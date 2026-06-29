@@ -101,6 +101,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Follow
             | Panel::Stable
             | Panel::Housing
+            | Panel::Appearance
     );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
@@ -184,6 +185,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.resurrect();
             InputAction::Handled
         }
+        b'e' | b'E' => {
+            // Open the appearance / bio builder.
+            state.open_appearance();
+            InputAction::Handled
+        }
         b'\r' | b'\n' => {
             if in_list {
                 state.activate_selection();
@@ -232,6 +238,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             } else if panel == Panel::Stable {
                 // At the Stable, the secondary action tends (feeds) your beast.
                 state.feed_pet();
+            } else if panel == Panel::Appearance {
+                // The secondary action cycles the trait the other way.
+                state.cycle_appearance(-1);
             } else if in_list {
                 state.sell_selection();
             } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities
@@ -276,6 +285,7 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Follow
             | Panel::Stable
             | Panel::Housing
+            | Panel::Appearance
     );
     match key {
         b'A' => {

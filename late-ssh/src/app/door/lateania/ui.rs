@@ -311,6 +311,7 @@ fn draw_side(
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
         Panel::Stable => stable_panel(view, state.cursor()),
         Panel::Housing => housing_panel(view, state.cursor()),
+        Panel::Appearance => appearance_panel(view, state.cursor()),
     };
     frame.render_widget(side_paragraph(lines), area);
 }
@@ -545,8 +546,14 @@ fn room_panel(
     if !view.features.is_empty() {
         lines.push(section("Of note"));
         for feat in &view.features {
+            // Actionable things get a diamond marker so they pop like loot.
+            let label = if is_actionable_feature(&feat.kind) {
+                format!("◆ {}", feat.name)
+            } else {
+                format!("· {}", feat.name)
+            };
             lines.extend(side_text_wrap(
-                feat.name.as_str(),
+                &label,
                 interactable_color(&feat.kind),
                 width,
             ));
@@ -1060,6 +1067,14 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
             .add_modifier(Modifier::BOLD),
     )));
     lines.extend(wrap(&view.trait_desc, 30));
+    if !view.bio.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("Bio"));
+        for l in wrap(&view.bio, 30) {
+            lines.push(l);
+        }
+        lines.push(hint("e", "edit appearance"));
+    }
     if !view.titles.is_empty() {
         lines.push(Line::raw(""));
         lines.push(section("Titles"));
@@ -1105,16 +1120,22 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         } else {
             format!(" [{}]", feat.kind)
         };
+        let actionable = is_actionable_feature(&feat.kind);
         let style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .bg(theme::BG_SELECTION())
                 .add_modifier(Modifier::BOLD)
+        } else if actionable {
+            Style::default()
+                .fg(interactable_color(&feat.kind))
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(interactable_color(&feat.kind))
         };
+        let bullet = if actionable { "◆" } else { marker };
         lines.push(Line::from(Span::styled(
-            format!("{marker} {}{}", feat.name, tag),
+            format!("{bullet} {}{}", feat.name, tag),
             style,
         )));
     }
@@ -1440,6 +1461,73 @@ fn housing_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines.push(hint("w/s", "select  Enter buy"));
     lines.push(hint("n", "close ledger"));
     lines
+}
+
+fn appearance_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Appearance & Bio",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+    ];
+    for (i, (label, value)) in view.appearance.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { ">" } else { " " };
+        let row_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{marker} {label:<9} "),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled(value.clone(), row_style),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "Your bio:",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    for l in wrap_plain(&view.bio, 30) {
+        lines.push(Line::from(Span::styled(
+            l,
+            Style::default()
+                .fg(theme::TEXT())
+                .add_modifier(Modifier::ITALIC),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "field  Enter next  x prev"));
+    lines.push(hint("e", "close"));
+    lines
+}
+
+/// Word-wrap a plain string to `width` columns.
+fn wrap_plain(s: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for word in s.split_whitespace() {
+        if !line.is_empty() && line.len() + 1 + word.len() > width {
+            out.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
 }
 
 /// Trim a string to `max` chars, adding an ellipsis when cut.
@@ -1904,6 +1992,20 @@ fn follow_panel(
             tag,
         ));
     }
+    // Profile the highlighted adventurer: show their chosen bio.
+    if let Some(occ) = view.occupants.get(cursor)
+        && !occ.bio.is_empty()
+    {
+        lines.push(Line::raw(""));
+        for l in wrap_plain(&occ.bio, 30) {
+            lines.push(Line::from(Span::styled(
+                l,
+                Style::default()
+                    .fg(theme::TEXT())
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        }
+    }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter follow/stop"));
     if view.following.is_some() {
@@ -1924,13 +2026,21 @@ fn rarity_color(rarity: &str) -> ratatui::style::Color {
 }
 
 /// Colour for an interactable room feature, so things you can act on stand out
-/// from plain room text: usable things (a fountain you can drink from) read
-/// green; everything else you can examine reads cyan.
+/// from plain room text the way loot does. A fountain you drink from reads
+/// green; vendors and usables you trade/act at read gold; purely lookable
+/// scenery (a plaque, a vista) reads a softer cyan "examine me".
 fn interactable_color(kind: &str) -> ratatui::style::Color {
     match kind {
         "fountain" => theme::SUCCESS(),
+        "bank" | "board" | "stable" | "clerk" => theme::AMBER_GLOW(),
         _ => theme::MENTION(),
     }
+}
+
+/// Whether a feature kind is something you actively use/trade at (vs. just look
+/// at). Drives a brighter, bolder treatment so actionable things pop.
+fn is_actionable_feature(kind: &str) -> bool {
+    matches!(kind, "fountain" | "bank" | "board" | "stable" | "clerk")
 }
 
 #[cfg(test)]

@@ -479,6 +479,155 @@ pub const FURNITURE: &[Furniture] = &[
         760,
         "A clockwork orrery of sun, moons, and worlds that turn at the truth's own pace beneath a domed ceiling.",
     ),
+    // ---- Trophies & the wider world ----
+    f(
+        "dragon_skull",
+        "a dragon's skull",
+        900,
+        "A wyrm's bleached skull the size of a cart, jaws propped open, a story you only half believe mounted over the door.",
+    ),
+    f(
+        "kraken_tankard",
+        "a kraken-ivory tankard",
+        70,
+        "A drinking horn carved from a kraken's beak, said to keep ale cold and boasts tall.",
+    ),
+    f(
+        "trophy_rack",
+        "a weapon trophy rack",
+        130,
+        "A wall rack of retired blades and a notched axe, each with a name and a grudge behind it.",
+    ),
+    f(
+        "map_table",
+        "a campaign map table",
+        240,
+        "A great table sunk with a relief map of Lateania, little carved tokens still mid-march across it.",
+    ),
+    f(
+        "ships_wheel",
+        "a ship's wheel",
+        110,
+        "A salt-silvered wheel from some lost caravel, mounted on the wall to be spun on stormy nights.",
+    ),
+    f(
+        "reaches_pearl",
+        "an abyssal pearl",
+        480,
+        "A pearl the size of a fist that holds a slow drift of light, dredged from the Sundered Reaches at great cost.",
+    ),
+    // ---- Garden & green ----
+    f(
+        "herb_planter",
+        "a window planter",
+        28,
+        "A long clay planter of basil and bright nasturtiums leaning toward what light there is.",
+    ),
+    f(
+        "orange_tree",
+        "a potted orange tree",
+        130,
+        "A dwarf orange tree in a glazed tub, three real fruit on it, the whole room the better for its scent.",
+    ),
+    f(
+        "koi_basin",
+        "a koi basin",
+        220,
+        "A wide ceramic basin where fat orange koi turn slow circles and rise hopefully at every footstep.",
+    ),
+    f(
+        "bonsai",
+        "a bonsai pine",
+        95,
+        "A gnarled little pine in a shallow dish, a whole windswept mountainside shrunk to the span of a hand.",
+    ),
+    f(
+        "topiary_stag",
+        "a topiary stag",
+        160,
+        "A box-hedge clipped into a leaping stag, kept indoors in a half-barrel and trimmed with quiet pride.",
+    ),
+    // ---- Light & wonder ----
+    f(
+        "witchlight_lamp",
+        "a witchlight lamp",
+        150,
+        "A lamp of cold green marshfire sealed in glass, throwing shadows that lean the wrong way.",
+    ),
+    f(
+        "sunstone",
+        "a glowing sunstone",
+        260,
+        "A fist of amber stone that drinks the day and gives it slowly back through the night, warm to the touch.",
+    ),
+    f(
+        "paper_lanterns",
+        "a string of paper lanterns",
+        40,
+        "A looping string of painted paper lanterns that turns any rafter into a festival.",
+    ),
+    f(
+        "hearthfire_glass",
+        "a hearthfire stained-glass",
+        300,
+        "A leaded window of ruby and gold that, lit from behind, sets a permanent sunset on the far wall.",
+    ),
+    // ---- Sound & study ----
+    f(
+        "lute_stand",
+        "a lute on a stand",
+        85,
+        "A pear-bellied lute resting on a carved stand, one string always a hair flat, forever waiting.",
+    ),
+    f(
+        "music_box",
+        "a rosewood music box",
+        130,
+        "A rosewood box that, wound, picks out a small sad waltz on steel teeth before running slowly down.",
+    ),
+    f(
+        "celestial_globe",
+        "a celestial globe",
+        200,
+        "A globe of the night sky, constellations picked out in tiny brass studs you can read by touch.",
+    ),
+    f(
+        "reading_nook",
+        "a cushioned reading nook",
+        175,
+        "A window seat heaped with cushions and a forgotten blanket, the single best chair you will ever own.",
+    ),
+    f(
+        "quill_set",
+        "an inkstand and quills",
+        45,
+        "A brass inkstand with a fan of trimmed swan quills and a blotter ruined by better letters than yours.",
+    ),
+    // ---- Comfort & hearth ----
+    f(
+        "pelt_pile",
+        "a pile of furs",
+        60,
+        "A heaped tumble of soft pelts by the fire, claimed nightly by whoever - or whatever - reaches it first.",
+    ),
+    f(
+        "steaming_bath",
+        "a copper bath",
+        280,
+        "A deep copper tub you fill from the kettle-crane, the one true luxury after a season in the Reaches.",
+    ),
+    f(
+        "cat_basket",
+        "a cat's basket",
+        20,
+        "A round wicker basket with a worn cushion, empty just now, but the indentation says otherwise.",
+    ),
+    f(
+        "welcome_rug",
+        "a woven welcome mat",
+        16,
+        "A coarse coir mat at the threshold, the word WELCOME picked out in faded red, meaning every letter.",
+    ),
 ];
 
 /// Look up a furnishing by its stable key.

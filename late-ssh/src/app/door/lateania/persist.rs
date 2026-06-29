@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 11;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -44,6 +44,7 @@ pub struct SavedCharacterInit {
     pub pet_loyalty: i64,
     pub owned_plot: Option<u32>,
     pub house_furniture: Vec<(u32, String)>,
+    pub appearance: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -118,6 +119,9 @@ pub struct SavedCharacter {
     /// Furnishings placed in the owned home, as (room id, furniture key) pairs.
     #[serde(default)]
     pub house_furniture: Vec<(u32, String)>,
+    /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
+    #[serde(default)]
+    pub appearance: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -194,6 +198,7 @@ impl SavedCharacter {
             pet_loyalty: init.pet_loyalty,
             owned_plot: init.owned_plot,
             house_furniture: init.house_furniture,
+            appearance: init.appearance,
         }
     }
 
@@ -276,6 +281,7 @@ mod tests {
             pet_loyalty: 250,
             owned_plot: Some(3),
             house_furniture: vec![(9040, "feather_bed".to_string())],
+            appearance: vec![1, 2, 3, 4, 5],
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -300,6 +306,7 @@ mod tests {
             back.house_furniture,
             vec![(9040, "feather_bed".to_string())]
         );
+        assert_eq!(back.appearance, vec![1, 2, 3, 4, 5]);
     }
 
     #[test]

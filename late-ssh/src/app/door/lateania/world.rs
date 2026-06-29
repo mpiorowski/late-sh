@@ -2573,6 +2573,14 @@ pub fn seed_world() -> World {
     extend_thornwood(&mut rooms, &mut spawns, &mut behaviors);
     extend_caverns(&mut rooms, &mut spawns, &mut behaviors);
 
+    // Append the Sundered Reaches: a second 1000-room continent (rooms 10000+),
+    // a drowned sea-realm hung off the Matlatesh capital. Runs after the maze
+    // regions so its free-direction gateway search avoids the cavern portal.
+    extend_reaches(&mut rooms, &mut spawns);
+
+    // Flesh out the four capitals with a district of new safe rooms each.
+    extend_cities(&mut rooms);
+
     // Append the player-housing district (Hearthward Close, rooms 9000+), a
     // public street of claimable homes hung off Embergate's Market Row. No mobs:
     // homes are safe. Ownership and furnishings are runtime side-state.
@@ -3716,6 +3724,559 @@ pub fn frontier_entrance_room() -> RoomId {
 
 pub fn is_frontier_room(id: RoomId) -> bool {
     (FRONTIER_BASE..FRONTIER_BASE + FRONTIER_ZONES as u32 * FRONTIER_W * FRONTIER_H).contains(&id)
+}
+
+// ---- City districts: flesh out the four capitals (rooms 400+) -------------
+//
+// Each capital gains a short district of safe, flavourful rooms hung off its
+// square via a free direction, so the cities feel like places to linger rather
+// than waypoints. Rooms are authored from a per-city theme; ids start at 400 to
+// stay within the "original" sub-5000 band.
+fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
+    // (square, city name, district label, [4 (room-name, room-desc) pairs]).
+    // Each description is at least two sentences and a paragraph long, to satisfy
+    // the world invariants. Ids start at 3000 (free, between Frontier and mazes).
+    #[allow(clippy::type_complexity)]
+    const CITIES: [(RoomId, &str, &str, [(&str, &str); 4]); 4] = [
+        (
+            1,
+            "Embergate",
+            "the Lamplit Quarter",
+            [
+                (
+                    "the Lamplit Baths",
+                    "Vaulted bath-houses breathe steam into the lamplight, and off-duty guards and road-worn travellers soak the miles from their bones in tiled pools. An attendant moves among them hawking hot towels and colder gossip, and for a copper you may join them and hear the whole city's business.",
+                ),
+                (
+                    "the Adventurers' Guildhall",
+                    "A long timbered hall hangs with battered shields and the pennants of a hundred dead and living companies, its walls papered with maps and notices of the missing. The ale is bad on purpose so no one lingers past their business, yet somehow the benches are always full of half-told stories.",
+                ),
+                (
+                    "Tinker's Row",
+                    "A crooked lane of workshops where smiths, gluers, and gear-cutters ply their trades cheek by jowl. The air is bright with sparks and loud with the ring of small hammers and smaller arguments, and a careful eye can find a clever thing here that no shop would ever stock.",
+                ),
+                (
+                    "the Shrine Garden",
+                    "Behind the temple a walled garden keeps its quiet, its pale gravel raked into slow rings around a single old plum tree. Here the grieving and the grateful sit alike on stone benches beneath the Dawn's open sky, and even the noise of the square seems to lower its voice at the gate.",
+                ),
+            ],
+        ),
+        (
+            TASMANIA_SQUARE,
+            "Tasmania",
+            "the Saltwind Wharves",
+            [
+                (
+                    "the Fishmarket",
+                    "Trestle stalls glitter with the morning's catch laid out on crushed ice, and fishwives cry their prices over the wheeling gulls. Beneath the boards the harbour cats conduct their own grey commerce, and the whole quarter smells of brine, smoke, and money changing hands.",
+                ),
+                (
+                    "the Cartographers' Loft",
+                    "Up a salt-bleached stair waits a loft of long tables where chart-makers ink the coasts in patient, hair-fine lines. The smell is of vellum and pitch and cold tea, and every wall holds a painted sea you have not yet sailed and perhaps were never meant to.",
+                ),
+                (
+                    "the Harbourmaster's Office",
+                    "A brass-and-mahogany office smelling of tar and ledgers stands with its windows full of swaying masts. The harbourmaster knows every hull in the bay and the debts of every captain besides, and very little crosses this water that she has not already written down.",
+                ),
+                (
+                    "the Storm-Chapel",
+                    "A squat chapel of black sea-rock crouches at the wharf's end, where sailors light candles before a voyage and leave them burning long after. Its altar lies heaped with the small offerings of those who go down to the sea, and the wind through its door sounds remarkably like a hymn.",
+                ),
+            ],
+        ),
+        (
+            MELVANALA_SQUARE,
+            "Melvanala",
+            "the Hightarn Terraces",
+            [
+                (
+                    "the Mirrorlake Walk",
+                    "A balustraded walk runs along the lakeshore where the water lies so still it doubles the snow-peaks upon its face. At dusk the lamplighters move along it in slow procession, and the whole terrace seems to hang suspended between two identical skies.",
+                ),
+                (
+                    "the Stonecutters' Court",
+                    "A court stands ringed with the workshops of masons and lapidaries, its ground gone pale with a permanent dust of stone. Here and there it glints where some careless apprentice spilled a pocket of uncut gems, and the patient tap of chisels never altogether stops.",
+                ),
+                (
+                    "the Alewife's Longhall",
+                    "A warm, low longhall sits thick with peat-smoke and the rise and fall of song, its rafters black with the winters of its hearth. The famous highland brew is poured here by the yard, and strangers who come in cold leave as friends, as kin, or not at all.",
+                ),
+                (
+                    "the Snowmelt Spring",
+                    "A carved grotto receives the mountain's coldest, clearest water into a worn stone basin fed from somewhere far above. Pilgrims kneel to drink and rise gasping at the chill, and they will swear to you afterward that it carried off whatever ailed them.",
+                ),
+            ],
+        ),
+        (
+            MATLATESH_SQUARE,
+            "Matlatesh",
+            "the Sunbaked Bazaar",
+            [
+                (
+                    "the Spice Bazaar",
+                    "A canvas-shaded maze of stalls lies heaped with saffron, dried citron, and peppers that seem to colour the very air you breathe. The haggling here never altogether stops, and a glass of sweet mint tea is always pressed upon you before any honest price is named.",
+                ),
+                (
+                    "the Glassblowers' Souk",
+                    "A souk of roaring furnaces opens off the lane, where glassblowers spin molten gobs into lamps, beads, and impossible birds. The heat stands like a wall at its mouth, and the finished wares catch the desert light along the shelves like rows of trapped and patient fire.",
+                ),
+                (
+                    "the Caravanserai",
+                    "A great mud-brick courtyard receives the caravans, where weary beasts and wearier drivers rest beneath the arcades. The air is loud with camels and a dozen tongues at once, and every traveller here carries a rumour, a contract, or a knife from somewhere even drier.",
+                ),
+                (
+                    "the Oasis Conservatory",
+                    "A high-walled garden the desert is forbidden to enter keeps its date palms, its tiled pool, and its astonishing birdsong. It is kept green at ruinous expense as a standing boast against the dunes, and to sit in its shade is the closest thing to wealth a poor traveller may borrow.",
+                ),
+            ],
+        ),
+    ];
+
+    for (c, &(square, city, district, district_rooms)) in CITIES.iter().enumerate() {
+        let base = 3000 + (c as RoomId) * 10;
+        // Find a free direction off the square to open the district.
+        let portal = [
+            Dir::North,
+            Dir::South,
+            Dir::East,
+            Dir::West,
+            Dir::Up,
+            Dir::Down,
+        ]
+        .into_iter()
+        .find(|d| rooms.get(&square).is_some_and(|r| !r.exits.contains_key(d)))
+        .unwrap_or(Dir::Up);
+        let back_to_square = portal.opposite();
+        // Fan the four district rooms onto distinct directions, never reusing the
+        // direction that leads back out to the square.
+        let fan: Vec<Dir> = [
+            Dir::North,
+            Dir::East,
+            Dir::South,
+            Dir::West,
+            Dir::Up,
+            Dir::Down,
+        ]
+        .into_iter()
+        .filter(|d| *d != back_to_square)
+        .take(4)
+        .collect();
+        let zone: &'static str = Box::leak(district.to_string().into_boxed_str());
+        let spine = base;
+        let mut spine_exits: Vec<(Dir, RoomId)> = vec![(back_to_square, square)];
+        for (k, &dir) in fan.iter().enumerate() {
+            spine_exits.push((dir, base + 1 + k as RoomId));
+        }
+        rooms.insert(
+            spine,
+            Room {
+                id: spine,
+                name: zone,
+                zone,
+                safe: true,
+                desc: Box::leak(
+                    format!(
+                        "{district} opens off the {city} square, the livelier heart of the city where folk gather to trade, to drink, to worship, and to waste an idle hour. Lanes run off in every direction to its several haunts, and the ordinary noise of living fills the air from dawn until well past dark."
+                    )
+                    .into_boxed_str(),
+                ),
+                exits: spine_exits.into_iter().collect(),
+            },
+        );
+        if let Some(sq) = rooms.get_mut(&square) {
+            sq.exits.insert(portal, spine);
+        }
+        for (k, (rname, rdesc)) in district_rooms.iter().enumerate() {
+            let id = base + 1 + k as RoomId;
+            let back = fan[k].opposite();
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name: rname,
+                    zone,
+                    safe: true,
+                    desc: rdesc,
+                    exits: [(back, spine)].into_iter().collect(),
+                },
+            );
+        }
+    }
+}
+
+// ---- The Sundered Reaches: a second 1000-room continent (rooms 10000+) -----
+//
+// A drowned, storm-wracked sea-realm of sinking isles, sunken cities, and the
+// abyss below - the same proven 20-zone × 10×5-grid generator as the Frontier,
+// with its own themed zones, a named boss per zone, and tier-scaled loot. Hung
+// off the Matlatesh desert capital via a sea-gate. Generation is data-driven and
+// deterministic, so the strict world invariants stay green.
+const REACHES_BASE: RoomId = 10_000;
+const REACHES_W: u32 = 10;
+const REACHES_H: u32 = 5;
+const REACHES_ZONES: usize = REACHES_ZONES_DATA.len();
+const REACHES_SPAWN_ID_START: u32 = 950_000;
+
+pub fn is_reaches_room(id: RoomId) -> bool {
+    (REACHES_BASE..REACHES_BASE + REACHES_ZONES as u32 * REACHES_W * REACHES_H).contains(&id)
+}
+
+/// Twenty zones of the Sundered Reaches: (zone, adjective, ground, landmark,
+/// creatures, three mob names, boss). Reuses `frontier_desc` for prose.
+#[allow(clippy::type_complexity)]
+const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+    (
+        "Saltmarsh Shallows",
+        "brackish",
+        "sucking tidal mud",
+        "a half-sunk fishing shrine",
+        "marsh-lurkers",
+        [
+            "a bog-drowned thrall",
+            "a reed-stalker",
+            "a brine-bloated hound",
+        ],
+        "Old Maw the Tidejaw",
+    ),
+    (
+        "Wreckers' Coast",
+        "wind-scoured",
+        "shingle and broken spar",
+        "the ribs of a shattered galleon",
+        "wreck-ghouls",
+        [
+            "a drowned wrecker",
+            "a barnacled brute",
+            "a gull-eyed scavenger",
+        ],
+        "Captain Sull the Unsunk",
+    ),
+    (
+        "The Weeping Cliffs",
+        "rain-lashed",
+        "slick black basalt",
+        "a weather-worn lighthouse",
+        "cliff-harpies",
+        ["a storm-harpy", "a cliff-clinger", "a salt-mad hermit"],
+        "Maelys of the Hundred Falls",
+    ),
+    (
+        "Kelpwood Drowned",
+        "green-gloomed",
+        "rotting kelp",
+        "a forest of petrified masts",
+        "kelp-stranglers",
+        ["a kelp-strangler", "a drowned dryad", "a tide-wight"],
+        "The Verdant Drowned King",
+    ),
+    (
+        "Sirens' Reef",
+        "coral-jagged",
+        "razor coral",
+        "a reef of singing bones",
+        "siren-kin",
+        [
+            "a luring siren",
+            "a reef-shark thrall",
+            "a pearl-eyed drowner",
+        ],
+        "Nauthis the Reefsinger",
+    ),
+    (
+        "The Sinking Isles",
+        "fog-bound",
+        "subsiding sand",
+        "a town swallowed to its rooftops",
+        "isle-revenants",
+        [
+            "a sinking-isle ghoul",
+            "a fog-walker",
+            "a drowned bellringer",
+        ],
+        "The Warden of Nine Sunk Bells",
+    ),
+    (
+        "Stormwall Straits",
+        "thunder-haunted",
+        "wave-swept rock",
+        "a broken sea-fort",
+        "storm-thralls",
+        [
+            "a stormbound corsair",
+            "a lightning-scarred brute",
+            "a gale-wraith",
+        ],
+        "Vexhal, Voice of the Storm",
+    ),
+    (
+        "The Brine Caverns",
+        "lightless",
+        "tide-cut limestone",
+        "a cavern of dripping stalactites",
+        "cave-anglers",
+        ["a blind cave-angler", "a brine-crawler", "a pallid drowner"],
+        "The Lanternless Hunger",
+    ),
+    (
+        "Sunken Valmaris",
+        "moss-drowned",
+        "silted marble",
+        "the flooded plaza of a dead city",
+        "city-drowned",
+        [
+            "a Valmaran revenant",
+            "a coral-grown sentinel",
+            "a drowned magister",
+        ],
+        "Empress Calyx, Still Crowned",
+    ),
+    (
+        "The Pearl Abyss",
+        "black-fathomed",
+        "abyssal silt",
+        "a trench of bioluminal bloom",
+        "abyss-things",
+        [
+            "an abyssal feeler",
+            "a glow-lure horror",
+            "a pressure-wraith",
+        ],
+        "That Which Pearls the Dark",
+    ),
+    (
+        "Coral Throne Reach",
+        "blood-coral",
+        "calcified bone",
+        "a throne grown of living reef",
+        "throne-guard",
+        ["a coral knight", "a reef-bound zealot", "a polyp-swarm"],
+        "The Coral Tyrant",
+    ),
+    (
+        "The Glass Currents",
+        "glassy",
+        "obsidian shard-sand",
+        "a river of slow black glass",
+        "glass-stalkers",
+        [
+            "a glass-skinned hunter",
+            "a shard-revenant",
+            "a mirror-drowner",
+        ],
+        "Sieth of the Cutting Tide",
+    ),
+    (
+        "Leviathan's Wake",
+        "oil-dark",
+        "whale-bone scree",
+        "the spine of a beached leviathan",
+        "wake-feeders",
+        ["a leviathan parasite", "a bone-picker", "a gut-crawler"],
+        "The Wake-Thing",
+    ),
+    (
+        "The Mourning Depths",
+        "ash-grey",
+        "drowned grave-silt",
+        "a fathom-deep field of cairns",
+        "depth-mourners",
+        [
+            "a mourning revenant",
+            "a grave-tide wraith",
+            "a sorrow-drowned",
+        ],
+        "The Keeper of Drowned Years",
+    ),
+    (
+        "Tempest Spire Reach",
+        "storm-crowned",
+        "wind-bared stone",
+        "a spire that splits the lightning",
+        "spire-stalkers",
+        [
+            "a tempest acolyte",
+            "a thunder-thrall",
+            "a stormcalled wraith",
+        ],
+        "Aurex, the Spire's Wrath",
+    ),
+    (
+        "The Trench of Maws",
+        "abyssal",
+        "trench-dark muck",
+        "a chasm lined with teeth",
+        "trench-maws",
+        ["a trench-maw spawn", "a gulper horror", "a swallowing dark"],
+        "The All-Devouring Trench",
+    ),
+    (
+        "Drowned Pantheon",
+        "god-haunted",
+        "temple silt",
+        "the toppled idols of drowned gods",
+        "godless-drowned",
+        [
+            "a fallen god's herald",
+            "a temple-drowned zealot",
+            "an idol-wraith",
+        ],
+        "The Last Drowned God",
+    ),
+    (
+        "The Black Maelstrom",
+        "vortex-torn",
+        "spinning wrack",
+        "the eye of an endless whirlpool",
+        "maelstrom-born",
+        [
+            "a maelstrom revenant",
+            "a churning horror",
+            "a vortex-wraith",
+        ],
+        "The Maelstrom's Heart",
+    ),
+    (
+        "Abyssal Court",
+        "crushing-dark",
+        "court-silt of the deep",
+        "a sunken court of cold thrones",
+        "court-drowned",
+        [
+            "an abyssal courtier",
+            "a deep-bound knight",
+            "a fathom-lord's guard",
+        ],
+        "The Fathom Lord",
+    ),
+    (
+        "The Sundering Deep",
+        "world-ending dark",
+        "the floor of all seas",
+        "the wound where the world drinks",
+        "the unsounded",
+        [
+            "a herald of the deep",
+            "an unsounded terror",
+            "a drowner-of-worlds",
+        ],
+        "Yssgar, the Sundering Deep",
+    ),
+];
+
+fn extend_reaches(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
+    let per_zone = REACHES_W * REACHES_H;
+    let mut spawn_id: u32 = REACHES_SPAWN_ID_START;
+
+    for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
+        REACHES_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = REACHES_BASE + (z as u32) * per_zone;
+        let tier = z + 12; // the Reaches sit beyond even the Frontier's tiers
+        for y in 0..REACHES_H {
+            for x in 0..REACHES_W {
+                let idx = y * REACHES_W + x;
+                let id = zbase + idx;
+                let is_entrance = z == 0 && idx == 0;
+                let is_boss_room = idx == per_zone - 1;
+
+                let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
+                let name: &'static str = Box::leak(
+                    format!("{zname} - {}", FRONTIER_PLACES[(idx as usize) % 10]).into_boxed_str(),
+                );
+                let desc: &'static str =
+                    Box::leak(frontier_desc(adj, ground, feature, creature, idx).into_boxed_str());
+
+                let mut exits: Vec<(Dir, RoomId)> = Vec::new();
+                if x + 1 < REACHES_W {
+                    exits.push((Dir::East, id + 1));
+                }
+                if x > 0 {
+                    exits.push((Dir::West, id - 1));
+                }
+                if y + 1 < REACHES_H {
+                    exits.push((Dir::South, id + REACHES_W));
+                }
+                if y > 0 {
+                    exits.push((Dir::North, id - REACHES_W));
+                }
+                rooms.insert(
+                    id,
+                    Room {
+                        id,
+                        name,
+                        desc,
+                        zone,
+                        safe: is_entrance,
+                        exits: exits.into_iter().collect(),
+                    },
+                );
+
+                if is_entrance {
+                    continue;
+                }
+                let ti = tier as i32;
+                if is_boss_room {
+                    spawns.push(MobSpawn {
+                        id: spawn_id,
+                        name: boss,
+                        home: id,
+                        max_hp: 1400 + ti * 230,
+                        damage: 64 + ti * 6,
+                        xp: 700 + ti * 120,
+                        respawn_secs: 600,
+                        loot: super::items::frontier_loot(z),
+                        boss: true,
+                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                    });
+                    spawn_id += 1;
+                } else if idx.is_multiple_of(2) {
+                    spawns.push(MobSpawn {
+                        id: spawn_id,
+                        name: mob_names[(idx as usize) % 3],
+                        home: id,
+                        max_hp: 820 + ti * 90,
+                        damage: 56 + ti * 6,
+                        xp: 160 + ti * 32,
+                        respawn_secs: 90,
+                        loot: super::items::frontier_loot(z),
+                        boss: false,
+                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                    });
+                    spawn_id += 1;
+                }
+            }
+        }
+    }
+
+    // Chain each zone's last cell down into the next zone's first cell.
+    for z in 0..REACHES_ZONES - 1 {
+        let here = REACHES_BASE + (z as u32) * per_zone + (per_zone - 1);
+        let there = REACHES_BASE + ((z as u32) + 1) * per_zone;
+        if let Some(r) = rooms.get_mut(&here) {
+            r.exits.insert(Dir::Down, there);
+        }
+        if let Some(r) = rooms.get_mut(&there) {
+            r.exits.insert(Dir::Up, here);
+        }
+    }
+
+    // Hang the sea-gate off the Matlatesh desert capital so the whole realm is
+    // reachable; the first room is a safe tidewatch waystation.
+    let entrance = REACHES_BASE;
+    let portal = [Dir::Down, Dir::Up, Dir::West]
+        .into_iter()
+        .find(|d| {
+            rooms
+                .get(&MATLATESH_SQUARE)
+                .is_some_and(|r| !r.exits.contains_key(d))
+        })
+        .unwrap_or(Dir::Down);
+    if let Some(hub) = rooms.get_mut(&MATLATESH_SQUARE) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), MATLATESH_SQUARE);
+    }
 }
 
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
@@ -6323,7 +6884,10 @@ mod tests {
         // 198 base + extension rooms, 100 overworld rooms, and the 1000
         // procedural Frontier rooms (rooms 2000+) all sit below room 5000.
         let original = count_in(0, 5000);
-        assert_eq!(original, 1298, "expected 1298 original rooms");
+        assert_eq!(
+            original, 1318,
+            "expected 1318 original rooms (incl. 20 city-district rooms)"
+        );
         // The two maze regions are full grids of rooms; the cave is sparse
         // (only the largest connected pocket survives), so it is bounded but
         // not exact.
@@ -6344,10 +6908,20 @@ mod tests {
         let housing = count_in(housing_mod::HOUSING_BASE, housing_mod::HOUSING_BASE + 1000);
         let expected_housing = 1 + housing_mod::TIERS.iter().map(|t| t.rooms()).sum::<usize>();
         assert_eq!(housing, expected_housing, "housing district room count");
-        // No stray rooms outside the five known groups.
+        // The Sundered Reaches: a second full 1000-room continent.
+        let reaches = count_in(
+            REACHES_BASE,
+            REACHES_BASE + REACHES_ZONES as RoomId * REACHES_W * REACHES_H,
+        );
+        assert_eq!(
+            reaches,
+            REACHES_ZONES * (REACHES_W * REACHES_H) as usize,
+            "the Sundered Reaches is a full 1000-room region"
+        );
+        // No stray rooms outside the six known groups.
         assert_eq!(
             world.rooms.len(),
-            original + catacombs + thornwood + caverns + housing,
+            original + catacombs + thornwood + caverns + housing + reaches,
             "every room should belong to a known region"
         );
         for spawn in &world.spawns {
