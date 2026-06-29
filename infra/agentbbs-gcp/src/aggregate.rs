@@ -85,7 +85,7 @@ mod tests {
             Event::now(EventKind::SessionOpen, "s1"),
             Event::now(EventKind::Post, "p1"),
             Event::now(EventKind::Post, "p2"),
-            Event::now(EventKind::Security, "rate"), // Warn
+            Event::now(EventKind::Security, "rate"),  // Warn
             Event::now(EventKind::Moderation, "ban"), // Warn
             Event::now(EventKind::McpCall, "tool"),
             Event::now(EventKind::Post, "p3"),

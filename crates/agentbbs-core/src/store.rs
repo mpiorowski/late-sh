@@ -127,20 +127,33 @@ mod redb_store {
         pub fn open(path: impl AsRef<Path>) -> Result<Self> {
             let db = Database::create(path).map_err(|e| Error::Storage(e.to_string()))?;
             // Ensure tables exist.
-            let wtx = db.begin_write().map_err(|e| Error::Storage(e.to_string()))?;
+            let wtx = db
+                .begin_write()
+                .map_err(|e| Error::Storage(e.to_string()))?;
             {
-                wtx.open_table(BOARDS).map_err(|e| Error::Storage(e.to_string()))?;
-                wtx.open_table(MESSAGES).map_err(|e| Error::Storage(e.to_string()))?;
-                wtx.open_table(BOARD_INDEX).map_err(|e| Error::Storage(e.to_string()))?;
+                wtx.open_table(BOARDS)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
+                wtx.open_table(MESSAGES)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
+                wtx.open_table(BOARD_INDEX)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
             }
             wtx.commit().map_err(|e| Error::Storage(e.to_string()))?;
             Ok(RedbStore { db })
         }
 
         fn read_index(&self, board: &str) -> Result<Vec<MessageId>> {
-            let rtx = self.db.begin_read().map_err(|e| Error::Storage(e.to_string()))?;
-            let table = rtx.open_table(BOARD_INDEX).map_err(|e| Error::Storage(e.to_string()))?;
-            match table.get(board).map_err(|e| Error::Storage(e.to_string()))? {
+            let rtx = self
+                .db
+                .begin_read()
+                .map_err(|e| Error::Storage(e.to_string()))?;
+            let table = rtx
+                .open_table(BOARD_INDEX)
+                .map_err(|e| Error::Storage(e.to_string()))?;
+            match table
+                .get(board)
+                .map_err(|e| Error::Storage(e.to_string()))?
+            {
                 Some(v) => Ok(serde_json::from_slice(v.value())?),
                 None => Ok(vec![]),
             }
@@ -150,9 +163,14 @@ mod redb_store {
     impl Store for RedbStore {
         fn put_board(&self, board: &Board) -> Result<()> {
             let bytes = serde_json::to_vec(board)?;
-            let wtx = self.db.begin_write().map_err(|e| Error::Storage(e.to_string()))?;
+            let wtx = self
+                .db
+                .begin_write()
+                .map_err(|e| Error::Storage(e.to_string()))?;
             {
-                let mut t = wtx.open_table(BOARDS).map_err(|e| Error::Storage(e.to_string()))?;
+                let mut t = wtx
+                    .open_table(BOARDS)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
                 t.insert(board.slug.as_str(), bytes.as_slice())
                     .map_err(|e| Error::Storage(e.to_string()))?;
             }
@@ -161,8 +179,13 @@ mod redb_store {
         }
 
         fn get_board(&self, slug: &str) -> Result<Option<Board>> {
-            let rtx = self.db.begin_read().map_err(|e| Error::Storage(e.to_string()))?;
-            let t = rtx.open_table(BOARDS).map_err(|e| Error::Storage(e.to_string()))?;
+            let rtx = self
+                .db
+                .begin_read()
+                .map_err(|e| Error::Storage(e.to_string()))?;
+            let t = rtx
+                .open_table(BOARDS)
+                .map_err(|e| Error::Storage(e.to_string()))?;
             match t.get(slug).map_err(|e| Error::Storage(e.to_string()))? {
                 Some(v) => Ok(Some(serde_json::from_slice(v.value())?)),
                 None => Ok(None),
@@ -170,8 +193,13 @@ mod redb_store {
         }
 
         fn list_boards(&self) -> Result<Vec<Board>> {
-            let rtx = self.db.begin_read().map_err(|e| Error::Storage(e.to_string()))?;
-            let t = rtx.open_table(BOARDS).map_err(|e| Error::Storage(e.to_string()))?;
+            let rtx = self
+                .db
+                .begin_read()
+                .map_err(|e| Error::Storage(e.to_string()))?;
+            let t = rtx
+                .open_table(BOARDS)
+                .map_err(|e| Error::Storage(e.to_string()))?;
             let mut out = Vec::new();
             for row in t.iter().map_err(|e| Error::Storage(e.to_string()))? {
                 let (_k, v) = row.map_err(|e| Error::Storage(e.to_string()))?;
@@ -181,9 +209,14 @@ mod redb_store {
         }
 
         fn put_message(&self, message: &Message) -> Result<()> {
-            let wtx = self.db.begin_write().map_err(|e| Error::Storage(e.to_string()))?;
+            let wtx = self
+                .db
+                .begin_write()
+                .map_err(|e| Error::Storage(e.to_string()))?;
             {
-                let mut mt = wtx.open_table(MESSAGES).map_err(|e| Error::Storage(e.to_string()))?;
+                let mut mt = wtx
+                    .open_table(MESSAGES)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
                 if mt
                     .get(message.id.0.as_str())
                     .map_err(|e| Error::Storage(e.to_string()))?
@@ -195,8 +228,9 @@ mod redb_store {
                 mt.insert(message.id.0.as_str(), bytes.as_slice())
                     .map_err(|e| Error::Storage(e.to_string()))?;
 
-                let mut idx_table =
-                    wtx.open_table(BOARD_INDEX).map_err(|e| Error::Storage(e.to_string()))?;
+                let mut idx_table = wtx
+                    .open_table(BOARD_INDEX)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
                 let mut ids: Vec<MessageId> = match idx_table
                     .get(message.body.board.as_str())
                     .map_err(|e| Error::Storage(e.to_string()))?
@@ -215,9 +249,17 @@ mod redb_store {
         }
 
         fn get_message(&self, id: &MessageId) -> Result<Option<Message>> {
-            let rtx = self.db.begin_read().map_err(|e| Error::Storage(e.to_string()))?;
-            let t = rtx.open_table(MESSAGES).map_err(|e| Error::Storage(e.to_string()))?;
-            match t.get(id.0.as_str()).map_err(|e| Error::Storage(e.to_string()))? {
+            let rtx = self
+                .db
+                .begin_read()
+                .map_err(|e| Error::Storage(e.to_string()))?;
+            let t = rtx
+                .open_table(MESSAGES)
+                .map_err(|e| Error::Storage(e.to_string()))?;
+            match t
+                .get(id.0.as_str())
+                .map_err(|e| Error::Storage(e.to_string()))?
+            {
                 Some(v) => Ok(Some(serde_json::from_slice(v.value())?)),
                 None => Ok(None),
             }
@@ -236,8 +278,13 @@ mod redb_store {
         }
 
         fn message_count(&self) -> Result<usize> {
-            let rtx = self.db.begin_read().map_err(|e| Error::Storage(e.to_string()))?;
-            let t = rtx.open_table(MESSAGES).map_err(|e| Error::Storage(e.to_string()))?;
+            let rtx = self
+                .db
+                .begin_read()
+                .map_err(|e| Error::Storage(e.to_string()))?;
+            let t = rtx
+                .open_table(MESSAGES)
+                .map_err(|e| Error::Storage(e.to_string()))?;
             Ok(t.len().map_err(|e| Error::Storage(e.to_string()))? as usize)
         }
     }

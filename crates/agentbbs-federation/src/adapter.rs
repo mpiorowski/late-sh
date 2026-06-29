@@ -154,11 +154,7 @@ impl<R: CommandRunner> AgentDbAdapter<R> {
     /// `npx agentdb query <key>` — fetch matching memories as typed records.
     /// Expects the CLI to emit a JSON array of `{key, value}` objects.
     pub async fn query_memory(&self, key: &str) -> Result<Vec<MemoryRecord>> {
-        let args = vec![
-            "agentdb".to_string(),
-            "query".to_string(),
-            key.to_string(),
-        ];
+        let args = vec!["agentdb".to_string(), "query".to_string(), key.to_string()];
         let stdout = self.runner.run("npx", &args).await?;
         let trimmed = stdout.trim();
         if trimmed.is_empty() {

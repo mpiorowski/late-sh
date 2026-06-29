@@ -140,7 +140,8 @@ mod tests {
 
     #[test]
     fn request_deserializes_with_defaults() {
-        let r: Request = serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).unwrap();
+        let r: Request =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).unwrap();
         assert_eq!(r.method, "ping");
         assert_eq!(r.params, Value::Null);
         assert!(!r.is_notification());

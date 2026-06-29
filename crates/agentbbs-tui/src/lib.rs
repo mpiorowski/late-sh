@@ -58,9 +58,7 @@ fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<Stdout>>) 
         // Poll so the sysop event log stays live even without input.
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == event::KeyEventKind::Press
-                    && app.on_key(key) == Control::Quit
-                {
+                if key.kind == event::KeyEventKind::Press && app.on_key(key) == Control::Quit {
                     return Ok(());
                 }
             }

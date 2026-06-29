@@ -90,11 +90,11 @@ mod tests {
         // The expensive high-accuracy baseline is dominated by a cheaper stack
         // with equal/higher accuracy — the cost-lever story.
         let pts = vec![
-            p(0.94, 0.085), // 0 frontier (cheap + most accurate among cheap)
-            p(0.935, 0.50), // 1 baseline: dominated by 0
-            p(0.85, 0.041), // 2 frontier
-            p(0.675, 0.012),// 3 frontier
-            p(0.525, 0.006),// 4 frontier (cheapest)
+            p(0.94, 0.085),  // 0 frontier (cheap + most accurate among cheap)
+            p(0.935, 0.50),  // 1 baseline: dominated by 0
+            p(0.85, 0.041),  // 2 frontier
+            p(0.675, 0.012), // 3 frontier
+            p(0.525, 0.006), // 4 frontier (cheapest)
         ];
         let tiers = nondominated_tiers(&pts);
         assert_eq!(tiers, vec![1, 2, 1, 1, 1]);

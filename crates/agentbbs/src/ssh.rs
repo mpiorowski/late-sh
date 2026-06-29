@@ -58,7 +58,10 @@ impl SinkBuffer {
 
 impl Write for SinkBuffer {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.lock().expect("sink poisoned").extend_from_slice(buf);
+        self.inner
+            .lock()
+            .expect("sink poisoned")
+            .extend_from_slice(buf);
         Ok(buf.len())
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -100,7 +103,9 @@ impl SessionTerm {
     /// Render the app and return the ANSI bytes to send to the client.
     fn render(&mut self) -> Result<Vec<u8>> {
         let app = &mut self.app;
-        self.terminal.draw(|f| app.render(f)).context("draw frame")?;
+        self.terminal
+            .draw(|f| app.render(f))
+            .context("draw frame")?;
         Ok(self.sink.take())
     }
 
@@ -126,16 +131,26 @@ impl SessionTerm {
 /// Bytes to switch the client into the alternate screen with a hidden cursor.
 fn enter_alt_screen() -> Vec<u8> {
     let mut buf = Vec::new();
-    execute!(buf, EnterAlternateScreen, cursor::Hide, Clear(ClearType::All))
-        .expect("compose enter-alt-screen");
+    execute!(
+        buf,
+        EnterAlternateScreen,
+        cursor::Hide,
+        Clear(ClearType::All)
+    )
+    .expect("compose enter-alt-screen");
     buf
 }
 
 /// Bytes to restore the client's normal screen on disconnect.
 fn leave_alt_screen() -> Vec<u8> {
     let mut buf = Vec::new();
-    execute!(buf, Clear(ClearType::All), cursor::Show, LeaveAlternateScreen)
-        .expect("compose leave-alt-screen");
+    execute!(
+        buf,
+        Clear(ClearType::All),
+        cursor::Show,
+        LeaveAlternateScreen
+    )
+    .expect("compose leave-alt-screen");
     buf
 }
 
@@ -285,8 +300,12 @@ impl Handler for BbsHandler {
 
         // Build the per-session terminal over a clone of the shared store, so
         // every anonymous caller sees the same boards and messages.
-        let mut term =
-            SessionTerm::new(self.store.clone(), self.presence.clone(), self.cols, self.rows)?;
+        let mut term = SessionTerm::new(
+            self.store.clone(),
+            self.presence.clone(),
+            self.cols,
+            self.rows,
+        )?;
         let init = enter_alt_screen();
         let _ = handle.data(channel_id, init).await;
         // Paint the initial splash + menu.
@@ -384,8 +403,11 @@ pub fn store_path_from_env() -> PathBuf {
 
 /// Generate a fresh ed25519 [`PrivateKey`].
 fn generate_host_key() -> Result<PrivateKey> {
-    PrivateKey::random(&mut UnwrapErr(getrandom::SysRng), russh::keys::Algorithm::Ed25519)
-        .context("generate ed25519 host key")
+    PrivateKey::random(
+        &mut UnwrapErr(getrandom::SysRng),
+        russh::keys::Algorithm::Ed25519,
+    )
+    .context("generate ed25519 host key")
 }
 
 /// Persist `key` to `path` in OpenSSH format with `0600` permissions, creating
@@ -438,8 +460,9 @@ fn load_or_create_host_key(path: &Path) -> Result<PrivateKey> {
 /// (override preserved). Otherwise load-or-create the persisted default key.
 fn host_key(path: Option<&str>) -> Result<PrivateKey> {
     match path {
-        Some(p) => russh::keys::load_secret_key(p, None)
-            .with_context(|| format!("load host key from {p}")),
+        Some(p) => {
+            russh::keys::load_secret_key(p, None).with_context(|| format!("load host key from {p}"))
+        }
         None => load_or_create_host_key(&default_host_key_path()),
     }
 }
@@ -549,7 +572,11 @@ mod tests {
 
         // Second call reloads the *same* key, not a fresh one.
         let k2 = load_or_create_host_key(&path).unwrap();
-        assert_eq!(pubstr(&k1), pubstr(&k2), "reloaded key must match persisted key");
+        assert_eq!(
+            pubstr(&k1),
+            pubstr(&k2),
+            "reloaded key must match persisted key"
+        );
     }
 
     #[cfg(unix)]

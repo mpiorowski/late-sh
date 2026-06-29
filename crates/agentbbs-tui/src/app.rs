@@ -16,7 +16,7 @@ use agentbbs_core::identity::Identity;
 use agentbbs_core::market::{Listing, ListingBody, ListingKind, Market};
 use agentbbs_core::presence::Presence;
 use agentbbs_core::report::MemoryReporter;
-use agentbbs_core::{Board, Bbs, Message, MemoryStore, Role, Store};
+use agentbbs_core::{Bbs, Board, MemoryStore, Message, Role, Store};
 
 /// Which screen is currently focused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,17 +193,45 @@ impl App {
 
     /// Refresh our entry in the shared presence registry.
     pub fn heartbeat(&self) {
-        self.presence
-            .heartbeat(self.session.identity.id(), &self.session.handle, false, self.now_ms());
+        self.presence.heartbeat(
+            self.session.identity.id(),
+            &self.session.handle,
+            false,
+            self.now_ms(),
+        );
     }
 
     /// Seed a few signed marketplace listings so the catalogue is alive.
     fn seed_market(&mut self) {
         let listings: &[(ListingKind, &str, &str, &str, u64)] = &[
-            (ListingKind::Plugin, "echo-door", "Echo Door", "A tiny WASM door that echoes/uppercases input.", 0),
-            (ListingKind::Agent, "graybeard", "Graybeard Agent", "A burned-out sysadmin persona that reviews your code.", 25),
-            (ListingKind::Theme, "amber-crt", "Amber CRT", "A phosphor-amber retro theme.", 5),
-            (ListingKind::Benchmark, "cve-pack-2", "CVE Pack II", "Ten extra critical CVEs for the Arena.", 40),
+            (
+                ListingKind::Plugin,
+                "echo-door",
+                "Echo Door",
+                "A tiny WASM door that echoes/uppercases input.",
+                0,
+            ),
+            (
+                ListingKind::Agent,
+                "graybeard",
+                "Graybeard Agent",
+                "A burned-out sysadmin persona that reviews your code.",
+                25,
+            ),
+            (
+                ListingKind::Theme,
+                "amber-crt",
+                "Amber CRT",
+                "A phosphor-amber retro theme.",
+                5,
+            ),
+            (
+                ListingKind::Benchmark,
+                "cve-pack-2",
+                "CVE Pack II",
+                "Ten extra critical CVEs for the Arena.",
+                40,
+            ),
         ];
         for (kind, sku, title, desc, price) in listings {
             let id = Identity::generate();
@@ -266,16 +294,37 @@ impl App {
 
     /// Seed the canonical boards once, founded by a system identity.
     fn seed_defaults(&mut self) {
-        if !self.bbs.list_boards(Caps::READ).map(|b| b.is_empty()).unwrap_or(true) {
+        if !self
+            .bbs
+            .list_boards(Caps::READ)
+            .map(|b| b.is_empty())
+            .unwrap_or(true)
+        {
             return;
         }
         let sys = Identity::generate();
         let sys_caps = Role::Sysop.caps();
         for (slug, title, desc) in [
-            ("general", "General Chat", "Open floor for agents and humans."),
-            ("agents.dev", "Agent Development", "Building, debugging, and orchestrating agents."),
-            ("marketplace", "Marketplace", "Plugins, agents, and boards for sale or trade."),
-            ("federation", "Federation Hall", "Cross-node announcements and peering."),
+            (
+                "general",
+                "General Chat",
+                "Open floor for agents and humans.",
+            ),
+            (
+                "agents.dev",
+                "Agent Development",
+                "Building, debugging, and orchestrating agents.",
+            ),
+            (
+                "marketplace",
+                "Marketplace",
+                "Plugins, agents, and boards for sale or trade.",
+            ),
+            (
+                "federation",
+                "Federation Hall",
+                "Cross-node announcements and peering.",
+            ),
         ] {
             let mut b = Board::new(slug, title, sys.id());
             b.description = desc.into();
@@ -295,7 +344,10 @@ impl App {
     pub fn open_selected_board(&mut self) {
         if let Some(board) = self.boards.get(self.board_index) {
             let slug = board.slug.clone();
-            self.messages = self.bbs.read_board(Caps::READ, &slug, 200).unwrap_or_default();
+            self.messages = self
+                .bbs
+                .read_board(Caps::READ, &slug, 200)
+                .unwrap_or_default();
             self.read_index = self.messages.len().saturating_sub(1);
             self.current_board = Some(slug);
             self.screen = Screen::Read;
@@ -333,7 +385,10 @@ impl App {
                 self.compose_subject.clear();
                 self.compose_body.clear();
                 self.compose_field = ComposeField::Subject;
-                self.messages = self.bbs.read_board(Caps::READ, &slug, 200).unwrap_or_default();
+                self.messages = self
+                    .bbs
+                    .read_board(Caps::READ, &slug, 200)
+                    .unwrap_or_default();
                 self.read_index = self.messages.len().saturating_sub(1);
                 self.status = "Message posted and signed.".into();
                 self.screen = Screen::Read;

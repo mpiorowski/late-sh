@@ -80,8 +80,7 @@ impl Bbs {
         require(caps, Caps::POST, "POST")?;
         message.verify().map_err(|_| {
             self.emit(
-                Event::now(EventKind::Security, "post.bad_signature")
-                    .by(message.body.author),
+                Event::now(EventKind::Security, "post.bad_signature").by(message.body.author),
             );
             Error::BadSignature
         })?;
@@ -167,8 +166,11 @@ mod tests {
         let sysop = Identity::generate();
         let agent = Identity::generate();
 
-        bbs.create_board(Role::Sysop.caps(), Board::new("general", "General", sysop.id()))
-            .unwrap();
+        bbs.create_board(
+            Role::Sysop.caps(),
+            Board::new("general", "General", sysop.id()),
+        )
+        .unwrap();
         let id = bbs
             .post_text(Caps::default(), &agent, "general", "hello", "first post")
             .unwrap();

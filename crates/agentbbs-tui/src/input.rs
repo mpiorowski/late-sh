@@ -82,7 +82,9 @@ impl App {
 
     fn key_boards(&mut self, key: KeyEvent) -> Control {
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => self.board_index = self.board_index.saturating_sub(1),
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.board_index = self.board_index.saturating_sub(1)
+            }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.board_index + 1 < self.boards.len() {
                     self.board_index += 1;

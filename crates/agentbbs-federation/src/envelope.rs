@@ -78,7 +78,11 @@ impl FederationEnvelope {
     /// The canonical signing bytes for this envelope as it stands.
     pub fn signing_bytes(&self) -> Result<Vec<u8>> {
         let payload_json = serde_json::to_vec(&self.payload)?;
-        Ok(Self::compose_signing_bytes(&self.node, self.seq, &payload_json))
+        Ok(Self::compose_signing_bytes(
+            &self.node,
+            self.seq,
+            &payload_json,
+        ))
     }
 
     /// Seal `payload` under `identity` at sequence `seq`, producing a signed

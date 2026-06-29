@@ -110,8 +110,11 @@ mod tests {
     async fn report_enqueues_without_blocking() {
         // No emulator: with a bogus base the POSTs will simply fail and be
         // logged inside the drain task. report() itself must still succeed.
-        let reporter =
-            FirestoreReporter::start("demo-project", Some("http://127.0.0.1:1"), &Handle::current());
+        let reporter = FirestoreReporter::start(
+            "demo-project",
+            Some("http://127.0.0.1:1"),
+            &Handle::current(),
+        );
         for i in 0..50 {
             reporter
                 .report(Event::now(EventKind::Post, format!("m{i}")))

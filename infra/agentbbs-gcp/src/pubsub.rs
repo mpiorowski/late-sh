@@ -31,7 +31,11 @@ impl PubSubPublisher {
     ///
     /// `base_url` overrides the endpoint; when `None` it is derived from
     /// `PUBSUB_EMULATOR_HOST` (falling back to production).
-    pub fn new(project: impl Into<String>, topic: impl Into<String>, base_url: Option<&str>) -> Self {
+    pub fn new(
+        project: impl Into<String>,
+        topic: impl Into<String>,
+        base_url: Option<&str>,
+    ) -> Self {
         let base = pubsub_base(base_url);
         let publish_url = format!(
             "{base}/v1/projects/{}/topics/{}:publish",
@@ -118,7 +122,11 @@ mod tests {
 
     #[test]
     fn publish_url_is_well_formed() {
-        let p = PubSubPublisher::new("demo-project", "agentbbs-events", Some("http://localhost:8085"));
+        let p = PubSubPublisher::new(
+            "demo-project",
+            "agentbbs-events",
+            Some("http://localhost:8085"),
+        );
         assert_eq!(
             p.publish_url(),
             "http://localhost:8085/v1/projects/demo-project/topics/agentbbs-events:publish"

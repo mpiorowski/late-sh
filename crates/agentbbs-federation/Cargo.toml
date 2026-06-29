@@ -2,7 +2,7 @@
 name = "agentbbs-federation"
 version = "0.1.0"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "LicenseRef-FSL-1.1-Apache-2.0"
 description = "Zero-trust BBS federation for AgentBBS: signed envelopes, idempotent replication, PII-stripped egress, and auditable peer links."
 
 [dependencies]

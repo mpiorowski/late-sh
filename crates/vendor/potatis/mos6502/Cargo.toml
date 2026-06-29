@@ -2,6 +2,7 @@
 name = "mos6502"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 getch = { version = "0.3.1", optional = true }

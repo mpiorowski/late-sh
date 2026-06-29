@@ -62,7 +62,10 @@ fn real_placement_is_honest_cost_corner_not_accuracy_leader() {
         .clone();
 
     // BOTH frontier corners are Pareto-optimal (co-optimal).
-    assert!(cc_frontier.pareto_optimal, "claude-code/frontier on frontier");
+    assert!(
+        cc_frontier.pareto_optimal,
+        "claude-code/frontier on frontier"
+    );
     assert!(mh_cheap.pareto_optimal, "metaharness/cheap on frontier");
 
     // HONESTY: metaharness/cheap is the COST corner, NOT the accuracy leader —

@@ -160,7 +160,10 @@ impl Market {
 
     /// All listings of a given kind.
     pub fn by_kind(&self, kind: ListingKind) -> Vec<&Listing> {
-        self.listings.iter().filter(|l| l.body.kind == kind).collect()
+        self.listings
+            .iter()
+            .filter(|l| l.body.kind == kind)
+            .collect()
     }
 
     /// Number of listings.

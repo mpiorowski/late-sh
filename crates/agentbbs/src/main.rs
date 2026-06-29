@@ -40,7 +40,11 @@ fn main() -> ExitCode {
             Ok(())
         }
         Command::Version => {
-            println!("agentbbs {} ({})", env!("CARGO_PKG_VERSION"), agentbbs_core::PROTOCOL_VERSION);
+            println!(
+                "agentbbs {} ({})",
+                env!("CARGO_PKG_VERSION"),
+                agentbbs_core::PROTOCOL_VERSION
+            );
             Ok(())
         }
         Command::Tui => run_tui(),
@@ -72,8 +76,8 @@ fn run_arena(cmd: ArenaCmd) -> anyhow::Result<()> {
         ArenaCmd::Retort { path } => {
             let results = match &path {
                 Some(p) => {
-                    let json = std::fs::read_to_string(p)
-                        .map_err(|e| anyhow::anyhow!("read {p}: {e}"))?;
+                    let json =
+                        std::fs::read_to_string(p).map_err(|e| anyhow::anyhow!("read {p}: {e}"))?;
                     agentbbs_arena::RetortResults::from_json(&json)
                         .map_err(|e| anyhow::anyhow!("parse {p}: {e}"))?
                 }
@@ -91,7 +95,10 @@ fn run_arena(cmd: ArenaCmd) -> anyhow::Result<()> {
             println!("Retort MetaHarness — DoE/ANOVA Pareto leaderboard");
             println!("  source:   {src}");
             println!("  harness:  {}", results.harness_version);
-            println!("  operator: {} (signs every stack entry)", operator.id().short());
+            println!(
+                "  operator: {} (signs every stack entry)",
+                operator.id().short()
+            );
             println!(
                 "  stacks:   {n} signed · ranked by Pareto frontier (requirement_coverage vs $/task)"
             );

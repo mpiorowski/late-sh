@@ -9,7 +9,9 @@ fn jstr(s: &str) -> String {
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: emit_retort_seed <bundle.json>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: emit_retort_seed <bundle.json>");
     let json = std::fs::read_to_string(&path).expect("read bundle");
     let results = RetortResults::from_json(&json).expect("parse bundle");
     let operator = Identity::generate();

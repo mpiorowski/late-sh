@@ -15,9 +15,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use agentbbs_core::{
-    Board, Event, EventKind, Identity, Message, Reporter, Result, Store,
-};
+use agentbbs_core::{Board, Event, EventKind, Identity, Message, Reporter, Result, Store};
 use serde_json::json;
 
 use crate::envelope::{FederationEnvelope, FederationPayload};
@@ -99,7 +97,8 @@ impl Federator {
         if let Some(d) = desc.get("description").and_then(|v| v.as_str()) {
             clean.description = d.to_string();
         }
-        self.broadcast(FederationPayload::AnnounceBoard(clean)).await
+        self.broadcast(FederationPayload::AnnounceBoard(clean))
+            .await
     }
 
     /// Replicate a verified message to trusted peers.

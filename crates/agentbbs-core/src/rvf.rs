@@ -119,7 +119,11 @@ impl RvfStore {
                 meta: r.meta.clone(),
             })
             .collect();
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(top_k);
         Ok(hits)
     }
@@ -154,7 +158,10 @@ impl RvfStore {
         }
         let version = u16::from_le_bytes(c.take(2)?.try_into().unwrap());
         if version != VERSION {
-            return Err(Error::malformed("rvf", format!("unsupported version {version}")));
+            return Err(Error::malformed(
+                "rvf",
+                format!("unsupported version {version}"),
+            ));
         }
         let dim = u32::from_le_bytes(c.take(4)?.try_into().unwrap()) as usize;
         let count = u32::from_le_bytes(c.take(4)?.try_into().unwrap()) as usize;

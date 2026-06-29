@@ -281,7 +281,9 @@ impl RetortResults {
         RetortResults {
             schema: RETORT_SCHEMA.into(),
             harness_version: "retort-metaharness@0.1.0".into(),
-            generated_at: "2026-06-28T12:00:00Z".parse().unwrap_or_else(|_| Utc::now()),
+            generated_at: "2026-06-28T12:00:00Z"
+                .parse()
+                .unwrap_or_else(|_| Utc::now()),
             design: DoeDesign {
                 models: vec!["claude-opus-4.8".into(), "deepseek-v4".into()],
                 harness_configs: vec![
@@ -294,20 +296,130 @@ impl RetortResults {
             },
             cells: vec![
                 // claude-code baseline — high accuracy, high cost.
-                cell("claude-opus-4.8", "claude-code", "task-a", 0.95, 0.91, 0.510, 58.0, Diagnosis::Pass, true, true),
-                cell("claude-opus-4.8", "claude-code", "task-b", 0.92, 0.89, 0.490, 55.0, Diagnosis::Pass, true, true),
+                cell(
+                    "claude-opus-4.8",
+                    "claude-code",
+                    "task-a",
+                    0.95,
+                    0.91,
+                    0.510,
+                    58.0,
+                    Diagnosis::Pass,
+                    true,
+                    true,
+                ),
+                cell(
+                    "claude-opus-4.8",
+                    "claude-code",
+                    "task-b",
+                    0.92,
+                    0.89,
+                    0.490,
+                    55.0,
+                    Diagnosis::Pass,
+                    true,
+                    true,
+                ),
                 // ruflo-3tier metaharness — matches baseline accuracy, ~6x cheaper (dominates it).
-                cell("claude-opus-4.8", "ruflo-3tier", "task-a", 0.95, 0.90, 0.088, 41.0, Diagnosis::Pass, true, false),
-                cell("claude-opus-4.8", "ruflo-3tier", "task-b", 0.93, 0.89, 0.082, 39.0, Diagnosis::Pass, true, false),
+                cell(
+                    "claude-opus-4.8",
+                    "ruflo-3tier",
+                    "task-a",
+                    0.95,
+                    0.90,
+                    0.088,
+                    41.0,
+                    Diagnosis::Pass,
+                    true,
+                    false,
+                ),
+                cell(
+                    "claude-opus-4.8",
+                    "ruflo-3tier",
+                    "task-b",
+                    0.93,
+                    0.89,
+                    0.082,
+                    39.0,
+                    Diagnosis::Pass,
+                    true,
+                    false,
+                ),
                 // single-shot opus — cheaper still, lower accuracy; one TOOLING false-fail.
-                cell("claude-opus-4.8", "single-shot", "task-a", 0.85, 0.80, 0.042, 22.0, Diagnosis::Pass, true, false),
-                cell("claude-opus-4.8", "single-shot", "task-b", 0.0, 0.0, 0.040, 21.0, Diagnosis::Tooling, false, false),
+                cell(
+                    "claude-opus-4.8",
+                    "single-shot",
+                    "task-a",
+                    0.85,
+                    0.80,
+                    0.042,
+                    22.0,
+                    Diagnosis::Pass,
+                    true,
+                    false,
+                ),
+                cell(
+                    "claude-opus-4.8",
+                    "single-shot",
+                    "task-b",
+                    0.0,
+                    0.0,
+                    0.040,
+                    21.0,
+                    Diagnosis::Tooling,
+                    false,
+                    false,
+                ),
                 // deepseek ruflo-3tier — mid accuracy, cheap.
-                cell("deepseek-v4", "ruflo-3tier", "task-a", 0.70, 0.66, 0.012, 33.0, Diagnosis::Genuine, false, false),
-                cell("deepseek-v4", "ruflo-3tier", "task-b", 0.65, 0.60, 0.011, 31.0, Diagnosis::Genuine, false, false),
+                cell(
+                    "deepseek-v4",
+                    "ruflo-3tier",
+                    "task-a",
+                    0.70,
+                    0.66,
+                    0.012,
+                    33.0,
+                    Diagnosis::Genuine,
+                    false,
+                    false,
+                ),
+                cell(
+                    "deepseek-v4",
+                    "ruflo-3tier",
+                    "task-b",
+                    0.65,
+                    0.60,
+                    0.011,
+                    31.0,
+                    Diagnosis::Genuine,
+                    false,
+                    false,
+                ),
                 // deepseek single-shot — cheapest, lowest accuracy.
-                cell("deepseek-v4", "single-shot", "task-a", 0.55, 0.52, 0.006, 18.0, Diagnosis::Genuine, false, false),
-                cell("deepseek-v4", "single-shot", "task-b", 0.50, 0.48, 0.005, 17.0, Diagnosis::Genuine, false, false),
+                cell(
+                    "deepseek-v4",
+                    "single-shot",
+                    "task-a",
+                    0.55,
+                    0.52,
+                    0.006,
+                    18.0,
+                    Diagnosis::Genuine,
+                    false,
+                    false,
+                ),
+                cell(
+                    "deepseek-v4",
+                    "single-shot",
+                    "task-b",
+                    0.50,
+                    0.48,
+                    0.005,
+                    17.0,
+                    Diagnosis::Genuine,
+                    false,
+                    false,
+                ),
             ],
             anova: AnovaResult {
                 response: "requirement_coverage".into(),
@@ -363,7 +475,11 @@ pub struct StackKey {
 
 impl std::fmt::Display for StackKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} · {} · {}", self.model, self.harness_config, self.language)
+        write!(
+            f,
+            "{} · {} · {}",
+            self.model, self.harness_config, self.language
+        )
     }
 }
 
@@ -795,7 +911,11 @@ fn insight_for(
         }
         Some((acov, acost)) => {
             let cheaper = pct_lower(cost, acost);
-            let times = if cost > 0.0 { acost / cost } else { f64::INFINITY };
+            let times = if cost > 0.0 {
+                acost / cost
+            } else {
+                f64::INFINITY
+            };
             let pts = ((acov - coverage) * 100.0).round() as i64;
             format!("frontier · {cheaper}% cheaper than top (top: more reliable at {times:.1}× cost, +{pts} pts)")
         }
@@ -852,7 +972,7 @@ mod tests {
             .unwrap();
         assert_eq!(opus_ss.cells_excluded_tooling, 1);
         assert_eq!(opus_ss.cells_total, 1); // only the genuine task-a counts
-        // Mean coverage is the surviving 0.85, NOT dragged to 0.425 by the false-fail.
+                                            // Mean coverage is the surviving 0.85, NOT dragged to 0.425 by the false-fail.
         assert!((opus_ss.mean_requirement_coverage - 0.85).abs() < 1e-9);
         // The claude-code stack is flagged as a baseline.
         let baseline = aggs

@@ -170,8 +170,7 @@ impl PluginHost {
         config.consume_fuel(true);
         let engine = Engine::new(&config);
 
-        let module = Module::new(&engine, wasm)
-            .map_err(|e| Error::malformed("wasm module", e))?;
+        let module = Module::new(&engine, wasm).map_err(|e| Error::malformed("wasm module", e))?;
 
         let mut store = Store::new(&engine, HostState::default());
 
@@ -257,11 +256,11 @@ impl PluginHost {
 
         // Emit an audit event for this invocation (best-effort).
         if let Some(reporter) = &self.reporter {
-            let _ = reporter.report(
-                Event::now(EventKind::PluginInvoke, req.kind.clone()).with(serde_json::json!({
+            let _ = reporter.report(Event::now(EventKind::PluginInvoke, req.kind.clone()).with(
+                serde_json::json!({
                     "board": req.board,
-                })),
-            );
+                }),
+            ));
         }
 
         // Reset the fuel budget for this invocation.

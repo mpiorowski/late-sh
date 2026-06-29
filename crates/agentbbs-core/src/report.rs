@@ -187,7 +187,8 @@ mod tests {
     fn memory_reporter_is_bounded() {
         let r = MemoryReporter::new(3);
         for i in 0..10 {
-            r.report(Event::now(EventKind::Post, format!("m{i}"))).unwrap();
+            r.report(Event::now(EventKind::Post, format!("m{i}")))
+                .unwrap();
         }
         assert_eq!(r.len(), 3);
         let snap = r.snapshot();

@@ -122,7 +122,10 @@ impl Arena {
         results: &crate::retort::RetortResults,
         identity: &Identity,
     ) -> Result<usize> {
-        if !self.benchmarks.contains_key(crate::retort::RETORT_BENCHMARK_ID) {
+        if !self
+            .benchmarks
+            .contains_key(crate::retort::RETORT_BENCHMARK_ID)
+        {
             self.register_benchmark(crate::retort::retort_benchmark());
         }
         let subs = crate::retort::ingest(results, identity)?;

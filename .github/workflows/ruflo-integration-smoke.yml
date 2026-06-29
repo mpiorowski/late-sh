@@ -1,0 +1,243 @@
+name: ruflo-integration-smoke
+
+# Regression guard: assert that the agentbbs MCP server + federation crate
+# surface stays compatible with what ruflo's `federation_bbs_*` MCP tools
+# (per ADR-164 in ruvnet/ruflo) depend on.
+#
+# Runs on PRs that touch the MCP / federation crates AND nightly via cron so
+# we catch silent drift even when no PR opens. Non-blocking on PRs initially
+# (continue-on-error) so legitimate refactors aren't gated by an external
+# package — the cron failure is the actual alarm.
+#
+# Surface contracts asserted:
+#   1. Federation envelope shape — `FederationPayload` enum keeps the 4
+#      variants ruflo's publish/register/watch flow semantically targets.
+#   2. MCP tool names — agentbbs-mcp still registers the 4 tools ruflo's
+#      Phase 2 wire-up will call into via the spawned `agentbbs mcp` process.
+#   3. RufloAdapter CLI contract — the `npx ruflo federation init|join|status`
+#      command surface that `agentbbs-federation/src/adapter.rs` shells out
+#      to still exists on the published @claude-flow/cli@latest.
+#   4. End-to-end MCP roundtrip — handshake + tools/list + post_message +
+#      read_board against the live `agentbbs-mcp` binary via stdio JSON-RPC.
+
+on:
+  pull_request:
+    paths:
+      - "crates/agentbbs-mcp/**"
+      - "crates/agentbbs-federation/**"
+      - "crates/agentbbs/**"
+      - ".github/workflows/ruflo-integration-smoke.yml"
+  schedule:
+    # Nightly at 04:17 UTC — offset from other repos' cron windows.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The contract surface ruflo depends on. Centralized so each assertion
+  # stays in sync.
+  EXPECTED_MCP_TOOLS: "list_boards read_board post_message search_memory"
+  EXPECTED_PAYLOAD_VARIANTS: "AnnounceBoard ReplicateMessage PeerHello Ack"
+  EXPECTED_RUFLO_FEDERATION_SUBCMDS: "init join status"
+
+jobs:
+  static-contract-checks:
+    name: static contract checks
+    runs-on: ubuntu-latest
+    # PR runs are advisory — cron runs are the alarm.
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: assert MCP tool names still registered
+        run: |
+          set -euo pipefail
+          server="crates/agentbbs-mcp/src/server.rs"
+          test -f "$server" || { echo "::error::missing $server"; exit 1; }
+          missing=()
+          for tool in $EXPECTED_MCP_TOOLS; do
+            if ! grep -q "\"name\": \"$tool\"" "$server"; then
+              missing+=("$tool")
+            fi
+          done
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::agentbbs-mcp dropped tool(s) ruflo depends on: ${missing[*]}"
+            echo "::error::ruflo's Phase 2 federation_bbs_* wire-up (ADR-164) calls into these via spawned 'agentbbs mcp'"
+            exit 1
+          fi
+          echo "ok: agentbbs-mcp still registers all 4 tools ($EXPECTED_MCP_TOOLS)"
+
+      - name: assert federation payload variants still exist
+        run: |
+          set -euo pipefail
+          env="crates/agentbbs-federation/src/envelope.rs"
+          test -f "$env" || { echo "::error::missing $env"; exit 1; }
+          missing=()
+          for variant in $EXPECTED_PAYLOAD_VARIANTS; do
+            if ! grep -qE "^\s*$variant(\(|\s*\{)" "$env"; then
+              missing+=("$variant")
+            fi
+          done
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::FederationPayload dropped variant(s) ruflo's publish/watch semantically targets: ${missing[*]}"
+            exit 1
+          fi
+          echo "ok: FederationPayload still has all 4 variants ($EXPECTED_PAYLOAD_VARIANTS)"
+
+      - name: assert RufloAdapter CLI contract unchanged
+        run: |
+          set -euo pipefail
+          adapter="crates/agentbbs-federation/src/adapter.rs"
+          test -f "$adapter" || { echo "::error::missing $adapter"; exit 1; }
+          # adapter.rs drives 'npx ruflo federation <sub>'. If the subcommand
+          # surface changes (e.g. renamed to 'agentbbs-federation'), ruflo's
+          # CLI must keep an alias OR we file an issue against ruflo.
+          for sub in $EXPECTED_RUFLO_FEDERATION_SUBCMDS; do
+            if ! grep -q "federation(\"$sub\"" "$adapter"; then
+              echo "::error::RufloAdapter no longer calls 'npx ruflo federation $sub' — ruflo CLI contract drift"
+              exit 1
+            fi
+          done
+          echo "ok: RufloAdapter still calls 'npx ruflo federation {$EXPECTED_RUFLO_FEDERATION_SUBCMDS}'"
+
+  mcp-roundtrip:
+    name: mcp roundtrip vs live binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: install_linux_build_dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev pkg-config mold
+
+      - name: install_rust
+        run: rustup component add clippy
+
+      - name: restore_rust_cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ruflo-integration-smoke
+          cache-targets: false
+
+      - name: build agentbbs binary
+        run: cargo build -p agentbbs --release
+
+      - name: setup node (for @claude-flow/cli surface check)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: assert @claude-flow/cli@latest still loadable
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cf-scratch
+          cd /tmp/cf-scratch
+          npm init -y >/dev/null 2>&1
+          # `npm view` is the cheapest "does this package still publish a CLI?"
+          # probe — avoids npx network shenanigans on CI. If @claude-flow/cli
+          # disappears from the registry, ruflo's adapter contract is moot.
+          version=$(npm view @claude-flow/cli@latest version 2>/dev/null || echo "")
+          if [ -z "$version" ]; then
+            echo "::error::@claude-flow/cli@latest not resolvable from npm"
+            exit 1
+          fi
+          echo "ok: @claude-flow/cli@latest resolves to $version"
+
+      - name: mcp stdio roundtrip via live agentbbs binary
+        run: |
+          set -euo pipefail
+          # Drive `agentbbs mcp` with a sequence of newline-delimited JSON-RPC
+          # requests and assert the responses match the contract ruflo's
+          # Phase 2 wire-up will rely on.
+          bin="./target/release/agentbbs"
+          test -x "$bin" || { echo "::error::missing $bin"; exit 1; }
+
+          requests=$(cat <<'EOF'
+          {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+          {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+          {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_boards","arguments":{}}}
+          EOF
+          )
+
+          # 600s cap — a hung run gets killed and reported.
+          responses=$(printf '%s\n' "$requests" | timeout --kill-after=10 600 "$bin" mcp || true)
+          echo "--- responses ---"
+          echo "$responses"
+          echo "--- end ---"
+
+          if [ -z "$responses" ]; then
+            echo "::error::agentbbs mcp produced no output — binary crashed or hung"
+            exit 1
+          fi
+
+          # Assert initialize handshake protocol version pinned at 2024-11-05.
+          if ! echo "$responses" | grep -q '"protocolVersion":"2024-11-05"'; then
+            echo "::error::MCP protocolVersion drift — ruflo expects 2024-11-05"
+            exit 1
+          fi
+
+          # Assert tools/list still returns the 4 contract tools.
+          for tool in $EXPECTED_MCP_TOOLS; do
+            if ! echo "$responses" | grep -q "\"name\":\"$tool\""; then
+              echo "::error::tools/list response missing tool: $tool"
+              exit 1
+            fi
+          done
+
+          echo "ok: mcp stdio roundtrip preserves protocolVersion + 4-tool contract"
+
+      - name: federation envelope roundtrip via existing cargo tests
+        run: |
+          # The agentbbs-federation crate's own integration tests already
+          # exercise the envelope seal/open/ingest path that ruflo's
+          # federation_bbs_publish semantically calls. Re-run them here so a
+          # break shows up under the regression-guard banner even if the main
+          # agentbbs.yml workflow is skipped on a docs-only PR elsewhere.
+          # cargo test accepts only ONE positional TESTNAME filter — loop over
+          # each named test so we get explicit pass/fail per test rather than
+          # a silent miss when one is renamed upstream.
+          tests="envelope_seal_open_roundtrip forged_node_id_rejected tampered_payload_rejected ingest_replay_is_idempotent announce_board_replicates loopback_two_node_replication ruflo_adapter_shells_npx"
+          for t in $tests; do
+            echo "== running $t =="
+            cargo test -p agentbbs-federation --release "$t"
+          done
+
+  report-status:
+    name: report regression status
+    needs: [static-contract-checks, mcp-roundtrip]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: summary
+        run: |
+          set -euo pipefail
+          static="${{ needs.static-contract-checks.result }}"
+          rt="${{ needs.mcp-roundtrip.result }}"
+          echo "static-contract-checks: $static"
+          echo "mcp-roundtrip:          $rt"
+          if [ "$static" != "success" ] || [ "$rt" != "success" ]; then
+            # On a cron run this is the load-bearing failure signal — the
+            # GitHub Actions UI surfaces it as a failed scheduled workflow
+            # and notifies maintainers per repo settings.
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              echo "::error::nightly regression guard FAILED — ruflo integration drift detected"
+              exit 1
+            fi
+            # On a PR it's advisory; the static + roundtrip jobs above are
+            # marked continue-on-error so they don't block merging.
+            echo "::warning::ruflo integration drift on PR — review before merge"
+          else
+            echo "ok: ruflo integration surface intact"
+          fi

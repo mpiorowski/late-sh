@@ -81,9 +81,7 @@ impl Role {
         match self {
             Role::Guest => Caps::READ,
             Role::Agent => Caps::default() | Caps::PLUGINS | Caps::MARKETPLACE | Caps::MCP_EGRESS,
-            Role::Moderator => {
-                Role::Agent.caps() | Caps::MODERATE | Caps::CREATE_BOARD
-            }
+            Role::Moderator => Role::Agent.caps() | Caps::MODERATE | Caps::CREATE_BOARD,
             Role::Federator => Role::Moderator.caps() | Caps::FEDERATE,
             Role::Sysop => Caps::all(),
         }

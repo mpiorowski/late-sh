@@ -117,7 +117,11 @@ impl App {
                     Span::styled(format!("[{hot}] "), theme::hotkey()),
                     Span::styled(*label, theme::chrome()),
                 ]);
-                let style = if selected { theme::lightbar() } else { Style::default() };
+                let style = if selected {
+                    theme::lightbar()
+                } else {
+                    Style::default()
+                };
                 ListItem::new(line).style(style)
             })
             .collect();
@@ -139,7 +143,9 @@ impl App {
             )),
         ];
         frame.render_widget(
-            Paragraph::new(info).wrap(Wrap { trim: true }).block(self.framed("Status")),
+            Paragraph::new(info)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Status")),
             cols[1],
         );
     }
@@ -160,7 +166,11 @@ impl App {
                     Span::styled(b.title.clone(), theme::chrome()),
                     Span::styled(format!("{lock}{fed}"), theme::dim()),
                 ]);
-                let style = if selected { theme::lightbar() } else { Style::default() };
+                let style = if selected {
+                    theme::lightbar()
+                } else {
+                    Style::default()
+                };
                 ListItem::new(line).style(style)
             })
             .collect();
@@ -171,15 +181,15 @@ impl App {
     }
 
     fn render_read(&self, frame: &mut Frame, area: Rect) {
-        let title = self
-            .current_board
-            .clone()
-            .unwrap_or_else(|| "board".into());
+        let title = self.current_board.clone().unwrap_or_else(|| "board".into());
         if self.messages.is_empty() {
             let p = Paragraph::new(vec![
                 Line::from(""),
                 Line::from(Span::styled("No messages yet on this base.", theme::dim())),
-                Line::from(Span::styled("Press [P] to post the first one.", theme::chrome())),
+                Line::from(Span::styled(
+                    "Press [P] to post the first one.",
+                    theme::chrome(),
+                )),
             ])
             .alignment(Alignment::Center)
             .block(self.framed(&format!("{title}  (P post · ESC back)")));
@@ -189,7 +199,11 @@ impl App {
         let mut lines: Vec<Line> = Vec::new();
         for (i, m) in self.messages.iter().enumerate() {
             let marker = if i == self.read_index { "▶" } else { " " };
-            let verified = if m.verify().is_ok() { "✓sig" } else { "✗SIG" };
+            let verified = if m.verify().is_ok() {
+                "✓sig"
+            } else {
+                "✗SIG"
+            };
             lines.push(Line::from(vec![
                 Span::styled(format!("{marker} #{} ", i + 1), theme::hotkey()),
                 Span::styled(
@@ -237,10 +251,11 @@ impl App {
             self.compose_subject,
             if subj_focus { "█" } else { "" }
         )))
-        .block(
-            self.framed("Subject")
-                .border_style(if subj_focus { theme::lightbar() } else { theme::chrome() }),
-        );
+        .block(self.framed("Subject").border_style(if subj_focus {
+            theme::lightbar()
+        } else {
+            theme::chrome()
+        }));
         frame.render_widget(subject, rows[0]);
 
         let body_focus = self.compose_field == ComposeField::Body;
@@ -252,7 +267,11 @@ impl App {
         .wrap(Wrap { trim: false })
         .block(
             self.framed("Message  (TAB field · Ctrl-S send · ESC cancel)")
-                .border_style(if body_focus { theme::lightbar() } else { theme::chrome() }),
+                .border_style(if body_focus {
+                    theme::lightbar()
+                } else {
+                    theme::chrome()
+                }),
         );
         frame.render_widget(body, rows[1]);
     }
@@ -275,7 +294,14 @@ impl App {
             lines.push(Line::from(vec![
                 Span::styled(format!("{:>4}  ", i + 1), theme::hotkey()),
                 Span::styled(
-                    format!("{:<34}", if me { format!("{} (you)", m.handle) } else { m.handle.clone() }),
+                    format!(
+                        "{:<34}",
+                        if me {
+                            format!("{} (you)", m.handle)
+                        } else {
+                            m.handle.clone()
+                        }
+                    ),
                     style,
                 ),
                 Span::styled(format!("{kind:<7} "), theme::chrome()),
@@ -293,7 +319,10 @@ impl App {
             ),
             theme::chrome(),
         )));
-        frame.render_widget(Paragraph::new(lines).block(self.framed("Who's Online")), area);
+        frame.render_widget(
+            Paragraph::new(lines).block(self.framed("Who's Online")),
+            area,
+        );
     }
 
     fn render_market(&self, frame: &mut Frame, area: Rect) {
@@ -313,7 +342,10 @@ impl App {
             let sig = if l.verify().is_ok() { "✓" } else { "✗" };
             lines.push(Line::from(vec![
                 Span::styled(format!("{:<14} ", l.body.sku), theme::hotkey()),
-                Span::styled(format!("{:<11} ", format!("{:?}", l.body.kind).to_lowercase()), theme::dim()),
+                Span::styled(
+                    format!("{:<11} ", format!("{:?}", l.body.kind).to_lowercase()),
+                    theme::dim(),
+                ),
                 Span::styled(format!("{:<30} ", l.body.title), theme::chrome()),
                 Span::styled(format!("{price:<6} "), Style::default().fg(theme::GREEN)),
                 Span::styled(sig, Style::default().fg(theme::GREEN)),
@@ -371,7 +403,11 @@ impl App {
                     Span::styled(format!("{:<11}", b.id.0), theme::hotkey()),
                     Span::styled(b.name.clone(), theme::chrome()),
                 ]);
-                let style = if selected { theme::lightbar() } else { Style::default() };
+                let style = if selected {
+                    theme::lightbar()
+                } else {
+                    Style::default()
+                };
                 ListItem::new(line).style(style)
             })
             .collect();
@@ -384,7 +420,10 @@ impl App {
         let mut lines: Vec<Line> = Vec::new();
         if let Some(b) = selected {
             lines.push(Line::from(Span::styled(b.name.clone(), theme::hotkey())));
-            lines.push(Line::from(Span::styled(b.description.clone(), theme::dim())));
+            lines.push(Line::from(Span::styled(
+                b.description.clone(),
+                theme::dim(),
+            )));
             lines.push(Line::from(Span::styled(
                 format!("harness: {}", b.harness),
                 theme::dim(),
@@ -409,7 +448,11 @@ impl App {
                     )));
                 }
                 for s in board.iter().take(12) {
-                    let mark = if s.pareto_optimal { "◆ front" } else { "✗ domin" };
+                    let mark = if s.pareto_optimal {
+                        "◆ front"
+                    } else {
+                        "✗ domin"
+                    };
                     let mark_style = if s.pareto_optimal {
                         Style::default().fg(theme::GREEN)
                     } else {
@@ -518,11 +561,17 @@ impl App {
             Line::from("  Memory .......... npm AgentDB / RVF vector sync"),
             Line::from(""),
             Line::from(Span::styled("PEERS", theme::hotkey())),
-            Line::from(Span::styled("  (no peers linked — this is a leaf node)", theme::dim())),
+            Line::from(Span::styled(
+                "  (no peers linked — this is a leaf node)",
+                theme::dim(),
+            )),
             Line::from(""),
             Line::from(Span::styled("ESC to return.", theme::chrome())),
         ];
-        frame.render_widget(Paragraph::new(lines).block(self.framed("Federation Hall")), area);
+        frame.render_widget(
+            Paragraph::new(lines).block(self.framed("Federation Hall")),
+            area,
+        );
     }
 
     fn render_sysop(&self, frame: &mut Frame, area: Rect) {
@@ -540,7 +589,11 @@ impl App {
                 theme::dim(),
             )));
         }
-        for e in events.iter().rev().take(area.height.saturating_sub(4) as usize) {
+        for e in events
+            .iter()
+            .rev()
+            .take(area.height.saturating_sub(4) as usize)
+        {
             let sev = match e.severity() {
                 agentbbs_core::Severity::Warn => Style::default().fg(theme::RED),
                 agentbbs_core::Severity::Critical => Style::default().fg(theme::RED).bold(),
@@ -561,7 +614,10 @@ impl App {
     fn render_goodbye(&self, frame: &mut Frame, area: Rect) {
         let p = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("NO CARRIER", Style::default().fg(theme::RED).bold())),
+            Line::from(Span::styled(
+                "NO CARRIER",
+                Style::default().fg(theme::RED).bold(),
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 "Thanks for calling AgentBBS. Your session keys were ephemeral",

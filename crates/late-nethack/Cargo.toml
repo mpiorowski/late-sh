@@ -2,6 +2,7 @@
 name = "late-nethack"
 version = "0.1.0"
 edition = "2024"
+license = "LicenseRef-FSL-1.1-Apache-2.0"
 
 # Standalone host for the NetHack door game. Runs the real upstream NetHack
 # binary on a PTY and exposes it over SSH, so late-ssh reaches it as a

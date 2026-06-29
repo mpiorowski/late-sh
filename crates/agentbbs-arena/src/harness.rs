@@ -143,7 +143,10 @@ pub fn parse_report(stdout: &str) -> Result<HarnessReport> {
             }
         }
     }
-    Err(Error::malformed("harness report", "no parseable JSON report on stdout"))
+    Err(Error::malformed(
+        "harness report",
+        "no parseable JSON report on stdout",
+    ))
 }
 
 #[cfg(test)]

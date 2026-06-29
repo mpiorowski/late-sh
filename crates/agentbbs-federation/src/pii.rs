@@ -14,9 +14,7 @@ use serde_json::Value;
 pub const REDACTED: &str = "[redacted]";
 
 /// Substrings (lowercased) that mark a key as PII-bearing.
-const SENSITIVE: &[&str] = &[
-    "email", "ip", "host", "token", "secret", "key", "phone",
-];
+const SENSITIVE: &[&str] = &["email", "ip", "host", "token", "secret", "key", "phone"];
 
 fn is_sensitive(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();

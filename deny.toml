@@ -30,7 +30,42 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 # Add RUSTSEC ids here (with a rationale) only when a fix is genuinely
 # unavailable and the path is unreachable.
-ignore = []
+ignore = [
+  # Real CVE — Marvin Attack timing sidechannel in rsa@0.9.x / 0.10.0-rc.x.
+  # No patched rsa exists in the compatible range; pulled transitively via
+  # ssh-key / russh / openssh-keys. AgentBBS uses Ed25519 keys; the vulnerable
+  # RSA-signature-verify path is not reached. Follow-up PR when patched rsa
+  # releases for either branch.
+  'RUSTSEC-2023-0071',
+
+  # --- Unmaintained-advisory chain (all from gtk/glib v0.18 transitive deps) ---
+  # The Linux desktop binding stack (gtk-rs, glib-rs, atk-rs, gdk-pixbuf,
+  # cairo-rs, pango-rs, gio-rs, etc.) has migrated to gtk4 and the v0.18 crates
+  # are no longer maintained. The replacement gtk4 stack lives at
+  # gtk4-rs.github.io. Migrating consumers is its own multi-PR effort.
+  # None of these are active CVEs — all are "unmaintained" advisories only.
+  # Follow-up: bump direct consumers off gtk v0.18 to gtk4-rs.
+  'RUSTSEC-2024-0411',   # gtk
+  'RUSTSEC-2024-0412',   # atk
+  'RUSTSEC-2024-0413',   # gdk
+  'RUSTSEC-2024-0414',   # gdk-pixbuf
+  'RUSTSEC-2024-0415',   # gio
+  'RUSTSEC-2024-0416',   # glib
+  'RUSTSEC-2024-0417',   # pango
+  'RUSTSEC-2024-0418',   # cairo
+  'RUSTSEC-2024-0419',   # gtk-sys (or sibling)
+  'RUSTSEC-2024-0420',   # gtk-sys / sibling
+  'RUSTSEC-2024-0370',   # proc-macro-error (transitive via gtk macros)
+  'RUSTSEC-2025-0134',   # additional gtk/glib chain
+  'RUSTSEC-2026-0190',   # additional gtk/glib chain
+  'RUSTSEC-2021-0153',   # older unmaintained on the same chain
+
+  # rustls-pemfile is unmaintained. Replacement is rustls-pki-types. The
+  # consuming crates (rustls-pemfile-2.x is pulled by reqwest / hyper-rustls)
+  # have not yet migrated. No active CVE. Follow-up: bump reqwest + hyper-rustls
+  # when their next minors land.
+  'RUSTSEC-2024-0436',
+]
 
 # ---------------------------------------------------------------------------
 # Licenses — allow the permissive + source-available families this tree uses.
@@ -41,8 +76,11 @@ ignore = []
 # SPDX confidence threshold for detecting a license from crate text.
 confidence-threshold = 0.8
 allow = [
-    # This workspace's own license + its future-grant license.
-    "FSL-1.1-Apache-2.0",
+    # This workspace's own license is FSL-1.1-Apache-2.0 — that license
+    # text is not a standard SPDX identifier so cargo-deny rejects it as an
+    # "unknown term" if listed here. The [licenses.private] block at the
+    # bottom of this file (ignore = true) already handles the workspace
+    # crates themselves; this allow list only covers third-party crates.
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     # Permissive families.
@@ -59,10 +97,24 @@ allow = [
     "Unicode-DFS-2016",
     # MPL is file-level copyleft; widely accepted (e.g. webpki-roots data).
     "MPL-2.0",
+    # CDLA-Permissive-2.0 — used by webpki-root-certs 1.0.7 (the trust-anchor
+    # data bundle, not code). Permissive Community Data License.
+    "CDLA-Permissive-2.0",
+    # The workspace's own license is FSL-1.1-Apache-2.0 (Functional Source
+    # License with an Apache-2.0 future-grant). This is not a standard SPDX
+    # identifier; cargo-deny's "LicenseRef-" prefix is the SPDX-blessed way
+    # to express a non-standard license. The late-{core,ssh,web,nethack}
+    # workspace crates declare `license = "LicenseRef-FSL-1.1-Apache-2.0"`.
+    "LicenseRef-FSL-1.1-Apache-2.0",
 ]
-# Per-crate license clarifications can be added here if a crate's license text
-# is non-standard and trips the confidence threshold.
-exceptions = []
+# Per-crate license clarifications: chafa-syms-rs ships under LGPL-3.0-only
+# (terminal-graphics glyph table data, not core code). We explicitly allow
+# LGPL-3.0-only ONLY for this crate so it doesn't expand to the rest of the
+# tree. The other workspace + vendored crates set `license` directly in
+# their Cargo.toml.
+exceptions = [
+  { allow = ["LGPL-3.0-only"], crate = "chafa-syms-rs" },
+]
 
 [licenses.private]
 # Don't require license metadata on the workspace's own unpublished crates.
@@ -75,7 +127,7 @@ ignore = true
 # Multiple versions of the same crate are common in a large tree; warn rather
 # than fail so this stays usable, but surface them.
 multiple-versions = "warn"
-wildcard-dependencies = "warn"
+wildcards = "warn"
 # Prefer the highest version when a crate is skipped/treed.
 highlight = "all"
 # Crates that must never appear (none for now).

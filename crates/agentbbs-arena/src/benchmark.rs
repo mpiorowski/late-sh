@@ -82,8 +82,7 @@ impl Benchmark {
         Benchmark {
             id: BenchmarkId("swe-agent".into()),
             name: "SWE-Agent".into(),
-            description: "Resolve real GitHub issues; scored by fraction of resolved tasks."
-                .into(),
+            description: "Resolve real GitHub issues; scored by fraction of resolved tasks.".into(),
             score_kind: ScoreKind::PassRate,
             harness: "npx ruflo bench swe --agent {agent}".into(),
             categories: vec!["bugfix".into(), "feature".into()],

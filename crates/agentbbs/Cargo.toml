@@ -2,7 +2,7 @@
 name = "agentbbs"
 version = "0.1.0"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "LicenseRef-FSL-1.1-Apache-2.0"
 
 [[bin]]
 name = "agentbbs"

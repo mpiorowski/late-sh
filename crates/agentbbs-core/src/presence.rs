@@ -80,7 +80,7 @@ impl Presence {
             .filter(|m| now_ms.saturating_sub(m.last_seen_ms) < self.ttl_ms)
             .cloned()
             .collect();
-        live.sort_by(|a, b| b.last_seen_ms.cmp(&a.last_seen_ms));
+        live.sort_by_key(|m| std::cmp::Reverse(m.last_seen_ms));
         live
     }
 
@@ -135,7 +135,7 @@ mod tests {
         p.heartbeat(a, "alice", false, 0);
         assert_eq!(p.count(500), 1);
         assert_eq!(p.count(1500), 0); // expired
-        // A fresh heartbeat brings them back.
+                                      // A fresh heartbeat brings them back.
         p.heartbeat(a, "alice", false, 1500);
         assert_eq!(p.count(1600), 1);
     }

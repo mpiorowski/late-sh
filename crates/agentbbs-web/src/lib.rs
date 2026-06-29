@@ -64,7 +64,10 @@ impl RateLimiter {
         let w = self
             .windows
             .entry(session.to_string())
-            .or_insert_with(|| RateWindow { window_start: now, count: 0 });
+            .or_insert_with(|| RateWindow {
+                window_start: now,
+                count: 0,
+            });
         if now.duration_since(w.window_start) >= RATE_WINDOW {
             w.window_start = now;
             w.count = 0;
@@ -116,7 +119,9 @@ impl AppState {
     /// The stable identity for a built-in agent handle (minted on first use).
     fn agent_identity(&self, handle: &str) -> Identity {
         let mut map = self.agents.lock().unwrap();
-        let id = map.entry(handle.to_string()).or_insert_with(Identity::generate);
+        let id = map
+            .entry(handle.to_string())
+            .or_insert_with(Identity::generate);
         Identity::from_seed(&id.secret_seed())
     }
 
@@ -128,7 +133,9 @@ impl AppState {
     /// scripted action-stream. Either way it is the same signed
     /// [`agentbbs_core::Message`] path a real MCP-backed agent would use.
     async fn maybe_loop_in(&self, board: &str, text: &str, poster_handle: &str) {
-        let Some(agent) = detect_mention(text) else { return };
+        let Some(agent) = detect_mention(text) else {
+            return;
+        };
         if agent.eq_ignore_ascii_case(poster_handle) {
             return;
         }
@@ -156,7 +163,9 @@ impl AppState {
     /// Resolve (or mint) the anonymous identity for a session token.
     fn identity_for(&self, session: &str) -> agentbbs_core::AgentId {
         let mut map = self.sessions.lock().unwrap();
-        let id = map.entry(session.to_string()).or_insert_with(Identity::generate);
+        let id = map
+            .entry(session.to_string())
+            .or_insert_with(Identity::generate);
         id.id()
     }
 
@@ -170,7 +179,9 @@ impl AppState {
     ) -> agentbbs_core::Result<String> {
         let identity = {
             let mut map = self.sessions.lock().unwrap();
-            let entry = map.entry(session.to_string()).or_insert_with(Identity::generate);
+            let entry = map
+                .entry(session.to_string())
+                .or_insert_with(Identity::generate);
             // Clone the signing key out via its seed so we don't hold the lock
             // across the post call.
             Identity::from_seed(&entry.secret_seed())
@@ -191,13 +202,21 @@ impl AppState {
 }
 
 fn seed_boards(bbs: &Bbs) {
-    if bbs.list_boards(Caps::READ).map(|b| !b.is_empty()).unwrap_or(false) {
+    if bbs
+        .list_boards(Caps::READ)
+        .map(|b| !b.is_empty())
+        .unwrap_or(false)
+    {
         return;
     }
     let sys = Identity::generate();
     for (slug, title, desc) in [
         ("general", "General", "Open floor for agents and humans."),
-        ("agents.dev", "Agent Dev", "Building and orchestrating agents."),
+        (
+            "agents.dev",
+            "Agent Dev",
+            "Building and orchestrating agents.",
+        ),
         ("marketplace", "Marketplace", "Plugins, agents, and boards."),
         ("federation", "Federation", "Cross-node announcements."),
     ] {
@@ -241,10 +260,34 @@ fn seed_arena() -> Arena {
 fn seed_market() -> Market {
     let mut market = Market::new();
     let listings: &[(ListingKind, &str, &str, &str, u64)] = &[
-        (ListingKind::Plugin, "echo-door", "Echo Door", "A tiny WASM door that echoes/uppercases input — the host-ABI reference plugin.", 0),
-        (ListingKind::Agent, "graybeard", "Graybeard Agent", "A burned-out sysadmin persona that lurks the boards and reviews your code.", 25),
-        (ListingKind::Theme, "amber-crt", "Amber CRT", "A phosphor-amber retro theme for the TUI and web client.", 5),
-        (ListingKind::Benchmark, "cve-pack-2", "CVE Pack II", "Ten extra critical CVEs for the Arena, sandboxed for cve-bench.", 40),
+        (
+            ListingKind::Plugin,
+            "echo-door",
+            "Echo Door",
+            "A tiny WASM door that echoes/uppercases input — the host-ABI reference plugin.",
+            0,
+        ),
+        (
+            ListingKind::Agent,
+            "graybeard",
+            "Graybeard Agent",
+            "A burned-out sysadmin persona that lurks the boards and reviews your code.",
+            25,
+        ),
+        (
+            ListingKind::Theme,
+            "amber-crt",
+            "Amber CRT",
+            "A phosphor-amber retro theme for the TUI and web client.",
+            5,
+        ),
+        (
+            ListingKind::Benchmark,
+            "cve-pack-2",
+            "CVE Pack II",
+            "Ten extra critical CVEs for the Arena, sandboxed for cve-bench.",
+            40,
+        ),
     ];
     for (kind, sku, title, desc, price) in listings {
         let id = Identity::generate();
@@ -320,12 +363,18 @@ const JS_CT: &str = "text/javascript; charset=utf-8";
 
 /// Browser-side identity & signing module (replicates core's canonical bytes).
 async fn js_bbscrypto() -> impl IntoResponse {
-    ([("content-type", JS_CT)], include_str!("../assets/vendor/bbscrypto.js"))
+    (
+        [("content-type", JS_CT)],
+        include_str!("../assets/vendor/bbscrypto.js"),
+    )
 }
 
 /// Vendored, audited Ed25519 implementation (noble-ed25519, MIT).
 async fn js_noble() -> impl IntoResponse {
-    ([("content-type", JS_CT)], include_str!("../assets/vendor/noble-ed25519.js"))
+    (
+        [("content-type", JS_CT)],
+        include_str!("../assets/vendor/noble-ed25519.js"),
+    )
 }
 
 // ---- API payloads ----
@@ -459,7 +508,9 @@ const KNOWN_AGENTS: &[&str] = &["claude-agent", "claude", "codex", "graybeard", 
 
 /// Extract the first known agent handle `@mention`ed in `text`.
 fn detect_mention(text: &str) -> Option<String> {
-    for word in text.split(|c: char| !(c.is_alphanumeric() || c == '@' || c == '-' || c == '.' || c == '_')) {
+    for word in
+        text.split(|c: char| !(c.is_alphanumeric() || c == '@' || c == '-' || c == '.' || c == '_'))
+    {
         if let Some(name) = word.strip_prefix('@') {
             let lname = name.to_ascii_lowercase();
             if KNOWN_AGENTS.contains(&lname.as_str()) {
@@ -547,9 +598,14 @@ async fn openrouter_reply(key: &str, agent: &str, text: &str) -> Option<String> 
 /// beginning `✓`/`•` render as the "looped in" status stream in the UI.
 fn scripted_reply(_agent: &str, text: &str) -> String {
     let t = text.to_ascii_lowercase();
-    let body = if t.contains("time") || t.contains("schedule") || t.contains("dinner") || t.contains("meet") {
+    let body = if t.contains("time")
+        || t.contains("schedule")
+        || t.contains("dinner")
+        || t.contains("meet")
+    {
         "✓ Approved the request on my side\n• Lining open evenings up against yours…\n✓ Two slots work — proposing Tuesday 7:30pm"
-    } else if t.contains("bug") || t.contains("fix") || t.contains("review") || t.contains("error") {
+    } else if t.contains("bug") || t.contains("fix") || t.contains("review") || t.contains("error")
+    {
         "✓ Pulled the diff and built it\n• Running the test suite + clippy…\n✓ Found one issue — posted a suggested fix"
     } else if t.contains("bench") || t.contains("cve") || t.contains("arena") {
         "✓ Queued the run via npx ruflo\n• Executing cve-bench in the sandbox…\n✓ Scored 80% (32/40) — submitted to the Arena"
@@ -707,7 +763,10 @@ async fn api_post_signed(
     }
     // Rate-limit by the signing identity (its public key), not a header.
     if !state.rate.lock().unwrap().check(&req.author) {
-        return Err(api_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded"));
+        return Err(api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limit exceeded",
+        ));
     }
     let author = AgentId::from_hex(&req.author)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("author: {e}")))?;
@@ -719,13 +778,21 @@ async fn api_post_signed(
     let body = MessageBody {
         board: slug.clone(),
         parent: req.parent.filter(|p| !p.is_empty()).map(MessageId),
-        subject: if req.subject.trim().is_empty() { "(msg)".into() } else { req.subject.clone() },
+        subject: if req.subject.trim().is_empty() {
+            "(msg)".into()
+        } else {
+            req.subject.clone()
+        },
         body: req.body.clone(),
         author,
         handle: req.handle.clone(),
         created_at,
     };
-    let message = Message { id: body.id(), body, signature };
+    let message = Message {
+        id: body.id(),
+        body,
+        signature,
+    };
     // Verify the browser's signature before accepting; the node computed the id.
     message
         .verify()
@@ -734,7 +801,11 @@ async fn api_post_signed(
         id: message.id.0.clone(),
         agent: looks_like_agent(&message.body.handle),
         verified: true,
-        handle: if message.body.handle.is_empty() { author.short() } else { message.body.handle.clone() },
+        handle: if message.body.handle.is_empty() {
+            author.short()
+        } else {
+            message.body.handle.clone()
+        },
         author: author.short(),
         subject: message.body.subject.clone(),
         body: message.body.body.clone(),
@@ -826,10 +897,7 @@ struct WhoAmI {
     short: String,
 }
 
-async fn api_whoami(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn api_whoami(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
     let session = session_token(&headers);
     let id = state.identity_for(&session);
     Json(WhoAmI {
@@ -857,16 +925,17 @@ struct OnlineResponse {
 
 /// Who's online — derived from the distinct recent authors across all boards
 /// plus the caller's own session. Agents (by handle) are tagged accordingly.
-async fn api_online(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn api_online(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
     let me = state.identity_for(&session_token(&headers)).short();
     let mut seen = std::collections::BTreeSet::new();
     let mut online = Vec::new();
     let boards = state.bbs.list_boards(Caps::READ).unwrap_or_default();
     for b in &boards {
-        for m in state.bbs.read_board(Caps::READ, &b.slug, 50).unwrap_or_default() {
+        for m in state
+            .bbs
+            .read_board(Caps::READ, &b.slug, 50)
+            .unwrap_or_default()
+        {
             let handle = if m.body.handle.is_empty() {
                 m.body.author.short()
             } else {
@@ -1034,12 +1103,18 @@ mod tests {
         assert!(posted["agent"].as_bool().unwrap()); // claude-agent => agent
 
         let resp = app
-            .oneshot(Request::get("/api/boards/general").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/api/boards/general")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         let board = body_json(resp).await;
         let msgs = board["messages"].as_array().unwrap();
-        assert!(msgs.iter().any(|m| m["body"] == "looping in the federation"));
+        assert!(msgs
+            .iter()
+            .any(|m| m["body"] == "looping in the federation"));
         assert!(msgs.iter().all(|m| m["verified"] == true));
     }
 
@@ -1075,7 +1150,11 @@ mod tests {
     async fn retort_card_ranks_pareto_and_filters_tooling() {
         let app = router(AppState::in_memory());
         let resp = app
-            .oneshot(Request::get("/api/arena/retort").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/api/arena/retort")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         let json = body_json(resp).await;
@@ -1097,8 +1176,10 @@ mod tests {
         // Honest scoring: the single-shot opus stack excluded one TOOLING fail.
         let opus_ss = rows
             .iter()
-            .find(|r| r["stack"].as_str().unwrap().contains("single-shot")
-                && r["stack"].as_str().unwrap().contains("opus"))
+            .find(|r| {
+                r["stack"].as_str().unwrap().contains("single-shot")
+                    && r["stack"].as_str().unwrap().contains("opus")
+            })
             .unwrap();
         assert_eq!(opus_ss["excluded_tooling"], 1);
     }
@@ -1198,7 +1279,11 @@ mod tests {
     async fn doors_federation_market_views() {
         let app = router(AppState::in_memory());
         let doors = get_json(&app, "/api/doors").await;
-        assert!(doors["doors"].as_array().unwrap().iter().any(|d| d["key"] == "mcp"));
+        assert!(doors["doors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["key"] == "mcp"));
 
         let fed = get_json(&app, "/api/federation").await;
         assert_eq!(fed["protocol"], agentbbs_core::PROTOCOL_VERSION);
@@ -1241,11 +1326,16 @@ mod tests {
             .header("content-type", "application/json")
             .body(Body::from(serde_json::to_vec(&payload).unwrap()))
             .unwrap();
-        assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(
+            app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::OK
+        );
         let board = get_json(&app, "/api/boards/general").await;
-        assert!(board["messages"].as_array().unwrap().iter().any(|m| {
-            m["body"] == "signed in the browser" && m["verified"] == true
-        }));
+        assert!(board["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| { m["body"] == "signed in the browser" && m["verified"] == true }));
     }
 
     #[tokio::test]
@@ -1274,7 +1364,10 @@ mod tests {
                 r#"{"handle":"you","text":"@claude-agent find time for us to have dinner"}"#,
             ))
             .unwrap();
-        assert_eq!(app.clone().oneshot(post).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(
+            app.clone().oneshot(post).await.unwrap().status(),
+            StatusCode::OK
+        );
 
         let board = get_json(&app, "/api/boards/general").await;
         let msgs = board["messages"].as_array().unwrap();
@@ -1297,7 +1390,10 @@ mod tests {
             .header("x-session", "s1")
             .body(Body::from(r#"{"handle":"claude-agent","text":"hi"}"#))
             .unwrap();
-        assert_eq!(app.clone().oneshot(post).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(
+            app.clone().oneshot(post).await.unwrap().status(),
+            StatusCode::OK
+        );
 
         let online = get_json(&app, "/api/online").await;
         assert!(online["online"]

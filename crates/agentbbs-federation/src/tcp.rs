@@ -111,7 +111,10 @@ impl FederationServer {
     }
 }
 
-async fn handle_connection(mut stream: TcpStream, federator: Arc<Federator>) -> std::io::Result<()> {
+async fn handle_connection(
+    mut stream: TcpStream,
+    federator: Arc<Federator>,
+) -> std::io::Result<()> {
     loop {
         let mut len_buf = [0u8; 4];
         // Clean EOF between frames ends the connection.
@@ -135,7 +138,7 @@ mod tests {
     use super::*;
     use crate::peer::{PeerBook, TrustLevel};
     use crate::transport::Transport;
-    use agentbbs_core::{Board, Identity, Message, MessageBody, MemoryStore, NullReporter, Store};
+    use agentbbs_core::{Board, Identity, MemoryStore, Message, MessageBody, NullReporter, Store};
     use chrono::Utc;
 
     fn author_message(author: &Identity, board: &str, text: &str) -> Message {
@@ -168,7 +171,11 @@ mod tests {
 
         // Sender node A trusts B at its bound address.
         let mut peers = PeerBook::new();
-        peers.add(Peer::new(b_fed.node_id(), addr.to_string(), TrustLevel::Trusted));
+        peers.add(Peer::new(
+            b_fed.node_id(),
+            addr.to_string(),
+            TrustLevel::Trusted,
+        ));
         let a_store: Arc<dyn Store> = Arc::new(MemoryStore::new());
         let a_fed = Federator::new(
             Identity::generate(),
@@ -207,7 +214,11 @@ mod tests {
     async fn unreachable_peer_is_best_effort() {
         // Sending to a closed port must not error (best-effort egress).
         let t = TcpTransport::new().with_timeout(std::time::Duration::from_millis(200));
-        let peer = Peer::new(Identity::generate().id(), "127.0.0.1:9", TrustLevel::Trusted);
+        let peer = Peer::new(
+            Identity::generate().id(),
+            "127.0.0.1:9",
+            TrustLevel::Trusted,
+        );
         assert!(t.send(&peer, vec![1, 2, 3]).await.is_ok());
     }
 }

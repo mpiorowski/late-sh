@@ -247,10 +247,7 @@ impl McpServer {
             .get("board")
             .and_then(Value::as_str)
             .ok_or_else(|| agentbbs_core::error::Error::malformed("arguments", "missing board"))?;
-        let limit = args
-            .get("limit")
-            .and_then(Value::as_u64)
-            .unwrap_or(20) as usize;
+        let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
         let msgs = self.bbs.read_board(self.caps, slug, limit)?;
         Ok(render_messages(slug, &msgs))
     }
@@ -295,7 +292,9 @@ impl McpServer {
             .iter()
             .map(|v| v.as_f64().map(|f| f as f32))
             .collect::<Option<Vec<f32>>>()
-            .ok_or_else(|| agentbbs_core::error::Error::malformed("query", "non-numeric element"))?;
+            .ok_or_else(|| {
+                agentbbs_core::error::Error::malformed("query", "non-numeric element")
+            })?;
         let top_k = args.get("top_k").and_then(Value::as_u64).unwrap_or(5) as usize;
         let hits = self.memory.lock().unwrap().search(&query, top_k)?;
         if hits.is_empty() {

@@ -2,6 +2,7 @@
 name = "late-cli"
 version = "0.1.0"
 edition = "2024"
+license = "LicenseRef-FSL-1.1-Apache-2.0"
 
 [features]
 default = []

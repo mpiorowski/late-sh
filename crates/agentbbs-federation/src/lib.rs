@@ -42,9 +42,7 @@ pub use transport::{LoopbackTransport, Transport};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentbbs_core::{
-        Board, Identity, Message, MessageBody, NullReporter, Reporter, Store,
-    };
+    use agentbbs_core::{Board, Identity, Message, MessageBody, NullReporter, Reporter, Store};
     use chrono::Utc;
     use serde_json::json;
     use std::sync::Arc;
@@ -108,12 +106,9 @@ mod tests {
     #[test]
     fn tampered_payload_rejected() {
         let node = Identity::generate();
-        let mut env = FederationEnvelope::seal(
-            &node,
-            FederationPayload::Ack { id: "abc".into() },
-            3,
-        )
-        .unwrap();
+        let mut env =
+            FederationEnvelope::seal(&node, FederationPayload::Ack { id: "abc".into() }, 3)
+                .unwrap();
         env.payload = FederationPayload::Ack {
             id: "tampered".into(),
         };
@@ -122,12 +117,9 @@ mod tests {
             Err(agentbbs_core::Error::BadSignature)
         ));
         // Also: tampering with the seq breaks the signature.
-        let mut env2 = FederationEnvelope::seal(
-            &node,
-            FederationPayload::Ack { id: "abc".into() },
-            3,
-        )
-        .unwrap();
+        let mut env2 =
+            FederationEnvelope::seal(&node, FederationPayload::Ack { id: "abc".into() }, 3)
+                .unwrap();
         env2.seq = 99;
         assert!(matches!(
             env2.open(),
@@ -323,8 +315,14 @@ mod tests {
     #[tokio::test]
     async fn agentdb_adapter_typed_results() {
         let canned = serde_json::to_string(&vec![
-            MemoryRecord { key: "k1".into(), value: "v1".into() },
-            MemoryRecord { key: "k2".into(), value: "v2".into() },
+            MemoryRecord {
+                key: "k1".into(),
+                value: "v1".into(),
+            },
+            MemoryRecord {
+                key: "k2".into(),
+                value: "v2".into(),
+            },
         ])
         .unwrap();
         let fake = FakeCommandRunner::with_output(canned);
@@ -333,7 +331,13 @@ mod tests {
         db.store_memory("topic", "value").await.unwrap();
         let rows = db.query_memory("topic").await.unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0], MemoryRecord { key: "k1".into(), value: "v1".into() });
+        assert_eq!(
+            rows[0],
+            MemoryRecord {
+                key: "k1".into(),
+                value: "v1".into()
+            }
+        );
 
         let calls = fake.calls();
         assert_eq!(calls[0], vec!["npx", "agentdb", "store", "topic", "value"]);

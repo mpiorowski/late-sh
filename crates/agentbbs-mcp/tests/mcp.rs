@@ -19,8 +19,11 @@ fn server_with_board(caps: Caps) -> Arc<McpServer> {
     let store = Arc::new(MemoryStore::new());
     let (bbs, reporter) = Bbs::with_memory_reporter(store);
     let sysop = Identity::generate();
-    bbs.create_board(Role::Sysop.caps(), Board::new("general", "General", sysop.id()))
-        .unwrap();
+    bbs.create_board(
+        Role::Sysop.caps(),
+        Board::new("general", "General", sysop.id()),
+    )
+    .unwrap();
     let agent = Identity::generate();
     Arc::new(McpServer::new(bbs, agent, caps, reporter, 4))
 }
@@ -214,8 +217,15 @@ fn tools_call_is_rate_limited() {
     let (bbs, reporter) = Bbs::with_memory_reporter(store);
     let agent = Identity::generate();
     // Allow only 2 tool calls per minute.
-    let server = McpServer::new(bbs, agent, Caps::default(), reporter, 4).with_rate_limit(2, 60_000);
-    let call = || server.handle(req(1, "tools/call", json!({ "name": "list_boards", "arguments": {} })));
+    let server =
+        McpServer::new(bbs, agent, Caps::default(), reporter, 4).with_rate_limit(2, 60_000);
+    let call = || {
+        server.handle(req(
+            1,
+            "tools/call",
+            json!({ "name": "list_boards", "arguments": {} }),
+        ))
+    };
     assert!(call().result.is_some(), "1st call allowed");
     assert!(call().result.is_some(), "2nd call allowed");
     let third = call();

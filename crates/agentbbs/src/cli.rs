@@ -144,9 +144,7 @@ fn parse_ssh(rest: &[String]) -> Result<Command, String> {
                 let v = rest
                     .get(i + 1)
                     .ok_or_else(|| "--port requires a value".to_string())?;
-                port = v
-                    .parse::<u16>()
-                    .map_err(|_| format!("invalid port: {v}"))?;
+                port = v.parse::<u16>().map_err(|_| format!("invalid port: {v}"))?;
                 i += 2;
             }
             "--host-key" | "-k" => {
@@ -282,10 +280,21 @@ mod tests {
     fn federate_serve_parsing() {
         assert_eq!(
             parse(["federate", "serve"]).unwrap(),
-            Command::Federate(Federate::Serve { port: DEFAULT_FED_PORT, peer: None })
+            Command::Federate(Federate::Serve {
+                port: DEFAULT_FED_PORT,
+                peer: None
+            })
         );
         assert_eq!(
-            parse(["federate", "serve", "--port", "8000", "--peer", "ab12@host:9000"]).unwrap(),
+            parse([
+                "federate",
+                "serve",
+                "--port",
+                "8000",
+                "--peer",
+                "ab12@host:9000"
+            ])
+            .unwrap(),
             Command::Federate(Federate::Serve {
                 port: 8000,
                 peer: Some("ab12@host:9000".to_string())

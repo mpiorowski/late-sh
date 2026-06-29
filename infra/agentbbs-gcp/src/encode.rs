@@ -90,7 +90,8 @@ pub fn to_firestore_fields(event: &Event) -> Value {
 
     // `at` is RFC 3339 with a trailing Z, which Firestore accepts directly.
     let at = event.at.to_rfc3339();
-    let detail = serde_json::to_string(&scrubbed_detail(event)).unwrap_or_else(|_| "null".to_string());
+    let detail =
+        serde_json::to_string(&scrubbed_detail(event)).unwrap_or_else(|_| "null".to_string());
 
     json!({
         "fields": {
@@ -205,8 +206,7 @@ mod tests {
         assert_eq!(decoded, ev);
 
         // And the encoded data matches encoding the canonical event json.
-        let expected_data =
-            base64::engine::general_purpose::STANDARD.encode(event_json(&ev));
+        let expected_data = base64::engine::general_purpose::STANDARD.encode(event_json(&ev));
         assert_eq!(data, expected_data);
     }
 
