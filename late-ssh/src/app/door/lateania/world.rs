@@ -2573,10 +2573,11 @@ pub fn seed_world() -> World {
     extend_thornwood(&mut rooms, &mut spawns, &mut behaviors);
     extend_caverns(&mut rooms, &mut spawns, &mut behaviors);
 
-    // Append the Sundered Reaches: a second 1000-room continent (rooms 10000+),
-    // a drowned sea-realm hung off the Matlatesh capital. Runs after the maze
-    // regions so its free-direction gateway search avoids the cavern portal.
-    extend_reaches(&mut rooms, &mut spawns);
+    // Append the Sundered Reaches: a second ~900-room continent (rooms 10000+),
+    // a drowned sea-realm of braided mazes and organic caverns hung off the
+    // Matlatesh capital. Runs after the maze regions so its free-direction
+    // gateway search avoids the cavern portal.
+    extend_reaches(&mut rooms, &mut spawns, &mut behaviors);
 
     // Flesh out the four capitals with a district of new safe rooms each.
     extend_cities(&mut rooms);
@@ -3912,13 +3913,22 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
 // off the Matlatesh desert capital via a sea-gate. Generation is data-driven and
 // deterministic, so the strict world invariants stay green.
 const REACHES_BASE: RoomId = 10_000;
-const REACHES_W: u32 = 10;
-const REACHES_H: u32 = 5;
+const REACHES_W: usize = 10;
+const REACHES_H: usize = 5;
 const REACHES_ZONES: usize = REACHES_ZONES_DATA.len();
 const REACHES_SPAWN_ID_START: u32 = 950_000;
+const REACHES_SEED: u64 = 0x5EA_D4EAD_u64;
+/// Each zone reserves this many room ids (a `REACHES_W`×`REACHES_H` cell field).
+const REACHES_ZONE_STRIDE: u32 = (REACHES_W * REACHES_H) as u32;
+
+/// Which Reaches zones are carved as organic caverns rather than braided mazes -
+/// the deep, drowned, cave-like ones. The rest are mazes.
+const fn reaches_zone_is_cavern(z: usize) -> bool {
+    matches!(z, 7 | 9 | 13 | 15 | 17 | 19)
+}
 
 pub fn is_reaches_room(id: RoomId) -> bool {
-    (REACHES_BASE..REACHES_BASE + REACHES_ZONES as u32 * REACHES_W * REACHES_H).contains(&id)
+    (REACHES_BASE..REACHES_BASE + REACHES_ZONES as u32 * REACHES_ZONE_STRIDE).contains(&id)
 }
 
 /// Twenty zones of the Sundered Reaches: (zone, adjective, ground, landmark,
@@ -4163,105 +4173,229 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
     ),
 ];
 
-fn extend_reaches(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
-    let per_zone = REACHES_W * REACHES_H;
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_reaches(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (REACHES_W, REACHES_H);
+    let n = w * h;
     let mut spawn_id: u32 = REACHES_SPAWN_ID_START;
+    // The deepest (boss) room of the previous zone, to chain the realm together.
+    let mut prev_exit: Option<RoomId> = None;
 
     for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
         REACHES_ZONES_DATA.iter().enumerate()
     {
-        let zbase = REACHES_BASE + (z as u32) * per_zone;
-        let tier = z + 12; // the Reaches sit beyond even the Frontier's tiers
-        for y in 0..REACHES_H {
-            for x in 0..REACHES_W {
-                let idx = y * REACHES_W + x;
-                let id = zbase + idx;
-                let is_entrance = z == 0 && idx == 0;
-                let is_boss_room = idx == per_zone - 1;
+        let zbase = REACHES_BASE + (z as u32) * REACHES_ZONE_STRIDE;
+        let tier = (z + 12) as i32; // the Reaches sit beyond even the Frontier's tiers
+        let mut rng = MazeRng::new(REACHES_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
 
-                let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
-                let name: &'static str = Box::leak(
-                    format!("{zname} - {}", FRONTIER_PLACES[(idx as usize) % 10]).into_boxed_str(),
-                );
-                let desc: &'static str =
-                    Box::leak(frontier_desc(adj, ground, feature, creature, idx).into_boxed_str());
+        // Carve the zone as either a braided maze or an organic cavern, and reduce
+        // both to a common form: which cells are real rooms, their distance from
+        // the entrance, and their open exits. No uniform grids here. A cavern that
+        // comes out too sparse on its seed falls back to a maze so no zone is empty.
+        let cavern_floor = if reaches_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 20).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
 
-                let mut exits: Vec<(Dir, RoomId)> = Vec::new();
-                if x + 1 < REACHES_W {
-                    exits.push((Dir::East, id + 1));
-                }
-                if x > 0 {
-                    exits.push((Dir::West, id - 1));
-                }
-                if y + 1 < REACHES_H {
-                    exits.push((Dir::South, id + REACHES_W));
-                }
-                if y > 0 {
-                    exits.push((Dir::North, id - REACHES_W));
-                }
-                rooms.insert(
+        // The zone boss waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Tidewatch").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Drowned Heart").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", FRONTIER_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str = Box::leak(
+                frontier_desc(adj, ground, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
                     id,
-                    Room {
-                        id,
-                        name,
-                        desc,
-                        zone,
-                        safe: is_entrance,
-                        exits: exits.into_iter().collect(),
-                    },
-                );
+                    name,
+                    desc,
+                    zone,
+                    safe: is_entrance && z == 0, // only the realm's sea-gate is safe
+                    exits,
+                },
+            );
 
-                if is_entrance {
+            if is_entrance {
+                continue;
+            }
+
+            // Behaviour-driven foes by the room's role: dead-ends ambush, junctions
+            // swarm, corridors patrol or cast; the deepest cell holds the boss.
+            let depth = dist[cell] as i32;
+            let storm = z >= 6; // the deeper Reaches crackle with the storm
+            let (mob_name, behavior, boss_mob, hp, dmg) = if is_boss {
+                (
+                    boss,
+                    MobBehavior::Brute,
+                    true,
+                    1400 + tier * 230,
+                    64 + tier * 6,
+                )
+            } else if degree == 1 {
+                (
+                    mob_names[0],
+                    MobBehavior::Ambusher,
+                    false,
+                    820 + tier * 60 + depth * 6,
+                    56 + tier * 4 + depth,
+                )
+            } else if degree >= 3 {
+                (
+                    mob_names[1],
+                    if rng.chance(50) {
+                        MobBehavior::PackHunter
+                    } else {
+                        MobBehavior::Summoner
+                    },
+                    false,
+                    900 + tier * 70 + depth * 6,
+                    58 + tier * 5 + depth,
+                )
+            } else {
+                // Leave some corridors quiet so the realm breathes.
+                if rng.chance(35) {
                     continue;
                 }
-                let ti = tier as i32;
-                if is_boss_room {
-                    spawns.push(MobSpawn {
-                        id: spawn_id,
-                        name: boss,
-                        home: id,
-                        max_hp: 1400 + ti * 230,
-                        damage: 64 + ti * 6,
-                        xp: 700 + ti * 120,
-                        respawn_secs: 600,
-                        loot: super::items::frontier_loot(z),
-                        boss: true,
-                        profile: DamageProfile::new(DamageType::Physical, None, None),
-                    });
-                    spawn_id += 1;
-                } else if idx.is_multiple_of(2) {
-                    spawns.push(MobSpawn {
-                        id: spawn_id,
-                        name: mob_names[(idx as usize) % 3],
-                        home: id,
-                        max_hp: 820 + ti * 90,
-                        damage: 56 + ti * 6,
-                        xp: 160 + ti * 32,
-                        respawn_secs: 90,
-                        loot: super::items::frontier_loot(z),
-                        boss: false,
-                        profile: DamageProfile::new(DamageType::Physical, None, None),
-                    });
-                    spawn_id += 1;
-                }
+                let behavior = match rng.below(4) {
+                    0 => MobBehavior::Wanderer,
+                    1 => MobBehavior::Patroller,
+                    2 => MobBehavior::Hunter,
+                    _ => MobBehavior::Caster(if storm {
+                        DamageType::Lightning
+                    } else {
+                        DamageType::Frost
+                    }),
+                };
+                (
+                    mob_names[2],
+                    behavior,
+                    false,
+                    820 + tier * 60 + depth * 6,
+                    56 + tier * 4 + depth,
+                )
+            };
+            let profile = match behavior {
+                MobBehavior::Caster(school) => DamageProfile::new(school, None, None),
+                _ => DamageProfile::new(DamageType::Physical, None, None),
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp: 160 + tier * 32 + if boss_mob { 540 } else { 0 } + depth * 5,
+                respawn_secs: if boss_mob { 600 } else { 90 },
+                loot: super::items::frontier_loot(z),
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior boss room descends to
+        // this zone's sea-gate, and back up again.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
             }
         }
-    }
-
-    // Chain each zone's last cell down into the next zone's first cell.
-    for z in 0..REACHES_ZONES - 1 {
-        let here = REACHES_BASE + (z as u32) * per_zone + (per_zone - 1);
-        let there = REACHES_BASE + ((z as u32) + 1) * per_zone;
-        if let Some(r) = rooms.get_mut(&here) {
-            r.exits.insert(Dir::Down, there);
-        }
-        if let Some(r) = rooms.get_mut(&there) {
-            r.exits.insert(Dir::Up, here);
-        }
+        prev_exit = Some(zbase + deepest as u32);
     }
 
     // Hang the sea-gate off the Matlatesh desert capital so the whole realm is
-    // reachable; the first room is a safe tidewatch waystation.
+    // reachable; the first zone's entrance is the only safe waystation.
     let entrance = REACHES_BASE;
     let portal = [Dir::Down, Dir::Up, Dir::West]
         .into_iter()
@@ -6908,15 +7042,16 @@ mod tests {
         let housing = count_in(housing_mod::HOUSING_BASE, housing_mod::HOUSING_BASE + 1000);
         let expected_housing = 1 + housing_mod::TIERS.iter().map(|t| t.rooms()).sum::<usize>();
         assert_eq!(housing, expected_housing, "housing district room count");
-        // The Sundered Reaches: a second full 1000-room continent.
+        // The Sundered Reaches: a second continent of braided mazes and organic
+        // caverns. Mazes fill their cell field; caverns are sparse, so the total
+        // is a sane band below the 1000-cell id range rather than an exact count.
         let reaches = count_in(
             REACHES_BASE,
-            REACHES_BASE + REACHES_ZONES as RoomId * REACHES_W * REACHES_H,
+            REACHES_BASE + REACHES_ZONES as RoomId * REACHES_ZONE_STRIDE,
         );
-        assert_eq!(
-            reaches,
-            REACHES_ZONES * (REACHES_W * REACHES_H) as usize,
-            "the Sundered Reaches is a full 1000-room region"
+        assert!(
+            (750..=1000).contains(&reaches),
+            "the Sundered Reaches should be ~900 rooms, got {reaches}"
         );
         // No stray rooms outside the six known groups.
         assert_eq!(
@@ -6933,6 +7068,31 @@ mod tests {
                 spawn.home
             );
         }
+    }
+
+    #[test]
+    fn the_reaches_are_mazes_and_caverns_not_grids() {
+        let world = seed_world();
+        let reaches: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| is_reaches_room(r.id))
+            .collect();
+        // Plenty of rooms - a real continent.
+        assert!(reaches.len() >= 750, "the Reaches are sizeable");
+        // A uniform grid has no dead-ends; a braided maze/cavern has many. The
+        // presence of degree-1 rooms (and varied degree overall) proves shape.
+        let dead_ends = reaches.iter().filter(|r| r.exits.len() == 1).count();
+        assert!(
+            dead_ends >= 20,
+            "the Reaches should wind into dead-ends, not be square blocks (got {dead_ends})"
+        );
+        let degrees: std::collections::HashSet<usize> =
+            reaches.iter().map(|r| r.exits.len()).collect();
+        assert!(
+            degrees.len() >= 3,
+            "rooms should vary in how many ways they branch (got {degrees:?})"
+        );
     }
 
     #[test]
