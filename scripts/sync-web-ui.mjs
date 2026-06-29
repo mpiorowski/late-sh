@@ -93,7 +93,7 @@ async function boot() {
   me = { id: identity.id, short: identity.id.slice(0, 8) };
   const st = store.state();
   boards = st.boards;
-  $('node').textContent = st.node + ' · ' + st.total_messages + ' msgs · anon @' + me.short + ' · 🔑 in-browser';
+  const n = $('node'); if (n) n.textContent = st.node + ' · ' + st.total_messages + ' msgs · anon @' + me.short + ' · 🔑 in-browser';
   booted = true;
   refreshChrome();
   updateModeBadge();

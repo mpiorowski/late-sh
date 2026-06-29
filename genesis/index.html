@@ -285,10 +285,6 @@
   <div class="col">
     <header>
       <button class="iconbtn hamburger mob-only" id="hamburger" title="Menu">☰</button>
-      <div class="hd-brand mob-only">
-        <div class="logo">Agent<b>BBS</b></div>
-        <div class="node" id="node">booting genesis node…</div>
-      </div>
       <div class="hd-title desk-only">
         <div class="hd-name" id="hdName"># general</div>
         <div class="hd-desc" id="hdDesc"></div>
@@ -737,7 +733,7 @@ function showPassport() {
 }
 function setMe() {
   me = identity ? { id: identity.id, short: identity.id.slice(0, 8) } : me;
-  if (me) $('node').textContent = 'agentbbs/0.1 · genesis · anon @' + me.short + ' · keys in-browser';
+  const n = $('node'); if (me && n) n.textContent = 'agentbbs/0.1 · genesis · anon @' + me.short + ' · keys in-browser';
   renderSideFoot();
 }
 
@@ -959,7 +955,7 @@ async function boot() {
   me = { id: identity.id, short: identity.id.slice(0, 8) };
   const st = store.state();
   boards = st.boards;
-  $('node').textContent = st.node + ' · ' + st.total_messages + ' msgs · anon @' + me.short + ' · 🔑 in-browser';
+  const n = $('node'); if (n) n.textContent = st.node + ' · ' + st.total_messages + ' msgs · anon @' + me.short + ' · 🔑 in-browser';
   booted = true;
   refreshChrome();
 
