@@ -11,9 +11,11 @@ use std::collections::VecDeque;
 use rand::Rng;
 use uuid::Uuid;
 
-use super::combat::{Combatant, resolve_round};
+use super::combat::{Buff, Combatant, resolve_round_buffed};
 use super::data;
-use super::model::{self, Character, ForestHunt, GypsyUpgrade};
+use super::events::{self, ForestEvent};
+use super::model::{self, Character, ForestHunt, GypsyUpgrade, Specialty};
+use super::specialty;
 use super::svc::{CharacterLoad, GreenDragonService};
 
 /// Which Green Dragon screen the session is looking at.
@@ -39,6 +41,10 @@ pub enum Mode {
     Training,
     /// The Gypsy's Tent: spend dragon points on permanent boons.
     Gypsy,
+    /// A forest special event awaiting the player's accept/decline choice.
+    Event,
+    /// The one-time specialty chooser (Mystical / Dark Arts / Thief).
+    ChooseSpecialty,
     /// The graveyard: shown while dead, until the next new day.
     Graveyard,
 }
@@ -62,6 +68,8 @@ pub struct Encounter {
     pub reward_gold: u32,
     pub reward_exp: u32,
     pub kind: FoeKind,
+    /// Active specialty buffs, ticked each round by [`resolve_round_buffed`].
+    pub buffs: Vec<Buff>,
 }
 
 const LOG_CAP: usize = 7;
@@ -75,6 +83,8 @@ pub struct State {
     cursor: usize,
     log: VecDeque<String>,
     encounter: Option<Encounter>,
+    /// The forest event awaiting an accept/decline choice, while in [`Mode::Event`].
+    pending_event: Option<ForestEvent>,
 }
 
 impl State {
@@ -92,6 +102,7 @@ impl State {
             cursor: 0,
             log: VecDeque::new(),
             encounter: None,
+            pending_event: None,
         }
     }
 
@@ -139,6 +150,12 @@ impl State {
         self.encounter.as_ref()
     }
 
+    /// The forest event currently awaiting a choice, if any (for rendering its
+    /// framing text in [`Mode::Event`]).
+    pub fn pending_event(&self) -> Option<ForestEvent> {
+        self.pending_event
+    }
+
     pub fn log_lines(&self) -> impl Iterator<Item = &str> {
         self.log.iter().map(String::as_str)
     }
@@ -157,7 +174,9 @@ impl State {
             Mode::Bank => bank_menu(c),
             Mode::Training => training_menu(c),
             Mode::Gypsy => gypsy_menu(c),
-            Mode::Fight => fight_menu(),
+            Mode::Fight => fight_menu(c),
+            Mode::Event => event_menu(c, self.pending_event),
+            Mode::ChooseSpecialty => specialty_menu(),
             Mode::Graveyard => vec![("Wait for a new day (leave)".into(), true)],
             Mode::Loading => Vec::new(),
         }
@@ -195,6 +214,8 @@ impl State {
             Mode::Training => self.select_training(),
             Mode::Gypsy => self.select_gypsy(),
             Mode::Fight => self.select_fight(),
+            Mode::Event => self.select_event(),
+            Mode::ChooseSpecialty => self.select_specialty(),
             Mode::Graveyard => Selection::Leave,
             Mode::Loading => Selection::Stay,
         }
@@ -212,6 +233,12 @@ impl State {
                 self.encounter = None;
                 self.goto(Mode::Village);
                 Selection::Stay
+            }
+            Mode::Event => {
+                // Esc on an event declines it (the no-choice branch), then
+                // returns to the forest.
+                self.cursor = 1;
+                self.select_event()
             }
             _ => {
                 self.goto(Mode::Village);
@@ -232,6 +259,7 @@ impl State {
         let rows = village_menu(c);
         match rows[self.cursor].0.as_str() {
             s if s.starts_with("The Forest") => self.goto(Mode::Forest),
+            s if s.starts_with("Choose a Specialty") => self.goto(Mode::ChooseSpecialty),
             s if s.starts_with("The Proving Yard") => self.goto(Mode::Training),
             s if s.starts_with("Seek Out the Green Dragon") => self.start_dragon(),
             s if s.starts_with("The Gypsy") => self.goto(Mode::Gypsy),
@@ -264,11 +292,19 @@ impl State {
             self.push_log("You are too tired to fight. Come back tomorrow.".into());
             return;
         }
+        // A fraction of searches turn up a special event instead of a fight. The
+        // event itself doesn't spend the forest turn (some, like the mine, spend
+        // it as their own effect), so roll before decrementing.
+        let mut rng = rand::thread_rng();
+        if rng.gen_range(0..100) < events::FOREST_EVENT_PERCENT {
+            let event = events::roll(&mut rng);
+            self.start_event(event);
+            return;
+        }
         c.turns -= 1;
         let player_level = c.level;
         // The hunt sets a ±1 base shift; LoGD then layers a small random jitter:
         // roughly a third of searches nudge the level up (1/5) and/or down (1/3).
-        let mut rng = rand::thread_rng();
         let mut level = hunt.creature_level(player_level) as i16;
         if rng.gen_range(0..3) == 0 {
             if rng.gen_range(0..5) == 0 {
@@ -303,9 +339,80 @@ impl State {
             reward_gold,
             reward_exp,
             kind: FoeKind::Creature,
+            buffs: Vec::new(),
         });
         self.push_log(format!("You encounter {name} wielding {weapon}!"));
         self.goto(Mode::Fight);
+    }
+
+    // --- forest special events ----------------------------------------------
+
+    /// Begin a forest event: log its framing, then either resolve it instantly
+    /// (no choice) or open [`Mode::Event`] to await the player's decision.
+    fn start_event(&mut self, event: ForestEvent) {
+        let c = self.character.as_ref().unwrap();
+        let pres = event.present(c);
+        if pres.choice.is_none() {
+            // Instant event: narration and outcome both go to the log, then we
+            // drop straight back to the forest.
+            for line in &pres.intro {
+                self.push_log((*line).to_string());
+            }
+            let mut rng = rand::thread_rng();
+            let lines = event.resolve(true, self.character.as_mut().unwrap(), &mut rng);
+            for line in lines {
+                self.push_log(line);
+            }
+            self.after_event();
+        } else {
+            // Choice event: the framing is shown in the panel (Mode::Event), so
+            // it isn't logged until the outcome lands.
+            self.pending_event = Some(event);
+            self.goto(Mode::Event);
+        }
+    }
+
+    /// Resolve the pending event with the player's choice (cursor 0 = accept).
+    fn select_event(&mut self) -> Selection {
+        let Some(event) = self.pending_event.take() else {
+            self.goto(Mode::Forest);
+            return Selection::Stay;
+        };
+        let accepted = self.cursor == 0;
+        let mut rng = rand::thread_rng();
+        let lines = event.resolve(accepted, self.character.as_mut().unwrap(), &mut rng);
+        for line in lines {
+            self.push_log(line);
+        }
+        self.after_event();
+        Selection::Stay
+    }
+
+    /// Land somewhere sensible after an event: the graveyard if it killed you
+    /// (the mine cave-in, the stream), otherwise back to the forest to hunt on.
+    fn after_event(&mut self) {
+        self.pending_event = None;
+        let alive = self.character.as_ref().unwrap().alive;
+        self.goto(if alive { Mode::Forest } else { Mode::Graveyard });
+        self.save();
+    }
+
+    // --- specialty chooser --------------------------------------------------
+
+    /// Apply the one-time specialty choice and return to the village.
+    fn select_specialty(&mut self) -> Selection {
+        let choice = match self.cursor {
+            0 => Specialty::Mystical,
+            1 => Specialty::DarkArts,
+            2 => Specialty::Thief,
+            _ => return Selection::Stay,
+        };
+        let c = self.character.as_mut().unwrap();
+        c.choose_specialty(choice);
+        self.push_log(format!("You devote yourself to the {}.", choice.name()));
+        self.save();
+        self.goto(Mode::Village);
+        Selection::Stay
     }
 
     // --- training (master fight) -------------------------------------------
@@ -328,6 +435,7 @@ impl State {
             reward_gold: 0,
             reward_exp: 0,
             kind: FoeKind::Master,
+            buffs: Vec::new(),
         });
         self.push_log(format!("{} steps forward to test you!", master.name));
         self.goto(Mode::Fight);
@@ -373,6 +481,7 @@ impl State {
             reward_gold: 0,
             reward_exp: 0,
             kind: FoeKind::Dragon,
+            buffs: Vec::new(),
         });
         self.push_log("You step into the dragon's lair. The air turns to fire.".into());
         self.goto(Mode::Fight);
@@ -385,13 +494,17 @@ impl State {
     }
 
     fn select_fight(&mut self) -> Selection {
-        match self.fight_menu_action() {
-            0 => {
-                self.attack_round();
-                Selection::Stay
-            }
-            1 => self.back(), // Flee
-            _ => Selection::Stay,
+        let c = self.character.as_ref().unwrap();
+        let skill_count = specialty::skills(c.specialty).len();
+        let cursor = self.fight_menu_action();
+        // Layout: [0] Attack, [1..=skill_count] skills, [last] Flee.
+        if cursor == 0 {
+            self.attack_round();
+            Selection::Stay
+        } else if cursor <= skill_count {
+            self.cast_specialty_skill(cursor - 1)
+        } else {
+            self.back() // Flee
         }
     }
 
@@ -401,10 +514,14 @@ impl State {
         };
         let player = self.character.as_ref().unwrap().combatant();
         let mut rng = rand::thread_rng();
-        let outcome = resolve_round(&mut rng, player, enc.foe);
+        let outcome = resolve_round_buffed(&mut rng, player, enc.foe, &mut enc.buffs);
 
         if outcome.player_crit {
             self.push_log("A critical strike! You triple your power!".into());
+        }
+        // Active-buff and wear-off flavor for this round.
+        for msg in &outcome.messages {
+            self.push_log(msg.clone());
         }
         enc.hp = enc.hp.saturating_sub(outcome.damage_to_enemy);
         self.push_log(format!(
@@ -420,6 +537,10 @@ impl State {
         // Foe strikes back.
         let c = self.character.as_mut().unwrap();
         c.hitpoints = c.hitpoints.saturating_sub(outcome.damage_to_player);
+        // Regeneration / life-tap healing, capped at max HP.
+        if outcome.player_heal > 0 {
+            c.hitpoints = (c.hitpoints + outcome.player_heal).min(c.max_hitpoints());
+        }
         let hp = c.hitpoints;
         self.push_log(format!(
             "{} hits you for {} ({} HP left).",
@@ -432,6 +553,29 @@ impl State {
         }
         self.encounter = Some(enc);
         self.save();
+    }
+
+    /// Cast the specialty skill at `skill_index` (rows after Attack/Flee in the
+    /// fight menu): spend its uses, apply its buff to the encounter, then resolve
+    /// a round with it active. Mirrors LoGD, where invoking a skill *is* the
+    /// round's action.
+    fn cast_specialty_skill(&mut self, skill_index: usize) -> Selection {
+        let c = self.character.as_ref().unwrap();
+        let skills = specialty::skills(c.specialty);
+        let Some(skill) = skills.get(skill_index) else {
+            return Selection::Stay;
+        };
+        let (level, attack) = (c.level as u32, c.attack());
+        if !self.character.as_mut().unwrap().spend_specialty_uses(skill.cost) {
+            self.push_log("You haven't the focus left for that skill.".into());
+            return Selection::Stay;
+        }
+        if let Some(enc) = self.encounter.as_mut() {
+            enc.buffs.push(skill.buff(level, attack));
+        }
+        self.push_log(format!("You invoke {}!", skill.name));
+        self.attack_round();
+        Selection::Stay
     }
 
     fn victory(&mut self, enc: &Encounter) {
@@ -611,6 +755,9 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
             c.can_challenge_master(),
         ),
     ];
+    if c.specialty == Specialty::None {
+        rows.push(("Choose a Specialty".into(), true));
+    }
     if c.can_seek_dragon() {
         rows.push(("Seek Out the Green Dragon".into(), true));
     }
@@ -640,8 +787,36 @@ fn forest_menu(c: &Character) -> Vec<(String, bool)> {
     ]
 }
 
-fn fight_menu() -> Vec<(String, bool)> {
-    vec![("Attack".into(), true), ("Flee".into(), true)]
+/// The fight menu: Attack, then any unlocked specialty skills (shown with their
+/// use-cost and disabled when the pool can't pay), then Flee. The skill rows sit
+/// between Attack and Flee so those two keep stable positions.
+fn fight_menu(c: &Character) -> Vec<(String, bool)> {
+    let mut rows = vec![("Attack".into(), true)];
+    for skill in specialty::skills(c.specialty) {
+        rows.push((
+            format!("{} ({} use{})", skill.name, skill.cost, if skill.cost == 1 { "" } else { "s" }),
+            c.specialty_uses >= skill.cost,
+        ));
+    }
+    rows.push(("Flee".into(), true));
+    rows
+}
+
+/// The three specialty choices for the one-time chooser.
+fn specialty_menu() -> Vec<(String, bool)> {
+    vec![
+        ("Mystical Powers (regeneration, life-siphon)".into(), true),
+        ("Dark Arts (minions, curses)".into(), true),
+        ("Thief Skills (poison, backstab)".into(), true),
+    ]
+}
+
+/// The pending forest event's two choices, or empty if none is staged.
+fn event_menu(c: &Character, event: Option<ForestEvent>) -> Vec<(String, bool)> {
+    match event.and_then(|e| e.present(c).choice) {
+        Some((accept, decline)) => vec![(accept.into(), true), (decline.into(), true)],
+        None => Vec::new(),
+    }
 }
 
 fn healer_menu(c: &Character) -> Vec<(String, bool)> {

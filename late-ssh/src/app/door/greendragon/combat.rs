@@ -76,6 +76,159 @@ pub fn resolve_round(rng: &mut impl Rng, player: Combatant, enemy: Combatant) ->
     }
 }
 
+/// An active combat buff: a bundle of per-round modifiers mirroring the fields
+/// LoGD's `apply_buff` understands. Every specialty skill compiles down to one
+/// of these. Defaults are no-ops (1.0 multipliers, zero flats) so a skill sets
+/// only the fields it actually changes — build one with [`Buff::new`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Buff {
+    pub name: String,
+    /// Rounds left before the buff wears off. Decremented after each round.
+    pub rounds_left: u32,
+    /// Multiplier on the player's attack stat (`atkmod`).
+    pub player_atk_mod: f32,
+    /// Multiplier on the player's defense stat (`defmod`).
+    pub player_def_mod: f32,
+    /// Multiplier on the enemy's attack stat (`badguyatkmod`).
+    pub enemy_atk_mod: f32,
+    /// Multiplier on the enemy's defense stat (`badguydefmod`).
+    pub enemy_def_mod: f32,
+    /// Multiplier on damage the enemy actually deals this round (`badguydmgmod`).
+    pub enemy_dmg_mod: f32,
+    /// Flat HP healed to the player each round (`regen`).
+    pub regen: u32,
+    /// Heal as a fraction of damage dealt to the enemy this round (`lifetap`).
+    pub lifetap: f32,
+    /// Extra hits on the enemy each round (`minioncount`), each rolling
+    /// `minion_min..=minion_max` damage.
+    pub minion_count: u32,
+    pub minion_min: u32,
+    pub minion_max: u32,
+    /// Reflect this fraction of damage received back at the enemy (`damageshield`).
+    pub damage_shield: f32,
+    /// Flavor shown while the buff is active.
+    pub round_msg: Option<String>,
+    /// Flavor shown the round it wears off.
+    pub wearoff: String,
+}
+
+impl Buff {
+    /// A no-op buff of `name` lasting `rounds`. Callers set the fields the skill
+    /// changes; everything else stays neutral.
+    pub fn new(name: impl Into<String>, rounds: u32) -> Self {
+        Buff {
+            name: name.into(),
+            rounds_left: rounds,
+            player_atk_mod: 1.0,
+            player_def_mod: 1.0,
+            enemy_atk_mod: 1.0,
+            enemy_def_mod: 1.0,
+            enemy_dmg_mod: 1.0,
+            regen: 0,
+            lifetap: 0.0,
+            minion_count: 0,
+            minion_min: 0,
+            minion_max: 0,
+            damage_shield: 0.0,
+            round_msg: None,
+            wearoff: String::new(),
+        }
+    }
+}
+
+/// A round resolved with active buffs folded in: the base outcome plus the heal
+/// the player gained and any buff flavor (per-round messages and wear-offs).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuffedOutcome {
+    pub damage_to_enemy: u32,
+    pub damage_to_player: u32,
+    pub player_crit: bool,
+    /// Total HP restored to the player this round (regen + lifetap).
+    pub player_heal: u32,
+    /// Buff flavor to log this round (active round messages, then wear-offs).
+    pub messages: Vec<String>,
+}
+
+fn scale(stat: u32, factor: f32) -> u32 {
+    (stat as f32 * factor).round() as u32
+}
+
+/// Resolve one round with `buffs` applied: stat multipliers adjust the combat
+/// roll, then post-round effects (enemy damage scaling, regen/lifetap heals,
+/// minion hits, the lightning damage-shield) layer on. Buffs tick down and
+/// expired ones are removed, their wear-off flavor collected. Mirrors how LoGD
+/// threads buff hooks through `rolldamage`.
+pub fn resolve_round_buffed(
+    rng: &mut impl Rng,
+    player: Combatant,
+    enemy: Combatant,
+    buffs: &mut Vec<Buff>,
+) -> BuffedOutcome {
+    let (mut p_atk, mut p_def) = (1.0_f32, 1.0_f32);
+    let (mut e_atk, mut e_def, mut e_dmg) = (1.0_f32, 1.0_f32, 1.0_f32);
+    for b in buffs.iter() {
+        p_atk *= b.player_atk_mod;
+        p_def *= b.player_def_mod;
+        e_atk *= b.enemy_atk_mod;
+        e_def *= b.enemy_def_mod;
+        e_dmg *= b.enemy_dmg_mod;
+    }
+    let buffed_player = Combatant {
+        attack: scale(player.attack, p_atk),
+        defense: scale(player.defense, p_def),
+    };
+    let buffed_enemy = Combatant {
+        attack: scale(enemy.attack, e_atk),
+        defense: scale(enemy.defense, e_def),
+    };
+
+    let base = resolve_round(rng, buffed_player, buffed_enemy);
+    let damage_to_player = scale(base.damage_to_player, e_dmg);
+
+    let mut heal = 0u32;
+    let mut bonus_to_enemy = 0u32;
+    let mut messages = Vec::new();
+    for b in buffs.iter() {
+        heal += b.regen;
+        if b.lifetap > 0.0 {
+            heal += scale(base.damage_to_enemy, b.lifetap);
+        }
+        if b.damage_shield > 0.0 {
+            bonus_to_enemy += scale(damage_to_player, b.damage_shield);
+        }
+        for _ in 0..b.minion_count {
+            let hi = b.minion_max.max(b.minion_min);
+            bonus_to_enemy += rng.gen_range(b.minion_min..=hi);
+        }
+        if let Some(msg) = &b.round_msg {
+            messages.push(msg.clone());
+        }
+    }
+
+    for b in buffs.iter_mut() {
+        b.rounds_left = b.rounds_left.saturating_sub(1);
+    }
+    let mut i = 0;
+    while i < buffs.len() {
+        if buffs[i].rounds_left == 0 {
+            let expired = buffs.remove(i);
+            if !expired.wearoff.is_empty() {
+                messages.push(expired.wearoff);
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    BuffedOutcome {
+        damage_to_enemy: base.damage_to_enemy + bonus_to_enemy,
+        damage_to_player,
+        player_crit: base.player_crit,
+        player_heal: heal,
+        messages,
+    }
+}
+
 /// How a fully simulated fight ended. Used by tests and balance checks; the
 /// live game steps one [`resolve_round`] per player action instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,6 +303,50 @@ mod tests {
             let o = resolve_round(&mut rng, p, e);
             assert!(o.damage_to_enemy > 0 || o.damage_to_player > 0);
         }
+    }
+
+    #[test]
+    fn buff_regen_heals_and_expires() {
+        let mut rng = StdRng::seed_from_u64(7);
+        let mut regen = Buff::new("Regen", 2);
+        regen.regen = 5;
+        let mut buffs = vec![regen];
+        let p = Combatant { attack: 5, defense: 5 };
+        let e = Combatant { attack: 5, defense: 5 };
+        // Round 1 and 2 each grant the regen heal; the buff lasts two rounds.
+        let r1 = resolve_round_buffed(&mut rng, p, e, &mut buffs);
+        assert_eq!(r1.player_heal, 5);
+        assert_eq!(buffs.len(), 1);
+        let r2 = resolve_round_buffed(&mut rng, p, e, &mut buffs);
+        assert_eq!(r2.player_heal, 5);
+        // It wore off at the end of round 2.
+        assert!(buffs.is_empty());
+        let r3 = resolve_round_buffed(&mut rng, p, e, &mut buffs);
+        assert_eq!(r3.player_heal, 0);
+    }
+
+    #[test]
+    fn buff_curse_halves_incoming_damage() {
+        // A foe that always deals damage, with and without the half-damage curse.
+        let p = Combatant { attack: 0, defense: 0 };
+        let e = Combatant { attack: 100, defense: 0 };
+        let mut none: Vec<Buff> = vec![];
+        let mut curse = Buff::new("Curse", 5);
+        curse.enemy_dmg_mod = 0.5;
+        let cursed = vec![curse];
+
+        let mut plain_total = 0u64;
+        let mut cursed_total = 0u64;
+        for seed in 0..200 {
+            let mut r1 = StdRng::seed_from_u64(seed);
+            plain_total += resolve_round_buffed(&mut r1, p, e, &mut none).damage_to_player as u64;
+            let mut r2 = StdRng::seed_from_u64(seed);
+            cursed_total +=
+                resolve_round_buffed(&mut r2, p, e, &mut cursed.clone()).damage_to_player as u64;
+        }
+        // Cursed damage should land near half of the uncursed total.
+        assert!(cursed_total * 2 <= plain_total + plain_total / 5);
+        assert!(cursed_total > 0);
     }
 
     #[test]

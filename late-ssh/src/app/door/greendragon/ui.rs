@@ -14,7 +14,7 @@ use crate::app::common::theme;
 use crate::app::door::landing;
 
 use super::data;
-use super::model::Character;
+use super::model::{Character, Specialty};
 use super::state::{Mode, State};
 
 /// Draw the live Green Dragon game (called when a character is loaded).
@@ -70,7 +70,7 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
     };
 
     let exp_target = c.exp_for_next_level();
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             c.name.clone(),
             bright.add_modifier(Modifier::BOLD),
@@ -90,6 +90,7 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         Line::raw(""),
         stat("Gold", c.gold.to_string(), gold),
         stat("Bank", c.gold_in_bank.to_string(), gold),
+        stat("Gems", c.gems.to_string(), gold),
         stat(
             "Exp",
             if c.level >= data::MAX_LEVEL {
@@ -103,6 +104,17 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         stat("Dragons", c.dragon_kills.to_string(), gold),
         stat("DK pts", c.dragon_points.to_string(), gold),
     ];
+
+    // Specialty (once chosen): the path, and today's spendable skill uses.
+    if c.specialty != Specialty::None {
+        lines.push(Line::raw(""));
+        lines.push(stat("Path", c.specialty.name().to_string(), bright));
+        lines.push(stat(
+            "Focus",
+            format!("{} uses (skill {})", c.specialty_uses, c.specialty_skill),
+            dim,
+        ));
+    }
 
     let block = Block::default()
         .borders(Borders::RIGHT)
@@ -190,6 +202,27 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         )));
     }
 
+    // A forest event shows its framing narration above the accept/decline rows.
+    if state.mode() == Mode::Event
+        && let Some(event) = state.pending_event()
+    {
+        lines.push(Line::raw(""));
+        for line in event.present(c).intro {
+            lines.push(Line::from(Span::styled(
+                line,
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
+        }
+    }
+
+    if state.mode() == Mode::ChooseSpecialty {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "Choose the craft you'll hone against the forest. The choice is permanent; you'll spend daily \"uses\" on its skills mid-fight.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+
     lines.push(Line::raw(""));
     for (i, (label, enabled)) in state.menu().into_iter().enumerate() {
         let selected = i == state.cursor();
@@ -251,6 +284,8 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Bank => "The Coinvault",
         Mode::Training => "The Proving Yard",
         Mode::Gypsy => "The Gypsy's Tent",
+        Mode::Event => "A Forest Happening",
+        Mode::ChooseSpecialty => "Choose Your Path",
         Mode::Graveyard => "The Graveyard",
     }
 }

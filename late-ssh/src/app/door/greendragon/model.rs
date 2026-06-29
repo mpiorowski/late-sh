@@ -135,8 +135,47 @@ pub struct Character {
     pub dragon_defense_bonus: u32,
     /// Permanent extra daily forest fights bought at the Gypsy (Stamina).
     pub dragon_turn_bonus: u32,
+    /// Gems: the second currency, found in the forest and spent advancing your
+    /// specialty (LoGD's gem economy). Distinct from gold.
+    pub gems: u64,
+    /// Chosen combat specialty, picked once and largely permanent. `None` until
+    /// the player decides (LoGD sets it on the first new day).
+    pub specialty: Specialty,
+    /// Lifetime skill points in the chosen specialty. Advanced by training
+    /// (gems) and by certain forest events. Every 3rd point grants a use.
+    pub specialty_skill: u32,
+    /// Spendable specialty "uses" for today: `floor(skill/3)` refreshed each new
+    /// day, +1 bonus for the specialty you actually chose.
+    pub specialty_uses: u32,
     /// UTC day-number of the last new-day reset, for turn/heal regeneration.
     pub last_day: i64,
+}
+
+/// The three combat specialties, mirroring LoGD's `MP`/`DA`/`TS`. The in-fight
+/// skills each unlocks live in [`super::combat`]; `None` is the undecided state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Specialty {
+    /// Undecided — no specialty chosen yet.
+    #[default]
+    None,
+    /// Mystical Powers: regeneration, earth fist, life siphon, lightning aura.
+    Mystical,
+    /// Dark Arts: skeleton minions, voodoo, the foe-weakening curse, wither.
+    DarkArts,
+    /// Thief skills: insult, poison blade, hidden attack, backstab.
+    Thief,
+}
+
+impl Specialty {
+    /// Short display label.
+    pub fn name(self) -> &'static str {
+        match self {
+            Specialty::None => "None",
+            Specialty::Mystical => "Mystical Powers",
+            Specialty::DarkArts => "Dark Arts",
+            Specialty::Thief => "Thief Skills",
+        }
+    }
 }
 
 impl Default for Character {
@@ -159,6 +198,10 @@ impl Default for Character {
             dragon_attack_bonus: 0,
             dragon_defense_bonus: 0,
             dragon_turn_bonus: 0,
+            gems: 0,
+            specialty: Specialty::None,
+            specialty_skill: 0,
+            specialty_uses: 0,
             last_day: 0,
         }
     }
@@ -460,8 +503,50 @@ impl Character {
         // yesterday's turns went unused (LoGD's "work for it" gate).
         self.apply_new_day_interest(interest_percent);
         self.turns = TURNS_PER_DAY + dk_forest_bonus;
+        self.refresh_specialty_uses();
         self.alive = true;
         self.hitpoints = self.max_hitpoints();
+        true
+    }
+
+    /// Refill the day's specialty uses: `floor(skill/3)`, plus 1 for having
+    /// chosen a specialty at all (LoGD's `specialtybonus`). No-op while undecided.
+    pub fn refresh_specialty_uses(&mut self) {
+        if self.specialty == Specialty::None {
+            self.specialty_uses = 0;
+            return;
+        }
+        self.specialty_uses = self.specialty_skill / 3 + 1;
+    }
+
+    /// Pick a specialty (LoGD chooses on the first new day; here it's a one-time
+    /// choice). Seeds the first day's uses immediately.
+    pub fn choose_specialty(&mut self, specialty: Specialty) {
+        self.specialty = specialty;
+        self.refresh_specialty_uses();
+    }
+
+    /// Advance the chosen specialty by one skill point. Every third point also
+    /// grants an immediate use (mirrors `incrementspecialty`). Returns the new
+    /// skill level, or `None` if the player has no specialty to advance.
+    pub fn increment_specialty(&mut self) -> Option<u32> {
+        if self.specialty == Specialty::None {
+            return None;
+        }
+        self.specialty_skill += 1;
+        if self.specialty_skill.is_multiple_of(3) {
+            self.specialty_uses += 1;
+        }
+        Some(self.specialty_skill)
+    }
+
+    /// Spend `cost` specialty uses to fire an in-fight skill. Returns false (and
+    /// spends nothing) if the pool can't cover it.
+    pub fn spend_specialty_uses(&mut self, cost: u32) -> bool {
+        if self.specialty_uses < cost {
+            return false;
+        }
+        self.specialty_uses -= cost;
         true
     }
 
@@ -510,6 +595,41 @@ mod tests {
         assert_eq!(c.max_hitpoints(), 80);
         assert_eq!(c.attack(), 18); // 8 + 10
         assert_eq!(c.defense(), 15); // 8 + 7
+    }
+
+    #[test]
+    fn specialty_skill_grants_a_use_every_three() {
+        let mut c = Character::new("hero", 0);
+        c.choose_specialty(Specialty::Thief);
+        // Choosing seeds the +1 bonus use.
+        assert_eq!(c.specialty_uses, 1);
+        // Two increments: still floor(2/3)=0 from skill, the seeded use remains.
+        c.increment_specialty();
+        c.increment_specialty();
+        assert_eq!(c.specialty_skill, 2);
+        assert_eq!(c.specialty_uses, 1);
+        // The third increment crosses a multiple of 3 and grants a use.
+        c.increment_specialty();
+        assert_eq!(c.specialty_skill, 3);
+        assert_eq!(c.specialty_uses, 2);
+    }
+
+    #[test]
+    fn specialty_uses_refresh_on_new_day() {
+        let mut c = Character::new("hero", 0);
+        c.choose_specialty(Specialty::Mystical);
+        c.specialty_skill = 9; // floor(9/3) = 3, plus the +1 chosen bonus
+        c.specialty_uses = 0; // spent down during the day
+        c.roll_new_day(1, 0, 0);
+        assert_eq!(c.specialty_uses, 4);
+    }
+
+    #[test]
+    fn increment_without_specialty_is_a_noop() {
+        let mut c = Character::new("hero", 0);
+        assert_eq!(c.increment_specialty(), None);
+        assert_eq!(c.specialty_skill, 0);
+        assert_eq!(c.specialty_uses, 0);
     }
 
     #[test]
