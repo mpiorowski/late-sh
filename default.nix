@@ -20,7 +20,7 @@
   mold,
   webkitgtk_4_1 ? null,
 }: let
-  packageVersion = (builtins.fromTOML (builtins.readFile ./late-ssh/Cargo.toml)).package.version;
+  packageVersion = (builtins.fromTOML (builtins.readFile ./crates/late-ssh/Cargo.toml)).package.version;
   gstPluginsBadNoLv2 =
     if stdenv.isLinux
     then
@@ -100,7 +100,7 @@ in
       "^.git/"
       "^flake\\.lock$"
       "^target/"
-      "^late-web/node_modules/"
+      "^crates/late-web/node_modules/"
     ];
 
     cargoLock.lockFile = ./Cargo.lock;

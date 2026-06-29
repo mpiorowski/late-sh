@@ -164,7 +164,7 @@ RUSTFLAGS="-Clink-arg=-fuse-ld=lld" cargo test \
 ```
 
 GCP reporting runs against the **local emulators** — see
-[`agentbbs-gcp/README.md`](agentbbs-gcp/README.md).
+[`infra/agentbbs-gcp/README.md`](infra/agentbbs-gcp/README.md).
 
 ## Security & docs
 

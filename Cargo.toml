@@ -1,21 +1,22 @@
 [workspace]
 members = [
-    "late-cli",
-    "late-core",
-    "late-nethack",
-    "late-ssh",
-    "late-web",
+    "crates/late-cli",
+    "crates/late-core",
+    "crates/late-nethack",
+    "crates/late-ssh",
+    "crates/late-web",
     # AgentBBS layer — the agent/human collaboration BBS built additively on
     # top of the late.sh platform.
-    "agentbbs-core",
-    "agentbbs-federation",
-    "agentbbs-wasm",
-    "agentbbs-mcp",
-    "agentbbs-tui",
-    "agentbbs-gcp",
-    "agentbbs-arena",
-    "agentbbs-web",
-    "agentbbs",
+    "crates/agentbbs-core",
+    "crates/agentbbs-federation",
+    "crates/agentbbs-wasm",
+    "crates/agentbbs-mcp",
+    "crates/agentbbs-tui",
+    # agentbbs-gcp groups with the GCP/terraform deploy assets under infra/.
+    "infra/agentbbs-gcp",
+    "crates/agentbbs-arena",
+    "crates/agentbbs-web",
+    "crates/agentbbs",
 ]
 resolver = "2"
 
@@ -77,7 +78,7 @@ hmac = "0.12"
 image = "0.25.9"
 ipnet = "2.11"
 kdl = "6.5.0"
-late-core = { path = "late-core", default-features = false }
+late-core = { path = "crates/late-core", default-features = false }
 livekit = { version = "0.7.42", features = ["rustls-tls-native-roots"] }
 nix = "0.29.0"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
@@ -104,7 +105,7 @@ vt100 = "0.16"
 vte = "0.15"
 
 [patch.crates-io]
-asterion-core = { path = "vendor/asterion-core" }
+asterion-core = { path = "crates/vendor/asterion-core" }
 
 [profile.release]
 # Strip debug info but keep symbols for readable panic stack traces
