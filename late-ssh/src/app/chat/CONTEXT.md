@@ -140,6 +140,7 @@ Messages:
 - Recent/tail queries return newest-first: `ORDER BY created DESC, id DESC`.
 - Delta queries return ascending after `(created, id)` and are inserted into newest-first local state.
 - `reply_to_message_id` is nullable and uses `ON DELETE SET NULL`.
+- `reply_to_user_id` is nullable and uses `ON DELETE SET NULL`. It records the user a bot/automated reply is responding to, used to filter such replies for viewers who ignore that user. Set only by bot sends.
 - `pinned` is a global message-level flag with a partial pinned index.
 
 Reactions:
@@ -377,9 +378,9 @@ Ignores:
 - `users.settings.ignored_user_ids` stores UUIDs, not usernames.
 - `users.settings.friend_user_ids` stores private one-way friend marks as UUIDs.
 - `/ignore @user` and `/unignore @user` resolve usernames at command time.
-- Ignore filtering applies to non-DM rooms only.
-- DMs intentionally bypass ignored-user filtering; leaving the DM room is the dismissal path.
-- `IgnoreListUpdated` refilters local non-DM messages in place with no DB refetch, then refreshes the Mentions list/unread count.
+- A message is hidden if its author is ignored, OR if `chat_messages.reply_to_user_id` is an ignored user. The latter hides bot/automated replies directed at an ignored user so they cannot be heard by proxy through `@bot`/`@graybeard`/`@dealer`. Only bots set `reply_to_user_id` (via `ChatService::send_bot_reply_task`); human replies use `reply_to_message_id`. The shared filter helper is `state::message_is_ignored_in`.
+- Ignore filtering applies to DMs too. An ignored peer's DM messages are filtered, and the DM room is hidden from the room rail/navigation while the peer is ignored (`visual_order_for_rooms` skips DMs whose `dm_peer_id` is ignored), so a new DM from the ignored user can't resurface the room or its unread badge. Unignoring restores the DM on the next render/snapshot.
+- `IgnoreListUpdated` refilters local messages in place (all rooms, including DMs and `reply_to_user_id` matches) with no DB refetch, then refreshes the Mentions list/unread count.
 - `unignore` does not retroactively restore already-filtered local messages until a future tail/snapshot naturally reloads them.
 
 ---
@@ -663,7 +664,7 @@ Test gaps:
 - `(created, id)` is the catch-up cursor.
 - Any operation exposing room contents must check membership first.
 - DM/private message bodies must not leak to non-members through broadcast handling.
-- Ignore filtering is non-DM only.
+- Ignore filtering covers all rooms including DMs, and also hides bot replies whose `reply_to_user_id` is ignored. DMs with an ignored peer are hidden from the room rail entirely.
 - `#announcements` admin-only currently depends on the provided `room_slug`; stale/missing slug is a fragile path.
 - Login `#announcements` modal marks `chat_room_members.last_read_at` only when dismissed; do not add a separate announcement-read table unless the room model itself changes.
 - Reaction and pin tasks are async; UI should not assume optimistic success.

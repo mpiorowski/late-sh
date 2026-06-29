@@ -622,6 +622,7 @@ impl App {
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
+            ignored_user_ids: self.chat.ignored_user_ids(),
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             room_unread_markers: &self.chat.room_unread_markers,

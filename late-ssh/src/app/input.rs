@@ -2527,6 +2527,7 @@ fn chat_room_list_view<'a>(
         room_jump_active: app.chat.room_jump_active,
         room_section_prefix_armed: app.room_section_prefix_armed,
         current_user_id: app.user_id,
+        ignored_user_ids: app.chat.ignored_user_ids(),
         feeds_available: app.chat.feeds.has_feeds(),
         feeds_selected: app.chat.feeds_selected,
         feeds_unread_count: app.chat.feeds.unread_count(),

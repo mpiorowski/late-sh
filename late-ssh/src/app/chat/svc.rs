@@ -1508,6 +1508,38 @@ impl ChatService {
         });
     }
 
+    /// Send a bot/automated reply that is a response to `reply_to_user_id`.
+    /// Recording the triggering user lets each viewer hide the reply when they
+    /// ignore that user, so ignored users cannot use a bot to be heard.
+    pub fn send_bot_reply_task(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        body: String,
+        reply_to_user_id: Option<Uuid>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service
+                    .send_message(user_id, room_id, None, body, None, reply_to_user_id, false)
+                    .await
+                {
+                    late_core::error_span!(
+                        "chat_bot_send_failed",
+                        error = ?e,
+                        "failed to send bot reply"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.send_bot_reply_task",
+                user_id = %user_id,
+                room_id = %room_id,
+            )),
+        );
+    }
+
     pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
         let SendMessageTask {
             user_id,
@@ -1528,6 +1560,7 @@ impl ChatService {
                         room_slug,
                         body,
                         reply_to_message_id,
+                        None,
                         is_admin,
                     )
                     .await
@@ -1623,6 +1656,7 @@ impl ChatService {
             Some("lounge".to_string()),
             body,
             None,
+            None,
             false,
         )
         .await
@@ -1636,6 +1670,7 @@ impl ChatService {
         room_slug: Option<String>,
         body: String,
         reply_to_message_id: Option<Uuid>,
+        reply_to_user_id: Option<Uuid>,
         is_admin: bool,
     ) -> Result<()> {
         let body = body.trim_start_matches('\n').trim_end();
@@ -1682,7 +1717,13 @@ impl ChatService {
             user_id,
             body: body.to_string(),
         };
-        let chat = ChatMessage::create_with_reply_to(&client, message, reply_to_message_id).await?;
+        let chat = ChatMessage::create_with_reply_targets(
+            &client,
+            message,
+            reply_to_message_id,
+            reply_to_user_id,
+        )
+        .await?;
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;

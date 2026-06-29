@@ -11,7 +11,8 @@ crate::model! {
     struct ChatMessage {
         @generated
         pub pinned: bool,
-        pub reply_to_message_id: Option<Uuid>;
+        pub reply_to_message_id: Option<Uuid>,
+        pub reply_to_user_id: Option<Uuid>;
         @data
         pub room_id: Uuid,
         pub user_id: Uuid,
@@ -168,16 +169,29 @@ impl ChatMessage {
         params: ChatMessageParams,
         reply_to_message_id: Option<Uuid>,
     ) -> Result<Self> {
+        Self::create_with_reply_targets(client, params, reply_to_message_id, None).await
+    }
+
+    /// Create a message, optionally recording both the replied-to message and
+    /// the user this message is a response to. `reply_to_user_id` is used to
+    /// filter bot replies for viewers who ignore the triggering user.
+    pub async fn create_with_reply_targets(
+        client: &impl GenericClient,
+        params: ChatMessageParams,
+        reply_to_message_id: Option<Uuid>,
+        reply_to_user_id: Option<Uuid>,
+    ) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO chat_messages (room_id, user_id, body, reply_to_message_id)
-                 VALUES ($1, $2, $3, $4)
+                "INSERT INTO chat_messages (room_id, user_id, body, reply_to_message_id, reply_to_user_id)
+                 VALUES ($1, $2, $3, $4, $5)
                  RETURNING *",
                 &[
                     &params.room_id,
                     &params.user_id,
                     &params.body,
                     &reply_to_message_id,
+                    &reply_to_user_id,
                 ],
             )
             .await?;

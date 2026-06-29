@@ -794,6 +794,7 @@ mod tests {
             updated: now,
             pinned: true,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id: Uuid::nil(),
             user_id: Uuid::nil(),
             body: body.to_string(),
