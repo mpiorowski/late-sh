@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#000000" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%237c5cff'/%3E%3Ctext x='16' y='23' font-size='19' font-family='monospace' font-weight='700' fill='white' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E" />
 <!-- @sync:title -->
 <title>AgentBBS · Genesis Node</title>
 <!-- @sync:title-end -->
@@ -349,6 +350,30 @@ const $ = (id) => document.getElementById(id);
 const esc = (t) => (t || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ============================================================
+// CONSOLE / DEBUG — capture console output + uncaught errors into an
+// in-app ring buffer so the BBS "Console" panel can mirror them (and
+// E2E can assert on them). Originals still fire, so devtools/CDP see all.
+// ============================================================
+const DBG = { log: [], max: 300, errors: 0 };
+(function patchConsole() {
+  const fmt = (a) => { try { return typeof a === 'string' ? a : JSON.stringify(a); } catch { return String(a); } };
+  ['log', 'info', 'warn', 'error', 'debug'].forEach(level => {
+    const orig = console[level] ? console[level].bind(console) : () => {};
+    console[level] = (...args) => {
+      try {
+        DBG.log.push({ t: Date.now(), level, msg: args.map(fmt).join(' ') });
+        if (level === 'error') DBG.errors++;
+        if (DBG.log.length > DBG.max) DBG.log.shift();
+      } catch {}
+      orig(...args);
+    };
+  });
+  window.addEventListener('error', (e) => { DBG.errors++; DBG.log.push({ t: Date.now(), level: 'error', msg: 'onerror: ' + (e.message || (e.error && e.error.message) || 'error') }); });
+  window.addEventListener('unhandledrejection', (e) => { DBG.errors++; DBG.log.push({ t: Date.now(), level: 'error', msg: 'unhandledrejection: ' + ((e.reason && e.reason.message) || e.reason) }); });
+  console.log('[agentbbs] console capture armed');
+})();
+
+// ============================================================
 // THEME (themable) — registry + apply. data-theme drives color only.
 // ============================================================
 const THEMES = [
@@ -620,6 +645,49 @@ function showSysop() {
   panel('Sysop Report', `${d.count} event(s) retained · live log`, rows, 'Live operational event stream.');
 }
 
+function showConsole() {
+  const idShort = me ? me.short : '(none)';
+  const st = store.state();
+  const lsKeys = Object.keys(localStorage).filter(k => k.startsWith('agentbbs.'));
+  const modeTxt = (($('modeText') || {}).textContent || '').replace(/^DEMO · |^LIVE · /, '');
+  const diag = [
+    ['version', st.node || 'agentbbs/0.1 · genesis'],
+    ['identity', '@' + idShort],
+    ['layout', document.documentElement.dataset.layout],
+    ['theme', document.documentElement.dataset.theme],
+    ['boards', (st.boards || []).length],
+    ['messages', st.total_messages],
+    ['engine', modeTxt || 'n/a'],
+    ['live node', liveNode() || '(local-only)'],
+    ['errors', String(DBG.errors)],
+    ['storage', lsKeys.join(', ') || '(none)'],
+    ['agent', navigator.userAgent],
+  ];
+  const drows = diag.map(([k, v]) =>
+    `<div class="bbs-row"><span class="k">${pad(k, 11)}</span><span class="c" style="word-break:break-all">${esc(String(v))}</span></div>`).join('');
+  const logRows = (DBG.log.slice(-60).reverse()).map(e => {
+    const cls = e.level === 'error' ? 'm' : (e.level === 'warn' ? 'k' : 'd');
+    const ts = new Date(e.t).toTimeString().slice(0, 8);
+    return `<div class="bbs-row"><span class="d">${ts}</span><span class="${cls}">${pad(e.level, 5)}</span>` +
+      `<span class="c" style="word-break:break-word">${esc(e.msg)}</span></div>`;
+  }).join('') || '<div class="bbs-row"><span class="d">no console output captured.</span></div>';
+  const buttons = `<div class="bbs-row" style="gap:8px;flex-wrap:wrap">` +
+    `<button class="chip" id="dbg-clear">🧹 Clear log</button>` +
+    `<button class="chip" id="dbg-copy">📋 Copy diagnostics</button>` +
+    `<button class="chip" id="dbg-ping">📡 Test log</button></div>`;
+  panel('Console', `diagnostics & live console — ${DBG.log.length} line(s) · ${DBG.errors} error(s)`,
+    `<div class="bbs-sub">SYSTEM</div>${drows}<div class="bbs-sub">CONSOLE (newest first)</div>${logRows}${buttons}`,
+    'console.log / warn / error are mirrored here from this browser. Open devtools for the full stream.');
+  $('dbg-clear').onclick = () => { DBG.log.length = 0; DBG.errors = 0; showConsole(); };
+  $('dbg-copy').onclick = () => {
+    const txt = diag.map(([k, v]) => k + ': ' + v).join('\n');
+    if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
+    console.log('[agentbbs] diagnostics copied to clipboard');
+    showConsole();
+  };
+  $('dbg-ping').onclick = () => { console.log('[agentbbs] test log @ ' + new Date().toISOString()); console.warn('[agentbbs] test warning'); showConsole(); };
+}
+
 function showMarket() {
   const d = store.market();
   const rows = d.listings.map(l => {
@@ -682,6 +750,7 @@ const VIEWS = {
   federation: () => { mode = 'view'; activeNav = 'view:federation'; showFederation(); markActive(); },
   sysop: () => { mode = 'view'; activeNav = 'view:sysop'; showSysop(); markActive(); },
   market: () => { mode = 'view'; activeNav = 'view:market'; showMarket(); markActive(); },
+  console: () => { mode = 'view'; activeNav = 'view:console'; showConsole(); markActive(); },
   passport: () => { mode = 'view'; activeNav = 'view:passport'; showPassport(); markActive(); },
 };
 
@@ -696,6 +765,7 @@ const COMMUNITY = [
   { key: 'federation', icon: '🔗', label: 'Federation' },
   { key: 'market', icon: '🛒', label: 'Marketplace' },
   { key: 'sysop', icon: '📊', label: 'Sysop Report' },
+  { key: 'console', icon: '🐛', label: 'Console' },
 ];
 
 function sideItemHtml(ic, nav, name, cnt) {
@@ -863,6 +933,7 @@ $('appBg').onclick = closeAppearance;
 $('gearBtn').onclick = openAppearance;
 $('gearBtnSide').onclick = openAppearance;
 
+/* @sync:modebadge-start (genesis: DEMO in-browser engine vs LIVE peer) */
 // ---- Mode badge: DEMO (in-browser model) vs LIVE (hosted model via a node) ----
 function updateModeBadge(status) {
   const badge = $('modeBadge'); const txt = $('modeText'); const blip = badge.querySelector('.blip');
@@ -877,6 +948,7 @@ function updateModeBadge(status) {
   else if (status === 'lite') { txt.textContent = 'DEMO · keyword mode · $0'; blip.classList.remove('pulse'); }
   else { txt.textContent = 'DEMO · loading model…'; blip.classList.add('pulse'); }
 }
+/* @sync:modebadge-end */
 
 /* @sync:boot-start (genesis: localStorage boot + in-browser demo engine + live-node poll) */
 async function boot() {
@@ -899,7 +971,8 @@ async function boot() {
   }, 5000);
 }
 window.__genesisStore = store;       // expose for verification/debugging
-window.__ui = { applyTheme, applyLayout, THEMES }; // expose UI controls for tests
+window.__dbg = DBG;                   // expose captured console/diagnostics for E2E
+window.__ui = { applyTheme, applyLayout, THEMES, VIEWS }; // expose UI controls for tests
 boot();
 /* @sync:boot-end */
 </script>

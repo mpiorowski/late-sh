@@ -1,0 +1,105 @@
+name: web-e2e
+
+# End-to-end browser tests + drift guard for the AgentBBS web UI (ADR-0024).
+# Runs the Playwright E2E (scripts/e2e/web-e2e.mjs) against BOTH frontends:
+#   1. genesis/        — the static, backend-free demo (the GitHub Pages artifact)
+#   2. agentbbs-web    — the server-backed PWA (built + run, /api-backed)
+# and enforces that the crate asset is regenerated from genesis (no drift).
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'genesis/**'
+      - 'crates/agentbbs-web/**'
+      - 'scripts/**'
+      - '.github/workflows/web-e2e.yml'
+  pull_request:
+    paths:
+      - 'genesis/**'
+      - 'crates/agentbbs-web/**'
+      - 'scripts/**'
+      - '.github/workflows/web-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift-guard:
+    name: genesis -> agentbbs-web drift guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Regenerate the crate asset from genesis (single source of truth)
+        run: node scripts/sync-web-ui.mjs
+      - name: Fail if the crate asset drifted from genesis
+        run: |
+          if ! git diff --quiet -- crates/agentbbs-web/assets; then
+            echo "::error::crates/agentbbs-web/assets is out of sync with genesis/."
+            echo "Run 'node scripts/sync-web-ui.mjs' and commit the result."
+            git --no-pager diff -- crates/agentbbs-web/assets
+            exit 1
+          fi
+          echo "agentbbs-web assets are in sync with genesis."
+
+  e2e-genesis:
+    name: e2e (genesis, static)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+      - name: Install E2E deps
+        working-directory: scripts/e2e
+        run: npm ci
+      - name: Serve genesis
+        run: |
+          python3 -m http.server 8211 --directory genesis &
+          for i in $(seq 1 20); do curl -sf -o /dev/null http://localhost:8211/ && break; sleep 0.5; done
+      - name: Run E2E against genesis
+        working-directory: scripts/e2e
+        env:
+          E2E_URL: http://localhost:8211/
+          E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: node web-e2e.mjs
+
+  e2e-web:
+    name: e2e (agentbbs-web, server-backed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+      - name: Verify asset is generated from genesis
+        run: node scripts/sync-web-ui.mjs && git diff --exit-code -- crates/agentbbs-web/assets
+      - name: Build agentbbs-web
+        run: cargo build -p agentbbs-web --bin agentbbs-web
+      - name: Install E2E deps
+        working-directory: scripts/e2e
+        run: npm ci
+      - name: Run the server
+        run: |
+          PORT=8092 ./target/debug/agentbbs-web &
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:8092/ && break; sleep 0.5; done
+      - name: Run E2E against agentbbs-web
+        working-directory: scripts/e2e
+        env:
+          E2E_URL: http://localhost:8092/
+          E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: node web-e2e.mjs

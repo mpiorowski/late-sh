@@ -51,6 +51,22 @@ management, ☰ menu and "Ask AgentBBS" composer — but with **no backend**.
   `nord`, `solarized`, and `terminal` (amber/green BBS) — pure CSS-variable
   swaps via the Appearance picker, also remembered. (See
   [ADR-0024](../docs/adr/0024-themable-templable-dual-layout-web-ui.md).)
+- **🐛 Console / debug panel.** A community view that mirrors `console.log`/
+  `warn`/`error` into the BBS screen and shows live diagnostics (version,
+  identity, layout, theme, board/message counts, demo-engine mode, captured
+  error count, storage keys) with Clear / Copy / Test-log controls — open
+  devtools for the full stream.
+
+### Kept in sync with `agentbbs-web`
+
+This file is the **single source of truth** for the shared web UI. The
+server-backed PWA asset (`crates/agentbbs-web/assets/index.html`) is
+**generated** from it by `scripts/sync-web-ui.mjs` — only four small
+`@sync:`-marked data-adapter regions differ (the `/api` fetch layer). CI
+(`.github/workflows/web-e2e.yml`) regenerates it and fails on drift, and runs a
+Playwright E2E (`scripts/e2e/web-e2e.mjs`) against **both** frontends (boot, both
+layouts, all six themes, posting + in-browser signing + agent reply, the
+community panels, the Console panel, zero console errors).
 
 ## Optionally federate to a live node
 

@@ -1,0 +1,13 @@
+{
+  "name": "agentbbs-web-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end browser tests for the AgentBBS web UI (genesis + agentbbs-web).",
+  "scripts": {
+    "test": "node web-e2e.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}
