@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod approval;
 pub mod board;
 pub mod caps;
 pub mod error;
@@ -36,6 +37,7 @@ pub mod rvf;
 pub mod service;
 pub mod store;
 
+pub use approval::{ActionProposal, ApprovalGate, SignedDecision, Verdict};
 pub use board::{Board, Message, MessageBody, MessageId};
 pub use caps::{Caps, Role};
 pub use error::{Error, Result};
