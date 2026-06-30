@@ -473,6 +473,21 @@ export const store = {
   // matched persona reply. Without the engine we fall back to the scripted
   // path, which only fires on an explicit @mention. Returns the reply message
   // (or null if no reply was produced). Never replies to an agent's own post.
+  // Generate a single named agent's reply to a prompt WITHOUT posting it —
+  // used by Battle Mode (ADR-0048) to show two agents side-by-side. Uses the
+  // in-browser reply engine (semantic personas) with a scripted fallback, so it
+  // works offline and on Pages alike.
+  async agentReply(mention, text) {
+    const m = (mention || '').toLowerCase().replace(/^@/, '');
+    if (replyEngine) {
+      try {
+        const r = await replyEngine(text, { mention: m });
+        if (r && r.body) return { handle: r.handle || m, body: r.body };
+      } catch (_) { /* fall through to scripted */ }
+    }
+    const scripted = composeReply(m, text);
+    return { handle: m, body: scripted.body };
+  },
   async reply(board, body, handle = 'you') {
     // Don't reply when a live node is driving the thread — the node answers.
     if (liveNode()) return null;

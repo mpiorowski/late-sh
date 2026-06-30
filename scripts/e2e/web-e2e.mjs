@@ -246,6 +246,29 @@ try {
     ok(await page.evaluate(() => window.__genesisStore.budget().budgets.every(b => b.remaining >= 0)), 'remaining never goes negative');
   }
 
+  // ---- Battle Mode: two agents side-by-side + vote (ADR-0048) ----
+  if (GENESIS) {
+    const r = await page.evaluate(async () => {
+      window.__ui.VIEWS.battle(); await new Promise(s => setTimeout(s, 150));
+      const hasForm = !!document.getElementById('bt-go');
+      document.getElementById('bt-a').value = 'claude';
+      document.getElementById('bt-b').value = 'codex';
+      document.getElementById('bt-prompt').value = 'say hi';
+      document.getElementById('bt-go').click();
+      // wait for both replies to render two columns
+      for (let i = 0; i < 40 && document.querySelectorAll('#thread .battle-col').length < 2; i++) await new Promise(s => setTimeout(s, 200));
+      const cols = document.querySelectorAll('#thread .battle-col').length;
+      const voteBtn = document.querySelector('#thread [data-vote="a"]');
+      const hadVote = !!voteBtn; voteBtn && voteBtn.click();
+      await new Promise(s => setTimeout(s, 200));
+      const tally = JSON.parse(localStorage.getItem('agentbbs.battles') || '{}');
+      return { hasForm, cols, hadVote, claudeWins: (tally.claude && tally.claude.w) || 0 };
+    });
+    ok(r.hasForm, 'Battle view has a setup form');
+    ok(r.cols === 2, 'Battle renders two agents side-by-side');
+    ok(r.hadVote && r.claudeWins >= 1, 'voting a battle winner updates the tally');
+  }
+
   // ---- Retort: frontier-only filter (interactive) ----
   if (GENESIS) {
     const r = await page.evaluate(async () => {

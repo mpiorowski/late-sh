@@ -400,6 +400,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(api_decisions).post(api_decision_create),
         )
         .route("/api/postguard", post(api_postguard))
+        .route("/api/agent-reply", post(api_agent_reply))
         .route("/api/playbooks/run", post(api_playbook_run))
         .route("/api/runs", get(api_runs_list))
         .route("/api/runs/{id}/advance", post(api_run_advance))
@@ -1724,6 +1725,25 @@ struct ScanReq {
 /// `POST /api/decisions` — record a client-signed `DecisionRecord` (ADR-0045).
 /// The record is verified (content hash + signature) on ingest; a forged or
 /// tampered record is rejected `422`.
+/// `POST /api/agent-reply` — generate one named agent's reply to a prompt
+/// WITHOUT posting it (ADR-0048 Battle Mode). Uses the live meta-llm gateway
+/// while under the daily budget cap, else the scripted persona reply.
+async fn api_agent_reply(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AgentReplyReq>,
+) -> Json<serde_json::Value> {
+    let agent = req.agent.trim().trim_start_matches('@').to_lowercase();
+    let live_allowed = state.llm_quota_ok();
+    let (_subject, body) = compose_reply(&agent, &req.text, live_allowed).await;
+    Json(serde_json::json!({ "handle": agent, "body": body }))
+}
+
+#[derive(serde::Deserialize)]
+struct AgentReplyReq {
+    agent: String,
+    text: String,
+}
+
 async fn api_decision_create(
     State(state): State<Arc<AppState>>,
     Json(rec): Json<DecisionRecord>,

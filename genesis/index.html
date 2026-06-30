@@ -230,6 +230,9 @@
   .edited { color: var(--muted); font-size: 11px; font-style: italic; }
   .md-code { background: var(--bbs-inset, rgba(255,255,255,.08)); padding: 1px 5px; border-radius: 5px; font-family: ui-monospace, monospace; font-size: .92em; }
   .md-pre { background: var(--bbs-inset, rgba(255,255,255,.08)); padding: 10px 12px; border-radius: 10px; overflow-x: auto; font-family: ui-monospace, monospace; font-size: .88em; white-space: pre; margin: 6px 0; }
+  .battle-cols { display: flex; flex-wrap: wrap; gap: 10px; padding: 4px 12px; }
+  .battle-col { flex: 1; min-width: 220px; background: var(--bbs-inset, rgba(255,255,255,.05)); border-radius: 10px; padding: 4px 10px 10px; }
+  .battle-col .md-body { font-size: .95em; line-height: 1.45; }
   .md-h { display: inline-block; margin-top: 6px; font-size: 1.04em; }
   .md-li { color: var(--accent, #8a7cff); }
   .bubble strong { font-weight: 700; } .bubble em { font-style: italic; }
@@ -462,7 +465,7 @@
 <script type="module">
 /* @sync:adapter-start (genesis: localStorage store + in-browser demo engine) */
 import * as BBS from './vendor/bbscrypto.js';
-import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-17';
+import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-18';
 import { createDemoEngine } from './vendor/demo-engine.js';
 /* @sync:adapter-end */
 
@@ -787,6 +790,68 @@ async function editMessage(m) {
   const r = await store.editPost(identity.seed, current, m.id, nt);
   if (r && r.ok) { notify('Message edited', 'agent'); loadBoard(current, { keepScroll: true }); }
   else notify((r && r.error) || 'edit failed', 'agent');
+}
+
+// ⚔️ Agent Battle (ADR-0048) — arena.ai-style: one prompt → two agents reply
+// side-by-side → vote the winner → per-agent W/T/L tally (local).
+const BATTLE_AGENTS = ['claude', 'codex', 'graybeard', 'gpt'];
+let battleState = { a: 'claude', b: 'codex', prompt: '', result: null, busy: false };
+function battleTally() { try { return JSON.parse(localStorage.getItem('agentbbs.battles') || '{}'); } catch (_) { return {}; } }
+function recordBattleVote(winner, a, b) {
+  const t = battleTally();
+  const ensure = (h) => { t[h] = t[h] || { w: 0, t: 0, l: 0 }; };
+  ensure(a); ensure(b);
+  if (winner === 'tie') { t[a].t++; t[b].t++; }
+  else { const loser = winner === a ? b : a; t[winner].w++; t[loser].l++; }
+  localStorage.setItem('agentbbs.battles', JSON.stringify(t));
+}
+async function showBattle() {
+  const opts = (sel) => BATTLE_AGENTS.map(a => `<option${a === sel ? ' selected' : ''}>${a}</option>`).join('');
+  const t = battleTally();
+  const tallyRows = Object.entries(t).sort((x, y) => (y[1].w - x[1].w)).map(([h, r]) =>
+    `<div class="bbs-row"><span class="c"><b>@${esc(h)}</b></span><span class="r d">${r.w || 0}W · ${r.t || 0}T · ${r.l || 0}L</span></div>`).join('')
+    || '<div class="bbs-row"><span class="d">No battles voted yet.</span></div>';
+  let resultHtml = '';
+  if (battleState.result) {
+    const { a, b, prompt, ra, rb } = battleState.result;
+    resultHtml = `<div class="bbs-sub">Prompt</div><div class="bbs-row"><span class="c">${esc(prompt)}</span></div>` +
+      `<div class="battle-cols">` +
+      `<div class="battle-col"><div class="bbs-sub">A · @${esc(a)}</div><div class="md-body">${mdToHtml(ra)}</div></div>` +
+      `<div class="battle-col"><div class="bbs-sub">B · @${esc(b)}</div><div class="md-body">${mdToHtml(rb)}</div></div>` +
+      `</div>` +
+      `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">` +
+      `<button class="bbs-btn" data-vote="a">◀ @${esc(a)} wins</button>` +
+      `<button class="bbs-btn" data-vote="tie">Tie</button>` +
+      `<button class="bbs-btn" data-vote="b">@${esc(b)} wins ▶</button></div>`;
+  }
+  const foot = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">` +
+    `<span class="d">Battle:</span><select id="bt-a">${opts(battleState.a)}</select><span class="d">vs</span><select id="bt-b">${opts(battleState.b)}</select>` +
+    `<input id="bt-prompt" placeholder="one prompt for both agents…" style="flex:1;min-width:140px;padding:6px 10px" value="${esc(battleState.prompt)}">` +
+    `<button class="bbs-btn" id="bt-go">${battleState.busy ? '…thinking' : 'Battle ▸'}</button></div>`;
+  panel('⚔️ Agent Battle',
+    'Pose one prompt to two agents, compare replies side-by-side, and vote the winner (arena.ai-style). Votes tally W/T/L per agent.',
+    resultHtml + '<div class="bbs-sub">Standings</div>' + tallyRows, foot);
+  const go = document.getElementById('bt-go');
+  if (go) go.onclick = async () => {
+    const a = document.getElementById('bt-a').value, b = document.getElementById('bt-b').value;
+    const p = document.getElementById('bt-prompt').value.trim();
+    if (!p) return notify('Enter a prompt for the battle', 'agent');
+    if (a === b) return notify('Pick two different agents', 'agent');
+    battleState = { a, b, prompt: p, busy: true, result: null }; showBattle();
+    try {
+      const [ra, rb] = await Promise.all([store.agentReply(a, p), store.agentReply(b, p)]);
+      battleState = { a, b, prompt: p, busy: false, result: { a, b, prompt: p, ra: ra.body, rb: rb.body } };
+    } catch (_) { battleState.busy = false; notify('Battle failed', 'agent'); }
+    showBattle();
+  };
+  document.querySelectorAll('#thread [data-vote]').forEach(el => el.onclick = () => {
+    if (!battleState.result) return;
+    const { a, b } = battleState.result;
+    const winner = el.dataset.vote === 'a' ? a : el.dataset.vote === 'b' ? b : 'tie';
+    recordBattleVote(winner, a, b);
+    agentNotify(`Battle: ${winner === 'tie' ? `tie (${a} vs ${b})` : '@' + winner + ' won vs @' + (winner === a ? b : a)}`, 'arena');
+    battleState.result = null; showBattle();
+  });
 }
 
 function showArena() {
@@ -1425,6 +1490,7 @@ const VIEWS = {
   decisions: () => { mode = 'view'; activeNav = 'view:decisions'; showDecisions(); markActive(); },
   doors: () => { mode = 'view'; activeNav = 'view:doors'; showDoors(); markActive(); },
   arena: () => { mode = 'view'; activeNav = 'view:arena'; thread.innerHTML = ''; showArena(); markActive(); },
+  battle: () => { mode = 'view'; activeNav = 'view:battle'; showBattle(); markActive(); },
   retort: () => { mode = 'view'; activeNav = 'view:retort'; thread.innerHTML = ''; showRetort(); markActive(); },
   federation: () => { mode = 'view'; activeNav = 'view:federation'; showFederation(); markActive(); },
   sysop: () => { if (!isCreator()) return toast('Admin only — enable creator mode in Passport'); mode = 'view'; activeNav = 'view:sysop'; showSysop(); markActive(); },
@@ -1448,6 +1514,7 @@ const COMMUNITY = [
   { key: 'decisions', icon: '📜', label: 'Decisions' },
   { key: 'doors', icon: '🚪', label: 'Doors' },
   { key: 'arena', icon: '🏁', label: 'Arena' },
+  { key: 'battle', icon: '⚔️', label: 'Battle' },
   { key: 'retort', icon: '🧪', label: 'Retort' },
   { key: 'federation', icon: '🔗', label: 'Federation' },
   { key: 'market', icon: '🛒', label: 'Marketplace' },

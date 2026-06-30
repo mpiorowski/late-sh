@@ -65,6 +65,15 @@ const store = {
     return { ok: true };
   },
   reply: async () => null, // the live node generates agent replies server-side
+  // Battle Mode (ADR-0048): one agent's reply via the server (live meta-llm).
+  agentReply: async (mention, text) => {
+    const m = (mention || '').replace(/^@/, '').toLowerCase();
+    try {
+      const r = await fetch('/api/agent-reply', { method: 'POST', headers: H, body: JSON.stringify({ agent: m, text }) });
+      if (r.ok) { const j = await r.json(); return { handle: j.handle || m, body: j.body }; }
+    } catch (_) { /* fall through */ }
+    return { handle: m, body: '(no reply)' };
+  },
   sync: _sync,
 };
 let _peer = localStorage.getItem('agentbbs.livenode') || '';
