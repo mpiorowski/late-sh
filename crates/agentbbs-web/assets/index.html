@@ -1546,6 +1546,47 @@ function updateModeBadge() {
 }
 /* @sync:modebadge-end */
 
+// ---- Command palette (⌘K / Ctrl-K) — fast fuzzy nav to any board/view/action.
+function paletteCommands() {
+  const cmds = [];
+  try { store.boards().forEach(b => cmds.push({ label: '# ' + b.slug, run: () => loadBoard(b.slug) })); } catch (_) {}
+  COMMUNITY.forEach(c => cmds.push({ label: c.icon + ' ' + c.label, run: () => (VIEWS[c.key] || (() => {}))() }));
+  cmds.push({ label: '🔑 Passport', run: () => VIEWS.passport() });
+  cmds.push({ label: '🖥 Toggle layout (mobile/desktop)', run: () => applyLayout(document.documentElement.dataset.layout === 'desktop' ? 'mobile' : 'desktop') });
+  return cmds;
+}
+function ensurePalette() {
+  if (document.getElementById('cmdpBg')) return;
+  const bg = document.createElement('div'); bg.className = 'modal-bg'; bg.id = 'cmdpBg';
+  bg.innerHTML = `<div class="modal open" id="cmdpModal" style="display:flex;flex-direction:column;max-width:520px;width:92%">
+    <div class="modal-head">⌘K Command palette<button class="x" id="cmdpClose">✕</button></div>
+    <div style="padding:10px 14px"><input id="cmdpInput" placeholder="Jump to a board, view, or action…" style="width:100%;padding:9px 12px;font-size:14px"></div>
+    <div class="modal-body" id="cmdpList" style="max-height:50vh"></div></div>`;
+  document.body.appendChild(bg);
+  bg.addEventListener('click', e => { if (e.target === bg) closePalette(); });
+  document.getElementById('cmdpClose').onclick = closePalette;
+  document.getElementById('cmdpInput').addEventListener('input', renderPalette);
+  document.getElementById('cmdpInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { const first = document.querySelector('#cmdpList [data-ci]'); if (first) first.click(); }
+  });
+}
+function renderPalette() {
+  const q = (document.getElementById('cmdpInput').value || '').toLowerCase();
+  const cmds = paletteCommands().filter(c => c.label.toLowerCase().includes(q));
+  const list = document.getElementById('cmdpList');
+  list.innerHTML = cmds.length
+    ? cmds.map((c, i) => `<div class="bbs-row" data-ci="${i}" style="cursor:pointer"><span class="c">${esc(c.label)}</span></div>`).join('')
+    : '<div class="bbs-row"><span class="d">No matches.</span></div>';
+  list.querySelectorAll('[data-ci]').forEach(el => el.onclick = () => { closePalette(); cmds[+el.dataset.ci].run(); });
+}
+function openPalette() { ensurePalette(); document.getElementById('cmdpBg').style.display = 'block'; const inp = document.getElementById('cmdpInput'); inp.value = ''; renderPalette(); inp.focus(); }
+function closePalette() { const bg = document.getElementById('cmdpBg'); if (bg) bg.style.display = 'none'; }
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); }
+  else if (e.key === 'Escape') closePalette();
+});
+window.__palette = { open: openPalette, close: closePalette }; // shared (outside @sync:boot)
+
 /* @sync:boot-start (agentbbs-web: /api preload + node poll) */
 async function boot() {
   identity = await store.boot();

@@ -254,6 +254,18 @@ try {
     ok(await page.evaluate(() => /✓ completed/.test(document.getElementById('thread').textContent)), 'approving the gate completes the run');
   }
 
+  // ---- command palette (⌘K) ----
+  await page.evaluate(() => window.__palette.open());
+  await page.waitForTimeout(60);
+  ok(await page.evaluate(() => getComputedStyle(document.getElementById('cmdpBg')).display !== 'none'), 'command palette opens');
+  ok(await page.evaluate(() => !!document.querySelector('#cmdpList [data-ci]')), 'command palette lists commands');
+  await page.evaluate(() => { document.getElementById('cmdpInput').value = 'general'; document.getElementById('cmdpInput').dispatchEvent(new Event('input', { bubbles: true })); });
+  await page.waitForTimeout(40);
+  ok(await page.evaluate(() => { const els = [...document.querySelectorAll('#cmdpList [data-ci]')]; return els.length > 0 && els.every(e => /general/i.test(e.textContent)); }), 'command palette filters by query');
+  await page.evaluate(() => document.querySelector('#cmdpList [data-ci]').click());
+  await page.waitForTimeout(60);
+  ok(await page.evaluate(() => getComputedStyle(document.getElementById('cmdpBg')).display === 'none'), 'selecting a command closes the palette');
+
   // ---- mobile layout + persistence ----
   await page.evaluate(() => window.__ui.applyLayout('mobile'));
   ok(await page.evaluate(() => document.documentElement.dataset.layout === 'mobile' && getComputedStyle(document.getElementById('sidebar')).display === 'none'), 'mobile layout hides sidebar');
