@@ -1203,18 +1203,21 @@ pub struct PodRecord {
     pub spec: PodSpec,
 }
 
-/// `POST /api/pods` — validate a [`PodSpec`] and record a spawn (idempotent on
-/// `idempotency_key`). Forwarding to the meta-llm `/v1/pods/spawn` gateway is
-/// wired when a `cog_` endpoint is configured; this scaffold records the intent
-/// and returns the pod at `Spawned`.
+/// `POST /api/pods` — validate a [`PodSpec`] and spawn a pod (idempotent on
+/// `idempotency_key`). When `AGENTBBS_PODS_BASE_URL` + a cog_ key are set this
+/// **forwards live** to the meta-llm `/v1/pods/spawn` gateway (frozen contract,
+/// issue #6) and records the returned `pod_id`/status; otherwise it records the
+/// intent locally at `Spawned`.
 async fn api_pods_spawn(
     State(state): State<Arc<AppState>>,
     Json(spec): Json<PodSpec>,
 ) -> Result<Json<PodRecord>, (StatusCode, Json<serde_json::Value>)> {
     spec.validate()
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("invalid pod spec: {e}")))?;
-    let mut pods = state.pods.lock().unwrap();
+    // Idempotency: return an existing record without re-spawning. Scope the lock
+    // so it is never held across the gateway await below.
     if let Some(key) = spec.idempotency_key.as_deref() {
+        let pods = state.pods.lock().unwrap();
         if let Some(existing) = pods
             .iter()
             .find(|p| p.spec.idempotency_key.as_deref() == Some(key))
@@ -1222,14 +1225,97 @@ async fn api_pods_spawn(
             return Ok(Json(existing.clone()));
         }
     }
+    // LIVE: forward to the meta-llm `/v1/pods/spawn` via the cog_ gateway when
+    // configured (AGENTBBS_PODS_BASE_URL + key); else record the intent locally.
+    let (id, status) = if let Some(cfg) = resolve_pods_config() {
+        match spawn_via_gateway(&cfg, &spec).await {
+            Ok(res) => res,
+            Err(e) => {
+                tracing::warn!(error = %e, "live pod spawn failed");
+                return Err(api_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("pod gateway spawn failed: {e}"),
+                ));
+            }
+        }
+    } else {
+        let n = state.pods.lock().unwrap().len();
+        (format!("pod-{n:04}"), PodStatus::Spawned)
+    };
     let record = PodRecord {
-        id: format!("pod-{:04}", pods.len()),
-        status: PodStatus::Spawned,
+        id,
+        status,
         created_at: chrono::Utc::now().to_rfc3339(),
         spec,
     };
-    pods.push(record.clone());
+    state.pods.lock().unwrap().push(record.clone());
     Ok(Json(record))
+}
+
+/// The cog_ gateway config for pod spawning (ADR-0035 / issue #6 contract).
+struct PodsConfig {
+    base_url: String,
+    key: String,
+}
+
+/// Resolve the pods gateway from the env, or `None` (→ local-stub spawn). The
+/// endpoint is `AGENTBBS_PODS_BASE_URL`; the cog_ key is read from the var *named*
+/// by `AGENTBBS_PODS_KEY_ENV` (else `AGENTBBS_LLM_KEY_ENV`). The key never leaves
+/// the server and is never logged.
+fn resolve_pods_config() -> Option<PodsConfig> {
+    let base_url = std::env::var("AGENTBBS_PODS_BASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    let key = ["AGENTBBS_PODS_KEY_ENV", "AGENTBBS_LLM_KEY_ENV"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .filter(|v| !v.trim().is_empty())
+        .find_map(|var| std::env::var(var).ok())
+        .filter(|k| !k.trim().is_empty())?;
+    Some(PodsConfig { base_url, key })
+}
+
+/// The frozen pods-spawn endpoint URL.
+fn pods_spawn_url(base: &str) -> String {
+    format!("{}/v1/pods/spawn", base.trim_end_matches('/'))
+}
+
+/// Map the meta-llm `PodStatus` string (UPPERCASE) onto our lifecycle enum.
+fn map_gateway_status(s: &str) -> PodStatus {
+    match s {
+        "EXECUTING" => PodStatus::Executing,
+        "EVALUATING" => PodStatus::Evaluating,
+        "ESCALATING" => PodStatus::Escalating,
+        _ => PodStatus::Spawned, // SPAWNED / IDLE / PAUSED / unknown
+    }
+}
+
+/// `POST /v1/pods/spawn` via the cog_ gateway. Returns `(pod_id, status)` or an
+/// error string (no token is ever included in the message).
+async fn spawn_via_gateway(
+    cfg: &PodsConfig,
+    spec: &PodSpec,
+) -> Result<(String, PodStatus), String> {
+    let req = spec.to_spawn_request();
+    let resp = reqwest::Client::new()
+        .post(pods_spawn_url(&cfg.base_url))
+        .bearer_auth(&cfg.key)
+        .json(&req)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("gateway returned {status}"));
+    }
+    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let pod_id = data["pod_id"]
+        .as_str()
+        .ok_or("gateway response missing pod_id")?
+        .to_string();
+    let st = map_gateway_status(data["status"].as_str().unwrap_or("SPAWNED"));
+    Ok((pod_id, st))
 }
 
 /// `GET /api/pods` — list spawned pods.
@@ -2210,6 +2296,20 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ADR-0035: pods gateway wiring — URL shape + env-gated config resolution.
+    #[test]
+    fn pods_gateway_url_and_config() {
+        assert_eq!(
+            pods_spawn_url("https://gw.example/"),
+            "https://gw.example/v1/pods/spawn"
+        );
+        assert_eq!(map_gateway_status("EVALUATING"), PodStatus::Evaluating);
+        assert_eq!(map_gateway_status("PAUSED"), PodStatus::Spawned);
+        // With no AGENTBBS_PODS_BASE_URL set, spawning stays local (None config).
+        std::env::remove_var("AGENTBBS_PODS_BASE_URL");
+        assert!(resolve_pods_config().is_none());
     }
 
     // ADR-0046: POST /api/postguard advisory scan classifies content.
