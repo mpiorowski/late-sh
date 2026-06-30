@@ -74,6 +74,39 @@ const store = {
     } catch (_) { /* fall through */ }
     return { handle: m, body: '(no reply)' };
   },
+  // Author-only edit/delete (ADR-0046): a signed control message via the same
+  // signed-post path — the server stores it and applyControl renders it.
+  retract: async (seed, board, targetId) => {
+    const signed = await BBS.signPost(seed, { board, subject: 'agentbbs/ctl:retract:' + targetId, body: targetId, handle: 'you' });
+    const r = await fetch('/api/boards/' + encodeURIComponent(board) + '/signed', { method: 'POST', headers: H, body: JSON.stringify(signed) });
+    return r.ok ? { ok: true, author: signed.author } : { ok: false, error: 'retract failed' };
+  },
+  editPost: async (seed, board, targetId, newText) => {
+    const signed = await BBS.signPost(seed, { board, subject: 'agentbbs/ctl:edit:' + targetId, body: newText, handle: 'you' });
+    const r = await fetch('/api/boards/' + encodeURIComponent(board) + '/signed', { method: 'POST', headers: H, body: JSON.stringify(signed) });
+    return r.ok ? { ok: true, author: signed.author } : { ok: false, error: 'edit failed' };
+  },
+  // Spawn a pod (ADR-0035): synthesize a minimal PodSpec and POST to /api/pods
+  // (live gateway), then refresh so the new pod shows.
+  spawnPod: async (domain, tier) => {
+    const caps = { low: 0.05, mid: 0.25, high: 1.0 };
+    const spec = { template: {
+      template_ref: domain + '/adhoc@1', domain,
+      system_prompt: 'Ad-hoc ' + domain + ' pod spawned from the UI.',
+      tools: [], bench_assertions: 'produces a useful, gated result',
+      per_agent_cap_usd: caps[tier] || 0.25, max_tier: tier || 'mid',
+      registered_room: domain + '-ops',
+    }, tier: tier || 'mid' };
+    try {
+      const r = await fetch('/api/pods', { method: 'POST', headers: H, body: JSON.stringify(spec) });
+      if (r.ok) { const pod = await r.json(); await _sync(); return { ok: true, pod }; }
+      const j = await r.json().catch(() => ({})); return { ok: false, error: j.error || 'spawn failed' };
+    } catch (_) { return { ok: false, error: 'spawn failed' }; }
+  },
+  // Server-side signed decisions + budget cap top-up are follow-ups (the genesis
+  // node does these locally); stub honestly so the shared UI never crashes.
+  recordDecision: async () => ({ ok: false, error: 'server-side signed decisions land in a follow-up — use the genesis node' }),
+  topUpCap: () => ({ ok: false, error: 'server-side cap top-up lands in a follow-up' }),
   sync: _sync,
 };
 let _peer = localStorage.getItem('agentbbs.livenode') || '';
@@ -151,6 +184,31 @@ for (const r of regions) {
 if (missing.length) {
   console.error(`sync-web-ui: missing @sync markers in genesis/index.html: ${missing.join(', ')}`);
   process.exit(2);
+}
+
+// --- Store-API parity guard ---
+// Every `store.METHOD` the shared UI calls must be defined in the agentbbs-web
+// adapter — otherwise the server-backed UI breaks only in the browser (a missing
+// method is a runtime TypeError no unit test sees). Assert it here so the
+// drift-guard CI fails fast instead. (Born from the arenaLive() regression.)
+{
+  const used = new Set(
+    [...html.matchAll(/\bstore\.([a-zA-Z_]\w*)/g)].map((m) => m[1]),
+  );
+  const block = (ADAPTER.match(/const store = \{([\s\S]*?)\n\};/) || [, ''])[1];
+  const defined = new Set(
+    [...block.matchAll(/(?:^|[{,])\s*([a-zA-Z_]\w*)\s*:/gm)].map((m) => m[1]),
+  );
+  const missingMethods = [...used].filter((m) => !defined.has(m)).sort();
+  if (missingMethods.length) {
+    console.error(
+      `sync-web-ui: the agentbbs-web adapter is missing store method(s) the shared UI calls: ${missingMethods.join(', ')}`,
+    );
+    console.error(
+      'Add them to the ADAPTER in scripts/sync-web-ui.mjs so genesis↔web store APIs stay in parity.',
+    );
+    process.exit(3);
+  }
 }
 
 const header = `<!-- GENERATED FROM genesis/index.html BY scripts/sync-web-ui.mjs — DO NOT EDIT BY HAND.\n     Edit genesis/index.html (the single source of truth, ADR-0024) and re-run the script. -->\n`;
