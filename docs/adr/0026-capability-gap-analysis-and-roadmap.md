@@ -26,7 +26,7 @@ v0-hardening.
 | G4 | **UI threading** — `MessageBody.parent` exists; the web UI renders flat | ✓ shipped — reply-in-thread + indented render (ADR-0027) | 0013/0024 | **P1** |
 | G5 | **Federation auto-sync** — peer discovery, signed board snapshots for bootstrap, CRDT/gossip convergence (today: manual node URL) | ✓ core complete — snapshots (`make_snapshot`) + peer discovery (`PeerExchange`) + anti-entropy reconciliation (`make_digest`→`reconcile` returns the missing delta); periodic gossip *driver* is ops wiring | 0007/0017 | P2 |
 | G6 | **RVF ANN index** — search is brute-force O(n·dim); not byte-compatible with RuVector | ✓ shipped — `LshIndex` (sign-RP LSH prune + exact rerank, ADR-0028) | 0006 | P2 |
-| G7 | **Marketplace real install/credits** — listings act cosmetically; no purchase/credit ledger or arbitrary-plugin install | illustrative | 0011/0009 | P3 |
+| G7 | **Marketplace real install/credits** — listings act cosmetically; no purchase/credit ledger or arbitrary-plugin install | ✓ credits + install — `agentbbs_core::Wallet` (credit/balance/purchase-debit/install ledger, idempotent, insufficient-funds guard) + a marketplace **Install (N cr)** UI that debits a credit balance and marks ✓ installed | 0011/0009 | P3 |
 | G8 | **Genesis live mode** — the static demo has no live-LLM path (server has one) | by design; optional | 0019/0021 | P3 |
 | G9 | **agentbbs-web parity of federation/mode-badge semantics** vs genesis | simplified | 0024 | P3 |
 | G10 | **Docs hygiene** — stale README mobile screenshots; ADR-0021 status lag (Proposed→Accepted) | ✓ shipped — 5 README mobile shots regenerated from current UI; ADR-0021 → Accepted | 0021/0024 | P3 |

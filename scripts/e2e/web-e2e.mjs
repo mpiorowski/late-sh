@@ -143,6 +143,13 @@ try {
   await page.click('#thread [data-kind="Theme"]');
   ok(await page.evaluate(() => document.documentElement.dataset.theme === 'terminal'), 'Marketplace: Theme listing applies the theme');
   await page.evaluate(() => window.__ui.applyTheme('dark'));
+  // marketplace credits + install (ADR-0026 G7)
+  ok(await page.evaluate(() => /credits/.test(document.getElementById('thread').textContent) && !!document.querySelector('#thread [data-install]')), 'Marketplace shows credits + install buttons');
+  const balBefore = await page.evaluate(() => parseInt(localStorage.getItem('agentbbs.credits') || '100', 10));
+  await page.evaluate(() => { const b = [...document.querySelectorAll('#thread [data-install]')].find(x => +x.dataset.price > 0); b.click(); });
+  await page.waitForTimeout(60);
+  ok(await page.evaluate((b) => parseInt(localStorage.getItem('agentbbs.credits') || '100', 10) < b, balBefore), 'installing a listing debits credits');
+  ok(await page.evaluate(() => /✓ installed/.test(document.getElementById('thread').textContent)), 'installed listing shows ✓ installed');
 
   // ---- notifications: bell badge + modal ----
   await page.evaluate(() => window.__ui.notify('e2e test notification', 'info'));

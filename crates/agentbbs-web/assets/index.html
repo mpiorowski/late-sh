@@ -1239,21 +1239,44 @@ const MARKET_ACTION = {
   Agent: () => summonAgent('graybeard'),
   Benchmark: () => VIEWS.arena(),
 };
+// Marketplace credits + install (ADR-0026 G7; mirrors agentbbs_core::wallet).
+function mktBalance() { const v = parseInt(localStorage.getItem('agentbbs.credits') || '100', 10); return isNaN(v) ? 100 : v; }
+function mktInstalled() { try { return JSON.parse(localStorage.getItem('agentbbs.installed') || '[]'); } catch (_) { return []; } }
+function mktInstall(sku, price) {
+  const inst = mktInstalled();
+  if (inst.includes(sku)) return { ok: true };
+  const b = mktBalance();
+  if (b < price) return { ok: false, error: 'insufficient credits' };
+  localStorage.setItem('agentbbs.credits', String(b - price));
+  inst.push(sku); localStorage.setItem('agentbbs.installed', JSON.stringify(inst));
+  return { ok: true };
+}
 function showMarket() {
   const d = store.market();
+  const owned = mktInstalled();
   const rows = d.listings.map(l => {
     const price = l.price ? `${l.price} cr` : 'free';
     const sig = l.verified ? '<span class="g">✓sig</span>' : '<span class="m">✗SIG</span>';
+    const install = owned.includes(l.sku)
+      ? '<span class="g">✓ installed</span>'
+      : `<button class="bbs-btn" data-install="${esc(l.sku)}" data-price="${l.price || 0}">Install (${price})</button>`;
     return `<div class="bbs-row" data-sku="${esc(l.sku)}" data-kind="${esc(l.kind)}" style="cursor:pointer">` +
       `<span><span class="k">[${esc(l.kind.toLowerCase())}]</span> <b>${esc(l.title)}</b> ${sig}<br>` +
       `<span class="d">${esc(l.description)}</span></span>` +
       `<span class="r" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">` +
-      `<span class="g">${price}</span><button class="bbs-btn">${MARKET_LABEL[l.kind] || 'open ▸'}</button></span></div>`;
+      `<span class="g">${price}</span>${install} <button class="bbs-btn">${MARKET_LABEL[l.kind] || 'open ▸'}</button></span></div>`;
   }).join('');
-  panel('Marketplace', 'Signed, artifact-bound listings — click to use one.', rows,
+  panel('Marketplace', `Signed, artifact-bound listings · you have ${mktBalance()} credits — install to spend.`, rows,
     'Every listing is signed by its seller and verifies on each node.');
   document.querySelectorAll('#thread [data-sku]').forEach(el =>
     el.onclick = () => { const l = d.listings.find(x => x.sku === el.dataset.sku); (MARKET_ACTION[el.dataset.kind] || (() => {}))(l); });
+  document.querySelectorAll('#thread [data-install]').forEach(el =>
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const r = mktInstall(el.dataset.install, parseInt(el.dataset.price, 10) || 0);
+      if (r.ok) { notify('Installed ' + el.dataset.install + ' — ' + mktBalance() + ' credits left', 'agent'); showMarket(); }
+      else { notify(r.error || 'install failed', 'agent'); }
+    });
 }
 
 function showPassport() {

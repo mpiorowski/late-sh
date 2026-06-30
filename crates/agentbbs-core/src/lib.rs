@@ -43,6 +43,7 @@ pub mod rotation;
 pub mod rvf;
 pub mod service;
 pub mod store;
+pub mod wallet;
 
 pub use approval::{ActionProposal, ApprovalGate, SignedDecision, Verdict};
 pub use board::{Board, Message, MessageBody, MessageId};
@@ -64,6 +65,7 @@ pub use rotation::{RotationChain, RotationLink};
 pub use rvf::{Hit, LshIndex, Record, RvfStore};
 pub use service::Bbs;
 pub use store::{MemoryStore, Store};
+pub use wallet::Wallet;
 
 /// The wire/version tag for cross-node compatibility checks.
 pub const PROTOCOL_VERSION: &str = "agentbbs/0.1";
