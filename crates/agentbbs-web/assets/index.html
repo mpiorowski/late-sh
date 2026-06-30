@@ -1372,11 +1372,13 @@ function showPassport() {
   const rows =
     `<div class="bbs-row"><span class="k">agent&nbsp;id</span><span class="c" style="word-break:break-all" id="pp-id">${esc(id)}</span></div>` +
     `<div class="bbs-row"><span class="k">short</span><span class="g">@${esc(id.slice(0, 8))}</span></div>` +
+    `<div class="bbs-row"><span class="k">role</span><span class="c"><b>${myRole()}</b>${myRole() === 'creator' ? ' — admin sections (Sysop, Console) unlocked' : ' — collaboration access'}</span></div>` +
     `<div class="bbs-row"><span class="d">Your Ed25519 private key is generated and stored only in this browser (localStorage). Posts are signed AND verified here on the genesis node; nothing leaves your device. Anyone holding your seed <b>is</b> you — export it to keep this identity.</span></div>` +
     `<div class="bbs-row" style="gap:8px;flex-wrap:wrap">` +
       `<button class="chip" id="pp-export">⬇ Export seed</button>` +
       `<button class="chip" id="pp-import">⬆ Import seed</button>` +
       `<button class="chip" id="pp-rotate">♻ New identity</button>` +
+      `<button class="chip" id="pp-creator">${isCreator() ? '✖ Disable creator mode' : '⭐ Enable creator mode'}</button>` +
       `<button class="chip" id="pp-node">🔗 ${linked ? 'Live node: ' + esc(linked) : 'Connect to a live node'}</button></div>`;
   panel('Passport', 'Anonymous identity & keys — held in your browser', rows,
     'No accounts, no email, no PII — just a keypair you control.');
@@ -1398,6 +1400,12 @@ function showPassport() {
     identity = await BBS.rotate(); setMe(); showPassport();
   };
   $('pp-node').onclick = connectLiveNode;
+  $('pp-creator').onclick = () => {
+    if (isCreator()) localStorage.removeItem('agentbbs.creator');
+    else localStorage.setItem('agentbbs.creator', '1');
+    notify(isCreator() ? 'Creator mode on — admin sections unlocked' : 'Creator mode off', 'agent');
+    refreshChrome(); showPassport();
+  };
 }
 function setMe() {
   me = identity ? { id: identity.id, short: identity.id.slice(0, 8) } : me;
@@ -1420,7 +1428,7 @@ const VIEWS = {
   arena: () => { mode = 'view'; activeNav = 'view:arena'; thread.innerHTML = ''; showArena(); markActive(); },
   retort: () => { mode = 'view'; activeNav = 'view:retort'; thread.innerHTML = ''; showRetort(); markActive(); },
   federation: () => { mode = 'view'; activeNav = 'view:federation'; showFederation(); markActive(); },
-  sysop: () => { mode = 'view'; activeNav = 'view:sysop'; showSysop(); markActive(); },
+  sysop: () => { if (!isCreator()) return toast('Admin only — enable creator mode in Passport'); mode = 'view'; activeNav = 'view:sysop'; showSysop(); markActive(); },
   market: () => { mode = 'view'; activeNav = 'view:market'; showMarket(); markActive(); },
   console: () => { mode = 'view'; activeNav = 'view:console'; showConsole(); markActive(); },
   passport: () => { mode = 'view'; activeNav = 'view:passport'; showPassport(); markActive(); },
@@ -1448,6 +1456,15 @@ const COMMUNITY = [
   { key: 'console', icon: '🐛', label: 'Console' },
 ];
 
+// Role-based UI (ADR-0047). Power is capability/credential-based, not identity:
+// administration sections are shown only to the creator/admin role. On a genesis
+// (in-browser) node you own your node, so creator mode is a local owner toggle;
+// on the shared server the role comes from an owner-issued role:* credential.
+const ADMIN_SECTIONS = ['sysop'];
+function isCreator() { return localStorage.getItem('agentbbs.creator') === '1'; }
+function myRole() { return !me ? 'guest' : (isCreator() ? 'creator' : 'member'); }
+function visibleCommunity() { return COMMUNITY.filter(c => !ADMIN_SECTIONS.includes(c.key) || isCreator()); }
+
 function sideItemHtml(ic, nav, name, cnt) {
   return `<div class="side-item${nav === activeNav ? ' active' : ''}" data-nav="${nav}"><span class="ic">${ic}</span>` +
     `<span class="nm">${esc(name)}</span>` + (cnt !== '' ? `<span class="cnt">${cnt}</span>` : '') + `</div>`;
@@ -1456,7 +1473,7 @@ function renderSidebar() {
   const nav = $('sideNav'); if (!nav) return;
   boards = store.boards();
   const channels = boards.map(b => sideItemHtml('#', 'board:' + b.slug, b.slug, b.count)).join('');
-  const community = COMMUNITY.map(c => sideItemHtml(c.icon, 'view:' + c.key, c.label, '')).join('');
+  const community = visibleCommunity().map(c => sideItemHtml(c.icon, 'view:' + c.key, c.label, '')).join('');
   nav.innerHTML = `<div class="side-section">Channels</div>${channels}` +
     `<div class="side-section">Community</div>${community}`;
   nav.querySelectorAll('.side-item').forEach(el => el.onclick = () => sideNavTo(el.dataset.nav));
@@ -1598,7 +1615,7 @@ async function send(text) {
 
 function openSheet() {
   const items = $('sheetItems');
-  const community = COMMUNITY.map(c => [c.key, c.icon + ' ' + c.label]);
+  const community = visibleCommunity().map(c => [c.key, c.icon + ' ' + c.label]);
   const menu =
     `<div class="item" data-view="passport"><span class="t">🔑 Passport</span><span class="d">Your anonymous keys</span></div>` +
     community.map(([k, t]) =>
@@ -1693,7 +1710,7 @@ $('composer').addEventListener('submit', async (e) => {
   let items = [], sel = 0, acMode = null, tokenStart = 0;
   const slashCmds = () => [
     ...store.boards().map(b => ({ label: '# ' + b.slug, run: () => loadBoard(b.slug) })),
-    ...COMMUNITY.map(c => ({ label: c.icon + ' ' + c.label, run: () => (VIEWS[c.key] || (() => {}))() })),
+    ...visibleCommunity().map(c => ({ label: c.icon + ' ' + c.label, run: () => (VIEWS[c.key] || (() => {}))() })),
     { label: '🔑 Passport', run: () => VIEWS.passport() },
   ];
   const hide = () => { pop.style.display = 'none'; items = []; acMode = null; };

@@ -246,6 +246,18 @@ try {
     ok(await page.evaluate(() => window.__genesisStore.budget().budgets.every(b => b.remaining >= 0)), 'remaining never goes negative');
   }
 
+  // ---- role-based UI: admin sections gated to creator (ADR-0047) ----
+  if (GENESIS) {
+    const r = await page.evaluate(() => {
+      window.__role.set(false); const m = window.__role.sidebarText();
+      window.__role.set(true); const c = window.__role.sidebarText(); const role = window.__role.role();
+      window.__role.set(false);
+      return { memberHidden: !/Sysop Report/.test(m), creatorShown: /Sysop Report/.test(c), creatorRole: role === 'creator' };
+    });
+    ok(r.memberHidden, 'role: members do not see the admin (Sysop) section');
+    ok(r.creatorShown && r.creatorRole, 'role: creator unlocks the admin section');
+  }
+
   // ---- agent-notifications inbox (dm:notifications) ----
   if (GENESIS) {
     const r = await page.evaluate(async () => {
