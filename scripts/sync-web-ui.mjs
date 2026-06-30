@@ -140,6 +140,20 @@ const store = {
       return r.ok ? { ok: true } : { ok: false, error: 'discard failed' };
     } catch (_) { return { ok: false, error: 'discard failed' }; }
   },
+  // Cross-repo collaboration (ADR-0036), read-only. This node IS the server,
+  // so a 502 here means THIS node doesn't have gh/jj installed (true of the
+  // default Cloud Run image) — never silently fakes data either way.
+  collabFetch: async (path) => {
+    try {
+      const r = await fetch(path, { headers: H });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, error: j.error || ('collab failed (' + r.status + ')') };
+      return { ok: true, result: j.result };
+    } catch (_) { return { ok: false, error: 'collab failed (network)' }; }
+  },
+  collabIssues: (repo) => store.collabFetch('/api/collab/github/issues?repo=' + encodeURIComponent(repo)),
+  collabPRs: (repo) => store.collabFetch('/api/collab/github/prs?repo=' + encodeURIComponent(repo)),
+  collabJjStatus: () => store.collabFetch('/api/collab/jujutsu/status'),
   // Hire an agent (ADR-0035): spawn a pod (hosted by that agent) via /api/pods.
   hire: async (handle, domain = 'ops') => {
     const h = (handle || '').replace(/^@/, '').toLowerCase();

@@ -25,10 +25,14 @@ const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
 const page = await ctx.newPage();
 
 const consoleErrors = [];
-// Ignore benign/environmental noise: favicon 404, transient network blips, and
-// the transformers.js CDN load (the demo engine degrades to keyword mode if it
-// fails). Real app errors (same-origin API failures, uncaught exceptions) still count.
-const BENIGN = /favicon|net::ERR|cdn\.jsdelivr|transformers|huggingface|CORS|Access to fetch|resolve\/main/i;
+// Ignore benign/environmental noise: favicon 404, transient network blips, the
+// transformers.js CDN load (the demo engine degrades to keyword mode if it
+// fails), and "Bad Gateway" — the literal reason phrase api_error() attaches
+// only to StatusCode::BAD_GATEWAY, used exclusively where a route honestly
+// reports a missing EXTERNAL dependency (gh/jj for /api/collab per ADR-0036;
+// the pods gateway), never an application bug. Real app errors (same-origin
+// API failures, uncaught exceptions) still count.
+const BENIGN = /favicon|net::ERR|cdn\.jsdelivr|transformers|huggingface|CORS|Access to fetch|resolve\/main|Bad Gateway/i;
 page.on('console', m => { if (m.type() === 'error' && !BENIGN.test(m.text())) consoleErrors.push(m.text()); });
 page.on('pageerror', e => consoleErrors.push('pageerror: ' + e.message));
 // "Draft with agent" (ADR-0049) is the only prompt()-driven UI flow in this
@@ -660,6 +664,14 @@ try {
   await page.evaluate(() => window.__ui.VIEWS.federation());
   await page.waitForTimeout(60);
   ok(await page.evaluate(() => /mode/.test(document.getElementById('thread').textContent) && /demo|federated|live/.test(document.getElementById('thread').textContent)), 'Federation view shows the node mode (G9 parity)');
+
+  // ---- collab view (ADR-0036) — read-only GitHub/jj surface ----
+  await page.evaluate(() => window.__ui.VIEWS.collab());
+  await page.waitForTimeout(80);
+  ok(await page.evaluate(() => /Collab/.test(document.getElementById('thread').textContent) && /Issues/.test(document.getElementById('thread').textContent) && !!document.getElementById('collab-repo')), 'Collab view renders with a repo input + Issues/PRs/jj actions');
+  await page.evaluate(() => document.getElementById('collab-jj').click());
+  await page.waitForTimeout(200);
+  ok(await page.evaluate(() => document.getElementById('collab-out').textContent.trim().length > 0), 'Collab jj-status action produces output — a result or an honest error, never a silent no-op');
 
   // ---- daily digest ----
   await page.evaluate(() => window.__ui.VIEWS.digest());

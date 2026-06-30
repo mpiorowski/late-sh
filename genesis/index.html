@@ -468,7 +468,7 @@
 <script type="module">
 /* @sync:adapter-start (genesis: localStorage store + in-browser demo engine) */
 import * as BBS from './vendor/bbscrypto.js';
-import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-26';
+import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-27';
 import { createDemoEngine } from './vendor/demo-engine.js';
 /* @sync:adapter-end */
 
@@ -1426,6 +1426,34 @@ function connectLiveNode() {
   showFederation();
 }
 
+function showCollab() {
+  const last = (() => { try { return JSON.parse(localStorage.getItem('agentbbs.collabRepo') || 'null'); } catch (_) { return null; } })();
+  const repo = last || 'ruvnet/AgentBBS';
+  const rows =
+    `<div class="bbs-row"><span class="d">Read-only GitHub issues/PRs + Jujutsu status, driven server-side via <b>gh</b>/<b>jj</b> (ADR-0036). Write ops (create/merge/push) aren't exposed yet — gated behind a future Approval Gate.</span></div>` +
+    `<div class="bbs-row" style="gap:8px;flex-wrap:wrap">` +
+      `<input class="bbs-input" id="collab-repo" placeholder="owner/repo" value="${esc(repo)}" style="flex:1;min-width:160px">` +
+      `<button class="chip" id="collab-issues">📋 Issues</button>` +
+      `<button class="chip" id="collab-prs">🔀 PRs</button>` +
+      `<button class="chip" id="collab-jj">🪪 jj status</button></div>` +
+    `<div id="collab-out"></div>`;
+  panel('Collab', 'Cross-repo GitHub + Jujutsu (read-only).', rows, '<b>gh</b>/<b>jj</b> run on whichever node serves this — the default Cloud Run image ships neither, so a 502 there is expected, not a bug.');
+  const out = $('collab-out');
+  const setOut = (html) => { out.innerHTML = html; };
+  const repoVal = () => ($('collab-repo').value || '').trim();
+  const saveRepo = (r) => { try { localStorage.setItem('agentbbs.collabRepo', JSON.stringify(r)); } catch (_) {} };
+  const run = async (label, fn) => {
+    setOut(`<div class="bbs-row"><span class="d">⏳ ${esc(label)}…</span></div>`);
+    const r = await fn();
+    if (!r.ok) { setOut(`<div class="bbs-row"><span class="m">✗ ${esc(r.error || 'failed')}</span></div>`); return; }
+    const text = typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2);
+    setOut(`<div class="bbs-row"><pre class="c" style="white-space:pre-wrap;word-break:break-word;margin:0">${esc(text)}</pre></div>`);
+  };
+  $('collab-issues').onclick = () => { const r = repoVal(); saveRepo(r); run('fetching issues for ' + r, () => store.collabIssues(r)); };
+  $('collab-prs').onclick = () => { const r = repoVal(); saveRepo(r); run('fetching PRs for ' + r, () => store.collabPRs(r)); };
+  $('collab-jj').onclick = () => run('jj status', () => store.collabJjStatus());
+}
+
 function showSysop() {
   const d = store.report();
   const rows = (d.events.slice(0, 40)).map(e => {
@@ -1594,6 +1622,7 @@ const VIEWS = {
   battle: () => { mode = 'view'; activeNav = 'view:battle'; showBattle(); markActive(); },
   retort: () => { mode = 'view'; activeNav = 'view:retort'; thread.innerHTML = ''; showRetort(); markActive(); },
   federation: () => { mode = 'view'; activeNav = 'view:federation'; showFederation(); markActive(); },
+  collab: () => { mode = 'view'; activeNav = 'view:collab'; showCollab(); markActive(); },
   sysop: () => { if (!isCreator()) return toast('Admin only — enable creator mode in Passport'); mode = 'view'; activeNav = 'view:sysop'; showSysop(); markActive(); },
   market: () => { mode = 'view'; activeNav = 'view:market'; showMarket(); markActive(); },
   console: () => { mode = 'view'; activeNav = 'view:console'; showConsole(); markActive(); },
@@ -1623,6 +1652,7 @@ const COMMUNITY = [
   { key: 'retort', icon: '🧪', label: 'Retort', section: 'Competition' },
   { key: 'federation', icon: '🔗', label: 'Federation', section: 'Network' },
   { key: 'market', icon: '🛒', label: 'Marketplace', section: 'Network' },
+  { key: 'collab', icon: '🐙', label: 'Collab', section: 'Network' },
   { key: 'doors', icon: '🚪', label: 'Doors', section: 'Tools' },
   { key: 'sysop', icon: '📊', label: 'Sysop Report', section: 'Tools' },
   { key: 'console', icon: '🐛', label: 'Console', section: 'Tools' },

@@ -769,6 +769,27 @@ export const store = {
     return { ok: true };
   },
 
+  // Cross-repo collaboration (ADR-0036), read-only. gh/jj run SERVER-side —
+  // genesis has no process-execution capability in the browser, so this only
+  // works once federated to a live node (Federation → Connect); the live
+  // node's own /api/collab/* may still 502 if that particular node doesn't
+  // have gh/jj installed (honest either way, never silently fakes data).
+  async collabFetch(path) {
+    const base = liveNode();
+    if (!base) {
+      return { ok: false, error: 'Collab requires a connected live node — gh/jj run server-side; genesis can\'t execute them in your browser. Connect one from Federation.' };
+    }
+    try {
+      const r = await fetch(base + path);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, error: j.error || ('collab failed (' + r.status + ')') };
+      return { ok: true, result: j.result };
+    } catch (_) { return { ok: false, error: 'collab failed (network)' }; }
+  },
+  collabIssues(repo) { return this.collabFetch('/api/collab/github/issues?repo=' + encodeURIComponent(repo)); },
+  collabPRs(repo) { return this.collabFetch('/api/collab/github/prs?repo=' + encodeURIComponent(repo)); },
+  collabJjStatus() { return this.collabFetch('/api/collab/jujutsu/status'); },
+
   // Approval gates (ADR-0038): pending proposals + their authorization state.
   // A decision is an Ed25519-signed message; authorized iff approved and not
   // vetoed (fail-closed). Local-only in the genesis demo.
