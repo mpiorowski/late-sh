@@ -246,6 +246,19 @@ try {
     ok(await page.evaluate(() => window.__genesisStore.budget().budgets.every(b => b.remaining >= 0)), 'remaining never goes negative');
   }
 
+  // ---- Pods: spawn a pod from the UI (interactive) ----
+  if (GENESIS) {
+    const r = await page.evaluate(async () => {
+      window.__ui.VIEWS.pods(); await new Promise(s => setTimeout(s, 150));
+      const before = window.__genesisStore.pods().pods.length;
+      const res = window.__genesisStore.spawnPod('security', 'high');
+      const after = window.__genesisStore.pods().pods.length;
+      return { hasForm: !!document.getElementById('pod-spawn'), ok: res && res.ok, grew: after === before + 1, tier: res && res.pod && res.pod.tier };
+    });
+    ok(r.hasForm, 'Pods view has a spawn form');
+    ok(r.ok && r.grew && r.tier === 'high', 'spawning a pod adds it with the chosen tier');
+  }
+
   // ---- Decisions: record a signed decision (interactive) ----
   if (GENESIS) {
     const r = await page.evaluate(async () => {

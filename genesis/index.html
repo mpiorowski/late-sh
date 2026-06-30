@@ -462,7 +462,7 @@
 <script type="module">
 /* @sync:adapter-start (genesis: localStorage store + in-browser demo engine) */
 import * as BBS from './vendor/bbscrypto.js';
-import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-14';
+import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-15';
 import { createDemoEngine } from './vendor/demo-engine.js';
 /* @sync:adapter-end */
 
@@ -942,10 +942,25 @@ function showPods() {
     `<div class="bbs-row"><span class="d">${pad(c.rank, 2)}</span>` +
     `<span class="c"><b>${esc(c.label)}</b> ${c.on_frontier ? '<span class="g">◆ frontier</span>' : '<span class="m">dominated</span>'}</span>` +
     `<span class="r d">acc ${(c.accuracy * 100).toFixed(0)}% · $${c.cost_usd.toFixed(4)}/task</span></div>`).join('');
+  const domOpts = ['research', 'security', 'trading', 'coding', 'ops', 'business-ops'].map(x => `<option>${x}</option>`).join('');
+  const tierOpts = ['low', 'mid', 'high'].map(x => `<option${x === 'mid' ? ' selected' : ''}>${x}</option>`).join('');
+  const foot = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">` +
+    `<span class="d">Spawn:</span>` +
+    `<select id="pod-domain" style="padding:6px 8px">${domOpts}</select>` +
+    `<select id="pod-tier" style="padding:6px 8px">${tierOpts}</select>` +
+    `<button class="bbs-btn" id="pod-spawn">Spawn pod ▸</button></div>`;
   panel('Domain Agent Pods',
-    'Hosted autonomous workers — status + the Pareto-ranked {domain×host×tier} configs.',
+    'Hosted autonomous workers — spawn one below; status + the Pareto-ranked {domain×host×tier} configs.',
     podRows + '<div class="bbs-sub">Config leaderboard · accuracy-vs-cost frontier (ADR-0023/0035)</div>' + cfgRows,
-    'Pods spawn via the cog_ gateway; step-results post signed into their room board.');
+    foot);
+  const sp = document.getElementById('pod-spawn');
+  if (sp) sp.onclick = () => {
+    const domain = document.getElementById('pod-domain').value;
+    const tier = document.getElementById('pod-tier').value;
+    const r = store.spawnPod(domain, tier);
+    if (r && r.ok) { agentNotify(`Spawned ${r.pod.domain} pod [${tier}] → #${r.pod.registered_room}`, 'pods'); showPods(); }
+    else notify((r && r.error) || 'spawn failed', 'agent');
+  };
 }
 
 // ---- Approvals inbox (ADR-0038) — human signs off on agent-proposed actions ----

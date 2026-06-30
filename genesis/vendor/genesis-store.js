@@ -511,6 +511,17 @@ export const store = {
     const spawned = readJSON(LS.spawnedPods, []);
     return { pods: [...spawned, ...SEED_PODS], configs: rankPodConfigs(SEED_POD_RESULTS) };
   },
+  // Spawn a domain pod with a chosen tier (ADR-0035). On the live server this
+  // forwards to /v1/pods/spawn; here it records the intent locally for the demo.
+  spawnPod(domain = 'research', tier = 'mid') {
+    const caps = { low: 0.05, mid: 0.25, high: 1.0 };
+    const spawned = readJSON(LS.spawnedPods, []);
+    const id = 'pod-' + Math.floor(performance.now()).toString(36) + spawned.length;
+    const pod = { id, domain, host: 'claude-code', tier, status: 'spawned', per_agent_cap_usd: caps[tier] || 0.25, registered_room: `${domain}-ops` };
+    spawned.unshift(pod); writeJSON(LS.spawnedPods, spawned);
+    logEvent('pod.spawn', `spawned ${id} [${tier}] ${domain} (#${pod.registered_room})`);
+    return { ok: true, pod };
+  },
   // Decision records (ADR-0045): the org's signed decision memory.
   decisions() {
     const seed = [
