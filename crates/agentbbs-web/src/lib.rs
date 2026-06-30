@@ -23,8 +23,8 @@ use agentbbs_core::market::{Listing, ListingBody, ListingKind, Market};
 use agentbbs_core::report::MemoryReporter;
 use agentbbs_core::{
     ActionProposal, ApprovalGate, Bbs, Board, BudgetLedger, MaxTier, MemoryStore, ModAction,
-    ModerationLog, OutcomeRecord, PodSpec, PodStatus, ReputationLedger, Role, SignedDecision,
-    Store,
+    ModerationLog, OutcomeRecord, Playbook, PlaybookRun, PodSpec, PodStatus, ReputationLedger,
+    Role, RunStatus, SignedDecision, Store,
 };
 
 use axum::extract::{Path, State};
@@ -115,6 +115,8 @@ pub struct AppState {
     budget: Mutex<BudgetLedger>,
     /// Signed moderation log (ADR-0032); enforced on the post path.
     moderation: Mutex<ModerationLog>,
+    /// Active playbook runs (ADR-0041 Phase 3), keyed by run id.
+    runs: Mutex<Vec<(String, PlaybookRun)>>,
 }
 
 impl AppState {
@@ -136,6 +138,7 @@ impl AppState {
             reputation: Mutex::new(ReputationLedger::new()),
             budget: Mutex::new(BudgetLedger::new()),
             moderation: Mutex::new(ModerationLog::new()),
+            runs: Mutex::new(Vec::new()),
         })
     }
 
@@ -362,6 +365,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/reputation", get(api_reputation))
         .route("/api/budget", get(api_budget))
         .route("/api/playbooks", get(api_playbooks))
+        .route("/api/playbooks/run", post(api_playbook_run))
+        .route("/api/runs", get(api_runs_list))
+        .route("/api/runs/{id}/advance", post(api_run_advance))
         .route(
             "/api/moderation",
             get(api_moderation_list).post(api_moderation_act),
@@ -1323,6 +1329,74 @@ async fn api_pods_result(
     Ok(Json(pod.clone()))
 }
 
+/// Drive a run forward: advance through `AgentTask`/`Tool` steps and any
+/// already-authorized `ApprovalGate`, stopping at the first un-approved gate or
+/// at completion. `gate` is the live approval gate; a gate's `allowed` deciders
+/// are whoever has signed a decision over its action id.
+fn drive_run(run: &mut PlaybookRun, gate: &ApprovalGate) {
+    loop {
+        let allowed: Vec<agentbbs_core::AgentId> = match run.gate_action_id() {
+            Some(aid) => gate.decisions_for(&aid).iter().map(|d| d.decider).collect(),
+            None => Vec::new(),
+        };
+        match run.advance(gate, &allowed) {
+            RunStatus::Running => continue,
+            _ => break, // AwaitingApproval | Completed | Failed
+        }
+    }
+}
+
+/// A run's externally-visible state.
+fn run_view(id: &str, run: &PlaybookRun) -> serde_json::Value {
+    serde_json::json!({
+        "run_id": id,
+        "status": run.status(),
+        "current_step": run.current().map(|s| s.id.clone()),
+        "gate_action_id": run.gate_action_id(),
+    })
+}
+
+/// `POST /api/playbooks/run` — start a run from a [`Playbook`] definition and
+/// drive it to the first approval gate (or completion). Returns the run state;
+/// approve the gate via `/api/approvals/decision` (signing over `gate_action_id`)
+/// then `POST /api/runs/{id}/advance` (ADR-0041 + ADR-0038).
+async fn api_playbook_run(
+    State(state): State<Arc<AppState>>,
+    Json(playbook): Json<Playbook>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let mut run = PlaybookRun::start(playbook)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("invalid playbook: {e}")))?;
+    drive_run(&mut run, &state.gate.lock().unwrap());
+    let mut runs = state.runs.lock().unwrap();
+    let id = format!("run-{:04}", runs.len());
+    let view = run_view(&id, &run);
+    runs.push((id, run));
+    Ok(Json(view))
+}
+
+/// `POST /api/runs/{id}/advance` — re-check the current gate against newly
+/// recorded approvals and drive the run forward.
+async fn api_run_advance(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let gate = state.gate.lock().unwrap();
+    let mut runs = state.runs.lock().unwrap();
+    let entry = runs
+        .iter_mut()
+        .find(|(rid, _)| *rid == id)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "run not found"))?;
+    drive_run(&mut entry.1, &gate);
+    Ok(Json(run_view(&entry.0, &entry.1)))
+}
+
+/// `GET /api/runs` — all playbook runs and their state.
+async fn api_runs_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let runs = state.runs.lock().unwrap();
+    let views: Vec<serde_json::Value> = runs.iter().map(|(id, r)| run_view(id, r)).collect();
+    Json(serde_json::json!({ "runs": views }))
+}
+
 /// `POST /api/moderation` — record a signed [`ModAction`] (mute/ban/timeout/
 /// lift, ADR-0032). The signature is verified before recording; forged or
 /// tampered actions are rejected. The moderator's `MODERATE` capability is a
@@ -1960,6 +2034,82 @@ mod tests {
         assert!(pb["playbook_id"].as_str().unwrap().len() == 64); // blake3 hex
         assert_eq!(pb["steps"].as_array().unwrap().len(), 3);
         assert_eq!(pb["steps"][1]["kind"], "approval_gate");
+    }
+
+    // ADR-0041 Phase 3: a playbook run parks at the approval gate, then a signed
+    // Approve over its gate_action_id lets /api/runs/{id}/advance complete it.
+    #[tokio::test]
+    async fn playbook_run_parks_at_gate_then_completes_on_approval() {
+        use agentbbs_core::{Identity, Playbook, PlaybookStep, SignedDecision, StepKind, Verdict};
+        let app = router(AppState::in_memory());
+        let human = Identity::generate();
+        let pb = Playbook::new(
+            "t",
+            "1",
+            "manual",
+            vec![
+                PlaybookStep {
+                    id: "do".into(),
+                    kind: StepKind::AgentTask {
+                        agent: "claude".into(),
+                        instruction: "work".into(),
+                    },
+                },
+                PlaybookStep {
+                    id: "gate".into(),
+                    kind: StepKind::ApprovalGate {
+                        summary: "ok to ship?".into(),
+                    },
+                },
+                PlaybookStep {
+                    id: "ship".into(),
+                    kind: StepKind::Tool {
+                        tool: "deploy".into(),
+                    },
+                },
+            ],
+        );
+        // Start the run → drives past the AgentTask, parks at the gate.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/playbooks/run")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&pb).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["status"], "awaiting_approval");
+        let run_id = v["run_id"].as_str().unwrap().to_string();
+        let aid = v["gate_action_id"].as_str().unwrap().to_string();
+
+        // Human signs an Approve over the gate's action id.
+        let d = SignedDecision::sign(&human, aid, Verdict::Approve, "ship it", chrono::Utc::now());
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/approvals/decision")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&d).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Advance → past the gate, runs the Tool, completes.
+        let resp = app
+            .oneshot(
+                Request::post(format!("/api/runs/{run_id}/advance"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(body_json(resp).await["status"], "completed");
     }
 
     // ADR-0038: propose → human signs a decision → gate authorizes; forgery 400.
