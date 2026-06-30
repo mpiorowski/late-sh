@@ -388,7 +388,9 @@ export const store = {
       // every message twice. We keep only very-recent (<10s) local posts the
       // server hasn't echoed yet, as an optimistic display; once the server
       // returns them (same content key) the local copy drops out.
-      const ckey = (m) => (m.author || '') + '|' + (m.created_at || '') + '|' + (m.body || '');
+      // Normalize the timestamp to epoch-ms so JS ("…Z", ms) and Rust
+      // ("…+00:00", ns) renderings of the same instant produce the same key.
+      const ckey = (m) => (m.author || '') + '|' + Date.parse(m.created_at || '') + '|' + (m.body || '');
       const liveKeys = new Set(live.map(ckey));
       const cutoff = Date.now() - 10000;
       const optimistic = messages.filter(m =>
