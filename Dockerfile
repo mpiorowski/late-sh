@@ -126,6 +126,52 @@ RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_
     && test -d ${NETHACK_VAR_PLAYGROUND}/save
 
 # ==============================================================================
+# Stage 0b: dopewars - Build the door game binary from verified upstream source
+# ==============================================================================
+# Unlike NetHack (its own SSH host), dopewars is a local PTY child of late-ssh, so
+# its binary ships inside the late-ssh images (base for dev, runtime-ssh for prod)
+# rather than a dedicated service image. We build the curses client terminal-only
+# (no GTK/SDL/sound) from the verified 1.6.2 release tarball: runtime deps are just
+# glib2 + ncursesw (+ libcurl, pulled in by the optional metaserver client). The
+# binary is self-contained -- drug/location data is compiled in, no data dir -- and
+# is NOT setgid, so it honors the per-session `-f` score path the proxy passes.
+#
+# The tarball SHA-256 is verified BEFORE the build (downloaded + hashed 2026-06-30);
+# `sha256sum -c` fails the build closed on any mismatch.
+FROM debian:${DEBIAN_VERSION}-slim AS dopewars-build
+
+ARG DOPEWARS_VERSION=1.6.2
+ARG DOPEWARS_TARBALL=dopewars-1.6.2.tar.gz
+ARG DOPEWARS_URL=https://downloads.sourceforge.net/project/dopewars/dopewars/1.6.2/dopewars-1.6.2.tar.gz
+ARG DOPEWARS_SHA256=623b9d1d4d576f8b1155150975308861c4ec23a78f9cc2b24913b022764eaae1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    build-essential \
+    pkg-config \
+    libglib2.0-dev \
+    libncursesw5-dev \
+    libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN curl -fsSL -o "${DOPEWARS_TARBALL}" "${DOPEWARS_URL}" \
+    && echo "${DOPEWARS_SHA256}  ${DOPEWARS_TARBALL}" | sha256sum -c - \
+    && tar -xzf "${DOPEWARS_TARBALL}" \
+    && rm "${DOPEWARS_TARBALL}"
+
+# Terminal-only build (GUI/server/sound disabled). The release Makefile drops
+# $(CURSES_LIBS) from dopewars_LDADD when the GTK client is disabled, so the curses
+# symbols are injected via the trailing $(LIBS) on the link line (LIBS=-lncursesw).
+# Copy the finished binary to a version-independent path for the COPY --from below.
+WORKDIR /build/dopewars-${DOPEWARS_VERSION}
+RUN ./configure --disable-gui-client --disable-gui-server --enable-curses-client \
+    && make LIBS="-lncursesw" \
+    && test -x src/dopewars \
+    && cp src/dopewars /dopewars
+
+# ==============================================================================
 # Stage 0: Base - Common system dependencies
 # ==============================================================================
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS base
@@ -144,6 +190,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     libncursesw6 \
+    libglib2.0-0 \
+    libcurl4 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack
 
@@ -158,6 +206,12 @@ COPY --from=nethack-build /var/games/nethack-var /var/games/nethack-var
 RUN mkdir -p /usr/games \
     && ln -sf /var/games/nethack/nethack /usr/games/nethack \
     && chmod -R 0777 /var/games/nethack-var
+
+# dopewars door game: a local PTY child of late-ssh (see late-ssh dopewars proxy).
+# Self-contained terminal-only binary from the dopewars-build stage; its runtime
+# libs (glib2/ncursesw/curl) are installed above. LATE_DOPEWARS_BIN defaults to
+# /usr/games/dopewars. The per-session `-f` score file lives under /tmp at runtime.
+COPY --from=dopewars-build /dopewars /usr/games/dopewars
 
 # Configure cargo to use mold linker
 RUN echo '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n\n[target.aarch64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]' >> /usr/local/cargo/config.toml
@@ -276,6 +330,20 @@ ENV RUST_LOG=info
 # Stage 4b: Runtime SSH - SSH server
 # ==============================================================================
 FROM runtime-base AS runtime-ssh
+
+# dopewars door game runs as a local PTY child of late-ssh (no separate host), so
+# its terminal-only binary + runtime libs ship here. ncurses-term adds the extended
+# terminfo DB (alacritty/st/rxvt) so those clients get native terminfo rather than
+# the proxy's xterm-256color fallback. The binary is self-contained (no data dir).
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libncursesw6 \
+    libcurl4 \
+    ncurses-term \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=dopewars-build /dopewars /usr/games/dopewars
+USER late
 
 COPY --from=builder /app/late-ssh-bin /app/late-ssh
 
