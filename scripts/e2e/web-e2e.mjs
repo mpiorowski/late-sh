@@ -269,7 +269,7 @@ try {
   // ---- federation view shows mode (G9 parity) ----
   await page.evaluate(() => window.__ui.VIEWS.federation());
   await page.waitForTimeout(60);
-  ok(await page.evaluate(() => /mode/.test(document.getElementById('thread').textContent) && /demo|federated/.test(document.getElementById('thread').textContent)), 'Federation view shows the node mode (G9 parity)');
+  ok(await page.evaluate(() => /mode/.test(document.getElementById('thread').textContent) && /demo|federated|live/.test(document.getElementById('thread').textContent)), 'Federation view shows the node mode (G9 parity)');
 
   // ---- daily digest ----
   await page.evaluate(() => window.__ui.VIEWS.digest());
