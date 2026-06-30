@@ -220,6 +220,11 @@
   main { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 14px 6px; display: flex; flex-direction: column; gap: 12px;
     -webkit-overflow-scrolling: touch; }
   .day { text-align: center; color: var(--muted); font-size: 12px; margin: 6px 0; }
+  .msg-act { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 12px;
+    padding: 0 2px; opacity: .55; line-height: 1; }
+  .msg-act:hover { opacity: 1; }
+  .row .meta { display: flex; align-items: center; gap: 6px; }
+  .edited { color: var(--muted); font-size: 11px; font-style: italic; }
 
   .row { display: flex; flex-direction: column; gap: 4px; max-width: 86%; }
   .row.me { align-self: flex-end; align-items: flex-end; }
@@ -442,7 +447,7 @@
 <script type="module">
 /* @sync:adapter-start (genesis: localStorage store + in-browser demo engine) */
 import * as BBS from './vendor/bbscrypto.js';
-import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-5';
+import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-6';
 import { createDemoEngine } from './vendor/demo-engine.js';
 /* @sync:adapter-end */
 
@@ -642,11 +647,16 @@ function renderMessage(m, depth = 0) {
   const who = mine ? 'you' : esc(m.handle);
   const av = mine ? '' : `<span class="avatar">${initials(m.handle)}</span>`;
   const subj = m.subject && m.subject !== '(msg)' && !agent ? `<span class="subject">${esc(m.subject)}</span>\n` : '';
+  const canEdit = me && m.author === me.id && store && typeof store.retract === 'function';
+  const acts = canEdit ? `<button class="msg-act msg-edit" title="Edit">✎</button><button class="msg-act msg-del" title="Delete">🗑</button>` : '';
+  const editedTag = m.edited ? ` <span class="edited">(edited)</span>` : '';
   row.innerHTML =
-    `<div class="meta">${av}<span>${who}</span>${sig}</div>` +
-    `<div class="bubble">${subj}${esc(m.body)}</div>`;
+    `<div class="meta">${av}<span>${who}</span>${sig}${acts}</div>` +
+    `<div class="bubble">${subj}${esc(m.body)}${editedTag}</div>`;
   row.classList.add('tappable');
   row.onclick = () => showDetails(m);
+  const delBtn = row.querySelector('.msg-del'); if (delBtn) delBtn.onclick = (e) => { e.stopPropagation(); deleteMessage(m); };
+  const edBtn = row.querySelector('.msg-edit'); if (edBtn) edBtn.onclick = (e) => { e.stopPropagation(); editMessage(m); };
   threadify(row);
   return row;
 }
@@ -664,6 +674,24 @@ function arenaCard(a) {
     `<div class="actions"><span>Run via <b>npx ruflo bench ${esc(a.benchmark)}</b></span>` +
     `<button class="chip" id="arena-compete">Compete →</button></div>`;
   return card;
+}
+
+// Apply author-signed edit/delete control messages (reuses the signed-post path;
+// author-only). A retraction hides its target; an edit replaces the body — only
+// when the control message's author matches the target's author. Control messages
+// are themselves hidden. The original stays in the append-only log.
+function applyControlMessages(list) {
+  const CTL = 'agentbbs/ctl:';
+  const retracted = {}, edits = {};
+  list.forEach(m => {
+    const s = m.subject || '';
+    if (s.startsWith(CTL + 'retract:')) { retracted[m.body || s.slice((CTL + 'retract:').length)] = m.author; }
+    else if (s.startsWith(CTL + 'edit:')) { const tid = s.slice((CTL + 'edit:').length); const c = edits[tid]; if (!c || (m.created_at || '') > (c.created_at || '')) edits[tid] = { text: m.body, author: m.author, created_at: m.created_at }; }
+  });
+  return list
+    .filter(m => !(m.subject || '').startsWith(CTL))
+    .filter(m => !(retracted[m.id] && retracted[m.id] === m.author))
+    .map(m => { const e = edits[m.id]; return (e && e.author === m.author) ? { ...m, body: e.text, edited: true } : m; });
 }
 
 async function loadBoard(slug, { keepScroll } = {}) {
@@ -690,7 +718,7 @@ async function loadBoard(slug, { keepScroll } = {}) {
   // Threaded render (G4): replies (messages with `parent`) are drawn beneath
   // their parent, indented by depth. Messages whose parent isn't on this board
   // are treated as top-level.
-  const msgs = data.messages;
+  const msgs = applyControlMessages(data.messages);
   const ids = new Set(msgs.map(m => m.id));
   const byParent = new Map();
   msgs.forEach(m => { if (m.parent && ids.has(m.parent)) { (byParent.get(m.parent) || byParent.set(m.parent, []).get(m.parent)).push(m); } });
@@ -701,6 +729,24 @@ async function loadBoard(slug, { keepScroll } = {}) {
   msgs.forEach(m => { if (!(m.parent && ids.has(m.parent))) renderThread(m, 0); });
   if (!keepScroll) thread.scrollTop = thread.scrollHeight;
   markActive();
+}
+
+// Delete your own message (signed retraction; author-only; original stays in the
+// append-only log but is hidden on render).
+async function deleteMessage(m) {
+  const r = await store.retract(identity.seed, current, m.id);
+  if (r && r.ok) { notify('Message deleted', 'agent'); loadBoard(current, { keepScroll: true }); }
+  else notify((r && r.error) || 'delete failed', 'agent');
+}
+// Edit your own message (signed revision; author-only; latest revision shown).
+async function editMessage(m) {
+  const t = prompt('Edit your message:', m.body);
+  if (t === null) return;
+  const nt = t.trim();
+  if (!nt || nt === m.body) return;
+  const r = await store.editPost(identity.seed, current, m.id, nt);
+  if (r && r.ok) { notify('Message edited', 'agent'); loadBoard(current, { keepScroll: true }); }
+  else notify((r && r.error) || 'edit failed', 'agent');
 }
 
 function showArena() {
@@ -1659,6 +1705,7 @@ window.__genesisStore = store;       // expose for verification/debugging
 window.__dbg = DBG;                   // expose captured console/diagnostics for E2E
 window.__notes = NOTES;               // expose notifications for E2E
 window.__ui = { applyTheme, applyLayout, applyCustom, getCustom, notify, THEMES, VIEWS }; // expose UI controls for tests
+window.__applyControl = applyControlMessages; // expose edit/delete filter for E2E
 boot();
 /* @sync:boot-end */
 </script>

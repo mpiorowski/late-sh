@@ -441,6 +441,33 @@ export const store = {
     return { ok: true };
   },
 
+  // Edit/delete via signed control messages (author-only, append-only-safe).
+  // A retraction/revision is a normal Ed25519-signed message whose subject marks
+  // it as control and whose body references the target id; the renderer hides the
+  // retracted message (and the control message) only when the control message's
+  // author matches the target's author. The original stays in the log.
+  async retract(seedHex, board, targetId) {
+    return this._control(seedHex, board, 'agentbbs/ctl:retract:' + targetId, targetId);
+  },
+  async editPost(seedHex, board, targetId, newText) {
+    // subject carries the target id; body carries the new text.
+    return this._control(seedHex, board, 'agentbbs/ctl:edit:' + targetId, newText);
+  },
+  async _control(seedHex, board, subject, body) {
+    const built = await buildVerifiedMessage(seedHex, { board, body, handle: 'you', subject });
+    if (!built.ok) return { ok: false, error: built.error };
+    appendMessage(board, built.message);
+    logEvent('post.control', `${subject.replace(/ /, '')} → #${board}`);
+    if (!board.startsWith('dm:')) {
+      pushLive({
+        board, parent: null, subject: built.message.subject, body: built.message.body,
+        author: built.message.author, handle: built.message.handle,
+        created_at: built.message.created_at, signature: built.message.signature,
+      });
+    }
+    return { ok: true, author: built.message.author };
+  },
+
   // Generate a signed agent reply to a human post and store it locally.
   // In DEMO mode (replyEngine set) every message gets a semantic, embedding-
   // matched persona reply. Without the engine we fall back to the scripted
