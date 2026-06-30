@@ -102,8 +102,21 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         ),
         stat("Turns", c.turns.to_string(), bright),
         stat("Dragons", c.dragon_kills.to_string(), gold),
-        stat("DK pts", c.dragon_points.to_string(), gold),
+        stat("Charm", c.charm.to_string(), bright),
+        stat("Soul", c.soulpoints.to_string(), bright),
     ];
+
+    // Living companions (e.g. a Bonecall skeleton), if any are at your side.
+    if !c.companions.is_empty() {
+        lines.push(Line::raw(""));
+        for comp in &c.companions {
+            lines.push(stat(
+                "Ally",
+                format!("{} ({}/{} HP)", comp.name, comp.hitpoints, comp.max_hitpoints),
+                dim,
+            ));
+        }
+    }
 
     // Specialty (once chosen): the path, and today's spendable skill uses.
     if c.specialty != Specialty::None {
@@ -178,26 +191,6 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
             "You are dead. Rest here until a new day dawns and you rise renewed.",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    }
-
-    if state.mode() == Mode::Gypsy {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(vec![
-            Span::styled("Dragon points  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                c.dragon_points.to_string(),
-                Style::default()
-                    .fg(theme::BADGE_GOLD())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        lines.push(Line::from(Span::styled(
-            format!(
-                "Boons so far: +{} HP, +{} attack, +{} defense, +{} daily fights",
-                c.dragon_hp_bonus, c.dragon_attack_bonus, c.dragon_defense_bonus, c.dragon_turn_bonus
-            ),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
@@ -283,7 +276,6 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Healer => "The Mendery",
         Mode::Bank => "The Coinvault",
         Mode::Training => "The Proving Yard",
-        Mode::Gypsy => "The Gypsy's Tent",
         Mode::Event => "A Forest Happening",
         Mode::ChooseSpecialty => "Choose Your Path",
         Mode::Graveyard => "The Graveyard",

@@ -8,7 +8,7 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use super::combat::Combatant;
+use super::combat::{Combatant, Companion};
 use super::data;
 
 /// Starting on-hand gold for a fresh character (`newplayerstartgold`).
@@ -28,48 +28,35 @@ pub const MAX_GOLD_FOR_INTEREST: u64 = 100_000;
 /// each new day (LoGD `mininterest`/`maxinterest` defaults).
 pub const MIN_INTEREST_PERCENT: u32 = 1;
 pub const MAX_INTEREST_PERCENT: u32 = 10;
-/// Gold reward ceiling carried into a fresh run after a dragon kill.
+/// Gold ceiling carried into a fresh run after a dragon kill, before the
+/// flawless bonus (LoGD `maxrestartgold`). Retained on-hand gold plus
+/// [`START_GOLD`] per kill is capped here.
 pub const DRAGON_RUN_GOLD_CAP: u64 = 300;
-/// Cap on the permanent extra daily forest turns bought at the Gypsy (Stamina).
-pub const DK_FOREST_TURN_CAP: u32 = 10;
-/// Dragon points banked per Green Dragon kill, spent at the Gypsy's Tent.
-pub const DRAGON_POINTS_PER_KILL: u32 = 3;
-/// Max-HP granted per Vitality purchase at the Gypsy.
-pub const GYPSY_HP_STEP: u32 = 15;
-
-/// A permanent upgrade bought at the Gypsy's Tent with dragon points. This is
-/// LoGD's dragon-point economy: kill the dragon, bank points, then spend them on
-/// across-run boons however you like. Every upgrade costs one point.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GypsyUpgrade {
-    /// +[`GYPSY_HP_STEP`] max HP.
-    Vitality,
-    /// +1 attack.
-    Might,
-    /// +1 defense.
-    Guard,
-    /// +1 daily forest fight, up to [`DK_FOREST_TURN_CAP`].
-    Stamina,
-}
-
-impl GypsyUpgrade {
-    /// Dragon-point cost of this upgrade.
-    pub const fn cost(self) -> u32 {
-        1
-    }
-
-    /// The log line shown after a successful purchase.
-    pub fn purchase_line(self) -> &'static str {
-        match self {
-            GypsyUpgrade::Vitality => "The gypsy traces a sigil; your vigor swells. (+max HP)",
-            GypsyUpgrade::Might => "The gypsy whispers a word; your arm grows stronger. (+attack)",
-            GypsyUpgrade::Guard => "The gypsy hums low; your guard hardens. (+defense)",
-            GypsyUpgrade::Stamina => {
-                "The gypsy blesses your stride; you'll roam the forest longer. (+1 daily fight)"
-            }
-        }
-    }
-}
+/// Gem ceiling carried into a fresh run after a dragon kill (LoGD
+/// `maxrestartgems`).
+pub const MAX_RESTART_GEMS: u32 = 10;
+/// Permanent attack/defense gained each dragon kill — LoGD's retained
+/// dragon-point boons, auto-applied on the kill (no Gypsy shop). The endgame
+/// dragon scales against this investment (`scaled_dragon`).
+pub const DK_ATTACK_PER_KILL: u32 = 1;
+pub const DK_DEFENSE_PER_KILL: u32 = 1;
+/// Permanent max-HP retained each dragon kill (one dragon point's worth of HP,
+/// 5 HP, mirroring LoGD's earned-HP retention across the run reset).
+pub const DK_HP_PER_KILL: u32 = 5;
+/// Extra daily forest fights granted per banked dragon kill (LoGD's `dkff`
+/// dragon-kill fights), capped so the day doesn't balloon.
+pub const DK_FOREST_FIGHTS_PER_KILL: u32 = 1;
+pub const DK_FOREST_FIGHTS_CAP: u32 = 10;
+/// Charm gained per dragon kill (LoGD `charm += 5`).
+pub const CHARM_PER_DRAGON_KILL: u32 = 5;
+/// Bonus gold (3x [`START_GOLD`]) and a gem for a flawless, no-damage dragon
+/// kill (LoGD's flawless bonus), added on top of the gold cap.
+pub const FLAWLESS_GOLD_BONUS: u64 = START_GOLD * 3;
+/// Soulpoints awarded for beating a master (LoGD `train.php`).
+pub const SOULPOINTS_PER_MASTER: u32 = 5;
+/// Forest turns docked the day after a death/resurrection (LoGD
+/// `resurrectionturns`, default -6).
+pub const RESURRECTION_TURNS: i32 = -6;
 
 /// The forest hunting intensities. LoGD offers easier/harder pickings that
 /// shift the creature level relative to the player's own level.
@@ -125,19 +112,24 @@ pub struct Character {
     pub seen_dragon: bool,
     /// Lifetime dragon kills.
     pub dragon_kills: u32,
-    /// Unspent dragon points, banked from kills, spent at the Gypsy's Tent.
-    pub dragon_points: u32,
-    /// Permanent max-HP bonus bought at the Gypsy (Vitality). Retained per run.
+    /// Permanent retained max-HP from dragon kills (LoGD's earned-HP retention).
     pub dragon_hp_bonus: u32,
-    /// Permanent attack bonus bought at the Gypsy (Might).
+    /// Permanent retained attack from dragon kills (LoGD's `at` dragon points).
     pub dragon_attack_bonus: u32,
-    /// Permanent defense bonus bought at the Gypsy (Guard).
+    /// Permanent retained defense from dragon kills (LoGD's `de` dragon points).
     pub dragon_defense_bonus: u32,
-    /// Permanent extra daily forest fights bought at the Gypsy (Stamina).
-    pub dragon_turn_bonus: u32,
     /// Gems: the second currency, found in the forest and spent advancing your
     /// specialty (LoGD's gem economy). Distinct from gold.
     pub gems: u64,
+    /// Charm: LoGD's social stat, gained on dragon kills (`+5`). Feeds the
+    /// not-yet-built flirting/marriage systems; tracked for parity.
+    pub charm: u32,
+    /// Soulpoints: LoGD's alignment/resurrection currency. Refilled each new day
+    /// to `50 + 5*level`, `+5` per master beaten. Tracked for parity.
+    pub soulpoints: u32,
+    /// Persistent combat companions (e.g. a Bonecall skeleton). They fight
+    /// alongside you across battles until destroyed (LoGD `apply_companion`).
+    pub companions: Vec<Companion>,
     /// Chosen combat specialty, picked once and largely permanent. `None` until
     /// the player decides (LoGD sets it on the first new day).
     pub specialty: Specialty,
@@ -193,12 +185,14 @@ impl Default for Character {
             alive: true,
             seen_dragon: false,
             dragon_kills: 0,
-            dragon_points: 0,
             dragon_hp_bonus: 0,
             dragon_attack_bonus: 0,
             dragon_defense_bonus: 0,
-            dragon_turn_bonus: 0,
             gems: 0,
+            charm: 0,
+            // Fresh level-1 soulpoints: 50 + 5*1 (LoGD new-day formula).
+            soulpoints: 55,
+            companions: Vec::new(),
             specialty: Specialty::None,
             specialty_skill: 0,
             specialty_uses: 0,
@@ -266,10 +260,11 @@ impl Character {
     }
 
     /// Advance one level after beating the master: +1 level (so +10 max HP, +1
-    /// attack, +1 defense via derivation), then heal to full.
+    /// attack, +1 defense via derivation), +5 soulpoints, then heal to full.
     pub fn advance_level(&mut self) {
         if self.level < data::MAX_LEVEL {
             self.level += 1;
+            self.soulpoints = self.soulpoints.saturating_add(SOULPOINTS_PER_MASTER);
             self.hitpoints = self.max_hitpoints();
         }
     }
@@ -437,74 +432,83 @@ impl Character {
         self.experience = (self.experience as f64 * EXP_KEEP_ON_DEATH).round() as u64;
         self.alive = false;
         self.hitpoints = 0;
+        // Your companions don't follow you past the grave.
+        self.companions.clear();
     }
 
-    /// Extra daily forest fights from Gypsy (Stamina) purchases, capped.
+    /// Extra daily forest fights earned from banked dragon kills (LoGD `dkff`):
+    /// one per kill, capped.
     pub fn dk_forest_bonus(&self) -> u32 {
-        self.dragon_turn_bonus.min(DK_FOREST_TURN_CAP)
+        (self.dragon_kills * DK_FOREST_FIGHTS_PER_KILL).min(DK_FOREST_FIGHTS_CAP)
     }
 
-    /// Spend one dragon point on a permanent [`GypsyUpgrade`]. Returns false if
-    /// the player can't afford it or the upgrade is already maxed.
-    pub fn buy_upgrade(&mut self, upgrade: GypsyUpgrade) -> bool {
-        let cost = upgrade.cost();
-        if self.dragon_points < cost {
-            return false;
-        }
-        match upgrade {
-            GypsyUpgrade::Vitality => {
-                self.dragon_hp_bonus = self.dragon_hp_bonus.saturating_add(GYPSY_HP_STEP);
-                // Let the new headroom be usable right away.
-                self.hitpoints = self.hitpoints.saturating_add(GYPSY_HP_STEP);
-            }
-            GypsyUpgrade::Might => self.dragon_attack_bonus = self.dragon_attack_bonus.saturating_add(1),
-            GypsyUpgrade::Guard => {
-                self.dragon_defense_bonus = self.dragon_defense_bonus.saturating_add(1)
-            }
-            GypsyUpgrade::Stamina => {
-                if self.dragon_turn_bonus >= DK_FOREST_TURN_CAP {
-                    return false;
-                }
-                self.dragon_turn_bonus += 1;
-                // Grant the extra fight this day too, not just next reset.
-                self.turns = self.turns.saturating_add(1);
-            }
-        }
-        self.dragon_points -= cost;
-        true
-    }
-
-    /// Reward a Green Dragon kill: bank the lifetime kill and a pot of dragon
-    /// points to spend at the Gypsy's Tent, then reset to a fresh, fully-healed
-    /// run (permanent Gypsy boons carry over via the derived-stat getters).
-    pub fn slay_dragon(&mut self) {
+    /// Reward a Green Dragon kill (`dragon.php`), then reset to a fresh,
+    /// fully-healed run. `flawless` is true if no damage was taken in the fight.
+    ///
+    /// Faithful to upstream: on-hand gold is **retained** and topped up by
+    /// [`START_GOLD`] per kill (capped at [`DRAGON_RUN_GOLD_CAP`]); gems accrue
+    /// `max(0, kills-7)` (capped); charm `+5`; and the permanent dragon-point
+    /// boons (attack/defense + earned HP) are auto-applied across the reset —
+    /// there is no Gypsy shop. A flawless kill adds [`FLAWLESS_GOLD_BONUS`] gold
+    /// (over the cap) and a gem. The specialty skill/uses restart at zero.
+    pub fn slay_dragon(&mut self, flawless: bool) {
         self.dragon_kills = self.dragon_kills.saturating_add(1);
-        self.dragon_points = self.dragon_points.saturating_add(DRAGON_POINTS_PER_KILL);
+        // Permanent retained boons, auto-applied (replacing the Gypsy shop).
+        self.dragon_attack_bonus = self.dragon_attack_bonus.saturating_add(DK_ATTACK_PER_KILL);
+        self.dragon_defense_bonus = self.dragon_defense_bonus.saturating_add(DK_DEFENSE_PER_KILL);
+        self.dragon_hp_bonus = self.dragon_hp_bonus.saturating_add(DK_HP_PER_KILL);
+        self.charm = self.charm.saturating_add(CHARM_PER_DRAGON_KILL);
+        let restart_gems = self.dragon_kills.saturating_sub(7).min(MAX_RESTART_GEMS);
+        self.gems = self.gems.saturating_add(restart_gems as u64);
+        // Retain on-hand gold + START_GOLD per kill, capped.
+        self.gold = (self.gold + START_GOLD * self.dragon_kills as u64).min(DRAGON_RUN_GOLD_CAP);
+        if flawless {
+            // The flawless bonus lands on top of the cap.
+            self.gold = self.gold.saturating_add(FLAWLESS_GOLD_BONUS);
+            self.gems = self.gems.saturating_add(1);
+        }
+        // Reset the run.
         self.level = 1;
         self.experience = 0;
         self.weapon_tier = 0;
         self.armor_tier = 0;
-        self.gold = (START_GOLD + self.dragon_kills as u64 * 100).min(DRAGON_RUN_GOLD_CAP);
         self.seen_dragon = false;
         self.alive = true;
+        // The specialty path is kept, but its skill/uses restart (LoGD's
+        // per-module dragonkill hook).
+        self.specialty_skill = 0;
+        self.specialty_uses = 0;
+        self.companions.clear();
         self.hitpoints = self.max_hitpoints();
     }
 
     /// Run the daily reset if `today` is past the stored day: pay bank interest,
-    /// refill forest turns, fully heal, and revive. `interest_percent` is the
-    /// day's rolled rate (the caller supplies the RNG). Returns true if a reset
-    /// happened.
-    pub fn roll_new_day(&mut self, today: i64, dk_forest_bonus: u32, interest_percent: u32) -> bool {
+    /// refill forest turns, fully heal, revive, and refresh soulpoints.
+    /// `interest_percent` is the day's rolled rate and `spirits` is the day's
+    /// `e_rand(-1,1)+e_rand(-1,1)` (-2..+2) turn jitter — both supplied by the
+    /// caller's RNG. A new day after a death also docks [`RESURRECTION_TURNS`].
+    /// Returns true if a reset happened.
+    pub fn roll_new_day(
+        &mut self,
+        today: i64,
+        dk_forest_bonus: u32,
+        interest_percent: u32,
+        spirits: i32,
+    ) -> bool {
         if today <= self.last_day {
             return false;
         }
+        let was_dead = !self.alive;
         self.last_day = today;
         // Interest is settled before turns refill, so it can read how many of
         // yesterday's turns went unused (LoGD's "work for it" gate).
         self.apply_new_day_interest(interest_percent);
-        self.turns = TURNS_PER_DAY + dk_forest_bonus;
+        let resurrection = if was_dead { RESURRECTION_TURNS } else { 0 };
+        let turns = TURNS_PER_DAY as i32 + dk_forest_bonus as i32 + spirits + resurrection;
+        self.turns = turns.max(0) as u32;
         self.refresh_specialty_uses();
         self.alive = true;
+        self.soulpoints = 50 + 5 * self.level as u32;
         self.hitpoints = self.max_hitpoints();
         true
     }
@@ -620,7 +624,7 @@ mod tests {
         c.choose_specialty(Specialty::Mystical);
         c.specialty_skill = 9; // floor(9/3) = 3, plus the +1 chosen bonus
         c.specialty_uses = 0; // spent down during the day
-        c.roll_new_day(1, 0, 0);
+        c.roll_new_day(1, 0, 0, 0);
         assert_eq!(c.specialty_uses, 4);
     }
 
@@ -698,15 +702,31 @@ mod tests {
     fn new_day_refills_and_revives() {
         let mut c = Character::new("hero", 10);
         c.turns = 0;
+        c.level = 3;
         c.die();
-        assert!(c.roll_new_day(11, 0, 0));
-        assert_eq!(c.turns, 10);
+        // Revives, but a death docks RESURRECTION_TURNS from the day's fights:
+        // 10 base - 6 resurrection + 0 spirits = 4.
+        assert!(c.roll_new_day(11, 0, 0, 0));
+        assert_eq!(c.turns, (TURNS_PER_DAY as i32 + RESURRECTION_TURNS) as u32);
         assert!(c.alive);
         assert_eq!(c.hitpoints, c.max_hitpoints());
+        // Soulpoints refill to 50 + 5*level.
+        assert_eq!(c.soulpoints, 50 + 5 * 3);
         // Same day again: no reset.
         c.turns = 3;
-        assert!(!c.roll_new_day(11, 0, 0));
+        assert!(!c.roll_new_day(11, 0, 0, 0));
         assert_eq!(c.turns, 3);
+    }
+
+    #[test]
+    fn new_day_spirits_jitter_turns() {
+        // A live player (no resurrection penalty): base 10 + spirits.
+        let mut high = Character::new("high", 10);
+        high.roll_new_day(11, 0, 0, 2); // very high spirits
+        assert_eq!(high.turns, 12);
+        let mut low = Character::new("low", 10);
+        low.roll_new_day(11, 0, 0, -2); // very low spirits
+        assert_eq!(low.turns, 8);
     }
 
     #[test]
@@ -715,60 +735,82 @@ mod tests {
         let mut worker = Character::new("worker", 10);
         worker.gold_in_bank = 1000;
         worker.turns = 0;
-        worker.roll_new_day(11, 0, 10); // 10% rolled
+        worker.roll_new_day(11, 0, 10, 0); // 10% rolled
         assert_eq!(worker.gold_in_bank, 1100);
 
         // Slacked off: left more than the threshold unused → no interest.
         let mut slacker = Character::new("slacker", 10);
         slacker.gold_in_bank = 1000;
         slacker.turns = FIGHTS_FOR_INTEREST + 1;
-        slacker.roll_new_day(11, 0, 10);
+        slacker.roll_new_day(11, 0, 10, 0);
         assert_eq!(slacker.gold_in_bank, 1000);
 
         // Over the ceiling → no interest no matter how hard you worked.
         let mut rich = Character::new("rich", 10);
         rich.gold_in_bank = MAX_GOLD_FOR_INTEREST;
         rich.turns = 0;
-        rich.roll_new_day(11, 0, 10);
+        rich.roll_new_day(11, 0, 10, 0);
         assert_eq!(rich.gold_in_bank, MAX_GOLD_FOR_INTEREST);
     }
 
     #[test]
-    fn dragon_kill_resets_run_and_banks_points() {
+    fn dragon_kill_retains_boons_and_resets_run() {
         let mut c = Character::new("hero", 0);
         c.level = 15;
         c.weapon_tier = 15;
+        c.armor_tier = 12;
         c.experience = 99999;
-        c.slay_dragon();
+        c.gold = 40; // retained on-hand gold
+        c.specialty = Specialty::Mystical;
+        c.specialty_skill = 12;
+        c.slay_dragon(false);
+
         assert_eq!(c.dragon_kills, 1);
-        assert_eq!(c.dragon_points, DRAGON_POINTS_PER_KILL);
+        // Permanent boons auto-applied (no Gypsy shop).
+        assert_eq!(c.dragon_attack_bonus, DK_ATTACK_PER_KILL);
+        assert_eq!(c.dragon_defense_bonus, DK_DEFENSE_PER_KILL);
+        assert_eq!(c.dragon_hp_bonus, DK_HP_PER_KILL);
+        assert_eq!(c.charm, CHARM_PER_DRAGON_KILL);
+        // Run reset, but boons carry through the derived stats.
         assert_eq!(c.level, 1);
         assert_eq!(c.weapon_tier, 0);
-        // No auto stat boon now — the points are spent at the Gypsy.
-        assert_eq!(c.dragon_hp_bonus, 0);
-        assert_eq!(c.max_hitpoints(), 10);
-        assert_eq!(c.hitpoints, 10);
+        assert_eq!(c.armor_tier, 0);
+        assert_eq!(c.experience, 0);
+        assert_eq!(c.max_hitpoints(), HP_PER_LEVEL + DK_HP_PER_KILL);
+        assert_eq!(c.attack(), 1 + DK_ATTACK_PER_KILL);
+        assert_eq!(c.defense(), 1 + DK_DEFENSE_PER_KILL);
+        // On-hand gold retained + 50/kill: 40 + 50 = 90.
+        assert_eq!(c.gold, 90);
+        // First kill is below the gem threshold (kills-7).
+        assert_eq!(c.gems, 0);
+        // Specialty path kept, skill/uses restart.
+        assert_eq!(c.specialty, Specialty::Mystical);
+        assert_eq!(c.specialty_skill, 0);
         assert!(!c.seen_dragon);
     }
 
     #[test]
-    fn gypsy_spends_points_on_permanent_boons() {
+    fn dragon_kill_gold_caps_then_flawless_adds_on_top() {
         let mut c = Character::new("hero", 0);
-        c.dragon_points = 4;
-        // Each boon costs one point and persists on the character.
-        assert!(c.buy_upgrade(GypsyUpgrade::Vitality));
-        assert_eq!(c.dragon_hp_bonus, GYPSY_HP_STEP);
-        assert_eq!(c.max_hitpoints(), HP_PER_LEVEL + GYPSY_HP_STEP);
-        assert!(c.buy_upgrade(GypsyUpgrade::Might));
-        assert_eq!(c.attack(), 1 + 1); // level 1 + might 1
-        assert!(c.buy_upgrade(GypsyUpgrade::Guard));
-        assert_eq!(c.defense(), 1 + 1);
-        assert!(c.buy_upgrade(GypsyUpgrade::Stamina));
-        assert_eq!(c.dragon_turn_bonus, 1);
-        assert_eq!(c.dk_forest_bonus(), 1);
-        // Spent the whole pot.
-        assert_eq!(c.dragon_points, 0);
-        assert!(!c.buy_upgrade(GypsyUpgrade::Vitality)); // broke now
+        c.level = 15;
+        c.dragon_kills = 9; // 10th kill after increment
+        c.gold = 100;
+        c.slay_dragon(true);
+        assert_eq!(c.dragon_kills, 10);
+        // 100 + 50*10 = 600, capped to 300, then +150 flawless = 450.
+        assert_eq!(c.gold, DRAGON_RUN_GOLD_CAP + FLAWLESS_GOLD_BONUS);
+        // Gems: max(0, 10-7) = 3, plus 1 flawless = 4.
+        assert_eq!(c.gems, 4);
+    }
+
+    #[test]
+    fn dk_forest_bonus_grows_with_kills() {
+        let mut c = Character::new("hero", 0);
+        assert_eq!(c.dk_forest_bonus(), 0);
+        c.dragon_kills = 3;
+        assert_eq!(c.dk_forest_bonus(), 3);
+        c.dragon_kills = 99;
+        assert_eq!(c.dk_forest_bonus(), DK_FOREST_FIGHTS_CAP);
     }
 
     #[test]
@@ -791,17 +833,6 @@ mod tests {
         let stat_points = (a - base.0) + (d - base.1) + (h - base.2) / 5;
         assert_eq!(stat_points, 9);
         assert!(a >= base.0 && d >= base.1 && h >= base.2);
-    }
-
-    #[test]
-    fn gypsy_stamina_is_capped() {
-        let mut c = Character::new("hero", 0);
-        c.dragon_points = 100;
-        c.dragon_turn_bonus = DK_FOREST_TURN_CAP;
-        // Already maxed: the purchase is refused and no point is spent.
-        assert!(!c.buy_upgrade(GypsyUpgrade::Stamina));
-        assert_eq!(c.dragon_points, 100);
-        assert_eq!(c.dk_forest_bonus(), DK_FOREST_TURN_CAP);
     }
 
     #[test]

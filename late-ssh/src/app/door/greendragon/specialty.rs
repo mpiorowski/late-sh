@@ -5,10 +5,11 @@
 //! `specialtythiefskills` — which are pure numbers and so uncopyrightable. The
 //! skill **names and flavor are original to late.sh**; no module prose is
 //! copied. Each skill spends "uses" from the per-day pool (see
-//! [`super::model::Character::spend_specialty_uses`]) and applies a
-//! [`Buff`] resolved by [`super::combat::resolve_round_buffed`].
+//! [`super::model::Character::spend_specialty_uses`]) and produces a
+//! [`SkillEffect`]: either a [`Buff`] resolved by
+//! [`super::combat::resolve_round_buffed`], or a persistent [`Companion`].
 
-use super::combat::Buff;
+use super::combat::{Buff, Companion};
 use super::model::Specialty;
 
 /// Integer rounding matching PHP's `round()` (half away from zero, positive
@@ -17,17 +18,26 @@ fn iround(x: f32) -> u32 {
     x.round() as u32
 }
 
+/// What casting a skill produces: most apply a per-round buff; a few summon a
+/// persistent ally (LoGD `apply_buff` vs `apply_companion`).
+pub enum SkillEffect {
+    /// A per-round combat buff applied to the active encounter.
+    Buff(Buff),
+    /// A persistent companion added to the caster (survives across fights).
+    Summon(Companion),
+}
+
 /// One castable specialty skill: a label, its use-cost, and a builder for the
-/// buff it applies (scaled by the player's level and attack at cast time).
+/// effect it produces (scaled by the player's level and attack at cast time).
 pub struct Skill {
     pub name: &'static str,
     pub cost: u32,
-    build: fn(level: u32, attack: u32) -> Buff,
+    build: fn(level: u32, attack: u32) -> SkillEffect,
 }
 
 impl Skill {
-    /// The buff this skill applies, given the caster's current level and attack.
-    pub fn buff(&self, level: u32, attack: u32) -> Buff {
+    /// The effect this skill produces, given the caster's level and attack.
+    pub fn effect(&self, level: u32, attack: u32) -> SkillEffect {
         (self.build)(level, attack)
     }
 }
@@ -52,8 +62,10 @@ const MYSTICAL: &[Skill] = &[
         build: |level, _atk| {
             let mut b = Buff::new("Mending Flow", 5);
             b.regen = level;
+            // Upstream `aura`: the mending current also heals your companions.
+            b.aura = true;
             b.wearoff = "the mending current ebbs away.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
     Skill {
@@ -66,7 +78,7 @@ const MYSTICAL: &[Skill] = &[
             b.minion_max = level * 3;
             b.round_msg = Some("a fist of living rock hammers your foe.".into());
             b.wearoff = "the stone fist crumbles back to gravel.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
     Skill {
@@ -77,7 +89,7 @@ const MYSTICAL: &[Skill] = &[
             b.lifetap = 1.0;
             b.round_msg = Some("your blade drinks deep and your wounds knit closed.".into());
             b.wearoff = "your weapon's thirst is sated.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
     Skill {
@@ -88,7 +100,7 @@ const MYSTICAL: &[Skill] = &[
             b.damage_shield = 2.0;
             b.round_msg = Some("lightning arcs off your skin into your attacker.".into());
             b.wearoff = "the crackling aura earths out and fades.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
 ];
@@ -99,14 +111,22 @@ const DARK_ARTS: &[Skill] = &[
     Skill {
         name: "Bonecall",
         cost: 1,
+        // Upstream's companions-enabled path: summon a persistent skeleton
+        // warrior (not a one-fight minion buff). Stats transcribed from
+        // `specialtydarkarts` apply_companion('skeleton_warrior', ...).
         build: |level, _atk| {
-            let mut b = Buff::new("Bonecall", 5);
-            b.minion_count = iround(level as f32 / 3.0) + 1;
-            b.minion_min = 0;
-            b.minion_max = iround(level as f32 / 2.0) + 1;
-            b.round_msg = Some("your risen bonewalkers tear at the enemy.".into());
-            b.wearoff = "your skeletons collapse into loose bones.".into();
-            b
+            let lvl = level as f64;
+            let hp = (lvl * 3.33).round() as u32 + 10;
+            let attack = ((lvl / 4.0 + 2.0).round() * (lvl / 3.0 + 2.0).round() + 1.5).round() as u32;
+            let defense = ((lvl / 3.0).floor() * (lvl / 6.0 + 2.0).ceil() + 2.5).round() as u32;
+            SkillEffect::Summon(Companion {
+                name: "Skeleton Warrior".into(),
+                hitpoints: hp,
+                max_hitpoints: hp,
+                attack,
+                defense,
+                dying_text: "Your skeleton warrior crumbles to dust.".into(),
+            })
         },
     },
     Skill {
@@ -119,7 +139,7 @@ const DARK_ARTS: &[Skill] = &[
             b.minion_min = iround(attack as f32 * 1.5);
             b.minion_max = iround(attack as f32 * 3.0);
             b.round_msg = Some("you drive a needle into the effigy and your foe convulses.".into());
-            b
+            SkillEffect::Buff(b)
         },
     },
     Skill {
@@ -130,7 +150,7 @@ const DARK_ARTS: &[Skill] = &[
             b.enemy_dmg_mod = 0.5;
             b.round_msg = Some("your foe sags under the hex and strikes at half force.".into());
             b.wearoff = "the hex lifts from your enemy.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
     Skill {
@@ -142,7 +162,7 @@ const DARK_ARTS: &[Skill] = &[
             b.enemy_def_mod = 0.0;
             b.round_msg = Some("your foe claws at its own withering soul, unable to fight.".into());
             b.wearoff = "your enemy's soul settles back into its body.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
 ];
@@ -158,7 +178,7 @@ const THIEF: &[Skill] = &[
             b.enemy_atk_mod = 0.5;
             b.round_msg = Some("stung by your jeering, your foe swings half-heartedly.".into());
             b.wearoff = "your foe shakes off the insult.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
     Skill {
@@ -169,7 +189,7 @@ const THIEF: &[Skill] = &[
             b.player_atk_mod = 2.0;
             b.round_msg = Some("venom on your blade doubles every cut.".into());
             b.wearoff = "the last of the venom dries on your blade.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
     Skill {
@@ -180,7 +200,7 @@ const THIEF: &[Skill] = &[
             b.enemy_atk_mod = 0.0;
             b.round_msg = Some("you melt into shadow; your foe swings at empty air.".into());
             b.wearoff = "you step back into plain sight.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
     Skill {
@@ -192,7 +212,7 @@ const THIEF: &[Skill] = &[
             b.player_def_mod = 3.0;
             b.round_msg = Some("striking from the blind side, you hit harder and guard tighter.".into());
             b.wearoff = "your advantage of surprise is spent.".into();
-            b
+            SkillEffect::Buff(b)
         },
     },
 ];
