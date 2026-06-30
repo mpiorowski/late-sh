@@ -1412,6 +1412,18 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             app.set_screen(Screen::GreenDragon);
             app.enter_greendragon();
         }
+        HubGame::Dopewars => {
+            if !app.dopewars_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "dopewars is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Dopewars);
+            if let Some(state) = app.dopewars_state.as_mut() {
+                state.connect();
+            }
+        }
     }
 }
 
@@ -1443,6 +1455,21 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if let ParsedInput::Byte(b'\r' | b'\n') = event {
             app.enter_nethack();
             if let Some(state) = app.nethack_state.as_mut() {
+                state.connect();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Dopewars {
+        // Running-mode bytes never reach here (intercepted in handle_input), so
+        // this only handles the Launcher. Enter launches the game; every other
+        // key falls through to the normal global handling, so the launcher
+        // behaves like a plain page.
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_dopewars();
+            if let Some(state) = app.dopewars_state.as_mut() {
                 state.connect();
             }
             return true;
@@ -3024,6 +3051,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Running-mode arrows are forwarded raw in App::handle_input; the
         // Launcher ignores them.
         Screen::Nethack => false,
+        Screen::Dopewars => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3651,6 +3679,11 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Nethack => {
             // Same as Rebels: Launcher Enter is handled in
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
+        Screen::Dopewars => {
+            // Same as Nethack: Launcher Enter is handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }

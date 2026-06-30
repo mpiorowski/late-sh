@@ -16,6 +16,7 @@ pub struct HubView {
     pub delete_confirm: bool,
     pub rebels_enabled: bool,
     pub nethack_enabled: bool,
+    pub dopewars_enabled: bool,
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
@@ -74,6 +75,13 @@ pub fn draw_games_hub(
                 frame,
                 layout[3],
                 view.delete_confirm,
+            );
+        }
+        HubGame::Dopewars => {
+            crate::app::door::dopewars::render::draw_landing(
+                frame,
+                layout[3],
+                view.dopewars_enabled,
             );
         }
     }

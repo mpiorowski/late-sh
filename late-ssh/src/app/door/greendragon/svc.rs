@@ -63,7 +63,12 @@ impl Inner {
 
     /// The write gate for `user_id`, created on first use.
     fn gate(&self, user_id: Uuid) -> Arc<TokioMutex<u64>> {
-        self.gates.lock().unwrap().entry(user_id).or_default().clone()
+        self.gates
+            .lock()
+            .unwrap()
+            .entry(user_id)
+            .or_default()
+            .clone()
     }
 }
 

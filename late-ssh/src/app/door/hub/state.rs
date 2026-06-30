@@ -11,15 +11,17 @@ pub enum HubGame {
     Rebels,
     Nethack,
     GreenDragon,
+    Dopewars,
 }
 
 impl HubGame {
     /// Selector order, left to right.
-    pub const ALL: [HubGame; 4] = [
+    pub const ALL: [HubGame; 5] = [
         HubGame::Lateania,
         HubGame::Rebels,
         HubGame::Nethack,
         HubGame::GreenDragon,
+        HubGame::Dopewars,
     ];
 
     pub fn label(self) -> &'static str {
@@ -28,6 +30,7 @@ impl HubGame {
             HubGame::Rebels => "Rebels",
             HubGame::Nethack => "NetHack",
             HubGame::GreenDragon => "Green Dragon",
+            HubGame::Dopewars => "dopewars",
         }
     }
 }
@@ -82,7 +85,9 @@ mod tests {
         s.select_next();
         assert_eq!(s.selected_game(), HubGame::GreenDragon);
         s.select_next();
-        assert_eq!(s.selected_game(), HubGame::GreenDragon);
+        assert_eq!(s.selected_game(), HubGame::Dopewars);
+        s.select_next();
+        assert_eq!(s.selected_game(), HubGame::Dopewars);
     }
 
     #[test]
@@ -98,7 +103,7 @@ mod tests {
     fn all_games_are_listed_in_order() {
         assert_eq!(
             HubGame::ALL.map(HubGame::label),
-            ["Lateania", "Rebels", "NetHack", "Green Dragon"],
+            ["Lateania", "Rebels", "NetHack", "Green Dragon", "dopewars"],
         );
     }
 }

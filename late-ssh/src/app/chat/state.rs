@@ -3806,8 +3806,7 @@ impl ChatState {
     }
 
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
-        let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id)
-        else {
+        let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
             return;
         };
 

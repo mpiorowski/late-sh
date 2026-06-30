@@ -83,6 +83,10 @@ pub struct Config {
     pub nethack_host: String,
     pub nethack_port: u16,
     pub nethack_secret: String,
+    /// dopewars door game: a local PTY child (no host crate). `bin` is the path
+    /// to the curses dopewars binary, resolved via `PATH` if unqualified.
+    pub dopewars_enabled: bool,
+    pub dopewars_bin: String,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -221,6 +225,11 @@ impl Config {
             port = self.nethack_port,
             has_secret = !self.nethack_secret.is_empty(),
             "nethack: NetHack door-game host (late-nethack) target and status"
+        );
+        tracing::info!(
+            enabled = self.dopewars_enabled,
+            bin = %self.dopewars_bin,
+            "dopewars: dopewars door-game local-pty child status"
         );
     }
 
@@ -376,6 +385,8 @@ impl Config {
             nethack_host: optional("LATE_NETHACK_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
             nethack_port: optional_parse("LATE_NETHACK_PORT", 2323)?,
             nethack_secret,
+            dopewars_enabled: optional_bool("LATE_DOPEWARS_ENABLED", false)?,
+            dopewars_bin: optional("LATE_DOPEWARS_BIN").unwrap_or_else(|| "dopewars".to_string()),
         })
     }
 }

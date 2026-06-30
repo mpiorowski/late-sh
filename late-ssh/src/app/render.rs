@@ -73,12 +73,9 @@ fn room_top_boxes_enabled(
     show_settings: bool,
     draft_enabled: bool,
     profile_enabled: bool,
-    home_selected: bool,
     room_selected: bool,
 ) -> bool {
-    if home_selected {
-        true
-    } else if !room_selected {
+    if !room_selected {
         false
     } else if show_settings {
         draft_enabled
@@ -154,12 +151,14 @@ struct DrawContext<'a> {
     games_hub_selected: usize,
     rebels_enabled: bool,
     nethack_enabled: bool,
+    dopewars_enabled: bool,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
+    dopewars_state: Option<&'a mut crate::app::door::dopewars::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
     /// pixel polish on top of the existing text rendering.
@@ -359,7 +358,6 @@ impl App {
             self.show_settings,
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
-            home_selected,
             room_selected,
         );
         let screen = self.screen;
@@ -793,6 +791,7 @@ impl App {
         // call set_viewport with the exact content_area before blitting.
         let mut rebels_state_taken = self.rebels_state.take();
         let mut nethack_state_taken = self.nethack_state.take();
+        let mut dopewars_state_taken = self.dopewars_state.take();
 
         let pinstar_browser = if screen == Screen::Pinstar {
             Some(&self.pinstar_browser)
@@ -825,11 +824,13 @@ impl App {
                         games_hub_selected: self.games_hub_state.selected(),
                         rebels_enabled: self.rebels_enabled,
                         nethack_enabled: self.nethack_enabled,
+                        dopewars_enabled: self.dopewars_enabled,
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
                         greendragon_state: self.greendragon_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
                         nethack_state: nethack_state_taken.as_mut(),
+                        dopewars_state: dopewars_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -933,6 +934,7 @@ impl App {
         self.pinstar_state = pinstar_state_taken;
         self.rebels_state = rebels_state_taken;
         self.nethack_state = nethack_state_taken;
+        self.dopewars_state = dopewars_state_taken;
         draw_result?;
 
         // Feed the modal's image capacity (recorded during draw) back into
@@ -1140,6 +1142,7 @@ impl App {
                         delete_confirm: ctx.door_delete_confirm,
                         rebels_enabled: ctx.rebels_enabled,
                         nethack_enabled: ctx.nethack_enabled,
+                        dopewars_enabled: ctx.dopewars_enabled,
                         terminal_image_protocol: ctx.terminal_image_protocol,
                         lateania_online: ctx.lateania_online,
                     },
@@ -1184,6 +1187,13 @@ impl App {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(content_area);
                     crate::app::door::nethack::render::draw_page(frame, content_area, state);
+                }
+            }
+            Screen::Dopewars => {
+                if let Some(state) = ctx.dopewars_state {
+                    // Size the child PTY to the exact widget area before blitting.
+                    state.set_viewport(content_area);
+                    crate::app::door::dopewars::render::draw_page(frame, content_area, state);
                 }
             }
             Screen::Pinstar => {
@@ -1488,7 +1498,11 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             || (*tab_screen == Screen::Games
                 && matches!(
                     screen,
-                    Screen::Lateania | Screen::Rebels | Screen::Nethack | Screen::GreenDragon
+                    Screen::Lateania
+                        | Screen::Rebels
+                        | Screen::Nethack
+                        | Screen::Dopewars
+                        | Screen::GreenDragon
                 ));
         let style = if active {
             Style::default()
@@ -1507,6 +1521,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
+        Screen::Dopewars => "dopewars",
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
@@ -1551,6 +1566,26 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         if in_game {
             spans.push(Span::styled(
                 "· ? help · S save · Ctrl-C quit ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
+    if screen == Screen::Dopewars {
+        spans.push(Span::styled(
+            "by dopewars.sourceforge.io ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        // While a game is live, surface the leave key in the chrome (it sits
+        // outside the game grid, so it never covers glyphs). Players who skipped
+        // the launcher otherwise mash Esc trying to get out.
+        let in_game = ctx
+            .dopewars_state
+            .as_deref()
+            .is_some_and(|state| state.is_running());
+        if in_game {
+            spans.push(Span::styled(
+                "· Ctrl-C quit ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1934,28 +1969,21 @@ mod tests {
     }
 
     #[test]
-    fn room_top_boxes_enabled_is_always_on_for_home() {
-        assert!(room_top_boxes_enabled(true, false, false, true, true));
-        assert!(room_top_boxes_enabled(false, false, false, true, true));
-        assert!(room_top_boxes_enabled(true, false, false, true, false));
+    fn room_top_boxes_enabled_prefers_settings_draft_while_modal_is_open() {
+        assert!(!room_top_boxes_enabled(true, false, true, true));
+        assert!(room_top_boxes_enabled(true, true, false, true));
     }
 
     #[test]
-    fn room_top_boxes_enabled_prefers_settings_draft_for_non_home_while_modal_is_open() {
-        assert!(!room_top_boxes_enabled(true, false, true, false, true));
-        assert!(room_top_boxes_enabled(true, true, false, false, true));
-    }
-
-    #[test]
-    fn room_top_boxes_enabled_uses_saved_profile_for_non_home_when_modal_is_closed() {
-        assert!(room_top_boxes_enabled(false, false, true, false, true));
-        assert!(!room_top_boxes_enabled(false, true, false, false, true));
+    fn room_top_boxes_enabled_uses_saved_profile_when_modal_is_closed() {
+        assert!(room_top_boxes_enabled(false, false, true, true));
+        assert!(!room_top_boxes_enabled(false, true, false, true));
     }
 
     #[test]
     fn room_top_boxes_enabled_is_off_for_synthetic_home_entries() {
-        assert!(!room_top_boxes_enabled(true, true, true, false, false));
-        assert!(!room_top_boxes_enabled(false, true, true, false, false));
+        assert!(!room_top_boxes_enabled(true, true, true, false));
+        assert!(!room_top_boxes_enabled(false, true, true, false));
     }
 
     #[test]

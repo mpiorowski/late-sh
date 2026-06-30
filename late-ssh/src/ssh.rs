@@ -900,6 +900,8 @@ impl russh::server::Handler for ClientHandler {
                 )
                 .with_username_directory(self.state.username_directory.clone()),
             )),
+            dopewars_enabled: self.state.config.dopewars_enabled,
+            dopewars_bin: self.state.config.dopewars_bin.clone(),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
