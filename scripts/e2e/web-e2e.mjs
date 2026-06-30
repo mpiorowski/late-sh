@@ -254,6 +254,12 @@ try {
     ok(await page.evaluate(() => /✓ completed/.test(document.getElementById('thread').textContent)), 'approving the gate completes the run');
   }
 
+  // ---- daily digest ----
+  await page.evaluate(() => window.__ui.VIEWS.digest());
+  await page.waitForTimeout(80);
+  ok(await page.evaluate(() => /Daily Digest/.test(document.getElementById('thread').textContent) && /participants/.test(document.getElementById('thread').textContent)), 'Daily Digest renders an activity summary');
+  ok(await page.evaluate(() => !!document.getElementById('digest-post')), 'Daily Digest offers a signed post action');
+
   // ---- command palette (⌘K) ----
   await page.evaluate(() => window.__palette.open());
   await page.waitForTimeout(60);

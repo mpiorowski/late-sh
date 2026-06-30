@@ -884,6 +884,35 @@ function showApprovals() {
   document.querySelectorAll('#thread [data-reject]').forEach(el => el.onclick = () => decide(el.dataset.reject, 'reject'));
 }
 
+// ---- Daily Digest — an agent-style standup of #general activity ----
+async function showDigest() {
+  const data = await store.board('general');
+  const msgs = data.messages || [];
+  const byHandle = {};
+  msgs.forEach(m => { const h = m.handle || m.short || '?'; byHandle[h] = (byHandle[h] || 0) + 1; });
+  const top = Object.entries(byHandle).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const recent = msgs.slice(-5).reverse();
+  const topRows = top.length
+    ? top.map(([h, n]) => `<div class="bbs-row"><span class="c">@${esc(h)}</span><span class="r d">${n} msg</span></div>`).join('')
+    : '<div class="bbs-row"><span class="d">No activity yet.</span></div>';
+  const recentRows = recent.map(m => `<div class="bbs-row"><span class="c"><b>@${esc(m.handle || '?')}</b> ${esc((m.body || '').replace(/\n/g, ' ').slice(0, 90))}</span></div>`).join('');
+  const summary = `<div class="bbs-row"><span class="c"><b>#general</b> · ${msgs.length} messages · ${Object.keys(byHandle).length} participants</span></div>` +
+    '<div class="bbs-sub">Most active</div>' + topRows +
+    (recentRows ? '<div class="bbs-sub">Recent</div>' + recentRows : '');
+  panel('Daily Digest',
+    'An at-a-glance standup of #general — what is happening and who is active. Post it as a signed agent message.',
+    summary,
+    '<button class="bbs-btn" id="digest-post">Post digest to #general ▸</button>');
+  const btn = document.getElementById('digest-post');
+  if (btn) btn.onclick = async () => {
+    const body = `📰 Daily digest — #general: ${msgs.length} messages, ${Object.keys(byHandle).length} participants. ` +
+      (top.length ? `Most active: ${top.map(([h, n]) => '@' + h + ' (' + n + ')').join(', ')}.` : 'Quiet day.');
+    const res = await store.post(identity.seed, { board: 'general', body, handle: 'digest' });
+    if (res && res.ok) { notify('Posted daily digest to #general', 'agent'); loadBoard('general'); }
+    else { notify((res && res.error) || 'post failed', 'agent'); }
+  };
+}
+
 // ---- Playbooks (ADR-0041) — versioned signed business workflows ----
 // Local playbook-run state (demo). The signed server path is /api/playbooks/run
 // + /api/runs (tested); here we drive the same state machine in-browser.
@@ -1219,6 +1248,7 @@ const VIEWS = {
   directory: () => { mode = 'view'; activeNav = 'view:directory'; showDirectory(); markActive(); },
   budget: () => { mode = 'view'; activeNav = 'view:budget'; showBudget(); markActive(); },
   playbooks: () => { mode = 'view'; activeNav = 'view:playbooks'; showPlaybooks(); markActive(); },
+  digest: () => { mode = 'view'; activeNav = 'view:digest'; showDigest(); markActive(); },
   doors: () => { mode = 'view'; activeNav = 'view:doors'; showDoors(); markActive(); },
   arena: () => { mode = 'view'; activeNav = 'view:arena'; thread.innerHTML = ''; showArena(); markActive(); },
   retort: () => { mode = 'view'; activeNav = 'view:retort'; thread.innerHTML = ''; showRetort(); markActive(); },
@@ -1240,6 +1270,7 @@ const COMMUNITY = [
   { key: 'directory', icon: '🏅', label: 'Directory' },
   { key: 'budget', icon: '💰', label: 'Budget' },
   { key: 'playbooks', icon: '📋', label: 'Playbooks' },
+  { key: 'digest', icon: '📰', label: 'Digest' },
   { key: 'doors', icon: '🚪', label: 'Doors' },
   { key: 'arena', icon: '🏁', label: 'Arena' },
   { key: 'retort', icon: '🧪', label: 'Retort' },
