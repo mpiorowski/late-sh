@@ -1329,15 +1329,55 @@ async fn api_pods_get(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<PodRecord>, (StatusCode, Json<serde_json::Value>)> {
-    state
+    let mut record = state
         .pods
         .lock()
         .unwrap()
         .iter()
         .find(|p| p.id == id)
         .cloned()
-        .map(Json)
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "pod not found"))
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "pod not found"))?;
+    // Live lifecycle poll (ADR-0035): when the gateway is configured and the pod
+    // isn't terminal, reflect the meta-llm status via GET /v1/pods/{id} (fail-soft
+    // — fall back to the recorded status). Lock is never held across the await.
+    if !record.status.is_terminal() {
+        if let Some(cfg) = resolve_pods_config() {
+            if let Ok(st) = poll_pod_status(&cfg, &id).await {
+                if st != record.status {
+                    record.status = st;
+                    if let Some(p) = state.pods.lock().unwrap().iter_mut().find(|p| p.id == id) {
+                        p.status = st;
+                    }
+                }
+            }
+        }
+    }
+    Ok(Json(record))
+}
+
+/// The frozen pods status-poll endpoint URL.
+fn pods_get_url(base: &str, id: &str) -> String {
+    format!("{}/v1/pods/{}", base.trim_end_matches('/'), id)
+}
+
+/// `GET /v1/pods/{id}` via the cog_ gateway → mapped lifecycle status, or an
+/// error string (no token in the message).
+async fn poll_pod_status(cfg: &PodsConfig, id: &str) -> Result<PodStatus, String> {
+    let resp = reqwest::Client::new()
+        .get(pods_get_url(&cfg.base_url, id))
+        .bearer_auth(&cfg.key)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("gateway returned {status}"));
+    }
+    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(map_gateway_status(
+        data["status"].as_str().unwrap_or("SPAWNED"),
+    ))
 }
 
 /// A pod step-result posted back by the runtime (ADR-0035): the new lifecycle
@@ -2307,6 +2347,10 @@ mod tests {
         );
         assert_eq!(map_gateway_status("EVALUATING"), PodStatus::Evaluating);
         assert_eq!(map_gateway_status("PAUSED"), PodStatus::Spawned);
+        assert_eq!(
+            pods_get_url("https://gw.example/", "pod_abc"),
+            "https://gw.example/v1/pods/pod_abc"
+        );
         // With no AGENTBBS_PODS_BASE_URL set, spawning stays local (None config).
         std::env::remove_var("AGENTBBS_PODS_BASE_URL");
         assert!(resolve_pods_config().is_none());
