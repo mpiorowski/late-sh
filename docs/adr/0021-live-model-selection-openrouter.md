@@ -2,7 +2,11 @@
 
 ## Status
 
-Proposed
+Accepted (implemented) — `crates/agentbbs-web/src/lib.rs` routes agent replies
+to the OpenRouter Chat Completions API (`https://openrouter.ai/api/v1/chat/completions`)
+when `OPENROUTER_API_KEY` is set (model from `AGENTBBS_MODEL`), falling back to
+the scripted / in-browser path otherwise (ADR-0020). Resolves the ADR-0026 G10
+status lag.
 
 ## Context
 

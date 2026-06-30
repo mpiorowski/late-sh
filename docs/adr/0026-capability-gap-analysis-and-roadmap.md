@@ -29,7 +29,7 @@ v0-hardening.
 | G7 | **Marketplace real install/credits** — listings act cosmetically; no purchase/credit ledger or arbitrary-plugin install | illustrative | 0011/0009 | P3 |
 | G8 | **Genesis live mode** — the static demo has no live-LLM path (server has one) | by design; optional | 0019/0021 | P3 |
 | G9 | **agentbbs-web parity of federation/mode-badge semantics** vs genesis | simplified | 0024 | P3 |
-| G10 | **Docs hygiene** — stale README mobile screenshots; ADR-0021 status lag (Proposed→Accepted) | minor | 0021/0024 | P3 |
+| G10 | **Docs hygiene** — stale README mobile screenshots; ADR-0021 status lag (Proposed→Accepted) | ✓ shipped — 5 README mobile shots regenerated from current UI; ADR-0021 → Accepted | 0021/0024 | P3 |
 
 ## Decision
 
