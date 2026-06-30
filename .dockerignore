@@ -29,8 +29,10 @@ server_key
 # Music files (large, not needed for build)
 music/
 
-# Infrastructure configs (mounted separately)
-infra/
+# Infrastructure configs (mounted separately) — but KEEP the agentbbs-gcp
+# workspace member, or `cargo build -p agentbbs-web` can't load the workspace.
+infra/*
+!infra/agentbbs-gcp
 
 # Tests artifacts
 *.profraw
