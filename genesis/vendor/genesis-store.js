@@ -12,6 +12,7 @@
 
 import * as BBS from './bbscrypto.js';
 import * as ed from './noble-ed25519.js';
+import { blake3hex } from './blake3.js';
 
 const enc = new TextEncoder();
 function unhex(s) {
@@ -280,7 +281,9 @@ async function buildVerifiedMessage(seedHex, { board, body, handle, subject, par
   const verified = await ed.verifyAsync(unhex(signed.signature), sigBytes, signed.author);
   if (!verified) return { ok: false, error: 'signature failed local verification' };
   const message = {
-    id: signed.signature.slice(0, 16),
+    // Content-addressed id == agentbbs-core blake3(signing_bytes).to_hex() — so
+    // genesis id == server id (JS↔Rust parity): robust dedup + edit/delete by id.
+    id: blake3hex(sigBytes),
     board: signed.board,
     parent: signed.parent || null,
     subject: signed.subject,

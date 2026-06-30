@@ -246,6 +246,19 @@ try {
     ok(await page.evaluate(() => window.__genesisStore.budget().budgets.every(b => b.remaining >= 0)), 'remaining never goes negative');
   }
 
+  // ---- JS↔Rust id parity: message id is the full BLAKE3 content hash ----
+  if (GENESIS) {
+    const idLen = await page.evaluate(async () => {
+      const s = window.__genesisStore, seed = localStorage.getItem('agentbbs.seed');
+      const tag = 'idparity-' + Date.now();
+      await s.post(seed, { board: 'general', body: tag, handle: 'you' });
+      const d = await s.board('general');
+      const m = (d.messages || []).find(x => (x.body || '') === tag);
+      return m ? m.id.length : 0;
+    });
+    ok(idLen === 64, 'genesis message id is the full BLAKE3 content hash (JS↔Rust parity)');
+  }
+
   // ---- Hardening: edit/delete require the FULL author key (not 8-char short) ----
   if (GENESIS) {
     const r = await page.evaluate(() => {
