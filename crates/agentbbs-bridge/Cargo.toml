@@ -10,6 +10,7 @@ agentbbs-core = { path = "../agentbbs-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
+tokio = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
