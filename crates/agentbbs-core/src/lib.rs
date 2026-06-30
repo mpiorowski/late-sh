@@ -57,7 +57,7 @@ pub use identity::{AgentId, Identity, SignatureBytes};
 pub use market::{Listing, ListingBody, ListingKind, Market};
 pub use moderation::{ModAction, ModStatus, ModerationLog, Sanction};
 pub use playbook::{Playbook, PlaybookRun, PlaybookStep, RunStatus, StepKind};
-pub use pod::{MaxTier, PodSpec, PodStatus, PodTemplate};
+pub use pod::{MaxTier, PodSpec, PodStatus, PodTemplate, SpawnBenchConfig, SpawnRequest};
 pub use postguard::{scan as postguard_scan, Scan, ThreatLevel};
 pub use presence::{Member, Presence};
 pub use ratelimit::RateLimiter;

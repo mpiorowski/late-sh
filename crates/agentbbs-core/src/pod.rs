@@ -178,6 +178,72 @@ impl PodSpec {
     pub fn effective_tier(&self) -> MaxTier {
         self.tier.unwrap_or(self.template.max_tier)
     }
+
+    /// Map this spec onto the **frozen meta-llm `POST /v1/pods/spawn` request**
+    /// (ADR-0035 / issue #6 contract). This is the AgentBBS-side serialization
+    /// the `PodController` sends through the `cog_` gateway — keeping it here (and
+    /// tested) makes flipping the spawn stub to the live call a config change, not
+    /// a reshape. Per-tenant attribution stays the gateway's job (cog_ key →
+    /// accountId), so it is intentionally absent.
+    pub fn to_spawn_request(&self) -> SpawnRequest {
+        let t = &self.template;
+        SpawnRequest {
+            pod_name: t.template_ref.clone(),
+            domain: t.domain.clone(),
+            template_ref: t.template_ref.clone(),
+            cron_schedule: t.cron_schedule.clone(),
+            per_agent_cap_usd: t.per_agent_cap_usd,
+            shard_count: 1,
+            bench_config: SpawnBenchConfig {
+                tier: self.effective_tier(),
+                pass_tier: None,
+                max_output_tokens: None,
+                max_steps: None,
+            },
+            registered_room: Some(t.registered_room.clone()),
+        }
+    }
+}
+
+/// The `bench_config` of a spawn request (frozen meta-llm `BenchConfig`): the
+/// starting `tier`, an optional `pass_tier`, and runaway backstops.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpawnBenchConfig {
+    /// Starting model tier (`low` | `mid` | `high`).
+    pub tier: MaxTier,
+    /// Optional tier the gate must pass at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass_tier: Option<MaxTier>,
+    /// Optional per-step output-token cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Optional max loop steps (runaway backstop).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_steps: Option<u32>,
+}
+
+/// The frozen meta-llm `POST /v1/pods/spawn` request body (`SpawnPodInput`,
+/// issue #6 contract). Field names/types match the runtime exactly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpawnRequest {
+    /// Human label for the pod.
+    pub pod_name: String,
+    /// Vertical.
+    pub domain: String,
+    /// Stable template reference.
+    pub template_ref: String,
+    /// Cron schedule for a recurring pod.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cron_schedule: Option<String>,
+    /// Reserve-and-Commit hard spend cap, USD.
+    pub per_agent_cap_usd: f64,
+    /// Number of shards to allocate (>= 1).
+    pub shard_count: u32,
+    /// The behavioral gate config.
+    pub bench_config: SpawnBenchConfig,
+    /// Board slug to route result posts to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registered_room: Option<String>,
 }
 
 /// A board-slug check: non-empty, lowercase alphanumerics and hyphens only.
@@ -254,6 +320,39 @@ mod tests {
         let mut p = research_pod();
         p.cron_schedule = Some("0 *".into());
         assert!(p.validate().is_err()); // not 5 fields
+    }
+
+    #[test]
+    fn spawn_request_matches_frozen_contract() {
+        // A Low-tier override on a Mid-ceiling research pod.
+        let spec = PodSpec {
+            template: research_pod(),
+            tier: Some(MaxTier::Low),
+            idempotency_key: None,
+        };
+        let v = serde_json::to_value(spec.to_spawn_request()).unwrap();
+        // Field names + types match the frozen /v1/pods/spawn SpawnPodInput.
+        assert_eq!(v["pod_name"], "research/competitive-intel@1");
+        assert_eq!(v["domain"], "research");
+        assert_eq!(v["template_ref"], "research/competitive-intel@1");
+        assert_eq!(v["per_agent_cap_usd"], 0.10);
+        assert_eq!(v["shard_count"], 1);
+        assert_eq!(v["bench_config"]["tier"], "low"); // effective (override) tier
+        assert_eq!(v["registered_room"], "research-intel");
+        assert_eq!(v["cron_schedule"], "0 * * * *");
+        // Optional bench fields are omitted, not null.
+        assert!(v["bench_config"].get("pass_tier").is_none());
+    }
+
+    #[test]
+    fn spawn_request_defaults_to_template_ceiling_tier() {
+        let spec = PodSpec {
+            template: research_pod(), // max_tier = Mid
+            tier: None,
+            idempotency_key: None,
+        };
+        let v = serde_json::to_value(spec.to_spawn_request()).unwrap();
+        assert_eq!(v["bench_config"]["tier"], "mid");
     }
 
     #[test]
