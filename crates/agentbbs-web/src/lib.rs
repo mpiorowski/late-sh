@@ -21,7 +21,7 @@ use agentbbs_core::caps::Caps;
 use agentbbs_core::identity::Identity;
 use agentbbs_core::market::{Listing, ListingBody, ListingKind, Market};
 use agentbbs_core::report::MemoryReporter;
-use agentbbs_core::{Bbs, Board, MemoryStore, Role, Store};
+use agentbbs_core::{Bbs, Board, MemoryStore, PodSpec, PodStatus, Role, Store};
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -98,6 +98,9 @@ pub struct AppState {
     /// Stable identities for built-in agents you can "loop in" by @mention,
     /// keyed by handle, so an agent always signs with the same key.
     agents: Mutex<HashMap<String, Identity>>,
+    /// Spawned domain-agent pods (ADR-0035 control plane). In-memory registry;
+    /// the live spawn forwards to the meta-llm `cog_` gateway when configured.
+    pods: Mutex<Vec<PodRecord>>,
 }
 
 impl AppState {
@@ -113,6 +116,7 @@ impl AppState {
             reporter,
             market: Mutex::new(seed_market()),
             agents: Mutex::new(HashMap::new()),
+            pods: Mutex::new(Vec::new()),
         })
     }
 
@@ -327,6 +331,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/federation", get(api_federation))
         .route("/api/report", get(api_report))
         .route("/api/market", get(api_market))
+        .route("/api/pods", get(api_pods_list).post(api_pods_spawn))
+        .route("/api/pods/{id}", get(api_pods_get))
         // Permissive CORS so a static genesis node (e.g. on GitHub Pages) can
         // read this node's boards and submit browser-signed posts cross-origin.
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -1106,6 +1112,70 @@ async fn api_market(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(serde_json::json!({ "listings": listings }))
 }
 
+/// A spawned pod as tracked by the AgentBBS control plane (ADR-0035).
+#[derive(Clone, Debug, Serialize)]
+pub struct PodRecord {
+    /// Server-assigned pod id.
+    pub id: String,
+    /// Lifecycle state.
+    pub status: PodStatus,
+    /// When the spawn was accepted (RFC3339).
+    pub created_at: String,
+    /// The validated spawn request.
+    pub spec: PodSpec,
+}
+
+/// `POST /api/pods` — validate a [`PodSpec`] and record a spawn (idempotent on
+/// `idempotency_key`). Forwarding to the meta-llm `/v1/pods/spawn` gateway is
+/// wired when a `cog_` endpoint is configured; this scaffold records the intent
+/// and returns the pod at `Spawned`.
+async fn api_pods_spawn(
+    State(state): State<Arc<AppState>>,
+    Json(spec): Json<PodSpec>,
+) -> Result<Json<PodRecord>, (StatusCode, Json<serde_json::Value>)> {
+    spec.validate()
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("invalid pod spec: {e}")))?;
+    let mut pods = state.pods.lock().unwrap();
+    if let Some(key) = spec.idempotency_key.as_deref() {
+        if let Some(existing) = pods
+            .iter()
+            .find(|p| p.spec.idempotency_key.as_deref() == Some(key))
+        {
+            return Ok(Json(existing.clone()));
+        }
+    }
+    let record = PodRecord {
+        id: format!("pod-{:04}", pods.len()),
+        status: PodStatus::Spawned,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        spec,
+    };
+    pods.push(record.clone());
+    Ok(Json(record))
+}
+
+/// `GET /api/pods` — list spawned pods.
+async fn api_pods_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let pods = state.pods.lock().unwrap().clone();
+    Json(serde_json::json!({ "pods": pods }))
+}
+
+/// `GET /api/pods/{id}` — fetch one pod, or 404.
+async fn api_pods_get(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<PodRecord>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .pods
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|p| p.id == id)
+        .cloned()
+        .map(Json)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "pod not found"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1214,6 +1284,101 @@ mod tests {
             .iter()
             .any(|m| m["body"] == "looping in the federation"));
         assert!(msgs.iter().all(|m| m["verified"] == true));
+    }
+
+    // ADR-0035: /api/pods spawn → list → get, plus spec validation.
+    #[tokio::test]
+    async fn pods_spawn_list_get_and_reject_invalid() {
+        let app = router(AppState::in_memory());
+        let spec = serde_json::json!({
+            "template": {
+                "template_ref": "research/competitive-intel@1",
+                "domain": "research",
+                "system_prompt": "analyst",
+                "tools": ["web.search"],
+                "bench_assertions": ">=2 dated sources per claim",
+                "per_agent_cap_usd": 0.10,
+                "cron_schedule": "0 * * * *",
+                "max_tier": "mid",
+                "registered_room": "research-intel"
+            },
+            "tier": "low",
+            "idempotency_key": "spawn-1"
+        });
+        // Spawn.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/pods")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&spec).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let pod = body_json(resp).await;
+        assert_eq!(pod["status"], "spawned");
+        let id = pod["id"].as_str().unwrap().to_string();
+
+        // Idempotent re-spawn returns the same id.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/pods")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&spec).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(body_json(resp).await["id"], id);
+
+        // List shows exactly one.
+        let resp = app
+            .clone()
+            .oneshot(Request::get("/api/pods").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(body_json(resp).await["pods"].as_array().unwrap().len(), 1);
+
+        // Get by id.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/pods/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Unknown id → 404.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::get("/api/pods/pod-9999")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // Invalid spec (tier above max_tier) → 400.
+        let mut bad = spec.clone();
+        bad["tier"] = serde_json::json!("high");
+        let resp = app
+            .oneshot(
+                Request::post("/api/pods")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&bad).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
