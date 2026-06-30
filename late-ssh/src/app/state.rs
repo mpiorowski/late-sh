@@ -216,6 +216,7 @@ pub struct SessionConfig {
     pub minesweeper_service: crate::app::arcade::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
+    pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
     pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
@@ -446,9 +447,11 @@ pub struct App {
     pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
     pub(crate) door_delete_confirm: bool,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
+    pub(crate) greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     /// Games hub (Screen::Games): the dedicated landing for the door games.
     pub(crate) games_hub_state: crate::app::door::hub::state::State,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
+    pub(crate) greendragon_state: Option<crate::app::door::greendragon::state::State>,
     pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
     /// Per-session TERM string (from the PTY request), used to size the rebels
     /// PTY.
@@ -1048,7 +1051,9 @@ impl App {
             door_delete_confirm: false,
             games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,
+            greendragon_service: config.greendragon_service,
             lateania_state: None,
+            greendragon_state: None,
             rebels_state: None,
             rebels_term: config.term.clone(),
             rebels_enabled: config.rebels_enabled,
@@ -1179,6 +1184,21 @@ impl App {
 
     pub(crate) fn leave_lateania(&mut self) {
         self.lateania_state = None;
+    }
+
+    pub(crate) fn enter_greendragon(&mut self) {
+        if self.greendragon_state.is_some() {
+            return;
+        }
+        self.greendragon_state = Some(crate::app::door::greendragon::state::State::new(
+            self.greendragon_service.clone(),
+            self.user_id,
+            self.username.clone(),
+        ));
+    }
+
+    pub(crate) fn leave_greendragon(&mut self) {
+        self.greendragon_state = None;
     }
 
     /// Store the active transport's render-loop wakeup so the rebels proxy can

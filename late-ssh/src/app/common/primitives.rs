@@ -53,15 +53,16 @@ pub enum Screen {
     Lateania,
     Rebels,
     Nethack,
+    GreenDragon,
     Artboard,
     Pinstar,
 }
 
 impl Screen {
-    /// Tab cycles only the top-level pages. The three door games (Lateania,
-    /// Rebels, Nethack) are reached through the Games hub, not the tab bar, so
-    /// they are absent from the cycle; if one is somehow current, `next`/`prev`
-    /// fall back to the hub that owns them.
+    /// Tab cycles only the top-level pages. The door games (Lateania, Rebels,
+    /// Nethack, Green Dragon) are reached through the Games hub, not the tab
+    /// bar, so they are absent from the cycle; if one is somehow current,
+    /// `next`/`prev` fall back to the hub that owns them.
     pub fn next(self) -> Self {
         match self {
             Screen::Dashboard => Screen::Arcade,
@@ -70,7 +71,9 @@ impl Screen {
             Screen::Rooms => Screen::Artboard,
             Screen::Artboard => Screen::Pinstar,
             Screen::Pinstar => Screen::Dashboard,
-            Screen::Lateania | Screen::Rebels | Screen::Nethack => Screen::Games,
+            Screen::Lateania | Screen::Rebels | Screen::Nethack | Screen::GreenDragon => {
+                Screen::Games
+            }
         }
     }
 
@@ -82,7 +85,9 @@ impl Screen {
             Screen::Rooms => Screen::Games,
             Screen::Artboard => Screen::Rooms,
             Screen::Pinstar => Screen::Artboard,
-            Screen::Lateania | Screen::Rebels | Screen::Nethack => Screen::Games,
+            Screen::Lateania | Screen::Rebels | Screen::Nethack | Screen::GreenDragon => {
+                Screen::Games
+            }
         }
     }
 }
@@ -101,6 +106,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
+        Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "Arcade",
         Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
@@ -203,7 +209,12 @@ mod tests {
 
     #[test]
     fn door_games_are_outside_the_tab_cycle_and_fall_back_to_the_hub() {
-        for door in [Screen::Lateania, Screen::Rebels, Screen::Nethack] {
+        for door in [
+            Screen::Lateania,
+            Screen::Rebels,
+            Screen::Nethack,
+            Screen::GreenDragon,
+        ] {
             assert_eq!(door.next(), Screen::Games);
             assert_eq!(door.prev(), Screen::Games);
         }

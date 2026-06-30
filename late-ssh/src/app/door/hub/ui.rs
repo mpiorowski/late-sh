@@ -69,6 +69,13 @@ pub fn draw_games_hub(
         HubGame::Nethack => {
             crate::app::door::nethack::render::draw_landing(frame, layout[3], view.nethack_enabled);
         }
+        HubGame::GreenDragon => {
+            crate::app::door::greendragon::screen::draw_landing(
+                frame,
+                layout[3],
+                view.delete_confirm,
+            );
+        }
     }
 
     draw_footer(frame, layout[4]);

@@ -1317,11 +1317,19 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
         return match event {
             ParsedInput::Byte(b'y' | b'Y' | b'\r' | b'\n') | ParsedInput::Char('y' | 'Y') => {
                 app.door_delete_confirm = false;
-                app.leave_lateania();
-                app.lateania_service.delete_character_task(app.user_id);
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Lateania character reset. Enter the world to start over.",
-                ));
+                if selected == HubGame::GreenDragon {
+                    app.leave_greendragon();
+                    app.greendragon_service.delete_character(app.user_id);
+                    app.banner = Some(crate::app::common::primitives::Banner::success(
+                        "Green Dragon character reset. Enter the village to start over.",
+                    ));
+                } else {
+                    app.leave_lateania();
+                    app.lateania_service.delete_character_task(app.user_id);
+                    app.banner = Some(crate::app::common::primitives::Banner::success(
+                        "Lateania character reset. Enter the world to start over.",
+                    ));
+                }
                 true
             }
             ParsedInput::Byte(b'n' | b'N' | b'd' | b'D')
@@ -1355,7 +1363,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Byte(b'd' | b'D') | ParsedInput::Char('d' | 'D')
-            if selected == HubGame::Lateania =>
+            if selected == HubGame::Lateania || selected == HubGame::GreenDragon =>
         {
             app.door_delete_confirm = true;
             true
@@ -1399,6 +1407,10 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             if let Some(state) = app.nethack_state.as_mut() {
                 state.connect();
             }
+        }
+        HubGame::GreenDragon => {
+            app.set_screen(Screen::GreenDragon);
+            app.enter_greendragon();
         }
     }
 }
@@ -1476,6 +1488,35 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                 return true;
             }
             _ => {}
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::GreenDragon {
+        // Native in-process door, handled like Lateania: forward all keys to the
+        // game, except let the global `?` guide through.
+        if app.greendragon_state.is_some() && door_games_allows_global_help(event) {
+            return false;
+        }
+        if app.greendragon_state.is_some() {
+            match event {
+                ParsedInput::Byte(byte) => {
+                    crate::app::door::greendragon::screen::GAME.handle_key(app, *byte);
+                }
+                ParsedInput::Char(ch) if ch.is_ascii() => {
+                    crate::app::door::greendragon::screen::GAME.handle_key(app, *ch as u8);
+                }
+                ParsedInput::Arrow(key) => {
+                    crate::app::door::greendragon::screen::GAME.handle_arrow(app, *key);
+                }
+                _ => {}
+            }
+            return true;
+        }
+        // Launcher fallback: Enter starts the game (the hub normally does this).
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_greendragon();
+            return true;
         }
         return false;
     }
@@ -2193,6 +2234,16 @@ fn dispatch_escape(app: &mut App) {
         app.door_delete_confirm = false;
         app.leave_lateania();
         app.set_screen(Screen::Games);
+        return;
+    }
+    // Esc in Green Dragon backs out one menu level (and leaves to the hub from
+    // the village); the game decides, so forward it.
+    if ctx.screen == Screen::GreenDragon {
+        if app.door_delete_confirm {
+            app.door_delete_confirm = false;
+            return;
+        }
+        crate::app::door::greendragon::screen::GAME.handle_key(app, 0x1B);
         return;
     }
     // Esc from the Games hub cancels a pending Lateania reset, otherwise drops
@@ -2967,6 +3018,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Games hub arrows are handled in handle_dedicated_screen_input.
         Screen::Games => false,
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
+        Screen::GreenDragon => crate::app::door::greendragon::screen::GAME.handle_arrow(app, key),
         // TODO(M5): forward arrows while Running; Launcher ignores them.
         Screen::Rebels => false,
         // Running-mode arrows are forwarded raw in App::handle_input; the
@@ -3588,6 +3640,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Lateania => {
             crate::app::door::lateania::screen::GAME.handle_key(app, byte);
+        }
+        Screen::GreenDragon => {
+            crate::app::door::greendragon::screen::GAME.handle_key(app, byte);
         }
         Screen::Rebels => {
             // Launcher key dispatch (connect on Enter) is handled via

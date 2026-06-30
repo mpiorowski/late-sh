@@ -1,5 +1,5 @@
 //! Games hub: the dedicated landing screen for the immersive door games
-//! (Lateania, Rebels, NetHack). It is a selector — a tab row of games with the
+//! (Lateania, Rebels, NetHack, Green Dragon). It is a selector — a tab row of games with the
 //! selected game's full landing page rendered below it — not a scroll. Left/right
 //! (or h/l) change the selection; Enter launches the selected game. Adding a
 //! future door game is a new `HubGame` entry plus a `draw_landing` for it, not a
@@ -10,17 +10,24 @@ pub enum HubGame {
     Lateania,
     Rebels,
     Nethack,
+    GreenDragon,
 }
 
 impl HubGame {
     /// Selector order, left to right.
-    pub const ALL: [HubGame; 3] = [HubGame::Lateania, HubGame::Rebels, HubGame::Nethack];
+    pub const ALL: [HubGame; 4] = [
+        HubGame::Lateania,
+        HubGame::Rebels,
+        HubGame::Nethack,
+        HubGame::GreenDragon,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             HubGame::Lateania => "Lateania",
             HubGame::Rebels => "Rebels",
             HubGame::Nethack => "NetHack",
+            HubGame::GreenDragon => "Green Dragon",
         }
     }
 }
@@ -73,7 +80,9 @@ mod tests {
         s.select_next();
         assert_eq!(s.selected_game(), HubGame::Nethack);
         s.select_next();
-        assert_eq!(s.selected_game(), HubGame::Nethack);
+        assert_eq!(s.selected_game(), HubGame::GreenDragon);
+        s.select_next();
+        assert_eq!(s.selected_game(), HubGame::GreenDragon);
     }
 
     #[test]
@@ -89,7 +98,7 @@ mod tests {
     fn all_games_are_listed_in_order() {
         assert_eq!(
             HubGame::ALL.map(HubGame::label),
-            ["Lateania", "Rebels", "NetHack"],
+            ["Lateania", "Rebels", "NetHack", "Green Dragon"],
         );
     }
 }

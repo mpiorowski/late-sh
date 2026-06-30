@@ -249,6 +249,11 @@ async fn main() -> anyhow::Result<()> {
         chip_service.clone(),
         db.clone(),
     );
+    let greendragon_service = late_ssh::app::door::greendragon::svc::GreenDragonService::new(
+        activity_publisher.clone(),
+        chip_service.clone(),
+        db.clone(),
+    );
     let sshattrick_room_manager =
         late_ssh::app::rooms::sshattrick::manager::SshattrickRoomManager::new(
             rooms_service.clone(),
@@ -366,6 +371,7 @@ async fn main() -> anyhow::Result<()> {
         solitaire_service,
         minesweeper_service,
         lateania_service,
+        greendragon_service,
         bonsai_service,
         pet_service,
         nonogram_library,
