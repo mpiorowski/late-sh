@@ -119,6 +119,9 @@ pub struct AppState {
     runs: Mutex<Vec<(String, PlaybookRun)>>,
     /// Decision records emitted by completed runs (ADR-0045).
     decisions: Mutex<DecisionLog>,
+    /// Daily live-LLM call budget guard (UTC-date, count) — caps aggregate cog_
+    /// spend from anonymous public (Pages) traffic. Env `AGENTBBS_LLM_DAILY_MAX`.
+    llm_day: Mutex<(String, u32)>,
 }
 
 impl AppState {
@@ -142,7 +145,28 @@ impl AppState {
             moderation: Mutex::new(ModerationLog::new()),
             runs: Mutex::new(Vec::new()),
             decisions: Mutex::new(DecisionLog::new()),
+            llm_day: Mutex::new((String::new(), 0)),
         })
+    }
+
+    /// Daily aggregate cap on live-LLM (cog_) calls — protects the budget when the
+    /// public Pages site routes here. Returns false once `AGENTBBS_LLM_DAILY_MAX`
+    /// (default 1000) calls have been made today (UTC); counter resets each day.
+    fn llm_quota_ok(&self) -> bool {
+        let max: u32 = std::env::var("AGENTBBS_LLM_DAILY_MAX")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000);
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let mut g = self.llm_day.lock().unwrap();
+        if g.0 != today {
+            *g = (today, 0);
+        }
+        if g.1 >= max {
+            return false;
+        }
+        g.1 += 1;
+        true
     }
 
     /// The stable identity for a built-in agent handle (minted on first use).
@@ -169,7 +193,10 @@ impl AppState {
             return;
         }
         let identity = self.agent_identity(&agent);
-        let (subject, body) = compose_reply(&agent, text).await;
+        // Daily budget guard: only take the live-LLM path while under the cap;
+        // otherwise fall back to the scripted reply (no cog_ spend).
+        let live_allowed = self.llm_quota_ok();
+        let (subject, body) = compose_reply(&agent, text, live_allowed).await;
         let msg_body = agentbbs_core::MessageBody {
             board: board.to_string(),
             parent: None,
@@ -380,9 +407,21 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/moderation",
             get(api_moderation_list).post(api_moderation_act),
         )
-        // Permissive CORS so a static genesis node (e.g. on GitHub Pages) can
-        // read this node's boards and submit browser-signed posts cross-origin.
-        .layer(tower_http::cors::CorsLayer::permissive())
+        // CORS locked to the GitHub Pages origin (+ this server, + localhost dev)
+        // so the static genesis node can read boards and submit browser-signed
+        // posts, without exposing the live (cog_-backed) API to arbitrary origins.
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::AllowOrigin::list([
+                    "https://ruvnet.github.io".parse().unwrap(),
+                    "https://agentbbs-web-63rzcdswba-uc.a.run.app"
+                        .parse()
+                        .unwrap(),
+                    "http://localhost:8211".parse().unwrap(),
+                ]))
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_headers([axum::http::header::CONTENT_TYPE]),
+        )
         .with_state(state)
 }
 
@@ -649,12 +688,14 @@ fn resolve_llm_config() -> Option<LlmConfig> {
 /// routes to the OpenRouter-hosted model; otherwise it returns a scripted
 /// action-stream. The API key is read from the process environment and never
 /// leaves the server.
-async fn compose_reply(agent: &str, text: &str) -> (String, String) {
-    if let Some(cfg) = resolve_llm_config() {
-        if let Some(body) = llm_reply(&cfg, agent, text).await {
-            return (format!("looped in {agent}"), body);
+async fn compose_reply(agent: &str, text: &str, live_allowed: bool) -> (String, String) {
+    if live_allowed {
+        if let Some(cfg) = resolve_llm_config() {
+            if let Some(body) = llm_reply(&cfg, agent, text).await {
+                return (format!("looped in {agent}"), body);
+            }
+            tracing::warn!("live LLM reply failed; falling back to scripted reply");
         }
-        tracing::warn!("live LLM reply failed; falling back to scripted reply");
     }
     (format!("looped in {agent}"), scripted_reply(agent, text))
 }

@@ -308,7 +308,12 @@ function appendMessage(slug, msg) {
 }
 
 // ---- optional live-node federation ----
-export function liveNode() { return localStorage.getItem(LS.node) || ''; }
+// Default the live node to the deployed Cloud Run server so the public Pages
+// site uses the live meta-llm out-of-the-box (key stays server-side; the server
+// enforces CORS + per-session rate-limit + a daily budget cap). First visit
+// (key absent) → live; explicit Disconnect stores '' → local-only demo.
+const DEFAULT_LIVE_NODE = 'https://agentbbs-web-63rzcdswba-uc.a.run.app';
+export function liveNode() { const v = localStorage.getItem(LS.node); return v === null ? DEFAULT_LIVE_NODE : v; }
 export function setLiveNode(url) {
   if (url) localStorage.setItem(LS.node, url.replace(/\/+$/, ''));
   else localStorage.removeItem(LS.node);

@@ -33,7 +33,7 @@ gcloud run deploy "$SERVICE" \
   --service-account="$SA" --allow-unauthenticated --port=8080 \
   --cpu=1 --memory=512Mi --max-instances=4 --min-instances=0 \
   --set-secrets="AGENTBBS_COGNITUM_KEY=AGENTBBS_COGNITUM_KEY:latest" \
-  --set-env-vars="AGENTBBS_PODS_BASE_URL=${GATEWAY},AGENTBBS_LLM_BASE_URL=${GATEWAY}/v1,AGENTBBS_PODS_KEY_ENV=AGENTBBS_COGNITUM_KEY,AGENTBBS_LLM_KEY_ENV=AGENTBBS_COGNITUM_KEY,AGENTBBS_MODEL=cognitum-auto,RUST_LOG=info"
+  --set-env-vars="AGENTBBS_PODS_BASE_URL=${GATEWAY},AGENTBBS_LLM_BASE_URL=${GATEWAY}/v1,AGENTBBS_PODS_KEY_ENV=AGENTBBS_COGNITUM_KEY,AGENTBBS_LLM_KEY_ENV=AGENTBBS_COGNITUM_KEY,AGENTBBS_MODEL=cognitum-auto,AGENTBBS_LLM_DAILY_MAX=500,RUST_LOG=info"
 
 URL="$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format='value(status.url)')"
 echo "==> deployed: $URL"
