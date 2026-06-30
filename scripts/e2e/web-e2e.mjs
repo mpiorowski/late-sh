@@ -149,12 +149,19 @@ try {
   ok(await page.evaluate(() => /ECHO: ABC123/.test(document.getElementById('echo-out').textContent)), 'Doors: Echo plugin runs (uppercase echo)');
 
   // ---- Doors: Memory Lane search returns real hits ----
+  // Was a fixed 300ms sleep — on the server frontend, search fetches every
+  // board over the network; a loaded CI runner can exceed that comfortably.
+  // Poll for the actual result instead (the search itself was also fixed to
+  // fetch boards concurrently rather than sequentially).
   await page.evaluate(() => window.__ui.VIEWS.doors());
   await page.waitForTimeout(120);
   await page.click('#thread [data-door="memory"]');
   await page.fill('#mem-in', 'verifiable');
   await page.click('#mem-run');
-  await page.waitForTimeout(300);
+  await page.waitForFunction(
+    () => /#general|no matches/.test(document.getElementById('mem-out').textContent),
+    { timeout: 10000 },
+  ).catch(() => {});
   ok(await page.evaluate(() => /#general|no matches/.test(document.getElementById('mem-out').textContent)), 'Doors: Memory Lane search runs');
 
   // ---- Marketplace: applying a Theme listing actually switches the theme ----

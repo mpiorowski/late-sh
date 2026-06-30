@@ -1570,14 +1570,16 @@ function doorMemory() {
     const q = ($('mem-in').value || '').trim().toLowerCase();
     const out = $('mem-out'); if (!out) return;
     if (!q) { out.innerHTML = '<div class="bbs-row"><span class="d">type a query.</span></div>'; return; }
-    const hits = [];
-    for (const b of store.boards()) {
+    // Fetch every board concurrently — on the server frontend store.board()
+    // is a real network round-trip per board; awaiting them one at a time
+    // multiplies total latency by the channel count for no reason.
+    const perBoard = await Promise.all(store.boards().map(async (b) => {
       const data = await store.board(b.slug);
-      for (const m of (data.messages || [])) {
-        const hay = ((m.subject || '') + ' ' + (m.body || '')).toLowerCase();
-        if (hay.includes(q)) hits.push({ slug: b.slug, m });
-      }
-    }
+      return (data.messages || [])
+        .filter((m) => ((m.subject || '') + ' ' + (m.body || '')).toLowerCase().includes(q))
+        .map((m) => ({ slug: b.slug, m }));
+    }));
+    const hits = perBoard.flat();
     console.log('[door:memory] "' + q + '" -> ' + hits.length + ' hit(s)');
     out.innerHTML = hits.length ? hits.slice(0, 20).map(h =>
       `<div class="bbs-row"><span class="d">#${esc(h.slug)}</span>` +
