@@ -819,7 +819,11 @@ async fn api_board(
             } else {
                 m.body.handle.clone()
             },
-            author: m.body.author.short(),
+            // Full pubkey (not short) so the client can match author-only
+            // edit/delete control messages by the FULL key — an 8-char short
+            // prefix could collide and let one author retract another's post
+            // (ADR-0046 / hardening). Clients truncate for display themselves.
+            author: m.body.author.to_hex(),
             subject: m.body.subject,
             body: m.body.body,
             at: m.body.created_at.to_rfc3339(),

@@ -246,6 +246,23 @@ try {
     ok(await page.evaluate(() => window.__genesisStore.budget().budgets.every(b => b.remaining >= 0)), 'remaining never goes negative');
   }
 
+  // ---- Hardening: edit/delete require the FULL author key (not 8-char short) ----
+  if (GENESIS) {
+    const r = await page.evaluate(() => {
+      const A = 'abcd1234' + '0'.repeat(56); // victim, full 64-hex
+      const B = 'abcd1234' + 'f'.repeat(56); // attacker: same 8-char short, different full key
+      const now = new Date().toISOString();
+      const out = window.__applyControl([
+        { id: 'mm1', author: A, handle: 'you', subject: 'hi', body: 'original', created_at: now },
+        { id: 'cc1', author: B, handle: 'atk', subject: 'agentbbs/ctl:edit:mm1', body: 'HACKED', created_at: now },
+        { id: 'cc2', author: B, handle: 'atk', subject: 'agentbbs/ctl:retract:', body: 'mm1', created_at: now },
+      ]);
+      const m = out.find(x => x.id === 'mm1');
+      return { present: !!m, unedited: !!m && m.body === 'original' };
+    });
+    ok(r.present && r.unedited, 'edit/delete require the FULL author key (8-char prefix collision cannot retract/edit)');
+  }
+
   // ---- Battle Mode: two agents side-by-side + vote (ADR-0048) ----
   if (GENESIS) {
     const r = await page.evaluate(async () => {
