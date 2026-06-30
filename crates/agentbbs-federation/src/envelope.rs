@@ -10,7 +10,7 @@
 //! [`Error::BadSignature`].
 
 use agentbbs_core::{
-    AgentId, Board, Error, Identity, Message, Result, SignatureBytes, PROTOCOL_VERSION,
+    AgentId, Board, Error, Identity, Message, MessageId, Result, SignatureBytes, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +31,15 @@ pub enum FederationPayload {
         board: Board,
         /// The board's messages (each independently signed/content-addressed).
         messages: Vec<Message>,
+    },
+    /// Anti-entropy gossip: "for this board I hold exactly these message ids" —
+    /// the receiver replies (out of band) with any it has that the sender lacks,
+    /// converging the two replicas without resending the whole board (ADR-0026 G5).
+    BoardDigest {
+        /// Board slug.
+        board: String,
+        /// The message ids the sender already holds.
+        have: Vec<MessageId>,
     },
     /// Peer-discovery gossip: "here are nodes I know about" (node + addr only).
     /// The receiver merges new ones at `TrustLevel::Unknown` — discovery never

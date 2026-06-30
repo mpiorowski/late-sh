@@ -217,6 +217,54 @@ mod tests {
         assert_eq!(dst2.message_count().unwrap(), 0); // fail-closed: nothing stored
     }
 
+    // G5 slice 3: anti-entropy reconciliation — a peer's digest yields exactly
+    // the messages it is missing (the convergence delta), and identical replicas
+    // yield nothing.
+    #[test]
+    fn digest_reconcile_returns_missing_delta() {
+        let author = Identity::generate();
+        // Node A holds m1, m2, m3.
+        let a_store: Arc<dyn Store> = Arc::new(agentbbs_core::MemoryStore::new());
+        let m: Vec<_> = (1..=3)
+            .map(|i| signed_message(&author, "general", &format!("m{i}")))
+            .collect();
+        for msg in &m {
+            a_store.put_message(msg).unwrap();
+        }
+        let a = Federator::new(
+            Identity::generate(),
+            a_store,
+            Arc::new(NullReporter),
+            Arc::new(LoopbackTransport::new()),
+            PeerBook::new(),
+        );
+        // Node B holds only m1; it sends A its digest.
+        let b_store: Arc<dyn Store> = Arc::new(agentbbs_core::MemoryStore::new());
+        b_store.put_message(&m[0]).unwrap();
+        let b = Federator::new(
+            Identity::generate(),
+            b_store,
+            Arc::new(NullReporter),
+            Arc::new(LoopbackTransport::new()),
+            PeerBook::new(),
+        );
+        let digest = b.make_digest("general", 100).unwrap();
+
+        // A reconciles → returns m2, m3 (what B lacks), all verifying.
+        let delta = a.reconcile(&digest.to_bytes().unwrap(), 100).unwrap();
+        let ids: std::collections::HashSet<_> = delta.iter().map(|x| x.id.0.clone()).collect();
+        assert_eq!(delta.len(), 2);
+        assert!(ids.contains(&m[1].id.0) && ids.contains(&m[2].id.0));
+        assert!(delta.iter().all(|x| x.verify().is_ok()));
+
+        // Converged replicas → empty delta.
+        let a_digest = a.make_digest("general", 100).unwrap();
+        assert!(a
+            .reconcile(&a_digest.to_bytes().unwrap(), 100)
+            .unwrap()
+            .is_empty());
+    }
+
     // G5 slice 2: peer-discovery gossip adds new peers at Unknown trust and
     // never downgrades an existing (e.g. Trusted) peer.
     #[test]

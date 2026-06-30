@@ -24,7 +24,7 @@ v0-hardening.
 | G2 | **Bridge inbound (Slack Socket Mode) + bridge-signing identity** (per-source subkeys, `bridged` envelope metadata, loop-guard map) | ◐ signing identity ✓ (`agentbbs-bridge::inbound`: subkeys + signed `bridged` + `SeenSet`); Socket Mode transport pending | 0025 (Phase 1) | **P1** |
 | G3 | **Bridge inbound (Teams: Azure Bot + RSC)** | not built | 0025 (Phase 2) | P2 |
 | G4 | **UI threading** — `MessageBody.parent` exists; the web UI renders flat | ✓ shipped — reply-in-thread + indented render (ADR-0027) | 0013/0024 | **P1** |
-| G5 | **Federation auto-sync** — peer discovery, signed board snapshots for bootstrap, CRDT/gossip convergence (today: manual node URL) | ◐ snapshots ✓ + peer discovery ✓ (`PeerExchange` gossip → `merge_discovered` at Unknown trust, interior-mutable PeerBook); gossip/CRDT message-set convergence pending | 0007/0017 | P2 |
+| G5 | **Federation auto-sync** — peer discovery, signed board snapshots for bootstrap, CRDT/gossip convergence (today: manual node URL) | ✓ core complete — snapshots (`make_snapshot`) + peer discovery (`PeerExchange`) + anti-entropy reconciliation (`make_digest`→`reconcile` returns the missing delta); periodic gossip *driver* is ops wiring | 0007/0017 | P2 |
 | G6 | **RVF ANN index** — search is brute-force O(n·dim); not byte-compatible with RuVector | ✓ shipped — `LshIndex` (sign-RP LSH prune + exact rerank, ADR-0028) | 0006 | P2 |
 | G7 | **Marketplace real install/credits** — listings act cosmetically; no purchase/credit ledger or arbitrary-plugin install | illustrative | 0011/0009 | P3 |
 | G8 | **Genesis live mode** — the static demo has no live-LLM path (server has one) | by design; optional | 0019/0021 | P3 |

@@ -93,6 +93,49 @@ impl Federator {
         Ok(())
     }
 
+    /// Build a signed anti-entropy digest of a board: exactly the message ids
+    /// this node holds. A peer answers with whatever it has that we lack (G5).
+    pub fn make_digest(&self, slug: &str, limit: usize) -> Result<FederationEnvelope> {
+        let have = self
+            .store
+            .list_messages(slug, limit)?
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        FederationEnvelope::seal(
+            &self.identity,
+            FederationPayload::BoardDigest {
+                board: slug.to_string(),
+                have,
+            },
+            self.next_seq(),
+        )
+    }
+
+    /// Reconcile against a peer's signed [`FederationPayload::BoardDigest`]:
+    /// verify the envelope, then return the messages WE hold on that board that
+    /// the peer is missing (its convergence delta) for the caller to replicate
+    /// back. Errors on a non-digest payload.
+    pub fn reconcile(&self, digest_bytes: &[u8], limit: usize) -> Result<Vec<Message>> {
+        let env = FederationEnvelope::from_bytes(digest_bytes)?;
+        match env.open()? {
+            FederationPayload::BoardDigest { board, have } => {
+                let theirs: std::collections::HashSet<&str> =
+                    have.iter().map(|id| id.0.as_str()).collect();
+                Ok(self
+                    .store
+                    .list_messages(board, limit)?
+                    .into_iter()
+                    .filter(|m| !theirs.contains(m.id.0.as_str()))
+                    .collect())
+            }
+            _ => Err(agentbbs_core::Error::malformed(
+                "digest",
+                "envelope is not a BoardDigest",
+            )),
+        }
+    }
+
     /// Build a signed peer-discovery gossip of this node's known peers (node +
     /// addr only). A receiver merges new ones at `TrustLevel::Unknown` (G5).
     pub fn make_peer_exchange(&self) -> Result<FederationEnvelope> {
@@ -204,6 +247,15 @@ impl Federator {
                     Event::now(EventKind::FederationReceive, board.slug.clone())
                         .by(envelope.node)
                         .with(json!({ "kind": "snapshot", "messages": messages.len() })),
+                );
+            }
+            FederationPayload::BoardDigest { board, have } => {
+                // Acknowledge; the convergence delta is produced by `reconcile()`
+                // and replicated back by the gossip layer (out of band).
+                self.emit(
+                    Event::now(EventKind::FederationReceive, board.clone())
+                        .by(envelope.node)
+                        .with(json!({ "kind": "digest", "have": have.len() })),
                 );
             }
             FederationPayload::PeerExchange { peers } => {
