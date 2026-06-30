@@ -140,6 +140,9 @@ const SEED_PODS = [
   { id: 'pod-0001', domain: 'security', host: 'native', tier: 'mid', status: 'evaluating', per_agent_cap_usd: 0.50, registered_room: 'security-watch' },
   { id: 'pod-0002', domain: 'trading', host: 'codex', tier: 'high', status: 'completed', per_agent_cap_usd: 0.25, registered_room: 'trading-signals' },
 ];
+// Demo per-pod spend (USD); pod-0001 is intentionally over its cap to show the
+// over-budget alert. Real spend comes from pod-result cost_usd / usage_ledger.
+const SEED_POD_SPEND = { 'pod-0000': 0.061, 'pod-0001': 0.523, 'pod-0002': 0.180 };
 const SEED_POD_RESULTS = [
   { config: { domain: 'research', host: 'claude-code', tier: 'high' }, accuracy: 0.92, cost_usd: 0.020, runs: 12 },
   { config: { domain: 'research', host: 'native', tier: 'low' }, accuracy: 0.88, cost_usd: 0.002, runs: 12 },
@@ -433,6 +436,18 @@ export const store = {
     const spawned = readJSON(LS.spawnedPods, []);
     return { pods: [...spawned, ...SEED_PODS], configs: rankPodConfigs(SEED_POD_RESULTS) };
   },
+  // Budget guardrails (ADR-0040): per-pod spend vs cap, over-budget flagged.
+  budget() {
+    const { pods } = this.pods();
+    return {
+      budgets: pods.map(p => {
+        const spent = SEED_POD_SPEND[p.id] || 0;
+        const cap = p.per_agent_cap_usd || 0;
+        return { pod_id: p.id, domain: p.domain, spent, cap, remaining: Math.max(0, cap - spent), over_budget: cap > 0 && spent >= cap, pct: cap > 0 ? spent / cap : 0 };
+      }),
+    };
+  },
+
   // "Hire the winner" (ADR-0035 + ADR-0039): spawn a pod with the chosen agent
   // as its host. Local in the demo; the live path spawns via the cog_ gateway.
   hire(handle, domain = 'ops') {

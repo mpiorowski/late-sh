@@ -39,8 +39,8 @@ async function _sync() {
       _get('/api/state'), _get('/api/arena'), _get('/api/arena/retort'), _get('/api/online'),
       _get('/api/doors'), _get('/api/federation'), _get('/api/report'), _get('/api/market'), _get('/api/arena/pods'), _get('/api/approvals'),
     ]);
-    const repu = await _get('/api/reputation');
-    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m, pods: p, approvals: ap, reputation: repu });
+    const [repu, bud] = await Promise.all([_get('/api/reputation'), _get('/api/budget')]);
+    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m, pods: p, approvals: ap, reputation: repu, budget: bud });
   } catch (e) { console.error('[agentbbs] /api sync failed', e); }
 }
 const store = {
@@ -52,6 +52,7 @@ const store = {
   proposals: () => _c.approvals || { proposals: [] }, // ADR-0038: GET /api/approvals
   directory: () => ({ agents: ((_c.reputation && _c.reputation.ranking) || []).map((r, i) => ({ handle: r.agent.slice(0, 8), kind: 'agent', successes: r.successes, total: r.total, rate: r.rate, score: r.score, rank: i + 1 })) }), // ADR-0039
   hire: async () => ({ ok: false, error: 'live "hire" spawns the pod via the cog_ gateway (next slice)' }), // ADR-0035
+  budget: () => _c.budget || { budgets: [] }, // ADR-0040: GET /api/budget
 
   decide: async () => ({ ok: false, error: 'approvals: in-browser decision signing on the server node lands in ADR-0038 phase 3' }),
   doors: () => _c.doors, federation: () => _c.federation, report: () => _c.report, market: () => _c.market,

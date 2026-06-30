@@ -225,6 +225,15 @@ try {
     ok(true, 'hire-the-winner spawns a pod hosted by the chosen agent');
   }
 
+  // ---- budget guardrails (ADR-0040) ----
+  await page.evaluate(() => window.__ui.VIEWS.budget());
+  await page.waitForTimeout(80);
+  ok(await page.evaluate(() => /Budget Guardrails/.test(document.getElementById('thread').textContent)), 'Budget guardrails panel renders');
+  if (GENESIS) {
+    ok(await page.evaluate(() => /over budget/.test(document.getElementById('thread').textContent) && window.__genesisStore.budget().budgets.some(b => b.over_budget)), 'an over-budget pod is flagged');
+    ok(await page.evaluate(() => window.__genesisStore.budget().budgets.every(b => b.remaining >= 0)), 'remaining never goes negative');
+  }
+
   // ---- mobile layout + persistence ----
   await page.evaluate(() => window.__ui.applyLayout('mobile'));
   ok(await page.evaluate(() => document.documentElement.dataset.layout === 'mobile' && getComputedStyle(document.getElementById('sidebar')).display === 'none'), 'mobile layout hides sidebar');

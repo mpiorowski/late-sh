@@ -456,8 +456,8 @@ async function _sync() {
       _get('/api/state'), _get('/api/arena'), _get('/api/arena/retort'), _get('/api/online'),
       _get('/api/doors'), _get('/api/federation'), _get('/api/report'), _get('/api/market'), _get('/api/arena/pods'), _get('/api/approvals'),
     ]);
-    const repu = await _get('/api/reputation');
-    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m, pods: p, approvals: ap, reputation: repu });
+    const [repu, bud] = await Promise.all([_get('/api/reputation'), _get('/api/budget')]);
+    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m, pods: p, approvals: ap, reputation: repu, budget: bud });
   } catch (e) { console.error('[agentbbs] /api sync failed', e); }
 }
 const store = {
@@ -469,6 +469,7 @@ const store = {
   proposals: () => _c.approvals || { proposals: [] }, // ADR-0038: GET /api/approvals
   directory: () => ({ agents: ((_c.reputation && _c.reputation.ranking) || []).map((r, i) => ({ handle: r.agent.slice(0, 8), kind: 'agent', successes: r.successes, total: r.total, rate: r.rate, score: r.score, rank: i + 1 })) }), // ADR-0039
   hire: async () => ({ ok: false, error: 'live "hire" spawns the pod via the cog_ gateway (next slice)' }), // ADR-0035
+  budget: () => _c.budget || { budgets: [] }, // ADR-0040: GET /api/budget
 
   decide: async () => ({ ok: false, error: 'approvals: in-browser decision signing on the server node lands in ADR-0038 phase 3' }),
   doors: () => _c.doors, federation: () => _c.federation, report: () => _c.report, market: () => _c.market,
@@ -925,6 +926,24 @@ function showApprovals() {
   document.querySelectorAll('#thread [data-reject]').forEach(el => el.onclick = () => decide(el.dataset.reject, 'reject'));
 }
 
+// ---- Budget guardrails (ADR-0040) — per-pod spend vs cap ----
+function showBudget() {
+  const d = store.budget();
+  const rows = (d.budgets || []).map(b => {
+    const pct = Math.min(1, b.pct);
+    const barColor = b.over_budget ? 'var(--red, #e5534b)' : (b.pct > 0.8 ? '#d8a657' : 'var(--green)');
+    const badge = b.over_budget ? '<span class="m">⚠ over budget</span>' : `<span class="d">${(b.pct * 100).toFixed(0)}%</span>`;
+    return `<div class="bbs-row"><span class="c"><b>${esc(b.domain)}</b> <span class="d">${esc(b.pod_id)}</span><br>` +
+      `<span style="display:inline-block;width:160px;height:6px;background:var(--bbs-inset,#222);border-radius:3px;overflow:hidden;vertical-align:middle">` +
+      `<span style="display:block;height:100%;width:${(pct * 100).toFixed(0)}%;background:${barColor}"></span></span></span>` +
+      `<span class="r">$${b.spent.toFixed(3)} / $${b.cap.toFixed(2)} ${badge}</span></div>`;
+  }).join('');
+  panel('Budget Guardrails',
+    'Per-pod spend vs its Reserve-and-Commit cap (ADR-0040). Over-budget pods are flagged; the gateway is the hard enforcer.',
+    rows || '<div class="bbs-row"><span class="d">No pods to budget.</span></div>',
+    'Spend is fed by pod step-results (cost_usd) + the meta-llm usage ledger.');
+}
+
 // ---- Agent Directory (ADR-0039) — hire by reputation ----
 function showDirectory() {
   const d = store.directory();
@@ -1189,6 +1208,7 @@ const VIEWS = {
   pods: () => { mode = 'view'; activeNav = 'view:pods'; showPods(); markActive(); },
   approvals: () => { mode = 'view'; activeNav = 'view:approvals'; showApprovals(); markActive(); },
   directory: () => { mode = 'view'; activeNav = 'view:directory'; showDirectory(); markActive(); },
+  budget: () => { mode = 'view'; activeNav = 'view:budget'; showBudget(); markActive(); },
   doors: () => { mode = 'view'; activeNav = 'view:doors'; showDoors(); markActive(); },
   arena: () => { mode = 'view'; activeNav = 'view:arena'; thread.innerHTML = ''; showArena(); markActive(); },
   retort: () => { mode = 'view'; activeNav = 'view:retort'; thread.innerHTML = ''; showRetort(); markActive(); },
@@ -1208,6 +1228,7 @@ const COMMUNITY = [
   { key: 'pods', icon: '🤖', label: 'Pods' },
   { key: 'approvals', icon: '✅', label: 'Approvals' },
   { key: 'directory', icon: '🏅', label: 'Directory' },
+  { key: 'budget', icon: '💰', label: 'Budget' },
   { key: 'doors', icon: '🚪', label: 'Doors' },
   { key: 'arena', icon: '🏁', label: 'Arena' },
   { key: 'retort', icon: '🧪', label: 'Retort' },
