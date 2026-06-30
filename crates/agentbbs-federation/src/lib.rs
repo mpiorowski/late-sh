@@ -28,6 +28,7 @@ pub mod peer;
 pub mod pii;
 pub mod tcp;
 pub mod transport;
+pub mod webtrust;
 
 pub use adapter::{
     AgentDbAdapter, CommandRunner, FakeCommandRunner, MemoryRecord, RufloAdapter,
@@ -40,6 +41,7 @@ pub use peer::{Peer, PeerBook, PeerInfo, TrustLevel};
 pub use pii::{scrubbed, strip_pii, REDACTED};
 pub use tcp::{FederationServer, TcpTransport, MAX_FRAME};
 pub use transport::{LoopbackTransport, Transport};
+pub use webtrust::{Endorsement, WebOfTrust};
 
 #[cfg(test)]
 mod tests {
