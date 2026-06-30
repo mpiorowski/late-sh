@@ -227,6 +227,12 @@
   .msg-act:hover { opacity: 1; }
   .row .meta { display: flex; align-items: center; gap: 6px; }
   .edited { color: var(--muted); font-size: 11px; font-style: italic; }
+  .md-code { background: var(--bbs-inset, rgba(255,255,255,.08)); padding: 1px 5px; border-radius: 5px; font-family: ui-monospace, monospace; font-size: .92em; }
+  .md-pre { background: var(--bbs-inset, rgba(255,255,255,.08)); padding: 10px 12px; border-radius: 10px; overflow-x: auto; font-family: ui-monospace, monospace; font-size: .88em; white-space: pre; margin: 6px 0; }
+  .md-h { display: inline-block; margin-top: 6px; font-size: 1.04em; }
+  .md-li { color: var(--accent, #8a7cff); }
+  .bubble strong { font-weight: 700; } .bubble em { font-style: italic; }
+  .bubble a { color: var(--accent, #8a7cff); text-decoration: underline; }
 
   .row { display: flex; flex-direction: column; gap: 4px; max-width: 86%; }
   .row.me { align-self: flex-end; align-items: flex-end; }
@@ -665,11 +671,26 @@ function setHeading(name, desc) {
   if (chip) chip.textContent = name.startsWith('#') ? name.slice(1).trim() : name.replace(/^[^ ]+ /, '').toLowerCase() || name;
 }
 
+// Safe markdown subset for message bodies. HTML-escape FIRST (XSS-safe), then
+// introduce only our own whitelisted tags; links restricted to http(s).
+function mdToHtml(src) {
+  let t = esc(src || '');
+  t = t.replace(/```([\s\S]*?)```/g, (_, c) => `<pre class="md-pre">${c.replace(/^\n|\n$/g, '')}</pre>`);
+  t = t.replace(/`([^`\n]+)`/g, '<code class="md-code">$1</code>');
+  t = t.replace(/^#{1,6}\s+(.+)$/gm, '<b class="md-h">$1</b>');
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
+  t = t.replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>');
+  t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  t = t.replace(/^\s*[-*]\s+(.+)$/gm, '<span class="md-li">•</span> $1');
+  return t.replace(/\n/g, '<br>');
+}
+
 function renderMessage(m, depth = 0) {
   const mine = m.handle === 'you' || (m.handle || '').startsWith('you-') || (me && m.author === me.id);
   const agent = m.agent ?? isAgent(m.handle);
   const threadify = (el) => { if (depth > 0) { el.classList.add('reply'); el.style.setProperty('--reply-indent', (depth * 22) + 'px'); } };
-  if (agent && /^[\s]*[•▸✓\-]/m.test(m.body)) {
+  if (agent && /^[\s]*[•▸✓]/m.test(m.body) && !/[*`#_]/.test(m.body)) {
     const lines = m.body.split('\n').filter(Boolean);
     const wrap = document.createElement('div');
     wrap.className = 'row them';
@@ -696,7 +717,7 @@ function renderMessage(m, depth = 0) {
   const editedTag = m.edited ? ` <span class="edited">(edited)</span>` : '';
   row.innerHTML =
     `<div class="meta">${av}<span>${who}</span>${sig}${acts}</div>` +
-    `<div class="bubble">${subj}${esc(m.body)}${editedTag}</div>`;
+    `<div class="bubble">${subj}${mdToHtml(m.body)}${editedTag}</div>`;
   row.classList.add('tappable');
   row.onclick = () => showDetails(m);
   const delBtn = row.querySelector('.msg-del'); if (delBtn) delBtn.onclick = (e) => { e.stopPropagation(); deleteMessage(m); };

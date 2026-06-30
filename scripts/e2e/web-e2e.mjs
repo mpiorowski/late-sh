@@ -246,6 +246,18 @@ try {
     ok(await page.evaluate(() => window.__genesisStore.budget().budgets.every(b => b.remaining >= 0)), 'remaining never goes negative');
   }
 
+  // ---- markdown rendering + XSS safety ----
+  if (GENESIS) {
+    const md = await page.evaluate(() => {
+      const h = window.__md('**bold** and `code` and ### Heading\n- item\n<img src=x onerror=alert(1)> [t](https://x.io)');
+      return { hasStrong: /<strong>bold<\/strong>/.test(h), hasCode: /<code[^>]*>code<\/code>/.test(h),
+        xssEscaped: !/<img/.test(h) && /&lt;img/.test(h), safeLink: /<a href="https:\/\/x\.io"/.test(h) };
+    });
+    ok(md.hasStrong && md.hasCode, 'markdown: bold + code render');
+    ok(md.xssEscaped, 'markdown: raw HTML is escaped (XSS-safe)');
+    ok(md.safeLink, 'markdown: http links render');
+  }
+
   // ---- edit / delete own message (signed control messages, genesis-local) ----
   if (GENESIS) {
     const res = await page.evaluate(async () => {
