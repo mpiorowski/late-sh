@@ -202,24 +202,28 @@ impl ForestEvent {
                 vec![format!("You chip {gold} gold out of the rock. The work costs you a forest fight.")]
             }
             11..=15 => {
-                let gems = rng.gen_range(1..=(ch.level as u64 / 7 + 1));
+                // Upstream gem ceiling is round(level/7)+1 (PHP round, half-up).
+                let gems = rng.gen_range(1..=((ch.level as f64 / 7.0).round() as u64 + 1));
                 ch.gems = ch.gems.saturating_add(gems);
                 lose_turn(ch);
                 vec![format!("The seam gives up {gems} gem(s). The work costs you a forest fight.")]
             }
             16..=18 => {
                 let gold = rng.gen_range(lvl * 10..=lvl * 40);
-                let gems = rng.gen_range(1..=(ch.level as u64 / 3 + 1));
+                let gems = rng.gen_range(1..=((ch.level as f64 / 3.0).round() as u64 + 1));
                 ch.gold = ch.gold.saturating_add(gold);
                 ch.gems = ch.gems.saturating_add(gems);
                 lose_turn(ch);
                 vec![format!("A rich pocket! You haul out {gold} gold and {gems} gem(s), losing a forest fight to the labor.")]
             }
-            // 19..=20: greed brings the roof down.
+            // 19..=20: greed brings the roof down. Upstream still credits 10%
+            // experience ("you learned about mining") and leaves gold/gems be.
             _ => {
+                let learned = (ch.experience as f64 * 0.1).round() as u64;
+                ch.experience = ch.experience.saturating_add(learned);
                 ch.alive = false;
                 ch.hitpoints = 0;
-                vec!["You spot a huge gem and swing too hard. The roof comes down in a roar of dust, and that is the end of you.".into()]
+                vec![format!("You spot a huge gem and swing too hard. The roof comes down in a roar of dust. In your last moments you grasp what went wrong (+{learned} experience), and that is the end of you.")]
             }
         }
     }
@@ -229,7 +233,9 @@ impl ForestEvent {
             return vec!["You tell the fairy your gems are your own. She sticks out her tongue and vanishes.".into()];
         }
         if ch.gems == 0 {
-            return vec!["You mime handing over a gem. The fairy stares flatly, unimpressed, and flits away.".into()];
+            // Upstream docks a forest fight for wasting her time.
+            ch.turns = ch.turns.saturating_sub(1);
+            return vec!["You mime handing over a gem. The fairy, insulted at the waste of her time, hexes your feet leaden — you lose a forest fight.".into()];
         }
         ch.gems -= 1;
         // e_rand(1,7): 1 -> +1 turn, 2-3 -> +2 gems, 4-5 -> +1 max HP, 6-7 -> skill.
@@ -283,9 +289,9 @@ impl ForestEvent {
                 vec!["You feel PERCEPTIVE, and notice a gem winking up from the streambed!".into()]
             }
             5..=7 => {
+                // Upstream grants only the extra fight here — no heal.
                 ch.turns = ch.turns.saturating_add(1);
-                ch.hitpoints = ch.max_hitpoints();
-                vec!["You feel ENERGETIC and HEALTHY: an extra forest fight, and your wounds are gone.".into()]
+                vec!["You feel ENERGETIC: the spring in your step is good for one more fight in the forest.".into()]
             }
             _ => {
                 ch.hitpoints = ch.max_hitpoints();
@@ -311,9 +317,13 @@ impl ForestEvent {
         } else if c1 == c2 || c2 == c3 || c1 == c3 {
             ch.turns = ch.turns.saturating_add(1);
             vec!["Two of a kind! Audrey hands over a single salve. You gain a forest fight!".into()]
-        } else {
-            ch.turns = ch.turns.saturating_sub(1);
+        } else if ch.turns > 0 {
+            ch.turns -= 1;
             vec!["No two alike. \"Off to bed early for you!\" Audrey cackles, and you lose a forest fight.".into()]
+        } else {
+            // No fight left to dock: upstream takes a charm point instead.
+            ch.charm = ch.charm.saturating_sub(1);
+            vec!["No two alike, and no fight left to lose. Audrey settles for mocking you until your pride stings (-1 charm).".into()]
         }
     }
 
@@ -377,15 +387,33 @@ mod tests {
     }
 
     #[test]
-    fn fairy_needs_a_gem_to_pay_out() {
+    fn fairy_gemless_accept_costs_a_turn() {
         let mut rng = StdRng::seed_from_u64(3);
         let mut c = hero(3);
         c.gems = 0;
-        let before = c.clone();
+        c.turns = 5;
         ForestEvent::Fairy.resolve(true, &mut c, &mut rng);
-        // No gem: nothing changes but the log line.
-        assert_eq!(c.gems, before.gems);
-        assert_eq!(c.turns, before.turns);
+        // No gem to give: upstream docks a forest fight for the wasted time.
+        assert_eq!(c.gems, 0);
+        assert_eq!(c.turns, 4);
+    }
+
+    #[test]
+    fn glowingstream_energetic_band_gives_turn_not_heal() {
+        // Force the 5..=7 band and confirm it grants a fight but no heal.
+        let mut found = false;
+        for seed in 0..200 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut c = hero(5);
+            c.hitpoints = 1;
+            c.turns = 3;
+            ForestEvent::GlowingStream.resolve(true, &mut c, &mut rng);
+            if c.alive && c.turns == 4 && c.hitpoints == 1 {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "expected a turns-only outcome with no heal");
     }
 
     #[test]

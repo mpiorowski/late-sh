@@ -84,12 +84,15 @@ impl GreenDragonService {
                 }
             };
             // Refill forest turns / heal / revive if a new day has rolled over
-            // since the last save. Gypsy Stamina adds permanent extra daily
-            // turns; the bank pays a freshly-rolled interest rate for the day.
+            // since the last save. Banked dragon kills add extra daily turns; the
+            // bank pays a freshly-rolled interest rate; the day's "spirits"
+            // (e_rand(-1,1) twice, -2..+2) jitter the forest fights, LoGD-style.
             let forest_bonus = character.dk_forest_bonus();
-            let interest = rand::thread_rng()
-                .gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
-            character.roll_new_day(day, forest_bonus, interest);
+            let mut rng = rand::thread_rng();
+            let interest =
+                rng.gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
+            let spirits = rng.gen_range(-1..=1) + rng.gen_range(-1..=1);
+            character.roll_new_day(day, forest_bonus, interest, spirits);
             let _ = tx.send(CharacterLoad::Ready(Box::new(character)));
         });
         rx

@@ -1,17 +1,23 @@
 //! The Legend of the Green Dragon combat engine: one self-contained,
 //! deterministic-with-a-seed round resolver. Mirrors LoGD's `rolldamage`
-//! (`lib/battle-skills.php`).
+//! (`lib/battle-skills.php`) faithfully, including its quirks.
 //!
-//! Every round each side rolls a "bell" (triangular) value between 0 and its
-//! relevant stat and subtracts the opponent's defensive roll. A 5% player crit
-//! triples the player's attack for the round (PvE only). The round rerolls
-//! until at least one side lands a nonzero hit, so fights always progress.
+//! Each round both sides roll a "bell" value (see [`bell_rand`]) against the
+//! relevant stat and subtract the opponent's defensive roll. Crucially these
+//! rolls can land *negative* or *overshoot* the stat, so a blow can glance (and
+//! a glancing blow actually heals the target — `damage` here is signed and a
+//! negative value restores the target's HP, exactly as upstream). A 1-in-20
+//! player crit triples the attack stat before rolling (PvE only), and an
+//! attack roll that exceeds the player's attack stat triggers a power move that
+//! adds bonus damage. The round rerolls until at least one side lands a nonzero
+//! hit, so fights always progress.
 //!
 //! Kept pure: callers pass an `&mut impl Rng`, so tests seed an RNG and assert
 //! exact outcomes. How a character's `attack`/`defense` are derived from
 //! equipped gear lives on the character model, not here.
 
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 /// A combatant reduced to the two numbers the round resolver needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,59 +26,277 @@ pub struct Combatant {
     pub defense: u32,
 }
 
-/// The result of one resolved round.
+/// A persistent ally that fights alongside the player (LoGD `apply_companion`).
+/// Summoned by skills like Bonecall, it persists across fights until its HP
+/// reaches zero. Stored on the character, so it is serde-able.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Companion {
+    pub name: String,
+    pub hitpoints: u32,
+    pub max_hitpoints: u32,
+    pub attack: u32,
+    pub defense: u32,
+    /// Flavor logged the round the companion is destroyed.
+    pub dying_text: String,
+}
+
+/// A landed power move (LoGD `report_power_move`): an attack roll that beat the
+/// player's attack stat by a growing margin, each tier adding bonus damage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerMove {
+    /// Roll > 1.5x attack stat.
+    Minor,
+    /// Roll > 2x.
+    Power,
+    /// Roll > 3x.
+    Double,
+    /// Roll > 4x.
+    Mega,
+}
+
+impl PowerMove {
+    /// Flavor for the round it lands.
+    pub fn label(self) -> &'static str {
+        match self {
+            PowerMove::Minor => "A minor power move!",
+            PowerMove::Power => "A power move!",
+            PowerMove::Double => "A DOUBLE power move!!",
+            PowerMove::Mega => "A MEGA power move!!!",
+        }
+    }
+}
+
+/// The result of one resolved round. Damage is **signed**: a negative value
+/// means a glancing blow that *heals* the target (mirroring LoGD, where a
+/// negative `creaturedmg` is subtracted from `creaturehealth`, i.e. added).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RoundOutcome {
-    /// Damage the player deals to the enemy this round.
-    pub damage_to_enemy: u32,
-    /// Damage the enemy deals to the player this round.
-    pub damage_to_player: u32,
-    /// Whether the player landed the 5% triple-damage crit this round.
+    /// Damage the player deals to the enemy (negative heals the enemy).
+    pub damage_to_enemy: i32,
+    /// Damage the enemy deals to the player (negative heals the player).
+    pub damage_to_player: i32,
+    /// Whether the player landed the 1-in-20 triple-attack crit this round.
     pub player_crit: bool,
+    /// The power move the player landed this round, if any.
+    pub power_move: Option<PowerMove>,
 }
 
-/// LoGD's `bell_rand(0, n)`: the average of two uniform rolls in `0..=n`, which
-/// biases results toward the middle of the range (a triangular distribution)
-/// instead of the flat spread a single roll would give.
-pub fn bell_rand(rng: &mut impl Rng, n: u32) -> u32 {
-    if n == 0 {
-        return 0;
+// --- bell_rand: LoGD's normal-curve roll ------------------------------------
+
+/// Low/high z bounds of LoGD's 441-entry `bell_rand` percentile table: the
+/// standard normal recentred so the 5th percentile maps to 0.0 and the 95th to
+/// 1.0, with the table's extreme tails capping z here.
+const Z_MIN: f64 = -0.716599;
+const Z_MAX: f64 = 1.712548831;
+/// Maps a standard-normal z onto the recentred scale: `2 * 1.6449`, since the
+/// std-normal 5th/95th percentiles are ∓1.6449 and the table places them at
+/// 0.0/1.0 (a unit apart, centred on 0.5).
+const Z_SCALE: f64 = 3.2897;
+
+/// Acklam's rational approximation of the inverse standard-normal CDF, accurate
+/// to ~1e-9 — the continuous form of LoGD's tabulated percentile→z lookup.
+fn inv_norm(p: f64) -> f64 {
+    const A: [f64; 6] = [
+        -3.969683028665376e+01,
+        2.209460984245205e+02,
+        -2.759285104469687e+02,
+        1.383577518672690e+02,
+        -3.066479806614716e+01,
+        2.506628277459239e+00,
+    ];
+    const B: [f64; 5] = [
+        -5.447609879822406e+01,
+        1.615858368580409e+02,
+        -1.556989798598866e+02,
+        6.680131188771972e+01,
+        -1.328068155288572e+01,
+    ];
+    const C: [f64; 6] = [
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e+00,
+        -2.549732539343734e+00,
+        4.374664141464968e+00,
+        2.938163982698783e+00,
+    ];
+    const D: [f64; 4] = [
+        7.784695709041462e-03,
+        3.224671290700398e-01,
+        2.445134137142996e+00,
+        3.754408661907416e+00,
+    ];
+    const PLOW: f64 = 0.02425;
+    const PHIGH: f64 = 1.0 - PLOW;
+    if p < PLOW {
+        let q = (-2.0 * p.ln()).sqrt();
+        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    } else if p <= PHIGH {
+        let q = p - 0.5;
+        let r = q * q;
+        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
+            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+    } else {
+        let q = (-2.0 * (1.0 - p).ln()).sqrt();
+        -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
     }
-    let a = rng.gen_range(0..=n);
-    let b = rng.gen_range(0..=n);
-    (a + b) / 2
 }
 
-/// 1-in-20 player crit chance, matching LoGD's `e_rand(1,20)==1`.
-const CRIT_CHANCE_DENOM: u32 = 20;
-/// Crit multiplier applied to player attack on a crit.
-const CRIT_MULTIPLIER: u32 = 3;
+/// LoGD's `bell_rand(0, max)`: a normal-curve roll. Upstream samples
+/// `mt_rand(0, 100000)` into a percentile→z table and returns `z * max`, where z
+/// runs from ~-0.72 (low tail) through ~0.498 (median) to ~1.71 (high tail). We
+/// reproduce that continuously via the inverse-normal CDF — which is exactly
+/// what the table tabulates. **The result can be negative or exceed `max`**: the
+/// long tails are load-bearing (they drive glancing hits and power moves).
+pub fn bell_rand(rng: &mut impl Rng, max: f64) -> f64 {
+    if max <= 0.0 {
+        return 0.0;
+    }
+    // Match the table's percentile sampling, clamped to its 3..=99997 key range.
+    let r = rng.gen_range(0u32..=100_000) as f64 / 100_000.0;
+    let p = r.clamp(0.00003, 0.99997);
+    let z = (0.5 + inv_norm(p) / Z_SCALE).clamp(Z_MIN, Z_MAX);
+    z * max
+}
 
-/// Resolve one PvE combat round between the player and an enemy.
-///
-/// Damage to a target is `bell_rand(0, attacker_attack) - bell_rand(0,
-/// target_defense)`, floored at zero (a blocked/glancing hit deals nothing).
-/// If both sides deal zero, the round rerolls so the fight makes progress.
-pub fn resolve_round(rng: &mut impl Rng, player: Combatant, enemy: Combatant) -> RoundOutcome {
-    loop {
-        let crit = rng.gen_range(1..=CRIT_CHANCE_DENOM) == 1;
-        let player_attack = if crit {
-            player.attack.saturating_mul(CRIT_MULTIPLIER)
-        } else {
-            player.attack
-        };
+/// PHP `(int)` truncation toward zero.
+fn trunc(x: f64) -> i32 {
+    x.trunc() as i32
+}
 
-        let to_enemy = bell_rand(rng, player_attack).saturating_sub(bell_rand(rng, enemy.defense));
-        let to_player = bell_rand(rng, enemy.attack).saturating_sub(bell_rand(rng, player.defense));
+/// PHP `round()` (half away from zero).
+fn iround(x: f64) -> i32 {
+    x.round() as i32
+}
 
-        if to_enemy == 0 && to_player == 0 {
-            continue;
+/// The folded per-round multipliers `rolldamage` reads from the buff set. All
+/// default to neutral (1.0 / false).
+#[derive(Clone, Copy, Debug)]
+struct Mods {
+    /// Player attack multiplier (`atkmod`).
+    atkmod: f64,
+    /// Player defense multiplier (`defmod`).
+    defmod: f64,
+    /// Enemy attack multiplier (`creatureatkmod`).
+    badguyatkmod: f64,
+    /// Enemy defense multiplier (`creaturedefmod`).
+    badguydefmod: f64,
+    /// Player outgoing-damage multiplier applied to the *final* damage (`dmgmod`).
+    dmgmod: f64,
+    /// Enemy outgoing-damage multiplier (`badguydmgmod`).
+    badguydmgmod: f64,
+    /// Difficulty knob folded into both defenses (`adjustment`, default 1.0).
+    adjustment: f64,
+    /// Forces damage dealt positive / damage taken non-positive (`invulnerable`).
+    invulnerable: bool,
+}
+
+impl Default for Mods {
+    fn default() -> Self {
+        Mods {
+            atkmod: 1.0,
+            defmod: 1.0,
+            badguyatkmod: 1.0,
+            badguydefmod: 1.0,
+            dmgmod: 1.0,
+            badguydmgmod: 1.0,
+            adjustment: 1.0,
+            invulnerable: false,
         }
-        return RoundOutcome {
-            damage_to_enemy: to_enemy,
-            damage_to_player: to_player,
-            player_crit: crit,
-        };
+    }
+}
+
+/// The core `rolldamage`: returns `(creaturedmg, selfdmg, crit, player_atk_roll)`.
+/// Both damages are signed and rerolled until at least one is nonzero. Mirrors
+/// `lib/battle-skills.php` line for line: a negative result is halved and kept
+/// negative (a glancing blow / heal), positive and negative branches multiply by
+/// `dmgmod`/`badguydmgmod` in the upstream order.
+fn roll_damage(rng: &mut impl Rng, player: Combatant, enemy: Combatant, m: Mods) -> (i32, i32, bool, f64) {
+    let adjusted_creature_def = m.badguydefmod * enemy.defense as f64 / (m.adjustment * m.adjustment);
+    let creature_attack = enemy.attack as f64 * m.badguyatkmod;
+    let adjusted_self_def = player.defense as f64 * m.adjustment * m.defmod;
+
+    let mut creaturedmg;
+    let mut selfdmg;
+    let mut crit;
+    let mut patkroll;
+    loop {
+        let mut atk = player.attack as f64 * m.atkmod;
+        crit = rng.gen_range(1..=20) == 1;
+        if crit {
+            atk *= 3.0;
+        }
+        patkroll = bell_rand(rng, atk);
+        let catkroll = bell_rand(rng, adjusted_creature_def);
+
+        let mut cd = -trunc(catkroll - patkroll);
+        if cd < 0 {
+            cd = trunc(cd as f64 / 2.0);
+            cd = iround(m.badguydmgmod * cd as f64);
+        } else if cd > 0 {
+            cd = iround(m.dmgmod * cd as f64);
+        }
+
+        let pdefroll = bell_rand(rng, adjusted_self_def);
+        let catkroll2 = bell_rand(rng, creature_attack);
+
+        let mut sd = -trunc(pdefroll - catkroll2);
+        if sd < 0 {
+            sd = trunc(sd as f64 / 2.0);
+            sd = iround(sd as f64 * m.dmgmod);
+        } else if sd > 0 {
+            sd = iround(sd as f64 * m.badguydmgmod);
+        }
+
+        creaturedmg = cd;
+        selfdmg = sd;
+        if !(creaturedmg == 0 && selfdmg == 0) {
+            break;
+        }
+    }
+    if m.invulnerable {
+        creaturedmg = creaturedmg.abs();
+        selfdmg = -selfdmg.abs();
+    }
+    (creaturedmg, selfdmg, crit, patkroll)
+}
+
+/// Apply LoGD `report_power_move`: when the player's attack roll exceeds their
+/// attack stat by a tier margin, add `e_rand(roll/4, roll/2)` damage (min 1).
+fn apply_power_move(rng: &mut impl Rng, patkroll: f64, base_atk: u32, dmg: i32) -> (i32, Option<PowerMove>) {
+    let uatk = base_atk as f64;
+    let tier = if patkroll > uatk * 4.0 {
+        Some(PowerMove::Mega)
+    } else if patkroll > uatk * 3.0 {
+        Some(PowerMove::Double)
+    } else if patkroll > uatk * 2.0 {
+        Some(PowerMove::Power)
+    } else if patkroll > uatk * 1.5 {
+        Some(PowerMove::Minor)
+    } else {
+        None
+    };
+    match tier {
+        Some(t) => {
+            let lo = (patkroll / 4.0) as i32;
+            let hi = (patkroll / 2.0) as i32;
+            let bonus = if hi > lo { rng.gen_range(lo..=hi) } else { lo };
+            ((dmg + bonus).max(1), Some(t))
+        }
+        None => (dmg, None),
+    }
+}
+
+/// Resolve one PvE combat round between the player and an enemy, no buffs.
+pub fn resolve_round(rng: &mut impl Rng, player: Combatant, enemy: Combatant) -> RoundOutcome {
+    let (cd, sd, crit, patkroll) = roll_damage(rng, player, enemy, Mods::default());
+    let (cd, power) = apply_power_move(rng, patkroll, player.attack, cd);
+    RoundOutcome {
+        damage_to_enemy: cd,
+        damage_to_player: sd,
+        player_crit: crit,
+        power_move: power,
     }
 }
 
@@ -95,8 +319,12 @@ pub struct Buff {
     pub enemy_def_mod: f32,
     /// Multiplier on damage the enemy actually deals this round (`badguydmgmod`).
     pub enemy_dmg_mod: f32,
+    /// Multiplier on the player's *outgoing* damage (`dmgmod`).
+    pub player_dmg_mod: f32,
     /// Flat HP healed to the player each round (`regen`).
     pub regen: u32,
+    /// If set, `regen` also heals the player's companions by `regen/3` (`aura`).
+    pub aura: bool,
     /// Heal as a fraction of damage dealt to the enemy this round (`lifetap`).
     pub lifetap: f32,
     /// Extra hits on the enemy each round (`minioncount`), each rolling
@@ -106,6 +334,8 @@ pub struct Buff {
     pub minion_max: u32,
     /// Reflect this fraction of damage received back at the enemy (`damageshield`).
     pub damage_shield: f32,
+    /// Forces outgoing damage positive and incoming non-positive (`invulnerable`).
+    pub invulnerable: bool,
     /// Flavor shown while the buff is active.
     pub round_msg: Option<String>,
     /// Flavor shown the round it wears off.
@@ -124,81 +354,124 @@ impl Buff {
             enemy_atk_mod: 1.0,
             enemy_def_mod: 1.0,
             enemy_dmg_mod: 1.0,
+            player_dmg_mod: 1.0,
             regen: 0,
+            aura: false,
             lifetap: 0.0,
             minion_count: 0,
             minion_min: 0,
             minion_max: 0,
             damage_shield: 0.0,
+            invulnerable: false,
             round_msg: None,
             wearoff: String::new(),
         }
     }
 }
 
-/// A round resolved with active buffs folded in: the base outcome plus the heal
-/// the player gained and any buff flavor (per-round messages and wear-offs).
+/// A round resolved with active buffs and companions folded in: the (signed)
+/// damages, the heal the player gained, and any buff/companion flavor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BuffedOutcome {
-    pub damage_to_enemy: u32,
-    pub damage_to_player: u32,
+    pub damage_to_enemy: i32,
+    pub damage_to_player: i32,
     pub player_crit: bool,
+    pub power_move: Option<PowerMove>,
     /// Total HP restored to the player this round (regen + lifetap).
     pub player_heal: u32,
-    /// Buff flavor to log this round (active round messages, then wear-offs).
+    /// Buff/companion flavor to log this round.
     pub messages: Vec<String>,
 }
 
-fn scale(stat: u32, factor: f32) -> u32 {
-    (stat as f32 * factor).round() as u32
-}
-
-/// Resolve one round with `buffs` applied: stat multipliers adjust the combat
-/// roll, then post-round effects (enemy damage scaling, regen/lifetap heals,
-/// minion hits, the lightning damage-shield) layer on. Buffs tick down and
-/// expired ones are removed, their wear-off flavor collected. Mirrors how LoGD
-/// threads buff hooks through `rolldamage`.
+/// Resolve one round with `buffs` and `companions` applied: stat multipliers
+/// adjust the combat roll, then post-round effects (regen/lifetap heals, minion
+/// hits, the lightning damage-shield, companion attacks) layer on. Companions
+/// strike the enemy and can themselves be struck down (dead ones are removed,
+/// their dying flavor collected). Buffs tick down and expired ones are removed.
+/// Mirrors how LoGD threads buff/companion hooks through `rolldamage`.
 pub fn resolve_round_buffed(
     rng: &mut impl Rng,
     player: Combatant,
     enemy: Combatant,
     buffs: &mut Vec<Buff>,
+    companions: &mut Vec<Companion>,
 ) -> BuffedOutcome {
-    let (mut p_atk, mut p_def) = (1.0_f32, 1.0_f32);
-    let (mut e_atk, mut e_def, mut e_dmg) = (1.0_f32, 1.0_f32, 1.0_f32);
+    let mut m = Mods::default();
     for b in buffs.iter() {
-        p_atk *= b.player_atk_mod;
-        p_def *= b.player_def_mod;
-        e_atk *= b.enemy_atk_mod;
-        e_def *= b.enemy_def_mod;
-        e_dmg *= b.enemy_dmg_mod;
+        m.atkmod *= b.player_atk_mod as f64;
+        m.defmod *= b.player_def_mod as f64;
+        m.badguyatkmod *= b.enemy_atk_mod as f64;
+        m.badguydefmod *= b.enemy_def_mod as f64;
+        m.badguydmgmod *= b.enemy_dmg_mod as f64;
+        m.dmgmod *= b.player_dmg_mod as f64;
+        if b.invulnerable {
+            m.invulnerable = true;
+        }
     }
-    let buffed_player = Combatant {
-        attack: scale(player.attack, p_atk),
-        defense: scale(player.defense, p_def),
-    };
-    let buffed_enemy = Combatant {
-        attack: scale(enemy.attack, e_atk),
-        defense: scale(enemy.defense, e_def),
-    };
 
-    let base = resolve_round(rng, buffed_player, buffed_enemy);
-    let damage_to_player = scale(base.damage_to_player, e_dmg);
+    let (cd, sd, crit, patkroll) = roll_damage(rng, player, enemy, m);
+    let (mut damage_to_enemy, power) = apply_power_move(rng, patkroll, player.attack, cd);
+    let damage_to_player = sd;
 
     let mut heal = 0u32;
-    let mut bonus_to_enemy = 0u32;
     let mut messages = Vec::new();
+
+    // Companions strike the enemy (positive contributions only).
+    let eff_enemy_def = m.badguydefmod * enemy.defense as f64 / (m.adjustment * m.adjustment);
+    for comp in companions.iter() {
+        if comp.hitpoints == 0 {
+            continue;
+        }
+        let dmg = trunc(bell_rand(rng, comp.attack as f64) - bell_rand(rng, eff_enemy_def));
+        if dmg > 0 {
+            damage_to_enemy += dmg;
+            messages.push(format!("{} strikes your foe for {dmg}.", comp.name));
+        }
+    }
+
+    // The enemy lashes out at one living companion (so they can fall).
+    let living: Vec<usize> = companions
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.hitpoints > 0)
+        .map(|(i, _)| i)
+        .collect();
+    if !living.is_empty() {
+        let pick = living[rng.gen_range(0..living.len())];
+        let eatk = bell_rand(rng, enemy.attack as f64 * m.badguyatkmod);
+        let cdef = bell_rand(rng, companions[pick].defense as f64);
+        let dmg = trunc(eatk - cdef).max(0) as u32;
+        if dmg > 0 {
+            let comp = &mut companions[pick];
+            comp.hitpoints = comp.hitpoints.saturating_sub(dmg);
+            if comp.hitpoints == 0 {
+                messages.push(comp.dying_text.clone());
+            }
+        }
+    }
+
+    // Aura heals living companions by regen/3.
+    let total_regen: u32 = buffs.iter().map(|b| b.regen).sum();
+    if total_regen > 0 && buffs.iter().any(|b| b.aura) {
+        for comp in companions.iter_mut() {
+            if comp.hitpoints > 0 {
+                comp.hitpoints = (comp.hitpoints + total_regen / 3).min(comp.max_hitpoints);
+            }
+        }
+    }
+    companions.retain(|c| c.hitpoints > 0);
+
     for b in buffs.iter() {
         heal += b.regen;
-        if b.lifetap > 0.0 {
-            heal += scale(base.damage_to_enemy, b.lifetap);
+        if b.lifetap > 0.0 && damage_to_enemy > 0 {
+            heal += (damage_to_enemy as f32 * b.lifetap).round() as u32;
         }
-        if b.damage_shield > 0.0 {
-            bonus_to_enemy += scale(damage_to_player, b.damage_shield);
+        if b.damage_shield > 0.0 && damage_to_player > 0 {
+            damage_to_enemy += (damage_to_player as f32 * b.damage_shield).round() as i32;
         }
         for _ in 0..b.minion_count {
             let hi = b.minion_max.max(b.minion_min);
-            bonus_to_enemy += rng.gen_range(b.minion_min..=hi);
+            damage_to_enemy += rng.gen_range(b.minion_min..=hi) as i32;
         }
         if let Some(msg) = &b.round_msg {
             messages.push(msg.clone());
@@ -221,9 +494,10 @@ pub fn resolve_round_buffed(
     }
 
     BuffedOutcome {
-        damage_to_enemy: base.damage_to_enemy + bonus_to_enemy,
+        damage_to_enemy,
         damage_to_player,
-        player_crit: base.player_crit,
+        player_crit: crit,
+        power_move: power,
         player_heal: heal,
         messages,
     }
@@ -237,27 +511,34 @@ pub enum FightResult {
     PlayerLost { rounds: u32, enemy_hp_left: u32 },
 }
 
+/// Apply signed damage to a pool, clamping into `0..=max` (negative heals).
+fn apply_damage(hp: u32, dmg: i32, max: u32) -> u32 {
+    ((hp as i64 - dmg as i64).clamp(0, max as i64)) as u32
+}
+
 /// Simulate a fight to the death, round by round, player striking first each
 /// round. Helper for tests and offline balance tuning.
 pub fn simulate_fight(
     rng: &mut impl Rng,
     player: Combatant,
+    player_max: u32,
     mut player_hp: u32,
     enemy: Combatant,
+    enemy_max: u32,
     mut enemy_hp: u32,
 ) -> FightResult {
     let mut rounds = 0;
     loop {
         rounds += 1;
         let outcome = resolve_round(rng, player, enemy);
-        enemy_hp = enemy_hp.saturating_sub(outcome.damage_to_enemy);
+        enemy_hp = apply_damage(enemy_hp, outcome.damage_to_enemy, enemy_max);
         if enemy_hp == 0 {
             return FightResult::PlayerWon {
                 rounds,
                 player_hp_left: player_hp,
             };
         }
-        player_hp = player_hp.saturating_sub(outcome.damage_to_player);
+        player_hp = apply_damage(player_hp, outcome.damage_to_player, player_max);
         if player_hp == 0 {
             return FightResult::PlayerLost {
                 rounds,
@@ -273,25 +554,31 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
-    fn bell_rand_stays_in_range_and_centers() {
+    fn bell_rand_centers_near_half_with_long_tails() {
         let mut rng = StdRng::seed_from_u64(1);
-        let mut sum = 0u64;
-        let n = 100;
-        let iters = 10_000;
+        let mut sum = 0.0;
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        let n = 100.0;
+        let iters = 50_000;
         for _ in 0..iters {
             let v = bell_rand(&mut rng, n);
-            assert!(v <= n);
-            sum += v as u64;
+            sum += v;
+            min = min.min(v);
+            max = max.max(v);
         }
-        let mean = sum as f64 / iters as f64;
-        // Triangular over 0..=100 centers near 50.
-        assert!((mean - 50.0).abs() < 3.0, "mean was {mean}");
+        let mean = sum / iters as f64;
+        // Median z ~0.498; the mean sits a touch above 0.5*n thanks to the
+        // skewed tails. Range can go negative and overshoot n.
+        assert!((mean - 49.8).abs() < 3.0, "mean was {mean}");
+        assert!(min < 0.0, "expected negative tail, min was {min}");
+        assert!(max > n, "expected overshoot tail, max was {max}");
     }
 
     #[test]
     fn bell_rand_zero_is_zero() {
         let mut rng = StdRng::seed_from_u64(2);
-        assert_eq!(bell_rand(&mut rng, 0), 0);
+        assert_eq!(bell_rand(&mut rng, 0.0), 0.0);
     }
 
     #[test]
@@ -301,7 +588,7 @@ mod tests {
         let e = Combatant { attack: 5, defense: 5 };
         for _ in 0..1000 {
             let o = resolve_round(&mut rng, p, e);
-            assert!(o.damage_to_enemy > 0 || o.damage_to_player > 0);
+            assert!(o.damage_to_enemy != 0 || o.damage_to_player != 0);
         }
     }
 
@@ -311,42 +598,69 @@ mod tests {
         let mut regen = Buff::new("Regen", 2);
         regen.regen = 5;
         let mut buffs = vec![regen];
+        let mut comps = Vec::new();
         let p = Combatant { attack: 5, defense: 5 };
         let e = Combatant { attack: 5, defense: 5 };
-        // Round 1 and 2 each grant the regen heal; the buff lasts two rounds.
-        let r1 = resolve_round_buffed(&mut rng, p, e, &mut buffs);
+        let r1 = resolve_round_buffed(&mut rng, p, e, &mut buffs, &mut comps);
         assert_eq!(r1.player_heal, 5);
         assert_eq!(buffs.len(), 1);
-        let r2 = resolve_round_buffed(&mut rng, p, e, &mut buffs);
+        let r2 = resolve_round_buffed(&mut rng, p, e, &mut buffs, &mut comps);
         assert_eq!(r2.player_heal, 5);
-        // It wore off at the end of round 2.
         assert!(buffs.is_empty());
-        let r3 = resolve_round_buffed(&mut rng, p, e, &mut buffs);
+        let r3 = resolve_round_buffed(&mut rng, p, e, &mut buffs, &mut comps);
         assert_eq!(r3.player_heal, 0);
     }
 
     #[test]
-    fn buff_curse_halves_incoming_damage() {
+    fn buff_curse_reduces_incoming_damage() {
         // A foe that always deals damage, with and without the half-damage curse.
         let p = Combatant { attack: 0, defense: 0 };
         let e = Combatant { attack: 100, defense: 0 };
-        let mut none: Vec<Buff> = vec![];
-        let mut curse = Buff::new("Curse", 5);
-        curse.enemy_dmg_mod = 0.5;
-        let cursed = vec![curse];
-
-        let mut plain_total = 0u64;
-        let mut cursed_total = 0u64;
-        for seed in 0..200 {
+        let mut plain_total = 0i64;
+        let mut cursed_total = 0i64;
+        for seed in 0..400 {
+            let mut none: Vec<Buff> = vec![];
+            let mut nc = Vec::new();
             let mut r1 = StdRng::seed_from_u64(seed);
-            plain_total += resolve_round_buffed(&mut r1, p, e, &mut none).damage_to_player as u64;
+            let d = resolve_round_buffed(&mut r1, p, e, &mut none, &mut nc).damage_to_player;
+            plain_total += d.max(0) as i64;
+
+            let mut curse = Buff::new("Curse", 5);
+            curse.enemy_dmg_mod = 0.5;
+            let mut cursed = vec![curse];
+            let mut cc = Vec::new();
             let mut r2 = StdRng::seed_from_u64(seed);
-            cursed_total +=
-                resolve_round_buffed(&mut r2, p, e, &mut cursed.clone()).damage_to_player as u64;
+            let d = resolve_round_buffed(&mut r2, p, e, &mut cursed, &mut cc).damage_to_player;
+            cursed_total += d.max(0) as i64;
         }
-        // Cursed damage should land near half of the uncursed total.
-        assert!(cursed_total * 2 <= plain_total + plain_total / 5);
         assert!(cursed_total > 0);
+        assert!(cursed_total < plain_total, "curse should reduce damage");
+    }
+
+    #[test]
+    fn companion_fights_and_can_fall() {
+        // A strong enemy eventually kills a frail companion; a sturdy one helps.
+        let mut rng = StdRng::seed_from_u64(11);
+        let p = Combatant { attack: 5, defense: 5 };
+        let e = Combatant { attack: 50, defense: 5 };
+        let mut buffs = Vec::new();
+        let mut comps = vec![Companion {
+            name: "Skeleton".into(),
+            hitpoints: 5,
+            max_hitpoints: 5,
+            attack: 10,
+            defense: 1,
+            dying_text: "It crumbles.".into(),
+        }];
+        let mut fell = false;
+        for _ in 0..50 {
+            resolve_round_buffed(&mut rng, p, e, &mut buffs, &mut comps);
+            if comps.is_empty() {
+                fell = true;
+                break;
+            }
+        }
+        assert!(fell, "the companion should eventually be destroyed");
     }
 
     #[test]
@@ -356,7 +670,8 @@ mod tests {
         let enemy = Combatant { attack: 3, defense: 3 };
         let mut wins = 0;
         for _ in 0..200 {
-            if let FightResult::PlayerWon { .. } = simulate_fight(&mut rng, player, 200, enemy, 21)
+            if let FightResult::PlayerWon { .. } =
+                simulate_fight(&mut rng, player, 200, 200, enemy, 21, 21)
             {
                 wins += 1;
             }
