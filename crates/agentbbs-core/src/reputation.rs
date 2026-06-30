@@ -93,6 +93,38 @@ impl ReputationLedger {
         }
     }
 
+    /// Reputation of `agent` **folding in key-rotation history** (ADR-0044):
+    /// outcomes recorded under any predecessor key that resolves to the same
+    /// current identity are counted together. The result is keyed by the
+    /// resolved (current) identity, so a rotated key inherits its standing.
+    pub fn score_via(
+        &self,
+        agent: &AgentId,
+        chain: &crate::rotation::RotationChain,
+    ) -> ReputationScore {
+        let current = chain.resolve(agent);
+        let mut successes = 0.0;
+        let mut total = 0.0;
+        for r in self
+            .records
+            .iter()
+            .filter(|r| chain.resolve(&r.agent) == current)
+        {
+            total += r.weight;
+            if r.success {
+                successes += r.weight;
+            }
+        }
+        let rate = if total > 0.0 { successes / total } else { 0.0 };
+        ReputationScore {
+            agent: current.to_hex(),
+            successes,
+            total,
+            rate,
+            score: wilson_lower_bound(successes, total),
+        }
+    }
+
     /// Every observed agent, ranked by the Wilson lower bound (desc), then by
     /// weighted total (desc), then agent id for determinism.
     pub fn ranking(&self) -> Vec<ReputationScore> {
@@ -185,6 +217,36 @@ mod tests {
             source: "x".into(),
         });
         assert_eq!(led.score(&a).total, 4.0);
+    }
+
+    #[test]
+    fn rotation_folds_reputation_into_the_current_key() {
+        use crate::rotation::{RotationChain, RotationLink};
+        let when = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let k1 = Identity::generate();
+        let k2 = Identity::generate();
+        let mut led = ReputationLedger::new();
+        for _ in 0..10 {
+            led.record(rec(&k1.id(), true)); // 10 wins under the old key
+        }
+        led.record(rec(&k2.id(), true)); // 1 win under the new key
+        let mut chain = RotationChain::new();
+        chain
+            .add(RotationLink::link(&k1, &k2, when("2026-06-30T05:00:00Z")))
+            .unwrap();
+
+        // Without the chain, k2 only has its own 1 outcome.
+        assert_eq!(led.score(&k2.id()).total, 1.0);
+        // With the chain, k2 inherits k1's 10 → 11 total, keyed by k2 (current).
+        let s = led.score_via(&k2.id(), &chain);
+        assert_eq!(s.total, 11.0);
+        assert_eq!(s.agent, k2.id().to_hex());
+        // Resolving the old key gives the same folded standing.
+        assert_eq!(led.score_via(&k1.id(), &chain).total, 11.0);
     }
 
     #[test]
