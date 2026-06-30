@@ -22,8 +22,8 @@ use agentbbs_core::identity::Identity;
 use agentbbs_core::market::{Listing, ListingBody, ListingKind, Market};
 use agentbbs_core::report::MemoryReporter;
 use agentbbs_core::{
-    ActionProposal, ApprovalGate, Bbs, Board, MaxTier, MemoryStore, OutcomeRecord, PodSpec,
-    PodStatus, ReputationLedger, Role, SignedDecision, Store,
+    ActionProposal, ApprovalGate, Bbs, Board, BudgetLedger, MaxTier, MemoryStore, OutcomeRecord,
+    PodSpec, PodStatus, ReputationLedger, Role, SignedDecision, Store,
 };
 
 use axum::extract::{Path, State};
@@ -110,6 +110,8 @@ pub struct AppState {
     gate: Mutex<ApprovalGate>,
     /// Agent reputation ledger (ADR-0039); fed by terminal pod outcomes.
     reputation: Mutex<ReputationLedger>,
+    /// Per-pod spend ledger (ADR-0040); fed by pod-result `cost_usd`.
+    budget: Mutex<BudgetLedger>,
 }
 
 impl AppState {
@@ -129,6 +131,7 @@ impl AppState {
             proposals: Mutex::new(Vec::new()),
             gate: Mutex::new(ApprovalGate::new()),
             reputation: Mutex::new(ReputationLedger::new()),
+            budget: Mutex::new(BudgetLedger::new()),
         })
     }
 
@@ -353,6 +356,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/approvals/decision", post(api_approvals_decide))
         .route("/api/reputation", get(api_reputation))
+        .route("/api/budget", get(api_budget))
         // Permissive CORS so a static genesis node (e.g. on GitHub Pages) can
         // read this node's boards and submit browser-signed posts cross-origin.
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -1273,6 +1277,11 @@ async fn api_pods_result(
         .post(Role::Agent.caps(), msg)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("post failed: {e}")))?;
 
+    // Record reported spend against the pod's budget (ADR-0040).
+    if let Some(cost) = result.cost_usd {
+        state.budget.lock().unwrap().record(&id, cost);
+    }
+
     // A terminal outcome feeds the pod's reputation (ADR-0039).
     if result.status.is_terminal() {
         state.reputation.lock().unwrap().record(OutcomeRecord {
@@ -1291,6 +1300,29 @@ async fn api_pods_result(
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "pod not found"))?;
     pod.status = result.status;
     Ok(Json(pod.clone()))
+}
+
+/// `GET /api/budget` — per-pod spend vs its `per_agent_cap_usd` (ADR-0040),
+/// with over-budget pods flagged. Spend is fed by pod-result `cost_usd`.
+async fn api_budget(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let pods = state.pods.lock().unwrap();
+    let budget = state.budget.lock().unwrap();
+    let statuses: Vec<serde_json::Value> = pods
+        .iter()
+        .map(|p| {
+            let s = budget.status(&p.id, p.spec.template.per_agent_cap_usd);
+            serde_json::json!({
+                "pod_id": p.id,
+                "domain": p.spec.template.domain,
+                "spent": s.spent,
+                "cap": s.cap,
+                "remaining": s.remaining,
+                "over_budget": s.over_budget,
+                "pct": s.pct,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "budgets": statuses }))
 }
 
 /// `GET /api/reputation` — agents ranked by their confidence-adjusted track
@@ -1694,6 +1726,7 @@ mod tests {
 
         // The completed pod now has a reputation entry with a success (ADR-0039).
         let resp = app
+            .clone()
             .oneshot(Request::get("/api/reputation").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -1702,6 +1735,16 @@ mod tests {
         assert_eq!(ranking.len(), 1);
         assert_eq!(ranking[0]["successes"], 1.0);
         assert!(ranking[0]["score"].as_f64().unwrap() > 0.0);
+
+        // Budget reflects the reported per-step cost_usd (ADR-0040).
+        let resp = app
+            .oneshot(Request::get("/api/budget").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let bud = body_json(resp).await;
+        let b0 = &bud["budgets"][0];
+        assert!(b0["spent"].as_f64().unwrap() > 0.0);
+        assert_eq!(b0["over_budget"], false); // 3×0.0001 well under the 0.10 cap
     }
 
     // ADR-0035 slice 7: the pod-monitor endpoint serves ranked configs + pods.

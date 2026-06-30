@@ -25,6 +25,7 @@
 
 pub mod approval;
 pub mod board;
+pub mod budget;
 pub mod caps;
 pub mod error;
 pub mod identity;
@@ -40,6 +41,7 @@ pub mod store;
 
 pub use approval::{ActionProposal, ApprovalGate, SignedDecision, Verdict};
 pub use board::{Board, Message, MessageBody, MessageId};
+pub use budget::{BudgetLedger, BudgetStatus};
 pub use caps::{Caps, Role};
 pub use error::{Error, Result};
 pub use identity::{AgentId, Identity, SignatureBytes};
