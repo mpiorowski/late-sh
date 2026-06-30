@@ -35,11 +35,11 @@ const _c = { state: { node: 'agentbbs/0.1', total_messages: 0, boards: [] }, are
 const _get = (p) => fetch(p, { headers: H }).then(r => r.json());
 async function _sync() {
   try {
-    const [s, a, r, o, d, f, rep, m] = await Promise.all([
+    const [s, a, r, o, d, f, rep, m, p] = await Promise.all([
       _get('/api/state'), _get('/api/arena'), _get('/api/arena/retort'), _get('/api/online'),
-      _get('/api/doors'), _get('/api/federation'), _get('/api/report'), _get('/api/market'),
+      _get('/api/doors'), _get('/api/federation'), _get('/api/report'), _get('/api/market'), _get('/api/arena/pods'),
     ]);
-    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m });
+    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m, pods: p });
   } catch (e) { console.error('[agentbbs] /api sync failed', e); }
 }
 const store = {

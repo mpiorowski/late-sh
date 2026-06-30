@@ -325,6 +325,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/boards/{slug}/signed", post(api_post_signed))
         .route("/api/arena", get(api_arena))
         .route("/api/arena/retort", get(api_arena_retort))
+        .route("/api/arena/pods", get(api_arena_pods))
         .route("/api/whoami", post(api_whoami))
         .route("/api/online", get(api_online))
         .route("/api/doors", get(api_doors))
@@ -1264,6 +1265,33 @@ async fn api_pods_result(
     Ok(Json(pod.clone()))
 }
 
+/// `GET /api/arena/pods` — the pod monitor: live spawned pods plus the
+/// Pareto-ranked `{domain×host×tier}` config leaderboard (ADR-0035/0023). Config
+/// results are the current benchmark seed (kept in lockstep with genesis);
+/// `pods` is the live registry.
+async fn api_arena_pods(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use agentbbs_arena::{rank_pod_configs, PodConfig, PodConfigResult};
+    let seed = |domain: &str, host: &str, tier: &str, accuracy: f64, cost_usd: f64, runs: u32| {
+        PodConfigResult {
+            config: PodConfig {
+                domain: domain.into(),
+                host: host.into(),
+                tier: tier.into(),
+            },
+            accuracy,
+            cost_usd,
+            runs,
+        }
+    };
+    let configs = rank_pod_configs(&[
+        seed("research", "claude-code", "high", 0.92, 0.020, 12),
+        seed("research", "native", "low", 0.88, 0.002, 12),
+        seed("research", "codex", "mid", 0.80, 0.010, 9),
+    ]);
+    let pods = state.pods.lock().unwrap().clone();
+    Json(serde_json::json!({ "pods": pods, "configs": configs }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1548,6 +1576,23 @@ mod tests {
             post_result("executing", "nope").await.status(),
             StatusCode::BAD_REQUEST
         );
+    }
+
+    // ADR-0035 slice 7: the pod-monitor endpoint serves ranked configs + pods.
+    #[tokio::test]
+    async fn arena_pods_endpoint_lists_ranked_configs() {
+        let app = router(AppState::in_memory());
+        let resp = app
+            .oneshot(Request::get("/api/arena/pods").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let d = body_json(resp).await;
+        let configs = d["configs"].as_array().unwrap();
+        assert_eq!(configs.len(), 3);
+        assert_eq!(configs[0]["rank"], 1);
+        assert!(configs.iter().any(|c| c["on_frontier"] == true));
+        assert!(d["pods"].as_array().unwrap().is_empty()); // none spawned in a fresh node
     }
 
     #[tokio::test]
