@@ -496,7 +496,16 @@ const store = {
   playbooks: () => _c.playbooks || { playbooks: [] }, // ADR-0041: GET /api/playbooks
   decisions: () => _c.decisions || { decisions: [] }, // ADR-0045: GET /api/decisions
 
-  decide: async () => ({ ok: false, error: 'approvals: in-browser decision signing on the server node lands in ADR-0038 phase 3' }),
+  // Approvals (ADR-0038): sign a decision over the action id in-browser and POST
+  // it to the gate, which verifies the signature.
+  decide: async (seed, actionId, verdict, reason = '') => {
+    try {
+      const dec = await BBS.signApprovalDecision(seed, { actionId, verdict, reason });
+      const r = await fetch('/api/approvals/decision', { method: 'POST', headers: H, body: JSON.stringify(dec) });
+      if (r.ok) { await _sync(); return { ok: true }; }
+      const j = await r.json().catch(() => ({})); return { ok: false, error: j.error || 'decision failed' };
+    } catch (_) { return { ok: false, error: 'decision failed' }; }
+  },
   doors: () => _c.doors, federation: () => _c.federation, report: () => _c.report, market: () => _c.market,
   post: async (seed, { board, body, handle, parent = null }) => {
     const signed = await BBS.signPost(seed, { board, body, handle, parent });

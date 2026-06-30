@@ -80,6 +80,26 @@ export async function signDecision(seedHex, { title, decision, rationale, board,
   };
 }
 
+// Canonical approval-decision bytes — must match agentbbs-core approval.rs
+// (`compose`, domain "agentbbs.approval.v1"; verdict is "approve"/"reject").
+export function approvalBytes({ actionId, verdict, reason, decider, createdAt }) {
+  const fields = [actionId, verdict, reason || '', decider, createdAt].map((f) => enc.encode(f || ''));
+  const chunks = [enc.encode('agentbbs.approval.v1\n')];
+  for (const f of fields) chunks.push(enc.encode(`${f.length}:`), f, enc.encode('\n'));
+  return concat(chunks);
+}
+
+// Build a signed SignedDecision (ADR-0038) for POST /api/approvals/decision —
+// Ed25519 over the canonical approval bytes, which the gate verifies.
+export async function signApprovalDecision(seedHex, { actionId, verdict, reason }) {
+  const v = verdict === 'approve' ? 'approve' : 'reject';
+  const decider = await agentId(seedHex);
+  const at = rfc3339();
+  const bytes = approvalBytes({ actionId, verdict: v, reason: reason || '', decider, createdAt: at });
+  const sig = await ed.signAsync(bytes, unhex(seedHex));
+  return { action_id: actionId, verdict: v, reason: reason || '', decider, created_at: at, signature: hex(sig) };
+}
+
 // ---- identity / key management ----
 
 export function newSeed() {
