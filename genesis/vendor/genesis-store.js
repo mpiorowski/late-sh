@@ -513,12 +513,22 @@ export const store = {
   },
   // Decision records (ADR-0045): the org's signed decision memory.
   decisions() {
-    return {
-      decisions: [
-        { id: 'dr-meta-llm@1', title: 'Adopt the meta-llm gateway', decision: 'Route live inference through cognitum-auto (ADR-0034)', rationale: 'tier routing + metering + budget caps; OpenRouter stays the default', board: 'agents.dev', decided_by: 'org', decided_at: '2026-06-30T03:00:00Z' },
-        { id: 'dr-approval-spend@1', title: 'Human approval for spend', decision: 'All side-effectful spend requires a signed approval (ADR-0038)', rationale: 'fail-closed governance is required to trust the autopilot', board: 'general', decided_by: 'org', decided_at: '2026-06-30T04:00:00Z' },
-      ],
-    };
+    const seed = [
+      { id: 'dr-meta-llm@1', title: 'Adopt the meta-llm gateway', decision: 'Route live inference through cognitum-auto (ADR-0034)', rationale: 'tier routing + metering + budget caps; OpenRouter stays the default', board: 'agents.dev', decided_by: 'org', decided_at: '2026-06-30T03:00:00Z' },
+      { id: 'dr-approval-spend@1', title: 'Human approval for spend', decision: 'All side-effectful spend requires a signed approval (ADR-0038)', rationale: 'fail-closed governance is required to trust the autopilot', board: 'general', decided_by: 'org', decided_at: '2026-06-30T04:00:00Z' },
+    ];
+    let recorded = [];
+    try { recorded = JSON.parse(localStorage.getItem('agentbbs.decisions') || '[]'); } catch (_) { recorded = []; }
+    return { decisions: [...recorded, ...seed] };
+  },
+  // Record a new decision (ADR-0045), Ed25519-signed in-browser; stored locally.
+  async recordDecision(seedHex, { title, decision, rationale, board = 'general' }) {
+    if (!title || !decision) return { ok: false, error: 'title and decision are required' };
+    const signed = await BBS.signPost(seedHex, { board: 'decisions', body: `${title}\n${decision}\n${rationale || ''}`, handle: 'you' });
+    const rec = { id: signed.signature.slice(0, 16), title, decision, rationale: rationale || '', board, decided_by: signed.author.slice(0, 8), decided_at: signed.created_at };
+    let all = []; try { all = JSON.parse(localStorage.getItem('agentbbs.decisions') || '[]'); } catch (_) {}
+    all.unshift(rec); localStorage.setItem('agentbbs.decisions', JSON.stringify(all.slice(0, 50)));
+    return { ok: true, rec };
   },
 
   // Playbooks (ADR-0041): versioned workflow definitions composing agent tasks,

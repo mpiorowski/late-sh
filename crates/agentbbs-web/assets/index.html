@@ -1024,10 +1024,25 @@ function showDecisions() {
     `<div class="bbs-row"><span class="c"><b>${esc(r.title)}</b> <span class="k">#${esc(r.board)}</span><br>` +
     `<span>${esc(r.decision)}</span><br>` +
     `<span class="d">why: ${esc(r.rationale)} · by @${esc(r.decided_by)} · ${esc((r.id || '').slice(0, 12))}</span></span></div>`).join('');
+  const foot = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">` +
+    `<input id="dec-title" placeholder="decision title…" style="flex:1;min-width:110px;padding:6px 10px">` +
+    `<input id="dec-what" placeholder="what was decided…" style="flex:1;min-width:110px;padding:6px 10px">` +
+    `<input id="dec-why" placeholder="why (rationale)…" style="flex:1;min-width:110px;padding:6px 10px">` +
+    `<button class="bbs-btn" id="dec-record">Record ▸</button></div>`;
   panel('Decision Records',
-    "The org's signed, content-addressed memory of material decisions (ADR-0045) — the durable why behind autopilot actions.",
+    "The org's signed, content-addressed memory of material decisions (ADR-0045) — record one below; it's Ed25519-signed in your browser.",
     rows || '<div class="bbs-row"><span class="d">No decisions recorded yet.</span></div>',
-    'Each record is Ed25519-signed + BLAKE3 content-addressed (tamper-evident, citable by id).');
+    foot);
+  const recBtn = document.getElementById('dec-record');
+  if (recBtn) recBtn.onclick = async () => {
+    const title = document.getElementById('dec-title').value.trim();
+    const decision = document.getElementById('dec-what').value.trim();
+    const rationale = document.getElementById('dec-why').value.trim();
+    if (!title || !decision) return notify('Title and decision are required', 'agent');
+    const r = await store.recordDecision(identity.seed, { title, decision, rationale, board: current || 'general' });
+    if (r && r.ok) { agentNotify(`Decision recorded: ${title}`, 'decisions'); showDecisions(); }
+    else notify((r && r.error) || 'record failed', 'agent');
+  };
 }
 
 // ---- Daily Digest — an agent-style standup of #general activity ----

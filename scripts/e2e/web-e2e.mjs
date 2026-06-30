@@ -246,6 +246,20 @@ try {
     ok(await page.evaluate(() => window.__genesisStore.budget().budgets.every(b => b.remaining >= 0)), 'remaining never goes negative');
   }
 
+  // ---- Decisions: record a signed decision (interactive) ----
+  if (GENESIS) {
+    const r = await page.evaluate(async () => {
+      window.__ui.VIEWS.decisions(); await new Promise(s => setTimeout(s, 150));
+      const t = 'e2e-decision-' + Date.now();
+      const seed = localStorage.getItem('agentbbs.seed');
+      const res = await window.__genesisStore.recordDecision(seed, { title: t, decision: 'do the thing', rationale: 'because' });
+      const listed = window.__genesisStore.decisions().decisions.some(d => d.title === t);
+      return { ok: res && res.ok, listed, hasForm: !!document.getElementById('dec-record') };
+    });
+    ok(r.hasForm, 'Decisions view has a record form');
+    ok(r.ok && r.listed, 'recording a decision adds a signed entry');
+  }
+
   // ---- desktop Who's-online → click to DM ----
   if (GENESIS) {
     const r = await page.evaluate(async () => {
