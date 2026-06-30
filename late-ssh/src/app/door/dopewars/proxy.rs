@@ -173,13 +173,20 @@ async fn run_bridge(
     let score_file = score_path(cfg.user_id);
 
     let mut cmd = TokioCommand::new(&cfg.bin);
-    // Single-player (`-n`), curses text client (`-t`), with a per-session score
-    // file (`-f`). Spawn with a cleared environment plus an explicit allowlist so
-    // the child sees only what curses needs: a TERM, a UTF-8 locale for the
-    // ncursesw line-drawing, and the window size.
+    // Single-player (`-n`), curses text client (`-t`), black-and-white (`-b`),
+    // with a per-session score file (`-f`). `-b` is deliberate: dopewars' own
+    // color scheme hard-codes a blue-on-blue window palette that assumes a black
+    // terminal and renders nearly unreadable when embedded. Monochrome lets its
+    // default colors map to `Color::Reset`, so the game inherits the late.sh
+    // theme (same approach as the nethack/rebels doors) and stays legible.
+    //
+    // Spawn with a cleared environment plus an explicit allowlist so the child
+    // sees only what curses needs: a TERM, a UTF-8 locale for the ncursesw
+    // line-drawing, and the window size.
     cmd.env_clear()
         .arg("-t")
         .arg("-n")
+        .arg("-b")
         .arg("-f")
         .arg(&score_file)
         .env("TERM", &term)
