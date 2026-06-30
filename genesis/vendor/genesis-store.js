@@ -382,10 +382,18 @@ export const store = {
     // (Phase 1 is local-only; E2E federation is ADR-0037 phase 3).
     const live = slug.startsWith('dm:') ? null : await fetchLiveBoard(slug);
     if (live) {
-      // Merge: remote messages first, then any local-only ones (dedupe by signature/id).
-      const seen = new Set(live.map(m => m.id));
-      const localOnly = messages.filter(m => !seen.has(m.id));
-      messages = [...live, ...localOnly].sort((a, b) =>
+      // The live node is AUTHORITATIVE when connected. We dedupe by CONTENT
+      // (author|created_at|body), not id, because a message's content-addressed
+      // id can differ between this browser and the server, which otherwise shows
+      // every message twice. We keep only very-recent (<10s) local posts the
+      // server hasn't echoed yet, as an optimistic display; once the server
+      // returns them (same content key) the local copy drops out.
+      const ckey = (m) => (m.author || '') + '|' + (m.created_at || '') + '|' + (m.body || '');
+      const liveKeys = new Set(live.map(ckey));
+      const cutoff = Date.now() - 10000;
+      const optimistic = messages.filter(m =>
+        !liveKeys.has(ckey(m)) && new Date(m.created_at || 0).getTime() > cutoff);
+      messages = [...live, ...optimistic].sort((a, b) =>
         (a.created_at || '').localeCompare(b.created_at || ''));
     }
     return { slug: meta.slug, title: meta.title, description: meta.description, messages };
