@@ -21,7 +21,7 @@ use agentbbs_core::caps::Caps;
 use agentbbs_core::identity::Identity;
 use agentbbs_core::market::{Listing, ListingBody, ListingKind, Market};
 use agentbbs_core::report::MemoryReporter;
-use agentbbs_core::{Bbs, Board, MemoryStore, PodSpec, PodStatus, Role, Store};
+use agentbbs_core::{Bbs, Board, MaxTier, MemoryStore, PodSpec, PodStatus, Role, Store};
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -333,6 +333,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/market", get(api_market))
         .route("/api/pods", get(api_pods_list).post(api_pods_spawn))
         .route("/api/pods/{id}", get(api_pods_get))
+        .route("/api/pods/{id}/results", post(api_pods_result))
         // Permissive CORS so a static genesis node (e.g. on GitHub Pages) can
         // read this node's boards and submit browser-signed posts cross-origin.
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -1176,6 +1177,93 @@ async fn api_pods_get(
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "pod not found"))
 }
 
+/// A pod step-result posted back by the runtime (ADR-0035): the new lifecycle
+/// status plus a human-readable summary and optional cost/tier telemetry.
+#[derive(Deserialize)]
+struct PodResult {
+    status: PodStatus,
+    summary: String,
+    #[serde(default)]
+    tier_used: Option<MaxTier>,
+    #[serde(default)]
+    cost_usd: Option<f64>,
+}
+
+/// `POST /api/pods/{id}/results` — record a pod step-result: advance the pod's
+/// lifecycle (rejecting illegal transitions) and post the summary as a
+/// **signed message** into the pod's `registered_room` board (rooms = boards,
+/// ADR-0003). The room is created on first result. The pod signs with its own
+/// anonymous per-pod identity.
+async fn api_pods_result(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(result): Json<PodResult>,
+) -> Result<Json<PodRecord>, (StatusCode, Json<serde_json::Value>)> {
+    // Snapshot the pod + validate the lifecycle transition before any write.
+    let (room, domain) = {
+        let pods = state.pods.lock().unwrap();
+        let pod = pods
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "pod not found"))?;
+        if !pod.status.can_transition_to(result.status) {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                format!("illegal transition {:?} -> {:?}", pod.status, result.status),
+            ));
+        }
+        (
+            pod.spec.template.registered_room.clone(),
+            pod.spec.template.domain.clone(),
+        )
+    };
+
+    // The pod's stable anonymous identity (per-pod key, server-held).
+    let identity = state.agent_identity(&format!("pod:{id}"));
+    // Ensure the room board exists (create on first result).
+    if state.bbs.store().get_board(&room).ok().flatten().is_none() {
+        let _ = state.bbs.create_board(
+            Role::Moderator.caps(),
+            Board::new(room.clone(), format!("Pod room · {domain}"), identity.id()),
+        );
+    }
+
+    // Post the step-result as a signed message; telemetry appended honestly.
+    let mut body = result.summary.clone();
+    let mut meta = format!("· status={:?}", result.status);
+    if let Some(t) = result.tier_used {
+        meta.push_str(&format!(" · tier={t:?}"));
+    }
+    if let Some(c) = result.cost_usd {
+        meta.push_str(&format!(" · ${c:.6}"));
+    }
+    body.push_str(&format!("\n\n{meta}"));
+    let msg_body = agentbbs_core::MessageBody {
+        board: room.clone(),
+        parent: None,
+        subject: format!("pod {id} step"),
+        body,
+        author: identity.id(),
+        handle: format!("pod:{domain}"),
+        created_at: chrono::Utc::now(),
+    };
+    let msg = agentbbs_core::Message::sign(&identity, msg_body)
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "sign failed"))?;
+    state
+        .bbs
+        .post(Role::Agent.caps(), msg)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("post failed: {e}")))?;
+
+    // Commit the lifecycle transition and return the updated pod.
+    let mut pods = state.pods.lock().unwrap();
+    let pod = pods
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "pod not found"))?;
+    pod.status = result.status;
+    Ok(Json(pod.clone()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1379,6 +1467,87 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ADR-0035 slice 4: a pod step-result posts a SIGNED message into the pod's
+    // room board and advances the lifecycle; illegal transitions are rejected.
+    #[tokio::test]
+    async fn pods_result_posts_signed_to_room_and_advances_lifecycle() {
+        let app = router(AppState::in_memory());
+        let spec = serde_json::json!({
+            "template": {
+                "template_ref": "research/intel@1", "domain": "research",
+                "system_prompt": "analyst", "tools": ["web.search"],
+                "bench_assertions": ">=2 dated sources", "per_agent_cap_usd": 0.10,
+                "max_tier": "mid", "registered_room": "research-intel"
+            },
+            "idempotency_key": "r1"
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/pods")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&spec).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let id = body_json(resp).await["id"].as_str().unwrap().to_string();
+
+        let post_result = |status: &str, summary: &str| {
+            let app = app.clone();
+            let body = serde_json::json!({ "status": status, "summary": summary, "tier_used": "low", "cost_usd": 0.0001 });
+            let path = format!("/api/pods/{id}/results");
+            async move {
+                app.oneshot(
+                    Request::post(path)
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+
+        // Spawned → Executing: 200 + status advances.
+        let resp = post_result("executing", "scanning sources").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await["status"], "executing");
+
+        // The room board now has a SIGNED message carrying the summary.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::get("/api/boards/research-intel")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let board = body_json(resp).await;
+        let msgs = board["messages"].as_array().unwrap();
+        assert!(msgs.iter().all(|m| m["verified"] == true));
+        assert!(msgs
+            .iter()
+            .any(|m| m["body"].as_str().unwrap().contains("scanning sources")));
+
+        // Executing → Evaluating → Completed: legal.
+        assert_eq!(
+            post_result("evaluating", "checking gate").await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            post_result("completed", "briefing done").await.status(),
+            StatusCode::OK
+        );
+
+        // Completed is terminal → Executing is illegal (400).
+        assert_eq!(
+            post_result("executing", "nope").await.status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[tokio::test]
