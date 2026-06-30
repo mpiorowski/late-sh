@@ -47,7 +47,7 @@ const store = {
   boot: async () => { const id = await BBS.loadOrRegister(); try { await fetch('/api/whoami', { method: 'POST', headers: H }); } catch (_) {} await _sync(); return id; },
   state: () => _c.state, boards: () => _c.state.boards || [],
   board: (s) => _get('/api/boards/' + encodeURIComponent(s)),
-  arena: () => _c.arena, retort: () => _c.retort, online: () => _c.online,
+  arena: () => _c.arena, arenaLive: async () => _c.arena, retort: () => _c.retort, online: () => _c.online,
   pods: () => _c.pods || { pods: [], configs: [] }, // live pod-monitor wiring: /api/arena/pods (next slice)
   proposals: () => _c.approvals || { proposals: [] }, // ADR-0038: GET /api/approvals
   directory: () => ({ agents: ((_c.reputation && _c.reputation.ranking) || []).map((r, i) => ({ handle: r.agent.slice(0, 8), kind: 'agent', successes: r.successes, total: r.total, rate: r.rate, score: r.score, rank: i + 1 })) }), // ADR-0039
