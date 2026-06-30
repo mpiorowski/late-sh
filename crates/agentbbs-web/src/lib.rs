@@ -27,7 +27,7 @@ use agentbbs_core::{
     PodStatus, ReputationLedger, Role, RunStatus, SignedDecision, Store,
 };
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{delete, get, post};
@@ -421,6 +421,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/drafts/{id}/edit", post(api_drafts_edit))
         .route("/api/drafts/{id}/sent", post(api_drafts_mark_sent))
         .route("/api/drafts/{id}", delete(api_drafts_discard))
+        .route("/api/collab/github/issues", get(api_collab_github_issues))
+        .route("/api/collab/github/prs", get(api_collab_github_prs))
+        .route("/api/collab/jujutsu/status", get(api_collab_jj_status))
+        .route("/api/collab/jujutsu/diff", get(api_collab_jj_diff))
+        .route("/api/collab/jujutsu/log", get(api_collab_jj_log))
         .route("/api/postguard", post(api_postguard))
         .route("/api/agent-reply", post(api_agent_reply))
         .route("/api/playbooks/run", post(api_playbook_run))
@@ -1797,6 +1802,79 @@ struct ScanReq {
     content: String,
 }
 
+// ---- Cross-repo collaboration (ADR-0036) — READ-ONLY surface ----
+// GitHubAdapter/JujutsuAdapter are pure command-builders that drive the `gh`/
+// `jj` CLIs from whatever the server process's own environment grants (its
+// `gh` keychain / GH_TOKEN, its own checked-out working copy for `jj`) — they
+// never hold or see a token themselves. Read endpoints only: list-issues,
+// list-PRs, jj status/diff/log are zero-blast-radius (nothing they touch can
+// mutate a repo). Write operations (create/comment/merge/push) are
+// deliberately NOT exposed here — wiring them through the existing Approval
+// Gate (ADR-0038), so a write requires a prior signed human Approve rather
+// than executing on receipt of a request, is a follow-up. If `gh`/`jj` aren't
+// installed on this node (true of the default Cloud Run image — see
+// deploy/Dockerfile, which ships neither), these endpoints fail cleanly with
+// 502, not a panic.
+
+#[derive(Deserialize)]
+struct RepoQuery {
+    repo: String,
+}
+
+fn collab_gh() -> agentbbs_federation::GitHubAdapter<agentbbs_federation::TokioCommandRunner> {
+    agentbbs_federation::GitHubAdapter::new(agentbbs_federation::TokioCommandRunner::new())
+}
+fn collab_jj() -> agentbbs_federation::JujutsuAdapter<agentbbs_federation::TokioCommandRunner> {
+    agentbbs_federation::JujutsuAdapter::new(agentbbs_federation::TokioCommandRunner::new())
+}
+/// `gh ... --json ...` output is itself JSON text; parse it through so the
+/// HTTP response is real JSON, not a JSON-encoded string. Non-JSON `jj`
+/// output (status/diff/log are plain text) is wrapped as a string field.
+fn collab_result(
+    out: Result<String, agentbbs_core::error::Error>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let raw = out.map_err(|e| api_error(StatusCode::BAD_GATEWAY, format!("collab: {e}")))?;
+    let value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::String(raw));
+    Ok(Json(serde_json::json!({ "ok": true, "result": value })))
+}
+
+/// `GET /api/collab/github/issues?repo=<owner/repo>` — open issues, as `gh`
+/// reports them (`number,title,labels`).
+async fn api_collab_github_issues(
+    Query(q): Query<RepoQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    collab_result(collab_gh().issue_list(&q.repo).await)
+}
+
+/// `GET /api/collab/github/prs?repo=<owner/repo>` — open PRs, as `gh` reports
+/// them (`number,title,headRefName,mergeable`).
+async fn api_collab_github_prs(
+    Query(q): Query<RepoQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    collab_result(collab_gh().pr_list(&q.repo).await)
+}
+
+/// `GET /api/collab/jujutsu/status` — the working-copy summary of whatever
+/// repo this node's process is running in.
+async fn api_collab_jj_status(
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    collab_result(collab_jj().status().await)
+}
+
+/// `GET /api/collab/jujutsu/diff` — uncommitted changes in the working copy.
+async fn api_collab_jj_diff(
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    collab_result(collab_jj().diff().await)
+}
+
+/// `GET /api/collab/jujutsu/log?limit=N` — recent change history (default 10).
+async fn api_collab_jj_log(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let limit: u32 = q.get("limit").and_then(|s| s.parse().ok()).unwrap_or(10);
+    collab_result(collab_jj().log(limit).await)
+}
+
 /// `GET /api/credentials` — every currently-valid signed credential on file
 /// (ADR-0042): `skill:rust`, `org:acme`, `role:moderator`, etc. Expired or
 /// unverifiable entries are never stored (rejected on issue).
@@ -3094,6 +3172,65 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ADR-0036: the read-only collab routes are wired and validate input
+    // WITHOUT ever invoking a real `gh`/`jj` process — these tests must never
+    // exercise TokioCommandRunner (this dev/CI environment may have real,
+    // authenticated `gh` access; even read-only calls would be a real network
+    // dependency in CI, the exact flakiness class this session has been
+    // de-flaking elsewhere). `collab_result` (the actual new logic — JSON-
+    // wrapping + error-status mapping) is unit-tested directly; the adapters'
+    // own command-construction is already covered by collab.rs's existing
+    // FakeCommandRunner tests, untouched here.
+    #[test]
+    fn collab_result_wraps_valid_json_output() {
+        let r = collab_result(Ok(r#"[{"number":6,"title":"x"}]"#.to_string()));
+        let body = r.unwrap().0;
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["result"][0]["number"], 6);
+    }
+
+    #[test]
+    fn collab_result_wraps_non_json_output_as_a_string() {
+        let r = collab_result(Ok("Working copy : abc123\n".to_string()));
+        let body = r.unwrap().0;
+        assert_eq!(body["result"], "Working copy : abc123\n");
+    }
+
+    #[test]
+    fn collab_result_maps_runner_error_to_bad_gateway() {
+        let err = agentbbs_core::error::Error::Other("spawn gh: No such file or directory".into());
+        let (status, body) = collab_result(Err(err)).unwrap_err();
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(body.0["error"].as_str().unwrap().contains("spawn gh"));
+    }
+
+    #[tokio::test]
+    async fn collab_routes_require_repo_query_param() {
+        let app = router(AppState::in_memory());
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::get("/api/collab/github/issues")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // axum's Query extractor rejects a missing required field before the
+        // handler body runs — no CommandRunner is ever constructed.
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let resp = app
+            .oneshot(
+                Request::get("/api/collab/github/prs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     // ADR-0044: a dual-signed rotation link is verified and resolves the old

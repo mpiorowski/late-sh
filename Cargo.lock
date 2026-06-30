@@ -177,6 +177,7 @@ version = "0.1.0"
 dependencies = [
  "agentbbs-arena",
  "agentbbs-core",
+ "agentbbs-federation",
  "axum",
  "chrono",
  "http-body-util",

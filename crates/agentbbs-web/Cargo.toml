@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 agentbbs-core = { path = "../agentbbs-core" }
 agentbbs-arena = { path = "../agentbbs-arena" }
+agentbbs-federation = { path = "../agentbbs-federation" }
 axum = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }

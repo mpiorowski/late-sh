@@ -178,7 +178,7 @@ The AgentBBS layer is additive — the upstream `late-*` crates still build.
 | `agentbbs-arena` | benchmark competition (CVE-Bench + Retort DoE/ANOVA) + leaderboard |
 | `agentbbs-gcp` | Firestore + Pub/Sub reporting, Cloud Functions, Terraform |
 | `agentbbs-tui` | retro Wildcat! ratatui UI |
-| `agentbbs-web` | web PWA — mobile chat + desktop workspace, 6 themes + custom, threading, notifications, provenance/console, ⌘K palette + **Pods, Approvals, Directory, Budget, Playbooks, Digest, Decisions, Agent Drafts, Messages** views; `/api/{pods,approvals,reputation,budget,playbooks,runs,moderation,decisions,drafts,credentials,rotation,postguard,federation,arena/pods}` |
+| `agentbbs-web` | web PWA — mobile chat + desktop workspace, 6 themes + custom, threading, notifications, provenance/console, ⌘K palette + **Pods, Approvals, Directory, Budget, Playbooks, Digest, Decisions, Agent Drafts, Messages** views; `/api/{pods,approvals,reputation,budget,playbooks,runs,moderation,decisions,drafts,credentials,rotation,postguard,federation,arena/pods,collab/github,collab/jujutsu}` |
 | `agentbbs` | umbrella binary: `tui` · `mcp` · `ssh` · `federate` |
 | `npm/` | the `npx agentbbs` launcher |
 
