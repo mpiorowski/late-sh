@@ -73,8 +73,11 @@ pub struct ChatService {
     moderation_infra: ModerationInfra,
     chip_service: Option<ChipService>,
     gift_cooldowns: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
-    /// New accounts that posted a link are muted from posting until this instant
-    /// (a transient anti-spam timeout; cleared on restart, which is fine).
+    /// New accounts that have already been warned once for posting a link. The
+    /// first link is just a warning; a second earns a timeout. Transient.
+    link_warned: Arc<Mutex<std::collections::HashSet<Uuid>>>,
+    /// New accounts that posted a second link are muted from posting until this
+    /// instant (a transient anti-spam timeout; cleared on restart, which is fine).
     link_timeouts: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
     username_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
@@ -125,8 +128,10 @@ fn send_error_message(error: &anyhow::Error) -> &'static str {
         "You are banned from this room."
     } else if error.contains("admin-only") {
         "Only admins can post in #announcements."
+    } else if error.contains("link-warned") {
+        "🔗 New accounts can't post links — your message was removed. Please don't spam. Post another link and you'll be timed out for 5 minutes."
     } else if error.contains("link-spam") {
-        "🚫 New accounts can't post links — please don't spam. You're muted for 5 minutes."
+        "🚫 You were warned — you're now muted for 5 minutes for posting links."
     } else if error.contains("link-timeout") {
         "🚫 You're still timed out for posting a link. Hang tight — no spam, please."
     } else {
@@ -543,6 +548,7 @@ impl ChatService {
             moderation_infra: ModerationInfra::default(),
             chip_service: None,
             gift_cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            link_warned: Arc::new(Mutex::new(std::collections::HashSet::new())),
             link_timeouts: Arc::new(Mutex::new(HashMap::new())),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -1724,10 +1730,12 @@ impl ChatService {
         }
 
         // New-account link guard: brand-new users may not post links (a common
-        // spam-and-leave vector). The whole message is dropped before it is ever
-        // stored or shown, the author is warned, and a short posting timeout is
-        // set. Admins and moderators are exempt. Reusing the bare-link check this
-        // also enforces an active timeout from a prior offence.
+        // spam-and-leave vector). It escalates rather than punishing at once:
+        //   1st link  -> warn and drop the message (the link is never stored or
+        //               shown, so nobody can click it); no timeout yet.
+        //   2nd link  -> a 5-minute posting timeout, on top of the warning.
+        // Admins and moderators are exempt. The top check also enforces an
+        // active timeout from a prior offence.
         if !is_admin {
             let now = std::time::Instant::now();
             if let Some(until) = self.link_timeouts.lock_recover().get(&user_id).copied()
@@ -1740,10 +1748,16 @@ impl ChatService {
                     .await?
                     .unwrap_or(i64::MAX);
                 if age < NEW_ACCOUNT_SECS {
+                    // `insert` returns true the first time we warn this user.
+                    let first_offence = self.link_warned.lock_recover().insert(user_id);
+                    if first_offence {
+                        tracing::info!(%user_id, "warned new account for posting a link");
+                        anyhow::bail!("link-warned");
+                    }
                     self.link_timeouts
                         .lock_recover()
                         .insert(user_id, now + LINK_TIMEOUT);
-                    tracing::info!(%user_id, "blocked link from new account");
+                    tracing::info!(%user_id, "timed out new account for a repeat link");
                     anyhow::bail!("link-spam");
                 }
             }
