@@ -181,10 +181,10 @@ impl PodSpec {
 
     /// Map this spec onto the **frozen meta-llm `POST /v1/pods/spawn` request**
     /// (ADR-0035 / issue #6 contract). This is the AgentBBS-side serialization
-    /// the `PodController` sends through the `cog_` gateway — keeping it here (and
-    /// tested) makes flipping the spawn stub to the live call a config change, not
-    /// a reshape. Per-tenant attribution stays the gateway's job (cog_ key →
-    /// accountId), so it is intentionally absent.
+    /// the `PodController` sends through the `cog_` gateway (now the LIVE spawn
+    /// path) — keeping the serialization here and tested kept the demo→live flip a
+    /// config change, not a reshape. Per-tenant attribution stays the gateway's
+    /// job (cog_ key → accountId), so it is intentionally absent.
     pub fn to_spawn_request(&self) -> SpawnRequest {
         let t = &self.template;
         SpawnRequest {
