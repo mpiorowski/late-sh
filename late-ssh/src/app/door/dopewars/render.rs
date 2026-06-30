@@ -54,7 +54,10 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("before the month runs out", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(
+                "before the month runs out",
+                Style::default().fg(theme::AMBER_DIM()),
+            ),
         ]),
         Line::from(Span::styled(
             "The classic street-market trading game. 31 days to turn a stake into a fortune.",

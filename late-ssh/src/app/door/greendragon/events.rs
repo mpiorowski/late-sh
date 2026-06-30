@@ -108,11 +108,21 @@ impl ForestEvent {
             },
             ForestEvent::Fairy => {
                 let intro = if ch.gems > 0 {
-                    vec!["A fairy darts out from under a fern.", "\"A gem!\" she demands, hovering. \"Give me a gem and I'll make it worth your while.\""]
+                    vec![
+                        "A fairy darts out from under a fern.",
+                        "\"A gem!\" she demands, hovering. \"Give me a gem and I'll make it worth your while.\"",
+                    ]
                 } else {
-                    vec!["A fairy darts out from under a fern.", "\"A gem!\" she demands, but a glance at your empty purse leaves her unimpressed."]
+                    vec![
+                        "A fairy darts out from under a fern.",
+                        "\"A gem!\" she demands, but a glance at your empty purse leaves her unimpressed.",
+                    ]
                 };
-                Presentation { title: self.title(), intro, choice: Some(("Give her a gem", "Refuse")) }
+                Presentation {
+                    title: self.title(),
+                    intro,
+                    choice: Some(("Give her a gem", "Refuse")),
+                }
             }
             ForestEvent::GlowingStream => Presentation {
                 title: self.title(),
@@ -136,16 +146,28 @@ impl ForestEvent {
                     // module's "you have no direction in the world" branch.
                     Presentation {
                         title: self.title(),
-                        intro: vec!["You find a strange hut, but the old woman inside takes one look at you and shoos you off; you've no direction in the world for her to sharpen."],
+                        intro: vec![
+                            "You find a strange hut, but the old woman inside takes one look at you and shoos you off; you've no direction in the world for her to sharpen.",
+                        ],
                         choice: None,
                     }
                 } else {
                     let intro = if ch.gems > 0 {
-                        vec!["Inside a crooked hut, a battle-scarred crone names herself master of all skills.", "\"Give me a gem,\" she says, \"and I'll teach you to advance in your craft.\""]
+                        vec![
+                            "Inside a crooked hut, a battle-scarred crone names herself master of all skills.",
+                            "\"Give me a gem,\" she says, \"and I'll teach you to advance in your craft.\"",
+                        ]
                     } else {
-                        vec!["Inside a crooked hut, a battle-scarred crone names herself master of all skills.", "She eyes your empty purse. \"Come back with a real gem, simpleton.\""]
+                        vec![
+                            "Inside a crooked hut, a battle-scarred crone names herself master of all skills.",
+                            "She eyes your empty purse. \"Come back with a real gem, simpleton.\"",
+                        ]
                     };
-                    Presentation { title: self.title(), intro, choice: Some(("Give her a gem", "Refuse")) }
+                    Presentation {
+                        title: self.title(),
+                        intro,
+                        choice: Some(("Give her a gem", "Refuse")),
+                    }
                 }
             }
             ForestEvent::Tavern => Presentation {
@@ -182,9 +204,16 @@ impl ForestEvent {
         }
     }
 
-    fn resolve_goldmine(self, accepted: bool, ch: &mut Character, rng: &mut impl Rng) -> Vec<String> {
+    fn resolve_goldmine(
+        self,
+        accepted: bool,
+        ch: &mut Character,
+        rng: &mut impl Rng,
+    ) -> Vec<String> {
         if !accepted {
-            return vec!["You decide the slow way to riches isn't worth your day, and move on.".into()];
+            return vec![
+                "You decide the slow way to riches isn't worth your day, and move on.".into(),
+            ];
         }
         let lose_turn = |ch: &mut Character| {
             ch.turns = ch.turns.saturating_sub(1);
@@ -199,14 +228,18 @@ impl ForestEvent {
                 let gold = rng.gen_range(lvl * 5..=lvl * 20);
                 ch.gold = ch.gold.saturating_add(gold);
                 lose_turn(ch);
-                vec![format!("You chip {gold} gold out of the rock. The work costs you a forest fight.")]
+                vec![format!(
+                    "You chip {gold} gold out of the rock. The work costs you a forest fight."
+                )]
             }
             11..=15 => {
                 // Upstream gem ceiling is round(level/7)+1 (PHP round, half-up).
                 let gems = rng.gen_range(1..=((ch.level as f64 / 7.0).round() as u64 + 1));
                 ch.gems = ch.gems.saturating_add(gems);
                 lose_turn(ch);
-                vec![format!("The seam gives up {gems} gem(s). The work costs you a forest fight.")]
+                vec![format!(
+                    "The seam gives up {gems} gem(s). The work costs you a forest fight."
+                )]
             }
             16..=18 => {
                 let gold = rng.gen_range(lvl * 10..=lvl * 40);
@@ -214,7 +247,9 @@ impl ForestEvent {
                 ch.gold = ch.gold.saturating_add(gold);
                 ch.gems = ch.gems.saturating_add(gems);
                 lose_turn(ch);
-                vec![format!("A rich pocket! You haul out {gold} gold and {gems} gem(s), losing a forest fight to the labor.")]
+                vec![format!(
+                    "A rich pocket! You haul out {gold} gold and {gems} gem(s), losing a forest fight to the labor."
+                )]
             }
             // 19..=20: greed brings the roof down. Upstream still credits 10%
             // experience ("you learned about mining") and leaves gold/gems be.
@@ -223,7 +258,9 @@ impl ForestEvent {
                 ch.experience = ch.experience.saturating_add(learned);
                 ch.alive = false;
                 ch.hitpoints = 0;
-                vec![format!("You spot a huge gem and swing too hard. The roof comes down in a roar of dust. In your last moments you grasp what went wrong (+{learned} experience), and that is the end of you.")]
+                vec![format!(
+                    "You spot a huge gem and swing too hard. The roof comes down in a roar of dust. In your last moments you grasp what went wrong (+{learned} experience), and that is the end of you."
+                )]
             }
         }
     }
@@ -254,15 +291,23 @@ impl ForestEvent {
                 vec!["A warmth spreads through you; your maximum hitpoints rise by 1!".into()]
             }
             _ => match ch.increment_specialty() {
-                Some(skill) => vec![format!("She whispers a secret of your craft. Your specialty skill rises to {skill}!")],
-                None => vec!["She whispers a secret of a craft you haven't chosen; it slips away unused.".into()],
+                Some(skill) => vec![format!(
+                    "She whispers a secret of your craft. Your specialty skill rises to {skill}!"
+                )],
+                None => vec![
+                    "She whispers a secret of a craft you haven't chosen; it slips away unused."
+                        .into(),
+                ],
             },
         }
     }
 
     fn resolve_stream(self, accepted: bool, ch: &mut Character, rng: &mut impl Rng) -> Vec<String> {
         if !accepted {
-            return vec!["You decide your luck is better spent elsewhere and leave the stream behind.".into()];
+            return vec![
+                "You decide your luck is better spent elsewhere and leave the stream behind."
+                    .into(),
+            ];
         }
         // e_rand(1,10): 1 death, 2 near-death, 3 heal+turn, 4 gem, 5-7 turn+heal,
         // 8-10 (default) full heal.
@@ -300,7 +345,12 @@ impl ForestEvent {
         }
     }
 
-    fn resolve_baskets(self, accepted: bool, ch: &mut Character, rng: &mut impl Rng) -> Vec<String> {
+    fn resolve_baskets(
+        self,
+        accepted: bool,
+        ch: &mut Character,
+        rng: &mut impl Rng,
+    ) -> Vec<String> {
         if !accepted {
             return vec!["You run, very quickly, away from the mad woman and her baskets.".into()];
         }
@@ -309,8 +359,11 @@ impl ForestEvent {
             ch.turns = ch.turns.saturating_add(5);
             return vec!["All three baskets burst open with the same creature! Audrey shrieks with joy and drops a whole BAG of salve. You gain FIVE forest fights!".into()];
         }
-        let (c1, c2, c3): (u8, u8, u8) =
-            (rng.gen_range(0..4), rng.gen_range(0..4), rng.gen_range(0..4));
+        let (c1, c2, c3): (u8, u8, u8) = (
+            rng.gen_range(0..4),
+            rng.gen_range(0..4),
+            rng.gen_range(0..4),
+        );
         if c1 == c2 && c2 == c3 {
             ch.turns = ch.turns.saturating_add(2);
             vec!["All three match! Audrey grudgingly grants you two salves. You gain TWO forest fights!".into()]
@@ -340,7 +393,9 @@ impl ForestEvent {
         }
         ch.gems -= 1;
         match ch.increment_specialty() {
-            Some(skill) => vec![format!("She presses a slip of instruction into your hand. Your specialty skill rises to {skill}!")],
+            Some(skill) => vec![format!(
+                "She presses a slip of instruction into your hand. Your specialty skill rises to {skill}!"
+            )],
             None => vec!["She sighs and waves you off.".into()],
         }
     }

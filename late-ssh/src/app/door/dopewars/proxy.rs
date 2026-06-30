@@ -195,13 +195,19 @@ async fn run_bridge(
         .env("LINES", cfg.rows.max(1).to_string())
         .env("COLUMNS", cfg.cols.max(1).to_string())
         .stdin(Stdio::from(
-            slave.try_clone().context("clone dopewars pty slave for stdin")?,
+            slave
+                .try_clone()
+                .context("clone dopewars pty slave for stdin")?,
         ))
         .stdout(Stdio::from(
-            slave.try_clone().context("clone dopewars pty slave for stdout")?,
+            slave
+                .try_clone()
+                .context("clone dopewars pty slave for stdout")?,
         ))
         .stderr(Stdio::from(
-            slave.try_clone().context("clone dopewars pty slave for stderr")?,
+            slave
+                .try_clone()
+                .context("clone dopewars pty slave for stderr")?,
         ))
         .kill_on_drop(true);
 

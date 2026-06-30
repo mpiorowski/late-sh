@@ -55,22 +55,118 @@ pub struct CreatureTier {
 /// `level - 1`. (LoGD levels 17-18 are degenerate easter-egg "Loneliness"
 /// entries and are intentionally omitted.)
 pub const CREATURES: [CreatureTier; 16] = [
-    CreatureTier { hp: 10, attack: 1, defense: 1, gold: 36, exp: 14 },
-    CreatureTier { hp: 21, attack: 3, defense: 3, gold: 97, exp: 24 },
-    CreatureTier { hp: 32, attack: 5, defense: 4, gold: 148, exp: 34 },
-    CreatureTier { hp: 43, attack: 7, defense: 6, gold: 162, exp: 45 },
-    CreatureTier { hp: 53, attack: 9, defense: 7, gold: 198, exp: 55 },
-    CreatureTier { hp: 64, attack: 11, defense: 8, gold: 234, exp: 66 },
-    CreatureTier { hp: 74, attack: 13, defense: 10, gold: 268, exp: 77 },
-    CreatureTier { hp: 84, attack: 15, defense: 11, gold: 302, exp: 89 },
-    CreatureTier { hp: 94, attack: 17, defense: 13, gold: 336, exp: 101 },
-    CreatureTier { hp: 105, attack: 19, defense: 14, gold: 369, exp: 114 },
-    CreatureTier { hp: 115, attack: 21, defense: 15, gold: 402, exp: 127 },
-    CreatureTier { hp: 125, attack: 23, defense: 17, gold: 435, exp: 141 },
-    CreatureTier { hp: 135, attack: 25, defense: 18, gold: 467, exp: 156 },
-    CreatureTier { hp: 145, attack: 27, defense: 20, gold: 499, exp: 172 },
-    CreatureTier { hp: 155, attack: 29, defense: 21, gold: 531, exp: 189 },
-    CreatureTier { hp: 166, attack: 31, defense: 22, gold: 563, exp: 207 },
+    CreatureTier {
+        hp: 10,
+        attack: 1,
+        defense: 1,
+        gold: 36,
+        exp: 14,
+    },
+    CreatureTier {
+        hp: 21,
+        attack: 3,
+        defense: 3,
+        gold: 97,
+        exp: 24,
+    },
+    CreatureTier {
+        hp: 32,
+        attack: 5,
+        defense: 4,
+        gold: 148,
+        exp: 34,
+    },
+    CreatureTier {
+        hp: 43,
+        attack: 7,
+        defense: 6,
+        gold: 162,
+        exp: 45,
+    },
+    CreatureTier {
+        hp: 53,
+        attack: 9,
+        defense: 7,
+        gold: 198,
+        exp: 55,
+    },
+    CreatureTier {
+        hp: 64,
+        attack: 11,
+        defense: 8,
+        gold: 234,
+        exp: 66,
+    },
+    CreatureTier {
+        hp: 74,
+        attack: 13,
+        defense: 10,
+        gold: 268,
+        exp: 77,
+    },
+    CreatureTier {
+        hp: 84,
+        attack: 15,
+        defense: 11,
+        gold: 302,
+        exp: 89,
+    },
+    CreatureTier {
+        hp: 94,
+        attack: 17,
+        defense: 13,
+        gold: 336,
+        exp: 101,
+    },
+    CreatureTier {
+        hp: 105,
+        attack: 19,
+        defense: 14,
+        gold: 369,
+        exp: 114,
+    },
+    CreatureTier {
+        hp: 115,
+        attack: 21,
+        defense: 15,
+        gold: 402,
+        exp: 127,
+    },
+    CreatureTier {
+        hp: 125,
+        attack: 23,
+        defense: 17,
+        gold: 435,
+        exp: 141,
+    },
+    CreatureTier {
+        hp: 135,
+        attack: 25,
+        defense: 18,
+        gold: 467,
+        exp: 156,
+    },
+    CreatureTier {
+        hp: 145,
+        attack: 27,
+        defense: 20,
+        gold: 499,
+        exp: 172,
+    },
+    CreatureTier {
+        hp: 155,
+        attack: 29,
+        defense: 21,
+        gold: 531,
+        exp: 189,
+    },
+    CreatureTier {
+        hp: 166,
+        attack: 31,
+        defense: 22,
+        gold: 563,
+        exp: 207,
+    },
 ];
 
 /// Look up the creature stat block for a forest level, clamped to 1..=16.
@@ -84,10 +180,16 @@ pub fn creature_tier(level: u8) -> CreatureTier {
 /// names are original to late.sh (see the module note on licensing); more can be
 /// appended per level without touching the stat tables.
 pub const CREATURE_NAMES: [&[(&str, &str)]; 16] = [
-    &[("Mangy Goblin", "Chipped Cleaver"), ("Field Rat Swarm", "Gnashing Teeth")],
+    &[
+        ("Mangy Goblin", "Chipped Cleaver"),
+        ("Field Rat Swarm", "Gnashing Teeth"),
+    ],
     &[("Bog Lurcher", "Slick Tendrils")],
     &[("Bandit Scout", "Worn Crossbow")],
-    &[("Snow Troll", "Frostbitten Fists"), ("Torch-lit Mob", "Pitchforks")],
+    &[
+        ("Snow Troll", "Frostbitten Fists"),
+        ("Torch-lit Mob", "Pitchforks"),
+    ],
     &[("Thornback Boar", "Goring Tusks")],
     &[("Spore Wraith", "Choking Cloud")],
     &[("Gravel Golem", "Crushing Slam")],
@@ -96,7 +198,10 @@ pub const CREATURE_NAMES: [&[(&str, &str)]; 16] = [
     &[("Clockwork Sentry", "Whirring Blades")],
     &[("Gloomfinch Flock", "Razor Feathers")],
     &[("Mirror Shade", "Stolen Face")],
-    &[("Three-Headed Hound", "Snapping Maws"), ("Hill Giant", "Uprooted Oak")],
+    &[
+        ("Three-Headed Hound", "Snapping Maws"),
+        ("Hill Giant", "Uprooted Oak"),
+    ],
     &[("Ronin of Ash", "Twin Embers")],
     &[("Hollow Archmage", "Unspoken Word")],
     &[("The Long Dark", "Creeping Dread")],
@@ -133,20 +238,62 @@ pub struct Master {
 /// Dragon. Names are original to late.sh; stats are derived (see
 /// [`master_stats`]): attack = defense = 2*level, hp = 11*level (level 1 = 12).
 pub const MASTERS: [Master; 14] = [
-    Master { name: "Sergeant Brann", weapon: "Drill Baton" },
-    Master { name: "Mistress Veil", weapon: "Quick Rapier" },
-    Master { name: "Old Garrick", weapon: "Notched Maul" },
-    Master { name: "Bram the Bear", weapon: "Studded Club" },
-    Master { name: "Seer Anwyn", weapon: "Silent Will" },
-    Master { name: "Thane Korl", weapon: "Dwarf-forged Axe" },
-    Master { name: "Ranger Esk", weapon: "Yew Longbow" },
-    Master { name: "Sir Aldric", weapon: "Broadsword" },
-    Master { name: "The Twin Mara", weapon: "Paired Blades" },
-    Master { name: "Master Sojin", weapon: "Open Palm" },
-    Master { name: "Halcyon", weapon: "Ringed Chakram" },
-    Master { name: "Wardren the Grey", weapon: "Elder Bow" },
-    Master { name: "Goliath Vorne", weapon: "Greatsword" },
-    Master { name: "Veotha the Last", weapon: "Severing Touch" },
+    Master {
+        name: "Sergeant Brann",
+        weapon: "Drill Baton",
+    },
+    Master {
+        name: "Mistress Veil",
+        weapon: "Quick Rapier",
+    },
+    Master {
+        name: "Old Garrick",
+        weapon: "Notched Maul",
+    },
+    Master {
+        name: "Bram the Bear",
+        weapon: "Studded Club",
+    },
+    Master {
+        name: "Seer Anwyn",
+        weapon: "Silent Will",
+    },
+    Master {
+        name: "Thane Korl",
+        weapon: "Dwarf-forged Axe",
+    },
+    Master {
+        name: "Ranger Esk",
+        weapon: "Yew Longbow",
+    },
+    Master {
+        name: "Sir Aldric",
+        weapon: "Broadsword",
+    },
+    Master {
+        name: "The Twin Mara",
+        weapon: "Paired Blades",
+    },
+    Master {
+        name: "Master Sojin",
+        weapon: "Open Palm",
+    },
+    Master {
+        name: "Halcyon",
+        weapon: "Ringed Chakram",
+    },
+    Master {
+        name: "Wardren the Grey",
+        weapon: "Elder Bow",
+    },
+    Master {
+        name: "Goliath Vorne",
+        weapon: "Greatsword",
+    },
+    Master {
+        name: "Veotha the Last",
+        weapon: "Severing Touch",
+    },
 ];
 
 /// Original weapon names by tier 1..=15, indexed by `tier - 1`. Purely cosmetic:

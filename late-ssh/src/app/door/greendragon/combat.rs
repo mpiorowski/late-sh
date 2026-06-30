@@ -100,7 +100,7 @@ fn inv_norm(p: f64) -> f64 {
         -3.969683028665376e+01,
         2.209460984245205e+02,
         -2.759285104469687e+02,
-        1.383577518672690e+02,
+        1.38357751867269e+02,
         -3.066479806614716e+01,
         2.506628277459239e+00,
     ];
@@ -212,8 +212,14 @@ impl Default for Mods {
 /// `lib/battle-skills.php` line for line: a negative result is halved and kept
 /// negative (a glancing blow / heal), positive and negative branches multiply by
 /// `dmgmod`/`badguydmgmod` in the upstream order.
-fn roll_damage(rng: &mut impl Rng, player: Combatant, enemy: Combatant, m: Mods) -> (i32, i32, bool, f64) {
-    let adjusted_creature_def = m.badguydefmod * enemy.defense as f64 / (m.adjustment * m.adjustment);
+fn roll_damage(
+    rng: &mut impl Rng,
+    player: Combatant,
+    enemy: Combatant,
+    m: Mods,
+) -> (i32, i32, bool, f64) {
+    let adjusted_creature_def =
+        m.badguydefmod * enemy.defense as f64 / (m.adjustment * m.adjustment);
     let creature_attack = enemy.attack as f64 * m.badguyatkmod;
     let adjusted_self_def = player.defense as f64 * m.adjustment * m.defmod;
 
@@ -264,7 +270,12 @@ fn roll_damage(rng: &mut impl Rng, player: Combatant, enemy: Combatant, m: Mods)
 
 /// Apply LoGD `report_power_move`: when the player's attack roll exceeds their
 /// attack stat by a tier margin, add `e_rand(roll/4, roll/2)` damage (min 1).
-fn apply_power_move(rng: &mut impl Rng, patkroll: f64, base_atk: u32, dmg: i32) -> (i32, Option<PowerMove>) {
+fn apply_power_move(
+    rng: &mut impl Rng,
+    patkroll: f64,
+    base_atk: u32,
+    dmg: i32,
+) -> (i32, Option<PowerMove>) {
     let uatk = base_atk as f64;
     let tier = if patkroll > uatk * 4.0 {
         Some(PowerMove::Mega)
@@ -584,8 +595,14 @@ mod tests {
     #[test]
     fn round_always_makes_progress() {
         let mut rng = StdRng::seed_from_u64(3);
-        let p = Combatant { attack: 5, defense: 5 };
-        let e = Combatant { attack: 5, defense: 5 };
+        let p = Combatant {
+            attack: 5,
+            defense: 5,
+        };
+        let e = Combatant {
+            attack: 5,
+            defense: 5,
+        };
         for _ in 0..1000 {
             let o = resolve_round(&mut rng, p, e);
             assert!(o.damage_to_enemy != 0 || o.damage_to_player != 0);
@@ -599,8 +616,14 @@ mod tests {
         regen.regen = 5;
         let mut buffs = vec![regen];
         let mut comps = Vec::new();
-        let p = Combatant { attack: 5, defense: 5 };
-        let e = Combatant { attack: 5, defense: 5 };
+        let p = Combatant {
+            attack: 5,
+            defense: 5,
+        };
+        let e = Combatant {
+            attack: 5,
+            defense: 5,
+        };
         let r1 = resolve_round_buffed(&mut rng, p, e, &mut buffs, &mut comps);
         assert_eq!(r1.player_heal, 5);
         assert_eq!(buffs.len(), 1);
@@ -614,8 +637,14 @@ mod tests {
     #[test]
     fn buff_curse_reduces_incoming_damage() {
         // A foe that always deals damage, with and without the half-damage curse.
-        let p = Combatant { attack: 0, defense: 0 };
-        let e = Combatant { attack: 100, defense: 0 };
+        let p = Combatant {
+            attack: 0,
+            defense: 0,
+        };
+        let e = Combatant {
+            attack: 100,
+            defense: 0,
+        };
         let mut plain_total = 0i64;
         let mut cursed_total = 0i64;
         for seed in 0..400 {
@@ -641,8 +670,14 @@ mod tests {
     fn companion_fights_and_can_fall() {
         // A strong enemy eventually kills a frail companion; a sturdy one helps.
         let mut rng = StdRng::seed_from_u64(11);
-        let p = Combatant { attack: 5, defense: 5 };
-        let e = Combatant { attack: 50, defense: 5 };
+        let p = Combatant {
+            attack: 5,
+            defense: 5,
+        };
+        let e = Combatant {
+            attack: 50,
+            defense: 5,
+        };
         let mut buffs = Vec::new();
         let mut comps = vec![Companion {
             name: "Skeleton".into(),
@@ -666,8 +701,14 @@ mod tests {
     #[test]
     fn overpowered_player_reliably_wins() {
         let mut rng = StdRng::seed_from_u64(4);
-        let player = Combatant { attack: 40, defense: 30 };
-        let enemy = Combatant { attack: 3, defense: 3 };
+        let player = Combatant {
+            attack: 40,
+            defense: 30,
+        };
+        let enemy = Combatant {
+            attack: 3,
+            defense: 3,
+        };
         let mut wins = 0;
         for _ in 0..200 {
             if let FightResult::PlayerWon { .. } =
