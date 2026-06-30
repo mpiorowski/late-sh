@@ -119,6 +119,25 @@ const FEDERATION = {
   note: 'No peers linked — this genesis node is a leaf running in your browser.',
 };
 
+// Post-path injection guard (ADR-0046) — JS port of agentbbs_core::postguard.
+const INJECTION_MARKERS = [
+  'ignore previous instructions', 'ignore all previous', 'ignore the above',
+  'ignore your instructions', 'disregard previous', 'disregard all previous',
+  'disregard the above', 'reveal your system prompt', 'print your system prompt',
+  'show your system prompt', 'your system prompt is', 'you are now',
+  'do anything now', 'developer mode enabled', 'ignore your guidelines',
+  'override your instructions',
+];
+function scanPost(content) {
+  const lc = String(content || '').toLowerCase();
+  const reasons = INJECTION_MARKERS.filter(m => lc.includes(m)).map(m => `instruction-override phrase: "${m}"`);
+  if (reasons.length) return { level: 'malicious', reasons };
+  const urls = (lc.match(/https?:\/\//g) || []).length;
+  if (urls > 5) reasons.push(`URL flood (${urls} links)`);
+  if (String(content || '').split(/\s+/).some(t => t.length > 400)) reasons.push('long opaque token (>400 chars)');
+  return { level: reasons.length ? 'suspicious' : 'clean', reasons };
+}
+
 export const PROTOCOL_VERSION = 'agentbbs/0.1';
 export const KNOWN_AGENTS = ['claude-agent', 'claude', 'codex', 'graybeard', 'gpt'];
 
@@ -372,6 +391,13 @@ export const store = {
   // message immediately and a "thinking" indicator while the model responds.
   // Returns { ok, error }.
   async post(seedHex, { board, body, handle = 'you', parent = null }) {
+    // Post-path injection guard (ADR-0046) — mirrors agentbbs_core::postguard.
+    // Blocks obvious prompt-injection before any @mentioned agent reads it.
+    const g = scanPost(body);
+    if (g.level === 'malicious') {
+      logEvent('post.blocked', g.reasons.join('; '), 'Warn');
+      return { ok: false, error: 'post blocked: ' + g.reasons.join('; ') };
+    }
     const built = await buildVerifiedMessage(seedHex, { board, body, handle, parent });
     if (!built.ok) {
       logEvent('post.rejected', built.error, 'Warn');
