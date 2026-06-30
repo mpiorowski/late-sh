@@ -246,6 +246,22 @@ try {
     ok(await page.evaluate(() => window.__genesisStore.budget().budgets.every(b => b.remaining >= 0)), 'remaining never goes negative');
   }
 
+  // ---- agent-notifications inbox (dm:notifications) ----
+  if (GENESIS) {
+    const r = await page.evaluate(async () => {
+      window.__agentNotify('e2e-inbox-note', 'digest');
+      await new Promise(s => setTimeout(s, 400));
+      window.__ui.VIEWS.dm();
+      await new Promise(s => setTimeout(s, 200));
+      const hasInbox = /🔔 Notifications/.test(document.getElementById('thread').textContent);
+      const b = await window.__genesisStore.board('dm:notifications');
+      const landed = (b.messages || []).some(m => m.body === 'e2e-inbox-note');
+      return { hasInbox, landed };
+    });
+    ok(r.hasInbox, 'Messages shows the 🔔 Notifications inbox');
+    ok(r.landed, 'agent events land in the notifications inbox');
+  }
+
   // ---- composer autocomplete (/ slash + @ agent) ----
   if (GENESIS) {
     const ac = await page.evaluate(() => {

@@ -459,7 +459,7 @@
 <script type="module">
 /* @sync:adapter-start (genesis: localStorage store + in-browser demo engine) */
 import * as BBS from './vendor/bbscrypto.js';
-import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-9';
+import { store, liveNode, setLiveNode, setReplyEngine } from './vendor/genesis-store.js?v=live-10';
 import { createDemoEngine } from './vendor/demo-engine.js';
 /* @sync:adapter-end */
 
@@ -515,6 +515,16 @@ function notify(text, kind = 'info', silent = false) {
   if (NOTES.length > 60) NOTES.pop();
   if (!silent) { unread++; renderBellBadge(); toast(text); }
   if ($('notifModal') && $('notifModal').classList.contains('open')) renderNotifs();
+}
+// Agent/system notification → the 🔔 center AND a persistent private inbox
+// (dm:notifications, local-only) so playbook/approval/digest/pod events are
+// waiting in ✉ Messages. Best-effort; never throws into the caller.
+function agentNotify(text, from = 'AgentBBS') {
+  notify(text, 'agent');
+  try {
+    addDmPeer('notifications');
+    if (identity && identity.seed) store.post(identity.seed, { board: 'dm:notifications', body: text, handle: from });
+  } catch (_) { /* inbox is best-effort */ }
 }
 function renderNotifs() {
   const body = $('notifBody'); if (!body) return;
@@ -895,12 +905,15 @@ function openDm(peer) {
   loadBoard('dm:' + peer); // private thread; heading + privacy handled downstream
 }
 function showDm() {
-  const peers = dmPeers();
-  const convoRows = peers.length
+  const peers = dmPeers().filter(p => p !== 'notifications');
+  const inboxRow = `<div class="bbs-row" data-dm="notifications" style="cursor:pointer">` +
+    `<span class="c"><b>🔔 Notifications</b><br><span class="d">playbook · approval · digest · pod events from agents</span></span>` +
+    `<span class="r"><button class="bbs-btn">open ▸</button></span></div>`;
+  const convoRows = inboxRow + (peers.length
     ? peers.map(p => `<div class="bbs-row" data-dm="${esc(p)}" style="cursor:pointer">` +
         `<span class="c"><b>✉ @${esc(p)}</b></span>` +
         `<span class="r"><button class="bbs-btn">open ▸</button></span></div>`).join('')
-    : `<div class="bbs-row"><span class="d">No conversations yet — start one below.</span></div>`;
+    : '');
   const chips = DM_AGENTS.map(a => `<button class="chip" data-newdm="${esc(a)}">@${esc(a)}</button>`).join(' ');
   const foot = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">` +
     `<span class="d">New DM:</span>${chips}` +
@@ -950,7 +963,7 @@ function showApprovals() {
   const decide = async (actionId, verdict) => {
     const r = await store.decide(identity.seed, actionId, verdict, '');
     if (!r.ok) { notify(r.error || 'decision failed', 'agent'); return; }
-    notify(`You ${verdict === 'approve' ? 'approved' : 'rejected'}: ${actionId}`, 'agent');
+    agentNotify(`Approval — you ${verdict === 'approve' ? 'approved' : 'rejected'}: ${actionId}`, 'approvals');
     showApprovals();
   };
   document.querySelectorAll('#thread [data-approve]').forEach(el => el.onclick = () => decide(el.dataset.approve, 'approve'));
@@ -994,7 +1007,7 @@ async function showDigest() {
     const body = `📰 Daily digest — #general: ${msgs.length} messages, ${Object.keys(byHandle).length} participants. ` +
       (top.length ? `Most active: ${top.map(([h, n]) => '@' + h + ' (' + n + ')').join(', ')}.` : 'Quiet day.');
     const res = await store.post(identity.seed, { board: 'general', body, handle: 'digest' });
-    if (res && res.ok) { notify('Posted daily digest to #general', 'agent'); loadBoard('general'); }
+    if (res && res.ok) { agentNotify('Daily digest posted to #general', 'digest'); loadBoard('general'); }
     else { notify((res && res.error) || 'post failed', 'agent'); }
   };
 }
@@ -1084,7 +1097,7 @@ function showDirectory() {
   document.querySelectorAll('#thread [data-hire]').forEach(el => el.onclick = () => {
     const r = store.hire(el.dataset.hire, 'ops');
     if (!r.ok) { notify(r.error || 'hire failed', 'agent'); return; }
-    notify(`Hired @${el.dataset.hire} — pod ${r.pod.id} spawned in #${r.pod.registered_room}`, 'agent');
+    agentNotify(`Hired @${el.dataset.hire} — pod ${r.pod.id} spawned in #${r.pod.registered_room}`, 'pods');
     VIEWS.pods();
   });
 }
@@ -1789,6 +1802,7 @@ window.__notes = NOTES;               // expose notifications for E2E
 window.__ui = { applyTheme, applyLayout, applyCustom, getCustom, notify, THEMES, VIEWS }; // expose UI controls for tests
 window.__applyControl = applyControlMessages; // expose edit/delete filter for E2E
 window.__md = mdToHtml; // expose markdown renderer for E2E
+window.__agentNotify = agentNotify; // expose for E2E
 boot();
 /* @sync:boot-end */
 </script>
