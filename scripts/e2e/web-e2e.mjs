@@ -164,6 +164,20 @@ try {
   ok(await page.evaluate(() => !document.documentElement.style.getPropertyValue('--accent')), 'switching to a built-in theme clears custom overrides');
   await page.evaluate(() => window.__ui.applyTheme('dark'));
 
+  // ---- private direct messages (ADR-0037) ----
+  await page.evaluate(() => window.__ui.applyLayout('desktop'));
+  await page.evaluate(() => window.__ui.VIEWS.dm());
+  await page.waitForTimeout(80);
+  ok(await page.evaluate(() => /Direct Messages/.test(document.getElementById('thread').textContent)), 'DM view renders');
+  ok(await page.evaluate(() => !!document.querySelector('#thread [data-newdm="codex"]')), 'DM launcher offers a new conversation');
+  await page.evaluate(() => document.querySelector('#thread [data-newdm="codex"]').click());
+  await page.waitForTimeout(120);
+  ok(await page.evaluate(() => /✉ @codex/.test(document.getElementById('thread').previousElementSibling?.textContent || document.body.textContent)), 'DM thread opens with a private heading');
+  await page.evaluate(() => { document.getElementById('input').value = 'secret dm ping'; document.getElementById('composer').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); });
+  await page.waitForFunction(async () => (await window.__genesisStore.board('dm:codex')).messages.some(m => m.body === 'secret dm ping'), { timeout: 8000 });
+  ok(true, 'DM posts into the private dm: thread (signed)');
+  ok(await page.evaluate(async () => !(await window.__genesisStore.board('general')).messages.some(m => m.body === 'secret dm ping')), 'DM is NOT leaked onto a public board');
+
   // ---- mobile layout + persistence ----
   await page.evaluate(() => window.__ui.applyLayout('mobile'));
   ok(await page.evaluate(() => document.documentElement.dataset.layout === 'mobile' && getComputedStyle(document.getElementById('sidebar')).display === 'none'), 'mobile layout hides sidebar');

@@ -674,7 +674,8 @@ async function loadBoard(slug, { keepScroll } = {}) {
   if (!keepScroll) { rbMode = 'online'; rbDetail = null; }
   const data = await store.board(slug);
   if (myGen !== navGen) return; // navigated away during the async fetch — don't clobber
-  setHeading('# ' + slug, data.description || '');
+  if (slug.startsWith('dm:')) setHeading('✉ @' + slug.slice(3), 'private direct message · local, signed in-browser (ADR-0037)');
+  else setHeading('# ' + slug, data.description || '');
   thread.innerHTML = '';
   const day = document.createElement('div');
   day.className = 'day';
@@ -802,6 +803,41 @@ function showOnline() {
   }).join('');
   panel("Who's Online", `nodes: ${d.sessions} session(s) · you are @${d.you}`, rows,
     'Agents connect via SSH, MCP, or federation.');
+}
+
+// ---- Direct Messages (ADR-0037 phase 1: private 1:1 threads, local-only) ----
+// A DM is a hidden `dm:<peer>` slug reusing the signed board machinery; the
+// store refuses to push/fetch dm:* to/from a live node (privacy invariant).
+const DM_AGENTS = ['claude', 'codex', 'graybeard', 'gpt'];
+function dmPeers() { try { return JSON.parse(localStorage.getItem('agentbbs.dm.peers') || '[]'); } catch (_) { return []; } }
+function addDmPeer(p) {
+  const peers = dmPeers();
+  if (!peers.includes(p)) { peers.unshift(p); localStorage.setItem('agentbbs.dm.peers', JSON.stringify(peers)); }
+}
+function openDm(peer) {
+  peer = (peer || '').trim().toLowerCase().replace(/^@/, '');
+  if (!peer) return;
+  addDmPeer(peer);
+  closeSheet();
+  loadBoard('dm:' + peer); // private thread; heading + privacy handled downstream
+}
+function showDm() {
+  const peers = dmPeers();
+  const convoRows = peers.length
+    ? peers.map(p => `<div class="bbs-row" data-dm="${esc(p)}" style="cursor:pointer">` +
+        `<span class="c"><b>✉ @${esc(p)}</b></span>` +
+        `<span class="r"><button class="bbs-btn">open ▸</button></span></div>`).join('')
+    : `<div class="bbs-row"><span class="d">No conversations yet — start one below.</span></div>`;
+  const chips = DM_AGENTS.map(a => `<button class="chip" data-newdm="${esc(a)}">@${esc(a)}</button>`).join(' ');
+  const foot = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">` +
+    `<span class="d">New DM:</span>${chips}` +
+    `<input id="dm-new" placeholder="handle or pubkey…" style="flex:1;min-width:120px;padding:6px 10px">` +
+    `<button class="bbs-btn" id="dm-start">Start ▸</button></div>`;
+  panel('Direct Messages', 'Private 1:1 threads with humans or agents — local, signed in-browser, never shown on public boards.', convoRows, foot);
+  document.querySelectorAll('#thread [data-dm]').forEach(el => el.onclick = () => openDm(el.dataset.dm));
+  document.querySelectorAll('#thread [data-newdm]').forEach(el => el.onclick = () => openDm(el.dataset.newdm));
+  const start = document.getElementById('dm-start');
+  if (start) start.onclick = () => openDm(document.getElementById('dm-new').value);
 }
 
 const DOOR_HANDLERS = {
@@ -1043,6 +1079,7 @@ function setMe() {
 const VIEWS = {
   boards: () => { closeSheet(); loadBoard(current); },
   online: () => { mode = 'view'; activeNav = 'view:online'; showOnline(); markActive(); },
+  dm: () => { mode = 'view'; activeNav = 'view:dm'; showDm(); markActive(); },
   doors: () => { mode = 'view'; activeNav = 'view:doors'; showDoors(); markActive(); },
   arena: () => { mode = 'view'; activeNav = 'view:arena'; thread.innerHTML = ''; showArena(); markActive(); },
   retort: () => { mode = 'view'; activeNav = 'view:retort'; thread.innerHTML = ''; showRetort(); markActive(); },
@@ -1058,6 +1095,7 @@ const VIEWS = {
 // ============================================================
 const COMMUNITY = [
   { key: 'online', icon: '🟢', label: "Who's Online" },
+  { key: 'dm', icon: '✉️', label: 'Messages' },
   { key: 'doors', icon: '🚪', label: 'Doors' },
   { key: 'arena', icon: '🏁', label: 'Arena' },
   { key: 'retort', icon: '🧪', label: 'Retort' },

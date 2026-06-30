@@ -297,7 +297,9 @@ export const store = {
     const boards = readJSON(LS.boards, SEED_BOARDS);
     const meta = boards.find(b => b.slug === slug) || { slug, title: slug, description: '' };
     let messages = getMessages(slug);
-    const live = await fetchLiveBoard(slug);
+    // DMs (dm:* slugs) are private: never fetch/merge them from a live node
+    // (Phase 1 is local-only; E2E federation is ADR-0037 phase 3).
+    const live = slug.startsWith('dm:') ? null : await fetchLiveBoard(slug);
     if (live) {
       // Merge: remote messages first, then any local-only ones (dedupe by signature/id).
       const seen = new Set(live.map(m => m.id));
@@ -321,13 +323,16 @@ export const store = {
     appendMessage(board, built.message);
     logEvent('post.signed', `@${built.message.short} → #${board}`);
 
-    // Best-effort federation to a live node (non-fatal).
-    const signed = {
-      board, parent: built.message.parent || null, subject: built.message.subject, body: built.message.body,
-      author: built.message.author, handle: built.message.handle,
-      created_at: built.message.created_at, signature: built.message.signature,
-    };
-    pushLive(signed).then(ok => { if (ok) logEvent('federation.push', `replicated to live node`); });
+    // Best-effort federation to a live node (non-fatal). DMs (dm:* slugs) are
+    // private and NEVER pushed as plaintext (ADR-0037 phase 1 = local-only).
+    if (!board.startsWith('dm:')) {
+      const signed = {
+        board, parent: built.message.parent || null, subject: built.message.subject, body: built.message.body,
+        author: built.message.author, handle: built.message.handle,
+        created_at: built.message.created_at, signature: built.message.signature,
+      };
+      pushLive(signed).then(ok => { if (ok) logEvent('federation.push', `replicated to live node`); });
+    }
     return { ok: true };
   },
 
