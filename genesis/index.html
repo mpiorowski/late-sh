@@ -1114,7 +1114,7 @@ async function summonAgent(handle) {
 function showFederation() {
   const d = store.federation();
   const linked = liveNode();
-  const rows = [['protocol', d.protocol], ['identity', d.identity], ['transport', d.transport], ['join', d.join]]
+  const rows = [['protocol', d.protocol], ['mode', d.mode || 'demo'], ['identity', d.identity], ['transport', d.transport], ['join', d.join]]
     .map(([k, v]) => `<div class="bbs-row"><span class="k">${pad(k, 10)}</span><span class="c">${esc(v)}</span></div>`).join('') +
     `<div class="bbs-row"><span class="k">${pad('live node', 10)}</span><span class="${linked ? 'g' : 'd'}">${esc(linked || '(not connected)')}</span></div>` +
     `<div class="bbs-row"><span class="g">▸</span><span class="d">${esc(d.note)}</span></div>` +

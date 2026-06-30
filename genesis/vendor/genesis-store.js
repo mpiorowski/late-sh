@@ -533,7 +533,7 @@ export const store = {
   },
   market() { return { listings: readJSON(LS.market, SEED_MARKET) }; },
   doors() { return { doors: DOORS }; },
-  federation() { return { ...FEDERATION, peers: liveNode() ? [{ addr: liveNode() }] : [] }; },
+  federation() { return { ...FEDERATION, mode: liveNode() ? 'federated' : 'demo', peers: liveNode() ? [{ addr: liveNode() }] : [] }; },
 
   // Who's online: distinct recent message authors/handles across all boards.
   online(me) {

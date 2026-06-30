@@ -1107,6 +1107,7 @@ async fn api_federation() -> impl IntoResponse {
         "identity": "ed25519 (anonymous, per-node)",
         "transport": "signed envelopes, PII-stripped egress, idempotent replication",
         "join": "npx ruflo federation join <addr>",
+        "mode": "live",
         "peers": [],
         "note": "No peers linked — this is a leaf node."
     }))
@@ -2097,6 +2098,20 @@ mod tests {
         );
         assert_eq!(act(lift).await.status(), StatusCode::OK);
         assert_eq!(post(signed_post("back")).await.status(), StatusCode::OK);
+    }
+
+    // G9: /api/federation exposes the same shape as genesis incl. an explicit mode.
+    #[tokio::test]
+    async fn federation_reports_mode() {
+        let app = router(AppState::in_memory());
+        let resp = app
+            .oneshot(Request::get("/api/federation").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let d = body_json(resp).await;
+        assert_eq!(d["mode"], "live");
+        assert!(d["protocol"].is_string());
+        assert!(d["peers"].is_array());
     }
 
     // ADR-0041 × 0045: a completed playbook run emits a decision record.

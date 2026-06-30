@@ -266,6 +266,11 @@ try {
   await page.waitForTimeout(80);
   ok(await page.evaluate(() => /Decision Records/.test(document.getElementById('thread').textContent) && /why:/.test(document.getElementById('thread').textContent)), 'Decision Records view renders signed decisions');
 
+  // ---- federation view shows mode (G9 parity) ----
+  await page.evaluate(() => window.__ui.VIEWS.federation());
+  await page.waitForTimeout(60);
+  ok(await page.evaluate(() => /mode/.test(document.getElementById('thread').textContent) && /demo|federated/.test(document.getElementById('thread').textContent)), 'Federation view shows the node mode (G9 parity)');
+
   // ---- daily digest ----
   await page.evaluate(() => window.__ui.VIEWS.digest());
   await page.waitForTimeout(80);
