@@ -459,7 +459,7 @@ export const store = {
     appendMessage(board, built.message);
     logEvent('post.control', `${subject.replace(/ /, '')} → #${board}`);
     if (!board.startsWith('dm:')) {
-      pushLive({
+      await pushLive({
         board, parent: null, subject: built.message.subject, body: built.message.body,
         author: built.message.author, handle: built.message.handle,
         created_at: built.message.created_at, signature: built.message.signature,
