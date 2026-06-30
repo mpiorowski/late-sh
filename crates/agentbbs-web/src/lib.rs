@@ -1885,7 +1885,11 @@ async fn api_budget_topup(
     if !req.amount.is_finite() || req.amount <= 0.0 {
         return Err(api_error(StatusCode::BAD_REQUEST, "amount must be > 0"));
     }
-    state.budget.lock().unwrap().bump_cap(&req.pod_id, req.amount);
+    state
+        .budget
+        .lock()
+        .unwrap()
+        .bump_cap(&req.pod_id, req.amount);
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -2372,7 +2376,10 @@ mod tests {
         .await["budgets"][0]["cap"]
             .as_f64()
             .unwrap();
-        assert!((cap1 - cap0 - 0.25).abs() < 1e-9, "cap rose by the top-up amount");
+        assert!(
+            (cap1 - cap0 - 0.25).abs() < 1e-9,
+            "cap rose by the top-up amount"
+        );
     }
 
     // P5: a completed pod that reports a bench outcome ranks live in the Arena.
