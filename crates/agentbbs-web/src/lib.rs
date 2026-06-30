@@ -1436,6 +1436,20 @@ struct PodResult {
     tier_used: Option<MaxTier>,
     #[serde(default)]
     cost_usd: Option<f64>,
+    /// Optional live bench outcome — when present on a terminal result, it is
+    /// ingested into the Arena leaderboard as a signed submission (ADR-0035 /
+    /// P5 live pod loop: Arena ranking from live bench).
+    #[serde(default)]
+    bench: Option<PodBench>,
+}
+
+#[derive(Deserialize)]
+struct PodBench {
+    score: f64,
+    passed: u32,
+    total: u32,
+    #[serde(default)]
+    benchmark: Option<String>,
 }
 
 /// `POST /api/pods/{id}/results` — record a pod step-result: advance the pod's
@@ -1516,6 +1530,35 @@ async fn api_pods_result(
             weight: 1.0,
             source: "pod".into(),
         });
+    }
+
+    // P5: a completed pod that reports a bench outcome ranks live in the Arena —
+    // a signed submission from the pod's own identity (fail-soft; never blocks
+    // the result write).
+    if result.status == PodStatus::Completed {
+        if let Some(b) = &result.bench {
+            let rr = agentbbs_arena::RunResult {
+                benchmark: agentbbs_arena::BenchmarkId(
+                    b.benchmark.clone().unwrap_or_else(|| "pod-bench".into()),
+                ),
+                competitor: identity.id(),
+                handle: format!("pod:{domain}"),
+                score: b.score,
+                passed: b.passed,
+                total: b.total,
+                harness: "meta-llm".into(),
+                at: chrono::Utc::now(),
+                detail: serde_json::Value::Null,
+            };
+            match agentbbs_arena::Submission::sign(&identity, rr) {
+                Ok(sub) => {
+                    if let Err(e) = state.arena.lock().unwrap().submit(sub) {
+                        tracing::warn!(error = %e, "pod bench arena submit rejected");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "pod bench submission sign failed"),
+            }
+        }
     }
 
     // Commit the lifecycle transition and return the updated pod.
@@ -2242,6 +2285,81 @@ mod tests {
         let b0 = &bud["budgets"][0];
         assert!(b0["spent"].as_f64().unwrap() > 0.0);
         assert_eq!(b0["over_budget"], false); // 3×0.0001 well under the 0.10 cap
+    }
+
+    // P5: a completed pod that reports a bench outcome ranks live in the Arena.
+    #[tokio::test]
+    async fn pod_completed_bench_ranks_in_arena() {
+        let app = router(AppState::in_memory());
+        let spec = serde_json::json!({
+            "template": {
+                "template_ref": "security/audit@1", "domain": "security",
+                "system_prompt": "auditor", "tools": [],
+                "bench_assertions": "no criticals", "per_agent_cap_usd": 0.50,
+                "max_tier": "high", "registered_room": "security-watch"
+            },
+            "idempotency_key": "b1"
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/pods")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&spec).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let id = body_json(resp).await["id"].as_str().unwrap().to_string();
+        let post = |body: serde_json::Value| {
+            let app = app.clone();
+            let path = format!("/api/pods/{id}/results");
+            async move {
+                app.oneshot(
+                    Request::post(path)
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(
+            post(serde_json::json!({ "status": "executing", "summary": "running cve-bench" }))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            post(serde_json::json!({ "status": "evaluating", "summary": "scoring" }))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        // Completed result WITH a bench outcome → Arena submission.
+        assert_eq!(
+            post(serde_json::json!({
+                "status": "completed", "summary": "32/40 passed",
+                "bench": { "score": 0.8, "passed": 32, "total": 40, "benchmark": "cve-bench" }
+            }))
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        // The Arena leaderboard now ranks this pod's live bench run.
+        let resp = app
+            .oneshot(Request::get("/api/arena").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let arena = body_json(resp).await;
+        let standings = arena["standings"].as_array().unwrap();
+        assert!(
+            standings
+                .iter()
+                .any(|s| s["handle"].as_str() == Some("pod:security")),
+            "the completed pod's bench run ranks in the Arena"
+        );
     }
 
     // ADR-0035 slice 7: the pod-monitor endpoint serves ranked configs + pods.
