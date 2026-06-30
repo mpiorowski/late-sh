@@ -5146,7 +5146,11 @@ fn extend_housing(rooms: &mut HashMap<RoomId, Room>) {
         for k in 0..n {
             let id = base + k as RoomId;
             let mut exits: Vec<(Dir, RoomId)> = Vec::new();
-            // The entrance room links back out to the close.
+            // The entrance room links back out to the close. Interior rooms chain
+            // North/South (not East/West) so this back-to-close direction can
+            // never collide with the forward link and overwrite it - the Longhouse
+            // door faces East, which was exactly the old chain direction, so its
+            // way out was clobbered and anyone who entered was trapped.
             if k == 0 {
                 exits.push((tier_dirs[i].opposite(), HOUSING_BASE));
             }
@@ -5154,7 +5158,7 @@ fn extend_housing(rooms: &mut HashMap<RoomId, Room>) {
             if k > 0 {
                 let stair = k == t.ground;
                 exits.push((
-                    if stair { Dir::Down } else { Dir::West },
+                    if stair { Dir::Down } else { Dir::North },
                     base + k as RoomId - 1,
                 ));
             }
@@ -5162,7 +5166,7 @@ fn extend_housing(rooms: &mut HashMap<RoomId, Room>) {
             if k + 1 < n {
                 let stair = k + 1 == t.ground;
                 exits.push((
-                    if stair { Dir::Up } else { Dir::East },
+                    if stair { Dir::Up } else { Dir::South },
                     base + k as RoomId + 1,
                 ));
             }
@@ -6301,6 +6305,40 @@ mod tests {
         let gate_id = square.exits.get(&Dir::South).copied().expect("south exit");
         let gate = world.room(gate_id).expect("gate exists");
         assert_eq!(gate.exits.get(&Dir::North).copied(), Some(1));
+    }
+
+    #[test]
+    fn every_home_has_a_way_back_out() {
+        use super::super::housing as housing_mod;
+        let world = seed_world();
+        // Can `from` reach `target` by following exits across the whole graph?
+        let can_reach = |from: RoomId, target: RoomId| -> bool {
+            let mut seen = std::collections::HashSet::from([from]);
+            let mut stack = vec![from];
+            while let Some(r) = stack.pop() {
+                if r == target {
+                    return true;
+                }
+                if let Some(room) = world.room(r) {
+                    for &to in room.exits.values() {
+                        if seen.insert(to) {
+                            stack.push(to);
+                        }
+                    }
+                }
+            }
+            false
+        };
+        // No home may be a trap: every housing room must be able to get back to
+        // the start room (this catches a door whose only exit leads deeper).
+        for &id in world.rooms.keys() {
+            if housing_mod::is_housing_room(id) {
+                assert!(
+                    can_reach(id, world.start_room),
+                    "housing room {id} is trapped - no way back out without recall"
+                );
+            }
+        }
     }
 
     #[test]
