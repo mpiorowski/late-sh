@@ -7,6 +7,31 @@ ratatui + a service + a `DoorGame` impl), not the nethack/rebels PTY-proxy
 pattern, because LoGD is a web app with no terminal to proxy — only its balance
 data and mechanics are reused.
 
+## Upstream source of truth
+
+Everything mechanical is transcribed from the **classic DragonPrime Edition**
+of LoGD — the final content-complete release, **1.1.2** (DragonPrime
+[ceased Sept 2019](https://dragonprime.net/index.php?topic=12736.msg106613)).
+We compare against the GitHub mirror:
+
+- **`jimlunsford/lotgd`** — <https://github.com/jimlunsford/lotgd> (raw:
+  `https://raw.githubusercontent.com/jimlunsford/lotgd/master/<path>`). Self-described
+  "DragonPrime Edition"; its creature/master/exp/weapon seed tables verified 1=1
+  against [`data.rs`](data.rs). Key files we ported: `lib/battle-skills.php`
+  (`rolldamage`), `lib/bell_rand.php`, `dragon.php`, `train.php`, `newday.php`,
+  `bank.php`, `healer.php`, `lib/forestoutcomes.php`, `lib/experience.php`,
+  `modules/specialty{mysticpower,darkarts,thiefskills}.php`, and the 8 forest
+  event modules.
+
+**Not** the source: the newer **`lotgd/core`** ("Daenerys") rewrite —
+<https://github.com/lotgd/core>. It's a headless, **content-empty** engine
+(no forest/dragon/masters/specialties), last real release v0.5.0 (Apr 2019),
+**archived Jan 2026**. Newer architecture, but a dead shell — nothing to port.
+
+Original LORD lineage for reference: [Wikipedia — Legend of the Red
+Dragon](https://en.wikipedia.org/wiki/Legend_of_the_Red_Dragon). LoGD project
+hub: [dragonprime.net](https://dragonprime.net/).
+
 ## Module map (flat)
 
 | File | Owns |
@@ -37,7 +62,9 @@ game so it backs out one menu level and only leaves to the hub from the village.
 
 ## Faithfulness notes (verified against `jimlunsford/lotgd` master)
 
-These were checked against the actual LoGD PHP source, not memory. Each names the upstream file it matches.
+These were checked against the actual LoGD PHP source (see [Upstream source of
+truth](#upstream-source-of-truth) above — <https://github.com/jimlunsford/lotgd>),
+not memory. Each names the upstream file it matches.
 
 - **Combat** mirrors `rolldamage` (`lib/battle-skills.php`) faithfully: `bell_rand` is the normal-curve roll (inverse-normal-CDF reproduction of the 441-entry percentile→z table, so it can go negative / overshoot), **signed damage** where a glancing blow heals the target, 1-in-20 player triple-crit, the `dmgmod`/`badguydmgmod` damage stages, `report_power_move` bonus damage at 1.5/2/3/4× the attack stat, reroll-until-progress, and `invulnerable`. (Earlier this port used a clamped triangular roll with floored glancing hits — that was *not* faithful; fixed.)
 - **Companions** (`apply_companion`): persistent allies stored on the character that strike the foe each round and can be struck down (and crumble). Bonecall summons the stat-blocked skeleton warrior; Mending Flow's `aura` heals them. Our one simplification: the foe makes a separate roll against a random companion each round (rather than LoGD's single-target redistribution), so companions don't soak the player's incoming hits.
