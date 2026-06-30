@@ -227,10 +227,11 @@ impl State {
             Mode::Village | Mode::Loading => Selection::Leave,
             Mode::Fight => {
                 // Esc during a fight flees back to the village (the turn is
-                // already spent).
+                // already spent). Persist so the fled fight stays fled.
                 self.push_log("You flee back to the safety of the village.".into());
                 self.encounter = None;
                 self.goto(Mode::Village);
+                self.save();
                 Selection::Stay
             }
             Mode::Event => {
@@ -342,6 +343,9 @@ impl State {
         });
         self.push_log(format!("You encounter {name} wielding {weapon}!"));
         self.goto(Mode::Fight);
+        // Persist the spent forest turn now, so a disconnect mid-fight can't
+        // refund it on reconnect.
+        self.save();
     }
 
     // --- forest special events ----------------------------------------------
@@ -466,6 +470,9 @@ impl State {
         });
         self.push_log("You step into the dragon's lair. The air turns to fire.".into());
         self.goto(Mode::Fight);
+        // Persist `seen_dragon` now so the once-per-run dragon seek can't be
+        // retried by disconnecting before the fight resolves.
+        self.save();
     }
 
     // --- fight resolution ---------------------------------------------------
