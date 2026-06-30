@@ -245,6 +245,13 @@ try {
   ok(await page.evaluate(() => /Playbooks/.test(document.getElementById('thread').textContent)), 'Playbooks view renders');
   if (GENESIS) {
     ok(await page.evaluate(() => /approval gate/.test(document.getElementById('thread').textContent) && /agent/.test(document.getElementById('thread').textContent)), 'a playbook shows agent steps + a human approval gate');
+    // run a playbook → it parks at the gate → approve → completes
+    await page.evaluate(() => document.querySelector('#thread [data-pbrun]').click());
+    await page.waitForTimeout(60);
+    ok(await page.evaluate(() => /awaiting approval/.test(document.getElementById('thread').textContent)), 'a playbook run parks at the approval gate');
+    await page.evaluate(() => document.querySelector('#thread [data-pbapprove]').click());
+    await page.waitForTimeout(60);
+    ok(await page.evaluate(() => /✓ completed/.test(document.getElementById('thread').textContent)), 'approving the gate completes the run');
   }
 
   // ---- mobile layout + persistence ----

@@ -885,6 +885,21 @@ function showApprovals() {
 }
 
 // ---- Playbooks (ADR-0041) — versioned signed business workflows ----
+// Local playbook-run state (demo). The signed server path is /api/playbooks/run
+// + /api/runs (tested); here we drive the same state machine in-browser.
+const pbRuns = {}; // playbook_id -> { cursor, status, approved: Set<stepId> }
+function drivePbRun(p) {
+  const r = pbRuns[p.playbook_id];
+  while (r.cursor < p.steps.length) {
+    const step = p.steps[r.cursor];
+    if (step.kind === 'approval_gate' && !r.approved.has(step.id)) { r.status = 'awaiting_approval'; return; }
+    r.cursor++;
+  }
+  r.status = 'completed';
+}
+function runPlaybook(p) { pbRuns[p.playbook_id] = { cursor: 0, status: 'running', approved: new Set() }; drivePbRun(p); showPlaybooks(); }
+function approvePbGate(p) { const r = pbRuns[p.playbook_id]; if (r) r.approved.add(p.steps[r.cursor].id); drivePbRun(p); showPlaybooks(); }
+
 function showPlaybooks() {
   const d = store.playbooks();
   const STEP = {
@@ -893,15 +908,26 @@ function showPlaybooks() {
     tool: (s) => `🔧 <b>tool</b> ${esc(s.tool)}`,
   };
   const rows = (d.playbooks || []).map(p => {
-    const steps = p.steps.map((s, i) => `<div class="bbs-row" style="padding-left:18px"><span class="d">${i + 1}</span>` +
-      `<span class="c">${(STEP[s.kind] || (() => esc(s.kind)))(s)}</span></div>`).join('');
+    const r = pbRuns[p.playbook_id];
+    const steps = p.steps.map((s, i) => {
+      const done = r && i < r.cursor ? '<span class="g">✓ </span>' : '';
+      const active = r && i === r.cursor && r.status !== 'completed' ? ' style="background:var(--bbs-inset,#1a2230)"' : '';
+      return `<div class="bbs-row"${active} style="padding-left:18px"><span class="d">${i + 1}</span>` +
+        `<span class="c">${done}${(STEP[s.kind] || (() => esc(s.kind)))(s)}</span></div>`;
+    }).join('');
+    const action = !r ? `<button class="bbs-btn" data-pbrun="${esc(p.playbook_id)}">Run ▸</button>`
+      : r.status === 'awaiting_approval' ? `<span class="m">⏸ awaiting approval</span> <button class="bbs-btn" data-pbapprove="${esc(p.playbook_id)}">Approve gate ✓</button>`
+        : r.status === 'completed' ? '<span class="g">✓ completed</span>' : '<span class="d">running…</span>';
     return `<div class="bbs-row"><span class="c"><b>${esc(p.name)}</b> <span class="k">v${esc(p.version)}</span><br>` +
-      `<span class="d">trigger: ${esc(p.trigger)} · ${p.steps.length} steps</span></span></div>` + steps;
+      `<span class="d">trigger: ${esc(p.trigger)} · ${p.steps.length} steps</span></span><span class="r">${action}</span></div>` + steps;
   }).join('');
   panel('Playbooks',
-    'Versioned, signed business workflows (ADR-0041) — agents do the work, humans gate the risky steps. Content-addressed + reviewable.',
+    'Versioned, signed business workflows (ADR-0041) — agents do the work, humans gate the risky steps. Run one to watch it drive + park at the gate.',
     rows || '<div class="bbs-row"><span class="d">No playbooks yet.</span></div>',
     'A run dispatches agent/tool steps and blocks at each ✋ approval gate (fail-closed).');
+  const byId = (id) => store.playbooks().playbooks.find(x => x.playbook_id === id);
+  document.querySelectorAll('#thread [data-pbrun]').forEach(el => el.onclick = () => runPlaybook(byId(el.dataset.pbrun)));
+  document.querySelectorAll('#thread [data-pbapprove]').forEach(el => el.onclick = () => approvePbGate(byId(el.dataset.pbapprove)));
 }
 
 // ---- Budget guardrails (ADR-0040) — per-pod spend vs cap ----
