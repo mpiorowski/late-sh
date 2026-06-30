@@ -32,6 +32,13 @@ pub enum FederationPayload {
         /// The board's messages (each independently signed/content-addressed).
         messages: Vec<Message>,
     },
+    /// Peer-discovery gossip: "here are nodes I know about" (node + addr only).
+    /// The receiver merges new ones at `TrustLevel::Unknown` — discovery never
+    /// grants trust (ADR-0026 G5).
+    PeerExchange {
+        /// The shared peer records.
+        peers: Vec<crate::peer::PeerInfo>,
+    },
     /// A peer introducing itself on link-up.
     PeerHello {
         /// The greeting node's identity.

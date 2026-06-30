@@ -50,6 +50,16 @@ impl Peer {
     }
 }
 
+/// A compact, shareable peer record for discovery gossip (node + address, no
+/// trust — the receiver decides trust locally, zero-trust by default).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerInfo {
+    /// The peer node's anonymous identity.
+    pub node: AgentId,
+    /// Transport address.
+    pub addr: String,
+}
+
 /// A thread-unaware registry of peers keyed by node id. Cheap to clone-iterate.
 #[derive(Default, Debug, Clone)]
 pub struct PeerBook {
@@ -80,6 +90,32 @@ impl PeerBook {
     /// Every known peer, in node-id order.
     pub fn all(&self) -> Vec<Peer> {
         self.peers.values().cloned().collect()
+    }
+
+    /// This book as shareable [`PeerInfo`] gossip (node + addr, trust omitted).
+    pub fn infos(&self) -> Vec<PeerInfo> {
+        self.peers
+            .values()
+            .map(|p| PeerInfo {
+                node: p.node,
+                addr: p.addr.clone(),
+            })
+            .collect()
+    }
+
+    /// Merge discovered peers (e.g. from a [`PeerInfo`] gossip): each *new* node
+    /// is added at [`TrustLevel::Unknown`] (zero-trust — discovery never grants
+    /// trust); existing peers are left untouched (their trust is preserved).
+    /// Returns the number of peers newly added.
+    pub fn merge_discovered(&mut self, infos: &[PeerInfo]) -> usize {
+        let mut added = 0;
+        for info in infos {
+            self.peers.entry(info.node.to_hex()).or_insert_with(|| {
+                added += 1;
+                Peer::new(info.node, info.addr.clone(), TrustLevel::Unknown)
+            });
+        }
+        added
     }
 
     /// Only the [`TrustLevel::Trusted`] peers — the egress set.

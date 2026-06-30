@@ -34,7 +34,7 @@ pub use adapter::{
 };
 pub use envelope::{FederationEnvelope, FederationPayload};
 pub use federator::Federator;
-pub use peer::{Peer, PeerBook, TrustLevel};
+pub use peer::{Peer, PeerBook, PeerInfo, TrustLevel};
 pub use pii::{scrubbed, strip_pii, REDACTED};
 pub use tcp::{FederationServer, TcpTransport, MAX_FRAME};
 pub use transport::{LoopbackTransport, Transport};
@@ -215,6 +215,42 @@ mod tests {
         );
         assert!(dst2_fed.ingest(&bad.to_bytes().unwrap()).is_err());
         assert_eq!(dst2.message_count().unwrap(), 0); // fail-closed: nothing stored
+    }
+
+    // G5 slice 2: peer-discovery gossip adds new peers at Unknown trust and
+    // never downgrades an existing (e.g. Trusted) peer.
+    #[test]
+    fn peer_exchange_discovers_at_unknown_trust() {
+        let peer_x = Identity::generate().id();
+        let a = Federator::new(
+            Identity::generate(),
+            Arc::new(agentbbs_core::MemoryStore::new()),
+            Arc::new(NullReporter),
+            Arc::new(LoopbackTransport::new()),
+            PeerBook::new(),
+        );
+        a.add_peer(Peer::new(peer_x, "tcp://x:9", TrustLevel::Trusted));
+        let env = a.make_peer_exchange().unwrap();
+
+        let b = Federator::new(
+            Identity::generate(),
+            Arc::new(agentbbs_core::MemoryStore::new()),
+            Arc::new(NullReporter),
+            Arc::new(LoopbackTransport::new()),
+            PeerBook::new(),
+        );
+        b.ingest(&env.to_bytes().unwrap()).unwrap();
+        let learned = b.peers();
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].node, peer_x);
+        assert_eq!(learned[0].trust, TrustLevel::Unknown); // discovery never grants trust
+
+        // Promote locally, then re-ingest: idempotent + trust NOT downgraded.
+        b.add_peer(Peer::new(peer_x, "tcp://x:9", TrustLevel::Trusted));
+        b.ingest(&env.to_bytes().unwrap()).unwrap();
+        let after = b.peers();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].trust, TrustLevel::Trusted);
     }
 
     // 4b. Ingest rejects a replicated message whose author signature is forged.

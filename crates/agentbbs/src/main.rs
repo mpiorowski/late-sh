@@ -243,7 +243,7 @@ async fn run_federate_serve(port: u16, peer: Option<String>) -> anyhow::Result<(
     );
 
     // Bootstrap: push our current boards + recent messages to trusted peers.
-    if !federator.peers().trusted().is_empty() {
+    if !federator.trusted_peers().is_empty() {
         let boards = store.list_boards().unwrap_or_default();
         for board in &boards {
             let _ = federator.announce_board(board).await;

@@ -13,7 +13,7 @@
 //! [`ingest`]: Federator::ingest
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use agentbbs_core::{Board, Event, EventKind, Identity, Message, Reporter, Result, Store};
 use serde_json::json;
@@ -29,7 +29,7 @@ pub struct Federator {
     store: Arc<dyn Store>,
     reporter: Arc<dyn Reporter>,
     transport: Arc<dyn Transport>,
-    peers: PeerBook,
+    peers: RwLock<PeerBook>,
     seq: AtomicU64,
 }
 
@@ -48,7 +48,7 @@ impl Federator {
             store,
             reporter,
             transport,
-            peers,
+            peers: RwLock::new(peers),
             seq: AtomicU64::new(0),
         }
     }
@@ -58,14 +58,19 @@ impl Federator {
         self.identity.id()
     }
 
-    /// Mutable access to the peer registry.
-    pub fn peers_mut(&mut self) -> &mut PeerBook {
-        &mut self.peers
+    /// Add or update a peer (interior-mutable, safe under `Arc<Federator>`).
+    pub fn add_peer(&self, peer: crate::peer::Peer) {
+        self.peers.write().unwrap().add(peer);
     }
 
-    /// Read-only access to the peer registry.
-    pub fn peers(&self) -> &PeerBook {
-        &self.peers
+    /// Snapshot of every known peer.
+    pub fn peers(&self) -> Vec<crate::peer::Peer> {
+        self.peers.read().unwrap().all()
+    }
+
+    /// Snapshot of the trusted (egress) peers.
+    pub fn trusted_peers(&self) -> Vec<crate::peer::Peer> {
+        self.peers.read().unwrap().trusted()
     }
 
     fn next_seq(&self) -> u64 {
@@ -81,10 +86,22 @@ impl Federator {
         let seq = self.next_seq();
         let envelope = FederationEnvelope::seal(&self.identity, payload, seq)?;
         let bytes = envelope.to_bytes()?;
-        for peer in self.peers.trusted() {
+        let targets = self.peers.read().unwrap().trusted();
+        for peer in targets {
             self.transport.send(&peer, bytes.clone()).await?;
         }
         Ok(())
+    }
+
+    /// Build a signed peer-discovery gossip of this node's known peers (node +
+    /// addr only). A receiver merges new ones at `TrustLevel::Unknown` (G5).
+    pub fn make_peer_exchange(&self) -> Result<FederationEnvelope> {
+        let peers = self.peers.read().unwrap().infos();
+        FederationEnvelope::seal(
+            &self.identity,
+            FederationPayload::PeerExchange { peers },
+            self.next_seq(),
+        )
     }
 
     /// Announce a board to trusted peers. The board's `description` is scrubbed
@@ -187,6 +204,15 @@ impl Federator {
                     Event::now(EventKind::FederationReceive, board.slug.clone())
                         .by(envelope.node)
                         .with(json!({ "kind": "snapshot", "messages": messages.len() })),
+                );
+            }
+            FederationPayload::PeerExchange { peers } => {
+                // Discovery never grants trust: new nodes land at Unknown.
+                let added = self.peers.write().unwrap().merge_discovered(peers);
+                self.emit(
+                    Event::now(EventKind::FederationReceive, "peers")
+                        .by(envelope.node)
+                        .with(json!({ "kind": "peer_exchange", "discovered": added })),
                 );
             }
             FederationPayload::PeerHello { node, protocol } => {
