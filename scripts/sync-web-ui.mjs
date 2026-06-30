@@ -35,11 +35,11 @@ const _c = { state: { node: 'agentbbs/0.1', total_messages: 0, boards: [] }, are
 const _get = (p) => fetch(p, { headers: H }).then(r => r.json());
 async function _sync() {
   try {
-    const [s, a, r, o, d, f, rep, m, p] = await Promise.all([
+    const [s, a, r, o, d, f, rep, m, p, ap] = await Promise.all([
       _get('/api/state'), _get('/api/arena'), _get('/api/arena/retort'), _get('/api/online'),
-      _get('/api/doors'), _get('/api/federation'), _get('/api/report'), _get('/api/market'), _get('/api/arena/pods'),
+      _get('/api/doors'), _get('/api/federation'), _get('/api/report'), _get('/api/market'), _get('/api/arena/pods'), _get('/api/approvals'),
     ]);
-    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m, pods: p });
+    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m, pods: p, approvals: ap });
   } catch (e) { console.error('[agentbbs] /api sync failed', e); }
 }
 const store = {
@@ -48,6 +48,8 @@ const store = {
   board: (s) => _get('/api/boards/' + encodeURIComponent(s)),
   arena: () => _c.arena, retort: () => _c.retort, online: () => _c.online,
   pods: () => _c.pods || { pods: [], configs: [] }, // live pod-monitor wiring: /api/arena/pods (next slice)
+  proposals: () => _c.approvals || { proposals: [] }, // ADR-0038: GET /api/approvals
+  decide: async () => ({ ok: false, error: 'approvals: in-browser decision signing on the server node lands in ADR-0038 phase 3' }),
   doors: () => _c.doors, federation: () => _c.federation, report: () => _c.report, market: () => _c.market,
   post: async (seed, { board, body, handle, parent = null }) => {
     const signed = await BBS.signPost(seed, { board, body, handle, parent });

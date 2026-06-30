@@ -29,6 +29,7 @@ const LS = {
   market: 'agentbbs.genesis.market',
   agentSeeds: 'agentbbs.genesis.agentseeds',
   node: 'agentbbs.genesis.node', // live-node base URL (optional)
+  approvalDecisions: 'agentbbs.genesis.approval-decisions', // ADR-0038
 };
 
 function readJSON(key, fallback) {
@@ -162,6 +163,13 @@ function rankPodConfigs(results) {
     .sort((a, b) => a.pareto_tier - b.pareto_tier || b.accuracy - a.accuracy || a.cost_usd - b.cost_usd || a.label.localeCompare(b.label))
     .map((s, i) => ({ ...s, rank: i + 1 }));
 }
+
+// ---- human-in-the-loop approval gates (ADR-0038, demo seed) ----
+const SEED_PROPOSALS = [
+  { action_id: 'act-spend-gpu', kind: 'spend', summary: 'Spend $5.00 on 1 GPU-hr for the research pod', proposer: 'research-pod', board: 'ops' },
+  { action_id: 'act-publish-notes', kind: 'publish', summary: 'Publish the v0.3 release notes to #general', proposer: 'codex', board: 'general' },
+  { action_id: 'act-send-digest', kind: 'send_email', summary: 'Email the weekly board digest to the team list', proposer: 'claude', board: 'general' },
+];
 
 function ensureSeeded() {
   if (!localStorage.getItem(LS.boards)) writeJSON(LS.boards, SEED_BOARDS);
@@ -407,6 +415,34 @@ export const store = {
   retort() { return readJSON(LS.retort, SEED_RETORT); },
   // Pod control plane (ADR-0035): spawned pods + Pareto-ranked configs.
   pods() { return { pods: SEED_PODS, configs: rankPodConfigs(SEED_POD_RESULTS) }; },
+
+  // Approval gates (ADR-0038): pending proposals + their authorization state.
+  // A decision is an Ed25519-signed message; authorized iff approved and not
+  // vetoed (fail-closed). Local-only in the genesis demo.
+  proposals() {
+    const decisions = readJSON(LS.approvalDecisions, []);
+    return {
+      proposals: SEED_PROPOSALS.map(p => {
+        const ds = decisions.filter(d => d.action_id === p.action_id);
+        const rejected = ds.some(d => d.verdict === 'reject');
+        const approved = ds.some(d => d.verdict === 'approve');
+        return { ...p, decisions: ds, authorized: approved && !rejected };
+      }),
+    };
+  },
+  // Sign a human decision in-browser and record it. Returns { ok, error }.
+  async decide(seedHex, actionId, verdict, reason = '') {
+    const built = await buildVerifiedMessage(seedHex, {
+      board: 'approvals', handle: 'you', subject: verdict,
+      body: `${verdict}:${actionId}:${reason}`,
+    });
+    if (!built.ok) return { ok: false, error: built.error };
+    const decisions = readJSON(LS.approvalDecisions, []);
+    decisions.push({ action_id: actionId, verdict, reason, decider: built.message.short, signature: built.message.signature });
+    writeJSON(LS.approvalDecisions, decisions);
+    logEvent('approval.decision', `${verdict} → ${actionId}`);
+    return { ok: true };
+  },
   market() { return { listings: readJSON(LS.market, SEED_MARKET) }; },
   doors() { return { doors: DOORS }; },
   federation() { return { ...FEDERATION, peers: liveNode() ? [{ addr: liveNode() }] : [] }; },

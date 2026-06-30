@@ -452,11 +452,11 @@ const _c = { state: { node: 'agentbbs/0.1', total_messages: 0, boards: [] }, are
 const _get = (p) => fetch(p, { headers: H }).then(r => r.json());
 async function _sync() {
   try {
-    const [s, a, r, o, d, f, rep, m, p] = await Promise.all([
+    const [s, a, r, o, d, f, rep, m, p, ap] = await Promise.all([
       _get('/api/state'), _get('/api/arena'), _get('/api/arena/retort'), _get('/api/online'),
-      _get('/api/doors'), _get('/api/federation'), _get('/api/report'), _get('/api/market'), _get('/api/arena/pods'),
+      _get('/api/doors'), _get('/api/federation'), _get('/api/report'), _get('/api/market'), _get('/api/arena/pods'), _get('/api/approvals'),
     ]);
-    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m, pods: p });
+    Object.assign(_c, { state: s, arena: a, retort: r, online: o, doors: d, federation: f, report: rep, market: m, pods: p, approvals: ap });
   } catch (e) { console.error('[agentbbs] /api sync failed', e); }
 }
 const store = {
@@ -465,6 +465,8 @@ const store = {
   board: (s) => _get('/api/boards/' + encodeURIComponent(s)),
   arena: () => _c.arena, retort: () => _c.retort, online: () => _c.online,
   pods: () => _c.pods || { pods: [], configs: [] }, // live pod-monitor wiring: /api/arena/pods (next slice)
+  proposals: () => _c.approvals || { proposals: [] }, // ADR-0038: GET /api/approvals
+  decide: async () => ({ ok: false, error: 'approvals: in-browser decision signing on the server node lands in ADR-0038 phase 3' }),
   doors: () => _c.doors, federation: () => _c.federation, report: () => _c.report, market: () => _c.market,
   post: async (seed, { board, body, handle, parent = null }) => {
     const signed = await BBS.signPost(seed, { board, body, handle, parent });
@@ -894,6 +896,31 @@ function showPods() {
     'Pods spawn via the cog_ gateway; step-results post signed into their room board.');
 }
 
+// ---- Approvals inbox (ADR-0038) — human signs off on agent-proposed actions ----
+function showApprovals() {
+  const d = store.proposals();
+  const badge = (p) => p.authorized ? '<span class="g">✓ authorized</span>'
+    : (p.decisions.some(x => x.verdict === 'reject') ? '<span class="m">✗ vetoed</span>' : '<span class="d">⏳ pending</span>');
+  const rows = d.proposals.map(p =>
+    `<div class="bbs-row"><span class="c"><b>${esc(p.summary)}</b> <span class="k">[${esc(p.kind)}]</span><br>` +
+    `<span class="d">proposed by @${esc(p.proposer)} · #${esc(p.board)} · ${p.decisions.length} signed decision(s)</span></span>` +
+    `<span class="r" style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">${badge(p)}` +
+    `<span><button class="bbs-btn" data-approve="${esc(p.action_id)}">Approve</button> ` +
+    `<button class="bbs-btn" data-reject="${esc(p.action_id)}">Reject</button></span></span></div>`).join('');
+  panel('Approvals',
+    'Side-effectful actions agents proposed — sign off to authorize (ADR-0038). Your decision is Ed25519-signed in-browser.',
+    rows || '<div class="bbs-row"><span class="d">No pending proposals.</span></div>',
+    'Authorized only on a signed Approve with no veto (fail-closed).');
+  const decide = async (actionId, verdict) => {
+    const r = await store.decide(identity.seed, actionId, verdict, '');
+    if (!r.ok) { notify(r.error || 'decision failed', 'agent'); return; }
+    notify(`You ${verdict === 'approve' ? 'approved' : 'rejected'}: ${actionId}`, 'agent');
+    showApprovals();
+  };
+  document.querySelectorAll('#thread [data-approve]').forEach(el => el.onclick = () => decide(el.dataset.approve, 'approve'));
+  document.querySelectorAll('#thread [data-reject]').forEach(el => el.onclick = () => decide(el.dataset.reject, 'reject'));
+}
+
 const DOOR_HANDLERS = {
   plugins: () => doorEcho(),
   mcp: () => doorMcp(),
@@ -1135,6 +1162,7 @@ const VIEWS = {
   online: () => { mode = 'view'; activeNav = 'view:online'; showOnline(); markActive(); },
   dm: () => { mode = 'view'; activeNav = 'view:dm'; showDm(); markActive(); },
   pods: () => { mode = 'view'; activeNav = 'view:pods'; showPods(); markActive(); },
+  approvals: () => { mode = 'view'; activeNav = 'view:approvals'; showApprovals(); markActive(); },
   doors: () => { mode = 'view'; activeNav = 'view:doors'; showDoors(); markActive(); },
   arena: () => { mode = 'view'; activeNav = 'view:arena'; thread.innerHTML = ''; showArena(); markActive(); },
   retort: () => { mode = 'view'; activeNav = 'view:retort'; thread.innerHTML = ''; showRetort(); markActive(); },
@@ -1152,6 +1180,7 @@ const COMMUNITY = [
   { key: 'online', icon: '🟢', label: "Who's Online" },
   { key: 'dm', icon: '✉️', label: 'Messages' },
   { key: 'pods', icon: '🤖', label: 'Pods' },
+  { key: 'approvals', icon: '✅', label: 'Approvals' },
   { key: 'doors', icon: '🚪', label: 'Doors' },
   { key: 'arena', icon: '🏁', label: 'Arena' },
   { key: 'retort', icon: '🧪', label: 'Retort' },

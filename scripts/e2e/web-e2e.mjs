@@ -192,6 +192,24 @@ try {
     ok(await page.evaluate(() => { const t = document.getElementById('thread').textContent; return t.indexOf('frontier') < t.indexOf('dominated'); }), 'frontier configs rank above dominated ones');
   }
 
+  // ---- approvals inbox (ADR-0038) ----
+  await page.evaluate(() => window.__ui.VIEWS.approvals());
+  await page.waitForTimeout(80);
+  ok(await page.evaluate(() => /Side-effectful actions/.test(document.getElementById('thread').textContent)), 'Approvals inbox renders');
+  if (GENESIS) {
+    ok(await page.evaluate(() => !!document.querySelector('#thread [data-approve]')), 'Approvals show Approve/Reject controls');
+    // sign an Approve in-browser → the proposal becomes authorized
+    await page.evaluate(() => document.querySelector('#thread [data-approve="act-spend-gpu"]').click());
+    await page.waitForFunction(() => window.__genesisStore.proposals().proposals.find(p => p.action_id === 'act-spend-gpu')?.authorized === true, { timeout: 8000 });
+    ok(true, 'signing an Approve in-browser authorizes the action (signed decision recorded)');
+    // a veto wins: reject another proposal → not authorized
+    await page.evaluate(() => window.__ui.VIEWS.approvals());
+    await page.waitForTimeout(60);
+    await page.evaluate(() => document.querySelector('#thread [data-reject="act-publish-notes"]').click());
+    await page.waitForFunction(() => { const p = window.__genesisStore.proposals().proposals.find(x => x.action_id === 'act-publish-notes'); return p && p.authorized === false && p.decisions.length > 0; }, { timeout: 8000 });
+    ok(true, 'a signed Reject vetoes (fail-closed)');
+  }
+
   // ---- mobile layout + persistence ----
   await page.evaluate(() => window.__ui.applyLayout('mobile'));
   ok(await page.evaluate(() => document.documentElement.dataset.layout === 'mobile' && getComputedStyle(document.getElementById('sidebar')).display === 'none'), 'mobile layout hides sidebar');
