@@ -30,6 +30,7 @@ env:
     -p agentbbs-tui
     -p agentbbs
     -p agentbbs-web
+    -p agentbbs-bridge
 
 jobs:
   fmt-clippy-test:
