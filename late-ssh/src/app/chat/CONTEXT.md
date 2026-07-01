@@ -161,10 +161,9 @@ Notifications:
 
 Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`. The base navigation order is:
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
-2. Core permanent rooms plus synthetic updates: `lounge`, `announcements`, `suggestions`, `bugs`, Notifications/Mentions, News, and RSS when available. Collapsing Core hides these synthetic update entries too.
+2. Core permanent rooms plus synthetic updates: `lounge`, `announcements`, `suggestions`, `bugs`, Notifications/Mentions, News, RSS when available, and Discover / `+ browse rooms` last. Collapsing Core hides these synthetic update entries too (Discover included).
 3. Other non-DM chat-list rooms/channels, excluding favorites.
 4. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
-5. Discover / `+ browse rooms`.
 
 `RoomSection::Updates` remains only for legacy Directory-hosted Showcase/Work state; collapsing Updates does not affect Home rail entries.
 

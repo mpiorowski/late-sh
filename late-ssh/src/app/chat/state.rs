@@ -4101,6 +4101,8 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         if feeds_available {
             order.push(RoomSlot::Feeds);
         }
+        // Discover ("browse rooms") lives at the bottom of Core.
+        order.push(RoomSlot::Discover);
     }
 
     // Channels: all non-DM rooms outside Core, public + private merged.
@@ -4138,7 +4140,6 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     order.extend(dms.iter().filter_map(|(r, _)| {
         (pushed_rooms.insert(r.id) && !dms_collapsed).then_some(RoomSlot::Room(r.id))
     }));
-    order.push(RoomSlot::Discover);
 
     order
 }
@@ -5699,12 +5700,12 @@ mod tests {
                 RoomSlot::Notifications,
                 RoomSlot::News,
                 RoomSlot::Feeds,
+                RoomSlot::Discover,
                 RoomSlot::Room(public_zeta),
                 RoomSlot::Room(private_beta),
                 RoomSlot::Room(public_alpha),
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
-                RoomSlot::Discover,
             ]
         );
     }
@@ -5780,6 +5781,8 @@ mod tests {
         assert!(!co.contains(&RoomSlot::Room(announcements)));
         assert!(!co.contains(&RoomSlot::Notifications));
         assert!(!co.contains(&RoomSlot::News));
+        // Discover now lives at the bottom of Core, so it collapses with it.
+        assert!(!co.contains(&RoomSlot::Discover));
         assert!(co.contains(&RoomSlot::Room(public_alpha)));
 
         // Updates is now hosted by the Directory page, not the Home rail.
@@ -5788,7 +5791,7 @@ mod tests {
         assert!(u.contains(&RoomSlot::News));
         assert!(!u.contains(&RoomSlot::Showcase));
         assert!(!u.contains(&RoomSlot::Work));
-        // Discover is not part of a collapsible section — always present.
+        // Discover lives in Core, which is expanded here, so it stays present.
         assert!(u.contains(&RoomSlot::Discover));
 
         // DMs collapsed: the DM drops out.

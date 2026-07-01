@@ -3419,6 +3419,8 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         if view.feeds_available {
             push_slot(RoomSlot::Feeds, &mut push_row);
         }
+        // Discover ("+ browse rooms") is the last entry in Core.
+        push_slot(RoomSlot::Discover, &mut push_row);
     }
 
     let channels: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
@@ -3465,9 +3467,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             }
         }
     }
-
-    push_row(blank(), None, false);
-    push_slot(RoomSlot::Discover, &mut push_row);
 
     RoomListRows {
         lines,
