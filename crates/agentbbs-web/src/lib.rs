@@ -119,8 +119,8 @@ pub struct AppState {
     budget: Mutex<BudgetLedger>,
     /// Signed moderation log (ADR-0032); enforced on the post path.
     moderation: Mutex<ModerationLog>,
-    /// Active playbook runs (ADR-0041 Phase 3), keyed by run id.
-    runs: Mutex<Vec<(String, PlaybookRun)>>,
+    /// Active playbook runs (ADR-0041 Phase 3).
+    runs: Mutex<Vec<RunEntry>>,
     /// Decision records emitted by completed runs (ADR-0045).
     decisions: Mutex<DecisionLog>,
     /// Verifiable credentials issued by any connected agent/human (ADR-0042).
@@ -1685,6 +1685,20 @@ async fn api_pods_result(
 /// already-authorized `ApprovalGate`, stopping at the first un-approved gate or
 /// at completion. `gate` is the live approval gate; a gate's `allowed` deciders
 /// are whoever has signed a decision over its action id.
+/// A tracked playbook run plus the state needed to keep its live progress thread
+/// (ADR-0052 Phase 2) idempotent across advance calls: the `Milestone` message
+/// that anchors the run and how many `Step` messages have been posted so far.
+struct RunEntry {
+    id: String,
+    run: PlaybookRun,
+    /// Board the progress thread is posted to.
+    board: String,
+    /// The anchor Milestone message id (set once, on first progress post).
+    milestone: Option<agentbbs_core::MessageId>,
+    /// Count of completed steps already posted as Step messages.
+    steps_posted: usize,
+}
+
 fn drive_run(run: &mut PlaybookRun, gate: &ApprovalGate) {
     loop {
         let allowed: Vec<agentbbs_core::AgentId> = match run.gate_action_id() {
@@ -1696,6 +1710,82 @@ fn drive_run(run: &mut PlaybookRun, gate: &ApprovalGate) {
             _ => break, // AwaitingApproval | Completed | Failed
         }
     }
+}
+
+/// Sign a `kind`-typed board message as the "autopilot" system identity and post
+/// it, returning its id. Used to build a playbook run's live progress thread
+/// (ADR-0052 Phase 2).
+fn post_autopilot(
+    state: &AppState,
+    board: &str,
+    subject: &str,
+    body: &str,
+    kind: agentbbs_core::MessageKind,
+    parent: Option<agentbbs_core::MessageId>,
+) -> Option<agentbbs_core::MessageId> {
+    let identity = state.agent_identity("autopilot");
+    let msg_body = agentbbs_core::MessageBody {
+        board: board.to_string(),
+        parent,
+        subject: subject.to_string(),
+        body: body.to_string(),
+        author: identity.id(),
+        handle: "autopilot".to_string(),
+        created_at: chrono::Utc::now(),
+        kind,
+    };
+    let msg = agentbbs_core::Message::sign(&identity, msg_body).ok()?;
+    state.bbs.post(Role::Agent.caps(), msg).ok()
+}
+
+/// Post a playbook run's live threaded progress (ADR-0052 Phase 2): a `Milestone`
+/// anchors the run (posted once), and each newly-completed `PlaybookStep` posts a
+/// `Step` message threaded under it. Idempotent via `entry.milestone` /
+/// `entry.steps_posted`, so repeated calls (start, then each advance) only post
+/// what's new. Signed by the "autopilot" system identity; soft-fails (a post
+/// error never breaks the run). The target board defaults to `agents.dev`
+/// (overridable via `AGENTBBS_PLAYBOOK_BOARD`).
+fn post_run_progress(state: &AppState, entry: &mut RunEntry) {
+    let pb = entry.run.playbook().clone();
+    if entry.milestone.is_none() {
+        let subject = format!("▶ Playbook '{}' v{}", pb.name, pb.version);
+        let body = format!(
+            "Autopilot started '{}' (trigger: {}) — {} step(s).",
+            pb.name,
+            pb.trigger,
+            pb.steps.len()
+        );
+        entry.milestone = post_autopilot(
+            state,
+            &entry.board,
+            &subject,
+            &body,
+            agentbbs_core::MessageKind::Milestone,
+            None,
+        );
+    }
+    let Some(milestone) = entry.milestone.clone() else {
+        return; // milestone post failed (e.g. board missing) — nothing to thread under
+    };
+    let completed = entry.run.steps_completed();
+    while entry.steps_posted < completed {
+        let step = &pb.steps[entry.steps_posted];
+        let subject = format!("✓ {}", step.id);
+        post_autopilot(
+            state,
+            &entry.board,
+            &subject,
+            &step.progress_summary(),
+            agentbbs_core::MessageKind::Step,
+            Some(milestone.clone()),
+        );
+        entry.steps_posted += 1;
+    }
+}
+
+/// The board a playbook run's progress thread posts to.
+fn playbook_board() -> String {
+    std::env::var("AGENTBBS_PLAYBOOK_BOARD").unwrap_or_else(|_| "agents.dev".to_string())
 }
 
 /// A run's externally-visible state.
@@ -1724,8 +1814,17 @@ async fn api_playbook_run(
     }
     let mut runs = state.runs.lock().unwrap();
     let id = format!("run-{:04}", runs.len());
-    let view = run_view(&id, &run);
-    runs.push((id, run));
+    let mut entry = RunEntry {
+        id: id.clone(),
+        run,
+        board: playbook_board(),
+        milestone: None,
+        steps_posted: 0,
+    };
+    // Post the live threaded progress log for whatever advanced in this call.
+    post_run_progress(&state, &mut entry);
+    let view = run_view(&entry.id, &entry.run);
+    runs.push(entry);
     Ok(Json(view))
 }
 
@@ -1739,14 +1838,16 @@ async fn api_run_advance(
     let mut runs = state.runs.lock().unwrap();
     let entry = runs
         .iter_mut()
-        .find(|(rid, _)| *rid == id)
+        .find(|e| e.id == id)
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "run not found"))?;
-    let was = entry.1.status();
-    drive_run(&mut entry.1, &gate);
-    let completed_now = was != RunStatus::Completed && entry.1.status() == RunStatus::Completed;
-    let view = run_view(&entry.0, &entry.1);
+    let was = entry.run.status();
+    drive_run(&mut entry.run, &gate);
+    // Post any steps completed by this advance to the run's progress thread.
+    post_run_progress(&state, entry);
+    let completed_now = was != RunStatus::Completed && entry.run.status() == RunStatus::Completed;
+    let view = run_view(&entry.id, &entry.run);
     let finished = if completed_now {
-        Some(entry.1.clone())
+        Some(entry.run.clone())
     } else {
         None
     };
@@ -1780,7 +1881,7 @@ fn record_run_completion(state: &AppState, run: &PlaybookRun) {
 /// `GET /api/runs` — all playbook runs and their state.
 async fn api_runs_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = state.runs.lock().unwrap();
-    let views: Vec<serde_json::Value> = runs.iter().map(|(id, r)| run_view(id, r)).collect();
+    let views: Vec<serde_json::Value> = runs.iter().map(|e| run_view(&e.id, &e.run)).collect();
     Json(serde_json::json!({ "runs": views }))
 }
 
@@ -4499,6 +4600,73 @@ mod tests {
 
         std::env::remove_var("AGENTBBS_WHATSAPP_VERIFY_TOKEN");
         std::env::remove_var("AGENTBBS_WHATSAPP_APP_SECRET");
+    }
+
+    // ADR-0052 Phase 2: a driven playbook run posts a live threaded progress
+    // log — a Milestone anchor + one Step per completed step, threaded under it,
+    // idempotent across advance calls.
+    #[test]
+    fn playbook_run_posts_a_threaded_progress_log() {
+        use agentbbs_core::caps::Caps;
+        use agentbbs_core::playbook::{PlaybookStep, StepKind};
+        use agentbbs_core::{MessageKind, Playbook, PlaybookRun};
+
+        let pb = Playbook::new(
+            "triage",
+            "1",
+            "manual",
+            vec![
+                PlaybookStep {
+                    id: "research".into(),
+                    kind: StepKind::AgentTask {
+                        agent: "claude".into(),
+                        instruction: "enrich the lead".into(),
+                    },
+                },
+                PlaybookStep {
+                    id: "gate".into(),
+                    kind: StepKind::ApprovalGate {
+                        summary: "approve spend".into(),
+                    },
+                },
+            ],
+        );
+        let state = AppState::in_memory();
+        let mut run = PlaybookRun::start(pb).unwrap();
+        // Drive past the AgentTask → parks at the gate (1 step completed).
+        drive_run(&mut run, &state.gate.lock().unwrap());
+        let mut entry = RunEntry {
+            id: "run-0".into(),
+            run,
+            board: "agents.dev".into(),
+            milestone: None,
+            steps_posted: 0,
+        };
+        post_run_progress(&state, &mut entry);
+
+        let msgs = state.bbs.read_board(Caps::READ, "agents.dev", 100).unwrap();
+        let milestones: Vec<_> = msgs
+            .iter()
+            .filter(|m| m.body.kind == MessageKind::Milestone)
+            .collect();
+        let steps: Vec<_> = msgs
+            .iter()
+            .filter(|m| m.body.kind == MessageKind::Step)
+            .collect();
+        assert_eq!(milestones.len(), 1, "one Milestone anchors the run");
+        assert_eq!(steps.len(), 1, "one Step for the completed AgentTask");
+        // The step threads under the milestone.
+        assert_eq!(
+            steps[0].body.parent.as_ref(),
+            Some(&milestones[0].id),
+            "the Step is threaded under the Milestone"
+        );
+        assert!(steps[0].body.body.contains("enrich the lead"));
+
+        // Idempotent: re-posting without advancing adds nothing new.
+        post_run_progress(&state, &mut entry);
+        let after = state.bbs.read_board(Caps::READ, "agents.dev", 100).unwrap();
+        assert_eq!(after.len(), msgs.len(), "no duplicate progress posts");
     }
 
     // ADR-0054 Q4: durability. A board post made through one AppState over a

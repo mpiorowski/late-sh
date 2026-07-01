@@ -78,6 +78,21 @@ pub struct PlaybookStep {
     pub kind: StepKind,
 }
 
+impl PlaybookStep {
+    /// A one-line, human-readable summary of what this step does — used as the
+    /// body of the `Step` progress message a runner posts as it advances
+    /// (ADR-0052 Phase 2).
+    pub fn progress_summary(&self) -> String {
+        match &self.kind {
+            StepKind::AgentTask { agent, instruction } => {
+                format!("agent task — @{agent}: {instruction}")
+            }
+            StepKind::ApprovalGate { summary } => format!("approval gate — {summary}"),
+            StepKind::Tool { tool } => format!("tool — {tool}"),
+        }
+    }
+}
+
 /// A versioned, content-addressed workflow definition.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Playbook {
@@ -208,6 +223,13 @@ impl PlaybookRun {
     /// The step at the cursor, if any.
     pub fn current(&self) -> Option<&PlaybookStep> {
         self.playbook.steps.get(self.cursor)
+    }
+
+    /// How many steps have been advanced past (i.e. completed) so far. A runner
+    /// posts one `Step` progress message per completed step (ADR-0052 Phase 2);
+    /// this is the cursor, exposed read-only.
+    pub fn steps_completed(&self) -> usize {
+        self.cursor
     }
 
     /// The deterministic approval action-id for the current `ApprovalGate` step
@@ -358,6 +380,28 @@ mod tests {
         // Final Tool step completes the run.
         assert_eq!(run.advance(&gate, &[human.id()]), RunStatus::Completed);
         assert!(run.current().is_none());
+    }
+
+    #[test]
+    fn progress_summary_and_steps_completed_track_the_run() {
+        use crate::approval::ApprovalGate;
+        let p = sample();
+        // Per-kind human summaries (ADR-0052 Phase 2 Step bodies).
+        assert!(p.steps[0]
+            .progress_summary()
+            .starts_with("agent task — @claude:"));
+        assert!(p.steps[1].progress_summary().starts_with("approval gate —"));
+        assert_eq!(p.steps[2].progress_summary(), "tool — crm.upsert");
+
+        // steps_completed advances with the cursor and stops at the gate.
+        let mut run = PlaybookRun::start(p).unwrap();
+        let gate = ApprovalGate::new();
+        let empty: Vec<crate::identity::AgentId> = vec![];
+        assert_eq!(run.steps_completed(), 0);
+        run.advance(&gate, &empty); // past AgentTask → parked at the gate
+        assert_eq!(run.steps_completed(), 1);
+        run.advance(&gate, &empty); // gate not approved → cursor unchanged
+        assert_eq!(run.steps_completed(), 1);
     }
 
     #[test]
