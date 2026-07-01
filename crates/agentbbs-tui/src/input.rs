@@ -23,9 +23,15 @@ impl App {
             Screen::Read => self.key_read(key),
             Screen::Compose => self.key_compose(key),
             Screen::Arena => self.key_arena(key),
-            Screen::Who | Screen::Doors | Screen::Market | Screen::Federation | Screen::Sysop => {
-                self.key_panel(key)
-            }
+            Screen::Pods => self.key_pods(key),
+            Screen::Approvals => self.key_approvals(key),
+            Screen::Budget => self.key_budget(key),
+            Screen::Who
+            | Screen::Doors
+            | Screen::Market
+            | Screen::Federation
+            | Screen::Sysop
+            | Screen::Decisions => self.key_panel(key),
             Screen::Goodbye => {
                 self.should_quit = true;
                 Control::Quit
@@ -169,6 +175,83 @@ impl App {
                 if self.arena_index + 1 < count {
                     self.arena_index += 1;
                 }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_pods(&mut self, key: KeyEvent) -> Control {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.pod_index = self.pod_index.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.pod_index + 1 < self.pods.len() {
+                    self.pod_index += 1;
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => match self.hire("demo", "ops") {
+                Ok(p) => {
+                    self.status =
+                        format!("Spawned {} in #{}", p.id, p.spec.template.registered_room)
+                }
+                Err(e) => self.status = format!("Spawn failed: {e}"),
+            },
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_approvals(&mut self, key: KeyEvent) -> Control {
+        use agentbbs_core::approval::Verdict;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.approval_index = self.approval_index.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.approval_index + 1 < self.proposals.len() {
+                    self.approval_index += 1;
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                let p = self.propose_action("spend", "buy 1 GPU-hr for a pod run", "general");
+                let short = &p.action_id[..p.action_id.len().min(8)];
+                self.status = format!("Proposed {} ({short})", p.kind);
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(p) = self.proposals.get(self.approval_index).cloned() {
+                    match self.decide_action(&p.action_id, Verdict::Approve, "looks fine") {
+                        Ok(()) => self.status = "Approved.".into(),
+                        Err(e) => self.status = format!("Decision failed: {e}"),
+                    }
+                }
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                if let Some(p) = self.proposals.get(self.approval_index).cloned() {
+                    match self.decide_action(&p.action_id, Verdict::Reject, "vetoed") {
+                        Ok(()) => self.status = "Rejected.".into(),
+                        Err(e) => self.status = format!("Decision failed: {e}"),
+                    }
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_budget(&mut self, key: KeyEvent) -> Control {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.pod_index = self.pod_index.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.pod_index + 1 < self.pods.len() {
+                    self.pod_index += 1;
+                }
+            }
+            KeyCode::Char('+') => {
+                self.topup_selected_pod(0.10);
+                self.status = "Raised cap by $0.10.".into();
             }
             KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
             _ => {}

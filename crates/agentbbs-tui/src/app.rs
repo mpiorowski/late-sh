@@ -12,9 +12,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use agentbbs_arena::{Arena, BenchmarkId, RunResult, Submission};
+use agentbbs_core::approval::{ActionProposal, ApprovalGate, SignedDecision, Verdict};
+use agentbbs_core::budget::BudgetLedger;
 use agentbbs_core::caps::Caps;
+use agentbbs_core::decision::{DecisionLog, DecisionRecord};
 use agentbbs_core::identity::Identity;
 use agentbbs_core::market::{Listing, ListingBody, ListingKind, Market};
+use agentbbs_core::pod::{MaxTier, PodSpec, PodStatus, PodTemplate};
 use agentbbs_core::presence::Presence;
 use agentbbs_core::report::MemoryReporter;
 use agentbbs_core::{Bbs, Board, MemoryStore, Message, MessageId, Role, Store};
@@ -26,6 +30,17 @@ pub struct ReplyTarget {
     pub id: MessageId,
     pub handle: String,
     pub subject: String,
+}
+
+/// A spawned pod as tracked by this session (ADR-0035 control plane, ADR-0051
+/// Phase A). Local-only, like the web's `PodRecord` when no live meta-llm
+/// gateway is configured — the TUI never calls the gateway itself.
+#[derive(Clone)]
+pub struct PodRecord {
+    pub id: String,
+    pub status: PodStatus,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub spec: PodSpec,
 }
 
 /// Which screen is currently focused.
@@ -53,6 +68,14 @@ pub enum Screen {
     Federation,
     /// Sysop reporting dashboard.
     Sysop,
+    /// Spawned domain-agent pods (ADR-0035).
+    Pods,
+    /// Pending action proposals + signed decisions (ADR-0038).
+    Approvals,
+    /// Per-pod spend vs. cap (ADR-0040).
+    Budget,
+    /// The org's signed decision log (ADR-0045).
+    Decisions,
     /// Sign-off screen.
     Goodbye,
 }
@@ -63,6 +86,10 @@ pub const MENU: &[(char, &str, Screen)] = &[
     ('W', "Who's Online", Screen::Who),
     ('D', "Door Games", Screen::Doors),
     ('A', "Arena (Benchmarks)", Screen::Arena),
+    ('P', "Pods", Screen::Pods),
+    ('V', "Approvals", Screen::Approvals),
+    ('B', "Budget", Screen::Budget),
+    ('C', "Decisions", Screen::Decisions),
     ('K', "Marketplace", Screen::Market),
     ('F', "Federation", Screen::Federation),
     ('S', "Sysop Report", Screen::Sysop),
@@ -146,6 +173,20 @@ pub struct App {
     pub status: String,
     /// Whether the app wants to quit.
     pub should_quit: bool,
+    /// Spawned domain-agent pods (ADR-0035).
+    pub pods: Vec<PodRecord>,
+    /// Highlighted pod row.
+    pub pod_index: usize,
+    /// Pending action proposals awaiting a signed decision (ADR-0038).
+    pub proposals: Vec<ActionProposal>,
+    /// The signed-decision approval gate (ADR-0038).
+    pub gate: ApprovalGate,
+    /// Highlighted proposal row.
+    pub approval_index: usize,
+    /// Per-pod spend ledger (ADR-0040).
+    pub budget: BudgetLedger,
+    /// The org's signed decision log (ADR-0045).
+    pub decisions: DecisionLog,
 }
 
 impl Drop for App {
@@ -196,10 +237,18 @@ impl App {
             started: Instant::now(),
             status: "Connected. Press ENTER.".into(),
             should_quit: false,
+            pods: Vec::new(),
+            pod_index: 0,
+            proposals: Vec::new(),
+            gate: ApprovalGate::new(),
+            approval_index: 0,
+            budget: BudgetLedger::new(),
+            decisions: DecisionLog::new(),
         };
         app.seed_defaults();
         app.seed_arena();
         app.seed_market();
+        app.seed_decisions();
         app.heartbeat();
         app.refresh_boards();
         app
@@ -304,6 +353,145 @@ impl App {
         let _ = self
             .arena
             .ingest_retort(&agentbbs_arena::RetortResults::sample(), &operator);
+    }
+
+    /// Seed the same two demo decisions the web UI shows (ADR-0045), signed by
+    /// a locally-generated "org-governance" identity — matches
+    /// `agentbbs-web`'s `api_decisions` seed exactly so the two frontends
+    /// present the same content.
+    fn seed_decisions(&mut self) {
+        let org = Identity::generate();
+        let t = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        for rec in [
+            DecisionRecord::new(
+                &org,
+                "Adopt the meta-llm gateway",
+                "Route live inference through cognitum-auto (ADR-0034)",
+                "tier routing + metering + budget caps; OpenRouter stays the default",
+                "agents.dev",
+                t("2026-06-30T03:00:00Z"),
+            ),
+            DecisionRecord::new(
+                &org,
+                "Human approval for spend",
+                "All side-effectful spend requires a signed approval (ADR-0038)",
+                "fail-closed governance is required to trust the autopilot",
+                "general",
+                t("2026-06-30T04:00:00Z"),
+            ),
+        ] {
+            let _ = self.decisions.add(rec);
+        }
+    }
+
+    /// Validate and record a pod spawn locally (idempotent on
+    /// `idempotency_key`). Matches `agentbbs-web`'s `api_pods_spawn`
+    /// local-stub path exactly — the TUI never calls the live meta-llm
+    /// gateway itself.
+    pub fn spawn_pod(&mut self, spec: PodSpec) -> Result<PodRecord, String> {
+        spec.validate().map_err(|e| e.to_string())?;
+        if let Some(key) = spec.idempotency_key.as_deref() {
+            if let Some(existing) = self
+                .pods
+                .iter()
+                .find(|p| p.spec.idempotency_key.as_deref() == Some(key))
+            {
+                return Ok(existing.clone());
+            }
+        }
+        let record = PodRecord {
+            id: format!("pod-{:04}", self.pods.len()),
+            status: PodStatus::Spawned,
+            created_at: chrono::Utc::now(),
+            spec,
+        };
+        self.pods.push(record.clone());
+        Ok(record)
+    }
+
+    /// "Hire" an agent from the Directory — synthesizes a `PodSpec` for
+    /// `@handle` in `domain`, matching the web adapter's `hire()` defaults
+    /// exactly (`per_agent_cap_usd: 0.25`, `max_tier: mid`).
+    pub fn hire(&mut self, handle: &str, domain: &str) -> Result<PodRecord, String> {
+        let h = handle.trim_start_matches('@').to_lowercase();
+        let h = if h.is_empty() { "agent".to_string() } else { h };
+        let template = PodTemplate {
+            template_ref: format!("{domain}/hired-{h}@1"),
+            domain: domain.to_string(),
+            system_prompt: format!("Pod hosted by @{h} (hired from the Directory)."),
+            tools: Vec::new(),
+            bench_assertions: "produces a useful, gated result".to_string(),
+            per_agent_cap_usd: 0.25,
+            cron_schedule: None,
+            max_tier: MaxTier::Mid,
+            registered_room: format!("{domain}-ops"),
+        };
+        self.spawn_pod(PodSpec {
+            template,
+            tier: Some(MaxTier::Mid),
+            idempotency_key: None,
+        })
+    }
+
+    /// Propose a side-effectful action (ADR-0038), signed as this session.
+    pub fn propose_action(&mut self, kind: &str, summary: &str, board: &str) -> ActionProposal {
+        let p = ActionProposal::new(
+            kind,
+            summary,
+            self.session.identity.id(),
+            board,
+            chrono::Utc::now(),
+        );
+        self.proposals.push(p.clone());
+        p
+    }
+
+    /// Record a signed decision on `action_id` as this session.
+    pub fn decide_action(
+        &mut self,
+        action_id: &str,
+        verdict: Verdict,
+        reason: &str,
+    ) -> Result<(), String> {
+        let decision = SignedDecision::sign(
+            &self.session.identity,
+            action_id,
+            verdict,
+            reason,
+            chrono::Utc::now(),
+        );
+        self.gate.record(decision).map_err(|e| e.to_string())
+    }
+
+    /// Whether `action_id` is currently authorized — matches the web's own
+    /// "allowed = whoever has actually decided" model (no separate ACL; the
+    /// gate itself is the only source of truth, ADR-0038).
+    pub fn is_action_authorized(&self, action_id: &str) -> bool {
+        let deciders: Vec<_> = self
+            .gate
+            .decisions_for(action_id)
+            .iter()
+            .map(|d| d.decider)
+            .collect();
+        self.gate.is_authorized(action_id, &deciders)
+    }
+
+    /// Budget status for `pod` against its template's Reserve-and-Commit cap.
+    pub fn budget_status(&self, pod: &PodRecord) -> agentbbs_core::budget::BudgetStatus {
+        self.budget
+            .status(&pod.id, pod.spec.template.per_agent_cap_usd)
+    }
+
+    /// Raise the highlighted pod's cap by `amount` USD (ADR-0040 operator
+    /// top-up).
+    pub fn topup_selected_pod(&mut self, amount: f64) {
+        if let Some(p) = self.pods.get(self.pod_index) {
+            self.budget.bump_cap(&p.id.clone(), amount);
+        }
     }
 
     /// Convenience constructor over an in-memory store.

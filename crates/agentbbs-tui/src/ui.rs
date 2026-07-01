@@ -6,7 +6,9 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
+use agentbbs_core::approval::Verdict;
 use agentbbs_core::caps::Caps;
+use agentbbs_core::pod::PodStatus;
 
 use crate::app::{App, ComposeField, Screen, MENU};
 use crate::theme;
@@ -37,6 +39,10 @@ impl App {
             Screen::Market => self.render_market(frame, rows[1]),
             Screen::Federation => self.render_federation(frame, rows[1]),
             Screen::Sysop => self.render_sysop(frame, rows[1]),
+            Screen::Pods => self.render_pods(frame, rows[1]),
+            Screen::Approvals => self.render_approvals(frame, rows[1]),
+            Screen::Budget => self.render_budget(frame, rows[1]),
+            Screen::Decisions => self.render_decisions(frame, rows[1]),
             Screen::Goodbye => self.render_goodbye(frame, rows[1]),
         }
         self.render_status(frame, rows[2]);
@@ -404,6 +410,219 @@ impl App {
             Paragraph::new(lines)
                 .wrap(Wrap { trim: true })
                 .block(self.framed("Marketplace")),
+            area,
+        );
+    }
+
+    fn render_pods(&self, frame: &mut Frame, area: Rect) {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "ID          DOMAIN       STATUS      ROOM              CAP",
+                theme::hotkey(),
+            )),
+            Line::from("──────────────────────────────────────────────────────────"),
+        ];
+        for (i, p) in self.pods.iter().enumerate() {
+            let selected = i == self.pod_index;
+            let marker = if selected { "▶" } else { " " };
+            let status = match p.status {
+                PodStatus::Spawned => "spawned",
+                PodStatus::Executing => "executing",
+                PodStatus::Evaluating => "evaluating",
+                PodStatus::Escalating => "escalating",
+                PodStatus::Completed => "completed",
+                PodStatus::Failed => "failed",
+            };
+            let style = if selected {
+                theme::lightbar()
+            } else {
+                Style::default()
+            };
+            lines.push(
+                Line::from(vec![
+                    Span::styled(format!("{marker} {:<11}", p.id), theme::hotkey()),
+                    Span::styled(format!("{:<12} ", p.spec.template.domain), theme::chrome()),
+                    Span::styled(format!("{status:<11} "), Style::default().fg(theme::GREEN)),
+                    Span::styled(
+                        format!("{:<17} ", p.spec.template.registered_room),
+                        theme::dim(),
+                    ),
+                    Span::styled(
+                        format!("${:.2}", p.spec.template.per_agent_cap_usd),
+                        theme::dim(),
+                    ),
+                ])
+                .style(style),
+            );
+        }
+        if self.pods.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No pods spawned yet. Hire an agent from the Directory, or press [N] to spawn a demo pod.",
+                theme::dim(),
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[N] spawn a demo pod · ESC back",
+            theme::chrome(),
+        )));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Pods")),
+            area,
+        );
+    }
+
+    fn render_approvals(&self, frame: &mut Frame, area: Rect) {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "KIND         SUMMARY                                    STATUS",
+                theme::hotkey(),
+            )),
+            Line::from("──────────────────────────────────────────────────────────"),
+        ];
+        for (i, p) in self.proposals.iter().enumerate() {
+            let selected = i == self.approval_index;
+            let marker = if selected { "▶" } else { " " };
+            let authorized = self.is_action_authorized(&p.action_id);
+            let status = if authorized {
+                Span::styled("✓ authorized", Style::default().fg(theme::GREEN))
+            } else {
+                Span::styled("⧗ pending", theme::dim())
+            };
+            let style = if selected {
+                theme::lightbar()
+            } else {
+                Style::default()
+            };
+            lines.push(
+                Line::from(vec![
+                    Span::styled(format!("{marker} {:<12}", p.kind), theme::hotkey()),
+                    Span::styled(format!("{:<42} ", p.summary), theme::chrome()),
+                    status,
+                ])
+                .style(style),
+            );
+            for d in self.gate.decisions_for(&p.action_id) {
+                let v = match d.verdict {
+                    Verdict::Approve => Span::styled("approve", Style::default().fg(theme::GREEN)),
+                    Verdict::Reject => Span::styled("reject", Style::default().fg(theme::RED)),
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("      ↳ "),
+                    v,
+                    Span::styled(format!(" by @{}", d.decider.short()), theme::dim()),
+                    Span::styled(
+                        if d.reason.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" — {}", d.reason)
+                        },
+                        theme::dim(),
+                    ),
+                ]));
+            }
+        }
+        if self.proposals.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No proposals yet. Press [N] to raise a demo proposal.",
+                theme::dim(),
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[N] propose · [Y] approve highlighted · [R] reject highlighted · ESC back",
+            theme::chrome(),
+        )));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Approvals")),
+            area,
+        );
+    }
+
+    fn render_budget(&self, frame: &mut Frame, area: Rect) {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "POD          SPENT      CAP        STATUS",
+                theme::hotkey(),
+            )),
+            Line::from("──────────────────────────────────────────────────────────"),
+        ];
+        for (i, p) in self.pods.iter().enumerate() {
+            let s = self.budget_status(p);
+            let selected = i == self.pod_index;
+            let marker = if selected { "▶" } else { " " };
+            let badge = if s.over_budget {
+                Span::styled("⚠ over budget", Style::default().fg(theme::RED))
+            } else {
+                Span::styled(
+                    format!("{:.0}%", s.pct * 100.0),
+                    Style::default().fg(theme::GREEN),
+                )
+            };
+            let style = if selected {
+                theme::lightbar()
+            } else {
+                Style::default()
+            };
+            lines.push(
+                Line::from(vec![
+                    Span::styled(format!("{marker} {:<11}", p.id), theme::hotkey()),
+                    Span::styled(format!("${:<9.3} ", s.spent), theme::chrome()),
+                    Span::styled(format!("${:<9.2} ", s.cap), theme::dim()),
+                    badge,
+                ])
+                .style(style),
+            );
+        }
+        if self.pods.is_empty() {
+            lines.push(Line::from(Span::styled("No pods to budget.", theme::dim())));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[+] raise highlighted pod's cap by $0.10 · ESC back",
+            theme::chrome(),
+        )));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Budget Guardrails")),
+            area,
+        );
+    }
+
+    fn render_decisions(&self, frame: &mut Frame, area: Rect) {
+        let mut lines: Vec<Line> = Vec::new();
+        for r in self.decisions.all() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    r.decided_at.format("%Y-%m-%d %H:%M ").to_string(),
+                    theme::dim(),
+                ),
+                Span::styled(r.title.clone(), Style::default().fg(theme::YELLOW)),
+                Span::raw("  "),
+                Span::styled(format!("#{}", r.board), theme::chrome()),
+            ]));
+            lines.push(Line::from(format!("   {}", r.decision)));
+            lines.push(Line::from(Span::styled(
+                format!("   why: {}", r.rationale),
+                theme::dim(),
+            )));
+            lines.push(Line::from(""));
+        }
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No decisions recorded yet.",
+                theme::dim(),
+            )));
+        }
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(self.framed("Decision Records  (ESC back)")),
             area,
         );
     }
