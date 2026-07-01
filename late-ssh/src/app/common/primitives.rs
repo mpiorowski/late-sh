@@ -56,6 +56,7 @@ pub enum Screen {
     GreenDragon,
     Artboard,
     Pinstar,
+    WorldCup,
 }
 
 impl Screen {
@@ -70,7 +71,8 @@ impl Screen {
             Screen::Games => Screen::Rooms,
             Screen::Rooms => Screen::Artboard,
             Screen::Artboard => Screen::Pinstar,
-            Screen::Pinstar => Screen::Dashboard,
+            Screen::Pinstar => Screen::WorldCup,
+            Screen::WorldCup => Screen::Dashboard,
             Screen::Lateania | Screen::Rebels | Screen::Nethack | Screen::GreenDragon => {
                 Screen::Games
             }
@@ -79,12 +81,13 @@ impl Screen {
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Pinstar,
+            Screen::Dashboard => Screen::WorldCup,
             Screen::Arcade => Screen::Dashboard,
             Screen::Games => Screen::Arcade,
             Screen::Rooms => Screen::Games,
             Screen::Artboard => Screen::Rooms,
             Screen::Pinstar => Screen::Artboard,
+            Screen::WorldCup => Screen::Pinstar,
             Screen::Lateania | Screen::Rebels | Screen::Nethack | Screen::GreenDragon => {
                 Screen::Games
             }
@@ -111,6 +114,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
+        Screen::WorldCup => "World Cup",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -194,17 +198,19 @@ mod tests {
         assert_eq!(Screen::Games.next(), Screen::Rooms);
         assert_eq!(Screen::Rooms.next(), Screen::Artboard);
         assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
-        assert_eq!(Screen::Pinstar.next(), Screen::Dashboard);
+        assert_eq!(Screen::Pinstar.next(), Screen::WorldCup);
+        assert_eq!(Screen::WorldCup.next(), Screen::Dashboard);
     }
 
     #[test]
     fn screen_prev_cycles_top_level_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::Pinstar);
+        assert_eq!(Screen::Dashboard.prev(), Screen::WorldCup);
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
         assert_eq!(Screen::Games.prev(), Screen::Arcade);
         assert_eq!(Screen::Rooms.prev(), Screen::Games);
         assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
         assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
+        assert_eq!(Screen::WorldCup.prev(), Screen::Pinstar);
     }
 
     #[test]

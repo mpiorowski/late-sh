@@ -117,7 +117,8 @@ const DARK_ARTS: &[Skill] = &[
         build: |level, _atk| {
             let lvl = level as f64;
             let hp = (lvl * 3.33).round() as u32 + 10;
-            let attack = ((lvl / 4.0 + 2.0).round() * (lvl / 3.0 + 2.0).round() + 1.5).round() as u32;
+            let attack =
+                ((lvl / 4.0 + 2.0).round() * (lvl / 3.0 + 2.0).round() + 1.5).round() as u32;
             let defense = ((lvl / 3.0).floor() * (lvl / 6.0 + 2.0).ceil() + 2.5).round() as u32;
             SkillEffect::Summon(Companion {
                 name: "Skeleton Warrior".into(),
@@ -210,7 +211,8 @@ const THIEF: &[Skill] = &[
             let mut b = Buff::new("Shadowstrike", 5);
             b.player_atk_mod = 3.0;
             b.player_def_mod = 3.0;
-            b.round_msg = Some("striking from the blind side, you hit harder and guard tighter.".into());
+            b.round_msg =
+                Some("striking from the blind side, you hit harder and guard tighter.".into());
             b.wearoff = "your advantage of surprise is spent.".into();
             SkillEffect::Buff(b)
         },

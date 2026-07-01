@@ -41,8 +41,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 
     let Some(c) = state.character() else {
         frame.render_widget(
-            Paragraph::new("Loading your character from the realm...")
-                .alignment(Alignment::Center),
+            Paragraph::new("Loading your character from the realm...").alignment(Alignment::Center),
             inner,
         );
         return;
@@ -85,7 +84,11 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         stat("Attack", c.attack().to_string(), bright),
         stat("Defense", c.defense().to_string(), bright),
         Line::raw(""),
-        stat("Weapon", data::weapon_name(c.weapon_tier).to_string(), bright),
+        stat(
+            "Weapon",
+            data::weapon_name(c.weapon_tier).to_string(),
+            bright,
+        ),
         stat("Armor", data::armor_name(c.armor_tier).to_string(), bright),
         Line::raw(""),
         stat("Gold", c.gold.to_string(), gold),
@@ -112,7 +115,10 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         for comp in &c.companions {
             lines.push(stat(
                 "Ally",
-                format!("{} ({}/{} HP)", comp.name, comp.hitpoints, comp.max_hitpoints),
+                format!(
+                    "{} ({}/{} HP)",
+                    comp.name, comp.hitpoints, comp.max_hitpoints
+                ),
                 dim,
             ));
         }
@@ -260,7 +266,12 @@ fn draw_log(frame: &mut Frame, area: Rect, state: &State) {
 
     let lines: Vec<Line> = state
         .log_lines()
-        .map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(theme::TEXT()))))
+        .map(|l| {
+            Line::from(Span::styled(
+                l.to_string(),
+                Style::default().fg(theme::TEXT()),
+            ))
+        })
         .collect();
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -322,13 +333,35 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     )));
     lines.push(Line::raw(""));
     lines.push(landing::heading("The Loop"));
-    lines.push(landing::stat("Forest", "fight creatures for gold and experience", 10));
-    lines.push(landing::stat("Masters", "beat your level master to advance", 10));
-    lines.push(landing::stat("Dragon", "reach level 15, then end the run in glory", 10));
+    lines.push(landing::stat(
+        "Forest",
+        "fight creatures for gold and experience",
+        10,
+    ));
+    lines.push(landing::stat(
+        "Masters",
+        "beat your level master to advance",
+        10,
+    ));
+    lines.push(landing::stat(
+        "Dragon",
+        "reach level 15, then end the run in glory",
+        10,
+    ));
     lines.push(Line::raw(""));
     lines.push(landing::heading("Enter"));
-    lines.push(landing::action(">", "Enter", "step into the village", theme::SUCCESS()));
-    lines.push(landing::action(" ", "d", "reset your character", theme::ERROR()));
+    lines.push(landing::action(
+        ">",
+        "Enter",
+        "step into the village",
+        theme::SUCCESS(),
+    ));
+    lines.push(landing::action(
+        " ",
+        "d",
+        "reset your character",
+        theme::ERROR(),
+    ));
     lines.push(Line::raw(""));
     lines.push(landing::heading("Once Inside"));
     lines.push(landing::hint("up/down", "move the menu cursor", 10));

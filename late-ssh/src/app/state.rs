@@ -269,6 +269,9 @@ pub struct SessionConfig {
             std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
         >,
     >,
+    /// Process-global World Cup service handle (clone), used to subscribe to
+    /// the snapshot and to mint a viewer guard while on the screen.
+    pub worldcup_service: Option<crate::app::worldcup::svc::WorldCupService>,
     pub active_users: Option<ActiveUsers>,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -357,6 +360,16 @@ pub struct App {
             std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
         >,
     >,
+    /// Live World Cup snapshot feed (process-global service, demand-gated).
+    pub(super) worldcup_rx: Option<
+        tokio::sync::watch::Receiver<std::sync::Arc<crate::app::worldcup::model::WorldCupSnapshot>>,
+    >,
+    /// Handle used to mint the viewer guard while on the World Cup screen.
+    pub(super) worldcup_service: Option<crate::app::worldcup::svc::WorldCupService>,
+    /// Present only while this session is on the World Cup screen; dropping it
+    /// releases the poll gate.
+    pub(crate) worldcup_viewer: Option<crate::app::worldcup::svc::WorldCupViewer>,
+    pub(crate) worldcup: crate::app::worldcup::state::State,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -969,6 +982,13 @@ impl App {
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
             radio_meta_rx: config.radio_meta_rx,
+            worldcup_rx: config
+                .worldcup_service
+                .as_ref()
+                .map(|svc| svc.subscribe_state()),
+            worldcup_service: config.worldcup_service,
+            worldcup_viewer: None,
+            worldcup: crate::app::worldcup::state::State::default(),
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
@@ -1521,6 +1541,14 @@ impl App {
         {
             self.nes_cabinet_state.activate();
         }
+        // Hold a viewer guard only while on the World Cup screen; this both
+        // wakes the demand-gated poller on entry and (by dropping the prior
+        // guard) releases it on exit.
+        self.worldcup_viewer = if self.screen == Screen::WorldCup {
+            self.worldcup_service.as_ref().map(|svc| svc.viewer())
+        } else {
+            None
+        };
         self.sync_visible_chat_room();
     }
 

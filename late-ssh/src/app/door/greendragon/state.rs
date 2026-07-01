@@ -531,9 +531,7 @@ impl State {
         } else {
             self.push_log(format!(
                 "Your blow glances off {}; it recovers {} HP ({} left).",
-                enc.name,
-                -outcome.damage_to_enemy,
-                enc.hp
+                enc.name, -outcome.damage_to_enemy, enc.hp
             ));
         }
 
@@ -562,7 +560,10 @@ impl State {
             self.push_log(format!("{} fumbles its strike ({} HP left).", enc.name, hp));
         }
         if outcome.player_heal > 0 {
-            self.push_log(format!("You knit {} HP back together.", outcome.player_heal));
+            self.push_log(format!(
+                "You knit {} HP back together.",
+                outcome.player_heal
+            ));
         }
 
         if hp == 0 {
@@ -597,7 +598,10 @@ impl State {
                 }
             }
             SkillEffect::Summon(companion) => {
-                self.push_log(format!("{} claws up from the earth to fight at your side.", companion.name));
+                self.push_log(format!(
+                    "{} claws up from the earth to fight at your side.",
+                    companion.name
+                ));
                 self.character.as_mut().unwrap().companions.push(companion);
             }
         }
@@ -715,7 +719,9 @@ impl State {
         }
         let cost = c.full_heal_cost();
         if c.buy_full_heal() {
-            self.push_log(format!("The healer restores you to full health for {cost} gold."));
+            self.push_log(format!(
+                "The healer restores you to full health for {cost} gold."
+            ));
             self.save();
         } else {
             self.push_log("You can't afford a full healing.".into());
@@ -826,7 +832,12 @@ fn fight_menu(c: &Character) -> Vec<(String, bool)> {
     let mut rows = vec![("Attack".into(), true)];
     for skill in specialty::skills(c.specialty) {
         rows.push((
-            format!("{} ({} use{})", skill.name, skill.cost, if skill.cost == 1 { "" } else { "s" }),
+            format!(
+                "{} ({} use{})",
+                skill.name,
+                skill.cost,
+                if skill.cost == 1 { "" } else { "s" }
+            ),
             c.specialty_uses >= skill.cost,
         ));
     }
@@ -853,10 +864,7 @@ fn event_menu(c: &Character, event: Option<ForestEvent>) -> Vec<(String, bool)> 
 
 fn healer_menu(c: &Character) -> Vec<(String, bool)> {
     let needs = c.hitpoints < c.max_hitpoints();
-    vec![(
-        format!("Heal fully ({} gold)", c.full_heal_cost()),
-        needs,
-    )]
+    vec![(format!("Heal fully ({} gold)", c.full_heal_cost()), needs)]
 }
 
 fn bank_menu(c: &Character) -> Vec<(String, bool)> {
@@ -911,7 +919,11 @@ fn shop_menu(c: &Character, weapon: bool) -> Vec<(String, bool)> {
         };
         return vec![(msg.into(), false)];
     }
-    let name = if weapon { data::weapon_name } else { data::armor_name };
+    let name = if weapon {
+        data::weapon_name
+    } else {
+        data::armor_name
+    };
     tiers
         .into_iter()
         .map(|(tier, cost)| {
@@ -942,7 +954,10 @@ mod tests {
         // Forest row disabled with no turns.
         assert!(!rows[0].1);
         // Healer disabled at full health.
-        let healer = rows.iter().find(|(l, _)| l.starts_with("The Mendery")).unwrap();
+        let healer = rows
+            .iter()
+            .find(|(l, _)| l.starts_with("The Mendery"))
+            .unwrap();
         assert!(!healer.1);
         // Dragon not offered below level 15.
         assert!(!rows.iter().any(|(l, _)| l.starts_with("Seek Out")));

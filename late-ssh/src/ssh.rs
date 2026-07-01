@@ -906,6 +906,7 @@ impl russh::server::Handler for ClientHandler {
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
+            worldcup_service: Some(self.state.worldcup_service.clone()),
             active_users: Some(self.state.active_users.clone()),
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),

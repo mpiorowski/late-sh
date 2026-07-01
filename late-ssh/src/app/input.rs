@@ -1288,6 +1288,20 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 /// launches it; `d` opens the Lateania reset prompt when Lateania is selected.
 /// Returns `false` for keys it does not own (digit/Tab nav, `q`, `?`) so they
 /// fall through to the global handlers.
+/// World Cup screen keys: `Space` toggles overview/bracket and `j`/`k` (plus
+/// the down/up arrows) scroll the active view. Returns `false` for everything
+/// else so global navigation (Tab, page numbers, `?`, `q`, …) still works.
+fn handle_worldcup_input(app: &mut App, event: &ParsedInput) -> bool {
+    let byte = match event {
+        ParsedInput::Byte(b) => *b,
+        ParsedInput::Char(c) if c.is_ascii() => *c as u8,
+        ParsedInput::Arrow(b'B') => b'j',
+        ParsedInput::Arrow(b'A') => b'k',
+        _ => return false,
+    };
+    crate::app::worldcup::input::handle_key(&mut app.worldcup, byte)
+}
+
 fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
     use crate::app::door::hub::state::HubGame;
 
@@ -1418,6 +1432,10 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
     if ctx.screen == Screen::Games {
         return handle_games_hub_input(app, event);
+    }
+
+    if ctx.screen == Screen::WorldCup {
+        return handle_worldcup_input(app, event);
     }
 
     if ctx.screen == Screen::Rebels {
@@ -2476,6 +2494,7 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
         }
         Screen::Artboard => {}
         Screen::Pinstar => {}
+        Screen::WorldCup => app.worldcup.scroll(delta),
         _ => {}
     }
 }
@@ -2494,6 +2513,7 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         18 => Some(Screen::Rooms),
         20 => Some(Screen::Artboard),
         22 => Some(Screen::Pinstar),
+        24 => Some(Screen::WorldCup),
         _ => None,
     }
 }
@@ -3031,6 +3051,9 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
             // Arrows handled via handle_dedicated_screen_input
             false
         }
+        // World Cup up/down arrows are consumed earlier in
+        // handle_dedicated_screen_input (mapped to k/j scroll).
+        Screen::WorldCup => false,
     }
 }
 
@@ -3589,6 +3612,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Pinstar);
             true
         }
+        b'7' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
+            app.set_screen(Screen::WorldCup);
+            true
+        }
         b'\t' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(ctx.screen.next());
@@ -3666,6 +3694,10 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Pinstar => {
             // Pinstar key dispatch is handled via handle_dedicated_screen_input
             // and the rich-event path; byte dispatch is a no-op here.
+        }
+        Screen::WorldCup => {
+            // World Cup keys are handled in handle_dedicated_screen_input
+            // (Space/j/k/arrows); byte dispatch is a no-op here.
         }
     }
 }

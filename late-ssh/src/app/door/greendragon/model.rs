@@ -276,7 +276,14 @@ impl Character {
         }
         let master = data::MASTERS[(self.level - 1) as usize];
         let (atk, def, hp) = data::master_stats(self.level);
-        Some((master, Combatant { attack: atk, defense: def }, hp))
+        Some((
+            master,
+            Combatant {
+                attack: atk,
+                defense: def,
+            },
+            hp,
+        ))
     }
 
     // --- endgame investment scaling (LoGD `dragon.php` / `train.php`) --------
@@ -395,7 +402,9 @@ impl Character {
         if missing == 0 {
             return 0;
         }
-        ((self.level as f64).ln() * (missing as f64 + 10.0)).round().max(0.0) as u64
+        ((self.level as f64).ln() * (missing as f64 + 10.0))
+            .round()
+            .max(0.0) as u64
     }
 
     /// Pay to fully heal if affordable. Returns true on success (including the
@@ -455,7 +464,9 @@ impl Character {
         self.dragon_kills = self.dragon_kills.saturating_add(1);
         // Permanent retained boons, auto-applied (replacing the Gypsy shop).
         self.dragon_attack_bonus = self.dragon_attack_bonus.saturating_add(DK_ATTACK_PER_KILL);
-        self.dragon_defense_bonus = self.dragon_defense_bonus.saturating_add(DK_DEFENSE_PER_KILL);
+        self.dragon_defense_bonus = self
+            .dragon_defense_bonus
+            .saturating_add(DK_DEFENSE_PER_KILL);
         self.dragon_hp_bonus = self.dragon_hp_bonus.saturating_add(DK_HP_PER_KILL);
         self.charm = self.charm.saturating_add(CHARM_PER_DRAGON_KILL);
         let restart_gems = self.dragon_kills.saturating_sub(7).min(MAX_RESTART_GEMS);

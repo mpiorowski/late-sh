@@ -1663,6 +1663,7 @@ impl ChatService {
     }
 
     #[tracing::instrument(skip(self, body), fields(user_id = %user_id, room_id = %room_id, body_len = body.len()))]
+    #[allow(clippy::too_many_arguments)]
     async fn send_message(
         &self,
         user_id: Uuid,

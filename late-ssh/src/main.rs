@@ -155,6 +155,7 @@ async fn main() -> anyhow::Result<()> {
     let now_playing_rx = now_playing_service.subscribe_state();
     let radio_meta_service = late_ssh::app::audio::radio_meta::svc::RadioMetaService::new();
     let radio_meta_rx = radio_meta_service.subscribe_state();
+    let worldcup_service = late_ssh::app::worldcup::svc::WorldCupService::new();
     let public_stream_base_url = format!("{}/stream", config.web_url.trim_end_matches('/'));
     let paired_client_registry =
         late_ssh::paired_clients::PairedClientRegistry::new(public_stream_base_url);
@@ -396,6 +397,7 @@ async fn main() -> anyhow::Result<()> {
         room_join_history: room_join_history.clone(),
         now_playing_rx: now_playing_rx.clone(),
         radio_meta_rx: radio_meta_rx.clone(),
+        worldcup_service: worldcup_service.clone(),
         session_registry,
         paired_client_registry,
         irc_registry: irc_registry.clone(),
@@ -507,6 +509,13 @@ async fn main() -> anyhow::Result<()> {
     let radio_meta_task = radio_meta_service.start_task(radio_meta_shutdown);
     tasks.spawn(async move {
         radio_meta_task.await.context("radio meta task panicked")?;
+        Ok(())
+    });
+
+    let worldcup_shutdown = session_shutdown.clone();
+    let worldcup_task = worldcup_service.start_task(worldcup_shutdown);
+    tasks.spawn(async move {
+        worldcup_task.await.context("world cup task panicked")?;
         Ok(())
     });
 
