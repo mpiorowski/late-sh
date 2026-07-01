@@ -30,7 +30,10 @@ reqwest = { workspace = true, features = ["json"] }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+jsonwebtoken = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
+rsa = { version = "0.9", features = ["pem"] }
+rand = { workspace = true }

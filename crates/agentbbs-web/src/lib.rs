@@ -14,6 +14,7 @@
 
 mod role_claim;
 mod slack_bridge;
+mod teams_bridge;
 mod whatsapp_bridge;
 
 use std::collections::HashMap;
@@ -139,6 +140,9 @@ pub struct AppState {
     /// Loop guard for the WhatsApp inbound bridge (ADR-0053 Phase 0) — dedupes
     /// on the wa message id so a retried Meta webhook never double-posts.
     whatsapp_seen: Mutex<agentbbs_bridge::SeenSet>,
+    /// Loop guard for the Teams inbound bridge (ADR-0055 Phase B) — dedupes on
+    /// the Bot Framework activity id so a retried webhook never double-posts.
+    teams_seen: Mutex<agentbbs_bridge::SeenSet>,
     /// Open free-form messaging windows per WhatsApp recipient (ADR-0053) —
     /// records each inbound so a board reply can be mirrored back out only
     /// within the 24h window.
@@ -172,6 +176,7 @@ impl AppState {
             llm_day: Mutex::new((String::new(), 0)),
             slack_seen: Mutex::new(agentbbs_bridge::SeenSet::new()),
             whatsapp_seen: Mutex::new(agentbbs_bridge::SeenSet::new()),
+            teams_seen: Mutex::new(agentbbs_bridge::SeenSet::new()),
             whatsapp_window: Mutex::new(agentbbs_bridge::SessionWindow::new()),
         })
     }
@@ -449,6 +454,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/bridge/whatsapp/events",
             get(api_whatsapp_verify).post(api_whatsapp_events),
         )
+        .route("/api/bridge/teams/messages", post(api_teams_messages))
         .route("/api/postguard", post(api_postguard))
         .route("/api/agent-reply", post(api_agent_reply))
         .route("/api/playbooks/run", post(api_playbook_run))
@@ -2261,6 +2267,100 @@ fn deliver_whatsapp_message(state: &AppState, msg: whatsapp_bridge::WhatsAppMess
     let signed = agentbbs_bridge::sign_inbound(&identity, &inbound, chrono::Utc::now());
     if let Err(e) = state.bbs.post(Role::Agent.caps(), signed) {
         tracing::warn!(error = %e, board = %board, "whatsapp bridge: post failed");
+    }
+}
+
+// ---- Teams inbound bridge (ADR-0055 Phase B) ----
+//
+// Same Internet-facing-webhook posture as the Slack/WhatsApp bridges: verify
+// before acting. Unlike them the auth is asymmetric — each POST carries a Bot
+// Framework Bearer JWT (RS256), validated against a configured decoding key +
+// issuer + audience + expiry. There is no GET handshake. See `teams_bridge`.
+
+/// `POST /api/bridge/teams/messages` — Bot Framework messaging endpoint.
+/// Validates the Bearer JWT (RS256 signature + issuer + audience + expiry)
+/// before acting, then bridge-signs+posts allowlisted-conversation messages.
+/// Always `200` for JWT-valid requests (even a soft skip — wrong conversation,
+/// missing config) so the Bot Service doesn't retry-storm; a missing/invalid
+/// JWT is 401, and an unconfigured bridge is 503.
+async fn api_teams_messages(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let app_id = std::env::var("AGENTBBS_TEAMS_APP_ID").unwrap_or_default();
+    let issuer = std::env::var("AGENTBBS_TEAMS_JWT_ISSUER").unwrap_or_default();
+    let pem = std::env::var("AGENTBBS_TEAMS_JWT_PUBKEY_PEM").unwrap_or_default();
+    if app_id.is_empty() || issuer.is_empty() || pem.is_empty() {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "teams bridge not configured",
+        ));
+    }
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if !teams_bridge::validate_jwt(token, pem.as_bytes(), &issuer, &app_id) {
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid token"));
+    }
+    let payload: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("invalid json: {e}")))?;
+    match teams_bridge::parse_activity(&payload) {
+        teams_bridge::TeamsEvent::Message(msg) => {
+            deliver_teams_message(&state, msg);
+            Ok(Json(serde_json::json!({ "ok": true })))
+        }
+        teams_bridge::TeamsEvent::Ignored => Ok(Json(serde_json::json!({ "ok": true }))),
+    }
+}
+
+/// Bridge-sign and post a validated Teams message if its conversation is
+/// allowlisted (`AGENTBBS_TEAMS_CHANNEL_MAP`) and the bridge identity is
+/// configured (`AGENTBBS_TEAMS_BRIDGE_SEED_HEX`). Soft-fails (logs, doesn't
+/// error the webhook) on any missing config or post failure — same posture as
+/// the Slack/WhatsApp paths. Inbound only this phase (no session-window /
+/// outbound).
+fn deliver_teams_message(state: &AppState, msg: teams_bridge::TeamsMessage) {
+    let Ok(channel_map_spec) = std::env::var("AGENTBBS_TEAMS_CHANNEL_MAP") else {
+        tracing::debug!("teams bridge: AGENTBBS_TEAMS_CHANNEL_MAP not set, dropping message");
+        return;
+    };
+    let channel_map = teams_bridge::parse_channel_map(&channel_map_spec);
+    let Some(board) = channel_map.get(&msg.conversation) else {
+        return; // not an allowlisted conversation — silent, not an error
+    };
+    let Ok(seed_hex) = std::env::var("AGENTBBS_TEAMS_BRIDGE_SEED_HEX") else {
+        tracing::warn!("teams bridge: AGENTBBS_TEAMS_BRIDGE_SEED_HEX not set, dropping message");
+        return;
+    };
+    let Some(seed) = slack_bridge::parse_seed_hex(&seed_hex) else {
+        tracing::warn!("teams bridge: AGENTBBS_TEAMS_BRIDGE_SEED_HEX is not valid 64-hex-char");
+        return;
+    };
+    let identity = agentbbs_bridge::BridgeIdentity::from_seed(seed);
+    let ext_id = format!("teams:{}", msg.activity_id);
+    if state.teams_seen.lock().unwrap().seen_or_record(&ext_id) {
+        return; // duplicate delivery — the Bot Service retries until it gets a 200
+    }
+    let display_name = if msg.name.is_empty() {
+        msg.user.clone()
+    } else {
+        msg.name
+    };
+    let inbound = agentbbs_bridge::Inbound {
+        platform: "teams".to_string(),
+        workspace: msg.conversation,
+        user_id: msg.user.clone(),
+        display_name,
+        text: msg.text,
+        external_msg_id: ext_id,
+        board: board.clone(),
+    };
+    let signed = agentbbs_bridge::sign_inbound(&identity, &inbound, chrono::Utc::now());
+    if let Err(e) = state.bbs.post(Role::Agent.caps(), signed) {
+        tracing::warn!(error = %e, board = %board, "teams bridge: post failed");
     }
 }
 
@@ -4600,6 +4700,136 @@ mod tests {
 
         std::env::remove_var("AGENTBBS_WHATSAPP_VERIFY_TOKEN");
         std::env::remove_var("AGENTBBS_WHATSAPP_APP_SECRET");
+    }
+
+    // ADR-0055 Phase B: Teams inbound bridge route wiring. Owns
+    // AGENTBBS_TEAMS_* for its duration — no other test touches these
+    // (single-owner env var idiom). The RS256 keypair is generated in-test;
+    // no private key material is ever committed.
+    #[tokio::test]
+    async fn teams_messages_route_rejects_unconfigured_bad_token_and_accepts_valid() {
+        use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+        use rsa::{RsaPrivateKey, RsaPublicKey};
+
+        // Generate an RS256 keypair in-test (private key never leaves the process).
+        let mut rng = rand::thread_rng();
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_key = RsaPublicKey::from(&private_key);
+        let private_pem = private_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let public_pem = public_key.to_public_key_pem(LineEnding::LF).unwrap();
+
+        let issuer = "https://api.botframework.com";
+        let app_id = "app-id-123";
+        let sign = |iss: &str, aud: &str| -> String {
+            #[derive(serde::Serialize)]
+            struct C {
+                aud: String,
+                iss: String,
+                exp: i64,
+            }
+            let claims = C {
+                aud: aud.to_string(),
+                iss: iss.to_string(),
+                exp: chrono::Utc::now().timestamp() + 3600,
+            };
+            let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+            let key = jsonwebtoken::EncodingKey::from_rsa_pem(private_pem.as_bytes()).unwrap();
+            jsonwebtoken::encode(&header, &claims, &key).unwrap()
+        };
+
+        // Unconfigured: no env set at all → 503.
+        std::env::remove_var("AGENTBBS_TEAMS_APP_ID");
+        std::env::remove_var("AGENTBBS_TEAMS_JWT_ISSUER");
+        std::env::remove_var("AGENTBBS_TEAMS_JWT_PUBKEY_PEM");
+        std::env::remove_var("AGENTBBS_TEAMS_CHANNEL_MAP");
+        std::env::remove_var("AGENTBBS_TEAMS_BRIDGE_SEED_HEX");
+        let app = router(AppState::in_memory());
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/bridge/teams/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        // Configure the bridge.
+        std::env::set_var("AGENTBBS_TEAMS_APP_ID", app_id);
+        std::env::set_var("AGENTBBS_TEAMS_JWT_ISSUER", issuer);
+        std::env::set_var("AGENTBBS_TEAMS_JWT_PUBKEY_PEM", &public_pem);
+        // The map uses the same `splitn(2, ':')` shape as Slack, so the
+        // conversation id (the key) must not contain a colon.
+        std::env::set_var("AGENTBBS_TEAMS_CHANNEL_MAP", "conv-1:general");
+        std::env::set_var(
+            "AGENTBBS_TEAMS_BRIDGE_SEED_HEX",
+            "43ee46a3b62cc120a0fdb63523aed147245e18b24bca232ceedbea5de6a278bc",
+        );
+
+        let activity = r#"{
+            "type": "message",
+            "id": "1690000000000",
+            "text": "hi board",
+            "from": { "id": "29:user-aad-id", "name": "Ada" },
+            "recipient": { "id": "28:app-id-123" },
+            "conversation": { "id": "conv-1" }
+        }"#;
+
+        // Absent Bearer → 401.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/bridge/teams/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(activity))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        // Bad Bearer (bogus token) → 401.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/bridge/teams/messages")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer not-a-jwt")
+                    .body(Body::from(activity))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        // Validly-signed token + a real message Activity on an allowlisted
+        // conversation → 200.
+        let token = sign(issuer, app_id);
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/bridge/teams/messages")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::from(activity))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["ok"], true);
+
+        std::env::remove_var("AGENTBBS_TEAMS_APP_ID");
+        std::env::remove_var("AGENTBBS_TEAMS_JWT_ISSUER");
+        std::env::remove_var("AGENTBBS_TEAMS_JWT_PUBKEY_PEM");
+        std::env::remove_var("AGENTBBS_TEAMS_CHANNEL_MAP");
+        std::env::remove_var("AGENTBBS_TEAMS_BRIDGE_SEED_HEX");
     }
 
     // ADR-0052 Phase 2: a driven playbook run posts a live threaded progress

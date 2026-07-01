@@ -78,6 +78,7 @@ hex = "0.4"
 hmac = "0.12"
 image = "0.25.9"
 ipnet = "2.11"
+jsonwebtoken = "9"
 kdl = "6.5.0"
 late-core = { path = "crates/late-core", default-features = false }
 livekit = { version = "0.7.42", features = ["rustls-tls-native-roots"] }
