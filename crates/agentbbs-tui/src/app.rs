@@ -350,6 +350,11 @@ pub struct App {
     pub draft_editing: bool,
     /// The draft body being typed, when `draft_editing`.
     pub draft_edit_input: String,
+    /// Whether the DM screen is prompting for a new peer handle to open,
+    /// rather than picking one from `dm_peers()`.
+    pub dm_new_editing: bool,
+    /// The handle being typed, when `dm_new_editing`.
+    pub dm_new_input: String,
 }
 
 impl Drop for App {
@@ -511,6 +516,8 @@ impl App {
             draft_index: 0,
             draft_editing: false,
             draft_edit_input: String::new(),
+            dm_new_editing: false,
+            dm_new_input: String::new(),
         };
         app.seed_defaults();
         app.seed_arena();

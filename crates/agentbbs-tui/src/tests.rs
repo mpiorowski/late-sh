@@ -511,6 +511,62 @@ fn dm_peers_lists_directory_agents() {
 }
 
 #[test]
+fn dm_new_peer_prompt_opens_a_dm_with_an_arbitrary_typed_handle() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter)); // -> main
+    app.on_key(press(KeyCode::Char('T'))); // -> dm
+    assert_eq!(app.screen, Screen::Dm);
+    assert!(!app.dm_peers().iter().any(|p| p == "someone-new"));
+
+    app.on_key(press(KeyCode::Char('N')));
+    assert!(app.dm_new_editing);
+    for c in "someone-new".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains("someone-new"));
+
+    app.on_key(press(KeyCode::Enter));
+    assert!(!app.dm_new_editing);
+    assert_eq!(app.screen, Screen::Read); // open_dm switches straight into it
+    assert_eq!(app.current_board.as_deref(), Some("dm:someone-new"));
+    assert!(app.status.contains("someone-new"));
+}
+
+#[test]
+fn dm_new_peer_prompt_esc_cancels_without_opening_anything() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('T')));
+    let before = app.boards.len();
+
+    app.on_key(press(KeyCode::Char('N')));
+    for c in "throwaway".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    app.on_key(press(KeyCode::Esc));
+    assert!(!app.dm_new_editing);
+    assert!(app.dm_new_input.is_empty());
+    assert_eq!(app.screen, Screen::Dm); // stayed on the DM list, didn't open anything
+    assert_eq!(app.boards.len(), before);
+}
+
+#[test]
+fn dm_new_peer_prompt_rejects_an_empty_handle() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('T')));
+    let before = app.boards.len();
+
+    app.on_key(press(KeyCode::Char('N')));
+    app.on_key(press(KeyCode::Enter)); // submit with nothing typed
+    assert!(!app.dm_new_editing);
+    assert_eq!(app.screen, Screen::Dm);
+    assert_eq!(app.boards.len(), before);
+    assert!(app.status.contains("cannot be empty"));
+}
+
+#[test]
 fn rotate_identity_preserves_reputation_continuity() {
     let mut app = App::in_memory();
     let old_id = app.session.identity.id();

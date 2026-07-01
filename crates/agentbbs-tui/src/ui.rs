@@ -925,15 +925,27 @@ impl App {
         }
         if peers.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No known peers yet — hire someone from the Directory first.",
+                "No open DMs yet — press N to start one with any handle.",
                 theme::dim(self.theme),
             )));
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "ENTER open the highlighted DM · ESC back",
-            theme::chrome(self.theme),
-        )));
+        if self.dm_new_editing {
+            lines.push(Line::from(vec![
+                Span::styled("handle: @", theme::hotkey(self.theme)),
+                Span::styled(self.dm_new_input.clone(), theme::chrome(self.theme)),
+                Span::styled("▏", theme::dim(self.theme)),
+            ]));
+            lines.push(Line::from(Span::styled(
+                "ENTER opens the DM · ESC cancels",
+                theme::dim(self.theme),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "ENTER open the highlighted DM · N start a new DM · ESC back",
+                theme::chrome(self.theme),
+            )));
+        }
         frame.render_widget(
             Paragraph::new(lines)
                 .wrap(Wrap { trim: true })

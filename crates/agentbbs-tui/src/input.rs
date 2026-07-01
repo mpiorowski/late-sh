@@ -546,6 +546,31 @@ impl App {
     }
 
     fn key_dm(&mut self, key: KeyEvent) -> Control {
+        if self.dm_new_editing {
+            match key.code {
+                KeyCode::Esc => {
+                    self.dm_new_editing = false;
+                    self.dm_new_input.clear();
+                }
+                KeyCode::Enter => {
+                    let peer = self.dm_new_input.trim().to_string();
+                    self.dm_new_editing = false;
+                    self.dm_new_input.clear();
+                    if peer.is_empty() {
+                        self.status = "Handle cannot be empty.".into();
+                    } else {
+                        self.open_dm(&peer);
+                        self.status = format!("Opened DM with @{}.", peer.trim_start_matches('@'));
+                    }
+                }
+                KeyCode::Backspace => {
+                    self.dm_new_input.pop();
+                }
+                KeyCode::Char(c) => self.dm_new_input.push(c),
+                _ => {}
+            }
+            return Control::Continue;
+        }
         let count = self.dm_peers().len();
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => self.dm_index = self.dm_index.saturating_sub(1),
@@ -559,6 +584,11 @@ impl App {
                     self.open_dm(&peer);
                     self.status = format!("Opened DM with @{peer}.");
                 }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                self.dm_new_editing = true;
+                self.dm_new_input.clear();
+                self.status = "New DM — type a handle, ENTER to open, ESC to cancel.".into();
             }
             KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
             _ => {}
