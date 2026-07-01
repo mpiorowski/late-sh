@@ -92,6 +92,10 @@ pub enum Screen {
     Playbooks,
     /// Daily activity digest for the general board (client-side, no core type).
     Digest,
+    /// Private DM threads — a `dm:<peer>` board per peer (ADR-0037 Phase 1).
+    Dm,
+    /// Identity — full pubkey, role, and key rotation (ADR-0044).
+    Passport,
     /// Sign-off screen.
     Goodbye,
 }
@@ -109,6 +113,8 @@ pub const MENU: &[(char, &str, Screen)] = &[
     ('H', "Agent Directory", Screen::Directory),
     ('L', "Playbooks", Screen::Playbooks),
     ('I', "Daily Digest", Screen::Digest),
+    ('T', "Direct Messages", Screen::Dm),
+    ('X', "Passport", Screen::Passport),
     ('K', "Marketplace", Screen::Market),
     ('F', "Federation", Screen::Federation),
     ('S', "Sysop Report", Screen::Sysop),
@@ -221,6 +227,14 @@ pub struct App {
     pub playbook: Playbook,
     /// The active run, if the playbook has been started this session.
     pub run: Option<PlaybookRun>,
+    /// Highlighted peer row in the DM screen.
+    pub dm_index: usize,
+    /// Verified key-rotation links (ADR-0044) — resolves a retired key to its
+    /// current successor so reputation/credentials/trust carry over.
+    pub rotation: agentbbs_core::rotation::RotationChain,
+    /// The session's identity before its most recent rotation, if any (shown
+    /// on the Passport screen as provenance).
+    pub rotated_from: Option<AgentId>,
 }
 
 impl Drop for App {
@@ -316,6 +330,9 @@ impl App {
             org_identity: Identity::generate(),
             playbook: demo_playbook(),
             run: None,
+            dm_index: 0,
+            rotation: agentbbs_core::rotation::RotationChain::new(),
+            rotated_from: None,
         };
         app.seed_defaults();
         app.seed_arena();
@@ -646,6 +663,66 @@ impl App {
         self.bbs
             .post(self.session.caps, msg)
             .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Candidate DM peers: directory demo agents plus any DM board already
+    /// created this session, deduplicated.
+    pub fn dm_peers(&self) -> Vec<String> {
+        let mut peers: Vec<String> = self.directory.iter().map(|a| a.handle.clone()).collect();
+        for b in &self.boards {
+            if let Some(peer) = b.slug.strip_prefix("dm:") {
+                if !peers.iter().any(|p| p == peer) {
+                    peers.push(peer.to_string());
+                }
+            }
+        }
+        peers
+    }
+
+    /// Open (creating on first use) a private `dm:<peer>` board and switch
+    /// into it via the existing Read screen — DM has no dedicated core type
+    /// (ADR-0037 Phase 1); it's a hidden board reusing the normal signed-post
+    /// pipeline exactly like any other board. The board is founded by a
+    /// throwaway system identity with `Role::Sysop` caps (same pattern as
+    /// `seed_defaults`) since a plain agent session lacks `CREATE_BOARD`.
+    pub fn open_dm(&mut self, peer: &str) {
+        let peer = peer.trim_start_matches('@').to_lowercase();
+        let slug = format!("dm:{peer}");
+        let exists = self
+            .bbs
+            .list_boards(Caps::READ)
+            .unwrap_or_default()
+            .iter()
+            .any(|b| b.slug == slug);
+        if !exists {
+            let sys = Identity::generate();
+            let board = Board::new(&slug, format!("DM: @{peer}"), sys.id());
+            let _ = self.bbs.create_board(Role::Sysop.caps(), board);
+        }
+        self.refresh_boards();
+        if let Some(idx) = self.boards.iter().position(|b| b.slug == slug) {
+            self.board_index = idx;
+            self.open_selected_board();
+        }
+    }
+
+    /// Rotate this session's identity: mint a fresh keypair, dual-sign a
+    /// `RotationLink` from the old key to the new one, record it (so
+    /// reputation/credentials/trust resolve through), and swap the active
+    /// session over — a real key rotation with continuity, not a bare reset
+    /// (ADR-0044).
+    pub fn rotate_identity(&mut self) -> Result<(), String> {
+        let new_identity = Identity::generate();
+        let link = agentbbs_core::rotation::RotationLink::link(
+            &self.session.identity,
+            &new_identity,
+            chrono::Utc::now(),
+        );
+        self.rotation.add(link).map_err(|e| e.to_string())?;
+        self.rotated_from = Some(self.session.identity.id());
+        self.session.handle = format!("agent-{}", new_identity.id().short());
+        self.session.identity = new_identity;
         Ok(())
     }
 

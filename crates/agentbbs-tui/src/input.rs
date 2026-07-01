@@ -29,6 +29,8 @@ impl App {
             Screen::Directory => self.key_directory(key),
             Screen::Playbooks => self.key_playbooks(key),
             Screen::Digest => self.key_digest(key),
+            Screen::Dm => self.key_dm(key),
+            Screen::Passport => self.key_passport(key),
             Screen::Who
             | Screen::Doors
             | Screen::Market
@@ -313,6 +315,39 @@ impl App {
             KeyCode::Char('p') | KeyCode::Char('P') => match self.post_digest() {
                 Ok(()) => self.status = "Digest posted to #general.".into(),
                 Err(e) => self.status = format!("Digest post failed: {e}"),
+            },
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_dm(&mut self, key: KeyEvent) -> Control {
+        let count = self.dm_peers().len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.dm_index = self.dm_index.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.dm_index + 1 < count {
+                    self.dm_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(peer) = self.dm_peers().get(self.dm_index).cloned() {
+                    self.open_dm(&peer);
+                    self.status = format!("Opened DM with @{peer}.");
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_passport(&mut self, key: KeyEvent) -> Control {
+        match key.code {
+            KeyCode::Char('r') | KeyCode::Char('R') => match self.rotate_identity() {
+                Ok(()) => self.status = "Identity rotated — continuity preserved.".into(),
+                Err(e) => self.status = format!("Rotation failed: {e}"),
             },
             KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
             _ => {}

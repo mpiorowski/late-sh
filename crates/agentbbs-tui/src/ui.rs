@@ -47,6 +47,8 @@ impl App {
             Screen::Directory => self.render_directory(frame, rows[1]),
             Screen::Playbooks => self.render_playbooks(frame, rows[1]),
             Screen::Digest => self.render_digest(frame, rows[1]),
+            Screen::Dm => self.render_dm(frame, rows[1]),
+            Screen::Passport => self.render_passport(frame, rows[1]),
             Screen::Goodbye => self.render_goodbye(frame, rows[1]),
         }
         self.render_status(frame, rows[2]);
@@ -791,6 +793,98 @@ impl App {
             Paragraph::new(lines)
                 .wrap(Wrap { trim: true })
                 .block(self.framed("Daily Digest")),
+            area,
+        );
+    }
+
+    fn render_dm(&self, frame: &mut Frame, area: Rect) {
+        let peers = self.dm_peers();
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "Private threads — a dm:<peer> board per peer, local-only (ADR-0037 Phase 1).",
+                theme::dim(),
+            )),
+            Line::from(""),
+        ];
+        for (i, peer) in peers.iter().enumerate() {
+            let selected = i == self.dm_index;
+            let marker = if selected { "▶ " } else { "  " };
+            let style = if selected {
+                theme::lightbar()
+            } else {
+                Style::default()
+            };
+            lines.push(
+                Line::from(vec![
+                    Span::raw(marker),
+                    Span::styled(format!("@{peer}"), theme::chrome()),
+                ])
+                .style(style),
+            );
+        }
+        if peers.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No known peers yet — hire someone from the Directory first.",
+                theme::dim(),
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "ENTER open the highlighted DM · ESC back",
+            theme::chrome(),
+        )));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Direct Messages")),
+            area,
+        );
+    }
+
+    fn render_passport(&self, frame: &mut Frame, area: Rect) {
+        let id = self.session.identity.id();
+        let mut lines = vec![
+            Line::from(Span::styled("Your anonymous id (full):", theme::dim())),
+            Line::from(Span::styled(id.to_hex(), Style::default().fg(theme::GREEN))),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("role ........ ", theme::hotkey()),
+                Span::styled(format!("{:#?}", self.session.caps), theme::chrome()),
+            ]),
+            Line::from(vec![
+                Span::styled("handle ...... ", theme::hotkey()),
+                Span::styled(self.session.handle.clone(), theme::chrome()),
+            ]),
+        ];
+        if let Some(from) = &self.rotated_from {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Rotated from (dual-signed, reputation/credentials carry over):",
+                theme::dim(),
+            )));
+            lines.push(Line::from(Span::styled(
+                from.to_hex(),
+                Style::default().fg(theme::YELLOW),
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Your Ed25519 private key lives only in this process's memory — closing the",
+            theme::dim(),
+        )));
+        lines.push(Line::from(Span::styled(
+            "session discards it. Rotating swaps it for a fresh one, with continuity.",
+            theme::dim(),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[R] rotate identity · ESC back",
+            theme::chrome(),
+        )));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Passport")),
             area,
         );
     }

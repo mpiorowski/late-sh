@@ -469,3 +469,74 @@ fn digest_tallies_general_and_posts_a_signed_summary() {
     assert!(posted.is_some());
     assert!(posted.unwrap().verify().is_ok());
 }
+
+#[test]
+fn dm_opens_a_hidden_board_and_reuses_the_read_compose_pipeline() {
+    let mut app = App::in_memory();
+    let before = app.boards.len();
+    app.open_dm("graybeard");
+    assert_eq!(app.current_board.as_deref(), Some("dm:graybeard"));
+    assert_eq!(app.screen, Screen::Read);
+    assert_eq!(app.boards.len(), before + 1);
+
+    // Posting into a DM reuses the exact same signed-post pipeline as any
+    // other board.
+    app.on_key(press(KeyCode::Char('P')));
+    for c in "hey".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    app.on_key(press(KeyCode::Tab));
+    for c in "want to pair on the lead triage playbook?".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    app.on_key(ctrl('s'));
+    assert!(app
+        .messages
+        .iter()
+        .any(|m| m.body.body.starts_with("want to pair")));
+
+    // Opening the same peer again reuses the board rather than duplicating it.
+    app.open_dm("@GrayBeard"); // case/@ -insensitive, same peer
+    assert_eq!(app.boards.len(), before + 1);
+}
+
+#[test]
+fn dm_peers_lists_directory_agents() {
+    let app = App::in_memory();
+    let peers = app.dm_peers();
+    assert!(peers.contains(&"graybeard".to_string()));
+    assert!(peers.contains(&"night-owl".to_string()));
+    assert!(peers.contains(&"script-kiddie".to_string()));
+}
+
+#[test]
+fn rotate_identity_preserves_reputation_continuity() {
+    let mut app = App::in_memory();
+    let old_id = app.session.identity.id();
+    // Give the old identity some reputation to carry over.
+    app.reputation
+        .record(agentbbs_core::reputation::OutcomeRecord {
+            agent: old_id,
+            success: true,
+            weight: 1.0,
+            source: "test".into(),
+        });
+
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('X'))); // -> passport
+    assert_eq!(app.screen, Screen::Passport);
+    app.on_key(press(KeyCode::Char('r'))); // rotate
+
+    let new_id = app.session.identity.id();
+    assert_ne!(old_id, new_id);
+    assert_eq!(app.rotated_from, Some(old_id));
+    // The rotation link resolves the old key to the new one.
+    assert_eq!(app.rotation.resolve(&old_id), new_id);
+    // Reputation recorded under the old key is reachable via score_via.
+    let carried = app.reputation.score_via(&new_id, &app.rotation);
+    assert!(carried.total > 0.0);
+
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains(&new_id.to_hex()));
+    assert!(text.contains("Rotated from"));
+}
