@@ -258,9 +258,11 @@ pub struct SessionConfig {
     /// Chip/badge grant sink for NetHack milestones (Amulet, ascension). `None`
     /// on headless/test paths, which disables milestone awards.
     pub nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
-    /// dopewars door game: a local PTY child. `bin` is the dopewars binary path.
+    /// dopewars door game: reached over SSH like nethack (host `late-dopewars`).
     pub dopewars_enabled: bool,
-    pub dopewars_bin: String,
+    pub dopewars_host: String,
+    pub dopewars_port: u16,
+    pub dopewars_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -476,12 +478,14 @@ pub struct App {
     /// Chip/badge grant sink threaded into the per-session NetHack door state.
     pub(crate) nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
     pub(crate) dopewars_state: Option<crate::app::door::dopewars::state::State>,
-    /// Per-session TERM string (from the PTY request), used to size the dopewars
-    /// PTY and give curses a real terminfo entry.
+    /// Per-session TERM string (from the PTY request), forwarded to the dopewars
+    /// host so curses gets a real terminfo entry.
     pub(crate) dopewars_term: String,
-    /// dopewars door game: enable flag and binary path (from the global Config).
+    /// dopewars door game: enable flag + host connection details (global Config).
     pub(crate) dopewars_enabled: bool,
-    pub(crate) dopewars_bin: String,
+    pub(crate) dopewars_host: String,
+    pub(crate) dopewars_port: u16,
+    pub(crate) dopewars_secret: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -1080,7 +1084,9 @@ impl App {
             dopewars_state: None,
             dopewars_term: config.term.clone(),
             dopewars_enabled: config.dopewars_enabled,
-            dopewars_bin: config.dopewars_bin,
+            dopewars_host: config.dopewars_host,
+            dopewars_port: config.dopewars_port,
+            dopewars_secret: config.dopewars_secret,
             repaint_signal: None,
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
@@ -1271,7 +1277,9 @@ impl App {
         }
         self.dopewars_state = Some(crate::app::door::dopewars::state::State::new(
             self.user_id,
-            self.dopewars_bin.clone(),
+            self.dopewars_host.clone(),
+            self.dopewars_port,
+            self.dopewars_secret.clone(),
             self.dopewars_term.clone(),
             self.dopewars_enabled,
             self.repaint_signal.clone(),
@@ -1687,9 +1695,10 @@ impl App {
         {
             return;
         }
-        // dopewars: same local-PTY passthrough as nethack. Every byte goes
-        // straight to the curses child while it runs; Ctrl-C ends the game (it
-        // traps no SIGINT) and drops back to the launcher.
+        // dopewars: same raw passthrough as nethack (both are network doors to a
+        // remote curses child). Every byte goes straight to the child while it
+        // runs; Ctrl-C ends the game (it traps no SIGINT) and drops back to the
+        // launcher.
         if self.screen == crate::app::common::primitives::Screen::Dopewars
             && let Some(state) = self.dopewars_state.as_ref()
             && state.is_running()

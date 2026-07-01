@@ -5,8 +5,10 @@ locals {
   rebels_host    = trimspace(var.REBELS_HOST) != "" ? trimspace(var.REBELS_HOST) : "frittura.org"
   rebels_port    = trimspace(var.REBELS_PORT) != "" ? trimspace(var.REBELS_PORT) : "3788"
 
-  # dopewars is a local-PTY child of service-ssh (no separate host/PVC/secret),
-  # so this is the only knob it needs beyond the baked-in binary path.
+  # DOPEWARS_ENABLED arrives as an empty string from CI when the GitHub variable
+  # is unset; default it on. Like nethack this now gates only the CLIENT door
+  # (service-ssh's LATE_DOPEWARS_ENABLED); the late-dopewars host pod is always
+  # deployed. Host/port/PVC locals live in dopewars.tf.
   dopewars_enabled = trimspace(var.DOPEWARS_ENABLED) != "" ? trimspace(var.DOPEWARS_ENABLED) : "1"
 
   voice_enabled = trimspace(var.VOICE_ENABLED) != "" ? trimspace(var.VOICE_ENABLED) : "1"

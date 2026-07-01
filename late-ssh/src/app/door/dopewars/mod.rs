@@ -1,11 +1,13 @@
-// dopewars - a door game run as a local PTY child of late-ssh. Unlike rebels
-// and nethack (reached over SSH), late.sh spawns the real upstream dopewars
-// curses client directly on a pty, streams its terminal through a vt100 emulator,
-// and blits the grid into a ratatui widget below the top bar. dopewars has no
-// savegame and no save-lock, so there is no host crate and no graceful-save
-// dance: a dropped run simply ends.
+// dopewars - a door game served by late.sh's own dopewars host (the
+// `late-dopewars` crate). Like nethack, late.sh reaches it over SSH: this module
+// is the client that connects to the host, streams the remote terminal through a
+// vt100 emulator, and draws it into a ratatui widget below the top bar. The host
+// runs the real upstream dopewars curses client on a PTY against one shared,
+// PVC-backed high-score file, authorized by a shared-secret-derived key.
+// dopewars has no mid-game save, so a dropped connection simply ends the run.
 //
 // dopewars: https://dopewars.sourceforge.io/
+pub mod identity;
 pub mod proxy;
 pub mod render;
 pub mod state;

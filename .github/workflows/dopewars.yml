@@ -1,17 +1,18 @@
 name: dopewars
 
 # Dedicated CI/CD for the dopewars door, responsible only for the from-source
-# binary (there is no separate host/PVC/secret -- dopewars is a local-PTY
-# child of service-ssh itself; see late-ssh/src/app/door/dopewars/CONTEXT.md):
+# binary and its standalone SSH host (late-dopewars, twin of late-nethack):
 #   - build_validate: compile the dopewars-build stage and prove the binary
 #     works and isn't setgid (a setgid binary silently refuses the per-session
 #     `-f` score path). Runs on changes to the build and weekly, to catch
 #     upstream / checksum breakage early (the build fetches a pinned tarball
 #     from SourceForge over the network).
-#   - build_runtime_ssh: build the full runtime-ssh target to catch breakage
-#     in that stage on Dockerfile PRs. Nothing else builds runtime-ssh on PR.
-#   - verify_deployed: manual, per-environment. Confirms the live service-ssh
-#     pod has the door enabled. There's no PVC/save state to seed or check.
+#   - build_runtime_dopewars: build the runtime-dopewars target (the
+#     late-dopewars host image) to catch breakage in that stage on Dockerfile
+#     PRs. Nothing else builds runtime-dopewars on PR.
+#   - verify_deployed: manual, per-environment. Confirms the live late-dopewars
+#     deployment is rolled out and the door is enabled. There's no PVC/save
+#     state to seed or check.
 
 on:
   pull_request:
@@ -86,8 +87,8 @@ jobs:
             echo "mode $mode OK (not setgid)"
           '
 
-  build_runtime_ssh:
-    name: build_runtime_ssh_image
+  build_runtime_dopewars:
+    name: build_runtime_dopewars_image
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -97,19 +98,19 @@ jobs:
       - name: setup_docker_buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build the runtime-ssh target (the late-ssh prod image, which is where
-      # dopewars actually ships) to catch breakage in that stage on Dockerfile
-      # PRs. We only prove it builds; it is not pushed here (deploy.yml builds
-      # and pushes the released image).
-      - name: build_runtime_ssh_target
+      # Build the runtime-dopewars target (the late-dopewars host image) to
+      # catch breakage in that stage on Dockerfile PRs. We only prove it builds;
+      # it is not pushed here (deploy_dopewars.yml builds and pushes the
+      # released image).
+      - name: build_runtime_dopewars_target
         uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
-          target: runtime-ssh
+          target: runtime-dopewars
           platforms: linux/amd64
           push: false
-          tags: late-ssh:ci
+          tags: late-dopewars:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -130,11 +131,15 @@ jobs:
           kubeconfig: ${{ secrets.KUBE_CONFIG }}
 
       - name: wait_for_rollout
-        run: kubectl rollout status deployment/service-ssh -n default --timeout=180s
+        run: kubectl rollout status deployment/late-dopewars -n default --timeout=180s
 
       - name: verify_door_enabled
         run: |
+          # LATE_DOPEWARS_ENABLED is a CLIENT flag: it lives on service-ssh (which
+          # reaches the host over SSH), NOT on the late-dopewars host pod. Read it
+          # there, mirroring nethack.yml.
           POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
+          echo "service-ssh pod: ${POD}"
           enabled=$(kubectl exec "${POD}" -- printenv LATE_DOPEWARS_ENABLED || true)
           echo "LATE_DOPEWARS_ENABLED=${enabled}"
           case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in

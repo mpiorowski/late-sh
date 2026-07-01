@@ -19,7 +19,9 @@ const EXIT_GRACE_TICKS: u8 = 10;
 
 pub struct State {
     user_id: uuid::Uuid,
-    bin: String,
+    host: String,
+    port: u16,
+    secret: String,
     /// Feature flag: when false the door is reachable but launching is a no-op
     /// and the Launcher shows an "unavailable" message.
     enabled: bool,
@@ -41,14 +43,18 @@ pub struct State {
 impl State {
     pub fn new(
         user_id: uuid::Uuid,
-        bin: String,
+        host: String,
+        port: u16,
+        secret: String,
         term: String,
         enabled: bool,
         repaint: Option<Arc<RenderSignal>>,
     ) -> Self {
         Self {
             user_id,
-            bin,
+            host,
+            port,
+            secret,
             enabled,
             mode: Mode::Launcher,
             proxy: None,
@@ -86,7 +92,9 @@ impl State {
             return;
         }
         self.proxy = Some(DopewarsProcess::spawn(ProcessConfig {
-            bin: self.bin.clone(),
+            host: self.host.clone(),
+            port: self.port,
+            secret: self.secret.clone(),
             user_id: self.user_id,
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
@@ -186,7 +194,9 @@ mod tests {
     fn disabled_state() -> State {
         State::new(
             uuid::Uuid::nil(),
-            "dopewars".to_string(),
+            "127.0.0.1".to_string(),
+            2324,
+            String::new(),
             "xterm".to_string(),
             false,
             None,

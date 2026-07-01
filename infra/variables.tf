@@ -47,6 +47,11 @@ variable "NETHACK_IMAGE_TAG" {
   type        = string
 }
 
+variable "DOPEWARS_IMAGE_TAG" {
+  description = "Docker image for late-dopewars, the dopewars door host (e.g., ghcr.io/org/late-dopewars:sha-abc123)."
+  type        = string
+}
+
 # =============================================================================
 # SSH Host Key
 # =============================================================================
@@ -179,7 +184,7 @@ variable "NETHACK_ENABLED" {
 }
 
 variable "DOPEWARS_ENABLED" {
-  description = "Enable the dopewars door game (real upstream binary on a local PTY, in-process in service-ssh; no separate host/PVC). Empty defaults to on."
+  description = "Enable the dopewars door game CLIENT (service-ssh reaches the late-dopewars host over SSH; the host pod is always deployed). Empty defaults to on."
   type        = string
   default     = ""
 

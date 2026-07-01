@@ -83,10 +83,12 @@ pub struct Config {
     pub nethack_host: String,
     pub nethack_port: u16,
     pub nethack_secret: String,
-    /// dopewars door game: a local PTY child (no host crate). `bin` is the path
-    /// to the curses dopewars binary, resolved via `PATH` if unqualified.
+    /// dopewars door game: reached over SSH like nethack. `enabled` gates only
+    /// the client; the host (`late-dopewars`) is deployed unconditionally.
     pub dopewars_enabled: bool,
-    pub dopewars_bin: String,
+    pub dopewars_host: String,
+    pub dopewars_port: u16,
+    pub dopewars_secret: String,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -228,8 +230,10 @@ impl Config {
         );
         tracing::info!(
             enabled = self.dopewars_enabled,
-            bin = %self.dopewars_bin,
-            "dopewars: dopewars door-game local-pty child status"
+            host = %self.dopewars_host,
+            port = self.dopewars_port,
+            has_secret = !self.dopewars_secret.is_empty(),
+            "dopewars: dopewars door-game host (late-dopewars) target and status"
         );
     }
 
@@ -281,6 +285,14 @@ impl Config {
                 .context("LATE_NETHACK_SECRET must be set when LATE_NETHACK_ENABLED is true")?
         } else {
             optional("LATE_NETHACK_SECRET").unwrap_or_default()
+        };
+
+        let dopewars_enabled = optional_bool("LATE_DOPEWARS_ENABLED", false)?;
+        let dopewars_secret = if dopewars_enabled {
+            optional("LATE_DOPEWARS_SECRET")
+                .context("LATE_DOPEWARS_SECRET must be set when LATE_DOPEWARS_ENABLED is true")?
+        } else {
+            optional("LATE_DOPEWARS_SECRET").unwrap_or_default()
         };
 
         Ok(Self {
@@ -385,8 +397,10 @@ impl Config {
             nethack_host: optional("LATE_NETHACK_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
             nethack_port: optional_parse("LATE_NETHACK_PORT", 2323)?,
             nethack_secret,
-            dopewars_enabled: optional_bool("LATE_DOPEWARS_ENABLED", false)?,
-            dopewars_bin: optional("LATE_DOPEWARS_BIN").unwrap_or_else(|| "dopewars".to_string()),
+            dopewars_enabled,
+            dopewars_host: optional("LATE_DOPEWARS_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
+            dopewars_port: optional_parse("LATE_DOPEWARS_PORT", 2324)?,
+            dopewars_secret,
         })
     }
 }
