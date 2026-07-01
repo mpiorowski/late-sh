@@ -49,6 +49,7 @@ impl App {
             Screen::Digest => self.render_digest(frame, rows[1]),
             Screen::Dm => self.render_dm(frame, rows[1]),
             Screen::Passport => self.render_passport(frame, rows[1]),
+            Screen::Console => self.render_console(frame, rows[1]),
             Screen::Goodbye => self.render_goodbye(frame, rows[1]),
         }
         self.render_status(frame, rows[2]);
@@ -922,6 +923,36 @@ impl App {
             Paragraph::new(lines)
                 .wrap(Wrap { trim: true })
                 .block(self.framed("Passport")),
+            area,
+        );
+    }
+
+    fn render_console(&self, frame: &mut Frame, area: Rect) {
+        let mut lines = vec![
+            Line::from(Span::styled("SYSTEM DIAGNOSTICS", theme::hotkey())),
+            Line::from(""),
+        ];
+        for (label, value) in self.console_diagnostics() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{:<17} ", label), theme::dim()),
+                Span::styled(value, theme::chrome()),
+            ]));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "A point-in-time summary, not a log — see Sysop Report for the",
+            theme::dim(),
+        )));
+        lines.push(Line::from(Span::styled(
+            "chronological event stream this reads from.",
+            theme::dim(),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("ESC back", theme::chrome())));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Console")),
             area,
         );
     }

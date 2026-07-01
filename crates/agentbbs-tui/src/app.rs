@@ -96,6 +96,9 @@ pub enum Screen {
     Dm,
     /// Identity — full pubkey, role, and key rotation (ADR-0044).
     Passport,
+    /// Diagnostics — session/store counts, distinct from Sysop's raw
+    /// chronological event log.
+    Console,
     /// Sign-off screen.
     Goodbye,
 }
@@ -118,6 +121,7 @@ pub const MENU: &[(char, &str, Screen)] = &[
     ('K', "Marketplace", Screen::Market),
     ('F', "Federation", Screen::Federation),
     ('S', "Sysop Report", Screen::Sysop),
+    ('E', "Console", Screen::Console),
     ('G', "Goodbye / Log Off", Screen::Goodbye),
 ];
 
@@ -754,6 +758,51 @@ impl App {
         } else {
             Role::Sysop.caps()
         };
+    }
+
+    /// System diagnostics — `(label, value)` pairs. Distinct from Sysop's raw
+    /// chronological event log: a point-in-time summary of every state
+    /// container this session holds. No "clear log" / "test log" actions
+    /// here (unlike the web's Console) — the TUI's `reporter` is the same
+    /// audited event stream Sysop reads, not a separate local debug ring
+    /// buffer, so injecting synthetic entries into it or clearing it would
+    /// falsify that audit trail rather than just resetting a UI toy.
+    pub fn console_diagnostics(&self) -> Vec<(&'static str, String)> {
+        let events = self.reporter.snapshot();
+        let errors = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.severity(),
+                    agentbbs_core::Severity::Warn | agentbbs_core::Severity::Critical
+                )
+            })
+            .count();
+        vec![
+            ("version", agentbbs_core::PROTOCOL_VERSION.to_string()),
+            (
+                "identity",
+                format!("@{}", self.session.identity.id().short()),
+            ),
+            ("caps", format!("{:#?}", self.session.caps)),
+            ("boards", self.boards.len().to_string()),
+            (
+                "messages",
+                self.bbs.store().message_count().unwrap_or(0).to_string(),
+            ),
+            (
+                "online",
+                self.presence.online(self.now_ms()).len().to_string(),
+            ),
+            ("pods", self.pods.len().to_string()),
+            ("proposals", self.proposals.len().to_string()),
+            ("credentials", self.credentials.all().len().to_string()),
+            ("decisions", self.decisions.all().len().to_string()),
+            ("installed", self.installed.len().to_string()),
+            ("credits", self.credits.to_string()),
+            ("events retained", events.len().to_string()),
+            ("errors/warnings", errors.to_string()),
+        ]
     }
 
     /// Install a marketplace listing by SKU — a local-only credit ledger, no

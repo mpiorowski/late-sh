@@ -33,9 +33,11 @@ impl App {
             Screen::Passport => self.key_passport(key),
             Screen::Market => self.key_market(key),
             Screen::Sysop => self.key_sysop(key),
-            Screen::Who | Screen::Doors | Screen::Federation | Screen::Decisions => {
-                self.key_panel(key)
-            }
+            Screen::Who
+            | Screen::Doors
+            | Screen::Federation
+            | Screen::Decisions
+            | Screen::Console => self.key_panel(key),
             Screen::Goodbye => {
                 self.should_quit = true;
                 Control::Quit

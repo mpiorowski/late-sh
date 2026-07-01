@@ -630,3 +630,23 @@ fn sysop_mute_blocks_posting_and_lift_restores_it() {
     app.on_key(press(KeyCode::Char('l')));
     assert!(app.moderation.can_post(&target_id, chrono::Utc::now()));
 }
+
+#[test]
+fn console_shows_live_diagnostics_distinct_from_sysops_event_log() {
+    let mut app = App::in_memory();
+    app.hire("bob", "ops").unwrap();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('E'))); // -> console
+    assert_eq!(app.screen, Screen::Console);
+
+    let diag = app.console_diagnostics();
+    let get = |k: &str| diag.iter().find(|(l, _)| *l == k).map(|(_, v)| v.clone());
+    assert_eq!(get("boards"), Some(app.boards.len().to_string()));
+    assert_eq!(get("pods"), Some("1".to_string()));
+    assert_eq!(get("credits"), Some("100".to_string()));
+
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains("Console"));
+    assert!(text.contains("SYSTEM DIAGNOSTICS"));
+    assert!(text.contains("point-in-time summary"));
+}
