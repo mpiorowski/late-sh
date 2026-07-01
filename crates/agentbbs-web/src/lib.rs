@@ -12,6 +12,7 @@
 //! any PII.
 #![forbid(unsafe_code)]
 
+mod role_claim;
 mod slack_bridge;
 mod whatsapp_bridge;
 
@@ -650,6 +651,37 @@ fn fresh_session_token() -> String {
     Identity::generate().id().to_hex()
 }
 
+/// Resolve the capabilities for a request from a *verified* external role claim
+/// (ADR-0054 Q2), falling back to the default `Role::Agent` caps. When
+/// `AGENTBBS_ROLE_CLAIM_SECRET` is unset the feature is off and every caller
+/// gets `Role::Agent` (the historical default — fully backward-compatible).
+/// When it is set, a caller may present `x-agentbbs-role` / `x-agentbbs-role-exp`
+/// / `x-agentbbs-role-sig` (HMAC-SHA256 over `"{role}:{exp}"`); a valid claim
+/// grants that role's caps (elevating an `employer`/`admin`, or restricting a
+/// `guest` to read-only). A missing, expired, or forged claim never elevates —
+/// it falls back to `Role::Agent` (fail-closed).
+fn resolve_caps(headers: &HeaderMap, now: i64) -> Caps {
+    let secret = std::env::var("AGENTBBS_ROLE_CLAIM_SECRET").unwrap_or_default();
+    if secret.is_empty() {
+        return Role::Agent.caps();
+    }
+    let h = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let (Some(role), Some(exp), Some(sig)) = (
+        h("x-agentbbs-role"),
+        h("x-agentbbs-role-exp"),
+        h("x-agentbbs-role-sig"),
+    ) else {
+        return Role::Agent.caps();
+    };
+    let Ok(exp) = exp.parse::<i64>() else {
+        return Role::Agent.caps();
+    };
+    match role_claim::verify_role_claim(&secret, role, exp, sig, now) {
+        Some(r) => r.caps(),
+        None => Role::Agent.caps(),
+    }
+}
+
 fn looks_like_agent(handle: &str) -> bool {
     let h = handle.to_ascii_lowercase();
     h.contains("agent")
@@ -986,6 +1018,7 @@ struct SignedPost {
 async fn api_post_signed(
     State(state): State<Arc<AppState>>,
     Path(slug): Path<String>,
+    headers: HeaderMap,
     Json(req): Json<SignedPost>,
 ) -> Result<Json<MessageView>, (StatusCode, Json<serde_json::Value>)> {
     use agentbbs_core::identity::{AgentId, SignatureBytes};
@@ -1077,9 +1110,12 @@ async fn api_post_signed(
     // Clone before `post` consumes it — used to mirror the reply back out to an
     // open WhatsApp session window (ADR-0053), after the post is accepted.
     let mirror_msg = message.clone();
+    // Caps come from a verified external role claim if configured (ADR-0054 Q2);
+    // otherwise the historical Role::Agent default.
+    let caps = resolve_caps(&headers, chrono::Utc::now().timestamp());
     state
         .bbs
-        .post(Role::Agent.caps(), message)
+        .post(caps, message)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, e.to_string()))?;
     maybe_mirror_whatsapp_outbound(&state, &mirror_msg);
     if human {
@@ -4463,6 +4499,57 @@ mod tests {
 
         std::env::remove_var("AGENTBBS_WHATSAPP_VERIFY_TOKEN");
         std::env::remove_var("AGENTBBS_WHATSAPP_APP_SECRET");
+    }
+
+    // ADR-0054 Q2: external-role→caps. Owns AGENTBBS_ROLE_CLAIM_SECRET for its
+    // duration (single-owner env idiom).
+    #[test]
+    fn resolve_caps_defaults_to_agent_and_elevates_on_a_valid_claim() {
+        use agentbbs_core::caps::Caps;
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let sign = |secret: &str, role: &str, exp: i64| -> String {
+            let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+            mac.update(format!("{role}:{exp}").as_bytes());
+            hex::encode(mac.finalize().into_bytes())
+        };
+        let now = 1000i64;
+
+        // Feature off (no secret): always Agent, even with headers present.
+        std::env::remove_var("AGENTBBS_ROLE_CLAIM_SECRET");
+        let mut h = HeaderMap::new();
+        h.insert("x-agentbbs-role", "sysop".parse().unwrap());
+        h.insert("x-agentbbs-role-exp", "2000".parse().unwrap());
+        h.insert(
+            "x-agentbbs-role-sig",
+            sign("sekret", "sysop", 2000).parse().unwrap(),
+        );
+        assert_eq!(resolve_caps(&h, now), Role::Agent.caps());
+
+        // Feature on: a valid moderator claim elevates to Moderator caps.
+        std::env::set_var("AGENTBBS_ROLE_CLAIM_SECRET", "sekret");
+        let mut hm = HeaderMap::new();
+        hm.insert("x-agentbbs-role", "moderator".parse().unwrap());
+        hm.insert("x-agentbbs-role-exp", "2000".parse().unwrap());
+        hm.insert(
+            "x-agentbbs-role-sig",
+            sign("sekret", "moderator", 2000).parse().unwrap(),
+        );
+        let caps = resolve_caps(&hm, now);
+        assert!(caps.contains(Caps::MODERATE));
+        assert_eq!(caps, Role::Moderator.caps());
+
+        // A forged signature never elevates — fail-closed to Agent.
+        let mut hf = HeaderMap::new();
+        hf.insert("x-agentbbs-role", "sysop".parse().unwrap());
+        hf.insert("x-agentbbs-role-exp", "2000".parse().unwrap());
+        hf.insert("x-agentbbs-role-sig", "deadbeef".parse().unwrap());
+        assert_eq!(resolve_caps(&hf, now), Role::Agent.caps());
+
+        // No claim headers at all, feature on → still Agent.
+        assert_eq!(resolve_caps(&HeaderMap::new(), now), Role::Agent.caps());
+
+        std::env::remove_var("AGENTBBS_ROLE_CLAIM_SECRET");
     }
 
     #[test]
