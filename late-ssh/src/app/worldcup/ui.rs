@@ -28,6 +28,10 @@ pub struct WorldCupView<'a> {
     /// the screen for terminal/font stacks that render regional-indicator pairs
     /// as boxed letters (mirrors the chat/shop `show_flag_fallback` setting).
     pub show_flags: bool,
+    /// Client is kitty, which splits regional-indicator flags in the overview's
+    /// rightmost (bracket) column — that one column drops flags for kitty while
+    /// keeping them everywhere else.
+    pub terminal_is_kitty: bool,
 }
 
 const LIVE: Color = Color::Rgb(255, 92, 92);
@@ -43,9 +47,16 @@ pub fn draw(frame: &mut Frame, area: Rect, view: WorldCupView) {
     draw_phase_bar(frame, bar_area, &view);
 
     match view.state.view {
-        View::Overview => {
-            draw_overview(frame, body_area, view.snapshot, view.state, view.show_flags)
-        }
+        View::Overview => draw_overview(
+            frame,
+            body_area,
+            view.snapshot,
+            view.state,
+            view.show_flags,
+            view.terminal_is_kitty,
+        ),
+        // The dedicated bracket has no panel to its left, so kitty renders its
+        // flags fine — only `show_flags` gates them here.
         View::Bracket => draw_bracket(frame, body_area, view.snapshot, view.state, view.show_flags),
     }
 }
@@ -149,6 +160,7 @@ fn draw_overview(
     snap: &WorldCupSnapshot,
     state: &State,
     show_flags: bool,
+    terminal_is_kitty: bool,
 ) {
     let show_bracket = area.width >= WIDE_OVERVIEW_MIN_WIDTH && !snap.bracket.is_empty();
     if show_bracket {
@@ -160,7 +172,9 @@ fn draw_overview(
         .areas(area);
         draw_matches_panel(frame, left, snap, show_flags);
         draw_groups_panel(frame, mid, snap, state.overview_scroll, show_flags);
-        draw_bracket(frame, right, snap, state, show_flags);
+        // kitty splits flags here (rightmost column, downstream of the panels'
+        // flags on shared rows), so it alone falls back to codes.
+        draw_bracket(frame, right, snap, state, show_flags && !terminal_is_kitty);
     } else {
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(44), Constraint::Fill(1)]).areas(area);

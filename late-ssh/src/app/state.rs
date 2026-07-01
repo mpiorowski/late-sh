@@ -25,10 +25,11 @@ use crate::{
     app::audio::{client_state::ClientAudioState, viz::Visualizer},
     app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
-        TerminalImageProtocol, TerminalImageRenderState, da1_probe, iterm2_capabilities_probe,
-        kitty_cleanup_commands, protocol_from_device_attributes, protocol_from_env_hint,
-        protocol_from_term, protocol_from_terminal_features, protocol_from_xtversion,
-        term_disables_terminal_images, terminal_image_cleanup_commands, terminal_string_terminator,
+        TerminalImageProtocol, TerminalImageRenderState, da1_probe, identity_is_kitty,
+        iterm2_capabilities_probe, kitty_cleanup_commands, protocol_from_device_attributes,
+        protocol_from_env_hint, protocol_from_term, protocol_from_terminal_features,
+        protocol_from_xtversion, term_disables_terminal_images, terminal_image_cleanup_commands,
+        terminal_string_terminator,
     },
     app::{
         chat,
@@ -577,6 +578,12 @@ pub struct App {
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
+    /// True when the client is kitty specifically. kitty desyncs its cursor from
+    /// ratatui's cell-width model on regional-indicator flags, which splits the
+    /// flags in the World Cup overview's rightmost column; that one column drops
+    /// flags for kitty. Seeded from TERM, refined by the XTVERSION reply.
+    pub(crate) terminal_is_kitty: bool,
+
     /// Desktop-notification domain: producers push through cloned
     /// `notifier` handles; render drains `notify_outbox` into OSC bytes.
     pub(crate) notifier: crate::app::notify::Notifier,
@@ -706,6 +713,7 @@ impl App {
             protocol_from_term(&config.term)
         };
         let inline_image_symbol_mode = InlineImageSymbolMode::from_identity(&config.term);
+        let terminal_is_kitty = identity_is_kitty(&config.term);
         let pending_terminal_commands = Vec::new();
         let (notifier, notify_outbox) = crate::app::notify::channel();
 
@@ -1138,6 +1146,7 @@ impl App {
             terminal_images_disabled,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
+            terminal_is_kitty,
             notifier,
             notify_outbox,
             is_draining: config.is_draining,
@@ -1574,6 +1583,11 @@ impl App {
             "terminal xtversion reply"
         );
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_identity(value));
+        // The XTVERSION payload identifies the terminal precisely (kitty vs the
+        // rest of the kitty-graphics family), refining the TERM-based seed.
+        if identity_is_kitty(value) {
+            self.terminal_is_kitty = true;
+        }
         if self.terminal_images_disabled {
             return;
         }

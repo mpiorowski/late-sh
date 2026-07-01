@@ -184,6 +184,9 @@ struct DrawContext<'a> {
     /// The account's flag-emoji tweak, shared with chat/shop: when set, flags
     /// are replaced by text fallbacks for terminals that can't render them.
     show_flag_fallback: bool,
+    /// Client is kitty specifically — it splits regional-indicator flags in the
+    /// World Cup overview's rightmost column (see `App::terminal_is_kitty`).
+    terminal_is_kitty: bool,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
@@ -854,6 +857,7 @@ impl App {
                         worldcup_snapshot: self.worldcup_rx.as_ref().map(|rx| rx.borrow().clone()),
                         worldcup_state: &self.worldcup,
                         show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                        terminal_is_kitty: self.terminal_is_kitty,
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
@@ -1266,6 +1270,7 @@ impl App {
                         snapshot,
                         state: ctx.worldcup_state,
                         show_flags: !ctx.show_flag_fallback,
+                        terminal_is_kitty: ctx.terminal_is_kitty,
                     },
                 );
             }
