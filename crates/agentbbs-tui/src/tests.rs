@@ -464,14 +464,59 @@ fn issue_credential_signs_and_stores_a_claim_for_the_highlighted_agent() {
     let subject = agentbbs_core::identity::AgentId::from_hex(&ranking[0].agent).unwrap();
     app.on_key(press(KeyCode::Enter));
     app.on_key(press(KeyCode::Char('H')));
-    app.on_key(press(KeyCode::Char('i'))); // issue skill:rust
+    app.on_key(press(KeyCode::Char('i'))); // opens the claim prompt
+    assert!(app.credential_claim_editing);
+    for c in "org:acme".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    app.on_key(press(KeyCode::Enter)); // submits
 
+    assert!(!app.credential_claim_editing);
     let valid = app.credentials.valid_for(&subject, chrono::Utc::now());
     assert_eq!(valid.len(), 1);
-    assert_eq!(valid[0].claim, "skill:rust");
+    assert_eq!(valid[0].claim, "org:acme");
     assert!(valid[0].verify().is_ok());
     let text = screen_text(&app, 120, 30);
-    assert!(text.contains("skill:rust"));
+    assert!(text.contains("org:acme"));
+}
+
+#[test]
+fn issue_credential_prompt_rejects_an_empty_claim() {
+    let mut app = App::in_memory();
+    let ranking = app.reputation.ranking();
+    let subject = agentbbs_core::identity::AgentId::from_hex(&ranking[0].agent).unwrap();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('H')));
+    app.on_key(press(KeyCode::Char('I')));
+    app.on_key(press(KeyCode::Enter)); // submit with nothing typed
+
+    assert!(!app.credential_claim_editing);
+    assert!(app.status.contains("cannot be empty"));
+    assert!(app
+        .credentials
+        .valid_for(&subject, chrono::Utc::now())
+        .is_empty());
+}
+
+#[test]
+fn issue_credential_prompt_esc_cancels_without_issuing_anything() {
+    let mut app = App::in_memory();
+    let ranking = app.reputation.ranking();
+    let subject = agentbbs_core::identity::AgentId::from_hex(&ranking[0].agent).unwrap();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('H')));
+    app.on_key(press(KeyCode::Char('I')));
+    for c in "throwaway".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    app.on_key(press(KeyCode::Esc));
+
+    assert!(!app.credential_claim_editing);
+    assert!(app.credential_claim_input.is_empty());
+    assert!(app
+        .credentials
+        .valid_for(&subject, chrono::Utc::now())
+        .is_empty());
 }
 
 #[test]

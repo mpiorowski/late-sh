@@ -832,10 +832,25 @@ impl App {
             )));
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "[N] hire highlighted · [I] issue skill:rust credential · ESC back",
-            theme::chrome(self.theme),
-        )));
+        if self.credential_claim_editing {
+            lines.push(Line::from(vec![
+                Span::styled("claim: ", theme::hotkey(self.theme)),
+                Span::styled(
+                    self.credential_claim_input.clone(),
+                    theme::chrome(self.theme),
+                ),
+                Span::styled("▏", theme::dim(self.theme)),
+            ]));
+            lines.push(Line::from(Span::styled(
+                "e.g. skill:rust, org:acme, role:moderator — ENTER issues, ESC cancels",
+                theme::dim(self.theme),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "[N] hire highlighted · [I] issue a credential · ESC back",
+                theme::chrome(self.theme),
+            )));
+        }
         frame.render_widget(
             Paragraph::new(lines)
                 .wrap(Wrap { trim: true })

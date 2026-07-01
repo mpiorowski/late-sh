@@ -386,6 +386,11 @@ pub struct App {
     pub decision_body_input: String,
     /// "Why" (rationale) being typed.
     pub decision_rationale_input: String,
+    /// Whether the Directory screen is prompting for a credential claim to
+    /// issue to the highlighted agent, rather than a fixed default.
+    pub credential_claim_editing: bool,
+    /// The claim text being typed, when `credential_claim_editing`.
+    pub credential_claim_input: String,
 }
 
 impl Drop for App {
@@ -554,6 +559,8 @@ impl App {
             decision_title_input: String::new(),
             decision_body_input: String::new(),
             decision_rationale_input: String::new(),
+            credential_claim_editing: false,
+            credential_claim_input: String::new(),
         };
         app.seed_defaults();
         app.seed_arena();

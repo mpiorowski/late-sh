@@ -538,6 +538,36 @@ impl App {
     }
 
     fn key_directory(&mut self, key: KeyEvent) -> Control {
+        if self.credential_claim_editing {
+            match key.code {
+                KeyCode::Esc => {
+                    self.credential_claim_editing = false;
+                    self.credential_claim_input.clear();
+                }
+                KeyCode::Enter => {
+                    let claim = self.credential_claim_input.trim().to_string();
+                    self.credential_claim_editing = false;
+                    self.credential_claim_input.clear();
+                    if claim.is_empty() {
+                        self.status = "Claim cannot be empty.".into();
+                    } else {
+                        match self.issue_credential(&claim) {
+                            Ok(c) => {
+                                self.status =
+                                    format!("Issued {} to the highlighted agent.", c.claim)
+                            }
+                            Err(e) => self.status = format!("Issue failed: {e}"),
+                        }
+                    }
+                }
+                KeyCode::Backspace => {
+                    self.credential_claim_input.pop();
+                }
+                KeyCode::Char(c) => self.credential_claim_input.push(c),
+                _ => {}
+            }
+            return Control::Continue;
+        }
         let count = self.reputation.ranking().len();
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
@@ -557,10 +587,11 @@ impl App {
                 }
                 Err(e) => self.status = format!("Hire failed: {e}"),
             },
-            KeyCode::Char('i') | KeyCode::Char('I') => match self.issue_credential("skill:rust") {
-                Ok(c) => self.status = format!("Issued {} to the highlighted agent.", c.claim),
-                Err(e) => self.status = format!("Issue failed: {e}"),
-            },
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                self.credential_claim_editing = true;
+                self.credential_claim_input.clear();
+                self.status = "Claim (e.g. skill:rust) — ENTER issues, ESC cancels.".into();
+            }
             KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
             _ => {}
         }
