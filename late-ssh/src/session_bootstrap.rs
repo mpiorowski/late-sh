@@ -384,6 +384,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             )
             .with_username_directory(state.username_directory.clone()),
         )),
+        dopewars_enabled: state.config.dopewars_enabled,
+        dopewars_host: state.config.dopewars_host.clone(),
+        dopewars_port: state.config.dopewars_port,
+        dopewars_secret: state.config.dopewars_secret.clone(),
         session_token,
         session_registry: Some(state.session_registry.clone()),
         paired_client_registry: Some(state.paired_client_registry.clone()),

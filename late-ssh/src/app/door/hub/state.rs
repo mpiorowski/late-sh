@@ -1,5 +1,5 @@
 //! Games hub: the dedicated landing screen for the immersive door games
-//! (Lateania, Rebels, NetHack, Green Dragon). It is a selector — a tab row of games with the
+//! (Lateania, NetHack, Green Dragon, Rebels). It is a selector — a tab row of games with the
 //! selected game's full landing page rendered below it — not a scroll. Left/right
 //! (or h/l) change the selection; Enter launches the selected game. Adding a
 //! future door game is a new `HubGame` entry plus a `draw_landing` for it, not a
@@ -11,15 +11,17 @@ pub enum HubGame {
     Rebels,
     Nethack,
     GreenDragon,
+    Dopewars,
 }
 
 impl HubGame {
     /// Selector order, left to right.
-    pub const ALL: [HubGame; 4] = [
+    pub const ALL: [HubGame; 5] = [
         HubGame::Lateania,
-        HubGame::Rebels,
         HubGame::Nethack,
         HubGame::GreenDragon,
+        HubGame::Rebels,
+        HubGame::Dopewars,
     ];
 
     pub fn label(self) -> &'static str {
@@ -28,6 +30,7 @@ impl HubGame {
             HubGame::Rebels => "Rebels",
             HubGame::Nethack => "NetHack",
             HubGame::GreenDragon => "Green Dragon",
+            HubGame::Dopewars => "dopewars",
         }
     }
 }
@@ -76,29 +79,31 @@ mod tests {
         s.select_prev();
         assert_eq!(s.selected_game(), HubGame::Lateania);
         s.select_next();
-        assert_eq!(s.selected_game(), HubGame::Rebels);
-        s.select_next();
         assert_eq!(s.selected_game(), HubGame::Nethack);
         s.select_next();
         assert_eq!(s.selected_game(), HubGame::GreenDragon);
         s.select_next();
-        assert_eq!(s.selected_game(), HubGame::GreenDragon);
+        assert_eq!(s.selected_game(), HubGame::Rebels);
+        s.select_next();
+        assert_eq!(s.selected_game(), HubGame::Dopewars);
+        s.select_next();
+        assert_eq!(s.selected_game(), HubGame::Dopewars);
     }
 
     #[test]
     fn select_jumps_directly() {
         let mut s = State::default();
         s.select(2);
-        assert_eq!(s.selected_game(), HubGame::Nethack);
+        assert_eq!(s.selected_game(), HubGame::GreenDragon);
         s.select(99);
-        assert_eq!(s.selected_game(), HubGame::Nethack);
+        assert_eq!(s.selected_game(), HubGame::GreenDragon);
     }
 
     #[test]
     fn all_games_are_listed_in_order() {
         assert_eq!(
             HubGame::ALL.map(HubGame::label),
-            ["Lateania", "Rebels", "NetHack", "Green Dragon"],
+            ["Lateania", "NetHack", "Green Dragon", "Rebels", "dopewars"],
         );
     }
 }

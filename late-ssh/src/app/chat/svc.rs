@@ -108,6 +108,17 @@ pub struct SendLoungeMessageTask {
     pub failure_log: &'static str,
 }
 
+/// Fully-resolved inputs for persisting a single chat message.
+struct SendMessageParams {
+    user_id: Uuid,
+    room_id: Uuid,
+    room_slug: Option<String>,
+    body: String,
+    reply_to_message_id: Option<Uuid>,
+    reply_to_user_id: Option<Uuid>,
+    is_admin: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoomMemberListItem {
     pub user_id: Uuid,
@@ -1522,7 +1533,15 @@ impl ChatService {
         tokio::spawn(
             async move {
                 if let Err(e) = service
-                    .send_message(user_id, room_id, None, body, None, reply_to_user_id, false)
+                    .send_message(SendMessageParams {
+                        user_id,
+                        room_id,
+                        room_slug: None,
+                        body,
+                        reply_to_message_id: None,
+                        reply_to_user_id,
+                        is_admin: false,
+                    })
                     .await
                 {
                     late_core::error_span!(
@@ -1554,15 +1573,15 @@ impl ChatService {
         tokio::spawn(
             async move {
                 match service
-                    .send_message(
+                    .send_message(SendMessageParams {
                         user_id,
                         room_id,
                         room_slug,
                         body,
                         reply_to_message_id,
-                        None,
+                        reply_to_user_id: None,
                         is_admin,
-                    )
+                    })
                     .await
                 {
                     Err(e) => {
@@ -1650,30 +1669,29 @@ impl ChatService {
         }
         drop(client);
 
-        self.send_message(
+        self.send_message(SendMessageParams {
             user_id,
-            room.id,
-            Some("lounge".to_string()),
+            room_id: room.id,
+            room_slug: Some("lounge".to_string()),
             body,
-            None,
-            None,
-            false,
-        )
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            is_admin: false,
+        })
         .await
     }
 
-    #[tracing::instrument(skip(self, body), fields(user_id = %user_id, room_id = %room_id, body_len = body.len()))]
-    #[allow(clippy::too_many_arguments)]
-    async fn send_message(
-        &self,
-        user_id: Uuid,
-        room_id: Uuid,
-        room_slug: Option<String>,
-        body: String,
-        reply_to_message_id: Option<Uuid>,
-        reply_to_user_id: Option<Uuid>,
-        is_admin: bool,
-    ) -> Result<()> {
+    #[tracing::instrument(skip(self, params), fields(user_id = %params.user_id, room_id = %params.room_id, body_len = params.body.len()))]
+    async fn send_message(&self, params: SendMessageParams) -> Result<()> {
+        let SendMessageParams {
+            user_id,
+            room_id,
+            room_slug,
+            body,
+            reply_to_message_id,
+            reply_to_user_id,
+            is_admin,
+        } = params;
         let body = body.trim_start_matches('\n').trim_end();
         if body.is_empty() {
             return Ok(());

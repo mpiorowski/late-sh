@@ -126,6 +126,52 @@ RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_
     && test -d ${NETHACK_VAR_PLAYGROUND}/save
 
 # ==============================================================================
+# Stage 0b: dopewars - Build the door game binary from verified upstream source
+# ==============================================================================
+# Like NetHack, dopewars runs in its own SSH host (late-dopewars); this stage
+# builds the binary, which is copied into runtime-dopewars for prod (and base for
+# dev-dopewars). We build the curses client terminal-only (no GTK/SDL/sound) from
+# the verified 1.6.2 release tarball: runtime deps are just glib2 + ncursesw (+
+# libcurl, pulled in by the optional metaserver client). The binary is
+# self-contained -- drug/location data is compiled in, no data dir -- and is NOT
+# setgid, so it honors the shared `-f` high-score path the host passes.
+#
+# The tarball SHA-256 is verified BEFORE the build (downloaded + hashed 2026-06-30);
+# `sha256sum -c` fails the build closed on any mismatch.
+FROM debian:${DEBIAN_VERSION}-slim AS dopewars-build
+
+ARG DOPEWARS_VERSION=1.6.2
+ARG DOPEWARS_TARBALL=dopewars-1.6.2.tar.gz
+ARG DOPEWARS_URL=https://downloads.sourceforge.net/project/dopewars/dopewars/1.6.2/dopewars-1.6.2.tar.gz
+ARG DOPEWARS_SHA256=623b9d1d4d576f8b1155150975308861c4ec23a78f9cc2b24913b022764eaae1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    build-essential \
+    pkg-config \
+    libglib2.0-dev \
+    libncursesw5-dev \
+    libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN curl -fsSL -o "${DOPEWARS_TARBALL}" "${DOPEWARS_URL}" \
+    && echo "${DOPEWARS_SHA256}  ${DOPEWARS_TARBALL}" | sha256sum -c - \
+    && tar -xzf "${DOPEWARS_TARBALL}" \
+    && rm "${DOPEWARS_TARBALL}"
+
+# Terminal-only build (GUI/server/sound disabled). The release Makefile drops
+# $(CURSES_LIBS) from dopewars_LDADD when the GTK client is disabled, so the curses
+# symbols are injected via the trailing $(LIBS) on the link line (LIBS=-lncursesw).
+# Copy the finished binary to a version-independent path for the COPY --from below.
+WORKDIR /build/dopewars-${DOPEWARS_VERSION}
+RUN ./configure --disable-gui-client --disable-gui-server --enable-curses-client \
+    && make LIBS="-lncursesw" \
+    && test -x src/dopewars \
+    && cp src/dopewars /dopewars
+
+# ==============================================================================
 # Stage 0: Base - Common system dependencies
 # ==============================================================================
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS base
@@ -144,6 +190,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     libncursesw6 \
+    libglib2.0-0 \
+    libcurl4 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack
 
@@ -158,6 +206,13 @@ COPY --from=nethack-build /var/games/nethack-var /var/games/nethack-var
 RUN mkdir -p /usr/games \
     && ln -sf /var/games/nethack/nethack /usr/games/nethack \
     && chmod -R 0777 /var/games/nethack-var
+
+# dopewars door game: served over SSH by the late-dopewars host (see late-ssh
+# dopewars proxy). The from-source terminal-only binary lives here so dev-dopewars
+# (which derives from `base`) can run it; prod ships it in runtime-dopewars. Its
+# runtime libs (glib2/ncursesw/curl) are installed above. LATE_DOPEWARS_BIN
+# defaults to /usr/games/dopewars.
+COPY --from=dopewars-build /dopewars /usr/games/dopewars
 
 # Configure cargo to use mold linker
 RUN echo '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n\n[target.aarch64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]' >> /usr/local/cargo/config.toml
@@ -183,15 +238,17 @@ COPY late-ssh/Cargo.toml late-ssh/Cargo.toml
 COPY late-web/Cargo.toml late-web/Cargo.toml
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
+COPY late-dopewars/Cargo.toml late-dopewars/Cargo.toml
 COPY vendor vendor
 
 # Create dummy source files for cargo-chef to analyze
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-nethack/src && \
+RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-nethack/src late-dopewars/src && \
     echo "fn main() {}" > late-core/src/lib.rs && \
     echo "fn main() {}" > late-ssh/src/main.rs && \
     echo "fn main() {}" > late-web/src/main.rs && \
     echo "fn main() {}" > late-cli/src/main.rs && \
-    echo "fn main() {}" > late-nethack/src/main.rs
+    echo "fn main() {}" > late-nethack/src/main.rs && \
+    echo "fn main() {}" > late-dopewars/src/main.rs
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -206,7 +263,7 @@ COPY vendor vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
-    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-nethack
+    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-nethack -p late-dopewars
 
 # Copy actual source code
 COPY Cargo.toml Cargo.lock ./
@@ -214,19 +271,22 @@ COPY late-core late-core
 COPY late-ssh late-ssh
 COPY late-web late-web
 COPY late-nethack late-nethack
+COPY late-dopewars late-dopewars
 COPY vendor vendor
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 RUN mkdir -p late-cli/src && echo "fn main() {}" > late-cli/src/main.rs
 # Build deployable binaries only (late-cli excluded - local CLI tooling).
-# late-nethack has no otel feature; it is built without the workspace feature flag.
+# late-nethack/late-dopewars have no otel feature; they are built without the
+# workspace feature flag.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     cargo build --release --features otel -p late-ssh -p late-web && \
-    cargo build --release -p late-nethack && \
+    cargo build --release -p late-nethack -p late-dopewars && \
     cp /app/target/release/late-ssh /app/late-ssh-bin && \
     cp /app/target/release/late-web /app/late-web-bin && \
-    cp /app/target/release/late-nethack /app/late-nethack-bin
+    cp /app/target/release/late-nethack /app/late-nethack-bin && \
+    cp /app/target/release/late-dopewars /app/late-dopewars-bin
 
 # Build frontend assets
 RUN cd late-web && npm install && npm run tailwind:build
@@ -255,6 +315,12 @@ CMD ["bash", "-c", "cd /app/late-web && npm install && npm run tailwind:build &&
 FROM dev-base AS dev-nethack
 CMD ["cargo", "watch", "-w", "late-nethack", "-x", "run -p late-nethack"]
 
+# dopewars host: serves the game over SSH (see late-dopewars). dev-base derives
+# from `base`, which already has the from-source dopewars binary + runtime libs,
+# so the default LATE_DOPEWARS_BIN (/usr/games/dopewars) resolves here.
+FROM dev-base AS dev-dopewars
+CMD ["cargo", "watch", "-w", "late-dopewars", "-x", "run -p late-dopewars"]
+
 # ==============================================================================
 # Stage 4a: Runtime base - Common runtime setup
 # ==============================================================================
@@ -277,6 +343,9 @@ ENV RUST_LOG=info
 # ==============================================================================
 FROM runtime-base AS runtime-ssh
 
+# dopewars now runs in its own late-dopewars host (like nethack), reached over
+# SSH, so its binary and curses runtime live solely in runtime-dopewars -- this
+# image ships only the client.
 COPY --from=builder /app/late-ssh-bin /app/late-ssh
 
 EXPOSE 2222
@@ -332,3 +401,33 @@ USER late
 EXPOSE 2323
 
 CMD ["/app/late-nethack"]
+
+# ==============================================================================
+# Stage 4e: Runtime dopewars - the late-dopewars host (game served over SSH)
+# ==============================================================================
+# Owns everything the game needs: the from-source terminal-only dopewars binary,
+# its curses/glib runtime, and the writable directory holding the single shared
+# high-score file (/var/lib/late-dopewars/dopewars.sco; backed by a PVC in prod
+# so the leaderboard survives restarts). LATE_DOPEWARS_BIN defaults to
+# /usr/games/dopewars, LATE_DOPEWARS_SCORE_FILE to that .sco path.
+FROM runtime-base AS runtime-dopewars
+USER root
+# libglib2.0-0/libncursesw6/libcurl4: dopewars' runtime deps. ncurses-term: the
+# EXTENDED terminfo DB (alacritty, rxvt, st, etc.) so clients on those terminals
+# get native terminfo rather than the xterm-256color fallback. Terminals that
+# ship their own terminfo (ghostty/kitty/wezterm) are covered by the host's TERM
+# fallback in late-dopewars (effective_term), since they are not in ncurses-term.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libncursesw6 \
+    libcurl4 \
+    ncurses-term \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/late-dopewars && chown late:late /var/lib/late-dopewars
+COPY --from=dopewars-build /dopewars /usr/games/dopewars
+COPY --from=builder /app/late-dopewars-bin /app/late-dopewars
+USER late
+
+EXPOSE 2324
+
+CMD ["/app/late-dopewars"]

@@ -259,6 +259,11 @@ pub struct SessionConfig {
     /// Chip/badge grant sink for NetHack milestones (Amulet, ascension). `None`
     /// on headless/test paths, which disables milestone awards.
     pub nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    /// dopewars door game: reached over SSH like nethack (host `late-dopewars`).
+    pub dopewars_enabled: bool,
+    pub dopewars_host: String,
+    pub dopewars_port: u16,
+    pub dopewars_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -486,6 +491,15 @@ pub struct App {
     pub(crate) nethack_secret: String,
     /// Chip/badge grant sink threaded into the per-session NetHack door state.
     pub(crate) nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    pub(crate) dopewars_state: Option<crate::app::door::dopewars::state::State>,
+    /// Per-session TERM string (from the PTY request), forwarded to the dopewars
+    /// host so curses gets a real terminfo entry.
+    pub(crate) dopewars_term: String,
+    /// dopewars door game: enable flag + host connection details (global Config).
+    pub(crate) dopewars_enabled: bool,
+    pub(crate) dopewars_host: String,
+    pub(crate) dopewars_port: u16,
+    pub(crate) dopewars_secret: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -1095,6 +1109,12 @@ impl App {
             nethack_port: config.nethack_port,
             nethack_secret: config.nethack_secret,
             nethack_awards: config.nethack_awards,
+            dopewars_state: None,
+            dopewars_term: config.term.clone(),
+            dopewars_enabled: config.dopewars_enabled,
+            dopewars_host: config.dopewars_host,
+            dopewars_port: config.dopewars_port,
+            dopewars_secret: config.dopewars_secret,
             repaint_signal: None,
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
@@ -1278,6 +1298,26 @@ impl App {
     fn leave_nethack(&mut self) {
         // Dropping the State drops the process, which kills the child nethack.
         self.nethack_state = None;
+    }
+
+    pub(crate) fn enter_dopewars(&mut self) {
+        if self.dopewars_state.is_some() {
+            return;
+        }
+        self.dopewars_state = Some(crate::app::door::dopewars::state::State::new(
+            self.user_id,
+            self.dopewars_host.clone(),
+            self.dopewars_port,
+            self.dopewars_secret.clone(),
+            self.dopewars_term.clone(),
+            self.dopewars_enabled,
+            self.repaint_signal.clone(),
+        ));
+    }
+
+    fn leave_dopewars(&mut self) {
+        // Dropping the State drops the process, which kills the child dopewars.
+        self.dopewars_state = None;
     }
 
     pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
@@ -1478,6 +1518,9 @@ impl App {
             if screen == Screen::Nethack {
                 self.enter_nethack();
             }
+            if screen == Screen::Dopewars {
+                self.enter_dopewars();
+            }
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
@@ -1520,6 +1563,11 @@ impl App {
             self.force_full_repaint();
         }
 
+        if self.screen == Screen::Dopewars {
+            self.leave_dopewars();
+            self.force_full_repaint();
+        }
+
         if self.screen == Screen::Pinstar {
             self.leave_pinstar();
             self.force_full_repaint();
@@ -1540,6 +1588,9 @@ impl App {
         }
         if self.screen == Screen::Nethack {
             self.enter_nethack();
+        }
+        if self.screen == Screen::Dopewars {
+            self.enter_dopewars();
         }
         if self.screen == Screen::Pinstar {
             self.enter_directory();
@@ -1682,6 +1733,23 @@ impl App {
         // global quit and drop the whole SSH session.
         if self.screen == crate::app::common::primitives::Screen::Nethack
             && let Some(state) = self.nethack_state.as_ref()
+            && state.in_exit_grace()
+        {
+            return;
+        }
+        // dopewars: same raw passthrough as nethack (both are network doors to a
+        // remote curses child). Every byte goes straight to the child while it
+        // runs; Ctrl-C ends the game (it traps no SIGINT) and drops back to the
+        // launcher.
+        if self.screen == crate::app::common::primitives::Screen::Dopewars
+            && let Some(state) = self.dopewars_state.as_ref()
+            && state.is_running()
+        {
+            state.forward_input(data);
+            return;
+        }
+        if self.screen == crate::app::common::primitives::Screen::Dopewars
+            && let Some(state) = self.dopewars_state.as_ref()
             && state.in_exit_grace()
         {
             return;

@@ -53,6 +53,7 @@ pub enum Screen {
     Lateania,
     Rebels,
     Nethack,
+    Dopewars,
     GreenDragon,
     Artboard,
     Pinstar,
@@ -73,9 +74,11 @@ impl Screen {
             Screen::Artboard => Screen::Pinstar,
             Screen::Pinstar => Screen::WorldCup,
             Screen::WorldCup => Screen::Dashboard,
-            Screen::Lateania | Screen::Rebels | Screen::Nethack | Screen::GreenDragon => {
-                Screen::Games
-            }
+            Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dopewars
+            | Screen::GreenDragon => Screen::Games,
         }
     }
 
@@ -88,9 +91,11 @@ impl Screen {
             Screen::Artboard => Screen::Rooms,
             Screen::Pinstar => Screen::Artboard,
             Screen::WorldCup => Screen::Pinstar,
-            Screen::Lateania | Screen::Rebels | Screen::Nethack | Screen::GreenDragon => {
-                Screen::Games
-            }
+            Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dopewars
+            | Screen::GreenDragon => Screen::Games,
         }
     }
 }
@@ -109,6 +114,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
+        Screen::Dopewars => "dopewars",
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "Arcade",
         Screen::Rooms => "Tables",
@@ -219,6 +225,7 @@ mod tests {
             Screen::Lateania,
             Screen::Rebels,
             Screen::Nethack,
+            Screen::Dopewars,
             Screen::GreenDragon,
         ] {
             assert_eq!(door.next(), Screen::Games);
