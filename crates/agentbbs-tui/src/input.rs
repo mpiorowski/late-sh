@@ -163,11 +163,43 @@ impl App {
     }
 
     fn key_collab(&mut self, key: KeyEvent) -> Control {
+        use crate::app::CollabView;
+        if self.collab_repo_editing {
+            match key.code {
+                KeyCode::Esc => {
+                    self.collab_repo_editing = false;
+                    self.collab_repo_input.clear();
+                }
+                KeyCode::Enter => {
+                    self.collab_repo = self.collab_repo_input.trim().to_string();
+                    self.collab_repo_editing = false;
+                    self.collab_repo_input.clear();
+                    self.status = if self.collab_repo.is_empty() {
+                        "Repo cleared.".into()
+                    } else {
+                        format!("Repo set to {} — press R to fetch.", self.collab_repo)
+                    };
+                }
+                KeyCode::Backspace => {
+                    self.collab_repo_input.pop();
+                }
+                KeyCode::Char(c) => self.collab_repo_input.push(c),
+                _ => {}
+            }
+            return Control::Continue;
+        }
         match key.code {
-            KeyCode::Char('1') => self.collab_view = crate::app::CollabView::Status,
-            KeyCode::Char('2') => self.collab_view = crate::app::CollabView::Diff,
-            KeyCode::Char('3') => self.collab_view = crate::app::CollabView::Log,
-            KeyCode::Char('r') | KeyCode::Char('R') => self.collab_jj_refresh(),
+            KeyCode::Char('1') => self.collab_view = CollabView::Status,
+            KeyCode::Char('2') => self.collab_view = CollabView::Diff,
+            KeyCode::Char('3') => self.collab_view = CollabView::Log,
+            KeyCode::Char('4') => self.collab_view = CollabView::GithubIssues,
+            KeyCode::Char('5') => self.collab_view = CollabView::GithubPrs,
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                self.collab_repo_editing = true;
+                self.collab_repo_input = self.collab_repo.clone();
+                self.status = "owner/repo — ENTER to set, ESC to cancel.".into();
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => self.collab_refresh(),
             KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
             _ => {}
         }

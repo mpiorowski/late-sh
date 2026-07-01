@@ -1411,21 +1411,41 @@ impl App {
                 tab(CollabView::Status, "Status", '1'),
                 tab(CollabView::Diff, "Diff", '2'),
                 tab(CollabView::Log, "Log", '3'),
+                tab(CollabView::GithubIssues, "Issues", '4'),
+                tab(CollabView::GithubPrs, "PRs", '5'),
             ]),
             Line::from(""),
         ];
+        if self.collab_view.needs_repo() {
+            let repo_shown = if self.collab_repo.is_empty() {
+                "(none set)"
+            } else {
+                self.collab_repo.as_str()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("repo: ", theme::dim(self.theme)),
+                Span::styled(repo_shown, theme::chrome(self.theme)),
+            ]));
+        }
         let cmd = match self.collab_view {
-            CollabView::Status => "jj status",
-            CollabView::Diff => "jj diff",
-            CollabView::Log => "jj log -n 10",
+            CollabView::Status => "jj status".to_string(),
+            CollabView::Diff => "jj diff".to_string(),
+            CollabView::Log => "jj log -n 10".to_string(),
+            CollabView::GithubIssues => format!("gh issue list --repo {}", self.collab_repo),
+            CollabView::GithubPrs => format!("gh pr list --repo {}", self.collab_repo),
         };
         lines.push(Line::from(Span::styled(
             format!("$ {cmd}"),
             theme::hotkey(self.theme),
         )));
-        match self.collab_jj_current() {
+        let bin = if self.collab_view.needs_repo() {
+            "gh"
+        } else {
+            "jj"
+        };
+        match self.collab_current() {
             None => lines.push(Line::from(Span::styled(
-                "  (not checked yet — press R; this runs a real jj subprocess)",
+                format!("  (not checked yet — press R; this runs a real {bin} subprocess)"),
                 theme::dim(self.theme),
             ))),
             Some(Ok(out)) if out.trim().is_empty() => lines.push(Line::from(Span::styled(
@@ -1446,20 +1466,34 @@ impl App {
                     Style::default().fg(theme::RED),
                 )));
                 lines.push(Line::from(Span::styled(
-                    "  (real subprocess error — jj isn't available here; not faked)",
+                    format!(
+                        "  (real subprocess error — {bin} isn't available or failed; not faked)"
+                    ),
                     theme::dim(self.theme),
                 )));
             }
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "[1/2/3] switch view · [R] refresh · ESC back — GitHub issues/PRs coming in a later slice",
-            theme::dim(self.theme),
-        )));
+        if self.collab_repo_editing {
+            lines.push(Line::from(vec![
+                Span::styled("owner/repo: ", theme::hotkey(self.theme)),
+                Span::styled(self.collab_repo_input.clone(), theme::chrome(self.theme)),
+                Span::styled("▏", theme::dim(self.theme)),
+            ]));
+            lines.push(Line::from(Span::styled(
+                "ENTER to set · ESC to cancel",
+                theme::dim(self.theme),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "[1-5] switch view · [E] set owner/repo · [R] refresh · ESC back",
+                theme::dim(self.theme),
+            )));
+        }
         frame.render_widget(
             Paragraph::new(lines)
                 .wrap(Wrap { trim: true })
-                .block(self.framed("Collab (Jujutsu)")),
+                .block(self.framed("Collab (Jujutsu / GitHub)")),
             area,
         );
     }

@@ -1079,3 +1079,88 @@ fn collab_panel_renders_real_output_and_errors_honestly_per_view() {
     app.on_key(press(KeyCode::Char('1')));
     assert!(screen_text(&app, 110, 30).contains("Working copy : abc123"));
 }
+
+#[test]
+fn collab_github_tabs_prompt_for_repo_via_e_and_persist_it() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('U')));
+
+    app.on_key(press(KeyCode::Char('4'))); // -> Issues tab
+    assert_eq!(app.collab_view, crate::app::CollabView::GithubIssues);
+    assert!(app.collab_view.needs_repo());
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains("(none set)"));
+    assert!(text.contains("gh issue list"));
+
+    app.on_key(press(KeyCode::Char('E')));
+    assert!(app.collab_repo_editing);
+    for c in "ruvnet/AgentBBS".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    app.on_key(press(KeyCode::Enter));
+    assert!(!app.collab_repo_editing);
+    assert_eq!(app.collab_repo, "ruvnet/AgentBBS");
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains("ruvnet/AgentBBS"));
+    assert!(text.contains("gh issue list --repo ruvnet/AgentBBS"));
+
+    // The repo persists across tabs and screens.
+    app.on_key(press(KeyCode::Char('5'))); // -> PRs tab
+    assert!(screen_text(&app, 110, 30).contains("gh pr list --repo ruvnet/AgentBBS"));
+}
+
+#[test]
+fn collab_github_refresh_without_a_repo_is_a_clear_local_error_not_a_subprocess_call() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('U')));
+    app.on_key(press(KeyCode::Char('4')));
+    assert!(app.collab_repo.is_empty());
+
+    // R with no repo set must not spawn `gh` — it's a local validation error.
+    app.on_key(press(KeyCode::Char('R')));
+    assert_eq!(
+        app.collab_gh_issues,
+        Some(Err(
+            "no repo set — press E to set owner/repo first".to_string()
+        ))
+    );
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains("no repo set"));
+}
+
+#[test]
+fn collab_github_issues_and_prs_cache_independently() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('U')));
+    app.collab_repo = "ruvnet/AgentBBS".to_string();
+
+    app.on_key(press(KeyCode::Char('4')));
+    app.collab_gh_issues = Some(Ok("#6  open  checkpoint issue".to_string()));
+    assert!(screen_text(&app, 110, 30).contains("checkpoint issue"));
+
+    app.on_key(press(KeyCode::Char('5')));
+    assert!(app.collab_gh_prs.is_none());
+    assert!(screen_text(&app, 110, 30).contains("not checked yet"));
+
+    app.on_key(press(KeyCode::Char('4')));
+    assert!(screen_text(&app, 110, 30).contains("checkpoint issue"));
+}
+
+#[test]
+fn collab_repo_editing_esc_cancels_without_changing_the_stored_repo() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('U')));
+    app.collab_repo = "already/set".to_string();
+
+    app.on_key(press(KeyCode::Char('E')));
+    for c in "throwaway/value".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    app.on_key(press(KeyCode::Esc));
+    assert!(!app.collab_repo_editing);
+    assert_eq!(app.collab_repo, "already/set");
+}

@@ -115,13 +115,25 @@ pub enum Screen {
     Goodbye,
 }
 
-/// Which Jujutsu view the Collab screen is currently showing.
+/// Which view the Collab screen is currently showing — the first three are
+/// Jujutsu (operate on the working directory, no input needed), the last
+/// two are GitHub (need `collab_repo` set first via the `E` prompt).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CollabView {
     #[default]
     Status,
     Diff,
     Log,
+    GithubIssues,
+    GithubPrs,
+}
+
+impl CollabView {
+    /// Whether this view needs a `owner/repo` string (GitHub) rather than
+    /// operating on the working directory (Jujutsu).
+    pub fn needs_repo(&self) -> bool {
+        matches!(self, CollabView::GithubIssues | CollabView::GithubPrs)
+    }
 }
 
 /// The lettered main-menu commands, in display order.
@@ -315,6 +327,17 @@ pub struct App {
     pub collab_jj_diff: Option<Result<String, String>>,
     /// Cached `jj log -n 10` result.
     pub collab_jj_log: Option<Result<String, String>>,
+    /// The `owner/repo` the GitHub Collab views query — persists across
+    /// visits, empty until set via the `E` prompt.
+    pub collab_repo: String,
+    /// Whether the Collab screen is prompting for a repo to set.
+    pub collab_repo_editing: bool,
+    /// The repo string being typed, when `collab_repo_editing`.
+    pub collab_repo_input: String,
+    /// Cached `gh issue list --repo <repo>` result.
+    pub collab_gh_issues: Option<Result<String, String>>,
+    /// Cached `gh pr list --repo <repo>` result.
+    pub collab_gh_prs: Option<Result<String, String>>,
 }
 
 impl Drop for App {
@@ -444,6 +467,11 @@ impl App {
             collab_jj_status: None,
             collab_jj_diff: None,
             collab_jj_log: None,
+            collab_repo: String::new(),
+            collab_repo_editing: false,
+            collab_repo_input: String::new(),
+            collab_gh_issues: None,
+            collab_gh_prs: None,
         };
         app.seed_defaults();
         app.seed_arena();
@@ -964,16 +992,25 @@ impl App {
         Ok((rt, adapter))
     }
 
-    /// Refresh whichever Jujutsu view is currently active (`R` in the Collab
+    /// Refresh whichever Collab view is currently active (`R` in the Collab
     /// screen). Real subprocess result/error, never faked — same posture as
     /// the web's Collab routes.
-    pub fn collab_jj_refresh(&mut self) {
+    pub fn collab_refresh(&mut self) {
+        if self.collab_view.needs_repo() {
+            self.collab_gh_refresh();
+        } else {
+            self.collab_jj_refresh();
+        }
+    }
+
+    fn collab_jj_refresh(&mut self) {
         let result = match Self::collab_runtime() {
             Ok((rt, adapter)) => {
                 let out = match self.collab_view {
                     CollabView::Status => rt.block_on(adapter.status()),
                     CollabView::Diff => rt.block_on(adapter.diff()),
                     CollabView::Log => rt.block_on(adapter.log(10)),
+                    CollabView::GithubIssues | CollabView::GithubPrs => return,
                 };
                 out.map_err(|e| e.to_string())
             }
@@ -983,15 +1020,62 @@ impl App {
             CollabView::Status => self.collab_jj_status = Some(result),
             CollabView::Diff => self.collab_jj_diff = Some(result),
             CollabView::Log => self.collab_jj_log = Some(result),
+            CollabView::GithubIssues | CollabView::GithubPrs => {}
         }
     }
 
-    /// The cached result for whichever Jujutsu view is currently active.
-    pub fn collab_jj_current(&self) -> &Option<Result<String, String>> {
+    /// A fresh `GitHubAdapter` plus a throwaway blocking tokio runtime —
+    /// same rationale as `federation_runtime`/`collab_runtime`.
+    fn collab_gh_runtime() -> Result<
+        (
+            tokio::runtime::Runtime,
+            agentbbs_federation::GitHubAdapter<agentbbs_federation::TokioCommandRunner>,
+        ),
+        String,
+    > {
+        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
+        let adapter =
+            agentbbs_federation::GitHubAdapter::new(agentbbs_federation::TokioCommandRunner::new());
+        Ok((rt, adapter))
+    }
+
+    fn collab_gh_refresh(&mut self) {
+        if self.collab_repo.trim().is_empty() {
+            let err = Err("no repo set — press E to set owner/repo first".to_string());
+            match self.collab_view {
+                CollabView::GithubIssues => self.collab_gh_issues = Some(err),
+                CollabView::GithubPrs => self.collab_gh_prs = Some(err),
+                _ => {}
+            }
+            return;
+        }
+        let repo = self.collab_repo.clone();
+        let result = match Self::collab_gh_runtime() {
+            Ok((rt, adapter)) => {
+                let out = match self.collab_view {
+                    CollabView::GithubIssues => rt.block_on(adapter.issue_list(&repo)),
+                    CollabView::GithubPrs => rt.block_on(adapter.pr_list(&repo)),
+                    _ => return,
+                };
+                out.map_err(|e| e.to_string())
+            }
+            Err(e) => Err(e),
+        };
+        match self.collab_view {
+            CollabView::GithubIssues => self.collab_gh_issues = Some(result),
+            CollabView::GithubPrs => self.collab_gh_prs = Some(result),
+            _ => {}
+        }
+    }
+
+    /// The cached result for whichever Collab view is currently active.
+    pub fn collab_current(&self) -> &Option<Result<String, String>> {
         match self.collab_view {
             CollabView::Status => &self.collab_jj_status,
             CollabView::Diff => &self.collab_jj_diff,
             CollabView::Log => &self.collab_jj_log,
+            CollabView::GithubIssues => &self.collab_gh_issues,
+            CollabView::GithubPrs => &self.collab_gh_prs,
         }
     }
 
