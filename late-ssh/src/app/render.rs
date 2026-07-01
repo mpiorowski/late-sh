@@ -548,9 +548,11 @@ impl App {
             marker_read_at: self.chat.feeds.marker_read_at(),
         };
         let discover_view = chat::discover::ui::DiscoverListView {
-            items: self.chat.discover.all_items(),
+            items: self.chat.discover.visible_items(),
             selected_index: self.chat.discover.selected_index(),
             loading: self.chat.discover.is_loading(),
+            filtering: self.chat.discover.is_filtering(),
+            query: self.chat.discover.query(),
         };
         let notifications_view = chat::notifications::ui::NotificationListView {
             items: self.chat.notifications.all_items(),

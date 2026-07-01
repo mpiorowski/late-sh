@@ -438,6 +438,8 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - `DiscoverRoomsLoaded { user_id, rooms }` and `DiscoverRoomsFailed { user_id, message }` are user-targeted.
 - `start_loading()` clears stale rows until results arrive; empty loaded state is distinct from loading.
 - Enter joins the selected public room.
+- Rooms render one dense line each (`ITEM_HEIGHT = 1` in `discover/ui.rs`): `#slug`, member/message counts, and last activity on a single row so the list shows many rooms at once.
+- `/` opens an inline substring filter over room slugs (footer shows the live query); typing edits it, `selected`/`visible_items` track the filtered subset, and `Esc` clears+closes it. While `discover.is_filtering()`, `app::input::handle_byte_event` and `chat::input::handle_byte` route every byte (digits, `space`, `h`/`l`) into the filter so it captures an unrestricted query; arrows still navigate. `start_slash_command_composer` excludes Discover so `/` never starts a slash command there.
 
 ---
 
@@ -558,7 +560,7 @@ modals and the icon picker). Username profile-opens are debounced via
 | Directory Projects | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Directory Profiles | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Mentions | `j/k` navigate, Enter jump to referenced room/message |
-| Discover | `j/k` navigate, Enter join selected public room |
+| Discover | `j/k` navigate, Enter join selected public room, `/` open slug filter (type to narrow, Enter join, `Esc` clear) |
 
 Directory Projects and Profiles reshuffle their listing on page/tab entry. News keeps its chronological order — only mine-only filtering applies. The slash-command composer in `app/input.rs` skips itself when News is selected so `/` reaches the synthetic-entry handler; Directory page 7 routes `/` directly to Projects/Profiles filtering.
 

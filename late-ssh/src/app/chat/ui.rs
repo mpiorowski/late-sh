@@ -3591,7 +3591,7 @@ fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
         Line::from(vec![key("h l space"), hint(" jump room")]),
         Line::from(vec![key("f"), hint("         favorite")]),
         Line::from(vec![key("[ ]/z"), hint("     sort/fold")]),
-        Line::from(vec![key("ctrl+/"), hint("    room picker")]),
+        Line::from(vec![key("ctrl+/"), hint("    picker")]),
     ]
 }
 
@@ -3850,16 +3850,36 @@ fn draw_selected_content(
             );
         }
     } else if view.discover_selected {
-        let hint_block = Block::default()
-            .title(" Discover ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER()));
-        let hint_text = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter join room",
-            Style::default().fg(theme::TEXT_DIM()),
-        )))
-        .block(hint_block);
-        frame.render_widget(hint_text, composer_area);
+        if view.discover_view.filtering {
+            let filter_block = Block::default()
+                .title(" Filter rooms ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+            let filter_text = Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!(" {}", view.discover_view.query),
+                    Style::default().fg(theme::TEXT_BRIGHT()),
+                ),
+                Span::styled("_", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(
+                    "   Enter join · Esc clear",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ]))
+            .block(filter_block);
+            frame.render_widget(filter_text, composer_area);
+        } else {
+            let hint_block = Block::default()
+                .title(" Discover ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER()));
+            let hint_text = Paragraph::new(Line::from(Span::styled(
+                " j/k navigate · Enter join room · / filter",
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .block(hint_block);
+            frame.render_widget(hint_text, composer_area);
+        }
     } else if news_selected {
         if view.news_processing || view.news_composing {
             let (title, border_style) = if view.news_processing {
@@ -4246,9 +4266,11 @@ mod tests {
             },
             discover_selected: false,
             discover_view: crate::app::chat::discover::ui::DiscoverListView {
-                items: &[],
+                items: Vec::new(),
                 selected_index: 0,
                 loading: false,
+                filtering: false,
+                query: "",
             },
             rows_cache,
             chat_rooms: rooms,

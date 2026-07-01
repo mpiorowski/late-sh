@@ -2102,6 +2102,13 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
         return;
     }
 
+    // The Discover filter is a text input; let it capture digits, `/`, etc.
+    // before the global screen-switch / slash-command handlers claim them.
+    if discover_filter_active(app, ctx.screen) {
+        let _ = chat::input::handle_byte(app, byte);
+        return;
+    }
+
     if handle_modal_input(app, ctx, byte) {
         return;
     }
@@ -2120,6 +2127,12 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
 
 fn room_jump_active_on_current_screen(app: &App, screen: Screen) -> bool {
     app.chat.room_jump_active && matches!(screen, Screen::Dashboard)
+}
+
+fn discover_filter_active(app: &App, screen: Screen) -> bool {
+    matches!(screen, Screen::Dashboard)
+        && app.chat.discover_selected
+        && app.chat.discover.is_filtering()
 }
 
 fn toggle_room_section_from_key(app: &mut App, ctx: InputContext, section: RoomSection) -> bool {
@@ -2234,6 +2247,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::Dashboard && app.chat.room_jump_active {
         app.chat.cancel_room_jump();
+        return;
+    }
+    if discover_filter_active(app, ctx.screen) {
+        app.chat.discover.cancel_filter();
         return;
     }
     if handle_modal_input(app, ctx, 0x1B) {
@@ -3127,10 +3144,13 @@ fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
         return false;
     }
 
-    // On synthetic chat entries (News/Showcase/Work), `/` is the
-    // filter-mine toggle, not a slash-command starter.
+    // On synthetic chat entries (News/Showcase/Work/Discover), `/` is a
+    // per-view filter shortcut, not a slash-command starter.
     if matches!(screen, Screen::Dashboard)
-        && (app.chat.news_selected || app.chat.showcase_selected || app.chat.work_selected)
+        && (app.chat.news_selected
+            || app.chat.showcase_selected
+            || app.chat.work_selected
+            || app.chat.discover_selected)
     {
         return false;
     }
