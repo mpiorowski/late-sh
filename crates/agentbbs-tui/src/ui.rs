@@ -8,6 +8,7 @@ use ratatui::Frame;
 
 use agentbbs_core::approval::Verdict;
 use agentbbs_core::caps::Caps;
+use agentbbs_core::playbook::{RunStatus, StepKind};
 use agentbbs_core::pod::PodStatus;
 
 use crate::app::{App, ComposeField, Screen, MENU};
@@ -44,6 +45,8 @@ impl App {
             Screen::Budget => self.render_budget(frame, rows[1]),
             Screen::Decisions => self.render_decisions(frame, rows[1]),
             Screen::Directory => self.render_directory(frame, rows[1]),
+            Screen::Playbooks => self.render_playbooks(frame, rows[1]),
+            Screen::Digest => self.render_digest(frame, rows[1]),
             Screen::Goodbye => self.render_goodbye(frame, rows[1]),
         }
         self.render_status(frame, rows[2]);
@@ -689,6 +692,105 @@ impl App {
             Paragraph::new(lines)
                 .wrap(Wrap { trim: true })
                 .block(self.framed("Agent Directory")),
+            area,
+        );
+    }
+
+    fn render_playbooks(&self, frame: &mut Frame, area: Rect) {
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled(self.playbook.name.clone(), theme::hotkey()),
+                Span::raw(" "),
+                Span::styled(format!("v{}", self.playbook.version), theme::dim()),
+            ]),
+            Line::from(Span::styled(
+                format!("trigger: {}", self.playbook.trigger),
+                theme::dim(),
+            )),
+            Line::from(""),
+        ];
+        let current_id = self.run.as_ref().and_then(|r| r.current()).map(|s| &s.id);
+        for step in &self.playbook.steps {
+            let active = current_id == Some(&step.id);
+            let marker = if active { "▶ " } else { "  " };
+            let (kind, detail) = match &step.kind {
+                StepKind::AgentTask { agent, instruction } => {
+                    ("agent task", format!("@{agent}: {instruction}"))
+                }
+                StepKind::ApprovalGate { summary } => ("approval gate", summary.clone()),
+                StepKind::Tool { tool } => ("tool", tool.clone()),
+            };
+            let style = if active {
+                Style::default().fg(theme::YELLOW)
+            } else {
+                theme::chrome()
+            };
+            lines.push(Line::from(vec![
+                Span::raw(marker),
+                Span::styled(format!("[{}] ", step.id), theme::hotkey()),
+                Span::styled(format!("{kind:<14} "), theme::dim()),
+                Span::styled(detail, style),
+            ]));
+        }
+        lines.push(Line::from(""));
+        let status_line = match &self.run {
+            None => Span::styled("Not started.", theme::dim()),
+            Some(r) => match r.status() {
+                RunStatus::Running => Span::styled("Running…", Style::default().fg(theme::GREEN)),
+                RunStatus::AwaitingApproval => {
+                    Span::styled("⧗ Awaiting approval", Style::default().fg(theme::YELLOW))
+                }
+                RunStatus::Completed => {
+                    Span::styled("✓ Completed", Style::default().fg(theme::GREEN))
+                }
+                RunStatus::Failed => Span::styled("✗ Failed", Style::default().fg(theme::RED)),
+            },
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Status: ", theme::hotkey()),
+            status_line,
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[R] run/advance · [Y] approve the current gate + advance · ESC back",
+            theme::chrome(),
+        )));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Playbooks")),
+            area,
+        );
+    }
+
+    fn render_digest(&self, frame: &mut Frame, area: Rect) {
+        let (count, participants) = self.digest_stats();
+        let lines = vec![
+            Line::from(Span::styled(
+                format!("Daily Digest — {}", chrono::Utc::now().format("%Y-%m-%d")),
+                theme::hotkey(),
+            )),
+            Line::from(""),
+            Line::from("Message bases activity on #general:"),
+            Line::from(vec![
+                Span::styled(format!("  {count} "), Style::default().fg(theme::GREEN)),
+                Span::raw("message(s) from "),
+                Span::styled(
+                    format!("{participants} "),
+                    Style::default().fg(theme::GREEN),
+                ),
+                Span::raw("participant(s) today."),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "[P] post this summary to #general, signed as \"digest\" · ESC back",
+                theme::chrome(),
+            )),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Daily Digest")),
             area,
         );
     }

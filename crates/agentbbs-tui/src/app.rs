@@ -19,11 +19,12 @@ use agentbbs_core::credential::{Credential, CredentialStore};
 use agentbbs_core::decision::{DecisionLog, DecisionRecord};
 use agentbbs_core::identity::{AgentId, Identity};
 use agentbbs_core::market::{Listing, ListingBody, ListingKind, Market};
+use agentbbs_core::playbook::{Playbook, PlaybookRun, PlaybookStep, RunStatus, StepKind};
 use agentbbs_core::pod::{MaxTier, PodSpec, PodStatus, PodTemplate};
 use agentbbs_core::presence::Presence;
 use agentbbs_core::report::MemoryReporter;
 use agentbbs_core::reputation::{OutcomeRecord, ReputationLedger};
-use agentbbs_core::{Bbs, Board, MemoryStore, Message, MessageId, Role, Store};
+use agentbbs_core::{Bbs, Board, MemoryStore, Message, MessageBody, MessageId, Role, Store};
 
 /// A snapshot of the message being replied to, kept alongside the compose
 /// buffer so Slack-style threaded replies don't need to re-fetch it.
@@ -87,6 +88,10 @@ pub enum Screen {
     Decisions,
     /// Agent directory — reputation ranking, hire, issue credentials (ADR-0039/0042).
     Directory,
+    /// Playbooks — versioned workflows with approval gates (ADR-0041).
+    Playbooks,
+    /// Daily activity digest for the general board (client-side, no core type).
+    Digest,
     /// Sign-off screen.
     Goodbye,
 }
@@ -102,6 +107,8 @@ pub const MENU: &[(char, &str, Screen)] = &[
     ('B', "Budget", Screen::Budget),
     ('C', "Decisions", Screen::Decisions),
     ('H', "Agent Directory", Screen::Directory),
+    ('L', "Playbooks", Screen::Playbooks),
+    ('I', "Daily Digest", Screen::Digest),
     ('K', "Marketplace", Screen::Market),
     ('F', "Federation", Screen::Federation),
     ('S', "Sysop Report", Screen::Sysop),
@@ -207,6 +214,13 @@ pub struct App {
     pub directory: Vec<DirectoryAgent>,
     /// Highlighted directory row.
     pub directory_index: usize,
+    /// A stable synthetic signer for org-level records (decision-on-completion,
+    /// seeded demo decisions) — mirrors the web's `agent_identity("org-governance")`.
+    pub org_identity: Identity,
+    /// The demo playbook (matches the web's `api_playbooks` definition exactly).
+    pub playbook: Playbook,
+    /// The active run, if the playbook has been started this session.
+    pub run: Option<PlaybookRun>,
 }
 
 impl Drop for App {
@@ -214,6 +228,37 @@ impl Drop for App {
         // Leave the shared presence registry when the session ends.
         self.presence.leave(&self.session.identity.id());
     }
+}
+
+/// The demo workflow, byte-identical to `agentbbs-web`'s `api_playbooks`
+/// definition — an agent task, a human approval gate, then a tool call.
+fn demo_playbook() -> Playbook {
+    Playbook::new(
+        "triage-inbound-lead",
+        "1",
+        "event:lead.created",
+        vec![
+            PlaybookStep {
+                id: "research".into(),
+                kind: StepKind::AgentTask {
+                    agent: "claude".into(),
+                    instruction: "enrich the lead from public sources".into(),
+                },
+            },
+            PlaybookStep {
+                id: "approve-spend".into(),
+                kind: StepKind::ApprovalGate {
+                    summary: "approve $5 enrichment spend".into(),
+                },
+            },
+            PlaybookStep {
+                id: "crm".into(),
+                kind: StepKind::Tool {
+                    tool: "crm.upsert".into(),
+                },
+            },
+        ],
+    )
 }
 
 impl App {
@@ -268,6 +313,9 @@ impl App {
             credentials: CredentialStore::new(),
             directory: Vec::new(),
             directory_index: 0,
+            org_identity: Identity::generate(),
+            playbook: demo_playbook(),
+            run: None,
         };
         app.seed_defaults();
         app.seed_arena();
@@ -385,7 +433,6 @@ impl App {
     /// `agentbbs-web`'s `api_decisions` seed exactly so the two frontends
     /// present the same content.
     fn seed_decisions(&mut self) {
-        let org = Identity::generate();
         let t = |s: &str| {
             chrono::DateTime::parse_from_rfc3339(s)
                 .unwrap()
@@ -393,7 +440,7 @@ impl App {
         };
         for rec in [
             DecisionRecord::new(
-                &org,
+                &self.org_identity,
                 "Adopt the meta-llm gateway",
                 "Route live inference through cognitum-auto (ADR-0034)",
                 "tier routing + metering + budget caps; OpenRouter stays the default",
@@ -401,7 +448,7 @@ impl App {
                 t("2026-06-30T03:00:00Z"),
             ),
             DecisionRecord::new(
-                &org,
+                &self.org_identity,
                 "Human approval for spend",
                 "All side-effectful spend requires a signed approval (ADR-0038)",
                 "fail-closed governance is required to trust the autopilot",
@@ -482,6 +529,124 @@ impl App {
             .map(|a| a.handle.clone())
             .unwrap_or_else(|| entry.agent[..8.min(entry.agent.len())].to_string());
         self.hire(&handle, "ops")
+    }
+
+    /// Start the demo playbook and drive it to the first gate (or
+    /// completion). Matches the web's `api_playbook_run` + `drive_run`
+    /// exactly — same `PlaybookRun`/`ApprovalGate` state machine.
+    pub fn run_playbook(&mut self) {
+        let mut run = match PlaybookRun::start(self.playbook.clone()) {
+            Ok(r) => r,
+            Err(e) => {
+                self.status = format!("Playbook start failed: {e}");
+                return;
+            }
+        };
+        self.drive(&mut run);
+        if run.status() == RunStatus::Completed {
+            self.record_run_completion(&run);
+        }
+        self.status = format!("Run status: {:?}", run.status());
+        self.run = Some(run);
+    }
+
+    /// Re-check the current gate against newly recorded approvals and drive
+    /// the active run forward (`agentbbs-web`'s `api_run_advance`).
+    pub fn advance_run(&mut self) {
+        let Some(mut run) = self.run.take() else {
+            self.status = "No active run — press [R] to start one.".into();
+            return;
+        };
+        self.drive(&mut run);
+        if run.status() == RunStatus::Completed {
+            self.record_run_completion(&run);
+        }
+        self.status = format!("Run status: {:?}", run.status());
+        self.run = Some(run);
+    }
+
+    /// Approve the active run's current gate as this session, then advance —
+    /// a same-screen convenience over the full propose→Approvals→advance
+    /// path (which also works, since it's the same `self.gate`).
+    pub fn approve_current_gate(&mut self, reason: &str) {
+        let Some(aid) = self.run.as_ref().and_then(|r| r.gate_action_id()) else {
+            self.status = "Current step is not an approval gate.".into();
+            return;
+        };
+        if let Err(e) = self.decide_action(&aid, Verdict::Approve, reason) {
+            self.status = format!("Decision failed: {e}");
+            return;
+        }
+        self.advance_run();
+    }
+
+    /// Advance non-gate steps unconditionally; park at an unauthorized gate.
+    fn drive(&self, run: &mut PlaybookRun) {
+        loop {
+            let allowed: Vec<AgentId> = match run.gate_action_id() {
+                Some(aid) => self
+                    .gate
+                    .decisions_for(&aid)
+                    .iter()
+                    .map(|d| d.decider)
+                    .collect(),
+                None => Vec::new(),
+            };
+            match run.advance(&self.gate, &allowed) {
+                RunStatus::Running => continue,
+                _ => break,
+            }
+        }
+    }
+
+    /// Emit a signed `DecisionRecord` when a run completes (ADR-0041 ×
+    /// ADR-0045), matching the web's `record_run_completion` exactly.
+    fn record_run_completion(&mut self, run: &PlaybookRun) {
+        let pb = run.playbook();
+        let rec = DecisionRecord::new(
+            &self.org_identity,
+            format!("Playbook '{}' completed", pb.name),
+            "All steps executed and approval gates signed off",
+            format!(
+                "playbook {}@{} ran to completion via the autopilot",
+                pb.name, pb.version
+            ),
+            "general",
+            chrono::Utc::now(),
+        );
+        let _ = self.decisions.add(rec);
+    }
+
+    /// Tally today's activity on `general` — matches the web's client-side
+    /// `showDigest` (no core type; pure counting over the board).
+    pub fn digest_stats(&self) -> (usize, usize) {
+        let messages = self
+            .bbs
+            .read_board(Caps::READ, "general", usize::MAX)
+            .unwrap_or_default();
+        let participants: std::collections::HashSet<_> =
+            messages.iter().map(|m| m.body.author).collect();
+        (messages.len(), participants.len())
+    }
+
+    /// Sign and post the digest summary to `general` as this session, handle
+    /// `"digest"` — matches the web's exact posting convention.
+    pub fn post_digest(&mut self) -> Result<(), String> {
+        let (count, participants) = self.digest_stats();
+        let body = MessageBody {
+            board: "general".to_string(),
+            parent: None,
+            subject: format!("Daily Digest — {}", chrono::Utc::now().format("%Y-%m-%d")),
+            body: format!("{count} message(s) from {participants} participant(s) today."),
+            author: self.session.identity.id(),
+            handle: "digest".to_string(),
+            created_at: chrono::Utc::now(),
+        };
+        let msg = Message::sign(&self.session.identity, body).map_err(|e| e.to_string())?;
+        self.bbs
+            .post(self.session.caps, msg)
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Validate and record a pod spawn locally (idempotent on

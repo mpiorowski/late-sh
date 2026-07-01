@@ -1,4 +1,6 @@
 use super::*;
+use agentbbs_core::caps::Caps;
+use agentbbs_core::{Message, MessageBody};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -396,4 +398,74 @@ fn issue_credential_signs_and_stores_a_claim_for_the_highlighted_agent() {
     assert!(valid[0].verify().is_ok());
     let text = screen_text(&app, 120, 30);
     assert!(text.contains("skill:rust"));
+}
+
+#[test]
+fn playbook_run_parks_at_the_gate_then_completes_on_approval() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('L'))); // -> playbooks
+    assert_eq!(app.screen, Screen::Playbooks);
+    assert!(app.run.is_none());
+
+    app.on_key(press(KeyCode::Char('r'))); // start + drive to the gate
+    assert_eq!(
+        app.run.as_ref().unwrap().status(),
+        agentbbs_core::playbook::RunStatus::AwaitingApproval
+    );
+    let text = screen_text(&app, 120, 30);
+    assert!(text.contains("Awaiting approval"));
+
+    let decisions_before = app.decisions.all().len();
+    app.on_key(press(KeyCode::Char('y'))); // approve the gate + advance
+    assert_eq!(
+        app.run.as_ref().unwrap().status(),
+        agentbbs_core::playbook::RunStatus::Completed
+    );
+    // Completion emits a signed DecisionRecord (ADR-0041 x ADR-0045).
+    assert_eq!(app.decisions.all().len(), decisions_before + 1);
+    let text = screen_text(&app, 120, 30);
+    assert!(text.contains("Completed"));
+}
+
+#[test]
+fn digest_tallies_general_and_posts_a_signed_summary() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('M')));
+    app.on_key(press(KeyCode::Enter)); // open first board
+                                       // Post one message so the digest has something to count. This may or may
+                                       // not land on "general" depending on alphabetical board order — post
+                                       // directly to general via Bbs to keep the test independent of that.
+    let body = MessageBody {
+        board: "general".into(),
+        parent: None,
+        subject: "hi".into(),
+        body: "hello".into(),
+        author: app.session.identity.id(),
+        handle: app.session.handle.clone(),
+        created_at: chrono::Utc::now(),
+    };
+    let msg = Message::sign(&app.session.identity, body).unwrap();
+    app.bbs.post(app.session.caps, msg).unwrap();
+
+    app.screen = Screen::Main;
+    app.on_key(press(KeyCode::Char('I'))); // -> digest
+    assert_eq!(app.screen, Screen::Digest);
+    let (count, participants) = app.digest_stats();
+    assert_eq!(count, 1);
+    assert_eq!(participants, 1);
+
+    let before = app.bbs.store().message_count().unwrap();
+    app.on_key(press(KeyCode::Char('p'))); // post the digest
+    let after = app.bbs.store().message_count().unwrap();
+    assert_eq!(after, before + 1);
+    let posted = app
+        .bbs
+        .read_board(Caps::READ, "general", 10)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.body.handle == "digest");
+    assert!(posted.is_some());
+    assert!(posted.unwrap().verify().is_ok());
 }

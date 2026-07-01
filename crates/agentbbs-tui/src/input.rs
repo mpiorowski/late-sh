@@ -27,6 +27,8 @@ impl App {
             Screen::Approvals => self.key_approvals(key),
             Screen::Budget => self.key_budget(key),
             Screen::Directory => self.key_directory(key),
+            Screen::Playbooks => self.key_playbooks(key),
+            Screen::Digest => self.key_digest(key),
             Screen::Who
             | Screen::Doors
             | Screen::Market
@@ -283,6 +285,34 @@ impl App {
             KeyCode::Char('i') | KeyCode::Char('I') => match self.issue_credential("skill:rust") {
                 Ok(c) => self.status = format!("Issued {} to the highlighted agent.", c.claim),
                 Err(e) => self.status = format!("Issue failed: {e}"),
+            },
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_playbooks(&mut self, key: KeyEvent) -> Control {
+        match key.code {
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                if self.run.is_none() {
+                    self.run_playbook();
+                } else {
+                    self.advance_run();
+                }
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => self.approve_current_gate("looks fine"),
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_digest(&mut self, key: KeyEvent) -> Control {
+        match key.code {
+            KeyCode::Char('p') | KeyCode::Char('P') => match self.post_digest() {
+                Ok(()) => self.status = "Digest posted to #general.".into(),
+                Err(e) => self.status = format!("Digest post failed: {e}"),
             },
             KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
             _ => {}
