@@ -43,8 +43,7 @@ impl Config {
         let secret =
             optional("LATE_DOPEWARS_SECRET").context("LATE_DOPEWARS_SECRET must be set")?;
         Ok(Self {
-            bin: optional("LATE_DOPEWARS_BIN")
-                .unwrap_or_else(|| "/usr/games/dopewars".to_string()),
+            bin: optional("LATE_DOPEWARS_BIN").unwrap_or_else(|| "/usr/games/dopewars".to_string()),
             score_file: optional("LATE_DOPEWARS_SCORE_FILE")
                 .unwrap_or_else(|| "/var/lib/late-dopewars/dopewars.sco".to_string()),
             secret,

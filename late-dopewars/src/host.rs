@@ -207,7 +207,15 @@ async fn run_bridge(
         }
     });
 
-    bridge_loop(&mut cmd_rx, &mut out_rx, &master, &mut child, &handle, channel).await;
+    bridge_loop(
+        &mut cmd_rx,
+        &mut out_rx,
+        &master,
+        &mut child,
+        &handle,
+        channel,
+    )
+    .await;
 
     // Close the SSH channel first so the late-ssh client returns to its launcher
     // immediately.

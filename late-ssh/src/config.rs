@@ -398,7 +398,8 @@ impl Config {
             nethack_port: optional_parse("LATE_NETHACK_PORT", 2323)?,
             nethack_secret,
             dopewars_enabled,
-            dopewars_host: optional("LATE_DOPEWARS_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
+            dopewars_host: optional("LATE_DOPEWARS_HOST")
+                .unwrap_or_else(|| "127.0.0.1".to_string()),
             dopewars_port: optional_parse("LATE_DOPEWARS_PORT", 2324)?,
             dopewars_secret,
         })
