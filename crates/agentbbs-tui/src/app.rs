@@ -235,6 +235,19 @@ pub struct App {
     /// The session's identity before its most recent rotation, if any (shown
     /// on the Passport screen as provenance).
     pub rotated_from: Option<AgentId>,
+    /// Local credit balance for the Marketplace (client-side concept, no
+    /// core type — matches the web's `mktBalance`/localStorage ledger, just
+    /// in-memory here since the TUI has no persistent storage).
+    pub credits: i64,
+    /// SKUs installed this session (matches the web's `mktInstalled`).
+    pub installed: std::collections::HashSet<String>,
+    /// Highlighted marketplace row.
+    pub market_index: usize,
+    /// Signed moderation log (ADR-0032). `Bbs::post` itself doesn't check
+    /// this (same as the web, where `AppState.moderation` is a separate
+    /// field the *handler* consults before calling `Bbs::post`) —
+    /// `submit_compose` enforces it explicitly before signing/posting.
+    pub moderation: agentbbs_core::moderation::ModerationLog,
 }
 
 impl Drop for App {
@@ -333,6 +346,10 @@ impl App {
             dm_index: 0,
             rotation: agentbbs_core::rotation::RotationChain::new(),
             rotated_from: None,
+            credits: 100,
+            installed: std::collections::HashSet::new(),
+            market_index: 0,
+            moderation: agentbbs_core::moderation::ModerationLog::new(),
         };
         app.seed_defaults();
         app.seed_arena();
@@ -726,6 +743,73 @@ impl App {
         Ok(())
     }
 
+    /// Toggle creator/sysop mode — a local-only elevation of this session's
+    /// own caps (no server round-trip, matching the web's client-side
+    /// "creator mode" toggle, ADR-0047 Phase 1: no backend enforcement of
+    /// this specific gate yet). Lets a single local session exercise the
+    /// admin-only screens (Sysop actions).
+    pub fn toggle_creator_mode(&mut self) {
+        self.session.caps = if self.session.caps.contains(Caps::SYSOP) {
+            Role::Agent.caps()
+        } else {
+            Role::Sysop.caps()
+        };
+    }
+
+    /// Install a marketplace listing by SKU — a local-only credit ledger, no
+    /// core type (matches the web's `mktInstall`/localStorage exactly; no
+    /// server-side purchase state exists to parity with).
+    pub fn install_listing(&mut self, sku: &str) -> Result<(), String> {
+        if self.installed.contains(sku) {
+            return Ok(());
+        }
+        let listing = self
+            .market
+            .all()
+            .iter()
+            .find(|l| l.body.sku == sku)
+            .ok_or_else(|| "listing not found".to_string())?;
+        let price = listing.body.price as i64;
+        if self.credits < price {
+            return Err("insufficient credits".to_string());
+        }
+        self.credits -= price;
+        self.installed.insert(sku.to_string());
+        Ok(())
+    }
+
+    /// Sign and record a moderation action against the target at
+    /// `directory_index`, requiring `Caps::MODERATE` (ADR-0032) here at the
+    /// call site — the same enforcement point the web's `api_post_signed`
+    /// handler uses (`ModerationLog` itself doesn't check caps; the caller
+    /// does, and `submit_compose` separately checks `can_post` before every
+    /// send, so a sanction actually takes effect on the next post attempt).
+    pub fn moderate_selected(
+        &mut self,
+        sanction: agentbbs_core::moderation::Sanction,
+    ) -> Result<(), String> {
+        if !self.session.caps.contains(Caps::MODERATE) {
+            return Err("requires MODERATE capability — toggle creator mode on Passport".into());
+        }
+        let ranking = self.reputation.ranking();
+        let entry = ranking
+            .get(self.directory_index)
+            .ok_or_else(|| "no agent selected".to_string())?;
+        let target = AgentId::from_hex(&entry.agent).map_err(|e| e.to_string())?;
+        let reason = match sanction {
+            agentbbs_core::moderation::Sanction::Lift => "sysop lifted the sanction",
+            _ => "sysop action from the TUI",
+        };
+        let action = agentbbs_core::moderation::ModAction::sign(
+            &self.session.identity,
+            target,
+            sanction,
+            reason,
+            chrono::Utc::now(),
+        );
+        self.moderation.record(action).map_err(|e| e.to_string())
+    }
+
     /// Validate and record a pod spawn locally (idempotent on
     /// `idempotency_key`). Matches `agentbbs-web`'s `api_pods_spawn`
     /// local-stub path exactly — the TUI never calls the live meta-llm
@@ -962,6 +1046,13 @@ impl App {
         };
         if self.compose_body.trim().is_empty() {
             self.status = "Cannot post an empty message.".into();
+            return;
+        }
+        if !self
+            .moderation
+            .can_post(&self.session.identity.id(), chrono::Utc::now())
+        {
+            self.status = "Posting is blocked by moderation.".into();
             return;
         }
         let subject = if self.compose_subject.trim().is_empty() {

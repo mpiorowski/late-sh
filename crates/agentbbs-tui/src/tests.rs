@@ -540,3 +540,93 @@ fn rotate_identity_preserves_reputation_continuity() {
     assert!(text.contains(&new_id.to_hex()));
     assert!(text.contains("Rotated from"));
 }
+
+#[test]
+fn marketplace_install_debits_credits_and_is_idempotent() {
+    let mut app = App::in_memory();
+    assert_eq!(app.credits, 100);
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('K'))); // marketplace
+                                           // graybeard (agent listing) is the second seeded item, price 25.
+    app.market_index = 1;
+    assert_eq!(app.market.all()[1].body.sku, "graybeard");
+
+    app.on_key(press(KeyCode::Char('n'))); // install
+    assert_eq!(app.credits, 75);
+    assert!(app.installed.contains("graybeard"));
+
+    app.on_key(press(KeyCode::Char('n'))); // installing again doesn't double-charge
+    assert_eq!(app.credits, 75);
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains("owned"));
+    assert!(text.contains("75 credits"));
+}
+
+#[test]
+fn creator_mode_toggle_gates_sysop_screen() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('S'))); // sysop
+    assert!(screen_text(&app, 110, 30).contains("Read-only view"));
+
+    app.screen = Screen::Main;
+    app.on_key(press(KeyCode::Char('X'))); // passport
+    app.on_key(press(KeyCode::Char('c'))); // toggle creator mode
+    assert!(app.session.caps.contains(Caps::SYSOP));
+
+    app.screen = Screen::Main;
+    app.on_key(press(KeyCode::Char('S'))); // sysop again
+    assert!(!screen_text(&app, 110, 30).contains("Read-only view"));
+}
+
+#[test]
+fn sysop_mute_blocks_posting_and_lift_restores_it() {
+    let mut app = App::in_memory();
+    let target_id = app.session.identity.id();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('X'))); // passport
+    app.on_key(press(KeyCode::Char('c'))); // enable creator mode
+
+    // Point Directory's ranking at the session's own identity so the sysop
+    // action targets something whose posting behavior we can observe.
+    app.reputation
+        .record(agentbbs_core::reputation::OutcomeRecord {
+            agent: target_id,
+            success: true,
+            weight: 1.0,
+            source: "test".into(),
+        });
+    let ranking = app.reputation.ranking();
+    app.directory_index = ranking
+        .iter()
+        .position(|r| r.agent == target_id.to_hex())
+        .unwrap();
+
+    app.screen = Screen::Main;
+    app.on_key(press(KeyCode::Char('S'))); // sysop
+    app.on_key(press(KeyCode::Char('m'))); // mute the target (self)
+    assert!(!app.moderation.can_post(&target_id, chrono::Utc::now()));
+
+    // Posting must now actually fail — moderation is enforced at the post
+    // path, not just displayed.
+    app.screen = Screen::Main;
+    app.on_key(press(KeyCode::Char('M')));
+    app.on_key(press(KeyCode::Enter));
+    let before = app.bbs.store().message_count().unwrap();
+    app.on_key(press(KeyCode::Char('P')));
+    for c in "hello".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    app.on_key(press(KeyCode::Tab));
+    for c in "should be blocked".chars() {
+        app.on_key(press(KeyCode::Char(c)));
+    }
+    app.on_key(ctrl('s'));
+    assert_eq!(app.bbs.store().message_count().unwrap(), before);
+    assert!(app.status.contains("blocked"));
+
+    // Lifting restores posting.
+    app.screen = Screen::Sysop;
+    app.on_key(press(KeyCode::Char('l')));
+    assert!(app.moderation.can_post(&target_id, chrono::Utc::now()));
+}

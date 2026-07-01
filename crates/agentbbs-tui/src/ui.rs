@@ -385,23 +385,36 @@ impl App {
             )),
             Line::from("──────────────────────────────────────────────────────────"),
         ];
-        for l in self.market.all() {
-            let price = if l.body.price == 0 {
+        for (i, l) in self.market.all().iter().enumerate() {
+            let selected = i == self.market_index;
+            let marker = if selected { "▶ " } else { "  " };
+            let owned = self.installed.contains(&l.body.sku);
+            let price = if owned {
+                "✓ owned".to_string()
+            } else if l.body.price == 0 {
                 "free".to_string()
             } else {
                 format!("{} cr", l.body.price)
             };
             let sig = if l.verify().is_ok() { "✓" } else { "✗" };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{:<14} ", l.body.sku), theme::hotkey()),
-                Span::styled(
-                    format!("{:<11} ", format!("{:?}", l.body.kind).to_lowercase()),
-                    theme::dim(),
-                ),
-                Span::styled(format!("{:<30} ", l.body.title), theme::chrome()),
-                Span::styled(format!("{price:<6} "), Style::default().fg(theme::GREEN)),
-                Span::styled(sig, Style::default().fg(theme::GREEN)),
-            ]));
+            let style = if selected {
+                theme::lightbar()
+            } else {
+                Style::default()
+            };
+            lines.push(
+                Line::from(vec![
+                    Span::styled(format!("{marker}{:<12} ", l.body.sku), theme::hotkey()),
+                    Span::styled(
+                        format!("{:<11} ", format!("{:?}", l.body.kind).to_lowercase()),
+                        theme::dim(),
+                    ),
+                    Span::styled(format!("{:<30} ", l.body.title), theme::chrome()),
+                    Span::styled(format!("{price:<8} "), Style::default().fg(theme::GREEN)),
+                    Span::styled(sig, Style::default().fg(theme::GREEN)),
+                ])
+                .style(style),
+            );
             lines.push(Line::from(Span::styled(
                 format!("   {}", l.body.description),
                 theme::dim(),
@@ -409,7 +422,14 @@ impl App {
         }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Every listing is signed by its seller and verifies on each node. ESC to return.",
+            format!(
+                "Every listing is signed by its seller and verifies on each node. You have {} credits.",
+                self.credits
+            ),
+            theme::chrome(),
+        )));
+        lines.push(Line::from(Span::styled(
+            "[N] install highlighted · ESC back",
             theme::chrome(),
         )));
         frame.render_widget(
@@ -877,8 +897,25 @@ impl App {
             theme::dim(),
         )));
         lines.push(Line::from(""));
+        let creator = self.session.caps.contains(Caps::SYSOP);
+        lines.push(Line::from(vec![
+            Span::styled("creator mode  ", theme::hotkey()),
+            Span::styled(
+                if creator {
+                    "✓ enabled"
+                } else {
+                    "✗ disabled"
+                },
+                if creator {
+                    Style::default().fg(theme::GREEN)
+                } else {
+                    theme::dim()
+                },
+            ),
+        ]));
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "[R] rotate identity · ESC back",
+            "[R] rotate identity · [C] toggle creator mode · ESC back",
             theme::chrome(),
         )));
         frame.render_widget(
@@ -1106,9 +1143,44 @@ impl App {
         ];
         if !self.session.caps.contains(Caps::SYSOP) {
             lines.push(Line::from(Span::styled(
-                "Read-only view — SYSOP capability required for actions.",
+                "Read-only view — SYSOP capability required for actions (toggle creator mode on Passport).",
                 theme::dim(),
             )));
+        } else {
+            let ranking = self.reputation.ranking();
+            if let Some(entry) = ranking.get(self.directory_index) {
+                let id = agentbbs_core::identity::AgentId::from_hex(&entry.agent).ok();
+                let handle = id
+                    .as_ref()
+                    .map(|id| self.directory_handle(id))
+                    .unwrap_or_else(|| entry.agent[..8.min(entry.agent.len())].to_string());
+                let status = id
+                    .as_ref()
+                    .map(|id| self.moderation.status(id))
+                    .map(|s| {
+                        if s.banned {
+                            "banned".to_string()
+                        } else if s.muted {
+                            "muted".to_string()
+                        } else if s.timed_out_until.is_some() {
+                            "timed out".to_string()
+                        } else {
+                            "none".to_string()
+                        }
+                    })
+                    .unwrap_or_else(|| "none".to_string());
+                lines.push(Line::from(vec![
+                    Span::styled("Target (Directory #", theme::dim()),
+                    Span::styled(format!("{}", self.directory_index + 1), theme::dim()),
+                    Span::styled("): ", theme::dim()),
+                    Span::styled(format!("@{handle} "), theme::chrome()),
+                    Span::styled(format!("[{status}]"), Style::default().fg(theme::YELLOW)),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    "[M] mute · [N] ban · [L] lift · [↑↓] pick target",
+                    theme::chrome(),
+                )));
+            }
         }
         for e in events
             .iter()

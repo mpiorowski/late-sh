@@ -31,12 +31,11 @@ impl App {
             Screen::Digest => self.key_digest(key),
             Screen::Dm => self.key_dm(key),
             Screen::Passport => self.key_passport(key),
-            Screen::Who
-            | Screen::Doors
-            | Screen::Market
-            | Screen::Federation
-            | Screen::Sysop
-            | Screen::Decisions => self.key_panel(key),
+            Screen::Market => self.key_market(key),
+            Screen::Sysop => self.key_sysop(key),
+            Screen::Who | Screen::Doors | Screen::Federation | Screen::Decisions => {
+                self.key_panel(key)
+            }
             Screen::Goodbye => {
                 self.should_quit = true;
                 Control::Quit
@@ -348,6 +347,81 @@ impl App {
             KeyCode::Char('r') | KeyCode::Char('R') => match self.rotate_identity() {
                 Ok(()) => self.status = "Identity rotated — continuity preserved.".into(),
                 Err(e) => self.status = format!("Rotation failed: {e}"),
+            },
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                self.toggle_creator_mode();
+                let on = self.session.caps.contains(agentbbs_core::caps::Caps::SYSOP);
+                self.status = if on {
+                    "Creator mode enabled — Sysop actions unlocked.".into()
+                } else {
+                    "Creator mode disabled.".into()
+                };
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_market(&mut self, key: KeyEvent) -> Control {
+        let count = self.market.all().len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.market_index = self.market_index.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.market_index + 1 < count {
+                    self.market_index += 1;
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                let sku = self
+                    .market
+                    .all()
+                    .get(self.market_index)
+                    .map(|l| l.body.sku.clone());
+                if let Some(sku) = sku {
+                    match self.install_listing(&sku) {
+                        Ok(()) => {
+                            self.status = format!("Installed {sku} — {} credits left", self.credits)
+                        }
+                        Err(e) => self.status = format!("Install failed: {e}"),
+                    }
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_sysop(&mut self, key: KeyEvent) -> Control {
+        use agentbbs_core::moderation::Sanction;
+        let count = self.reputation.ranking().len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.directory_index = self.directory_index.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.directory_index + 1 < count {
+                    self.directory_index += 1;
+                }
+            }
+            KeyCode::Char('m') | KeyCode::Char('M') => match self.moderate_selected(Sanction::Mute)
+            {
+                Ok(()) => self.status = "Target muted.".into(),
+                Err(e) => self.status = format!("Moderation failed: {e}"),
+            },
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                match self.moderate_selected(Sanction::Ban) {
+                    Ok(()) => self.status = "Target banned.".into(),
+                    Err(e) => self.status = format!("Moderation failed: {e}"),
+                }
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') => match self.moderate_selected(Sanction::Lift)
+            {
+                Ok(()) => self.status = "Sanction lifted.".into(),
+                Err(e) => self.status = format!("Moderation failed: {e}"),
             },
             KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
             _ => {}
