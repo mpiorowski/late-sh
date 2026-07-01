@@ -138,6 +138,10 @@ pub struct AppState {
     /// Loop guard for the WhatsApp inbound bridge (ADR-0053 Phase 0) — dedupes
     /// on the wa message id so a retried Meta webhook never double-posts.
     whatsapp_seen: Mutex<agentbbs_bridge::SeenSet>,
+    /// Open free-form messaging windows per WhatsApp recipient (ADR-0053) —
+    /// records each inbound so a board reply can be mirrored back out only
+    /// within the 24h window.
+    whatsapp_window: Mutex<agentbbs_bridge::SessionWindow>,
 }
 
 impl AppState {
@@ -167,6 +171,7 @@ impl AppState {
             llm_day: Mutex::new((String::new(), 0)),
             slack_seen: Mutex::new(agentbbs_bridge::SeenSet::new()),
             whatsapp_seen: Mutex::new(agentbbs_bridge::SeenSet::new()),
+            whatsapp_window: Mutex::new(agentbbs_bridge::SessionWindow::new()),
         })
     }
 
@@ -1069,10 +1074,14 @@ async fn api_post_signed(
     };
     let human = !looks_like_agent(&message.body.handle);
     let text = message.body.body.clone();
+    // Clone before `post` consumes it — used to mirror the reply back out to an
+    // open WhatsApp session window (ADR-0053), after the post is accepted.
+    let mirror_msg = message.clone();
     state
         .bbs
         .post(Role::Agent.caps(), message)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, e.to_string()))?;
+    maybe_mirror_whatsapp_outbound(&state, &mirror_msg);
     if human {
         state.maybe_loop_in(&slug, &text, &view.handle).await;
     }
@@ -2095,6 +2104,14 @@ fn deliver_whatsapp_message(state: &AppState, msg: whatsapp_bridge::WhatsAppMess
     if state.whatsapp_seen.lock().unwrap().seen_or_record(&ext_id) {
         return; // duplicate delivery — Meta retries until it gets a 200
     }
+    // Open the 24h free-form window for this sender so a board reply can be
+    // mirrored back out to them (ADR-0053). Keyed by sender number (matches the
+    // BoardMapping `recipient` the outbound path sends to).
+    state
+        .whatsapp_window
+        .lock()
+        .unwrap()
+        .record(&msg.from, chrono::Utc::now().timestamp());
     let inbound = agentbbs_bridge::Inbound {
         platform: "whatsapp".to_string(),
         workspace: msg.phone_number_id,
@@ -2108,6 +2125,60 @@ fn deliver_whatsapp_message(state: &AppState, msg: whatsapp_bridge::WhatsAppMess
     if let Err(e) = state.bbs.post(Role::Agent.caps(), signed) {
         tracing::warn!(error = %e, board = %board, "whatsapp bridge: post failed");
     }
+}
+
+/// Pure gate for WhatsApp free-form outbound (ADR-0053): given the board→target
+/// config, the open-window state, a just-posted message, and `now` (unix secs),
+/// return the WhatsApp `OutboundPost`s that may be sent right now — the board's
+/// configured WhatsApp target, but only if the recipient's 24h window is open.
+/// Bridge-originated messages and unmapped boards yield nothing (via `plan`).
+/// Kept pure (no I/O) so the window/config logic is unit-tested without network.
+fn plan_whatsapp_outbound(
+    config: &agentbbs_bridge::BridgeConfig,
+    window: &agentbbs_bridge::SessionWindow,
+    msg: &agentbbs_core::Message,
+    now: i64,
+) -> Vec<agentbbs_bridge::OutboundPost> {
+    agentbbs_bridge::Bridge::new(config.clone())
+        .plan(msg)
+        .into_iter()
+        .filter(|p| p.target == agentbbs_bridge::Target::WhatsApp)
+        .filter(|p| {
+            p.payload["to"].as_str().is_some_and(|to| {
+                window.is_open(to, now, agentbbs_bridge::WHATSAPP_SESSION_WINDOW_SECS)
+            })
+        })
+        .collect()
+}
+
+/// Mirror a just-posted board message out to WhatsApp if the board has a
+/// configured WhatsApp target (`AGENTBBS_WHATSAPP_BRIDGE_CONFIG`, a
+/// `BridgeConfig` JSON) and the recipient's free-form window is open. Delivery
+/// is fire-and-forget (`tokio::spawn`) and soft-fails — a Cloud API hiccup must
+/// never block or fail the poster's request. Only the outbound *mechanism* here
+/// is web-side; the bearer token is resolved from env by `agentbbs_bridge::deliver`.
+fn maybe_mirror_whatsapp_outbound(state: &Arc<AppState>, msg: &agentbbs_core::Message) {
+    let Ok(cfg_json) = std::env::var("AGENTBBS_WHATSAPP_BRIDGE_CONFIG") else {
+        return; // outbound mirroring not configured
+    };
+    let Ok(config) = agentbbs_bridge::BridgeConfig::from_json(&cfg_json) else {
+        tracing::warn!("whatsapp outbound: AGENTBBS_WHATSAPP_BRIDGE_CONFIG is not valid JSON");
+        return;
+    };
+    let now = chrono::Utc::now().timestamp();
+    let posts = {
+        let window = state.whatsapp_window.lock().unwrap();
+        plan_whatsapp_outbound(&config, &window, msg, now)
+    };
+    if posts.is_empty() {
+        return; // unmapped board, bridged message, or window closed
+    }
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        if let Err(e) = agentbbs_bridge::deliver(&client, &posts).await {
+            tracing::warn!(error = %e, "whatsapp outbound: delivery failed");
+        }
+    });
 }
 
 /// `GET /api/credentials` — every currently-valid signed credential on file
@@ -4392,5 +4463,59 @@ mod tests {
 
         std::env::remove_var("AGENTBBS_WHATSAPP_VERIFY_TOKEN");
         std::env::remove_var("AGENTBBS_WHATSAPP_APP_SECRET");
+    }
+
+    #[test]
+    fn whatsapp_outbound_gated_by_the_session_window() {
+        use agentbbs_core::{Identity, Message, MessageBody};
+        // A board with a configured WhatsApp target.
+        let config = agentbbs_bridge::BridgeConfig::from_json(
+            r#"{"mappings":[{"board":"general","whatsapp":{"phone_number_id":"111","recipient":"15551234567","token_env":"WA_TOK"}}]}"#,
+        )
+        .unwrap();
+        let id = Identity::generate();
+        let body = MessageBody {
+            board: "general".into(),
+            parent: None,
+            subject: "re".into(),
+            body: "reply back out".into(),
+            author: id.id(),
+            handle: "you".into(),
+            created_at: chrono::Utc::now(),
+            kind: agentbbs_core::MessageKind::Post,
+        };
+        let msg = Message::sign(&id, body).unwrap();
+        let now = 1_700_000_000;
+
+        // Window closed (recipient never messaged) → nothing goes out.
+        let closed = agentbbs_bridge::SessionWindow::new();
+        assert!(plan_whatsapp_outbound(&config, &closed, &msg, now).is_empty());
+
+        // Window open (recipient messaged just now) → the reply is planned to them.
+        let mut open = agentbbs_bridge::SessionWindow::new();
+        open.record("15551234567", now);
+        let posts = plan_whatsapp_outbound(&config, &open, &msg, now);
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].target, agentbbs_bridge::Target::WhatsApp);
+        assert_eq!(posts[0].payload["to"], "15551234567");
+        assert_eq!(posts[0].auth_token_env.as_deref(), Some("WA_TOK"));
+
+        // Past the 24h window → withheld again.
+        let later = now + agentbbs_bridge::WHATSAPP_SESSION_WINDOW_SECS + 1;
+        assert!(plan_whatsapp_outbound(&config, &open, &msg, later).is_empty());
+
+        // A bridge-originated message is never mirrored (loop guard), even open.
+        let bridged_body = MessageBody {
+            board: "general".into(),
+            parent: None,
+            subject: "x".into(),
+            body: "echo".into(),
+            author: id.id(),
+            handle: "bridge:whatsapp:111".into(),
+            created_at: chrono::Utc::now(),
+            kind: agentbbs_core::MessageKind::Post,
+        };
+        let bridged = Message::sign(&id, bridged_body).unwrap();
+        assert!(plan_whatsapp_outbound(&config, &open, &bridged, now).is_empty());
     }
 }

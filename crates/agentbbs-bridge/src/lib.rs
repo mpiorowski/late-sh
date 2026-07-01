@@ -288,6 +288,43 @@ impl Bridge {
     }
 }
 
+/// WhatsApp's free-form ("customer service") messaging window: a business may
+/// send a free-form, non-template message to a user only within 24 hours of that
+/// user's last inbound message (ADR-0053). Outside it, only pre-approved
+/// templates are allowed — deferred to a later phase.
+pub const WHATSAPP_SESSION_WINDOW_SECS: i64 = 24 * 60 * 60;
+
+/// Tracks the last-inbound instant per recipient so the outbound path can gate
+/// free-form sends to the open 24h window (ADR-0053). Purely in-memory — a
+/// restart forgets windows, which fails *closed* (outbound is simply withheld
+/// until the user messages again), the safe direction. `key` is whatever the
+/// caller keys recipients by (for WhatsApp, the recipient phone number).
+#[derive(Clone, Debug, Default)]
+pub struct SessionWindow {
+    last_inbound: std::collections::HashMap<String, i64>,
+}
+
+impl SessionWindow {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record an inbound message from `key` at `now` (unix seconds).
+    pub fn record(&mut self, key: &str, now: i64) {
+        self.last_inbound.insert(key.to_string(), now);
+    }
+
+    /// Whether a free-form outbound to `key` is permitted right now: the last
+    /// inbound was between 0 and `window_secs` ago. Unknown key → closed; a
+    /// future-dated last-inbound (clock skew) → closed (fail-closed).
+    pub fn is_open(&self, key: &str, now: i64, window_secs: i64) -> bool {
+        self.last_inbound.get(key).is_some_and(|&t| {
+            let delta = now - t;
+            (0..=window_secs).contains(&delta)
+        })
+    }
+}
+
 /// Bridge delivery error.
 #[derive(Debug)]
 pub enum BridgeError {
@@ -552,6 +589,34 @@ mod tests {
         assert!(b
             .plan(&msg("general", "bridge:whatsapp", "echo"))
             .is_empty());
+    }
+
+    #[test]
+    fn session_window_opens_on_inbound_and_closes_after_24h() {
+        let mut w = SessionWindow::new();
+        let t0 = 1_700_000_000;
+        assert!(!w.is_open("15551234567", t0, WHATSAPP_SESSION_WINDOW_SECS)); // unknown → closed
+        w.record("15551234567", t0);
+        assert!(w.is_open("15551234567", t0, WHATSAPP_SESSION_WINDOW_SECS)); // same instant
+        assert!(w.is_open(
+            "15551234567",
+            t0 + WHATSAPP_SESSION_WINDOW_SECS,
+            WHATSAPP_SESSION_WINDOW_SECS
+        )); // exactly 24h → still open
+        assert!(!w.is_open(
+            "15551234567",
+            t0 + WHATSAPP_SESSION_WINDOW_SECS + 1,
+            WHATSAPP_SESSION_WINDOW_SECS
+        )); // 24h+1s → closed
+    }
+
+    #[test]
+    fn session_window_is_per_recipient_and_fails_closed_on_skew() {
+        let mut w = SessionWindow::new();
+        let t0 = 1_700_000_000;
+        w.record("alice", t0);
+        assert!(!w.is_open("bob", t0, WHATSAPP_SESSION_WINDOW_SECS)); // different recipient
+        assert!(!w.is_open("alice", t0 - 5, WHATSAPP_SESSION_WINDOW_SECS)); // future-dated → closed
     }
 
     #[test]
