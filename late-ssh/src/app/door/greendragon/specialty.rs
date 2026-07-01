@@ -127,6 +127,8 @@ const DARK_ARTS: &[Skill] = &[
                 attack,
                 defense,
                 dying_text: "Your skeleton warrior crumbles to dust.".into(),
+                // A conjured construct: no mercenary healer can mend it.
+                cannotbehealed: true,
             })
         },
     },

@@ -214,6 +214,14 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    if state.mode() == Mode::MercenaryCamp {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "Fighters loiter by the cookfires, waiting on coin. Hire one to march at your side in the forest, or pay the surgeon to mend a wounded companion.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+
     if state.mode() == Mode::ChooseSpecialty {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
@@ -286,6 +294,7 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::ArmorShop => "Duskmail Armoury",
         Mode::Healer => "The Mendery",
         Mode::Bank => "The Coinvault",
+        Mode::MercenaryCamp => "The Mercenary Camp",
         Mode::Training => "The Proving Yard",
         Mode::Event => "A Forest Happening",
         Mode::ChooseSpecialty => "Choose Your Path",

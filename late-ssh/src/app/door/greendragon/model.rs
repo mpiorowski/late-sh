@@ -420,6 +420,93 @@ impl Character {
         }
     }
 
+    // --- companions / mercenary camp ----------------------------------------
+
+    /// Enroll a companion if there is room in your band (LoGD `apply_companion`,
+    /// gated by `maxcompanions`). Returns false when you already lead too many;
+    /// callers surface that as the "no one will follow you" refusal. Summoned
+    /// skeletons and hired mercenaries share the one cap.
+    pub fn add_companion(&mut self, companion: Companion) -> bool {
+        if self.companions.len() >= data::MAX_COMPANIONS {
+            return false;
+        }
+        self.companions.push(companion);
+        true
+    }
+
+    /// Whether a companion with this name already marches with you (LoGD blocks
+    /// hiring a duplicate).
+    pub fn owns_companion(&self, name: &str) -> bool {
+        self.companions.iter().any(|c| c.name == name)
+    }
+
+    /// Whether this mercenary will follow you right now: dragon-kill gate met,
+    /// not already hired, band not full, and both prices affordable.
+    pub fn can_hire(&self, m: &data::Mercenary) -> bool {
+        self.dragon_kills >= m.cost_dks
+            && !self.owns_companion(m.name)
+            && self.companions.len() < data::MAX_COMPANIONS
+            && self.gold >= m.cost_gold
+            && self.gems >= m.cost_gems
+    }
+
+    /// Hire a mercenary: spend gold + gems and enroll a companion whose stats are
+    /// scaled to your level at hire (`base + per_level * level`). Returns false
+    /// (spending nothing) if you can't currently hire them.
+    pub fn hire_mercenary(&mut self, m: &data::Mercenary) -> bool {
+        if !self.can_hire(m) {
+            return false;
+        }
+        self.gold -= m.cost_gold;
+        self.gems -= m.cost_gems;
+        let lvl = self.level as u32;
+        let max_hp = m.base_hp + m.hp_per_level * lvl;
+        self.add_companion(Companion {
+            name: m.name.to_string(),
+            hitpoints: max_hp,
+            max_hitpoints: max_hp,
+            attack: m.base_attack + m.attack_per_level * lvl,
+            defense: m.base_defense + m.defense_per_level * lvl,
+            dying_text: m.dying_text.to_string(),
+            cannotbehealed: false,
+        })
+    }
+
+    /// Gold to fully mend the companion at `idx` (LoGD `mercenarycamp.php`:
+    /// `round(log(level+1) * (missing + 10) * 1.33)`). `None` when the index is
+    /// out of range, the companion can't be healed, or it's already at full HP.
+    pub fn companion_heal_cost(&self, idx: usize) -> Option<u64> {
+        let comp = self.companions.get(idx)?;
+        if comp.cannotbehealed {
+            return None;
+        }
+        let missing = comp.max_hitpoints.saturating_sub(comp.hitpoints);
+        if missing == 0 {
+            return None;
+        }
+        let cost = ((self.level as f64 + 1.0).ln()
+            * (missing as f64 + 10.0)
+            * data::COMPANION_HEAL_FACTOR)
+            .round()
+            .max(0.0);
+        Some(cost as u64)
+    }
+
+    /// Pay to fully mend the companion at `idx`. Returns false (spending nothing)
+    /// when it can't be healed or you can't afford it.
+    pub fn heal_companion(&mut self, idx: usize) -> bool {
+        let Some(cost) = self.companion_heal_cost(idx) else {
+            return false;
+        };
+        if self.gold < cost {
+            return false;
+        }
+        self.gold -= cost;
+        let comp = &mut self.companions[idx];
+        comp.hitpoints = comp.max_hitpoints;
+        true
+    }
+
     /// Deposit on-hand gold into the bank (clamped to what's on hand).
     pub fn deposit(&mut self, amount: u64) {
         let amount = amount.min(self.gold);
@@ -853,5 +940,92 @@ mod tests {
         assert_eq!(ForestHunt::Thrillseeking.creature_level(5), 6);
         assert_eq!(ForestHunt::Slumming.creature_level(1), 1); // clamps
         assert_eq!(ForestHunt::Thrillseeking.creature_level(15), 16); // clamps
+    }
+
+    fn merc_by_name(name: &str) -> &'static data::Mercenary {
+        data::MERCENARIES.iter().find(|m| m.name == name).unwrap()
+    }
+
+    fn dummy_companion(name: &str, cannotbehealed: bool) -> Companion {
+        Companion {
+            name: name.to_string(),
+            hitpoints: 10,
+            max_hitpoints: 10,
+            attack: 1,
+            defense: 1,
+            dying_text: String::new(),
+            cannotbehealed,
+        }
+    }
+
+    #[test]
+    fn hire_mercenary_scales_stats_and_spends() {
+        let mut c = Character::new("hero", 0);
+        c.level = 5;
+        c.gold = 5_000;
+        let merc = merc_by_name("Copper Sellsword"); // 2000 gold, no gems/dk gate
+        assert!(c.hire_mercenary(merc));
+        assert_eq!(c.gold, 5_000 - merc.cost_gold);
+        assert_eq!(c.companions.len(), 1);
+        let comp = &c.companions[0];
+        assert_eq!(comp.attack, merc.base_attack + merc.attack_per_level * 5);
+        assert_eq!(comp.defense, merc.base_defense + merc.defense_per_level * 5);
+        assert_eq!(comp.max_hitpoints, merc.base_hp + merc.hp_per_level * 5);
+        assert_eq!(comp.hitpoints, comp.max_hitpoints);
+        assert!(!comp.cannotbehealed);
+        // Can't hire the same one twice.
+        assert!(!c.hire_mercenary(merc));
+    }
+
+    #[test]
+    fn dragon_kill_gate_blocks_early_hire() {
+        let mut c = Character::new("hero", 0);
+        c.level = 5;
+        c.gold = 1_000_000;
+        c.gems = 10;
+        let warden = merc_by_name("Hedge Warden"); // needs 1 dragon kill
+        assert!(!c.can_hire(warden));
+        c.dragon_kills = 1;
+        assert!(c.can_hire(warden));
+    }
+
+    #[test]
+    fn band_cap_blocks_further_companions_and_hires() {
+        let mut c = Character::new("hero", 0);
+        for i in 0..data::MAX_COMPANIONS {
+            assert!(c.add_companion(dummy_companion(&format!("ally{i}"), false)));
+        }
+        // Full band: no more, whether summoned or hired.
+        assert!(!c.add_companion(dummy_companion("one too many", false)));
+        c.gold = 1_000_000;
+        assert!(!c.hire_mercenary(&data::MERCENARIES[0]));
+    }
+
+    #[test]
+    fn companion_heal_cost_matches_formula_and_pays() {
+        let mut c = Character::new("hero", 0);
+        c.level = 6;
+        c.gold = 10_000;
+        c.add_companion(dummy_companion("Copper Sellsword", false));
+        c.companions[0].max_hitpoints = 50;
+        c.companions[0].hitpoints = 30; // missing 20
+        let expected =
+            ((6.0_f64 + 1.0).ln() * (20.0 + 10.0) * data::COMPANION_HEAL_FACTOR).round() as u64;
+        assert_eq!(c.companion_heal_cost(0), Some(expected));
+        let before = c.gold;
+        assert!(c.heal_companion(0));
+        assert_eq!(c.gold, before - expected);
+        assert_eq!(c.companions[0].hitpoints, c.companions[0].max_hitpoints);
+        // At full HP there's nothing left to mend.
+        assert_eq!(c.companion_heal_cost(0), None);
+    }
+
+    #[test]
+    fn summoned_constructs_cannot_be_mended() {
+        let mut c = Character::new("hero", 0);
+        c.add_companion(dummy_companion("Skeleton", true));
+        c.companions[0].hitpoints = 1;
+        assert_eq!(c.companion_heal_cost(0), None);
+        assert!(!c.heal_companion(0));
     }
 }

@@ -38,6 +38,11 @@ pub struct Companion {
     pub defense: u32,
     /// Flavor logged the round the companion is destroyed.
     pub dying_text: String,
+    /// Summoned magical constructs (a Bonecall skeleton) can't be mended at the
+    /// Mercenary Camp; hired flesh-and-blood companions can (LoGD
+    /// `cannotbehealed`). Defaults false so pre-mercenary saves load clean.
+    #[serde(default)]
+    pub cannotbehealed: bool,
 }
 
 /// A landed power move (LoGD `report_power_move`): an attack roll that beat the
@@ -686,6 +691,7 @@ mod tests {
             attack: 10,
             defense: 1,
             dying_text: "It crumbles.".into(),
+            cannotbehealed: true,
         }];
         let mut fell = false;
         for _ in 0..50 {

@@ -37,6 +37,8 @@ pub enum Mode {
     Healer,
     /// The Coinvault (bank).
     Bank,
+    /// The Mercenary Camp: hire and mend companions.
+    MercenaryCamp,
     /// The Proving Yard (the master fight gate).
     Training,
     /// A forest special event awaiting the player's accept/decline choice.
@@ -173,6 +175,7 @@ impl State {
             Mode::ArmorShop => shop_menu(c, false),
             Mode::Healer => healer_menu(c),
             Mode::Bank => bank_menu(c),
+            Mode::MercenaryCamp => mercenary_menu(c),
             Mode::Training => training_menu(c),
             Mode::Fight => fight_menu(c),
             Mode::Event => event_menu(c, self.pending_event),
@@ -211,6 +214,7 @@ impl State {
             Mode::ArmorShop => self.buy_gear(false),
             Mode::Healer => self.select_healer(),
             Mode::Bank => self.select_bank(),
+            Mode::MercenaryCamp => self.select_mercenary(),
             Mode::Training => self.select_training(),
             Mode::Fight => self.select_fight(),
             Mode::Event => self.select_event(),
@@ -266,6 +270,7 @@ impl State {
             s if s.starts_with("Duskmail") => self.goto(Mode::ArmorShop),
             s if s.starts_with("The Mendery") => self.goto(Mode::Healer),
             s if s.starts_with("The Coinvault") => self.goto(Mode::Bank),
+            s if s.starts_with("The Mercenary Camp") => self.goto(Mode::MercenaryCamp),
             s if s.starts_with("Leave") => return Selection::Leave,
             _ => {}
         }
@@ -598,11 +603,14 @@ impl State {
                 }
             }
             SkillEffect::Summon(companion) => {
-                self.push_log(format!(
-                    "{} claws up from the earth to fight at your side.",
-                    companion.name
-                ));
-                self.character.as_mut().unwrap().companions.push(companion);
+                let name = companion.name.clone();
+                if self.character.as_mut().unwrap().add_companion(companion) {
+                    self.push_log(format!("{name} claws up from the earth to fight at your side."));
+                } else {
+                    self.push_log(
+                        "The earth stirs, but you already lead too many to command another.".into(),
+                    );
+                }
             }
         }
         self.push_log(format!("You invoke {name}!"));
@@ -750,6 +758,40 @@ impl State {
         Selection::Stay
     }
 
+    // --- mercenary camp -----------------------------------------------------
+
+    fn select_mercenary(&mut self) -> Selection {
+        let c = self.character.as_ref().unwrap();
+        let actions = mercenary_actions(c);
+        let Some(action) = actions.get(self.cursor).copied() else {
+            return Selection::Stay;
+        };
+        match action {
+            MercAction::Hire(i) => {
+                let merc = &data::MERCENARIES[i];
+                if self.character.as_mut().unwrap().hire_mercenary(merc) {
+                    self.push_log(format!("{} joins your band. {}", merc.name, merc.blurb));
+                    self.save();
+                } else {
+                    self.push_log("They look you over, spit, and turn away.".into());
+                }
+            }
+            MercAction::Heal(i) => {
+                let name = c.companions[i].name.clone();
+                let cost = c.companion_heal_cost(i).unwrap_or(0);
+                if self.character.as_mut().unwrap().heal_companion(i) {
+                    self.push_log(format!(
+                        "The camp surgeon patches {name} back to full for {cost} gold."
+                    ));
+                    self.save();
+                } else {
+                    self.push_log("You haven't the gold to mend them.".into());
+                }
+            }
+        }
+        Selection::Stay
+    }
+
     // --- helpers ------------------------------------------------------------
 
     fn push_log(&mut self, line: String) {
@@ -812,6 +854,7 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
         c.hitpoints < c.max_hitpoints(),
     ));
     rows.push(("The Coinvault (bank)".into(), true));
+    rows.push(("The Mercenary Camp (companions)".into(), true));
     rows.push(("Leave the realm".into(), true));
     rows
 }
@@ -875,6 +918,77 @@ fn bank_menu(c: &Character) -> Vec<(String, bool)> {
             c.gold_in_bank > 0,
         ),
     ]
+}
+
+/// One selectable action in the Mercenary Camp: hire the roster entry at this
+/// index, or mend the owned companion at this index. Built identically by the
+/// menu renderer and the selection handler so cursor rows line up (mirroring the
+/// shop's `available_tiers`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MercAction {
+    Hire(usize),
+    Heal(usize),
+}
+
+/// The camp's live action list: hires first (roster entries whose dragon-kill
+/// gate you've cleared and don't already lead), then heals (owned, damaged,
+/// mendable companions). Band-full and can't-afford states stay *listed* here
+/// but render disabled, so the player can still see what's on offer.
+fn mercenary_actions(c: &Character) -> Vec<MercAction> {
+    let mut actions = Vec::new();
+    for (i, m) in data::MERCENARIES.iter().enumerate() {
+        if c.dragon_kills >= m.cost_dks && !c.owns_companion(m.name) {
+            actions.push(MercAction::Hire(i));
+        }
+    }
+    for i in 0..c.companions.len() {
+        if c.companion_heal_cost(i).is_some() {
+            actions.push(MercAction::Heal(i));
+        }
+    }
+    actions
+}
+
+fn merc_price_label(m: &data::Mercenary) -> String {
+    let gems = |n: u64| format!("{n} gem{}", if n == 1 { "" } else { "s" });
+    match (m.cost_gold, m.cost_gems) {
+        (0, g) => gems(g),
+        (gold, 0) => format!("{gold} gold"),
+        (gold, g) => format!("{gold} gold + {}", gems(g)),
+    }
+}
+
+fn mercenary_menu(c: &Character) -> Vec<(String, bool)> {
+    let actions = mercenary_actions(c);
+    if actions.is_empty() {
+        return vec![(
+            "No one here will follow you today. (nothing to do)".into(),
+            false,
+        )];
+    }
+    actions
+        .into_iter()
+        .map(|action| match action {
+            MercAction::Hire(i) => {
+                let m = &data::MERCENARIES[i];
+                (
+                    format!("Hire {} - {}", m.name, merc_price_label(m)),
+                    c.can_hire(m),
+                )
+            }
+            MercAction::Heal(i) => {
+                let cost = c.companion_heal_cost(i).unwrap_or(0);
+                let comp = &c.companions[i];
+                (
+                    format!(
+                        "Mend {} - {cost} gold ({}/{} HP)",
+                        comp.name, comp.hitpoints, comp.max_hitpoints
+                    ),
+                    c.gold >= cost,
+                )
+            }
+        })
+        .collect()
 }
 
 fn training_menu(c: &Character) -> Vec<(String, bool)> {
@@ -1003,5 +1117,38 @@ mod tests {
         let rows = bank_menu(&c);
         assert!(rows[0].1); // can deposit
         assert!(!rows[1].1); // nothing to withdraw
+    }
+
+    #[test]
+    fn village_menu_offers_mercenary_camp() {
+        let rows = village_menu(&lvl(1));
+        assert!(rows.iter().any(|(l, en)| l.starts_with("The Mercenary Camp") && *en));
+    }
+
+    #[test]
+    fn mercenary_menu_lists_hires_and_gates_on_cost_and_dks() {
+        let mut c = lvl(5);
+        c.gold = 300; // affords only the cheapest (Stray Cur, 250)
+        let menu = mercenary_menu(&c);
+        // Cheapest hire is enabled.
+        assert!(menu.iter().any(|(l, en)| l.starts_with("Hire Stray Cur") && *en));
+        // A pricier one is still listed, but disabled.
+        assert!(menu
+            .iter()
+            .any(|(l, en)| l.contains("Copper Sellsword") && !*en));
+        // Dragon-kill-gated mercs don't appear at all with 0 kills.
+        assert!(!menu.iter().any(|(l, _)| l.contains("Hedge Warden")));
+    }
+
+    #[test]
+    fn mercenary_menu_shows_mend_row_for_wounded_companion() {
+        let mut c = lvl(5);
+        c.gold = 100_000;
+        assert!(c.hire_mercenary(&data::MERCENARIES[1])); // Copper Sellsword
+        c.companions[0].hitpoints = 1;
+        let menu = mercenary_menu(&c);
+        assert!(menu
+            .iter()
+            .any(|(l, en)| l.starts_with("Mend Copper Sellsword") && *en));
     }
 }

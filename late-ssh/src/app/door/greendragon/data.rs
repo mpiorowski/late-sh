@@ -367,6 +367,119 @@ pub const DRAGON_ATTACK: u32 = 45;
 pub const DRAGON_DEFENSE: u32 = 25;
 pub const DRAGON_HP: u32 = 300;
 
+// --- Mercenary Camp ---------------------------------------------------------
+
+/// Most companions you can lead into the forest at once (LoGD's `maxcompanions`
+/// setting, which both `apply_companion` and this camp gate on). A server
+/// setting upstream rather than a fixed balance number, so this is our chosen
+/// band size; summoned skeletons and hired mercenaries share it.
+pub const MAX_COMPANIONS: usize = 4;
+
+/// Multiplier in the companion heal price (LoGD `mercenarycamp.php`:
+/// `round(log(level+1) * (pointstoheal + 10) * 1.33)`).
+pub const COMPANION_HEAL_FACTOR: f64 = 1.33;
+
+/// A companion hireable at the Mercenary Camp (LoGD `mercenarycamp.php` reading
+/// the `companions` table). The **mechanic** is transcribed 1=1: a gold/gem
+/// price, a dragon-kill gate (`companioncostdks`), and stats that scale with
+/// your level at hire (`attack = attack + attackperlevel*level`, likewise for
+/// defense and max HP). The **roster, names, and flavor are original to
+/// late.sh** — the stock `companions` table is a separately-seeded, non-core
+/// list, like our creature/weapon names, so there is no canonical seed to copy.
+#[derive(Clone, Copy, Debug)]
+pub struct Mercenary {
+    pub name: &'static str,
+    /// One-line pitch shown in the camp.
+    pub blurb: &'static str,
+    pub cost_gold: u64,
+    pub cost_gems: u64,
+    /// Dragon kills required before this one will follow you.
+    pub cost_dks: u32,
+    pub base_attack: u32,
+    pub attack_per_level: u32,
+    pub base_defense: u32,
+    pub defense_per_level: u32,
+    pub base_hp: u32,
+    pub hp_per_level: u32,
+    /// Logged the round this companion falls.
+    pub dying_text: &'static str,
+}
+
+/// The camp's roster, cheapest first. Later entries gate behind dragon kills and
+/// gems, so the band you can field grows with your investment.
+pub const MERCENARIES: [Mercenary; 5] = [
+    Mercenary {
+        name: "Stray Cur",
+        blurb: "A half-wild dog that took a liking to you. More teeth than sense.",
+        cost_gold: 250,
+        cost_gems: 0,
+        cost_dks: 0,
+        base_attack: 1,
+        attack_per_level: 1,
+        base_defense: 0,
+        defense_per_level: 1,
+        base_hp: 5,
+        hp_per_level: 4,
+        dying_text: "The stray yelps once and bolts into the brush.",
+    },
+    Mercenary {
+        name: "Copper Sellsword",
+        blurb: "A road-worn blade for hire who works cheap and asks nothing.",
+        cost_gold: 2_000,
+        cost_gems: 0,
+        cost_dks: 0,
+        base_attack: 2,
+        attack_per_level: 1,
+        base_defense: 1,
+        defense_per_level: 1,
+        base_hp: 10,
+        hp_per_level: 8,
+        dying_text: "The sellsword crumples with a curse on his lips.",
+    },
+    Mercenary {
+        name: "Hedge Warden",
+        blurb: "A grim forester who has buried more men than she can name.",
+        cost_gold: 8_000,
+        cost_gems: 0,
+        cost_dks: 1,
+        base_attack: 3,
+        attack_per_level: 2,
+        base_defense: 2,
+        defense_per_level: 1,
+        base_hp: 15,
+        hp_per_level: 10,
+        dying_text: "The warden falls without a sound, as she lived.",
+    },
+    Mercenary {
+        name: "Ironbound Reaver",
+        blurb: "A plate-clad killer who charges gems and earns every one.",
+        cost_gold: 20_000,
+        cost_gems: 1,
+        cost_dks: 3,
+        base_attack: 5,
+        attack_per_level: 2,
+        base_defense: 4,
+        defense_per_level: 2,
+        base_hp: 25,
+        hp_per_level: 12,
+        dying_text: "The reaver's armor buckles and he goes down hard.",
+    },
+    Mercenary {
+        name: "Ashen Revenant",
+        blurb: "Something that used to be a champion, bound to your banner by gems and dread.",
+        cost_gold: 0,
+        cost_gems: 5,
+        cost_dks: 7,
+        base_attack: 8,
+        attack_per_level: 3,
+        base_defense: 6,
+        defense_per_level: 2,
+        base_hp: 40,
+        hp_per_level: 15,
+        dying_text: "The revenant collapses into a drift of cold ash.",
+    },
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

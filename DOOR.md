@@ -1,10 +1,16 @@
 # Door Games & MUDs - Candidate Research
 
 Investigation notes for slowly adding more door games / MUDs to late.sh.
-Status: **research only, nothing committed.** Last updated 2026-06-28.
+Status: **research only, nothing committed.** Last updated 2026-07-01.
 
 ## TL;DR
 
+- **Zork is now unblocked and is the cleanest door on this list.** Microsoft +
+  Activision **relicensed Zork I/II/III source under MIT on 2025-11-20**, so the
+  old proprietary wall is gone. Compile the ZIL source to a `.z3` with ZILF, run
+  it under **dfrotz** (GPL, dumb terminal, pure libc) on a PTY. Single-player, no
+  server, no shared state, no vt100 scraping. Easier than dopewars was. **Do this
+  next.** See deep dive below.
 - **You wanted LORD but couldn't license it.** The legal, open-source answer is
   **Legend of the Green Dragon (LotGD)** - a faithful free remake of LORD. The
   catch: it's a PHP + MySQL *web* app, not a terminal door, so it needs work to
@@ -50,6 +56,7 @@ worth owning. Licensing is the gate before any of this matters.
 
 | Game | License | Notes / fit |
 |---|---|---|
+| **Zork I / II / III** | **MIT (source, 2025-11-20)** + dfrotz GPLv2+ runtime | The Infocom trilogy, relicensed by Microsoft/Activision. Compile the ZIL source to a `.z3` with the community **ZILF/ZAPF** toolchain, run under **dfrotz** (Frotz dumb interface, pure libc). Single-player, no server → **pattern 2, the lowest-friction door here.** See deep dive below. |
 | **dopewars** | GPL | Drug Wars / Dope Wars done right. Has a **curses text client** and a client/server **multiplayer** mode. Pure Linux terminal program → **pattern 2, near-zero friction.** Copyright Ben Webb 1998-2022, still maintained. |
 | **Usurper** | GPL | Classic LORD-style RPG door. Rick Parrish ported it to **32/64-bit** (orig by Jakob Dangarden). Runs on Linux → **pattern 2.** Good "second LORD-like" alongside LotGD. |
 | **Legend of the Green Dragon (LotGD)** | GPL (≤0.9.7), Creative Commons (after) | **The open LORD.** Faithful remake. BUT it's **PHP + MySQL web**, not a terminal door → needs either a TUI front-end or a native port (**pattern 1**). Highest player-recognition payoff, highest effort. Active forks exist (incl. a Symfony rewrite). |
@@ -76,6 +83,53 @@ worth owning. Licensing is the gate before any of this matters.
 | **Falcon's Eye** | Not a separate game - it's a **NetHack** frontend (graphical). We already run real NetHack; nothing new here. |
 
 ---
+
+## Zork: deep dive (newly unblocked, do this next)
+
+For decades Zork was a hard **red**: proprietary, and Activision's legal dept had
+explicitly said the old Zork Nemesis / Grand Inquisitor "free download" promos did
+**not** grant redistribution. That wall is gone.
+
+### What changed
+
+On **2025-11-20**, Microsoft's Open Source Programs Office, Team Xbox, and
+Activision **relicensed Zork I, II, and III source under the MIT license**, via
+PRs to the `historicalsource/zork*` repos, coordinated with Jason Scott of the
+Internet Archive. MIT means redistribution, modification, and derivative works
+are all fine, including alongside our chip economy / donations. Clean green.
+
+### The one catch: MIT covers the source, not a runnable file
+
+The repos ship **ZIL** (Zork Implementation Language, an MDL/Lisp dialect), not a
+playable story file. There is no official Infocom compiler, but the community
+**ZILF/ZAPF** toolchain compiles the ZIL (with minor noted issues) into a
+standard Z-machine `.z3`. Pipeline: `zork1.zil` → ZILF → `zork1.z3`.
+
+### Integration: the lowest-friction door researched, easier than NetHack
+
+- **Runtime: dfrotz** — the dumb-terminal interface of **Frotz** (GPLv2+). No
+  curses, no graphics, no color, **just libc and line-oriented stdin/stdout**.
+  Textbook **pattern 2** (PTY child, like dopewars), and cleaner than NetHack
+  because there's no full-screen vt100 to scrape.
+- **Single-player, no server, no shared state.** Each session is a
+  `dfrotz zorkN.z3` child. None of the twclone/Wolfpack global-instance or
+  economy-clock questions apply.
+- **No lock-wedge failure class.** Unlike the NetHack `?lock.*` getlock wedge,
+  Z-machine `SAVE` writes an ordinary per-player quetzal file. Just give each
+  player a save dir.
+- **Milestones without JSON or scraping:** `dfrotz` prints a plain `Score: N`
+  status line on stdout - read it directly instead of vt100-scraping like
+  NetHack does for the Amulet/ascension.
+
+### Open questions specific to Zork
+
+- Build the ZILF/ZAPF toolchain once (CI or vendored) to produce the three `.z3`
+  files; confirm the "minor issues" ZILF hits on Zork I don't affect playability.
+- Per-player quetzal save dir keyed like other doors; saves should persist across
+  sessions (Zork is long).
+- Not the mainframe **Dungeon** (FORTRAN/C port): that one is "free noncommercial
+  distribution" only, which trips our commercial-use axis, and it's a slightly
+  different game. The MIT trilogy supersedes it - skip Dungeon.
 
 ## TradeWars: deep dive (the one everybody asks for)
 
@@ -160,16 +214,20 @@ really a new Lateania-style game, not "The Pit."
 
 ## Recommended order of attack
 
-1. **dopewars** - fastest real win. GPL, terminal-native, multiplayer. Wrap it
+1. **Zork I/II/III** - newest and cleanest win. MIT source since 2025-11-20;
+   compile ZIL→`.z3` with ZILF and run under `dfrotz` on a PTY. Single-player,
+   no server, no scraping - less work than dopewars, bulletproof licensing, high
+   recognition. **Do this next.** See deep dive above.
+2. **dopewars** - fastest real win. GPL, terminal-native, multiplayer. Wrap it
    like NetHack (`late-nethack`-style host or a local PTY child). Low risk, high
    "oh nice, Drug Wars" recognition.
-2. **Usurper** - second easy PTY door, scratches the LORD-RPG itch with a clean
+3. **Usurper** - second easy PTY door, scratches the LORD-RPG itch with a clean
    license while we decide on LotGD.
-3. **Legend of the Green Dragon** - the marquee "this is basically LORD" feature,
+4. **Legend of the Green Dragon** - the marquee "this is basically LORD" feature,
    but budget real effort: it's a web app, so either a native Rust port
    (Lateania-style) or a TUI shim over the PHP backend. Decide pattern before
    starting.
-4. **TradeWars via twclone** - the most-requested game, finally tractable.
+5. **TradeWars via twclone** - the most-requested game, finally tractable.
    Run the MIT twclone server next to our Postgres and write a native Rust JSON
    client. More work than dopewars but no licensing/DOS/BBS nightmare, and the
    payoff is the game people keep asking for. Do the protocol spike first (see
