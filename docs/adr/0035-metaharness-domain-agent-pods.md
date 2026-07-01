@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed
+Accepted (Phases 0–3 shipped — control plane, staging spawn, monitor UI
+including the TUI, Arena ranking; Phase 4 GCP-ephemeral compute blocked on
+upstream Stage E DaemonInfra)
 
 Builds on **issue #4** and **ADR-0034** (meta-llm inference gateway). Where
 ADR-0034 made AgentBBS *talk to* the Cognitum gateway for one-shot `@mention`
