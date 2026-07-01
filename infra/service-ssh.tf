@@ -229,6 +229,18 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # dopewars is a local PTY child of service-ssh itself (no separate host,
+          # PVC, or shared secret) -- the binary is baked into the runtime-ssh
+          # image at /usr/games/dopewars (Dockerfile dopewars-build stage).
+          env {
+            name  = "LATE_DOPEWARS_ENABLED"
+            value = local.dopewars_enabled
+          }
+          env {
+            name  = "LATE_DOPEWARS_BIN"
+            value = "/usr/games/dopewars"
+          }
+
           # --- Files / uploads ---
           env {
             name  = "LATE_FILES_S3_ENDPOINT"

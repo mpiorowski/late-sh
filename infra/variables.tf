@@ -178,6 +178,17 @@ variable "NETHACK_ENABLED" {
   }
 }
 
+variable "DOPEWARS_ENABLED" {
+  description = "Enable the dopewars door game (real upstream binary on a local PTY, in-process in service-ssh; no separate host/PVC). Empty defaults to on."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DOPEWARS_ENABLED)))
+    error_message = "DOPEWARS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
 # =============================================================================
 # AI (Gemini)
 # =============================================================================

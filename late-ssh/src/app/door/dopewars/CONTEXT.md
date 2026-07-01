@@ -4,7 +4,7 @@
 - Scope: the dopewars door — the module in `late-ssh/src/app/door/dopewars` (proxy/state/render/mod) plus its screen lifecycle wiring in `late-ssh/src/app` (state/input/render/tick) and its config/build wiring (`config.rs`, `Dockerfile`, `Makefile`, `.env`). There is **no host crate** — dopewars runs in-process.
 - Domain: dopewars, the real upstream curses "Drug Wars" trading game (GPLv2), run as a **local PTY child of late-ssh** and blitted into a ratatui widget below the top bar.
 - Primary audience: LLM agents changing the dopewars launcher UI, the local-PTY proxy, input forwarding, or its config/build wiring.
-- Last updated: 2026-06-30 (initial build — door playable in local/docker; prod enable deferred).
+- Last updated: 2026-07-01 (dedicated CI/CD added — `.github/workflows/dopewars.yml` mirrors `nethack.yml`).
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI, keybindings, or build/deploy wiring.
@@ -88,8 +88,8 @@ Cross-module wiring (outside this folder — the ~10 door touchpoints):
 - dopewars is a **local PTY child of late-ssh**, so the binary + runtime libs ship in the late-ssh images, **not** a separate `service-` container: copied into `base` (dev, for `dev-ssh`'s cargo-watch) and `runtime-ssh` (prod) at `/usr/games/dopewars`. `base` also gains `libglib2.0-0`/`libcurl4` (it already had `libncursesw6`); `runtime-ssh` installs `libglib2.0-0`/`libncursesw6`/`libcurl4`/`ncurses-term`.
 - `Makefile` + `.env` thread `LATE_DOPEWARS_ENABLED=1` / `LATE_DOPEWARS_BIN=/usr/games/dopewars` (mirroring the nethack block).
 
-### Prod (deferred)
-- **Not yet wired into prod infra.** `infra/service-ssh.tf` does not inject `LATE_DOPEWARS_ENABLED`, so on prod the door defaults off and shows "Currently unavailable" (graceful, not a crash). The binary already ships in `runtime-ssh`. To go live later, set on the prod ssh service: `LATE_DOPEWARS_ENABLED=1` and `LATE_DOPEWARS_BIN=/usr/games/dopewars`. Intentional per the build owner ("no prod infra for now").
+### Prod
+- **Wired into `infra/service-ssh.tf`**, mirroring the rebels/nethack enable-flag pattern but with no separate host/PVC/secret (dopewars is a local-PTY child of `service-ssh` itself). `local.dopewars_enabled` (from `infra/defaults.tf`, `var.DOPEWARS_ENABLED`, empty → `"1"`) sets `LATE_DOPEWARS_ENABLED`; `LATE_DOPEWARS_BIN` is hardcoded to `/usr/games/dopewars` (the path baked into `runtime-ssh` by the `dopewars-build` Dockerfile stage — no terraform var needed since it's not independently configurable). `.github/workflows/terraform.yml` threads `TF_VAR_DOPEWARS_ENABLED` from the `DOPEWARS_ENABLED` repo/org variable. No dedicated *deploy* workflow is needed (dopewars rides along in the normal `runtime-ssh` image built by `deploy.yml`), but it does get dedicated CI: `.github/workflows/dopewars.yml` mirrors `nethack.yml` — PR-triggered (+ weekly cron) build validation of the `dopewars-build` stage with a `--version` smoke test and a setgid check (§5), plus a `runtime-ssh` PR build to catch integration breakage, plus a manual `verify_deployed` job that checks `LATE_DOPEWARS_ENABLED` on the live `service-ssh` pod.
 
 ---
 
@@ -139,4 +139,3 @@ cargo test -p late-ssh dopewars
 ### Possible future work
 - Milestones/chips/awards by scraping the final-score screen (the deferred second pass; mirror `nethack/milestone.rs` + `award.rs`).
 - Optional shared/competitive market: one `dopewars -S` server with `-o`/`-p` clients per session (single-player ships first; see `DOOR_DOPEWARS_PREP.md`).
-- Wire the enable flag into `infra/service-ssh.tf` to turn the door on in prod (§4).

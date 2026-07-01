@@ -1,0 +1,143 @@
+name: dopewars
+
+# Dedicated CI/CD for the dopewars door, responsible only for the from-source
+# binary (there is no separate host/PVC/secret -- dopewars is a local-PTY
+# child of service-ssh itself; see late-ssh/src/app/door/dopewars/CONTEXT.md):
+#   - build_validate: compile the dopewars-build stage and prove the binary
+#     works and isn't setgid (a setgid binary silently refuses the per-session
+#     `-f` score path). Runs on changes to the build and weekly, to catch
+#     upstream / checksum breakage early (the build fetches a pinned tarball
+#     from SourceForge over the network).
+#   - build_runtime_ssh: build the full runtime-ssh target to catch breakage
+#     in that stage on Dockerfile PRs. Nothing else builds runtime-ssh on PR.
+#   - verify_deployed: manual, per-environment. Confirms the live service-ssh
+#     pod has the door enabled. There's no PVC/save state to seed or check.
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .github/workflows/dopewars.yml
+  schedule:
+    - cron: "0 6 * * 2" # Tuesdays 06:00 UTC (staggered a day after nethack's)
+  workflow_dispatch:
+    inputs:
+      run_verify_deployed:
+        description: "Also verify the door is enabled on the live pod after building"
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: "Target environment for verify_deployed"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+permissions:
+  contents: read
+
+jobs:
+  build_validate:
+    name: build_validate_dopewars_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build only the dopewars-build stage and load it locally so we can run
+      # the binary. The stage itself already asserts the binary lands at
+      # /dopewars; we re-prove it runs and re-check the setgid invariant here.
+      - name: build_dopewars_stage
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: dopewars-build
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: dopewars-build:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: smoke_test_binary
+        run: |
+          docker run --rm dopewars-build:ci /dopewars --version
+
+      # Prove the setgid invariant holds: dopewars silently refuses a user
+      # `-f` score path under setgid, which would break the per-session score
+      # file without erroring loudly (see CONTEXT.md §5).
+      - name: verify_not_setgid
+        run: |
+          docker run --rm dopewars-build:ci sh -c '
+            set -e
+            mode=$(stat -c "%a" /dopewars)
+            if [ -g /dopewars ]; then
+              echo "::error::dopewars binary is setgid (mode $mode)"
+              exit 1
+            fi
+            echo "mode $mode OK (not setgid)"
+          '
+
+  build_runtime_ssh:
+    name: build_runtime_ssh_image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build the runtime-ssh target (the late-ssh prod image, which is where
+      # dopewars actually ships) to catch breakage in that stage on Dockerfile
+      # PRs. We only prove it builds; it is not pushed here (deploy.yml builds
+      # and pushes the released image).
+      - name: build_runtime_ssh_target
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime-ssh
+          platforms: linux/amd64
+          push: false
+          tags: late-ssh:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  verify_deployed:
+    name: verify_deployed
+    needs: build_validate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_verify_deployed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment/service-ssh -n default --timeout=180s
+
+      - name: verify_door_enabled
+        run: |
+          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
+          enabled=$(kubectl exec "${POD}" -- printenv LATE_DOPEWARS_ENABLED || true)
+          echo "LATE_DOPEWARS_ENABLED=${enabled}"
+          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) echo "door enabled" ;;
+            *) echo "::warning::dopewars door is not enabled (LATE_DOPEWARS_ENABLED=${enabled})" ;;
+          esac
