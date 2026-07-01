@@ -1014,3 +1014,68 @@ fn federation_panel_renders_real_status_output_when_set() {
     assert!(text.contains("mode: leaf"));
     assert!(text.contains("peers: 0"));
 }
+
+// ADR-0051/0036: Collab screen (Jujutsu half — status/diff/log). GitHub
+// issues/PRs are a separate slice needing a repo-input prompt. None of these
+// tests invoke the real `jj` subprocess — `collab_jj_refresh` is never
+// called, matching the established rule.
+
+#[test]
+fn collab_screen_defaults_to_status_view_and_shows_the_real_command() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter)); // splash -> main
+    app.on_key(press(KeyCode::Char('U'))); // main -> collab
+    assert_eq!(app.screen, Screen::Collab);
+    assert_eq!(app.collab_view, crate::app::CollabView::Status);
+    assert!(app.collab_jj_status.is_none());
+
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains("Collab"));
+    assert!(text.contains("jj status"));
+    assert!(text.contains("not checked yet"));
+}
+
+#[test]
+fn collab_view_switches_between_status_diff_and_log_independently() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('U')));
+
+    app.on_key(press(KeyCode::Char('2')));
+    assert_eq!(app.collab_view, crate::app::CollabView::Diff);
+    assert!(screen_text(&app, 110, 30).contains("jj diff"));
+
+    app.on_key(press(KeyCode::Char('3')));
+    assert_eq!(app.collab_view, crate::app::CollabView::Log);
+    assert!(screen_text(&app, 110, 30).contains("jj log -n 10"));
+
+    app.on_key(press(KeyCode::Char('1')));
+    assert_eq!(app.collab_view, crate::app::CollabView::Status);
+}
+
+#[test]
+fn collab_panel_renders_real_output_and_errors_honestly_per_view() {
+    let mut app = App::in_memory();
+    app.on_key(press(KeyCode::Enter));
+    app.on_key(press(KeyCode::Char('U')));
+
+    // Simulate a successful `jj status` without spawning a real process.
+    app.collab_jj_status = Some(Ok("Working copy : abc123 (no changes)".to_string()));
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains("Working copy : abc123"));
+
+    // Switching to Diff shows Diff's own (unset) state, not Status's cache.
+    app.on_key(press(KeyCode::Char('2')));
+    assert!(app.collab_jj_diff.is_none());
+    assert!(screen_text(&app, 110, 30).contains("not checked yet"));
+
+    // Simulate a real failure (e.g. `jj` not installed).
+    app.collab_jj_diff = Some(Err("spawn jj: No such file or directory".to_string()));
+    let text = screen_text(&app, 110, 30);
+    assert!(text.contains("spawn jj: No such file or directory"));
+    assert!(text.contains("real subprocess error"));
+
+    // Status's cached result is untouched by Diff's state.
+    app.on_key(press(KeyCode::Char('1')));
+    assert!(screen_text(&app, 110, 30).contains("Working copy : abc123"));
+}

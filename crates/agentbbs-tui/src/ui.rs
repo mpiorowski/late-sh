@@ -52,6 +52,7 @@ impl App {
             Screen::Console => self.render_console(frame, rows[1]),
             Screen::Palette => self.render_palette(frame, rows[1]),
             Screen::Appearance => self.render_appearance(frame, rows[1]),
+            Screen::Collab => self.render_collab(frame, rows[1]),
             Screen::Goodbye => self.render_goodbye(frame, rows[1]),
         }
         self.render_status(frame, rows[2]);
@@ -1390,6 +1391,75 @@ impl App {
             Paragraph::new(lines)
                 .wrap(Wrap { trim: true })
                 .block(self.framed("Federation Hall")),
+            area,
+        );
+    }
+
+    fn render_collab(&self, frame: &mut Frame, area: Rect) {
+        use crate::app::CollabView;
+        let tab = |view: CollabView, label: &str, hot: char| {
+            let active = self.collab_view == view;
+            let style = if active {
+                theme::lightbar(self.theme)
+            } else {
+                theme::dim(self.theme)
+            };
+            Span::styled(format!(" [{hot}] {label} "), style)
+        };
+        let mut lines = vec![
+            Line::from(vec![
+                tab(CollabView::Status, "Status", '1'),
+                tab(CollabView::Diff, "Diff", '2'),
+                tab(CollabView::Log, "Log", '3'),
+            ]),
+            Line::from(""),
+        ];
+        let cmd = match self.collab_view {
+            CollabView::Status => "jj status",
+            CollabView::Diff => "jj diff",
+            CollabView::Log => "jj log -n 10",
+        };
+        lines.push(Line::from(Span::styled(
+            format!("$ {cmd}"),
+            theme::hotkey(self.theme),
+        )));
+        match self.collab_jj_current() {
+            None => lines.push(Line::from(Span::styled(
+                "  (not checked yet — press R; this runs a real jj subprocess)",
+                theme::dim(self.theme),
+            ))),
+            Some(Ok(out)) if out.trim().is_empty() => lines.push(Line::from(Span::styled(
+                "  (empty response)",
+                theme::dim(self.theme),
+            ))),
+            Some(Ok(out)) => {
+                for line in out.lines().take(14) {
+                    lines.push(Line::from(Span::styled(
+                        line.to_string(),
+                        theme::chrome(self.theme),
+                    )));
+                }
+            }
+            Some(Err(e)) => {
+                lines.push(Line::from(Span::styled(
+                    format!("  ✗ {e}"),
+                    Style::default().fg(theme::RED),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  (real subprocess error — jj isn't available here; not faked)",
+                    theme::dim(self.theme),
+                )));
+            }
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[1/2/3] switch view · [R] refresh · ESC back — GitHub issues/PRs coming in a later slice",
+            theme::dim(self.theme),
+        )));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(self.framed("Collab (Jujutsu)")),
             area,
         );
     }

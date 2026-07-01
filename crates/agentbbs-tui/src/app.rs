@@ -108,8 +108,20 @@ pub enum Screen {
     /// mirrors the web's 6 `data-theme` palettes plus the TUI's own Retro
     /// default).
     Appearance,
+    /// Cross-repo collaboration — Jujutsu status/diff/log (ADR-0036/0051).
+    /// GitHub issues/PRs are a separate slice (need a repo-input prompt).
+    Collab,
     /// Sign-off screen.
     Goodbye,
+}
+
+/// Which Jujutsu view the Collab screen is currently showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CollabView {
+    #[default]
+    Status,
+    Diff,
+    Log,
 }
 
 /// The lettered main-menu commands, in display order.
@@ -132,6 +144,7 @@ pub const MENU: &[(char, &str, Screen)] = &[
     ('S', "Sysop Report", Screen::Sysop),
     ('E', "Console", Screen::Console),
     ('O', "Appearance", Screen::Appearance),
+    ('U', "Collab (jj)", Screen::Collab),
     ('G', "Goodbye / Log Off", Screen::Goodbye),
 ];
 
@@ -293,6 +306,15 @@ pub struct App {
     pub federation_editing: bool,
     /// The peer address being typed, when `federation_editing`.
     pub federation_input: String,
+    /// Which Jujutsu view the Collab screen shows — persists across visits
+    /// so switching screens doesn't lose your place.
+    pub collab_view: CollabView,
+    /// Cached `jj status` result — real subprocess result/error, never faked.
+    pub collab_jj_status: Option<Result<String, String>>,
+    /// Cached `jj diff` result.
+    pub collab_jj_diff: Option<Result<String, String>>,
+    /// Cached `jj log -n 10` result.
+    pub collab_jj_log: Option<Result<String, String>>,
 }
 
 impl Drop for App {
@@ -418,6 +440,10 @@ impl App {
             federation_status: None,
             federation_editing: false,
             federation_input: String::new(),
+            collab_view: CollabView::default(),
+            collab_jj_status: None,
+            collab_jj_diff: None,
+            collab_jj_log: None,
         };
         app.seed_defaults();
         app.seed_arena();
@@ -920,6 +946,53 @@ impl App {
         };
         self.status = format_federation_join_status(addr, &result);
         self.federation_status = Some(result);
+    }
+
+    /// A fresh `JujutsuAdapter` plus a throwaway blocking tokio runtime —
+    /// same rationale as `federation_runtime`.
+    fn collab_runtime() -> Result<
+        (
+            tokio::runtime::Runtime,
+            agentbbs_federation::JujutsuAdapter<agentbbs_federation::TokioCommandRunner>,
+        ),
+        String,
+    > {
+        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
+        let adapter = agentbbs_federation::JujutsuAdapter::new(
+            agentbbs_federation::TokioCommandRunner::new(),
+        );
+        Ok((rt, adapter))
+    }
+
+    /// Refresh whichever Jujutsu view is currently active (`R` in the Collab
+    /// screen). Real subprocess result/error, never faked — same posture as
+    /// the web's Collab routes.
+    pub fn collab_jj_refresh(&mut self) {
+        let result = match Self::collab_runtime() {
+            Ok((rt, adapter)) => {
+                let out = match self.collab_view {
+                    CollabView::Status => rt.block_on(adapter.status()),
+                    CollabView::Diff => rt.block_on(adapter.diff()),
+                    CollabView::Log => rt.block_on(adapter.log(10)),
+                };
+                out.map_err(|e| e.to_string())
+            }
+            Err(e) => Err(e),
+        };
+        match self.collab_view {
+            CollabView::Status => self.collab_jj_status = Some(result),
+            CollabView::Diff => self.collab_jj_diff = Some(result),
+            CollabView::Log => self.collab_jj_log = Some(result),
+        }
+    }
+
+    /// The cached result for whichever Jujutsu view is currently active.
+    pub fn collab_jj_current(&self) -> &Option<Result<String, String>> {
+        match self.collab_view {
+            CollabView::Status => &self.collab_jj_status,
+            CollabView::Diff => &self.collab_jj_diff,
+            CollabView::Log => &self.collab_jj_log,
+        }
     }
 
     /// Install a marketplace listing by SKU — a local-only credit ledger, no

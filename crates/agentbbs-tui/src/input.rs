@@ -52,6 +52,7 @@ impl App {
             Screen::Palette => self.key_palette(key),
             Screen::Appearance => self.key_appearance(key),
             Screen::Federation => self.key_federation(key),
+            Screen::Collab => self.key_collab(key),
             Screen::Who | Screen::Doors | Screen::Decisions | Screen::Console => {
                 self.key_panel(key)
             }
@@ -155,6 +156,18 @@ impl App {
                 self.status = "Peer address — ENTER to join, ESC to cancel.".into();
             }
             KeyCode::Char('r') | KeyCode::Char('R') => self.federation_refresh_status(),
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            _ => {}
+        }
+        Control::Continue
+    }
+
+    fn key_collab(&mut self, key: KeyEvent) -> Control {
+        match key.code {
+            KeyCode::Char('1') => self.collab_view = crate::app::CollabView::Status,
+            KeyCode::Char('2') => self.collab_view = crate::app::CollabView::Diff,
+            KeyCode::Char('3') => self.collab_view = crate::app::CollabView::Log,
+            KeyCode::Char('r') | KeyCode::Char('R') => self.collab_jj_refresh(),
             KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
             _ => {}
         }
