@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 mod slack_bridge;
+mod whatsapp_bridge;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -134,6 +135,9 @@ pub struct AppState {
     /// Loop guard for the Slack inbound bridge (ADR-0025 Phase 1) — dedupes
     /// on Slack's own `ts` so a retried webhook delivery never double-posts.
     slack_seen: Mutex<agentbbs_bridge::SeenSet>,
+    /// Loop guard for the WhatsApp inbound bridge (ADR-0053 Phase 0) — dedupes
+    /// on the wa message id so a retried Meta webhook never double-posts.
+    whatsapp_seen: Mutex<agentbbs_bridge::SeenSet>,
 }
 
 impl AppState {
@@ -162,6 +166,7 @@ impl AppState {
             drafts: Mutex::new(agentbbs_core::DraftQueue::new()),
             llm_day: Mutex::new((String::new(), 0)),
             slack_seen: Mutex::new(agentbbs_bridge::SeenSet::new()),
+            whatsapp_seen: Mutex::new(agentbbs_bridge::SeenSet::new()),
         })
     }
 
@@ -434,6 +439,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/collab/jujutsu/diff", get(api_collab_jj_diff))
         .route("/api/collab/jujutsu/log", get(api_collab_jj_log))
         .route("/api/bridge/slack/events", post(api_slack_events))
+        .route(
+            "/api/bridge/whatsapp/events",
+            get(api_whatsapp_verify).post(api_whatsapp_events),
+        )
         .route("/api/postguard", post(api_postguard))
         .route("/api/agent-reply", post(api_agent_reply))
         .route("/api/playbooks/run", post(api_playbook_run))
@@ -1989,6 +1998,115 @@ fn deliver_slack_message(state: &AppState, msg: slack_bridge::SlackMessage) {
     let signed = agentbbs_bridge::sign_inbound(&identity, &inbound, chrono::Utc::now());
     if let Err(e) = state.bbs.post(Role::Agent.caps(), signed) {
         tracing::warn!(error = %e, board = %board, "slack bridge: post failed");
+    }
+}
+
+// ---- WhatsApp inbound bridge (ADR-0053 Phase 0) ----
+//
+// Same Internet-facing-webhook posture as the Slack bridge: verify before
+// acting. Two Meta mechanisms — a GET verification handshake and HMAC-signed
+// POST events — see `whatsapp_bridge`.
+
+/// `GET /api/bridge/whatsapp/events` — Meta's one-time webhook verification.
+/// Echoes back `hub.challenge` (as plain text, which Meta requires) iff
+/// `hub.verify_token` matches `AGENTBBS_WHATSAPP_VERIFY_TOKEN`; 403 otherwise,
+/// 503 when unconfigured.
+async fn api_whatsapp_verify(
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let token = std::env::var("AGENTBBS_WHATSAPP_VERIFY_TOKEN").unwrap_or_default();
+    if token.is_empty() {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "whatsapp bridge not configured",
+        ));
+    }
+    let get = |k: &str| params.get(k).map(String::as_str).unwrap_or("");
+    match whatsapp_bridge::verify_handshake(
+        &token,
+        get("hub.mode"),
+        get("hub.verify_token"),
+        get("hub.challenge"),
+    ) {
+        Some(challenge) => Ok(challenge),
+        None => Err(api_error(StatusCode::FORBIDDEN, "verification failed")),
+    }
+}
+
+/// `POST /api/bridge/whatsapp/events` — Meta webhook event delivery. Verifies
+/// the `X-Hub-Signature-256` HMAC over the raw body, then bridge-signs+posts
+/// text messages on allowlisted business numbers. Always `200` for
+/// signature-valid requests (even a soft skip) so Meta doesn't retry-storm;
+/// only a bad/missing signature is rejected.
+async fn api_whatsapp_events(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let secret = std::env::var("AGENTBBS_WHATSAPP_APP_SECRET").unwrap_or_default();
+    if secret.is_empty() {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "whatsapp bridge not configured",
+        ));
+    }
+    let sig = headers
+        .get("x-hub-signature-256")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !whatsapp_bridge::verify_signature(&secret, &body, sig) {
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid signature"));
+    }
+    let payload: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("invalid json: {e}")))?;
+    for msg in whatsapp_bridge::parse_messages(&payload) {
+        deliver_whatsapp_message(&state, msg);
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Bridge-sign and post a validated WhatsApp message if its business number is
+/// allowlisted (`AGENTBBS_WHATSAPP_NUMBER_MAP`) and the bridge identity is
+/// configured (`AGENTBBS_WHATSAPP_BRIDGE_SEED_HEX`). Soft-fails (logs, doesn't
+/// error the webhook) on any missing config or post failure — same posture as
+/// the Slack path. Sender phone numbers are PII: they are used only to derive
+/// the per-source bridge subkey and are never placed in a federated envelope.
+fn deliver_whatsapp_message(state: &AppState, msg: whatsapp_bridge::WhatsAppMessage) {
+    let Ok(map_spec) = std::env::var("AGENTBBS_WHATSAPP_NUMBER_MAP") else {
+        tracing::debug!("whatsapp bridge: AGENTBBS_WHATSAPP_NUMBER_MAP not set, dropping message");
+        return;
+    };
+    let number_map = whatsapp_bridge::parse_number_map(&map_spec);
+    let Some(board) = number_map.get(&msg.phone_number_id) else {
+        return; // not an allowlisted business number — silent, not an error
+    };
+    let Ok(seed_hex) = std::env::var("AGENTBBS_WHATSAPP_BRIDGE_SEED_HEX") else {
+        tracing::warn!("whatsapp bridge: AGENTBBS_WHATSAPP_BRIDGE_SEED_HEX not set, dropping");
+        return;
+    };
+    let Some(seed) = slack_bridge::parse_seed_hex(&seed_hex) else {
+        tracing::warn!(
+            "whatsapp bridge: AGENTBBS_WHATSAPP_BRIDGE_SEED_HEX is not valid 64-hex-char"
+        );
+        return;
+    };
+    let identity = agentbbs_bridge::BridgeIdentity::from_seed(seed);
+    let ext_id = format!("whatsapp:{}", msg.id);
+    if state.whatsapp_seen.lock().unwrap().seen_or_record(&ext_id) {
+        return; // duplicate delivery — Meta retries until it gets a 200
+    }
+    let inbound = agentbbs_bridge::Inbound {
+        platform: "whatsapp".to_string(),
+        workspace: msg.phone_number_id,
+        user_id: msg.from.clone(),
+        display_name: msg.from,
+        text: msg.text,
+        external_msg_id: ext_id,
+        board: board.clone(),
+    };
+    let signed = agentbbs_bridge::sign_inbound(&identity, &inbound, chrono::Utc::now());
+    if let Err(e) = state.bbs.post(Role::Agent.caps(), signed) {
+        tracing::warn!(error = %e, board = %board, "whatsapp bridge: post failed");
     }
 }
 
@@ -4186,5 +4304,93 @@ mod tests {
         assert_eq!(json["challenge"], "abc123");
 
         std::env::remove_var("AGENTBBS_SLACK_SIGNING_SECRET");
+    }
+
+    // ADR-0053 Phase 0: WhatsApp inbound bridge route wiring. Owns
+    // AGENTBBS_WHATSAPP_VERIFY_TOKEN / AGENTBBS_WHATSAPP_APP_SECRET for its
+    // duration — no other test touches these (single-owner env var idiom).
+    #[tokio::test]
+    async fn whatsapp_route_handshake_and_signature_gate() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let sign = |secret: &str, body: &str| -> String {
+            let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+            mac.update(body.as_bytes());
+            format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+        };
+
+        // GET handshake unconfigured → 503.
+        std::env::remove_var("AGENTBBS_WHATSAPP_VERIFY_TOKEN");
+        std::env::remove_var("AGENTBBS_WHATSAPP_APP_SECRET");
+        let app = router(AppState::in_memory());
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::get("/api/bridge/whatsapp/events?hub.mode=subscribe&hub.verify_token=x&hub.challenge=c")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        // GET handshake wrong token → 403; correct token echoes the challenge.
+        std::env::set_var("AGENTBBS_WHATSAPP_VERIFY_TOKEN", "vtok");
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::get("/api/bridge/whatsapp/events?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=c")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::get("/api/bridge/whatsapp/events?hub.mode=subscribe&hub.verify_token=vtok&hub.challenge=echo-me")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], b"echo-me");
+
+        // POST with a forged signature → 401; correctly signed → 200.
+        std::env::set_var("AGENTBBS_WHATSAPP_APP_SECRET", "app-secret");
+        let body = r#"{"object":"whatsapp_business_account","entry":[]}"#;
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/bridge/whatsapp/events")
+                    .header("content-type", "application/json")
+                    .header("x-hub-signature-256", "sha256=deadbeef")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let sig = sign("app-secret", body);
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/bridge/whatsapp/events")
+                    .header("content-type", "application/json")
+                    .header("x-hub-signature-256", &sig)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        std::env::remove_var("AGENTBBS_WHATSAPP_VERIFY_TOKEN");
+        std::env::remove_var("AGENTBBS_WHATSAPP_APP_SECRET");
     }
 }
