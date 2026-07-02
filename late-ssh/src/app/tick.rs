@@ -32,6 +32,7 @@ impl App {
         }
 
         self.sync_visible_chat_room();
+        self.tick_clubhouse();
 
         // Services
         if let Some(b) = self.chat.tick() {

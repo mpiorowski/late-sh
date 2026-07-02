@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-01 (World Cup HUD as top-level screen `7`, a demand-gated FotMob live poller; dopewars door: prod infra + dedicated CI/CD — `infra/service-ssh.tf`, `.github/workflows/dopewars.yml`)
+- Last updated: 2026-07-02 (Clubhouse tavern as admin-gated top-level screen `0`: walkable ASCII Late Lounge with live-user seating, embedded #lounge chat, and the new @bartender ghost bot)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -56,7 +56,7 @@ Routing rules for future LLM agents:
 - Update a local context file when behavior changes inside that domain.
 - Update this root file when a contract is global, crosses crate/domain boundaries, changes keybindings/screens, or adds/removes a local `CONTEXT.md`.
 - If code and context disagree, trust the code, then patch the relevant context before handing off.
-- No local context currently exists for `late-core`, profile, classic bonsai, pet companion, Directory/Pinstar, infra, or AI modules; use this root file plus the code until one is added.
+- No local context currently exists for `late-core`, profile, classic bonsai, pet companion, Directory/Pinstar, Clubhouse, infra, or AI modules; use this root file plus the code until one is added.
 
 ---
 
@@ -649,7 +649,7 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 | ArtboardSnapshot | `artboard_snapshots` | `board_key` UNIQUE (`main`, `daily:YYYY-MM-DD`, `monthly:YYYY-MM`, `curated:YYYY-MM-DD[-N]`, restore backups), `canvas` JSONB, `provenance` JSONB. Runtime contracts live in `late-ssh/src/app/artboard/CONTEXT.md`. |
 
 **Key enums:**
-- `Screen`: `Dashboard`, `Arcade`, `Games`, `Rooms`, `Artboard`, `Lateania`, `Rebels`, `Nethack`, `Dopewars`, `GreenDragon`, `Pinstar` (the door-game screens — Lateania/Rebels/Nethack/Dopewars/GreenDragon — are reached only through the Games hub, not the tab cycle; screen 7 renders as Directory: Profiles, Projects, and Pinstar tabs). `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, RSS, Voice, and Discover are synthetic room-like entries within Home chat. Showcase/Projects and Work/Profiles data still use chat-adjacent services and unread cursors, but their UI lives on Directory page 7, not the Home rail or room jump picker.
+- `Screen`: `Dashboard`, `Arcade`, `Games`, `Rooms`, `Artboard`, `Lateania`, `Rebels`, `Nethack`, `Dopewars`, `GreenDragon`, `Pinstar`, `WorldCup`, `Clubhouse` (the door-game screens — Lateania/Rebels/Nethack/Dopewars/GreenDragon — are reached only through the Games hub, not the tab cycle; screen 7 renders as Directory: Profiles, Projects, and Pinstar tabs; `Clubhouse` is the admin-gated tavern on key `0`, outside the Tab cycle — see `late-ssh/src/app/clubhouse/`). `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, RSS, Voice, and Discover are synthetic room-like entries within Home chat. Showcase/Projects and Work/Profiles data still use chat-adjacent services and unread cursors, but their UI lives on Directory page 7, not the Home rail or room jump picker.
 - `ChatRoom.kind`: `lounge` (slug=lounge), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 - `GameKind`: Rust enum in `late-core::models::game_room`; currently `Asterion`, `Blackjack`, `Chess`, `Poker`, `Sshattrick`, `TicTacToe`, and `Tron`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
@@ -686,6 +686,7 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 
 In progress:
 - **Rooms/Blackjack:** Active multiplayer table-game work is documented in `late-ssh/src/app/rooms/CONTEXT.md`. Root context keeps only project-wide contracts; local context owns directory, service, Blackjack runtime, rendering, dashboard slot, and known-gap details.
+- **Clubhouse tavern (admin preview):** Top-level screen `0`, gated by `is_admin` (the `b'0'` arm in `handle_global_key`; losing admin bounces you to Home). Full-bleed walkable ASCII tavern (`late-ssh/src/app/clubhouse/`: `map.rs` floor plan + collision/seats/zones, `state.rs` avatar/roster/rotation, `input.rs`, `ui.rs`) over an embedded #lounge chat (bottom ~30%, same `EmbeddedRoomChatView` machinery as Rooms with its own `clubhouse_chat_rows_cache`). Live humans from `active_users` are seated in arrival order (28 seats → 5 standing spots → `+N at the door`; over capacity the crowd rotates one place every ~25s). Arrows/hjkl walk, `i`/Enter composes into #lounge, Shift+J/K selects messages, red props are interactive: bartender (`t` prefills `@bartender `), jukebox (music-key cheat sheet; Enter opens the Music Booth). New @bartender ghost bot (warm tavern keeper, carries `bot_app_context()`) answers mentions. Before opening to everyone: drop the admin gate, decide seat-capacity behavior at real user counts, and consider a splash tip + help-modal entry.
 
 Future:
 - **Nonograms (v2)**: Replace random generation with pixel-art-to-nonogram pipeline or bulk-curate from webpbn.com.
@@ -797,7 +798,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - DM room endpoints (`dm_user_a`, `dm_user_b`) are durable even when `chat_room_members` changes: if one participant leaves a DM, the next message from the other participant re-adds both endpoints before targeted delivery. Private topic rooms do not have durable endpoints and still require explicit invites/rejoins.
 - `users.username` is the canonical public handle for chat/DM lookup; SSH login seeds it from the SSH username via `User::next_available_username` (sanitizes to `[A-Za-z0-9._-]`, adds `-N` suffixes to stay unique on `LOWER(username)`)
 - Plain username display should use `State.username_directory` or the render snapshot derived from it. Do not add ad hoc per-feature username caches for seat labels, activity labels, or recent-join labels unless the feature needs richer author metadata such as badges, countries, or bonsai glyphs.
-- @bot and @graybeard bootstrap on app startup: ensure DB user with a fixed `username`, join public rooms, and insert into `active_users` (always online). Both are dedicated users with fixed fingerprints (`bot-fp-000`, `graybeard-fp-000`)
+- @bot, @graybeard, @bartender, and @dealer bootstrap on app startup: ensure DB user with a fixed `username`, join public rooms, and insert into `active_users` (always online). All are dedicated users with fixed fingerprints (`bot-fp-000`, `graybeard-fp-000`, `bartender-fp-000`, `dealer-fp-000`). Ghost-bot entries in `active_users` have `fingerprint: None`; the Clubhouse roster uses that to keep bots out of the seat pool.
 - Connection limits (global semaphore + per-IP counter) plus SSH attempt rate limit (sliding window) MUST be enforced before any auth (effective client IP is resolved from PROXY protocol when enabled)
 - Chat message deletes are hard deletes; any moderation/delete path must remove rows directly rather than relying on tombstones
 

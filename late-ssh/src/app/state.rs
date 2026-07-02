@@ -376,6 +376,8 @@ pub struct App {
     /// releases the poll gate.
     pub(crate) worldcup_viewer: Option<crate::app::worldcup::svc::WorldCupViewer>,
     pub(crate) worldcup: crate::app::worldcup::state::State,
+    /// Admin-gated clubhouse tavern (page `0`): avatar, crowd, animations.
+    pub(crate) clubhouse: crate::app::clubhouse::state::State,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -410,6 +412,7 @@ pub struct App {
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
+    pub(crate) clubhouse_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
@@ -675,6 +678,8 @@ impl App {
                 .rooms_active_room
                 .as_ref()
                 .map(|room| room.chat_room_id),
+            // The clubhouse pins the embedded chat to #lounge.
+            Screen::Clubhouse => self.chat.lounge_room_id(),
             _ => None,
         }
     }
@@ -1011,6 +1016,7 @@ impl App {
             worldcup_service: config.worldcup_service,
             worldcup_viewer: None,
             worldcup: crate::app::worldcup::state::State::default(),
+            clubhouse: crate::app::clubhouse::state::State::default(),
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
@@ -1048,6 +1054,7 @@ impl App {
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            clubhouse_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
@@ -1489,6 +1496,10 @@ impl App {
             self.pet_state.cancel_play();
             self.show_cat_modal = false;
         }
+        // The clubhouse is admin-gated; losing admin walks you out the door.
+        if !self.is_admin && self.screen == Screen::Clubhouse {
+            self.set_screen(Screen::Dashboard);
+        }
         self.hub_state.ensure_visible_tab(self.is_admin);
     }
 
@@ -1762,6 +1773,47 @@ impl App {
             return false;
         };
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
+    }
+
+    /// Advance the clubhouse animation clock every tick and, while the
+    /// screen is up, refresh the crowd from the active-users map about once
+    /// a second. Bots stay out of the seat pool; the two staff bots
+    /// (@bartender, @graybeard) only toggle their fixed spots.
+    pub(crate) fn tick_clubhouse(&mut self) {
+        let on_screen = self.screen == Screen::Clubhouse;
+        self.clubhouse.tick(on_screen);
+        if !on_screen || !self.clubhouse.roster_refresh_due() {
+            return;
+        }
+
+        let mut roster = Vec::new();
+        let mut graybeard_online = false;
+        let mut bartender_online = false;
+        if let Some(active_users) = &self.active_users {
+            let active_users = active_users.lock_recover();
+            for (user_id, user) in active_users.iter() {
+                // Ghost bots register with no fingerprint; humans always
+                // authenticate with an SSH key.
+                if user.fingerprint.is_none() {
+                    match user.username.as_str() {
+                        "graybeard" => graybeard_online = true,
+                        "bartender" => bartender_online = true,
+                        _ => {}
+                    }
+                    continue;
+                }
+                if *user_id == self.user_id {
+                    continue;
+                }
+                roster.push(crate::app::clubhouse::state::Occupant {
+                    user_id: *user_id,
+                    username: user.username.clone(),
+                });
+            }
+        }
+        self.clubhouse.graybeard_online = graybeard_online;
+        self.clubhouse.bartender_online = bartender_online;
+        self.clubhouse.update_roster(roster);
     }
 
     fn set_shared_session_afk(&self, message: Option<String>) {

@@ -75,7 +75,10 @@ impl InputContext {
 }
 
 fn is_chat_composer_context(ctx: InputContext) -> bool {
-    matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && ctx.chat_composing
+    matches!(
+        ctx.screen,
+        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
+    ) && ctx.chat_composing
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -889,7 +892,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && app.chat.has_overlay() {
+    if matches!(
+        ctx.screen,
+        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
+    ) && app.chat.has_overlay()
+    {
         handle_overlay_input(app, &event);
         return;
     }
@@ -1448,6 +1455,10 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
 
     if ctx.screen == Screen::WorldCup {
         return handle_worldcup_input(app, event);
+    }
+
+    if ctx.screen == Screen::Clubhouse {
+        return crate::app::clubhouse::input::handle_event(app, event);
     }
 
     if ctx.screen == Screen::Rebels {
@@ -2256,13 +2267,19 @@ fn dispatch_escape(app: &mut App) {
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
-    if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
-        && app.chat.is_reaction_leader_active()
+    if matches!(
+        ctx.screen,
+        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
+    ) && app.chat.is_reaction_leader_active()
     {
         app.chat.cancel_reaction_leader();
         return;
     }
-    if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && app.chat.has_overlay() {
+    if matches!(
+        ctx.screen,
+        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
+    ) && app.chat.has_overlay()
+    {
         app.chat.close_overlay();
         return;
     }
@@ -2372,7 +2389,9 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
-    if ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some() {
+    if matches!(ctx.screen, Screen::Dashboard | Screen::Clubhouse)
+        && app.chat.selected_message_id.is_some()
+    {
         app.chat.clear_message_selection();
     }
 }
@@ -2539,6 +2558,11 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
         Screen::Artboard => {}
         Screen::Pinstar => {}
         Screen::WorldCup => app.worldcup.scroll(delta),
+        Screen::Clubhouse => {
+            if let Some(room_id) = app.chat.lounge_room_id() {
+                chat::input::handle_scroll_in_room(app, room_id, delta);
+            }
+        }
         _ => {}
     }
 }
@@ -3069,8 +3093,10 @@ fn mouse_scroll_delta(mouse: MouseEvent) -> Option<isize> {
 
 fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
     // Route arrows to autocomplete when active
-    if matches!(screen, Screen::Dashboard | Screen::Rooms)
-        && app.chat.is_composing()
+    if matches!(
+        screen,
+        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
+    ) && app.chat.is_composing()
         && app.chat.is_autocomplete_active()
     {
         chat::input::handle_autocomplete_arrow(app, key);
@@ -3099,6 +3125,9 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // World Cup up/down arrows are consumed earlier in
         // handle_dedicated_screen_input (mapped to k/j scroll).
         Screen::WorldCup => false,
+        // Walk-mode arrows are consumed in handle_dedicated_screen_input;
+        // composing-mode arrows are swallowed by the shared composer gate.
+        Screen::Clubhouse => false,
     }
 }
 
@@ -3157,6 +3186,7 @@ fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
 
     let room_id = match screen {
         Screen::Dashboard => app.chat.selected_room_id,
+        Screen::Clubhouse => app.chat.lounge_room_id(),
         _ => None,
     };
     let Some(room_id) = room_id else {
@@ -3665,6 +3695,13 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::WorldCup);
             true
         }
+        // The clubhouse is an admin-gated preview; non-admins fall through
+        // so `0` stays inert for them.
+        b'0' if app.is_admin && !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
+            app.set_screen(Screen::Clubhouse);
+            true
+        }
         b'\t' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(ctx.screen.next());
@@ -3751,6 +3788,10 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::WorldCup => {
             // World Cup keys are handled in handle_dedicated_screen_input
             // (Space/j/k/arrows); byte dispatch is a no-op here.
+        }
+        Screen::Clubhouse => {
+            // Clubhouse keys are handled in handle_dedicated_screen_input
+            // (walking, chat routing, interactions); no-op here.
         }
     }
 }
