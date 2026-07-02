@@ -143,11 +143,32 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
                 .add_modifier(Modifier::BOLD),
         };
     }
+    // The back-bar shelves: every bottle gets its own liquor glint.
+    if map::BACK_BAR.contains(x, y) && matches!(ch, '╿' | '╽' | '▯') {
+        return Style::default().fg(hashed_color(x, y, BOTTLE_PALETTE));
+    }
+    // The neon house sign burns over the north wall.
+    if map::NEON_SIGN.contains(x, y) {
+        return match ch {
+            '╭' | '╮' | '╰' | '╯' | '─' | '│' => Style::default().fg(theme::ERROR()),
+            _ => Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        };
+    }
+    // Moonlight in the windows.
+    if map::WINDOWS.iter().any(|w| w.contains(x, y)) {
+        return match ch {
+            '☾' => Style::default().fg(theme::AMBER_GLOW()),
+            '·' | '*' => Style::default().fg(theme::TEXT_MUTED()),
+            _ => dim,
+        };
+    }
     // Interactive props glow red so they read as "walk up to me".
     if map::JUKEBOX.contains(x, y) {
         return match ch {
             '♪' => Style::default().fg(theme::AMBER_GLOW()),
-            '[' | ']' | '·' => Style::default().fg(theme::TEXT_MUTED()),
+            '[' | ']' | '·' | '▞' | '▚' | '○' => Style::default().fg(theme::TEXT_MUTED()),
             _ => Style::default().fg(theme::ERROR()),
         };
     }
@@ -161,22 +182,91 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
             _ => Style::default().fg(theme::TEXT_MUTED()),
         };
     }
+    if map::PIANO.contains(x, y) {
+        return match ch {
+            '♪' => Style::default().fg(theme::AMBER_GLOW()),
+            '│' => Style::default().fg(theme::TEXT_BRIGHT()),
+            '▌' => Style::default().fg(theme::TEXT_MUTED()),
+            '─' => dim,
+            _ => Style::default().fg(theme::AMBER_DIM()),
+        };
+    }
+    if map::POOL_TABLE.contains(x, y) {
+        return match ch {
+            '▓' => Style::default().fg(theme::SUCCESS()),
+            '●' => Style::default().fg(theme::ERROR()),
+            '○' | '·' => Style::default().fg(theme::TEXT_BRIGHT()),
+            _ => Style::default().fg(theme::AMBER_DIM()),
+        };
+    }
+    if map::BOOKSHELF.contains(x, y) {
+        // Frame first (the case sides share '║' with book spines).
+        if x == map::BOOKSHELF.x0
+            || x == map::BOOKSHELF.x1
+            || matches!(ch, '╔' | '╗' | '╚' | '╝' | '╠' | '╣' | '═')
+        {
+            return Style::default().fg(theme::AMBER_DIM());
+        }
+        return Style::default().fg(hashed_color(x, y, BOOK_PALETTE));
+    }
+    if map::NOTICEBOARD.contains(x, y) {
+        return match ch {
+            '▯' => Style::default().fg(theme::AMBER()),
+            '·' => Style::default().fg(theme::ERROR()),
+            _ => dim,
+        };
+    }
+    if map::FIREPLACE.contains(x, y) {
+        return match ch {
+            '▒' => Style::default().fg(theme::AMBER_DIM()),
+            '█' | '▓' | '▄' | '▀' => Style::default().fg(theme::TEXT_MUTED()),
+            '╔' | '╗' | '╚' | '╝' | '═' | '║' => Style::default().fg(theme::TEXT_MUTED()),
+            _ => Style::default().fg(theme::AMBER()),
+        };
+    }
     match ch {
-        '║' | '═' | '╔' | '╗' | '╚' | '╝' | '╡' | '╞' => dim,
+        '║' | '═' | '╔' | '╗' | '╚' | '╝' | '╡' | '╞' | '╢' => dim,
         '▔' | '▄' | '▀' => Style::default().fg(theme::AMBER_DIM()),
         '█' => Style::default().fg(theme::TEXT_MUTED()),
         '╥' => Style::default().fg(theme::AMBER()),
-        '╿' | '╽' | '▯' => Style::default().fg(theme::TEXT_MUTED()),
-        '≡' => Style::default().fg(theme::AMBER_DIM()),
-        '╭' | '╮' | '╰' | '╯' | '─' | '│' => Style::default().fg(theme::AMBER_DIM()),
+        '╿' | '╽' | '▐' | '▯' => Style::default().fg(theme::TEXT_MUTED()),
+        '≡' | '·' => Style::default().fg(theme::AMBER_DIM()),
+        '╭' | '╮' | '╰' | '╯' | '─' | '│' | '┬' | '┴' => Style::default().fg(theme::AMBER_DIM()),
         '▒' => Style::default().fg(theme::TEXT_FAINT()),
         'h' => dim,
         '░' => Style::default().fg(theme::TEXT_FAINT()),
         '♣' => Style::default().fg(theme::SUCCESS()),
+        '╨' => Style::default().fg(theme::AMBER_DIM()),
+        '▼' => Style::default().fg(theme::AMBER_GLOW()),
+        '$' => Style::default().fg(theme::SUCCESS()),
+        '[' | ']' => dim,
+        '/' => Style::default().fg(theme::AMBER_DIM()),
         '◎' => Style::default().fg(theme::AMBER_GLOW()),
         _ if ch.is_ascii_alphabetic() => Style::default().fg(theme::AMBER_DIM()),
         _ => Style::default().fg(theme::TEXT_MUTED()),
     }
+}
+
+const BOTTLE_PALETTE: [fn() -> ratatui::style::Color; 5] = [
+    theme::AMBER,
+    theme::SUCCESS,
+    theme::ERROR,
+    theme::CHAT_AUTHOR,
+    theme::TEXT_MUTED,
+];
+const BOOK_PALETTE: [fn() -> ratatui::style::Color; 5] = [
+    theme::CHAT_AUTHOR,
+    theme::SUCCESS,
+    theme::AMBER,
+    theme::MENTION,
+    theme::TEXT_MUTED,
+];
+
+/// A stable per-cell pick from a small palette, so bottle rows and book
+/// spines read as a colorful jumble without flickering frame to frame.
+fn hashed_color(x: u16, y: u16, palette: [fn() -> ratatui::style::Color; 5]) -> ratatui::style::Color {
+    let h = mix(u64::from(x) * 31 + u64::from(y) * 131);
+    palette[(h % palette.len() as u64) as usize]()
 }
 
 fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
@@ -209,16 +299,65 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
         }
     }
 
-    // Notes drift up and away from the jukebox.
+    // Notes drift away from the jukebox onto the floor.
     if view.now_playing.is_some() {
+        let (jx, jy) = (map::JUKEBOX.x0, map::JUKEBOX.y0);
         let phase = (t / 5) % 6;
-        let note_x = 74u16.saturating_sub((phase / 2) as u16);
-        let note_y = 6u16.saturating_sub(phase as u16).max(1);
-        put_if_floor(cells, note_x, note_y, '♪', theme::AMBER_GLOW());
+        put_if_floor(
+            cells,
+            jx.saturating_sub(2 + phase as u16),
+            jy + 2,
+            '♪',
+            theme::AMBER_GLOW(),
+        );
         let phase2 = (t / 5 + 3) % 6;
-        let note2_x = 73u16.saturating_sub((phase2 / 2) as u16);
-        let note2_y = 7u16.saturating_sub(phase2 as u16).max(1);
-        put_if_floor(cells, note2_x, note2_y, '♫', theme::AMBER());
+        put_if_floor(
+            cells,
+            jx.saturating_sub(3 + phase2 as u16),
+            jy + 4,
+            '♫',
+            theme::AMBER(),
+        );
+    }
+
+    // The dart hops between ring cells every few seconds.
+    let hit = (mix(t / 75) % map::DART_HITS.len() as u64) as usize;
+    for (i, &(x, y)) in map::DART_HITS.iter().enumerate() {
+        if i == hit {
+            set(cells, x, y, '×', Style::default().fg(theme::ERROR()));
+        } else {
+            set(cells, x, y, '·', Style::default().fg(theme::TEXT_MUTED()));
+        }
+    }
+
+    // Stars twinkle in the window panes (the moon holds still).
+    for window in map::WINDOWS.iter() {
+        for y in window.y0..=window.y1 {
+            for x in window.x0..=window.x1 {
+                if !matches!(map::char_at(x, y), '·' | '*') {
+                    continue;
+                }
+                let h = mix(u64::from(x) * 53 + u64::from(y) * 97 + t / 10);
+                let (ch, color) = match h % 5 {
+                    0 => ('*', theme::TEXT_BRIGHT()),
+                    1 => (' ', theme::TEXT_FAINT()),
+                    _ => ('·', theme::TEXT_MUTED()),
+                };
+                set(cells, x, y, ch, Style::default().fg(color));
+            }
+        }
+    }
+
+    // The neon sign shorts out for a frame now and then.
+    if mix(t / 4) % 19 == 0 {
+        for y in map::NEON_SIGN.y0..=map::NEON_SIGN.y1 {
+            for x in map::NEON_SIGN.x0..=map::NEON_SIGN.x1 {
+                let ch = map::char_at(x, y);
+                if ch != ' ' {
+                    set(cells, x, y, ch, Style::default().fg(theme::TEXT_FAINT()));
+                }
+            }
+        }
     }
 
     // The cat: tail flick, occasional z.
@@ -314,8 +453,8 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) {
     if door_count > 0 {
         put_label(
             cells,
-            58,
-            24,
+            map::DOOR_LABEL.0,
+            map::DOOR_LABEL.1,
             &format!("+{door_count} at the door"),
             Style::default().fg(theme::AMBER_DIM()),
         );
@@ -395,6 +534,42 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                 "the real board lives on page 5, the Artboard",
                 text,
             ))],
+        ),
+        map::Interactive::Piano => (
+            " ♪ the piano ",
+            flavor,
+            vec![
+                Line::from(Span::styled("an upright with honky-tonk tuning.", text)),
+                Line::from(Span::styled(
+                    "it hums along with the jukebox, one bar behind.",
+                    dim,
+                )),
+            ],
+        ),
+        map::Interactive::Pool => (
+            " ○ pool ",
+            flavor,
+            vec![Line::from(Span::styled(
+                "the felt is pristine. the physics engine is you.",
+                text,
+            ))],
+        ),
+        map::Interactive::Bookshelf => (
+            " ▐ the stacks ",
+            flavor,
+            vec![
+                Line::from(Span::styled("zines, manpages, one dog-eared K&R.", text)),
+                Line::from(Span::styled("borrow anything. return it eventually.", dim)),
+            ],
+        ),
+        map::Interactive::Noticeboard => (
+            " ▯ noticeboard ",
+            Style::default().fg(theme::AMBER()),
+            vec![
+                Line::from(Span::styled("? guide · Ctrl+G hub · Ctrl+O settings", text)),
+                Line::from(Span::styled("pages 1-7 up top · 0 is this room", text)),
+                Line::from(Span::styled("lost? ask @bartender in the chat below", dim)),
+            ],
         ),
         map::Interactive::Cat => (
             " ~o the cat ",
