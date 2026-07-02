@@ -323,6 +323,18 @@ impl User {
         Ok(())
     }
 
+    /// Seconds since the account was created, or `None` if the user is unknown.
+    /// Used by the chat link rate-limiter to pick a cooldown tier by account age.
+    pub async fn account_age_seconds(client: &Client, user_id: Uuid) -> Result<Option<i64>> {
+        let row = client
+            .query_opt(
+                "SELECT EXTRACT(EPOCH FROM (now() - created))::bigint AS age FROM users WHERE id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.map(|r| r.get::<_, i64>("age")))
+    }
+
     pub async fn list_usernames_by_ids(
         client: &Client,
         user_ids: &[Uuid],
