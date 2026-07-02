@@ -73,6 +73,12 @@ pub struct ChatService {
     moderation_infra: ModerationInfra,
     chip_service: Option<ChipService>,
     gift_cooldowns: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
+    /// New accounts that have already been warned once for posting a link. The
+    /// first link is just a warning; a second earns a timeout. Transient.
+    link_warned: Arc<Mutex<std::collections::HashSet<Uuid>>>,
+    /// New accounts that posted a second link are muted from posting until this
+    /// instant (a transient anti-spam timeout; cleared on restart, which is fine).
+    link_timeouts: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
     username_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
     refresh_scheduler_started: Arc<AtomicBool>,
@@ -145,6 +151,12 @@ fn send_error_message(error: &anyhow::Error) -> &'static str {
         "You are banned from this room."
     } else if error.contains("admin-only") {
         "Only admins can post in #announcements."
+    } else if error.contains("link-warned") {
+        "🔗 New accounts can't post links — your message was removed. Please don't spam. Post another link and you'll be timed out for 5 minutes."
+    } else if error.contains("link-spam") {
+        "🚫 You were warned — you're now muted for 5 minutes for posting links."
+    } else if error.contains("link-timeout") {
+        "🚫 You're still timed out for posting a link. Hang tight — no spam, please."
     } else {
         "Could not send message. Please try again."
     }
@@ -559,6 +571,8 @@ impl ChatService {
             moderation_infra: ModerationInfra::default(),
             chip_service: None,
             gift_cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            link_warned: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            link_timeouts: Arc::new(Mutex::new(HashMap::new())),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
             refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
@@ -858,7 +872,17 @@ impl ChatService {
                 }
             }
 
-            if let Some(badge) = chat_author_badge(item.chat_flag, item.chat_badge) {
+            // The presence rank (earned by accumulated connected time) rides the
+            // chat-badge channel so it renders beside the name everywhere, with
+            // any purchased flag/badge kept after it.
+            let rank_glyph = presence_rank(item.online_seconds).map(|(_, glyph)| glyph);
+            let special = chat_author_badge(item.chat_flag, item.chat_badge);
+            let combined = match (rank_glyph, special) {
+                (Some(rank), Some(special)) => Some(format!("{rank} {special}")),
+                (Some(rank), None) => Some(rank.to_string()),
+                (None, special) => special,
+            };
+            if let Some(badge) = combined {
                 maps.chat_badges.insert(item.user_id, badge);
             }
             if let Some(badge) = item
@@ -889,6 +913,55 @@ fn chat_author_badge(flag: Option<String>, badge: Option<String>) -> Option<Stri
         .collect::<Vec<_>>()
         .join(" ");
     (!joined.is_empty()).then_some(joined)
+}
+
+/// Idle "presence rank" tiers, earned purely by accumulated connected time (you
+/// rank up just by hanging around). Thresholds are in seconds.
+const PRESENCE_RANKS: [(i64, &str, &str); 5] = [
+    (3_600_000, "Landmark", "🗿"), // 1000h
+    (720_000, "Fixture", "🏛"),     // 200h
+    (360_000, "Local", "🛋"),       // 100h
+    (86_400, "Regular", "☕"),     // 24h
+    (3_600, "Drifter", "🪶"),      // 1h
+];
+
+/// The presence rank `(name, badge glyph)` for a connected-time total, or `None`
+/// for accounts with under an hour online (no rank badge yet).
+fn presence_rank(online_seconds: i64) -> Option<(&'static str, &'static str)> {
+    PRESENCE_RANKS
+        .iter()
+        .find(|(threshold, _, _)| online_seconds >= *threshold)
+        .map(|(_, name, glyph)| (*name, *glyph))
+}
+
+/// An account younger than this many seconds is "brand new" for the link guard.
+const NEW_ACCOUNT_SECS: i64 = 3 * 60 * 60; // 3 hours
+/// How long a new account is muted from posting after a blocked link.
+const LINK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// Common TLDs used to spot a bare-domain link (one with no http/www scheme).
+const LINK_TLDS: &[&str] = &[
+    ".com", ".net", ".org", ".io", ".gg", ".xyz", ".co", ".me", ".tv", ".link", ".app", ".dev",
+    ".info", ".biz", ".online", ".site", ".shop", ".ru", ".cn", ".to", ".ly", ".ai",
+];
+
+/// Whether a message body contains anything that looks like a clickable link.
+/// Catches `http(s)://`, `www.`, and bare `domain.tld` forms so new-account spam
+/// can't slip a link through without a scheme.
+fn contains_link(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    if lower.contains("http://") || lower.contains("https://") || lower.contains("www.") {
+        return true;
+    }
+    LINK_TLDS.iter().any(|tld| {
+        lower.match_indices(tld).any(|(i, _)| {
+            // Require an alphanumeric host char before the dot and a boundary
+            // after the TLD, so "x.com", "buy.io/now" match but "etc." does not.
+            let before = lower[..i].chars().last();
+            let after = lower[i + tld.len()..].chars().next();
+            before.is_some_and(|c| c.is_alphanumeric())
+                && after.is_none_or(|c| !c.is_alphanumeric())
+        })
+    })
 }
 
 impl ChatService {
@@ -1774,6 +1847,41 @@ impl ChatService {
         if RoomBan::is_active_for_room_and_user(&client, room_id, user_id).await? {
             anyhow::bail!("user is banned from this room");
         }
+
+        // New-account link guard: brand-new users may not post links (a common
+        // spam-and-leave vector). It escalates rather than punishing at once:
+        //   1st link  -> warn and drop the message (the link is never stored or
+        //               shown, so nobody can click it); no timeout yet.
+        //   2nd link  -> a 5-minute posting timeout, on top of the warning.
+        // Admins and moderators are exempt. The top check also enforces an
+        // active timeout from a prior offence.
+        if !is_admin {
+            let now = std::time::Instant::now();
+            if let Some(until) = self.link_timeouts.lock_recover().get(&user_id).copied()
+                && now < until
+            {
+                anyhow::bail!("link-timeout");
+            }
+            if contains_link(body) {
+                let age = User::account_age_seconds(&client, user_id)
+                    .await?
+                    .unwrap_or(i64::MAX);
+                if age < NEW_ACCOUNT_SECS {
+                    // `insert` returns true the first time we warn this user.
+                    let first_offence = self.link_warned.lock_recover().insert(user_id);
+                    if first_offence {
+                        tracing::info!(%user_id, "warned new account for posting a link");
+                        anyhow::bail!("link-warned");
+                    }
+                    self.link_timeouts
+                        .lock_recover()
+                        .insert(user_id, now + LINK_TIMEOUT);
+                    tracing::info!(%user_id, "timed out new account for a repeat link");
+                    anyhow::bail!("link-spam");
+                }
+            }
+        }
+
         if let Some(reply_to_message_id) = reply_to_message_id {
             let reply_target = ChatMessage::get(&client, reply_to_message_id)
                 .await?
@@ -3132,6 +3240,42 @@ mod tests {
     use super::*;
     use chrono::Duration as ChronoDuration;
     use late_core::models::chat_poll::{ChatPoll, ChatPollOptionSummary};
+
+    #[test]
+    fn contains_link_catches_schemes_www_and_bare_domains() {
+        for spam in [
+            "click https://evil.example/win",
+            "HTTP://EVIL.io free chips",
+            "go to www.evil.io now",
+            "buy at evil.io/now",
+            "join evil.gg or evil.xyz",
+            "dm me on telegram t.me/scammer",
+        ] {
+            assert!(contains_link(spam), "should flag: {spam}");
+        }
+        for clean in [
+            "hello there, how are you?",
+            "i finished 2048 and got a high score",
+            "see you at 3pm. thanks!",
+            "node.js is fine to mention",
+            "e.g. that idea is good",
+        ] {
+            assert!(!contains_link(clean), "should not flag: {clean}");
+        }
+    }
+
+    #[test]
+    fn presence_rank_climbs_with_connected_hours() {
+        let h = 3_600;
+        assert_eq!(presence_rank(0), None);
+        assert_eq!(presence_rank(59 * 60), None, "under an hour = no rank");
+        assert_eq!(presence_rank(h).map(|(n, _)| n), Some("Drifter"));
+        assert_eq!(presence_rank(24 * h).map(|(n, _)| n), Some("Regular"));
+        assert_eq!(presence_rank(100 * h).map(|(n, _)| n), Some("Local"));
+        assert_eq!(presence_rank(200 * h).map(|(n, _)| n), Some("Fixture"));
+        assert_eq!(presence_rank(1000 * h).map(|(n, _)| n), Some("Landmark"));
+        assert_eq!(presence_rank(5000 * h).map(|(n, _)| n), Some("Landmark"));
+    }
 
     fn test_poll(options: Vec<(&str, i64)>) -> ActiveChatPoll {
         let now = Utc::now();

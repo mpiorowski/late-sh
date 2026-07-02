@@ -256,6 +256,7 @@ pub(crate) fn parse_mod_command(input: &str) -> Result<ModCommand> {
         "room-voice" => parse_room_voice_mod_command(&rest),
         "kick" => parse_kick_mod_command(&rest),
         "ban" => parse_ban_mod_command(&rest),
+        "timeout" => parse_timeout_mod_command(&rest),
         "unban" => parse_unban_mod_command(&rest),
         "artboard" => parse_artboard_mod_command(&rest),
         "admin" => parse_admin_mod_command(&rest),
@@ -483,6 +484,39 @@ fn parse_ban_mod_command(parts: &[&str]) -> Result<ModCommand> {
         }),
         _ => anyhow::bail!(USAGE),
     }
+}
+
+/// `timeout @name <interval> [reason...]` — a quick, fixed-interval server
+/// timeout. It is a durationed server ban under the hood (it ends sessions and
+/// auto-lifts when the interval elapses), so `unban server @name` can lift it
+/// early. Only the listed intervals are accepted, to keep it fast to type.
+fn parse_timeout_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: timeout @name <5m|15m|1h|24h|2d|1w> [reason...]";
+    let username = required_username(parts.first().copied(), USAGE)?;
+    let Some(interval) = parts.get(1).copied() else {
+        anyhow::bail!("{USAGE}");
+    };
+    let duration = match interval.to_ascii_lowercase().as_str() {
+        "5m" => chrono::Duration::minutes(5),
+        "15m" => chrono::Duration::minutes(15),
+        "1h" => chrono::Duration::hours(1),
+        "24h" | "1d" => chrono::Duration::hours(24),
+        "2d" => chrono::Duration::days(2),
+        "1w" | "1week" | "7d" => chrono::Duration::days(7),
+        _ => anyhow::bail!("invalid interval '{interval}'. {USAGE}"),
+    };
+    let reason = parts.get(2..).unwrap_or_default().join(" ");
+    let reason = if reason.trim().is_empty() {
+        format!("timeout {interval}")
+    } else {
+        reason
+    };
+    Ok(ModCommand::ServerUser {
+        action: ServerUserAction::Ban,
+        username,
+        duration: Some(duration),
+        reason,
+    })
 }
 
 fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -763,6 +797,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "--- bans, etc. ---",
             "kick   <server|voice|#room> @name [reason...]",
             "ban    <server|#room|artboard|audio> @name [duration] [reason...]",
+            "timeout @name <5m|15m|1h|24h|2d|1w> [reason...]",
             "unban  <server|#room|artboard|audio|voice> @name [reason...]",
             "",
             "--- help & admin ---",
@@ -879,6 +914,14 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "ban server @name [duration] [reason...]",
             "Creates a server ban and terminates active sessions.",
         ],
+        "timeout" => &[
+            "timeout @name <5m|15m|1h|24h|2d|1w> [reason...]",
+            "A quick, fixed-interval server timeout: ends the user's sessions and",
+            "auto-lifts when the interval elapses. Intervals: 5m, 15m, 1h, 24h, 2d, 1w.",
+            "It is a durationed server ban under the hood, so 'unban server @name'",
+            "lifts it early. @name: username; bare name is also accepted.",
+            "reason: optional audit text after the interval.",
+        ],
         "ban room" => &[
             "ban #roomname @name [duration] [reason...]",
             "Creates a room ban and removes membership.",
@@ -991,6 +1034,46 @@ fn help_lines(lines: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_maps_intervals_to_a_durationed_server_ban() {
+        let cases = [
+            ("5m", chrono::Duration::minutes(5)),
+            ("15m", chrono::Duration::minutes(15)),
+            ("1h", chrono::Duration::hours(1)),
+            ("24h", chrono::Duration::hours(24)),
+            ("2d", chrono::Duration::days(2)),
+            ("1w", chrono::Duration::days(7)),
+        ];
+        for (token, expected) in cases {
+            match parse_mod_command(&format!("/mod timeout @spammer {token}")).unwrap() {
+                ModCommand::ServerUser {
+                    action,
+                    username,
+                    duration,
+                    ..
+                } => {
+                    assert_eq!(action, ServerUserAction::Ban);
+                    assert_eq!(username, "spammer");
+                    assert_eq!(duration, Some(expected), "interval {token}");
+                }
+                other => panic!("expected a server ban for {token}, got {other:?}"),
+            }
+        }
+        // A bare name and a trailing reason are both accepted.
+        match parse_mod_command("/mod timeout spammer 1h being a pest").unwrap() {
+            ModCommand::ServerUser {
+                username, reason, ..
+            } => {
+                assert_eq!(username, "spammer");
+                assert_eq!(reason, "being a pest");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        // An unknown interval is rejected with guidance.
+        assert!(parse_mod_command("/mod timeout @x 3y").is_err());
+        assert!(parse_mod_command("/mod timeout @x").is_err());
+    }
 
     #[test]
     fn parses_optional_mod_prefix() {

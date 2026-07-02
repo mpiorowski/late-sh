@@ -79,6 +79,9 @@ struct ClientHandler {
     _conn_permit: Option<OwnedSemaphorePermit>,
     per_ip_incremented: bool,
     active_user_incremented: bool,
+    /// When this authed session became active, for accruing connected time
+    /// (the idle presence rank) on disconnect.
+    online_since: Option<std::time::Instant>,
     over_limit: bool,
 
     /// Activity feed
@@ -297,6 +300,7 @@ impl Server {
             _conn_permit: permit,
             per_ip_incremented,
             active_user_incremented: false,
+            online_since: None,
             over_limit,
             channel: None,
             app_channel_id: None,
@@ -415,6 +419,24 @@ impl Drop for ClientHandler {
         {
             metrics::add_ssh_session(-1);
             let user_id = user.id;
+
+            // Accrue this session's connected time toward the user's idle
+            // presence rank. Capped at 24h to shrug off any clock weirdness.
+            if let Some(since) = self.online_since {
+                let seconds = (since.elapsed().as_secs() as i64).min(24 * 60 * 60);
+                if seconds > 0 {
+                    let db = self.state.db.clone();
+                    tokio::spawn(async move {
+                        if let Ok(client) = db.get().await
+                            && let Err(e) =
+                                User::add_online_seconds(&client, user_id, seconds).await
+                        {
+                            tracing::warn!(error = ?e, "failed to accrue online_seconds");
+                        }
+                    });
+                }
+            }
+
             let mut user_still_afk = false;
             let mut active_users = self.state.active_users.lock_recover();
 
@@ -602,6 +624,7 @@ impl russh::server::Handler for ClientHandler {
                 );
             }
             self.active_user_incremented = true;
+            self.online_since = Some(std::time::Instant::now());
             metrics::add_ssh_session(1);
         }
         crate::usernames::upsert(
