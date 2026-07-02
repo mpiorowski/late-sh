@@ -33,6 +33,7 @@ pub struct GhostService {
     blackjack_table_manager: BlackjackTableManager,
     active_users: ActiveUsers,
     activity_tx: broadcast::Sender<ActivityEvent>,
+    username_directory: crate::usernames::UsernameDirectory,
 }
 
 #[derive(Clone)]
@@ -142,6 +143,22 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply n
     Vary the opener, vary the close, do not repeat catchphrases. \
     Never be cruel, never go after a real person's identity. The complaint is the tooling, not the human.";
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
+const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
+const BARTENDER_USERNAME: &str = "bartender";
+const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(25);
+const BARTENDER_REPLY_MAX_LINES: usize = 3;
+const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
+    You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
+    You pour imaginary drinks with terminal-flavored names (a double SIGTERM neat, a Bash Old Fashioned, \
+    a Segfault Sour, warm milk for the juniors, decaf for anyone shipping on a Friday) and you never charge — first round is always on the house. \
+    You know the house inside out. When someone asks how something works, give a real, correct answer from the app context, \
+    phrased like a bartender giving directions: short, concrete, pointing at the right key or page. \
+    You listen more than you talk. You remember regulars fondly, notice who has been up too late, and gently suggest water, sleep, or one more song. \
+    Voice: low lights, rain outside, jukebox humming. A little wistful, never gloomy. Kind by default, dry when teased. \
+    Keep replies to 1-3 short lines. No markdown, no bullet lists, no emoji. \
+    Never be cruel, never gossip meanly about real users, never use slurs or identity attacks. \
+    Do not repeat catchphrases; vary the pour, vary the welcome. \
+    If someone just says hi, welcome them in, slide something across the counter, and ask what they are having or what they are building.";
 
 impl GhostService {
     pub fn new(
@@ -151,6 +168,7 @@ impl GhostService {
         blackjack_table_manager: BlackjackTableManager,
         active_users: ActiveUsers,
         activity_tx: broadcast::Sender<ActivityEvent>,
+        username_directory: crate::usernames::UsernameDirectory,
     ) -> Self {
         Self {
             db,
@@ -159,6 +177,7 @@ impl GhostService {
             blackjack_table_manager,
             active_users,
             activity_tx,
+            username_directory,
         }
     }
 
@@ -203,6 +222,23 @@ impl GhostService {
             }
         }
 
+        // Initialize the bartender — keeper of the clubhouse tavern.
+        if self.ai_service.is_enabled() {
+            match self.ensure_bartender_user().await {
+                Ok(bartender) => {
+                    self.set_always_on(&bartender);
+                    let svc = self.clone();
+                    let bt_shutdown = shutdown.clone();
+                    tokio::spawn(async move {
+                        svc.run_bartender_mention_task(bartender, bt_shutdown).await;
+                    });
+                }
+                Err(err) => {
+                    tracing::error!(error = ?err, "ghost service failed to initialize @bartender user");
+                }
+            }
+        }
+
         if self.ai_service.is_enabled() {
             match self.ensure_dealer_user().await {
                 Ok(dealer) => {
@@ -226,7 +262,7 @@ impl GhostService {
             }
         }
 
-        tracing::info!("ghost service started (bot + graybeard + dealer always-on)");
+        tracing::info!("ghost service started (bot + graybeard + bartender + dealer always-on)");
 
         // Keep alive until shutdown so the spawned tasks stay referenced.
         shutdown.cancelled().await;
@@ -538,6 +574,140 @@ impl GhostService {
 
         self.chat_service.send_bot_reply_task(
             gb.id,
+            trigger_message.room_id,
+            safe_reply,
+            Some(trigger_message.user_id),
+        );
+
+        Ok(())
+    }
+
+    /// Bartender: the clubhouse tavern keeper. Replies when mentioned, warm
+    /// and useful — he carries the app context so he can pour real answers.
+    async fn run_bartender_mention_task(
+        self,
+        bartender: BotUser,
+        shutdown: late_core::shutdown::CancellationToken,
+    ) {
+        let mut events = self.chat_service.subscribe_events();
+        let mut last_reply: HashMap<Uuid, Instant> = HashMap::new();
+
+        tracing::info!(username = %bartender.username, "bartender mention responder started");
+
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    tracing::info!(username = %bartender.username, "bartender mention responder shutting down");
+                    break;
+                }
+                recv_result = events.recv() => {
+                    match recv_result {
+                        Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
+                            if message.user_id == bartender.id {
+                                continue;
+                            }
+                            if let Some(targets) = target_user_ids
+                                && !targets.contains(&bartender.id)
+                            {
+                                continue;
+                            }
+                            if !contains_mention(&message.body, &bartender.username) {
+                                continue;
+                            }
+                            if let Some(last) = last_reply.get(&message.user_id)
+                                && last.elapsed() < BARTENDER_MENTION_COOLDOWN
+                            {
+                                continue;
+                            }
+
+                            last_reply.insert(message.user_id, Instant::now());
+                            let svc = self.clone();
+                            let bartender = bartender.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = svc.bartender_mention_reply(bartender, message).await {
+                                    tracing::error!(error = ?e, "bartender mention reply failed");
+                                }
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(skipped, "bartender event listener lagged");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+    }
+
+    async fn bartender_mention_reply(
+        &self,
+        bartender: BotUser,
+        trigger_message: ChatMessage,
+    ) -> Result<()> {
+        let messages = {
+            let client = self.db.get().await?;
+            ChatRoomMember::auto_join_public_rooms(&client, bartender.id).await?;
+
+            if !ChatRoomMember::is_member(&client, trigger_message.room_id, bartender.id).await? {
+                return Ok(());
+            }
+
+            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
+                .await?
+        };
+        if messages.is_empty() {
+            return Ok(());
+        }
+
+        let (history_str, usernames) = self.build_chat_history(&messages).await?;
+        let patron = mention_target_for_user(
+            usernames.get(&trigger_message.user_id).map(String::as_str),
+            trigger_message.user_id,
+        );
+
+        let system_prompt = format!(
+            "Your username is: {username}\n\n\
+            {persona}\n\n\
+            {app_context}\n\n\
+            Someone at the bar mentioned you. You always answer a patron.\n\
+            When they ask how the house works, answer from the app context above — correct keys, correct pages.\n\
+            You may address them as {patron}.\n\
+            Keep it to 1-3 short lines. No markdown. No emoji.\n\
+            NEVER prefix your message with your own username, and do not wrap it in quotes.\n\
+            Do NOT output SKIP. Output only the message text.",
+            username = bartender.username,
+            persona = BARTENDER_PERSONA,
+            app_context = bot_app_context(),
+        );
+
+        let history_with_prompt = format!(
+            "{history_str}---\nThe latest message mentioned @{}. Pour your reply.",
+            bartender.username
+        );
+
+        let Some(reply) = self
+            .ai_service
+            .generate_reply(&system_prompt, &history_with_prompt)
+            .await?
+        else {
+            return Ok(());
+        };
+
+        let Some(safe_reply) = sanitize_generated_reply_with_line_limit(
+            &reply,
+            Some(&bartender.username),
+            BARTENDER_REPLY_MAX_LINES,
+        ) else {
+            return Ok(());
+        };
+
+        let mut rng = TinyRng::seeded();
+        let delay = rng.next_between_inclusive(2, 6) as u64;
+        tokio::time::sleep(Duration::from_secs(delay)).await;
+
+        self.chat_service.send_bot_reply_task(
+            bartender.id,
             trigger_message.room_id,
             safe_reply,
             Some(trigger_message.user_id),
@@ -862,6 +1032,11 @@ impl GhostService {
             .await
     }
 
+    async fn ensure_bartender_user(&self) -> Result<BotUser> {
+        self.ensure_user(BARTENDER_FINGERPRINT, BARTENDER_USERNAME)
+            .await
+    }
+
     async fn ensure_dealer_user(&self) -> Result<BotUser> {
         self.ensure_user(DEALER_FINGERPRINT, DEALER_USERNAME).await
     }
@@ -903,6 +1078,11 @@ impl GhostService {
         };
 
         ChatRoomMember::auto_join_public_rooms(&client, user.id).await?;
+
+        // A freshly created bot row postdates the startup username-directory
+        // snapshot, and the next periodic refresh is up to 30 minutes out —
+        // without this, chat author labels fall back to the short user id.
+        crate::usernames::upsert(&self.username_directory, user.id, username);
 
         Ok(BotUser {
             id: user.id,
