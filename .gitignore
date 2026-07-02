@@ -1,6 +1,7 @@
 target/
 tmp/
 node_modules
+.idea
 .env
 .envrc
 .env.local

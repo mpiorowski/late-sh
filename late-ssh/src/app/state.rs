@@ -84,17 +84,18 @@ pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 4;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 5;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 6;
 pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
-pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 8;
-pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 9;
-pub(crate) const GAME_SELECTION_NES_DABG: usize = 10;
-pub(crate) const GAME_SELECTION_NES_FALLING: usize = 11;
-pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 12;
-pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 13;
-pub(crate) const GAME_SELECTION_NES_RHDE: usize = 14;
-pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 15;
-pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 16;
-pub(crate) const GAME_SELECTION_NES_2048: usize = 17;
-pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 18;
+pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
+pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 9;
+pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 10;
+pub(crate) const GAME_SELECTION_NES_DABG: usize = 11;
+pub(crate) const GAME_SELECTION_NES_FALLING: usize = 12;
+pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 13;
+pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 14;
+pub(crate) const GAME_SELECTION_NES_RHDE: usize = 15;
+pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 16;
+pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 17;
+pub(crate) const GAME_SELECTION_NES_2048: usize = 18;
+pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 19;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
@@ -200,11 +201,14 @@ pub struct SessionConfig {
     pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
     pub tetris_service: crate::app::arcade::tetris::svc::LaterisService,
     pub snake_service: crate::app::arcade::snake::svc::SnakeService,
+    pub traffic_service: crate::app::arcade::traffic::svc::TrafficService,
     pub rubiks_cube_service: crate::app::arcade::rubiks_cube::svc::RubiksCubeService,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
     pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
+    pub initial_traffic_track_scores: Vec<late_core::models::traffic::TrackScore>,
+    pub initial_traffic_high_score: Option<late_core::models::traffic::HighScore>,
     pub le_word_service: crate::app::arcade::le_word::svc::LeWordService,
     pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
     pub initial_le_word_game: Option<late_core::models::le_word::Game>,
@@ -532,6 +536,7 @@ pub struct App {
     pub(crate) solitaire_state: crate::app::arcade::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
     pub(crate) nes_cabinet_state: crate::app::arcade::nes_cabinet::state::State,
+    pub(crate) traffic_state: crate::app::arcade::traffic::state::State,
     pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
     /// Rooms whose current pending turn already emitted a "your turn"
     /// notification; each room is cleared once that turn passes.
@@ -833,6 +838,13 @@ impl App {
             config.initial_minesweeper_games,
         );
         let nes_cabinet_state = crate::app::arcade::nes_cabinet::state::State::new();
+        let mut traffic_state = crate::app::arcade::traffic::state::State::new();
+        traffic_state.hydrate(
+            config.user_id,
+            config.traffic_service.clone(),
+            config.initial_traffic_track_scores,
+            config.initial_traffic_high_score,
+        );
         let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
         let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
         crate::app::dashboard::state::seed_persisted_room_joins_from_rooms(
@@ -1143,6 +1155,7 @@ impl App {
             solitaire_state,
             minesweeper_state,
             nes_cabinet_state,
+            traffic_state,
             active_room_game: None,
             rooms_turn_notified_room_ids: HashSet::new(),
             rooms_last_turn_scan_at: None,
