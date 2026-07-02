@@ -1701,6 +1701,18 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         append_home_title_extras(&mut spans, ctx);
     }
 
+    // The clubhouse tavern draws no widget chrome of its own, so the
+    // headcount and keybinds live up here.
+    if screen == Screen::Clubhouse {
+        spans.push(Span::styled(
+            format!(
+                "· {} inside · arrows/hjkl walk · Enter interact · J/K messages ",
+                ctx.clubhouse_state.headcount()
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+
     if screen == Screen::WorldCup {
         spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
         spans.push(Span::styled(

@@ -1,8 +1,9 @@
 //! Clubhouse renderer: the tavern viewport (camera-follow over the floor
 //! plan, live occupants, animated fire/jukebox/dog/candles, proximity
 //! popovers) with the embedded #lounge chat pinned to the bottom of the
-//! screen. People render as head-plus-body sprites; seated users become a
-//! `☺` in their stool's parens.
+//! screen. Dwarf Fortress vibes, single-width glyphs only: walking people
+//! are 3-row stick figures (`o` head, `/|\` arms, `Λ` legs; you get an `@`),
+//! and a seated user is an `o` perched on their stool.
 
 use ratatui::{
     Frame,
@@ -38,9 +39,9 @@ pub fn draw(
     view: ClubhouseView<'_>,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    // Bottom ~30% is the live #lounge; the tavern gets the rest.
-    let chat_height = ((u32::from(area.height) * 3 / 10) as u16)
-        .clamp(8, 12)
+    // Bottom ~40% is the live #lounge; the tavern gets the rest.
+    let chat_height = ((u32::from(area.height) * 2 / 5) as u16)
+        .max(8)
         .min(area.height.saturating_sub(8));
     let layout =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(chat_height)]).split(area);
@@ -54,27 +55,10 @@ pub fn draw(
 
 fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
     let state = view.state;
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::AMBER_DIM()))
-        .title(Line::from(vec![
-            Span::styled(
-                " ☾ the clubhouse ",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("· {} inside ", state.headcount()),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ]))
-        .title_bottom(Line::from(Span::styled(
-            " arrows/hjkl walk · i chat · Enter interact · J/K messages ",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    // No widget border: the room's own walls are the frame. The headcount
+    // and keybinds live in the app frame title (`app_frame_title` in
+    // `render.rs`), so the tavern gets every cell.
+    let inner = area;
     if inner.width < 4 || inner.height < 4 {
         return;
     }
@@ -175,12 +159,30 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
     if map::DOG_ZONE.contains(x, y) {
         return Style::default().fg(theme::AMBER());
     }
-    // Interactive props glow so they read as "walk up to me".
+    // Interactive props wear red frames so they read as "walk up to me";
+    // their names sit amber-bold in the art with the page digit glowing.
+    let signpost_text = |ch: char| {
+        if ch.is_ascii_digit() {
+            Some(
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else if ch.is_ascii_alphabetic() || ch == '·' {
+            Some(
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            None
+        }
+    };
     if map::JUKEBOX.contains(x, y) {
         return match ch {
             '♪' => Style::default().fg(theme::AMBER_GLOW()),
             '[' | ']' | '·' | '▞' | '▚' | '○' => Style::default().fg(theme::TEXT_MUTED()),
-            _ => Style::default().fg(theme::ERROR()),
+            _ => signpost_text(ch).unwrap_or_else(|| Style::default().fg(theme::ERROR())),
         };
     }
     if map::ARCADE_SCREEN.contains(x, y) {
@@ -191,21 +193,19 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
             '●' => Style::default().fg(theme::ERROR()),
             '┃' => Style::default().fg(theme::TEXT_BRIGHT()),
             '╭' | '╮' | '╰' | '╯' | '─' | '│' => dim,
-            _ if ch.is_ascii_alphabetic() => Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-            _ => Style::default().fg(theme::TEXT_MUTED()),
+            _ => signpost_text(ch).unwrap_or_else(|| Style::default().fg(theme::ERROR())),
         };
     }
     if map::DOORS.contains(x, y) {
+        if x == map::DOORS.x0 || x == map::DOORS.x1 || matches!(ch, '╭' | '╮' | '╰' | '╯' | '─')
+        {
+            return Style::default().fg(theme::ERROR());
+        }
         return match ch {
             '○' => Style::default().fg(theme::AMBER_GLOW()),
             '║' => Style::default().fg(theme::AMBER()),
             '│' | '▒' => Style::default().fg(theme::AMBER_DIM()),
-            _ if ch.is_ascii_alphabetic() => Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-            _ => dim,
+            _ => signpost_text(ch).unwrap_or(dim),
         };
     }
     if map::POKER_TABLE.contains(x, y) {
@@ -213,15 +213,31 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
             '▒' => Style::default().fg(theme::SUCCESS()),
             '♥' | '♦' => Style::default().fg(theme::ERROR()),
             '♠' | '♣' => Style::default().fg(theme::TEXT_BRIGHT()),
-            _ => Style::default().fg(theme::AMBER_DIM()),
+            _ => signpost_text(ch).unwrap_or_else(|| Style::default().fg(theme::ERROR())),
         };
     }
     if map::EASEL.contains(x, y) {
+        // The title row is the ARTBOARD·5 signpost; the rest of the canvas
+        // is paint splatter.
+        if y == map::EASEL.y0 + 1
+            && let Some(style) = signpost_text(ch)
+        {
+            return style;
+        }
         return match ch {
             '·' | '~' | '°' | '*' => Style::default().fg(hashed_color(x, y, PAINT_PALETTE)),
             '╱' | '╲' => Style::default().fg(theme::TEXT_MUTED()),
-            _ => Style::default().fg(theme::AMBER_DIM()),
+            _ => Style::default().fg(theme::ERROR()),
         };
+    }
+    if map::BOOKSHELF.contains(x, y) {
+        if x == map::BOOKSHELF.x0
+            || x == map::BOOKSHELF.x1
+            || matches!(ch, '╔' | '╗' | '╚' | '╝' | '╠' | '╣' | '═')
+        {
+            return Style::default().fg(theme::AMBER_DIM());
+        }
+        return Style::default().fg(hashed_color(x, y, BOOK_PALETTE));
     }
     if map::FIREPLACE.contains(x, y) {
         return match ch {
@@ -265,6 +281,13 @@ const PAINT_PALETTE: [fn() -> ratatui::style::Color; 5] = [
     theme::AMBER,
     theme::MENTION,
     theme::ERROR,
+];
+const BOOK_PALETTE: [fn() -> ratatui::style::Color; 5] = [
+    theme::CHAT_AUTHOR,
+    theme::SUCCESS,
+    theme::AMBER,
+    theme::MENTION,
+    theme::TEXT_MUTED,
 ];
 
 /// A stable per-cell pick from a small palette, so the bottle shelf and the
@@ -320,13 +343,13 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
         }
     }
 
-    // Notes drift away from the jukebox onto the floor.
+    // Notes drift out of the jukebox, across the floor below it.
     if view.now_playing.is_some() {
-        let (jx, jy) = (map::JUKEBOX.x1, map::JUKEBOX.y0);
+        let (jx, jy) = (map::JUKEBOX.x0, map::JUKEBOX.y1);
         let phase = ((t / 5) % 6) as u16;
-        put_if_floor(cells, jx + 2 + phase, jy + 2, '♪', theme::AMBER_GLOW());
+        put_if_floor(cells, jx + 1 + phase, jy + 1 + (phase % 2), '♪', theme::AMBER_GLOW());
         let phase2 = ((t / 5 + 3) % 6) as u16;
-        put_if_floor(cells, jx + 3 + phase2, jy + 4, '♫', theme::AMBER());
+        put_if_floor(cells, jx + 8 + phase2, jy + 2 - (phase2 % 2), '♫', theme::AMBER());
     }
 
     // The arcade cabinet plays its attract mode to an empty room.
@@ -381,9 +404,32 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
         set(cells, dx + 4, dy + 1, '-', amber);
     }
     let tail = if (t / 8) % 2 == 0 { ')' } else { '/' };
-    set(cells, dx + 6, dy, tail, amber);
+    set(cells, dx + 7, dy, tail, amber);
     if (t / 40) % 3 == 0 {
         put_if_floor(cells, dx + 8, dy.saturating_sub(1), 'z', theme::TEXT_FAINT());
+    }
+}
+
+/// A 3-row stick figure standing on `(x, y)` (the feet cell). Degrades near
+/// the top wall: torso needs one row of headroom, the head needs two.
+fn draw_figure(cells: &mut Cells, x: u16, y: u16, head: char, style: Style) {
+    set(cells, x, y, 'Λ', style);
+    if y >= 2 {
+        set(cells, x.saturating_sub(1), y - 1, '/', style);
+        set(cells, x, y - 1, '|', style);
+        set(cells, x + 1, y - 1, '\\', style);
+    }
+    if y >= 3 {
+        set(cells, x, y - 2, head, style);
+    }
+}
+
+/// Where an occupant's head goes for a seat: perched above a stool, sunk
+/// into an armchair.
+fn seat_head_y(seat: &map::Seat) -> u16 {
+    match seat.kind {
+        map::SeatKind::Stool => seat.y - 1,
+        map::SeatKind::Armchair => seat.y,
     }
 }
 
@@ -398,42 +444,28 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) {
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
-    set(
-        cells,
-        map::BARTENDER.0,
-        map::BARTENDER.1,
-        '☻',
-        bartender_style,
-    );
-    set(
-        cells,
-        map::BARTENDER.0,
-        map::BARTENDER.1 + 1,
-        '╿',
-        bartender_style,
-    );
-    put_label(
-        cells,
-        map::BARTENDER.0,
-        map::BARTENDER.1 - 1,
-        "bartender",
-        bartender_style,
-    );
+    let (bx, by) = map::BARTENDER;
+    set(cells, bx, by, 'O', bartender_style);
+    set(cells, bx - 1, by + 1, '/', bartender_style);
+    set(cells, bx, by + 1, '|', bartender_style);
+    set(cells, bx + 1, by + 1, '\\', bartender_style);
+    put_label(cells, bx, by - 1, "bartender", bartender_style);
 
     if state.graybeard_online {
         let seat = map::GRAYBEARD_SEAT;
         let style = Style::default().fg(theme::TEXT_MUTED());
-        set(cells, seat.x, seat.y, '☺', style);
-        put_label(cells, seat.x, seat.y - 1, "graybeard", style);
+        set(cells, seat.x, seat_head_y(&seat), 'o', style);
+        put_label(cells, seat.x, seat.y + 2, "graybeard", style);
     }
 
     for (seat, who) in state.seated() {
         let style = Style::default().fg(occupant_color(who.user_id));
-        set(cells, seat.x, seat.y, '☺', style);
+        let head_y = seat_head_y(seat);
+        set(cells, seat.x, head_y, 'o', style);
         let label_y = if seat.label_below {
-            seat.y + 1
+            seat.y + 2
         } else {
-            seat.y - 1
+            head_y.saturating_sub(1).max(1)
         };
         put_label(
             cells,
@@ -446,12 +478,11 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) {
 
     for ((x, y), who) in state.standing() {
         let style = Style::default().fg(occupant_color(who.user_id));
-        set(cells, x, y.saturating_sub(1), '☺', style);
-        set(cells, x, y, '╿', style);
+        draw_figure(cells, x, y, 'o', style);
         put_label(
             cells,
             x,
-            y.saturating_sub(2).max(1),
+            y.saturating_sub(3).max(1),
             &truncate_name(&who.username),
             Style::default().fg(theme::TEXT_DIM()),
         );
@@ -469,28 +500,19 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) {
     }
 
     // You, last: always on top.
-    set(
+    draw_figure(
         cells,
         state.player_x,
         state.player_y,
-        '╿',
-        Style::default().fg(theme::AMBER_GLOW()),
+        '@',
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
     );
-    if state.player_y >= 2 {
-        set(
-            cells,
-            state.player_x,
-            state.player_y - 1,
-            '@',
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        );
-    }
     put_label(
         cells,
         state.player_x,
-        state.player_y.saturating_sub(2).max(1),
+        state.player_y.saturating_sub(3).max(1),
         &truncate_name(view.own_username),
         Style::default()
             .fg(theme::TEXT_BRIGHT())
@@ -513,7 +535,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
 
     let (title, border, lines): (&str, Style, Vec<Line>) = match prop {
         map::Interactive::Bartender => (
-            " ☻ the bartender ",
+            " O the bartender ",
             interactive,
             vec![
                 Line::from(vec![

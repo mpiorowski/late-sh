@@ -4,75 +4,82 @@
 //! camera in `ui.rs` pans over it as you walk; rows may be right-trimmed and
 //! are padded back to `MAP_W` at read time.
 //!
-//! Everything is drawn at "zoomed" scale — a stool is `(_)`, people are
-//! head-plus-body sprites, the dog is three rows — and each interactive
-//! landmark doubles as a signpost for an app page: the arcade cabinet is
-//! page 2, the big wooden door is the door games on page 3, the poker table
-//! is Tables on page 4, and the easel is the Artboard on page 5. The bar
-//! (with the @bartender behind it), the jukebox, the fireplace, and the dog
-//! round out the room.
+//! Everything is drawn at "zoomed" scale, Dwarf Fortress vibes, single-width
+//! glyphs only: stools are `(_)` on a `╨` leg, tables are 10x4 ovals with a
+//! candle, people render as 3-row stick figures, the dog is three rows. Each
+//! interactive landmark carries its page number in the art and doubles as a
+//! signpost: the arcade cabinet is page 2, the big wooden door is the door
+//! games on page 3, the poker table is Tables on page 4, and the easel is
+//! the Artboard on page 5. The bar (with @bartender behind it), the jukebox,
+//! the fireplace, and the dog round out the room.
 
-pub const MAP_W: u16 = 200;
-pub const MAP_H: u16 = 52;
+pub const MAP_W: u16 = 184;
+pub const MAP_H: u16 = 50;
 
 #[rustfmt::skip]
 pub const MAP: [&str; MAP_H as usize] = [
-    "╔═══════════════════════════════════════════════════════════════════════════════════════╡ ☾ THE LATE LOUNGE ☽ ╞════════════════════════════════════════════════════════════════════════════════════════╗",
-    "║▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔      ╭─────┬─────╮     ╭─────┬─────╮                              ╭───────────────╮            ╭─────────────╮                    ║",
-    "║    ¡   !   ¡   °   !   ¡   !   °   ¡   !   ¡   !   ¡   °   !     ▐      │  ·  │   · │     │  ·  │   · │     ╭────────────────╮     ╭╯   ♪ JUKEBOX ♪   ╰╮         ╭╯    DOORS    ╰╮                   ║",
-    "║    █   █   █   █   █   █   █   █   █   █   █   █   █   █   █     ▐      │     │ ·   │     │     │ ·   │     │ ☾ late·sh 24/7 │     │     ▂▄▆█▇▆▄▂      │         │ ║ │ ║ ▒ ║ │ ║ │                   ║",
-    "║ ──────────────────────────────────────────────────────────────── ▐      │ ☾   │   · │     │   · │  ·  │     ╰────────────────╯     │    ╭─────────╮    │         │ ║ │ ○ ▒ ○ │ ║ │                   ║",
-    "║                                                         [$]      ▐      │   · │ ·   │     │   · │ ·   │                            │    │ [·····] │    │         │ ║ │ ║ ▒ ║ │ ║ │                   ║",
-    "║                                                                  ▐      ╰─────┴─────╯     ╰─────┴─────╯                            │    ╰─────────╯    │         ╰───────────────╯                   ║",
-    "║             ╥╥                  ╥╥                  ╥╥           ▐                                                                 │     ▞▚ ▞▚ ▞▚      │                                             ║",
-    "║▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                 ╰────○─────────○────╯                                             ║",
-    "║█████████████████████████≡·THE·LATE·BAR·≡██████████████████████████                                                                                                                                   ║",
-    "║                                                                                                                                                                                                      ║",
-    "║     (_)       (_)       (_)       (_)       (_)       (_)   (_)                                                                                                                       ╔═══════════╗  ║",
-    "║                                                                    ♣♣                                                                                    ♣♣                           ║A R C A D E║  ║",
-    "║                                                                   ♣♣♣♣                                                                                  ♣♣♣♣                          ╟───────────╢  ║",
-    "║                                                                    ╰╯                                                                                    ╰╯                           ║ ╭───────╮ ║  ║",
-    "║ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                                               ║ │ ▄▀▄ · │ ║  ║",
-    "║ █▒▒▒¡▒▒▒▒▒¡▒▒▒▒▒¡▒▒▒▒▒█ ╭──╮                                          ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                 ║ │ ·  ●  │ ║  ║",
-    "║ █▒╔═════════════════╗▒█  _ ▐                                          ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                 ║ ╰───────╯ ║  ║",
-    "║ █▒║ )~( ^ )~( ~ ( ^ ║▒█ ╰──╯                                          ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                 ║  ┃   ● ●  ║  ║",
-    "║ █▒║ (~) ^ (~) ( ^ ) ║▒█                                               ░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░                                                 ║ ▒▒▒▒▒▒▒▒▒ ║  ║",
-    "║ █▒╚═════════════════╝▒█                                               ░░░░░░░░╭─────╮░░░░░░░░░░░░░░░░░░░░░╭─────╮░░░░░░░░░░░░░░░░░░░░                                                 ╚═══════════╝  ║",
-    "║ ▀▀▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▀▀ ╭──╮                                          ░░░░(_)░│  ¡  │░(_)░░░░░░░░░░░░░(_)░│  ¡  │░(_)░░░░░░░░░░░░░░░░                                                                ║",
-    "║    ░░░░░░░░░░░░░░░░░░    _ ▐                                          ░░░░░░░░╰─────╯░░░░░░░░░░░░░░░░░░░░░╰─────╯░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║    ░░░░░░░░░░░░░░░░░░   ╰──╯                                          ░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║    ░░░░░░░░░░░░░░░░░░                                                 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║                                                                       ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║       \\,_,/ )                                                         ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║       ( o.o )/                                                        ░░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║        \\_u_/                                                          ░░░░░░░░░░░░░░░░░░░░░░╭─────╮░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║                                                                       ░░░░░░░░░░░░░░░░░░(_)░│  ¡  │░(_)░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║     ╔═══════════╗                                                     ░░░░░░░░░░░░░░░░░░░░░░╰─────╯░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║     ║ ·   ~   ° ║                           (_)                       ░░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                 (_)        (_)                                 ║",
-    "║     ║   *   ·   ║                         ╭─────╮                     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░            ╭──────────────────────╮                            ║",
-    "║     ║ °   ·   ~ ║                     (_) │  ¡  │ (_)                 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░        ╭───╯▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒╰───╮                        ║",
-    "║     ╚═══════════╝                         ╰─────╯                     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    (_) │▒▒▒▒♠▒▒▒▒▒▒♥▒▒▒▒▒▒♣▒▒▒▒▒▒♦▒▒▒▒│ (_)                    ║",
-    "║       ╱       ╲                             (_)                       ░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░        ╰───╮▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒╭───╯                        ║",
-    "║      ╱         ╲                                                      ░░░░░░░░╭─────╮░░░░░░░░░░░░░░░░░░░░░╭─────╮░░░░░░░░░░░░░░░░░░░░            ╰──────────────────────╯                            ║",
-    "║                                                                       ░░░░(_)░│  ¡  │░(_)░░░░░░░░░░░░░(_)░│  ¡  │░(_)░░░░░░░░░░░░░░░░                 (_)        (_)                                 ║",
-    "║                                                                       ░░░░░░░░╰─────╯░░░░░░░░░░░░░░░░░░░░░╰─────╯░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║                                                                       ░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║                                                                       ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                                                ║",
-    "║                                                                                                                                                                                                      ║",
-    "║                              ♣♣                                                                                                                                                                      ║",
-    "║                             ♣♣♣♣                                                                                                                                                                     ║",
-    "║                              ╰╯                                                                                                                                                  ♣♣                  ║",
-    "║                                                                                                                                                                                 ♣♣♣♣                 ║",
-    "║  ♣♣                                                                                                                                                                              ╰╯                  ║",
-    "║ ♣♣♣♣                                                                                                                                                                                                 ║",
-    "║  ╰╯                                                                                   ░░░░░░░░░░░░░░░░░░░░░░░░                                                                                       ║",
-    "║                                                                                       ░░░░░░░░░░░░░░░░░░░░░░░░                                                                                       ║",
-    "║                                                                                                                                                                                                      ║",
-    "╚═══════════════════════════════════════════════════════════════════════════════════════════════╡ door ╞═══════════════════════════════════════════════════════════════════════════════════════════════╝"
+    "╔═══════════════════════════════════════════════════════════════════════════════╡ ☾ THE LATE LOUNGE ☽ ╞════════════════════════════════════════════════════════════════════════════════╗",
+    "║▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔         ╭──────┬──────╮     ╭───────────╮                         ╭───────────╮     ╔═════════╗   ╭──────┬──────╮            ║",
+    "║   ¡   !   ¡   °   !   ¡   !   °   ¡   !   ¡   °   !   ▐         │  ·   │    · │   ╭╯ ♪ JUKEBOX ♪ ╰╮  ╭────────────────╮ ╭╯   DOORS·3   ╰╮   ║ARCADE·2 ║   │  ·   │    · │      ♣♣♣   ║",
+    "║   █   █   █   █   █   █   █   █   █   █   █   █   █   ▐         │    ☾ │  ·   │   │   ▂▄▆█▇▆▄▂    │  │ ☾ late·sh 24/7 │ │   ║ │ ▒ │ ║   │   ║╭───────╮║   │ ·    │    · │     ♣♣♣♣♣  ║",
+    "║ ───────────────────────────────────────────────────── ▐         ├──────┼──────┤   │   [·······]   │  ╰────────────────╯ │   ║ │ ○ │ ║   │   ║│ ▄▀▄ · │║   ├──────┼──────┤      ♣♣♣   ║",
+    "║      Y     Y     Y     Y     Y     Y     Y     Y      ▐         │ ·    │   ·  │   │   ▞▚ ▞▚ ▞▚    │                     │   ║ │ ▒ │ ║   │   ║╰───────╯║   │ ·    │   ·  │      ╰─╯   ║",
+    "║                                               [$]     ▐         │      │ ·    │   ╰───○───────○───╯                     ╰───────────────╯   ║ ┃  ● ●  ║   │      │ ·    │            ║",
+    "║                                                       ▐ ╭──╮    ╰──────┴──────╯                                                             ╚═════════╝   ╰──────┴──────╯            ║",
+    "║           ╥╥              ╥╥              ╥╥          ▐ │▒▒│ ╭──╮                                                                                                                    ║",
+    "║▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ │▒▒│ │▒▒│                                                                                                                    ║",
+    "║███████████████████≡·THE·LATE·BAR·≡█████████████████████ ╰──╯ ╰──╯                                                                                                                    ║",
+    "║                                                                                                                                                          (_)        (_)              ║",
+    "║    (_)     (_)     (_)     (_)     (_)     (_)   (_)      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                 ╨          ╨               ║",
+    "║     ╨       ╨       ╨       ╨       ╨       ╨     ╨       ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░            ╭────────────────────╮          ║",
+    "║                                                           ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░        ╭───╯▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒╰───╮      ║",
+    "║ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄               ╔═══════════╗       ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░   (_)  │▒♠▒▒▒▒▒▒▒▒TABLES·4▒▒▒▒▒▒▒▒♥▒│  (_) ║",
+    "║ █▒▒▒¡▒▒▒▒▒¡▒▒▒▒▒¡▒▒▒▒▒█ ╭──╮          ║▌▐│▌║▐▌│▐▌▐║       ░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░    ╨   ╰───╮▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒╭───╯   ╨  ║",
+    "║ █▒╔═════════════════╗▒█  _ ▐          ╠═══════════╣       ░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░            ╰────────────────────╯          ║",
+    "║ █▒║ )~( ^ )~( ~ ( ^ ║▒█ ╰──╯          ║▐│▌▐▌║▌▐│▌║║       ░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░                                            ║",
+    "║ █▒║ (~) ^ (~) ( ^ ) ║▒█               ╚═══════════╝       ░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░                (_)        (_)              ║",
+    "║ █▒╚═════════════════╝▒█ ╭──╮                              ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                 ╨          ╨               ║",
+    "║ ▀▀▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▀▀  _ ▐                              ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░                                            ║",
+    "║    ░░░░░░░░░░░░░░░░░    ╰──╯                              ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░                                            ║",
+    "║    ░░░░░░░░░░░░░░░░░                                      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                            ║",
+    "║    ░░░░░░░░░░░░░░░░░                                      ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░            (_)                             ║",
+    "║  ♣♣♣   \\,_,/ )                                            ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░             ╨                              ║",
+    "║ ♣♣♣♣♣ ( o.o )/                                            ░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░          ╭──────╮                          ║",
+    "║  ♣♣♣   \\_u_/                                              ░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░     (_) ╭╯  ¡   ╰╮ (_)                     ║",
+    "║  ╰─╯                           ╭─╮                        ░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░      ╨  ╰╮      ╭╯  ╨                      ║",
+    "║                                ╰┬╯           ♣♣♣          ░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░          ╰──────╯                          ║",
+    "║   ╔════════════╗                │           ♣♣♣♣♣         ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                            ║",
+    "║   ║ ARTBOARD·5 ║                ┴            ♣♣♣          ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░            (_)                             ║",
+    "║   ║  ~   ·   ° ║                             ╰─╯          ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░             ╨                              ║",
+    "║   ║ °   *   ·  ║                                          ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                            ║",
+    "║   ╚════════════╝                                          ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░                              (_)           ║",
+    "║     ╱        ╲                                            ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░                               ╨            ║",
+    "║    ╱          ╲          (_)                              ░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░            (_)             ╭──────╮        ║",
+    "║                           ╨                               ░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░             ╨         (_) ╭╯  ¡   ╰╮ (_)   ║",
+    "║                        ╭──────╮                           ░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░          ╭──────╮      ╨  ╰╮      ╭╯  ╨    ║",
+    "║                   (_) ╭╯  ¡   ╰╮ (_)                      ░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░     (_) ╭╯  ¡   ╰╮ (_)     ╰──────╯        ║",
+    "║                    ╨  ╰╮      ╭╯  ╨                       ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      ╨  ╰╮      ╭╯  ╨                      ║",
+    "║                        ╰──────╯                           ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░          ╰──────╯            (_)           ║",
+    "║                                                           ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░                               ╨            ║",
+    "║                          (_)             ♣♣♣                                                                                                         (_)                             ║",
+    "║                           ╨             ♣♣♣♣♣                                                                                              ♣♣♣        ╨                        ♣♣♣   ║",
+    "║                                          ♣♣♣                                                                                              ♣♣♣♣♣                               ♣♣♣♣♣  ║",
+    "║                                          ╰─╯                                  ░░░░░░░░░░░░░░░░░░░░░░░░                                     ♣♣♣                                 ♣♣♣   ║",
+    "║                                                                               ░░░░░░░░░░░░░░░░░░░░░░░░                                     ╰─╯                                 ╰─╯   ║",
+    "║                                                                                                                                                                                      ║",
+    "╚═══════════════════════════════════════════════════════════════════════════════════════╡ door ╞═══════════════════════════════════════════════════════════════════════════════════════╝"
 ];
 
-/// A seat an active user can occupy; `(x, y)` is the anchor cell (the `_` of
-/// a stool or armchair), which the renderer swaps for a `☺` when taken.
+/// What kind of furniture a seat is; decides where the occupant's head goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeatKind {
+    /// `(_)` with a leg: the occupant's head renders one row above.
+    Stool,
+    /// Boxy armchair: the occupant sits inside, on the anchor itself.
+    Armchair,
+}
+
+/// A seat an active user can occupy; `(x, y)` is the anchor cell (the `_`).
 /// Labels normally float above the head; seats under a table edge flip the
 /// label below so names never overdraw their own table.
 #[derive(Debug, Clone, Copy)]
@@ -80,146 +87,182 @@ pub struct Seat {
     pub x: u16,
     pub y: u16,
     pub label_below: bool,
+    pub kind: SeatKind,
 }
 
-const fn s(x: u16, y: u16, label_below: bool) -> Seat {
-    Seat { x, y, label_below }
+const fn s(x: u16, y: u16, label_below: bool, kind: SeatKind) -> Seat {
+    Seat {
+        x,
+        y,
+        label_below,
+        kind,
+    }
 }
 
 pub const SEATS: &[Seat] = &[
     // bar stools
-s(7, 11, false),
-    s(17, 11, false),
-    s(27, 11, false),
-    s(37, 11, false),
-    s(47, 11, false),
-    s(57, 11, false),
+    s(6, 12, true, SeatKind::Stool),
+    s(14, 12, true, SeatKind::Stool),
+    s(22, 12, true, SeatKind::Stool),
+    s(30, 12, true, SeatKind::Stool),
+    s(38, 12, true, SeatKind::Stool),
+    s(46, 12, true, SeatKind::Stool),
     // fireplace armchairs
-    s(27, 17, false),
-    s(27, 22, false),
-    // round tables (five on the rug, one quiet corner; N/S/W/E each)
-    s(83, 19, false),
-    s(83, 23, true),
-    s(77, 21, false),
-    s(89, 21, false),
-    s(111, 19, false),
-    s(111, 23, true),
-    s(105, 21, false),
-    s(117, 21, false),
-    s(97, 27, false),
-    s(97, 31, true),
-    s(91, 29, false),
-    s(103, 29, false),
-    s(83, 35, false),
-    s(83, 39, true),
-    s(77, 37, false),
-    s(89, 37, false),
-    s(111, 35, false),
-    s(111, 39, true),
-    s(105, 37, false),
-    s(117, 37, false),
-    s(47, 31, false),
-    s(47, 35, true),
-    s(41, 33, false),
-    s(53, 33, false),
+    s(27, 17, false, SeatKind::Armchair),
+    s(27, 21, false, SeatKind::Armchair),
+    // rug tables, three rows of three (N/S/W/E stools each)
+    s(70, 14, false, SeatKind::Stool),
+    s(70, 21, true, SeatKind::Stool),
+    s(63, 17, false, SeatKind::Stool),
+    s(78, 17, false, SeatKind::Stool),
+    s(96, 14, false, SeatKind::Stool),
+    s(96, 21, true, SeatKind::Stool),
+    s(89, 17, false, SeatKind::Stool),
+    s(104, 17, false, SeatKind::Stool),
+    s(122, 14, false, SeatKind::Stool),
+    s(122, 21, true, SeatKind::Stool),
+    s(115, 17, false, SeatKind::Stool),
+    s(130, 17, false, SeatKind::Stool),
+    s(70, 24, false, SeatKind::Stool),
+    s(70, 31, true, SeatKind::Stool),
+    s(63, 27, false, SeatKind::Stool),
+    s(78, 27, false, SeatKind::Stool),
+    s(96, 24, false, SeatKind::Stool),
+    s(96, 31, true, SeatKind::Stool),
+    s(89, 27, false, SeatKind::Stool),
+    s(104, 27, false, SeatKind::Stool),
+    s(122, 24, false, SeatKind::Stool),
+    s(122, 31, true, SeatKind::Stool),
+    s(115, 27, false, SeatKind::Stool),
+    s(130, 27, false, SeatKind::Stool),
+    s(70, 34, false, SeatKind::Stool),
+    s(70, 41, true, SeatKind::Stool),
+    s(63, 37, false, SeatKind::Stool),
+    s(78, 37, false, SeatKind::Stool),
+    s(96, 34, false, SeatKind::Stool),
+    s(96, 41, true, SeatKind::Stool),
+    s(89, 37, false, SeatKind::Stool),
+    s(104, 37, false, SeatKind::Stool),
+    s(122, 34, false, SeatKind::Stool),
+    s(122, 41, true, SeatKind::Stool),
+    s(115, 37, false, SeatKind::Stool),
+    s(130, 37, false, SeatKind::Stool),
+    // the quiet table off the rug, south-west
+    s(28, 36, false, SeatKind::Stool),
+    s(28, 43, true, SeatKind::Stool),
+    s(21, 39, false, SeatKind::Stool),
+    s(36, 39, false, SeatKind::Stool),
     // poker table
-    s(153, 31, false),
-    s(164, 31, false),
-    s(153, 37, true),
-    s(164, 37, true),
-    s(140, 34, false),
-    s(177, 34, false),
+    s(156, 11, false, SeatKind::Stool),
+    s(167, 11, false, SeatKind::Stool),
+    s(156, 19, true, SeatKind::Stool),
+    s(167, 19, true, SeatKind::Stool),
+    s(143, 15, false, SeatKind::Stool),
+    s(180, 15, false, SeatKind::Stool),
+    // games-corner tables, south-east
+    s(152, 24, false, SeatKind::Stool),
+    s(152, 31, true, SeatKind::Stool),
+    s(145, 27, false, SeatKind::Stool),
+    s(160, 27, false, SeatKind::Stool),
+    s(170, 34, false, SeatKind::Stool),
+    s(170, 41, true, SeatKind::Stool),
+    s(163, 37, false, SeatKind::Stool),
+    s(178, 37, false, SeatKind::Stool),
+    s(152, 36, false, SeatKind::Stool),
+    s(152, 43, true, SeatKind::Stool),
+    s(145, 39, false, SeatKind::Stool),
+    s(160, 39, false, SeatKind::Stool),
 ];
 
 /// @graybeard's reserved corner stool at the end of the bar. Not part of the
 /// general pool; he sits there whenever he is online (always).
-pub const GRAYBEARD_SEAT: Seat = s(63, 11, false);
+pub const GRAYBEARD_SEAT: Seat = s(52, 12, true, SeatKind::Stool);
 
 /// Standing room near the door for the overflow crowd, staggered across
 /// three rows so name labels never overdraw a neighbor's avatar.
 pub const STANDING_SPOTS: &[(u16, u16)] = &[
+    (72, 44),
     (78, 46),
-    (84, 48),
-    (116, 46),
-    (122, 48),
-    (72, 47),
-    (128, 47),
+    (106, 44),
+    (112, 46),
+    (66, 45),
+    (118, 45),
 ];
 
 /// Where your avatar appears: on the welcome mat just inside the door.
-pub const SPAWN: (u16, u16) = (100, 48);
+pub const SPAWN: (u16, u16) = (92, 46);
 
 /// The bartender's head cell, in the alley behind the counter (sealed off
-/// from players); the body renders one row below.
-pub const BARTENDER: (u16, u16) = (34, 5);
+/// from players); the torso renders one row below.
+pub const BARTENDER: (u16, u16) = (28, 6);
 
-/// Top-left of the dog sprawled in front of the hearth (3 rows, 8 wide).
-pub const DOG: (u16, u16) = (8, 26);
+/// Top-left of the dog sprawled beside the hearth rug (3 rows, 8 wide).
+pub const DOG: (u16, u16) = (8, 25);
 
 /// The dog's bounding box, for proximity and styling.
 pub const DOG_ZONE: Zone = Zone {
     x0: 8,
-    y0: 26,
+    y0: 25,
     x1: 15,
-    y1: 28,
+    y1: 27,
 };
 
 /// Where the "+N at the door" overflow label is centered.
-pub const DOOR_LABEL: (u16, u16) = (116, 49);
+pub const DOOR_LABEL: (u16, u16) = (108, 47);
 
 /// The bar counter players walk up to (both counter rows).
 pub const BAR_COUNTER: Zone = Zone {
     x0: 1,
-    y0: 8,
-    x1: 67,
-    y1: 9,
+    y0: 9,
+    x1: 56,
+    y1: 10,
 };
-/// The back-bar bottle shelf, for the multicolor liquor glow.
+/// The back-bar shelf (bottles and hanging glasses), for the liquor glow.
 pub const BACK_BAR: Zone = Zone {
     x0: 1,
     y0: 2,
-    x1: 66,
-    y1: 3,
+    x1: 55,
+    y1: 5,
 };
 pub const JUKEBOX: Zone = Zone {
-    x0: 133,
+    x0: 84,
     y0: 1,
-    x1: 153,
-    y1: 8,
+    x1: 100,
+    y1: 6,
 };
 /// The big wooden door to the door games (page 3).
 pub const DOORS: Zone = Zone {
-    x0: 163,
+    x0: 122,
     y0: 1,
-    x1: 179,
+    x1: 138,
     y1: 6,
 };
 /// The arcade cabinet (page 2).
 pub const ARCADE: Zone = Zone {
-    x0: 184,
-    y0: 11,
-    x1: 196,
-    y1: 20,
+    x0: 142,
+    y0: 1,
+    x1: 152,
+    y1: 7,
 };
 /// The cabinet's screen cells, shimmering with phosphor pixels.
 pub const ARCADE_SCREEN: Zone = Zone {
-    x0: 188,
-    y0: 15,
-    x1: 192,
-    y1: 16,
+    x0: 145,
+    y0: 4,
+    x1: 149,
+    y1: 4,
 };
 /// The oval poker table (Tables, page 4).
 pub const POKER_TABLE: Zone = Zone {
-    x0: 143,
-    y0: 32,
-    x1: 174,
-    y1: 36,
+    x0: 147,
+    y0: 13,
+    x1: 176,
+    y1: 17,
 };
 /// The easel (the Artboard, page 5).
 pub const EASEL: Zone = Zone {
-    x0: 6,
+    x0: 4,
     y0: 30,
-    x1: 18,
+    x1: 17,
     y1: 36,
 };
 pub const FIREPLACE: Zone = Zone {
@@ -228,26 +271,33 @@ pub const FIREPLACE: Zone = Zone {
     x1: 24,
     y1: 21,
 };
+/// The decor bookshelf near the hearth, for the colorful book spines.
+pub const BOOKSHELF: Zone = Zone {
+    x0: 40,
+    y0: 15,
+    x1: 52,
+    y1: 19,
+};
 /// The neon house sign on the north wall, for the glow/flicker styling.
 pub const NEON_SIGN: Zone = Zone {
-    x0: 110,
+    x0: 103,
     y0: 2,
-    x1: 127,
+    x1: 120,
     y1: 4,
 };
 /// The two moonlit windows; their `·`/`*` panes twinkle.
 pub const WINDOWS: [Zone; 2] = [
     Zone {
-        x0: 74,
+        x0: 66,
         y0: 1,
-        x1: 86,
-        y1: 6,
+        x1: 80,
+        y1: 7,
     },
     Zone {
-        x0: 92,
+        x0: 156,
         y0: 1,
-        x1: 104,
-        y1: 6,
+        x1: 170,
+        y1: 7,
     },
 ];
 
@@ -260,19 +310,26 @@ pub const FIRE_CELLS: Zone = Zone {
 };
 /// The jukebox equalizer strip, animated while music is playing.
 pub const JUKEBOX_EQ: Zone = Zone {
-    x0: 139,
+    x0: 88,
     y0: 3,
-    x1: 146,
+    x1: 95,
     y1: 3,
 };
 /// Every `¡` candle in the room (table centers and the mantle); they flicker.
-pub const CANDLES: [(u16, u16); 9] = [
-    (83, 21),
-    (111, 21),
-    (97, 29),
-    (83, 37),
-    (111, 37),
-    (47, 33),
+pub const CANDLES: [(u16, u16); 16] = [
+    (70, 17),
+    (96, 17),
+    (122, 17),
+    (70, 27),
+    (96, 27),
+    (122, 27),
+    (70, 37),
+    (96, 37),
+    (122, 37),
+    (28, 39),
+    (152, 27),
+    (170, 37),
+    (152, 39),
     (6, 16),
     (12, 16),
     (18, 16),
@@ -363,12 +420,15 @@ pub fn char_at(x: u16, y: u16) -> char {
     grid()[y as usize][x as usize]
 }
 
-/// Players may stand on bare floor and rugs/mats — nothing else.
+/// Players can walk (climb, really) over everything: tables, stools, the
+/// dog, the fire. Only the outer walls and the bartender's alley (the shelf
+/// and workspace behind the counter) block movement — you may stand ON the
+/// counter, but never behind it.
 pub fn walkable(x: u16, y: u16) -> bool {
     if x == 0 || y == 0 || x >= MAP_W - 1 || y >= MAP_H - 1 {
         return false;
     }
-    matches!(char_at(x, y), ' ' | '░')
+    !(x <= BAR_COUNTER.x1 && y < BAR_COUNTER.y0)
 }
 
 #[cfg(test)]
@@ -432,13 +492,13 @@ mod tests {
     #[test]
     fn bar_alley_is_sealed_from_players() {
         // The bartender's alley (behind the counter) must not be reachable:
-        // shelf row above, counter below, wall left, seal column right.
+        // shelf rows above, counter below, wall left, seal column right.
         let reachable = reachable_from_spawn();
         assert!(
             !reachable.contains(&BARTENDER),
             "players can reach the bartender's alley"
         );
-        for y in 2..8u16 {
+        for y in 2..9u16 {
             for x in 1..BAR_COUNTER.x1 {
                 assert!(!reachable.contains(&(x, y)), "alley leak at ({x}, {y})");
             }
@@ -450,16 +510,21 @@ mod tests {
         let reachable = reachable_from_spawn();
         for seat in SEATS.iter().chain(std::iter::once(&GRAYBEARD_SEAT)) {
             let (x, y) = (seat.x, seat.y);
-            let adjacent = [
-                (x + 1, y),
-                (x.wrapping_sub(1), y),
-                (x, y + 1),
-                (x, y.wrapping_sub(1)),
-            ];
-            assert!(
-                adjacent.iter().any(|cell| reachable.contains(cell)),
-                "no way to walk up to the seat at ({x}, {y})"
-            );
+            // A stool's own parens and leg surround the anchor, so look at
+            // the full 8-neighborhood for a walkable approach cell.
+            let mut approachable = false;
+            for dx in -1i32..=1 {
+                for dy in -1i32..=1 {
+                    if (dx, dy) == (0, 0) {
+                        continue;
+                    }
+                    let cell = (x.wrapping_add_signed(dx as i16), y.wrapping_add_signed(dy as i16));
+                    if reachable.contains(&cell) {
+                        approachable = true;
+                    }
+                }
+            }
+            assert!(approachable, "no way to walk up to the seat at ({x}, {y})");
         }
         for &(x, y) in STANDING_SPOTS {
             assert!(reachable.contains(&(x, y)), "spot ({x}, {y}) unreachable");
@@ -469,31 +534,32 @@ mod tests {
     #[test]
     fn interactives_resolve_by_proximity() {
         // Standing in front of the bar.
-        assert_eq!(nearest_interactive(34, 11), Some(Interactive::Bartender));
+        assert_eq!(nearest_interactive(28, 12), Some(Interactive::Bartender));
         // Next to the jukebox.
-        assert_eq!(nearest_interactive(131, 5), Some(Interactive::Jukebox));
-        // Under the big door to the door games.
-        assert_eq!(nearest_interactive(171, 8), Some(Interactive::Doors));
+        assert_eq!(nearest_interactive(82, 4), Some(Interactive::Jukebox));
         // In front of the arcade cabinet.
-        assert_eq!(nearest_interactive(182, 15), Some(Interactive::Arcade));
+        assert_eq!(nearest_interactive(154, 4), Some(Interactive::Arcade));
+        // Under the big door to the door games.
+        assert_eq!(nearest_interactive(130, 8), Some(Interactive::Doors));
         // Walking up to the poker table.
-        assert_eq!(nearest_interactive(145, 30), Some(Interactive::Poker));
+        assert_eq!(nearest_interactive(145, 15), Some(Interactive::Poker));
         // Admiring the easel.
-        assert_eq!(nearest_interactive(20, 33), Some(Interactive::Easel));
+        assert_eq!(nearest_interactive(19, 33), Some(Interactive::Easel));
         // Petting distance.
         assert_eq!(nearest_interactive(16, 26), Some(Interactive::Dog));
         // Warming up by the hearth, out of the dog's reach.
-        assert_eq!(nearest_interactive(26, 19), Some(Interactive::Fireplace));
+        assert_eq!(nearest_interactive(25, 23), Some(Interactive::Fireplace));
         // Middle of the rug: nothing.
-        assert_eq!(nearest_interactive(122, 26), None);
+        assert_eq!(nearest_interactive(100, 22), None);
     }
 
     #[test]
-    fn walls_and_furniture_block_movement() {
+    fn only_walls_and_the_bar_alley_block_movement() {
         assert!(!walkable(0, 25)); // west wall
-        assert!(!walkable(80, 20)); // table corner
-        assert!(!walkable(7, 11)); // occupied-able bar stool
-        assert!(walkable(122, 26)); // rug
+        assert!(!walkable(28, 5)); // behind the counter
+        assert!(walkable(67, 16)); // right over a table
+        assert!(walkable(28, 9)); // standing ON the counter is allowed
+        assert!(walkable(100, 22)); // rug
         assert!(walkable(SPAWN.0, SPAWN.1)); // welcome mat
     }
 }
