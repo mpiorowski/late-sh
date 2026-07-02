@@ -88,6 +88,18 @@ pub struct DiscoverRoomItem {
     pub member_count: i64,
     pub message_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,
+    /// A snapshot of the room's most recent messages, oldest-first, captured at
+    /// list-load time so the discover preview pane can render instantly while
+    /// scrolling. Empty when the room has no messages yet.
+    pub recent: Vec<PreviewMessage>,
+}
+
+/// One line of a room's recent activity, shown in the discover preview pane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewMessage {
+    pub author: String,
+    pub body: String,
+    pub created: DateTime<Utc>,
 }
 
 pub struct SendMessageTask {
@@ -893,6 +905,7 @@ impl ChatService {
                 member_count: row.member_count,
                 message_count: row.message_count,
                 last_message_at: row.last_message_at,
+                recent: Vec::new(),
             })
             .collect())
     }
@@ -1244,11 +1257,62 @@ impl ChatService {
             .into_iter()
             .map(|room| room.id)
             .collect();
-        Ok(Self::list_all_discover_rooms(&client)
+        let mut rooms: Vec<DiscoverRoomItem> = Self::list_all_discover_rooms(&client)
             .await?
             .into_iter()
             .filter(|room| !joined_ids.contains(&room.room_id))
-            .collect())
+            .collect();
+
+        Self::attach_recent_previews(&client, &mut rooms).await?;
+        Ok(rooms)
+    }
+
+    /// Fetch a snapshot of each room's most recent messages and attach them as
+    /// the `recent` preview, so the discover UI can render a preview pane
+    /// instantly while the user scrolls. Best-effort: a preview-fetch failure is
+    /// logged but leaves the rooms usable with empty previews.
+    async fn attach_recent_previews(
+        client: &tokio_postgres::Client,
+        rooms: &mut [DiscoverRoomItem],
+    ) -> Result<()> {
+        const PREVIEW_MESSAGES_PER_ROOM: i64 = 5;
+
+        let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.room_id).collect();
+        if room_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut messages_by_room =
+            ChatMessage::list_recent_for_rooms(client, &room_ids, PREVIEW_MESSAGES_PER_ROOM).await?;
+
+        let author_ids: Vec<Uuid> = messages_by_room
+            .values()
+            .flatten()
+            .map(|msg| msg.user_id)
+            .collect();
+        let usernames = User::list_usernames_by_ids(client, &author_ids).await?;
+
+        for room in rooms.iter_mut() {
+            let Some(mut messages) = messages_by_room.remove(&room.room_id) else {
+                continue;
+            };
+            // `list_recent_for_rooms` returns newest-first; flip to chronological
+            // so the preview reads top-to-bottom like a normal chat transcript.
+            messages.reverse();
+            room.recent = messages
+                .into_iter()
+                .map(|msg| PreviewMessage {
+                    author: usernames
+                        .get(&msg.user_id)
+                        .cloned()
+                        .unwrap_or_else(|| "someone".to_string()),
+                    body: msg.body,
+                    created: msg.created,
+                })
+                .collect();
+        }
+
+        Ok(())
     }
 
     pub fn list_discover_rooms_task(&self, user_id: Uuid) {

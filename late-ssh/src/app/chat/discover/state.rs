@@ -139,6 +139,7 @@ mod tests {
             member_count: 1,
             message_count: 0,
             last_message_at: Some(Utc::now()),
+            recent: Vec::new(),
         }
     }
 
