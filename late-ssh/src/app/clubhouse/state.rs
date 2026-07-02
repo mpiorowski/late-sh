@@ -138,7 +138,8 @@ impl State {
         self.present.len() + 1
     }
 
-    /// Try to walk one step; furniture, walls, and other patrons block.
+    /// Try to walk one step; only outer walls and the bartender alley block.
+    /// Furniture, props, and other patrons are walk-through.
     pub fn try_move(&mut self, dx: i32, dy: i32) -> bool {
         let nx = self.player_x.saturating_add_signed(dx as i16);
         let ny = self.player_y.saturating_add_signed(dy as i16);
