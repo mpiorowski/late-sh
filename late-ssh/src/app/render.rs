@@ -190,6 +190,9 @@ struct DrawContext<'a> {
     /// Client is kitty specifically — it splits regional-indicator flags in the
     /// World Cup overview's rightmost column (see `App::terminal_is_kitty`).
     terminal_is_kitty: bool,
+    /// The account's raw timezone tweak. The World Cup screen (its only
+    /// consumer) parses it lazily so no work happens on other screens' frames.
+    worldcup_timezone: Option<&'a str>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
@@ -921,6 +924,7 @@ impl App {
                         clubhouse_chat_view,
                         show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                         terminal_is_kitty: self.terminal_is_kitty,
+                        worldcup_timezone: self.profile_state.profile().timezone.as_deref(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
@@ -1343,6 +1347,9 @@ impl App {
                         state: ctx.worldcup_state,
                         show_flags: !ctx.show_flag_fallback,
                         terminal_is_kitty: ctx.terminal_is_kitty,
+                        timezone: crate::app::profile::svc::parse_account_tz(
+                            ctx.worldcup_timezone,
+                        ),
                     },
                 );
             }

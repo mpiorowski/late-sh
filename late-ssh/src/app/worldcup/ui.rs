@@ -7,6 +7,7 @@
 //! friendly placeholder rather than a blank screen.
 
 use chrono::Utc;
+use chrono_tz::Tz;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -32,6 +33,10 @@ pub struct WorldCupView<'a> {
     /// rightmost (bracket) column — that one column drops flags for kitty while
     /// keeping them everywhere else.
     pub terminal_is_kitty: bool,
+    /// The account's timezone tweak, parsed from the profile setting. When
+    /// present, upcoming kick-off times are rendered in this local zone
+    /// (instead of UTC) and the UPCOMING header calls that out.
+    pub timezone: Option<Tz>,
 }
 
 const LIVE: Color = Color::Rgb(255, 92, 92);
@@ -54,6 +59,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: WorldCupView) {
             view.state,
             view.show_flags,
             view.terminal_is_kitty,
+            view.timezone,
         ),
         // The dedicated bracket has no panel to its left, so kitty renders its
         // flags fine — only `show_flags` gates them here.
@@ -161,6 +167,7 @@ fn draw_overview(
     state: &State,
     show_flags: bool,
     terminal_is_kitty: bool,
+    timezone: Option<Tz>,
 ) {
     let show_bracket = area.width >= WIDE_OVERVIEW_MIN_WIDTH && !snap.bracket.is_empty();
     if show_bracket {
@@ -170,7 +177,7 @@ fn draw_overview(
             Constraint::Length(OVERVIEW_BRACKET_WIDTH),
         ])
         .areas(area);
-        draw_matches_panel(frame, left, snap, show_flags);
+        draw_matches_panel(frame, left, snap, show_flags, timezone);
         draw_groups_panel(frame, mid, snap, state.overview_scroll, show_flags);
         // kitty splits flags here (rightmost column, downstream of the panels'
         // flags on shared rows), so it alone falls back to codes.
@@ -178,12 +185,18 @@ fn draw_overview(
     } else {
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(44), Constraint::Fill(1)]).areas(area);
-        draw_matches_panel(frame, left, snap, show_flags);
+        draw_matches_panel(frame, left, snap, show_flags, timezone);
         draw_groups_panel(frame, right, snap, state.overview_scroll, show_flags);
     }
 }
 
-fn draw_matches_panel(frame: &mut Frame, area: Rect, snap: &WorldCupSnapshot, show_flags: bool) {
+fn draw_matches_panel(
+    frame: &mut Frame,
+    area: Rect,
+    snap: &WorldCupSnapshot,
+    show_flags: bool,
+    timezone: Option<Tz>,
+) {
     let block = panel_block(" ⚽ Matches ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -202,12 +215,19 @@ fn draw_matches_panel(frame: &mut Frame, area: Rect, snap: &WorldCupSnapshot, sh
 
     let upcoming: Vec<&Match> = snap.upcoming().take(10).collect();
     if !upcoming.is_empty() {
-        lines.push(section_header("UPCOMING"));
+        // When the account has a timezone set, kick-offs are rendered in that
+        // local time; call it out in the header so the times aren't ambiguous.
+        let header = if timezone.is_some() {
+            "UPCOMING (local time)"
+        } else {
+            "UPCOMING"
+        };
+        lines.push(section_header(header));
         // Group consecutive fixtures under a single day banner so each row
         // only needs the kick-off time, buying back horizontal room.
         let mut current_day: Option<String> = None;
         for m in upcoming {
-            let day = kickoff_day(m);
+            let day = kickoff_day(m, timezone);
             if day != current_day {
                 if let Some(d) = &day {
                     lines.push(banner_line(d, width));
@@ -215,7 +235,7 @@ fn draw_matches_panel(frame: &mut Frame, area: Rect, snap: &WorldCupSnapshot, sh
                 current_day = day;
             }
             lines.push(fill_bg(
-                upcoming_match_line(m, show_flags),
+                upcoming_match_line(m, show_flags, timezone),
                 muted_row_bg(),
                 width,
             ));
@@ -259,10 +279,10 @@ fn live_match_line(m: &Match, show_flags: bool) -> Line<'static> {
     ])
 }
 
-fn upcoming_match_line(m: &Match, show_flags: bool) -> Line<'static> {
+fn upcoming_match_line(m: &Match, show_flags: bool, timezone: Option<Tz>) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("{:<6}", kickoff_time(m)),
+            format!("{:<6}", kickoff_time(m, timezone)),
             Style::default().fg(theme::AMBER_DIM()),
         ),
         team_span(&m.home, false, show_flags),
@@ -367,14 +387,32 @@ fn score_str(m: &Match) -> String {
     }
 }
 
-fn kickoff_day(m: &Match) -> Option<String> {
-    m.kickoff.map(|t| t.format("%b %d").to_string())
+fn kickoff_day(m: &Match, timezone: Option<Tz>) -> Option<String> {
+    m.kickoff.map(|t| format_kickoff_day(t, timezone))
 }
 
-fn kickoff_time(m: &Match) -> String {
+fn kickoff_time(m: &Match, timezone: Option<Tz>) -> String {
     m.kickoff
-        .map(|t| t.format("%H:%M").to_string())
+        .map(|t| format_kickoff_time(t, timezone))
         .unwrap_or_default()
+}
+
+/// Format the day portion of a kick-off in the account's timezone when set,
+/// otherwise in UTC (the snapshot's native zone).
+fn format_kickoff_day(t: chrono::DateTime<Utc>, timezone: Option<Tz>) -> String {
+    match timezone {
+        Some(tz) => t.with_timezone(&tz).format("%b %d").to_string(),
+        None => t.format("%b %d").to_string(),
+    }
+}
+
+/// Format the time portion of a kick-off in the account's timezone when set,
+/// otherwise in UTC (the snapshot's native zone).
+fn format_kickoff_time(t: chrono::DateTime<Utc>, timezone: Option<Tz>) -> String {
+    match timezone {
+        Some(tz) => t.with_timezone(&tz).format("%H:%M").to_string(),
+        None => t.format("%H:%M").to_string(),
+    }
 }
 
 // ---- groups ----------------------------------------------------------------
@@ -666,12 +704,36 @@ mod tests {
             status: MatchStatus::Upcoming,
             ..Default::default()
         };
-        assert_eq!(kickoff_day(&m), Some("Jun 30".to_string()));
-        assert_eq!(kickoff_time(&m), "21:00");
+        // No timezone set -> UTC, the snapshot's native zone.
+        assert_eq!(kickoff_day(&m, None), Some("Jun 30".to_string()));
+        assert_eq!(kickoff_time(&m, None), "21:00");
 
         let tbd = Match::default();
-        assert_eq!(kickoff_day(&tbd), None);
-        assert_eq!(kickoff_time(&tbd), "");
+        assert_eq!(kickoff_day(&tbd, None), None);
+        assert_eq!(kickoff_time(&tbd, None), "");
+    }
+
+    #[test]
+    fn kickoff_uses_account_timezone_when_set() {
+        use chrono::TimeZone;
+        // 21:00 UTC is 23:00 the same day in Europe/Warsaw (UTC+2 in summer).
+        let m = Match {
+            kickoff: Some(Utc.with_ymd_and_hms(2026, 6, 30, 21, 0, 0).unwrap()),
+            status: MatchStatus::Upcoming,
+            ..Default::default()
+        };
+        let tz: Tz = "Europe/Warsaw".parse().unwrap();
+        assert_eq!(kickoff_day(&m, Some(tz)), Some("Jun 30".to_string()));
+        assert_eq!(kickoff_time(&m, Some(tz)), "23:00");
+
+        // 2026-06-30 22:30 UTC is 2026-07-01 00:30 in Warsaw -> day rolls over.
+        let late = Match {
+            kickoff: Some(Utc.with_ymd_and_hms(2026, 6, 30, 22, 30, 0).unwrap()),
+            status: MatchStatus::Upcoming,
+            ..Default::default()
+        };
+        assert_eq!(kickoff_day(&late, Some(tz)), Some("Jul 01".to_string()));
+        assert_eq!(kickoff_time(&late, Some(tz)), "00:30");
     }
 
     #[test]
