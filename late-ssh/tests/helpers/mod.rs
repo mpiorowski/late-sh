@@ -201,6 +201,10 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         nethack_host: String::new(),
         nethack_port: 2323,
         nethack_secret: String::new(),
+        dopewars_enabled: false,
+        dopewars_host: String::new(),
+        dopewars_port: 2324,
+        dopewars_secret: String::new(),
     }
 }
 
@@ -317,6 +321,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             chip_service.clone(),
             db.clone(),
         ),
+        greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
+            activity_publisher.clone(),
+            chip_service.clone(),
+            db.clone(),
+        ),
         rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
@@ -353,6 +362,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ultimate_service,
         now_playing_rx,
         radio_meta_rx,
+        worldcup_service: late_ssh::app::worldcup::svc::WorldCupService::new(),
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
         room_join_feed,
@@ -456,6 +466,11 @@ fn make_app_with_chat_service_and_permissions(
         initial_minesweeper_games: Vec::new(),
         lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
             chip_service,
             db.clone(),
         ),
@@ -492,6 +507,10 @@ fn make_app_with_chat_service_and_permissions(
         nethack_port: 2323,
         nethack_secret: String::new(),
         nethack_awards: None,
+        dopewars_enabled: false,
+        dopewars_host: String::new(),
+        dopewars_port: 2324,
+        dopewars_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
@@ -499,6 +518,7 @@ fn make_app_with_chat_service_and_permissions(
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
+        worldcup_service: None,
         user_id,
         permissions,
         artboard_banned: false,
@@ -601,6 +621,11 @@ pub fn make_app_with_paired_client(
         initial_minesweeper_games: Vec::new(),
         lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
             chip_service,
             db.clone(),
         ),
@@ -637,6 +662,10 @@ pub fn make_app_with_paired_client(
         nethack_port: 2323,
         nethack_secret: String::new(),
         nethack_awards: None,
+        dopewars_enabled: false,
+        dopewars_host: String::new(),
+        dopewars_port: 2324,
+        dopewars_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
@@ -644,6 +673,7 @@ pub fn make_app_with_paired_client(
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
+        worldcup_service: None,
         user_id,
         permissions: Permissions::default(),
         artboard_banned: false,

@@ -47,6 +47,11 @@ variable "NETHACK_IMAGE_TAG" {
   type        = string
 }
 
+variable "DOPEWARS_IMAGE_TAG" {
+  description = "Docker image for late-dopewars, the dopewars door host (e.g., ghcr.io/org/late-dopewars:sha-abc123)."
+  type        = string
+}
+
 # =============================================================================
 # SSH Host Key
 # =============================================================================
@@ -175,6 +180,17 @@ variable "NETHACK_ENABLED" {
   validation {
     condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.NETHACK_ENABLED)))
     error_message = "NETHACK_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
+variable "DOPEWARS_ENABLED" {
+  description = "Enable the dopewars door game CLIENT (service-ssh reaches the late-dopewars host over SSH; the host pod is always deployed). Empty defaults to on."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DOPEWARS_ENABLED)))
+    error_message = "DOPEWARS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
   }
 }
 

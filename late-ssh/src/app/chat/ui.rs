@@ -2224,6 +2224,7 @@ pub struct ChatRenderInput<'a> {
     pub composing: bool,
     pub current_user_id: Uuid,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    pub ignored_user_ids: &'a HashSet<Uuid>,
     pub show_flag_fallback: bool,
     pub cursor_visible: bool,
     pub mention_matches: &'a [MentionMatch],
@@ -2296,6 +2297,7 @@ pub(crate) struct ChatRoomListView<'a> {
     pub room_jump_active: bool,
     pub room_section_prefix_armed: bool,
     pub current_user_id: Uuid,
+    pub ignored_user_ids: &'a HashSet<Uuid>,
     pub feeds_available: bool,
     pub feeds_selected: bool,
     pub feeds_unread_count: i64,
@@ -2617,6 +2619,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         room_jump_active: view.room_jump_active,
         room_section_prefix_armed: view.room_section_prefix_armed,
         current_user_id: view.current_user_id,
+        ignored_user_ids: view.ignored_user_ids,
         feeds_available: view.feeds_view.has_feeds,
         feeds_selected: view.feeds_selected,
         feeds_unread_count: view.feeds_unread_count,
@@ -3201,6 +3204,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         feeds_available: view.feeds_available,
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
+        ignored_user_ids: view.ignored_user_ids,
     });
     // Bumped rooms are advertised as read-only text at the top of the rail;
     // they are not part of `order`, so they take no jump key and never
@@ -3415,6 +3419,8 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         if view.feeds_available {
             push_slot(RoomSlot::Feeds, &mut push_row);
         }
+        // Discover ("+ browse rooms") is the last entry in Core.
+        push_slot(RoomSlot::Discover, &mut push_row);
     }
 
     let channels: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
@@ -3461,9 +3467,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             }
         }
     }
-
-    push_row(blank(), None, false);
-    push_slot(RoomSlot::Discover, &mut push_row);
 
     RoomListRows {
         lines,
@@ -3587,7 +3590,7 @@ fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
         Line::from(vec![key("h l space"), hint(" jump room")]),
         Line::from(vec![key("f"), hint("         favorite")]),
         Line::from(vec![key("[ ]/z"), hint("     sort/fold")]),
-        Line::from(vec![key("ctrl+/"), hint("    find room")]),
+        Line::from(vec![key("ctrl+/"), hint("    picker")]),
     ]
 }
 
@@ -3846,16 +3849,36 @@ fn draw_selected_content(
             );
         }
     } else if view.discover_selected {
-        let hint_block = Block::default()
-            .title(" Discover ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER()));
-        let hint_text = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter join room",
-            Style::default().fg(theme::TEXT_DIM()),
-        )))
-        .block(hint_block);
-        frame.render_widget(hint_text, composer_area);
+        if view.discover_view.filtering {
+            let filter_block = Block::default()
+                .title(" Filter rooms ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+            let filter_text = Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!(" {}", view.discover_view.query),
+                    Style::default().fg(theme::TEXT_BRIGHT()),
+                ),
+                Span::styled("_", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(
+                    "   Enter join · Esc clear",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ]))
+            .block(filter_block);
+            frame.render_widget(filter_text, composer_area);
+        } else {
+            let hint_block = Block::default()
+                .title(" Discover ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER()));
+            let hint_text = Paragraph::new(Line::from(Span::styled(
+                " j/k navigate · Enter join room · / filter",
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .block(hint_block);
+            frame.render_widget(hint_text, composer_area);
+        }
     } else if news_selected {
         if view.news_processing || view.news_composing {
             let (title, border_style) = if view.news_processing {
@@ -4024,6 +4047,7 @@ mod tests {
             updated: Utc::now(),
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id,
             user_id,
             body: "hello".to_string(),
@@ -4075,6 +4099,7 @@ mod tests {
             updated: Utc::now(),
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id,
             user_id: author_id,
             body: "hello".to_string(),
@@ -4144,6 +4169,7 @@ mod tests {
             updated: created,
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id,
             user_id,
             body: "hello".to_string(),
@@ -4206,6 +4232,7 @@ mod tests {
         static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
         static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+        static IGNORED_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
         static VOICE_CHANNELS: OnceLock<
             HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
@@ -4238,9 +4265,11 @@ mod tests {
             },
             discover_selected: false,
             discover_view: crate::app::chat::discover::ui::DiscoverListView {
-                items: &[],
+                items: Vec::new(),
                 selected_index: 0,
                 loading: false,
+                filtering: false,
+                query: "",
             },
             rows_cache,
             chat_rooms: rooms,
@@ -4270,6 +4299,7 @@ mod tests {
             composing: false,
             current_user_id: Uuid::nil(),
             afk_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
+            ignored_user_ids: IGNORED_USER_IDS.get_or_init(HashSet::new),
             show_flag_fallback: false,
             cursor_visible: false,
             mention_matches: &[],
@@ -4930,13 +4960,16 @@ mod tests {
             .collect();
 
         assert_eq!(
-            &keyed_slots[..5],
+            &keyed_slots[..6],
             &[
                 (RoomSlot::Room(lounge.id), "a lounge".to_string()),
                 (RoomSlot::Notifications, "s mentions".to_string()),
                 (RoomSlot::News, "d news".to_string()),
                 (RoomSlot::Feeds, "f rss".to_string()),
-                (RoomSlot::Room(rust.id), "g rust".to_string()),
+                // Discover ("+ browse rooms") is the last entry in Core, so the
+                // topic rooms below it start one jump key later.
+                (RoomSlot::Discover, "g + browse rooms".to_string()),
+                (RoomSlot::Room(rust.id), "h rust".to_string()),
             ]
         );
     }

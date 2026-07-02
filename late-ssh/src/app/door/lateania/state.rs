@@ -6,6 +6,7 @@
 // list panels. All real actions delegate to the service's *_task methods; this
 // struct never blocks and never mutates world truth.
 
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
@@ -14,6 +15,9 @@ use uuid::Uuid;
 use super::classes::Class;
 use super::svc::{LateaniaService, MudSnapshot, PlayerView, empty_player_view};
 use super::world::Dir;
+
+/// Lines moved per `[` / `]` press when scrolling a text panel.
+const SCROLL_STEP: usize = 3;
 
 /// Which side panel the session is looking at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +53,10 @@ pub struct State {
     panel: Panel,
     /// Selection cursor for the inventory/shop list panels.
     cursor: usize,
+    /// Line the list view is scrolled to. Interior-mutable so the render pass
+    /// (which only holds `&State`) can keep the highlighted row inside a
+    /// scroll-off margin. Reset whenever the panel changes.
+    list_scroll: Cell<usize>,
     joined: bool,
     join_pending: bool,
     join_requested_at: Instant,
@@ -68,6 +76,7 @@ impl State {
             snapshot_rx,
             panel: Panel::Room,
             cursor: 0,
+            list_scroll: Cell::new(0),
             joined: true,
             join_pending: true,
             join_requested_at,
@@ -131,6 +140,7 @@ impl State {
         if self.panel != panel {
             self.panel = panel;
             self.cursor = 0;
+            self.list_scroll.set(0);
         }
     }
 
@@ -141,6 +151,31 @@ impl State {
             self.panel = panel;
         }
         self.cursor = 0;
+        self.list_scroll.set(0);
+    }
+
+    /// Current list scroll offset (first visible line).
+    pub fn list_scroll(&self) -> usize {
+        self.list_scroll.get()
+    }
+
+    /// Store the list scroll offset chosen by the render pass.
+    pub fn set_list_scroll(&self, off: usize) {
+        self.list_scroll.set(off);
+    }
+
+    /// Manual scroll for cursor-less text panels (`[` / `]`). List panels
+    /// auto-follow their cursor and re-clamp this on the next render, so these
+    /// only have a lasting effect on text panels. The render pass clamps the
+    /// value to the content, so growing it past the end is harmless.
+    pub fn scroll_text_up(&mut self) {
+        let cur = self.list_scroll.get();
+        self.list_scroll.set(cur.saturating_sub(SCROLL_STEP));
+    }
+
+    pub fn scroll_text_down(&mut self) {
+        let cur = self.list_scroll.get();
+        self.list_scroll.set(cur + SCROLL_STEP);
     }
 
     /// Current list length for whichever list panel is active (for cursor clamp).

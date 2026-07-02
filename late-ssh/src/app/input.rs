@@ -1288,6 +1288,20 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 /// launches it; `d` opens the Lateania reset prompt when Lateania is selected.
 /// Returns `false` for keys it does not own (digit/Tab nav, `q`, `?`) so they
 /// fall through to the global handlers.
+/// World Cup screen keys: `Space` toggles overview/bracket and `j`/`k` (plus
+/// the down/up arrows) scroll the active view. Returns `false` for everything
+/// else so global navigation (Tab, page numbers, `?`, `q`, …) still works.
+fn handle_worldcup_input(app: &mut App, event: &ParsedInput) -> bool {
+    let byte = match event {
+        ParsedInput::Byte(b) => *b,
+        ParsedInput::Char(c) if c.is_ascii() => *c as u8,
+        ParsedInput::Arrow(b'B') => b'j',
+        ParsedInput::Arrow(b'A') => b'k',
+        _ => return false,
+    };
+    crate::app::worldcup::input::handle_key(&mut app.worldcup, byte)
+}
+
 fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
     use crate::app::door::hub::state::HubGame;
 
@@ -1317,11 +1331,19 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
         return match event {
             ParsedInput::Byte(b'y' | b'Y' | b'\r' | b'\n') | ParsedInput::Char('y' | 'Y') => {
                 app.door_delete_confirm = false;
-                app.leave_lateania();
-                app.lateania_service.delete_character_task(app.user_id);
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Lateania character reset. Enter the world to start over.",
-                ));
+                if selected == HubGame::GreenDragon {
+                    app.leave_greendragon();
+                    app.greendragon_service.delete_character(app.user_id);
+                    app.banner = Some(crate::app::common::primitives::Banner::success(
+                        "Green Dragon character reset. Enter the village to start over.",
+                    ));
+                } else {
+                    app.leave_lateania();
+                    app.lateania_service.delete_character_task(app.user_id);
+                    app.banner = Some(crate::app::common::primitives::Banner::success(
+                        "Lateania character reset. Enter the world to start over.",
+                    ));
+                }
                 true
             }
             ParsedInput::Byte(b'n' | b'N' | b'd' | b'D')
@@ -1355,7 +1377,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Byte(b'd' | b'D') | ParsedInput::Char('d' | 'D')
-            if selected == HubGame::Lateania =>
+            if selected == HubGame::Lateania || selected == HubGame::GreenDragon =>
         {
             app.door_delete_confirm = true;
             true
@@ -1400,12 +1422,32 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
                 state.connect();
             }
         }
+        HubGame::GreenDragon => {
+            app.set_screen(Screen::GreenDragon);
+            app.enter_greendragon();
+        }
+        HubGame::Dopewars => {
+            if !app.dopewars_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "dopewars is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Dopewars);
+            if let Some(state) = app.dopewars_state.as_mut() {
+                state.connect();
+            }
+        }
     }
 }
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
     if ctx.screen == Screen::Games {
         return handle_games_hub_input(app, event);
+    }
+
+    if ctx.screen == Screen::WorldCup {
+        return handle_worldcup_input(app, event);
     }
 
     if ctx.screen == Screen::Rebels {
@@ -1431,6 +1473,21 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if let ParsedInput::Byte(b'\r' | b'\n') = event {
             app.enter_nethack();
             if let Some(state) = app.nethack_state.as_mut() {
+                state.connect();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Dopewars {
+        // Running-mode bytes never reach here (intercepted in handle_input), so
+        // this only handles the Launcher. Enter launches the game; every other
+        // key falls through to the normal global handling, so the launcher
+        // behaves like a plain page.
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_dopewars();
+            if let Some(state) = app.dopewars_state.as_mut() {
                 state.connect();
             }
             return true;
@@ -1476,6 +1533,35 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                 return true;
             }
             _ => {}
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::GreenDragon {
+        // Native in-process door, handled like Lateania: forward all keys to the
+        // game, except let the global `?` guide through.
+        if app.greendragon_state.is_some() && door_games_allows_global_help(event) {
+            return false;
+        }
+        if app.greendragon_state.is_some() {
+            match event {
+                ParsedInput::Byte(byte) => {
+                    crate::app::door::greendragon::screen::GAME.handle_key(app, *byte);
+                }
+                ParsedInput::Char(ch) if ch.is_ascii() => {
+                    crate::app::door::greendragon::screen::GAME.handle_key(app, *ch as u8);
+                }
+                ParsedInput::Arrow(key) => {
+                    crate::app::door::greendragon::screen::GAME.handle_arrow(app, *key);
+                }
+                _ => {}
+            }
+            return true;
+        }
+        // Launcher fallback: Enter starts the game (the hub normally does this).
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_greendragon();
+            return true;
         }
         return false;
     }
@@ -2016,6 +2102,13 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
         return;
     }
 
+    // The Discover filter is a text input; let it capture digits, `/`, etc.
+    // before the global screen-switch / slash-command handlers claim them.
+    if discover_filter_active(app, ctx.screen) {
+        let _ = chat::input::handle_byte(app, byte);
+        return;
+    }
+
     if handle_modal_input(app, ctx, byte) {
         return;
     }
@@ -2034,6 +2127,12 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
 
 fn room_jump_active_on_current_screen(app: &App, screen: Screen) -> bool {
     app.chat.room_jump_active && matches!(screen, Screen::Dashboard)
+}
+
+fn discover_filter_active(app: &App, screen: Screen) -> bool {
+    matches!(screen, Screen::Dashboard)
+        && app.chat.discover_selected
+        && app.chat.discover.is_filtering()
 }
 
 fn toggle_room_section_from_key(app: &mut App, ctx: InputContext, section: RoomSection) -> bool {
@@ -2150,6 +2249,10 @@ fn dispatch_escape(app: &mut App) {
         app.chat.cancel_room_jump();
         return;
     }
+    if discover_filter_active(app, ctx.screen) {
+        app.chat.discover.cancel_filter();
+        return;
+    }
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
@@ -2193,6 +2296,16 @@ fn dispatch_escape(app: &mut App) {
         app.door_delete_confirm = false;
         app.leave_lateania();
         app.set_screen(Screen::Games);
+        return;
+    }
+    // Esc in Green Dragon backs out one menu level (and leaves to the hub from
+    // the village); the game decides, so forward it.
+    if ctx.screen == Screen::GreenDragon {
+        if app.door_delete_confirm {
+            app.door_delete_confirm = false;
+            return;
+        }
+        crate::app::door::greendragon::screen::GAME.handle_key(app, 0x1B);
         return;
     }
     // Esc from the Games hub cancels a pending Lateania reset, otherwise drops
@@ -2425,6 +2538,7 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
         }
         Screen::Artboard => {}
         Screen::Pinstar => {}
+        Screen::WorldCup => app.worldcup.scroll(delta),
         _ => {}
     }
 }
@@ -2443,6 +2557,7 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         18 => Some(Screen::Rooms),
         20 => Some(Screen::Artboard),
         22 => Some(Screen::Pinstar),
+        24 => Some(Screen::WorldCup),
         _ => None,
     }
 }
@@ -2476,6 +2591,7 @@ fn chat_room_list_view<'a>(
         room_jump_active: app.chat.room_jump_active,
         room_section_prefix_armed: app.room_section_prefix_armed,
         current_user_id: app.user_id,
+        ignored_user_ids: app.chat.ignored_user_ids(),
         feeds_available: app.chat.feeds.has_feeds(),
         feeds_selected: app.chat.feeds_selected,
         feeds_unread_count: app.chat.feeds.unread_count(),
@@ -2966,11 +3082,13 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Games hub arrows are handled in handle_dedicated_screen_input.
         Screen::Games => false,
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
+        Screen::GreenDragon => crate::app::door::greendragon::screen::GAME.handle_arrow(app, key),
         // TODO(M5): forward arrows while Running; Launcher ignores them.
         Screen::Rebels => false,
         // Running-mode arrows are forwarded raw in App::handle_input; the
         // Launcher ignores them.
         Screen::Nethack => false,
+        Screen::Dopewars => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -2978,6 +3096,9 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
             // Arrows handled via handle_dedicated_screen_input
             false
         }
+        // World Cup up/down arrows are consumed earlier in
+        // handle_dedicated_screen_input (mapped to k/j scroll).
+        Screen::WorldCup => false,
     }
 }
 
@@ -3023,10 +3144,13 @@ fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
         return false;
     }
 
-    // On synthetic chat entries (News/Showcase/Work), `/` is the
-    // filter-mine toggle, not a slash-command starter.
+    // On synthetic chat entries (News/Showcase/Work/Discover), `/` is a
+    // per-view filter shortcut, not a slash-command starter.
     if matches!(screen, Screen::Dashboard)
-        && (app.chat.news_selected || app.chat.showcase_selected || app.chat.work_selected)
+        && (app.chat.news_selected
+            || app.chat.showcase_selected
+            || app.chat.work_selected
+            || app.chat.discover_selected)
     {
         return false;
     }
@@ -3536,6 +3660,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Pinstar);
             true
         }
+        b'7' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
+            app.set_screen(Screen::WorldCup);
+            true
+        }
         b'\t' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(ctx.screen.next());
@@ -3588,6 +3717,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Lateania => {
             crate::app::door::lateania::screen::GAME.handle_key(app, byte);
         }
+        Screen::GreenDragon => {
+            crate::app::door::greendragon::screen::GAME.handle_key(app, byte);
+        }
         Screen::Rebels => {
             // Launcher key dispatch (connect on Enter) is handled via
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
@@ -3595,6 +3727,11 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Nethack => {
             // Same as Rebels: Launcher Enter is handled in
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
+        Screen::Dopewars => {
+            // Same as Nethack: Launcher Enter is handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }
@@ -3610,6 +3747,10 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Pinstar => {
             // Pinstar key dispatch is handled via handle_dedicated_screen_input
             // and the rich-event path; byte dispatch is a no-op here.
+        }
+        Screen::WorldCup => {
+            // World Cup keys are handled in handle_dedicated_screen_input
+            // (Space/j/k/arrows); byte dispatch is a no-op here.
         }
     }
 }
@@ -4459,9 +4600,9 @@ mod tests {
         assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Rooms));
         assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
         assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
-        // The door games are no longer top-level tabs; their old columns and the
-        // gaps between digits map to nothing.
-        assert_eq!(topbar_screen_hit_test(24, 0), None);
+        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::WorldCup));
+        // The door games are no longer top-level tabs; the column past the last
+        // digit and the gaps between digits map to nothing.
         assert_eq!(topbar_screen_hit_test(26, 0), None);
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);

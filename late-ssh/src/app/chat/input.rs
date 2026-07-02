@@ -524,6 +524,13 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
+    // While the Discover filter is open it owns every byte (including space and
+    // h/l, which would otherwise trigger room-jump / room-switch) so the user
+    // can type an unrestricted query.
+    if app.chat.discover_selected && app.chat.discover.is_filtering() {
+        return super::discover::input::handle_byte(app, byte);
+    }
+
     if app.chat.room_jump_active {
         match byte {
             b' ' => {

@@ -150,7 +150,8 @@ Before class choice:
 - World actions: `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel; `g` casts the Resurrection rite on the nearest fallen adventurer in the room (Cleric/Paladin/Druid only); `p` opens the Stable (companion vendor) where one stands; `n` opens the housing ledger (at the clerk, or inside a home you own).
 - While dead (a corpse): all normal keys are suppressed; only `r`/Enter (release to the temple) and `Esc` (leave) respond, until a resurrection or the auto-release deadline.
 - Panels: `c` character, `v` abilities, `t` inventory, `b` shop where a merchant exists, `o` examine/look, `k` titles, `j` quest journal, `f` follow.
-- List panels: `w/s` or up/down move cursor; `1-9` jump and activate; Enter activates.
+- List panels: `w/s` or up/down move cursor; `1-9` jump and activate; Enter activates. The view auto-scrolls to keep the highlighted row within a small scroll-off margin (top and bottom).
+- Cursor-less text panels (character/abilities/quests): `[` / `]` scroll. Both scroll offsets share one interior-mutable `list_scroll` on `state::State`, clamped to content by the render pass and reset on panel change.
 - Inventory panel: `x` sells the selected inventory row when a shop is present.
 - Follow panel: Enter follows/stops the selected in-room adventurer; `x` stops following whoever is currently followed, including absent/separated targets.
 - `Esc` leaves active Lateania and returns to the Games hub.

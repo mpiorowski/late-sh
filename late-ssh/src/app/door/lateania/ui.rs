@@ -299,20 +299,67 @@ fn draw_side(
         return;
     }
 
-    let lines = match state.panel() {
+    // List panels return the line index of the highlighted row so the view can
+    // scroll to keep the selection visible; text panels return `None`.
+    let (lines, selected) = match state.panel() {
         Panel::Room => unreachable!("room panel is rendered by draw_room_side"),
-        Panel::Character => character_panel(view),
-        Panel::Abilities => abilities_panel(view),
+        Panel::Character => (character_panel(view), None),
+        Panel::Abilities => (abilities_panel(view), None),
         Panel::Inventory => inventory_panel(view, state.cursor()),
         Panel::Shop => shop_panel(view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
         Panel::Titles => titles_panel(view, state.cursor()),
-        Panel::Quests => quests_panel(view),
+        Panel::Quests => (quests_panel(view), None),
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
         Panel::Stable => stable_panel(view, state.cursor()),
         Panel::Housing => housing_panel(view, state.cursor()),
     };
-    frame.render_widget(side_paragraph(lines), area);
+    let off = scroll_offset(
+        state.list_scroll(),
+        lines.len(),
+        selected,
+        area.height as usize,
+    );
+    state.set_list_scroll(off);
+    let shown = if off == 0 {
+        lines
+    } else {
+        lines.into_iter().skip(off).collect()
+    };
+    frame.render_widget(side_paragraph(shown), area);
+}
+
+/// Lines of context kept between the highlighted row and the top/bottom edges of
+/// the list view, so navigating never parks the selection flush against a
+/// border (except at the very start/end of the list, where there's nothing more
+/// to show).
+const LIST_SCROLL_MARGIN: usize = 2;
+
+/// New first-visible line for a side panel, given the previous scroll `prev`.
+///
+/// List panels pass the highlighted row as `selected` and auto-follow it,
+/// nudging only when it would come within `LIST_SCROLL_MARGIN` of an edge so
+/// the list scrolls under the cursor. Cursor-less text panels pass
+/// `selected = None` and are scrolled manually (`[` / `]`); here we just clamp
+/// the requested offset to the content.
+fn scroll_offset(prev: usize, total: usize, selected: Option<usize>, height: usize) -> usize {
+    if height == 0 || total <= height {
+        return 0;
+    }
+    let max = total - height;
+    let Some(sel) = selected else {
+        // Text panel: honor the manual offset, clamped to the content.
+        return prev.min(max);
+    };
+    // Margin can't exceed what fits above and below within the window.
+    let margin = LIST_SCROLL_MARGIN.min(height.saturating_sub(1) / 2);
+    let mut off = prev.min(max);
+    if sel < off + margin {
+        off = sel.saturating_sub(margin);
+    } else if sel + margin >= off + height {
+        off = sel + margin + 1 - height;
+    }
+    off.min(max)
 }
 
 fn draw_room_side(
@@ -341,8 +388,9 @@ fn draw_room_side(
 
 /// Titles panel: a selectable list of earned titles with their levels. Enter
 /// sets the highlighted one as your displayed title (or clears it).
-fn titles_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+fn titles_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Titles")];
+    let mut sel_line = None;
     if view.titles.is_empty() {
         lines.push(Line::from(Span::styled(
             "  none earned yet - slay notable foes",
@@ -351,6 +399,9 @@ fn titles_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     }
     for (i, title) in view.titles.iter().enumerate() {
         let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let active = view.active_title == Some(i);
         let level = view.title_levels.get(i).copied().unwrap_or(1);
         let marker = if selected { ">" } else { " " };
@@ -375,7 +426,7 @@ fn titles_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter display"));
     lines.push(hint("k", "close  (* = shown by your name)"));
-    lines
+    (lines, sel_line)
 }
 
 /// Quest journal: Frontier zone clears plus active board bounties.
@@ -410,6 +461,7 @@ fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
     )));
     lines.push(Line::raw(""));
     lines.push(hint("j", "close"));
+    lines.push(hint("[ ]", "scroll"));
     lines
 }
 
@@ -1085,12 +1137,14 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     }
     lines.push(Line::raw(""));
     lines.push(hint("c", "close  v abilities  t bag"));
+    lines.push(hint("[ ]", "scroll"));
     lines
 }
 
 /// Examine panel: the lookable things in the current room.
-fn examine_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+fn examine_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Look at")];
+    let mut sel_line = None;
     if view.features.is_empty() {
         lines.push(Line::from(Span::styled(
             "  nothing of note here",
@@ -1099,6 +1153,9 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     }
     for (i, feat) in view.features.iter().enumerate() {
         let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let marker = if selected { ">" } else { " " };
         let tag = if feat.kind.is_empty() {
             String::new()
@@ -1121,7 +1178,7 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter look"));
     lines.push(hint("o", "close"));
-    lines
+    (lines, sel_line)
 }
 
 /// One compact line of the six ability scores with their modifiers.
@@ -1177,10 +1234,12 @@ fn abilities_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(hint("1-9", "use ability in combat"));
     lines.push(hint("v", "close"));
+    lines.push(hint("[ ]", "scroll"));
     lines
 }
 
-fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+    let mut sel_line = None;
     let mut lines = vec![
         section("Inventory"),
         Line::from(Span::styled(
@@ -1202,6 +1261,9 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     }
     for (i, it) in view.inventory.iter().enumerate() {
         let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let marker = if selected { ">" } else { " " };
         let tag = inventory_item_tag(it.equipped, it.slot.as_deref());
         let style = if selected {
@@ -1226,7 +1288,7 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter equip/use"));
     lines.push(hint("x", "sell (at a shop)  t close"));
-    lines
+    (lines, sel_line)
 }
 
 fn inventory_item_tag(equipped: bool, slot: Option<&str>) -> String {
@@ -1238,13 +1300,17 @@ fn inventory_item_tag(equipped: bool, slot: Option<&str>) -> String {
     slot.map(|slot| format!(" ({slot})")).unwrap_or_default()
 }
 
-fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(shop) = &view.shop else {
-        return vec![Line::from(Span::styled(
-            "No shop here.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))];
+        return (
+            vec![Line::from(Span::styled(
+                "No shop here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
     };
+    let mut sel_line = None;
     let gold_line = if view.banked_gold > 0 {
         format!(
             "{} - your gold: {} (bank: {})",
@@ -1268,6 +1334,9 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     ];
     for (i, e) in shop.entries.iter().enumerate() {
         let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let marker = if selected { ">" } else { " " };
         let price_color = if e.affordable {
             theme::BADGE_GOLD()
@@ -1303,16 +1372,20 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter buy"));
     lines.push(hint("b", "leave shop"));
-    lines
+    (lines, sel_line)
 }
 
-fn stable_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(stable) = &view.stable else {
-        return vec![Line::from(Span::styled(
-            "No stable here.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))];
+        return (
+            vec![Line::from(Span::styled(
+                "No stable here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
     };
+    let mut sel_line = None;
     let mut lines = vec![
         Line::from(Span::styled(
             "The Stable",
@@ -1354,6 +1427,9 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     for (i, e) in stable.entries.iter().enumerate() {
         let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let marker = if selected { ">" } else { " " };
         let price_color = if e.affordable {
             theme::BADGE_GOLD()
@@ -1381,16 +1457,20 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines.push(hint("w/s", "select  Enter buy"));
     lines.push(hint("x", &format!("feed/tend ({}g)", stable.feed_cost)));
     lines.push(hint("p", "leave stable"));
-    lines
+    (lines, sel_line)
 }
 
-fn housing_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+fn housing_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(housing) = &view.housing else {
-        return vec![Line::from(Span::styled(
-            "No housing ledger here.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))];
+        return (
+            vec![Line::from(Span::styled(
+                "No housing ledger here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
     };
+    let mut sel_line = None;
     let mut lines = vec![
         Line::from(Span::styled(
             housing.title.clone(),
@@ -1406,6 +1486,9 @@ fn housing_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     ];
     for (i, e) in housing.entries.iter().enumerate() {
         let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let marker = if selected { ">" } else { " " };
         let price_color = if e.owned {
             theme::SUCCESS()
@@ -1443,7 +1526,7 @@ fn housing_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter buy"));
     lines.push(hint("n", "close ledger"));
-    lines
+    (lines, sel_line)
 }
 
 /// Trim a string to `max` chars, adding an ellipsis when cut.
@@ -1859,8 +1942,9 @@ fn follow_panel(
     view: &PlayerView,
     cursor: usize,
     usernames: &UsernameLookup<'_>,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Follow")];
+    let mut sel_line = None;
     if view.occupants.is_empty() {
         lines.push(Line::from(Span::styled(
             "  no one else is here",
@@ -1873,6 +1957,9 @@ fn follow_panel(
             .cloned()
             .unwrap_or_else(|| "adventurer".to_string());
         let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let following = view.following == Some(occ.user_id);
         let marker = if selected { "> " } else { "  " };
         let tag = if !occ.alive {
@@ -1914,7 +2001,7 @@ fn follow_panel(
         lines.push(hint("x", "stop following"));
     }
     lines.push(hint("f", "close"));
-    lines
+    (lines, sel_line)
 }
 
 fn rarity_color(rarity: &str) -> ratatui::style::Color {

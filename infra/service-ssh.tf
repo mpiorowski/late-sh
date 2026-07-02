@@ -229,6 +229,31 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # dopewars is served by the late-dopewars host pod (service-dopewars.tf);
+          # late-ssh connects to it over SSH. HOST/PORT target that Service and
+          # SECRET (shared with the host) authorizes the connection.
+          env {
+            name  = "LATE_DOPEWARS_ENABLED"
+            value = local.dopewars_enabled
+          }
+          env {
+            name  = "LATE_DOPEWARS_HOST"
+            value = local.dopewars_service_host
+          }
+          env {
+            name  = "LATE_DOPEWARS_PORT"
+            value = local.dopewars_port
+          }
+          env {
+            name = "LATE_DOPEWARS_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.dopewars_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
           # --- Files / uploads ---
           env {
             name  = "LATE_FILES_S3_ENDPOINT"

@@ -70,9 +70,21 @@ impl PtyHost {
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(256);
         // Detached: the JoinHandle drops here, but the task runs to completion.
+        // Keep a clone of the handle so we can guarantee the channel is closed
+        // even when run_bridge returns Err *before* its own eof/close teardown
+        // (openpty / spawn / pty-clone failure -- e.g. a broken image or a
+        // misconfigured LATE_NETHACK_BIN). Without this, the late-ssh client --
+        // which marks the door Running the instant request_shell succeeds --
+        // strands the user on the nethack screen until the connection times out
+        // instead of dropping back to the Games hub. All of run_bridge's `?`
+        // early-returns are before eof/close, and nothing after eof/close can
+        // fail, so an Err here always means the channel was never closed.
+        let cleanup = handle.clone();
         tokio::spawn(async move {
             if let Err(e) = run_bridge(cfg, cmd_rx, handle, channel, shutdown_rx).await {
                 tracing::warn!(error = ?e, "nethack host bridge ended with error");
+                let _ = cleanup.eof(channel).await;
+                let _ = cleanup.close(channel).await;
             }
         });
         Self { cmd_tx }

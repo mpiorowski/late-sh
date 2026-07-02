@@ -120,6 +120,7 @@ pub struct State {
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
+    pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     pub rooms_service: RoomsService,
     pub blackjack_table_manager: BlackjackTableManager,
     pub room_game_registry: RoomGameRegistry,
@@ -141,6 +142,7 @@ pub struct State {
     pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,
     pub radio_meta_rx:
         watch::Receiver<HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>>,
+    pub worldcup_service: crate::app::worldcup::svc::WorldCupService,
     pub session_registry: SessionRegistry,
     pub paired_client_registry: PairedClientRegistry,
     pub irc_registry: crate::ircd::registry::IrcRegistry,

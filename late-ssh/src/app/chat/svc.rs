@@ -94,6 +94,18 @@ pub struct DiscoverRoomItem {
     pub member_count: i64,
     pub message_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,
+    /// A snapshot of the room's most recent messages, oldest-first, captured at
+    /// list-load time so the discover preview pane can render instantly while
+    /// scrolling. Empty when the room has no messages yet.
+    pub recent: Vec<PreviewMessage>,
+}
+
+/// One line of a room's recent activity, shown in the discover preview pane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewMessage {
+    pub author: String,
+    pub body: String,
+    pub created: DateTime<Utc>,
 }
 
 pub struct SendMessageTask {
@@ -112,6 +124,17 @@ pub struct SendLoungeMessageTask {
     pub request_id: Option<Uuid>,
     pub join_if_needed: bool,
     pub failure_log: &'static str,
+}
+
+/// Fully-resolved inputs for persisting a single chat message.
+struct SendMessageParams {
+    user_id: Uuid,
+    room_id: Uuid,
+    room_slug: Option<String>,
+    body: String,
+    reply_to_message_id: Option<Uuid>,
+    reply_to_user_id: Option<Uuid>,
+    is_admin: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -955,6 +978,7 @@ impl ChatService {
                 member_count: row.member_count,
                 message_count: row.message_count,
                 last_message_at: row.last_message_at,
+                recent: Vec::new(),
             })
             .collect())
     }
@@ -1306,11 +1330,63 @@ impl ChatService {
             .into_iter()
             .map(|room| room.id)
             .collect();
-        Ok(Self::list_all_discover_rooms(&client)
+        let mut rooms: Vec<DiscoverRoomItem> = Self::list_all_discover_rooms(&client)
             .await?
             .into_iter()
             .filter(|room| !joined_ids.contains(&room.room_id))
-            .collect())
+            .collect();
+
+        Self::attach_recent_previews(&client, &mut rooms).await?;
+        Ok(rooms)
+    }
+
+    /// Fetch a snapshot of each room's most recent messages and attach them as
+    /// the `recent` preview, so the discover UI can render a preview pane
+    /// instantly while the user scrolls. Best-effort: a preview-fetch failure is
+    /// logged but leaves the rooms usable with empty previews.
+    async fn attach_recent_previews(
+        client: &tokio_postgres::Client,
+        rooms: &mut [DiscoverRoomItem],
+    ) -> Result<()> {
+        const PREVIEW_MESSAGES_PER_ROOM: i64 = 5;
+
+        let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.room_id).collect();
+        if room_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut messages_by_room =
+            ChatMessage::list_recent_for_rooms(client, &room_ids, PREVIEW_MESSAGES_PER_ROOM)
+                .await?;
+
+        let author_ids: Vec<Uuid> = messages_by_room
+            .values()
+            .flatten()
+            .map(|msg| msg.user_id)
+            .collect();
+        let usernames = User::list_usernames_by_ids(client, &author_ids).await?;
+
+        for room in rooms.iter_mut() {
+            let Some(mut messages) = messages_by_room.remove(&room.room_id) else {
+                continue;
+            };
+            // `list_recent_for_rooms` returns newest-first; flip to chronological
+            // so the preview reads top-to-bottom like a normal chat transcript.
+            messages.reverse();
+            room.recent = messages
+                .into_iter()
+                .map(|msg| PreviewMessage {
+                    author: usernames
+                        .get(&msg.user_id)
+                        .cloned()
+                        .unwrap_or_else(|| "someone".to_string()),
+                    body: msg.body,
+                    created: msg.created,
+                })
+                .collect();
+        }
+
+        Ok(())
     }
 
     pub fn list_discover_rooms_task(&self, user_id: Uuid) {
@@ -1581,6 +1657,46 @@ impl ChatService {
         });
     }
 
+    /// Send a bot/automated reply that is a response to `reply_to_user_id`.
+    /// Recording the triggering user lets each viewer hide the reply when they
+    /// ignore that user, so ignored users cannot use a bot to be heard.
+    pub fn send_bot_reply_task(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        body: String,
+        reply_to_user_id: Option<Uuid>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service
+                    .send_message(SendMessageParams {
+                        user_id,
+                        room_id,
+                        room_slug: None,
+                        body,
+                        reply_to_message_id: None,
+                        reply_to_user_id,
+                        is_admin: false,
+                    })
+                    .await
+                {
+                    late_core::error_span!(
+                        "chat_bot_send_failed",
+                        error = ?e,
+                        "failed to send bot reply"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.send_bot_reply_task",
+                user_id = %user_id,
+                room_id = %room_id,
+            )),
+        );
+    }
+
     pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
         let SendMessageTask {
             user_id,
@@ -1595,14 +1711,15 @@ impl ChatService {
         tokio::spawn(
             async move {
                 match service
-                    .send_message(
+                    .send_message(SendMessageParams {
                         user_id,
                         room_id,
                         room_slug,
                         body,
                         reply_to_message_id,
+                        reply_to_user_id: None,
                         is_admin,
-                    )
+                    })
                     .await
                 {
                     Err(e) => {
@@ -1690,27 +1807,29 @@ impl ChatService {
         }
         drop(client);
 
-        self.send_message(
+        self.send_message(SendMessageParams {
             user_id,
-            room.id,
-            Some("lounge".to_string()),
+            room_id: room.id,
+            room_slug: Some("lounge".to_string()),
             body,
-            None,
-            false,
-        )
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            is_admin: false,
+        })
         .await
     }
 
-    #[tracing::instrument(skip(self, body), fields(user_id = %user_id, room_id = %room_id, body_len = body.len()))]
-    async fn send_message(
-        &self,
-        user_id: Uuid,
-        room_id: Uuid,
-        room_slug: Option<String>,
-        body: String,
-        reply_to_message_id: Option<Uuid>,
-        is_admin: bool,
-    ) -> Result<()> {
+    #[tracing::instrument(skip(self, params), fields(user_id = %params.user_id, room_id = %params.room_id, body_len = params.body.len()))]
+    async fn send_message(&self, params: SendMessageParams) -> Result<()> {
+        let SendMessageParams {
+            user_id,
+            room_id,
+            room_slug,
+            body,
+            reply_to_message_id,
+            reply_to_user_id,
+            is_admin,
+        } = params;
         let body = body.trim_start_matches('\n').trim_end();
         if body.is_empty() {
             return Ok(());
@@ -1790,7 +1909,13 @@ impl ChatService {
             user_id,
             body: body.to_string(),
         };
-        let chat = ChatMessage::create_with_reply_to(&client, message, reply_to_message_id).await?;
+        let chat = ChatMessage::create_with_reply_targets(
+            &client,
+            message,
+            reply_to_message_id,
+            reply_to_user_id,
+        )
+        .await?;
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;

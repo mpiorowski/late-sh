@@ -3,6 +3,7 @@ use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::{
     artboard_ban::ArtboardBan,
+    article_feed_read::ArticleFeedRead,
     server_ban::ServerBan,
     user::{User, UserParams, extract_theme_id},
 };
@@ -878,6 +879,7 @@ impl russh::server::Handler for ClientHandler {
             minesweeper_service: self.state.minesweeper_service.clone(),
             initial_minesweeper_games,
             lateania_service: self.state.lateania_service.clone(),
+            greendragon_service: self.state.greendragon_service.clone(),
             rooms_service: self.state.rooms_service.clone(),
             room_game_registry: self.state.room_game_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
@@ -922,12 +924,17 @@ impl russh::server::Handler for ClientHandler {
                 )
                 .with_username_directory(self.state.username_directory.clone()),
             )),
+            dopewars_enabled: self.state.config.dopewars_enabled,
+            dopewars_host: self.state.config.dopewars_host.clone(),
+            dopewars_port: self.state.config.dopewars_port,
+            dopewars_secret: self.state.config.dopewars_secret.clone(),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
+            worldcup_service: Some(self.state.worldcup_service.clone()),
             active_users: Some(self.state.active_users.clone()),
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
@@ -1445,6 +1452,13 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
                         "failed to seed auto-join chat rooms for newly created user"
                     );
                 }
+            }
+            if let Err(e) = ArticleFeedRead::seed_read_for_new_user(&client, user.id).await {
+                tracing::warn!(
+                    user_id = %user.id,
+                    error = ?e,
+                    "failed to seed news read cursor for newly created user"
+                );
             }
             (user, true)
         }

@@ -112,7 +112,7 @@ async fn login_announcements_return_unread_without_marking_read() {
 }
 
 #[tokio::test]
-async fn login_announcements_pages_oldest_unread_first() {
+async fn login_announcements_shows_newest_first_capped_at_ten() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let viewer = create_test_user(&test_db.db, "announcements-batch-viewer").await;
@@ -143,14 +143,19 @@ async fn login_announcements_pages_oldest_unread_first() {
             .expect("set announcement order");
     }
 
+    // The splash shows the newest 10 unread, newest at the top: announcement
+    // 11 down to 2. The LIMIT keeps the most recent, not the oldest.
     let first_batch = load_login_announcements(&client, viewer.id)
         .await
         .expect("load first batch")
         .expect("first batch");
     assert_eq!(first_batch.messages.len(), 10);
-    assert_eq!(first_batch.messages[0].body, "announcement 0");
-    assert_eq!(first_batch.messages[9].body, "announcement 9");
+    assert_eq!(first_batch.messages[0].body, "announcement 11");
+    assert_eq!(first_batch.messages[9].body, "announcement 2");
 
+    // Marking read up to the newest displayed catches the viewer up; the two
+    // announcements older than the 10-message window sit behind the cursor and
+    // are treated as seen (an old-announcement backlog is not paged through).
     client
         .execute(
             "UPDATE chat_room_members
@@ -165,11 +170,8 @@ async fn login_announcements_pages_oldest_unread_first() {
         .await
         .expect("mark first batch read");
 
-    let second_batch = load_login_announcements(&client, viewer.id)
+    let after_mark = load_login_announcements(&client, viewer.id)
         .await
-        .expect("load second batch")
-        .expect("second batch");
-    assert_eq!(second_batch.messages.len(), 2);
-    assert_eq!(second_batch.messages[0].body, "announcement 10");
-    assert_eq!(second_batch.messages[1].body, "announcement 11");
+        .expect("reload announcements after mark");
+    assert!(after_mark.is_none());
 }
