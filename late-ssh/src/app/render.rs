@@ -190,9 +190,9 @@ struct DrawContext<'a> {
     /// Client is kitty specifically — it splits regional-indicator flags in the
     /// World Cup overview's rightmost column (see `App::terminal_is_kitty`).
     terminal_is_kitty: bool,
-    /// The account's parsed timezone tweak, fed to the World Cup screen so
-    /// upcoming kick-offs render in the viewer's local time.
-    worldcup_timezone: Option<chrono_tz::Tz>,
+    /// The account's raw timezone tweak. The World Cup screen (its only
+    /// consumer) parses it lazily so no work happens on other screens' frames.
+    worldcup_timezone: Option<&'a str>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
@@ -924,9 +924,7 @@ impl App {
                         clubhouse_chat_view,
                         show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                         terminal_is_kitty: self.terminal_is_kitty,
-                        worldcup_timezone: parse_worldcup_timezone(
-                            self.profile_state.profile().timezone.as_deref(),
-                        ),
+                        worldcup_timezone: self.profile_state.profile().timezone.as_deref(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
@@ -1349,7 +1347,9 @@ impl App {
                         state: ctx.worldcup_state,
                         show_flags: !ctx.show_flag_fallback,
                         terminal_is_kitty: ctx.terminal_is_kitty,
-                        timezone: ctx.worldcup_timezone,
+                        timezone: crate::app::profile::svc::parse_account_tz(
+                            ctx.worldcup_timezone,
+                        ),
                     },
                 );
             }
@@ -1902,15 +1902,6 @@ fn line_width(line: &Line<'_>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum()
-}
-
-/// Parse the account's timezone tweak into a `chrono_tz::Tz` for the World Cup
-/// screen. `None` (unset, blank, or unparseable) leaves kick-offs in UTC.
-fn parse_worldcup_timezone(timezone: Option<&str>) -> Option<chrono_tz::Tz> {
-    timezone
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.parse::<chrono_tz::Tz>().ok())
 }
 
 fn app_frame_bottom_titles(area_width: u16) -> (Line<'static>, Option<Line<'static>>) {
