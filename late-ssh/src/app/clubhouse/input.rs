@@ -2,11 +2,14 @@
 //! embedded #lounge chat. Plain arrows/hjkl move your avatar; `i` (or Enter)
 //! opens the composer; Shift+J/K walk the message selection like the Rooms
 //! embedded chat; `t` at the bar pours a `@bartender ` mention into the
-//! composer. Returns `false` for anything it does not own so global keys
-//! (numbers, Tab, `q`, `?`, `v` music chords, ...) keep working, and returns
-//! `false` outright while composing so the shared composer pipeline gets the
-//! bytes.
+//! composer. Enter next to a landmark prop follows its signpost: the arcade
+//! cabinet, the heavy door, the poker table, and the easel jump to their app
+//! pages (2/3/4/5), and the jukebox opens the Music Booth. Returns `false`
+//! for anything it does not own so global keys (numbers, Tab, `q`, `?`, `v`
+//! music chords, ...) keep working, and returns `false` outright while
+//! composing so the shared composer pipeline gets the bytes.
 
+use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
@@ -78,6 +81,11 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                     Some(Interactive::Bartender) => {
                         app.chat.insert_mention_in_room(lounge_id, "bartender");
                     }
+                    // The landmark props are signposts: Enter walks through.
+                    Some(Interactive::Arcade) => app.set_screen(Screen::Arcade),
+                    Some(Interactive::Doors) => app.set_screen(Screen::Games),
+                    Some(Interactive::Poker) => app.set_screen(Screen::Rooms),
+                    Some(Interactive::Easel) => app.set_screen(Screen::Artboard),
                     _ => app.chat.start_composing_in_room(lounge_id),
                 }
                 return true;
