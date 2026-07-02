@@ -336,6 +336,7 @@ async fn main() -> anyhow::Result<()> {
         blackjack_table_manager.clone(),
         active_users.clone(),
         activity_tx.clone(),
+        username_directory.clone(),
     );
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,

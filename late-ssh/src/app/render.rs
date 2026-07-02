@@ -180,6 +180,10 @@ struct DrawContext<'a> {
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     worldcup_snapshot: Option<std::sync::Arc<crate::app::worldcup::model::WorldCupSnapshot>>,
     worldcup_state: &'a crate::app::worldcup::state::State,
+    clubhouse_state: &'a crate::app::clubhouse::state::State,
+    clubhouse_own_username: &'a str,
+    /// Embedded #lounge chat for the clubhouse; built only on that screen.
+    clubhouse_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     /// The account's flag-emoji tweak, shared with chat/shop: when set, flags
     /// are replaced by text fallbacks for terminals that can't render them.
     show_flag_fallback: bool,
@@ -738,6 +742,59 @@ impl App {
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                 });
+        // The clubhouse pins its embedded chat to #lounge; the view is only
+        // assembled while that screen is up. Mirrors the Rooms view above,
+        // with its own row cache (never share one across surfaces).
+        let clubhouse_lounge_id = if screen == Screen::Clubhouse {
+            self.chat.lounge_room_id()
+        } else {
+            None
+        };
+        let clubhouse_chat_view =
+            clubhouse_lounge_id.map(|lounge_id| chat::ui::EmbeddedRoomChatView {
+                title: "#lounge",
+                messages: self.chat.messages_for_room(lounge_id),
+                overlay: self.chat.overlay(),
+                image_modal,
+                rows_cache: &mut self.clubhouse_chat_rows_cache,
+                usernames: chat_usernames,
+                countries: chat_countries,
+                friend_user_ids: self.chat.friend_user_ids(),
+                afk_user_ids: self.afk_user_ids.as_ref(),
+                message_reactions,
+                inline_images: &self.chat.inline_image_cache,
+                unread_marker: self
+                    .chat
+                    .room_unread_markers
+                    .get(&lounge_id)
+                    .copied()
+                    .flatten(),
+                current_user_id: self.user_id,
+                voice_channel_id: None,
+                voice_snapshot,
+                voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                selected_message_id: self.chat.selected_message_id,
+                selected_image_message: self
+                    .chat
+                    .selected_message_has_inline_image_in_room(lounge_id),
+                highlighted_message_id: self.chat.highlighted_message_id,
+                reaction_picker_active: self.chat.is_reaction_leader_active(),
+                composer: self.chat.composer(),
+                composing: self.chat.composing,
+                mention_matches: &self.chat.mention_ac.matches,
+                mention_selected: self.chat.mention_ac.selected,
+                mention_active: self.chat.mention_ac.active,
+                reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                is_editing: self.chat.edited_message_id.is_some(),
+                bonsai_glyphs,
+                chat_badges,
+                profile_award_badges,
+                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                composer_rect_slot: Some(&self.chat.last_composer_rect),
+                composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+                chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+            });
         let mut terminal_image_frame = TerminalImageFrame::default();
 
         // Sixel cleanup, pre-frame phase. Sixel — unlike Kitty — has no
@@ -862,6 +919,9 @@ impl App {
                         pinstar_browser,
                         worldcup_snapshot: self.worldcup_rx.as_ref().map(|rx| rx.borrow().clone()),
                         worldcup_state: &self.worldcup,
+                        clubhouse_state: &self.clubhouse,
+                        clubhouse_own_username: self.profile_state.profile().username.as_str(),
+                        clubhouse_chat_view,
                         show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                         terminal_is_kitty: self.terminal_is_kitty,
                         worldcup_timezone: parse_worldcup_timezone(
@@ -1293,6 +1353,17 @@ impl App {
                     },
                 );
             }
+            Screen::Clubhouse => crate::app::clubhouse::ui::draw(
+                frame,
+                content_area,
+                crate::app::clubhouse::ui::ClubhouseView {
+                    state: ctx.clubhouse_state,
+                    own_username: ctx.clubhouse_own_username,
+                    now_playing: ctx.now_playing,
+                    chat: ctx.clubhouse_chat_view,
+                },
+                terminal_images,
+            ),
         }
 
         if let Some(sidebar_area) = sidebar_area {
@@ -1564,6 +1635,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Rooms => "Tables",
         Screen::Pinstar => "Directory",
         Screen::WorldCup => "World Cup",
+        Screen::Clubhouse => "Clubhouse",
     };
     spans.push(Span::styled(
         " | ",
@@ -1634,6 +1706,18 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     if screen == Screen::Dashboard {
         append_home_title_extras(&mut spans, ctx);
+    }
+
+    // The clubhouse tavern draws no widget chrome of its own, so the
+    // headcount and keybinds live up here.
+    if screen == Screen::Clubhouse {
+        spans.push(Span::styled(
+            format!(
+                "· {} inside · arrows/hjkl walk · Enter interact · J/K messages ",
+                ctx.clubhouse_state.headcount()
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
     }
 
     if screen == Screen::WorldCup {

@@ -58,13 +58,15 @@ pub enum Screen {
     Artboard,
     Pinstar,
     WorldCup,
+    Clubhouse,
 }
 
 impl Screen {
     /// Tab cycles only the top-level pages. The door games (Lateania, Rebels,
     /// Nethack, Green Dragon) are reached through the Games hub, not the tab
     /// bar, so they are absent from the cycle; if one is somehow current,
-    /// `next`/`prev` fall back to the hub that owns them.
+    /// `next`/`prev` fall back to the hub that owns them. The admin-gated
+    /// Clubhouse (key `0`) is likewise outside the cycle and bounces to Home.
     pub fn next(self) -> Self {
         match self {
             Screen::Dashboard => Screen::Arcade,
@@ -74,6 +76,7 @@ impl Screen {
             Screen::Artboard => Screen::Pinstar,
             Screen::Pinstar => Screen::WorldCup,
             Screen::WorldCup => Screen::Dashboard,
+            Screen::Clubhouse => Screen::Dashboard,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -91,6 +94,7 @@ impl Screen {
             Screen::Artboard => Screen::Rooms,
             Screen::Pinstar => Screen::Artboard,
             Screen::WorldCup => Screen::Pinstar,
+            Screen::Clubhouse => Screen::Dashboard,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -121,6 +125,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
         Screen::WorldCup => "World Cup",
+        Screen::Clubhouse => "Clubhouse",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
