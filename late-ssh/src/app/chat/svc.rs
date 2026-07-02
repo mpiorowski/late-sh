@@ -151,7 +151,10 @@ fn send_error_message(error: &anyhow::Error) -> String {
         "Only admins can post in #announcements.".to_string()
     } else if let Some(secs) = error.strip_prefix("link-cooldown:") {
         let secs = secs.parse::<u64>().unwrap_or(0);
-        format!("🔗 New accounts can only post a link occasionally — next link in {}.", format_cooldown(secs))
+        format!(
+            "🔗 New accounts can only post a link occasionally — next link in {}.",
+            format_cooldown(secs)
+        )
     } else {
         "Could not send message. Please try again.".to_string()
     }
@@ -1871,10 +1874,11 @@ impl ChatService {
         // every so often, to blunt spam-and-leave without silencing them. Old
         // (7d+) accounts and admins are unlimited. The age lookup only runs when
         // a non-admin message actually contains a link, which is rare.
-        if !is_admin && contains_link(body) {
-            if let Some(remaining) = self.link_cooldown_remaining(&client, user_id).await? {
-                anyhow::bail!("link-cooldown:{}", remaining.as_secs());
-            }
+        if !is_admin
+            && contains_link(body)
+            && let Some(remaining) = self.link_cooldown_remaining(&client, user_id).await?
+        {
+            anyhow::bail!("link-cooldown:{}", remaining.as_secs());
         }
 
         if let Some(reply_to_message_id) = reply_to_message_id {
