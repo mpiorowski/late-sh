@@ -174,7 +174,11 @@ mod tests {
             state.push_char(ch);
         }
 
-        let visible: Vec<_> = state.visible_items().iter().map(|i| i.slug.clone()).collect();
+        let visible: Vec<_> = state
+            .visible_items()
+            .iter()
+            .map(|i| i.slug.clone())
+            .collect();
         assert_eq!(visible, vec!["rust", "rust-gamedev"]);
     }
 
@@ -189,13 +193,22 @@ mod tests {
         }
         // Query reset selection to the top of the filtered list.
         assert_eq!(state.selected_index(), 0);
-        assert_eq!(state.selected_item().map(|i| i.slug.clone()), Some("beta".into()));
+        assert_eq!(
+            state.selected_item().map(|i| i.slug.clone()),
+            Some("beta".into())
+        );
 
         state.move_selection(1);
-        assert_eq!(state.selected_item().map(|i| i.slug.clone()), Some("betamax".into()));
+        assert_eq!(
+            state.selected_item().map(|i| i.slug.clone()),
+            Some("betamax".into())
+        );
         // Cannot move past the end of the filtered list.
         state.move_selection(1);
-        assert_eq!(state.selected_item().map(|i| i.slug.clone()), Some("betamax".into()));
+        assert_eq!(
+            state.selected_item().map(|i| i.slug.clone()),
+            Some("betamax".into())
+        );
     }
 
     #[test]

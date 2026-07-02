@@ -1283,7 +1283,8 @@ impl ChatService {
         }
 
         let mut messages_by_room =
-            ChatMessage::list_recent_for_rooms(client, &room_ids, PREVIEW_MESSAGES_PER_ROOM).await?;
+            ChatMessage::list_recent_for_rooms(client, &room_ids, PREVIEW_MESSAGES_PER_ROOM)
+                .await?;
 
         let author_ids: Vec<Uuid> = messages_by_room
             .values()

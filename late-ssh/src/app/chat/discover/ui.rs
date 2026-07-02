@@ -341,8 +341,14 @@ mod tests {
 
     #[test]
     fn preview_shows_recent_messages_of_selected_room() {
-        let a = with_recent(discover_item("rust", 12, 3), &[("alice", "hello rustaceans")]);
-        let b = with_recent(discover_item("python", 6, 1), &[("bob", "pythonic greeting")]);
+        let a = with_recent(
+            discover_item("rust", 12, 3),
+            &[("alice", "hello rustaceans")],
+        );
+        let b = with_recent(
+            discover_item("python", 6, 1),
+            &[("bob", "pythonic greeting")],
+        );
         let rendered = render_discover_at(
             DiscoverListView {
                 items: vec![&a, &b],
@@ -362,8 +368,14 @@ mod tests {
 
     #[test]
     fn preview_follows_selection() {
-        let a = with_recent(discover_item("rust", 12, 3), &[("alice", "hello rustaceans")]);
-        let b = with_recent(discover_item("python", 6, 1), &[("bob", "pythonic greeting")]);
+        let a = with_recent(
+            discover_item("rust", 12, 3),
+            &[("alice", "hello rustaceans")],
+        );
+        let b = with_recent(
+            discover_item("python", 6, 1),
+            &[("bob", "pythonic greeting")],
+        );
         let rendered = render_discover_at(
             DiscoverListView {
                 items: vec![&a, &b],
@@ -381,7 +393,10 @@ mod tests {
 
     #[test]
     fn preview_hidden_when_too_narrow() {
-        let a = with_recent(discover_item("rust", 12, 3), &[("alice", "hello rustaceans")]);
+        let a = with_recent(
+            discover_item("rust", 12, 3),
+            &[("alice", "hello rustaceans")],
+        );
         let rendered = render_discover_at(
             DiscoverListView {
                 items: vec![&a],
