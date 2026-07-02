@@ -815,7 +815,10 @@ async fn chat_room_list_is_mouse_clickable() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    app.handle_input(b"\x1b[<0;5;9M");
+    // Click the #rust row in the sidebar. It sits below the Core section
+    // (lounge, mentions, news, "+ browse rooms") and the Channels header, at
+    // rail row 10 (SGR mouse rows are 1-based).
+    app.handle_input(b"\x1b[<0;5;10M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }
@@ -1224,9 +1227,9 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     wait_for_render_contains(&mut app, "dnd").await;
 
     // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
-    // then dnd (channels section). Press l three times to reach dnd from
-    // lounge.
-    app.handle_input(b"lll");
+    // "+ browse rooms" (Discover, last in Core), then dnd (channels section).
+    // Press l four times to reach dnd from lounge.
+    app.handle_input(b"llll");
     wait_for_render_contains(&mut app, "Home · dnd").await;
 
     app.handle_input(b"i");

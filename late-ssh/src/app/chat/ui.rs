@@ -4960,13 +4960,16 @@ mod tests {
             .collect();
 
         assert_eq!(
-            &keyed_slots[..5],
+            &keyed_slots[..6],
             &[
                 (RoomSlot::Room(lounge.id), "a lounge".to_string()),
                 (RoomSlot::Notifications, "s mentions".to_string()),
                 (RoomSlot::News, "d news".to_string()),
                 (RoomSlot::Feeds, "f rss".to_string()),
-                (RoomSlot::Room(rust.id), "g rust".to_string()),
+                // Discover ("+ browse rooms") is the last entry in Core, so the
+                // topic rooms below it start one jump key later.
+                (RoomSlot::Discover, "g + browse rooms".to_string()),
+                (RoomSlot::Room(rust.id), "h rust".to_string()),
             ]
         );
     }
