@@ -518,7 +518,10 @@ mod tests {
                     if (dx, dy) == (0, 0) {
                         continue;
                     }
-                    let cell = (x.wrapping_add_signed(dx as i16), y.wrapping_add_signed(dy as i16));
+                    let cell = (
+                        x.wrapping_add_signed(dx as i16),
+                        y.wrapping_add_signed(dy as i16),
+                    );
                     if reachable.contains(&cell) {
                         approachable = true;
                     }

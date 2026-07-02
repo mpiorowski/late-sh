@@ -96,7 +96,7 @@ impl State {
             }
         }
         roster.retain(|new| !self.present.iter().any(|old| old.user_id == new.user_id));
-        roster.sort_by(|a, b| a.username.to_lowercase().cmp(&b.username.to_lowercase()));
+        roster.sort_by_key(|a| a.username.to_lowercase());
         self.present.extend(roster);
         if self.rotation_offset >= self.present.len() {
             self.rotation_offset = 0;

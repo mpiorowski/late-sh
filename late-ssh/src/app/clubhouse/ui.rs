@@ -244,7 +244,9 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
             '¡' => Style::default().fg(theme::AMBER_GLOW()),
             '▒' => Style::default().fg(theme::AMBER_DIM()),
             '█' | '▓' | '▄' | '▀' => Style::default().fg(theme::TEXT_MUTED()),
-            '╔' | '╗' | '╚' | '╝' | '═' | '║' => Style::default().fg(theme::TEXT_MUTED()),
+            '╔' | '╗' | '╚' | '╝' | '═' | '║' => {
+                Style::default().fg(theme::TEXT_MUTED())
+            }
             _ => Style::default().fg(theme::AMBER()),
         };
     }
@@ -255,7 +257,9 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
         '╥' => Style::default().fg(theme::AMBER()),
         '≡' | '·' => Style::default().fg(theme::AMBER_DIM()),
         '¡' | '!' => Style::default().fg(theme::AMBER_GLOW()),
-        '╭' | '╮' | '╰' | '╯' | '─' | '│' | '┬' | '┴' => Style::default().fg(theme::AMBER_DIM()),
+        '╭' | '╮' | '╰' | '╯' | '─' | '│' | '┬' | '┴' => {
+            Style::default().fg(theme::AMBER_DIM())
+        }
         '▒' => Style::default().fg(theme::TEXT_FAINT()),
         '(' | ')' | '_' => dim,
         '▐' => Style::default().fg(theme::TEXT_MUTED()),
@@ -321,8 +325,8 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
     // Candle flames breathe on the tables and the mantle.
     for &(x, y) in map::CANDLES.iter() {
         let h = mix(u64::from(x) * 31 + u64::from(y) * 131 + t / 6);
-        let ch = if h % 7 == 0 { '!' } else { '¡' };
-        let color = if h % 3 == 0 {
+        let ch = if h.is_multiple_of(7) { '!' } else { '¡' };
+        let color = if h.is_multiple_of(3) {
             theme::AMBER()
         } else {
             theme::AMBER_GLOW()
@@ -347,9 +351,21 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
     if view.now_playing.is_some() {
         let (jx, jy) = (map::JUKEBOX.x0, map::JUKEBOX.y1);
         let phase = ((t / 5) % 6) as u16;
-        put_if_floor(cells, jx + 1 + phase, jy + 1 + (phase % 2), '♪', theme::AMBER_GLOW());
+        put_if_floor(
+            cells,
+            jx + 1 + phase,
+            jy + 1 + (phase % 2),
+            '♪',
+            theme::AMBER_GLOW(),
+        );
         let phase2 = ((t / 5 + 3) % 6) as u16;
-        put_if_floor(cells, jx + 8 + phase2, jy + 2 - (phase2 % 2), '♫', theme::AMBER());
+        put_if_floor(
+            cells,
+            jx + 8 + phase2,
+            jy + 2 - (phase2 % 2),
+            '♫',
+            theme::AMBER(),
+        );
     }
 
     // The arcade cabinet plays its attract mode to an empty room.
@@ -357,7 +373,7 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
         for x in map::ARCADE_SCREEN.x0..=map::ARCADE_SCREEN.x1 {
             let h = mix(u64::from(x) * 97 + u64::from(y) * 53 + t / 4);
             let ch = SCREEN_CHARS[(h % SCREEN_CHARS.len() as u64) as usize];
-            let color = if h % 5 == 0 {
+            let color = if h.is_multiple_of(5) {
                 theme::TEXT_BRIGHT()
             } else {
                 theme::SUCCESS()
@@ -385,7 +401,7 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
     }
 
     // The neon sign shorts out for a frame now and then.
-    if mix(t / 4) % 19 == 0 {
+    if mix(t / 4).is_multiple_of(19) {
         for y in map::NEON_SIGN.y0..=map::NEON_SIGN.y1 {
             for x in map::NEON_SIGN.x0..=map::NEON_SIGN.x1 {
                 let ch = map::char_at(x, y);
@@ -399,14 +415,20 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
     // The dog: slow blinks, a wagging tail, the occasional dream.
     let (dx, dy) = map::DOG;
     let amber = Style::default().fg(theme::AMBER());
-    if (t / 45) % 7 == 0 {
+    if (t / 45).is_multiple_of(7) {
         set(cells, dx + 2, dy + 1, '-', amber);
         set(cells, dx + 4, dy + 1, '-', amber);
     }
-    let tail = if (t / 8) % 2 == 0 { ')' } else { '/' };
+    let tail = if (t / 8).is_multiple_of(2) { ')' } else { '/' };
     set(cells, dx + 7, dy, tail, amber);
-    if (t / 40) % 3 == 0 {
-        put_if_floor(cells, dx + 8, dy.saturating_sub(1), 'z', theme::TEXT_FAINT());
+    if (t / 40).is_multiple_of(3) {
+        put_if_floor(
+            cells,
+            dx + 8,
+            dy.saturating_sub(1),
+            'z',
+            theme::TEXT_FAINT(),
+        );
     }
 }
 

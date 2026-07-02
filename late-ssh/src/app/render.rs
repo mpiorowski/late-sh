@@ -1347,9 +1347,7 @@ impl App {
                         state: ctx.worldcup_state,
                         show_flags: !ctx.show_flag_fallback,
                         terminal_is_kitty: ctx.terminal_is_kitty,
-                        timezone: crate::app::profile::svc::parse_account_tz(
-                            ctx.worldcup_timezone,
-                        ),
+                        timezone: crate::app::profile::svc::parse_account_tz(ctx.worldcup_timezone),
                     },
                 );
             }
