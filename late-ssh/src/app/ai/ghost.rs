@@ -1,3 +1,28 @@
+//! The "ghost" bots: always-on chat characters (@bot, @graybeard,
+//! @bartender, @dealer) plus their init, mention responders, the dealer's
+//! blackjack table commentary, and the clubhouse tutorial's @bartender
+//! welcome. Each bot registers with `fingerprint: None` so it stays out of
+//! the human headcount (`active_users` / clubhouse lobby).
+//!
+//! ## AI call policy: grounded vs cheap
+//!
+//! `AiService` exposes two generation paths; pick by whether the reply might
+//! need to look something up.
+//!
+//! - `generate_reply` — grounded with Google Search, large output cap
+//!   (~8-15s, more expensive). Use ONLY when a reply may need real-world or
+//!   current info: the general **@bot**, and the **@bartender mention** (house
+//!   Q&A that can spill into web questions).
+//! - `generate_short_reply` — ungrounded, small output cap (~1-2s, cheap).
+//!   Use for pure in-character banter that never needs a lookup: **@graybeard
+//!   mentions**, both **@dealer** paths (blackjack quips + mentions), and the
+//!   **@bartender tutorial greeting**. The greeting in particular MUST use
+//!   this: paired with the grounded path it timed out every time and only the
+//!   scripted fallback ever showed.
+//!
+//! When adding a bot line, default to `generate_short_reply` and only reach
+//! for `generate_reply` if the character genuinely answers factual questions.
+
 use anyhow::{Context, Result};
 use late_core::{
     MutexRecover,
