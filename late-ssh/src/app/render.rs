@@ -1568,6 +1568,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
     let tabs = [
+        (Screen::Clubhouse, "0"),
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
         (Screen::Games, "3"),

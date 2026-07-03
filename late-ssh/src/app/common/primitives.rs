@@ -62,21 +62,21 @@ pub enum Screen {
 }
 
 impl Screen {
-    /// Tab cycles only the top-level pages. The door games (Lateania, Rebels,
-    /// Nethack, Green Dragon) are reached through the Games hub, not the tab
-    /// bar, so they are absent from the cycle; if one is somehow current,
-    /// `next`/`prev` fall back to the hub that owns them. The admin-gated
-    /// Clubhouse (key `0`) is likewise outside the cycle and bounces to Home.
+    /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
+    /// through World Cup (`7`). The door games (Lateania, Rebels, Nethack,
+    /// Green Dragon) are reached through the Games hub, not the tab bar, so
+    /// they are absent from the cycle; if one is somehow current,
+    /// `next`/`prev` fall back to the hub that owns them.
     pub fn next(self) -> Self {
         match self {
+            Screen::Clubhouse => Screen::Dashboard,
             Screen::Dashboard => Screen::Arcade,
             Screen::Arcade => Screen::Games,
             Screen::Games => Screen::Rooms,
             Screen::Rooms => Screen::Artboard,
             Screen::Artboard => Screen::Pinstar,
             Screen::Pinstar => Screen::WorldCup,
-            Screen::WorldCup => Screen::Dashboard,
-            Screen::Clubhouse => Screen::Dashboard,
+            Screen::WorldCup => Screen::Clubhouse,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -87,14 +87,14 @@ impl Screen {
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::WorldCup,
+            Screen::Clubhouse => Screen::WorldCup,
+            Screen::Dashboard => Screen::Clubhouse,
             Screen::Arcade => Screen::Dashboard,
             Screen::Games => Screen::Arcade,
             Screen::Rooms => Screen::Games,
             Screen::Artboard => Screen::Rooms,
             Screen::Pinstar => Screen::Artboard,
             Screen::WorldCup => Screen::Pinstar,
-            Screen::Clubhouse => Screen::Dashboard,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -204,18 +204,20 @@ mod tests {
 
     #[test]
     fn screen_next_cycles_top_level_screens() {
+        assert_eq!(Screen::Clubhouse.next(), Screen::Dashboard);
         assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
         assert_eq!(Screen::Arcade.next(), Screen::Games);
         assert_eq!(Screen::Games.next(), Screen::Rooms);
         assert_eq!(Screen::Rooms.next(), Screen::Artboard);
         assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
         assert_eq!(Screen::Pinstar.next(), Screen::WorldCup);
-        assert_eq!(Screen::WorldCup.next(), Screen::Dashboard);
+        assert_eq!(Screen::WorldCup.next(), Screen::Clubhouse);
     }
 
     #[test]
     fn screen_prev_cycles_top_level_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::WorldCup);
+        assert_eq!(Screen::Clubhouse.prev(), Screen::WorldCup);
+        assert_eq!(Screen::Dashboard.prev(), Screen::Clubhouse);
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
         assert_eq!(Screen::Games.prev(), Screen::Arcade);
         assert_eq!(Screen::Rooms.prev(), Screen::Games);

@@ -659,6 +659,10 @@ impl App {
         self.show_bonsai_modal = false;
         self.show_bonsai_v2_modal = false;
         self.show_cat_modal = false;
+        // Real sessions land in the clubhouse; the integration suite predates
+        // that and drives flows from Home, so tests start there.
+        self.screen = Screen::Dashboard;
+        self.sync_visible_chat_room();
     }
 
     pub(crate) fn login_announcements_visible(&self) -> bool {
@@ -983,7 +987,9 @@ impl App {
         let mut app = Self {
             running: true,
             size: (cols, rows),
-            screen: Screen::Dashboard,
+            // Everyone lands in the clubhouse: the tavern is the front door
+            // of late.sh (and the first-visit tutorial starts there).
+            screen: Screen::Clubhouse,
             banner: None,
             show_settings: true,
             show_splash: true,
@@ -1207,6 +1213,9 @@ impl App {
         if app.screen == Screen::Artboard {
             app.enter_dartboard();
         }
+        // The landing screen skips `set_screen`, so run its entry hook by
+        // hand: immediate crowd refresh plus the first-visit tutorial.
+        app.clubhouse.enter_screen();
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
         app.chat.sync_selection();
@@ -1514,10 +1523,6 @@ impl App {
             self.show_bonsai_v2_modal = false;
             self.pet_state.cancel_play();
             self.show_cat_modal = false;
-        }
-        // The clubhouse is admin-gated; losing admin walks you out the door.
-        if !self.is_admin && self.screen == Screen::Clubhouse {
-            self.set_screen(Screen::Dashboard);
         }
         self.hub_state.ensure_visible_tab(self.is_admin);
     }

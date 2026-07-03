@@ -905,7 +905,10 @@ fn draw_bartender_banner(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_
     if age_ms > BARTENDER_BANNER_MS {
         return;
     }
-    let (lines, _) = wrap_bubble(bubble_text(&message.body), 44, 4);
+    // Roomy on purpose: his replies are up to three sanitized lines of real
+    // directions, and the banner is the only place they render.
+    let width_budget = usize::from(inner.width.saturating_sub(6)).min(56);
+    let (lines, _) = wrap_bubble(bubble_text(&message.body), width_budget.max(16), 8);
     if lines.is_empty() {
         return;
     }

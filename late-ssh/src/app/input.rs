@@ -2267,10 +2267,8 @@ fn dispatch_escape(app: &mut App) {
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
-    if matches!(
-        ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-    ) && app.chat.is_reaction_leader_active()
+    if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
+        && app.chat.is_reaction_leader_active()
     {
         app.chat.cancel_reaction_leader();
         return;
@@ -2575,14 +2573,15 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 1 2 3 4 5 6 | ..." land on these columns.
-        12 => Some(Screen::Dashboard),
-        14 => Some(Screen::Arcade),
-        16 => Some(Screen::Games),
-        18 => Some(Screen::Rooms),
-        20 => Some(Screen::Artboard),
-        22 => Some(Screen::Pinstar),
-        24 => Some(Screen::WorldCup),
+        // cells in " late.sh | 0 1 2 3 4 5 6 7 | ..." land on these columns.
+        12 => Some(Screen::Clubhouse),
+        14 => Some(Screen::Dashboard),
+        16 => Some(Screen::Arcade),
+        18 => Some(Screen::Games),
+        20 => Some(Screen::Rooms),
+        22 => Some(Screen::Artboard),
+        24 => Some(Screen::Pinstar),
+        26 => Some(Screen::WorldCup),
         _ => None,
     }
 }
@@ -3696,9 +3695,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::WorldCup);
             true
         }
-        // The clubhouse is an admin-gated preview; non-admins fall through
-        // so `0` stays inert for them.
-        b'0' if app.is_admin && !artboard_blocks_page_switch => {
+        b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Clubhouse);
             true
@@ -4636,16 +4633,17 @@ mod tests {
 
     #[test]
     fn topbar_screen_hit_test_maps_screen_digits() {
-        assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
-        assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Arcade));
-        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Games));
-        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
-        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
-        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::WorldCup));
+        assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Clubhouse));
+        assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Dashboard));
+        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Arcade));
+        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Games));
+        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Rooms));
+        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Artboard));
+        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Pinstar));
+        assert_eq!(topbar_screen_hit_test(26, 0), Some(Screen::WorldCup));
         // The door games are no longer top-level tabs; the column past the last
         // digit and the gaps between digits map to nothing.
-        assert_eq!(topbar_screen_hit_test(26, 0), None);
+        assert_eq!(topbar_screen_hit_test(28, 0), None);
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);
     }
