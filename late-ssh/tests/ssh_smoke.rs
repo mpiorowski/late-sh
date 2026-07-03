@@ -9,6 +9,7 @@ use russh::{
     keys::{PrivateKey, PrivateKeyWithHashAlg},
 };
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Duration, timeout};
@@ -214,6 +215,11 @@ async fn closing_token_exec_channel_does_not_close_interactive_shell() {
         .await
         .expect("send shell input after token close");
     expect_shell_data(&mut shell_channel).await;
+    // The clubhouse animates, so the frame above arrives ~66ms after the
+    // close and proves little on its own. Watch the channel for the full
+    // drain budget: a Close propagating from the token-channel teardown
+    // panics inside the helper.
+    drain_shell_data(&mut shell_channel).await;
 
     client
         .disconnect(russh::Disconnect::ByApplication, "", "en")
@@ -234,8 +240,14 @@ async fn expect_shell_data(channel: &mut russh::Channel<client::Msg>) {
     }
 }
 
+/// Swallow the intro frame burst so a later `expect_shell_data` asserts on
+/// fresh output. Returns on a 100ms quiet gap, or after an overall budget:
+/// the shell lands on the Clubhouse, which animates forever (fire, candles,
+/// jukebox, avatars), so idle frames never stop and the quiet gap may never
+/// come. The budget keeps the drain from looping indefinitely.
 async fn drain_shell_data(channel: &mut russh::Channel<client::Msg>) {
-    loop {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
         match timeout(Duration::from_millis(100), channel.wait()).await {
             Ok(Some(ChannelMsg::Data { .. })) => {}
             Ok(Some(ChannelMsg::Close)) => panic!("interactive shell closed unexpectedly"),
