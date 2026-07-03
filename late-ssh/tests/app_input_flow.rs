@@ -163,6 +163,9 @@ async fn shift_tab_cycles_screens_backwards() {
     let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
 
     app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+
+    app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "FIFA World Cup").await;
 
     app.handle_input(b"\x1b[Z");
@@ -214,6 +217,9 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, "FIFA World Cup").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Home ").await;

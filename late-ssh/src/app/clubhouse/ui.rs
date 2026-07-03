@@ -16,6 +16,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::collections::HashMap;
+use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
 
 use crate::app::common::theme;
@@ -799,7 +800,17 @@ fn bubble_text(body: &str) -> String {
         }
         _ => body,
     };
-    body.split_whitespace().collect::<Vec<_>>().join(" ")
+    to_single_width(&body.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Fold user-controlled text down to one terminal cell per char so it lands
+/// cleanly in the tavern grid, which assumes single-width glyphs everywhere.
+/// Wide glyphs (emoji, CJK) and zero-width/combining marks would otherwise
+/// desync the row they draw into; each is replaced with a `·` placeholder.
+fn to_single_width(text: &str) -> String {
+    text.chars()
+        .map(|ch| if ch.width() == Some(1) { ch } else { '·' })
+        .collect()
 }
 
 /// Wrap at the narrowest width tier that fits the whole message; fall back
@@ -1309,8 +1320,9 @@ fn put_label(cells: &mut Cells, x_center: u16, y: u16, label: &str, style: Style
 }
 
 pub(crate) fn truncate_name(name: &str) -> String {
+    let name = to_single_width(name);
     if name.chars().count() <= LABEL_MAX {
-        return name.to_string();
+        return name;
     }
     let mut out: String = name.chars().take(LABEL_MAX - 1).collect();
     out.push('…');
@@ -1345,6 +1357,20 @@ mod tests {
         assert_eq!(truncate_name("alice"), "alice");
         assert_eq!(truncate_name("exactly-10"), "exactly-10");
         assert_eq!(truncate_name("much-too-long-name"), "much-too-…");
+    }
+
+    #[test]
+    fn single_width_folds_wide_and_zero_width_glyphs() {
+        // ASCII and box-drawing art survive untouched.
+        assert_eq!(to_single_width("hello ·│─"), "hello ·│─");
+        // Emoji (width 2) and combining marks (width 0) become one cell each,
+        // so the char count matches the rendered cell count.
+        let folded = to_single_width("a🎉b");
+        assert_eq!(folded, "a·b");
+        assert_eq!(folded.chars().count(), 3);
+        // Wide names collapse before truncation, so the length math is honest:
+        // 12 double-width chars fold to 12 cells, cut to 9 plus an ellipsis.
+        assert_eq!(truncate_name("你你你你你你你你你你你你"), "·········…");
     }
 
     #[test]
