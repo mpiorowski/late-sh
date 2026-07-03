@@ -5,7 +5,8 @@
 //! over their author's head, emotes play on avatars, and arrivals slip in at
 //! the door. Dwarf Fortress vibes, single-width glyphs only: walking people
 //! are 3-row stick figures (`o` head, `/|\` arms, `Λ` legs; you get an `@`),
-//! and a seated user is an `o` perched on their stool.
+//! a seated user is an `o` perched on their stool, and the dog is a pocket
+//! `(ᴥ)` with a wagging tail that trots wherever the shared lobby says.
 
 use ratatui::{
     Frame,
@@ -178,10 +179,6 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
             '·' | '*' => Style::default().fg(theme::TEXT_MUTED()),
             _ => dim,
         };
-    }
-    // The dog is the same warm amber as the rest of the hearth corner.
-    if map::DOG_ZONE.contains(x, y) {
-        return Style::default().fg(theme::AMBER());
     }
     // Interactive props wear red frames so they read as "walk up to me";
     // their names sit amber-bold in the art with the page digit glowing.
@@ -475,43 +472,56 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
         }
     }
 
-    // The dog: slow blinks, a wagging tail, the occasional dream. A fresh
-    // pet doubles the wag, floats hearts, and credits the petter.
-    let (dx, dy) = map::DOG;
+    // The dog: a pocket wanderer, `(ᴥ)` plus a wagging tail, drawn from the
+    // shared lobby so every session sees the same trot. Napping slows the
+    // tail and drifts a `z`; a fresh pet speeds it up, floats hearts, and
+    // credits the petter.
+    let dog = view.state.snapshot.dog;
+    let (dx, dy) = (dog.x, dog.y);
     let amber = Style::default().fg(theme::AMBER());
     let petted = view.state.snapshot.dog_pet.as_ref();
-    if petted.is_none() && (t / 45).is_multiple_of(7) {
-        set(cells, dx + 2, dy + 1, '-', amber);
-        set(cells, dx + 4, dy + 1, '-', amber);
-    }
-    let wag = if petted.is_some() { 2 } else { 8 };
-    let tail = if (t / wag).is_multiple_of(2) { ')' } else { '/' };
-    set(cells, dx + 7, dy, tail, amber);
+    set(cells, dx.saturating_sub(1), dy, '(', amber);
+    set(cells, dx, dy, 'ᴥ', amber);
+    set(cells, dx + 1, dy, ')', amber);
+    let wag = if petted.is_some() {
+        2
+    } else if dog.resting {
+        16
+    } else {
+        5
+    };
+    let tail = if (t / wag).is_multiple_of(2) { '/' } else { '\\' };
+    let tail_x = if dog.facing_left {
+        dx + 2
+    } else {
+        dx.saturating_sub(2)
+    };
+    set(cells, tail_x, dy, tail, amber);
     if let Some((name, _)) = petted {
         let beat = ((t / 4) % 3) as u16;
-        put_if_floor(cells, dx + 2 + beat, dy.saturating_sub(1), '♥', theme::ERROR());
         put_if_floor(
             cells,
-            dx + 6,
+            dx.saturating_sub(1) + beat,
+            dy.saturating_sub(1),
+            '♥',
+            theme::ERROR(),
+        );
+        put_if_floor(
+            cells,
+            dx + 2,
             dy.saturating_sub(1) - (beat % 2),
             '♥',
             theme::ERROR(),
         );
         put_label(
             cells,
-            dx + 4,
-            dy + 3,
+            dx,
+            dy + 1,
             &format!("{} pets the dog", truncate_name(name)),
             Style::default().fg(theme::TEXT_FAINT()),
         );
-    } else if (t / 40).is_multiple_of(3) {
-        put_if_floor(
-            cells,
-            dx + 8,
-            dy.saturating_sub(1),
-            'z',
-            theme::TEXT_FAINT(),
-        );
+    } else if dog.resting && (t / 40).is_multiple_of(3) {
+        put_if_floor(cells, dx + 2, dy.saturating_sub(1), 'z', theme::TEXT_FAINT());
     }
 }
 
@@ -965,11 +975,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
             " ☾ welcome to the late lounge ☽ ",
             vec![
                 Line::from(Span::styled(
-                    "you're on the welcome mat, and the whole house is live:",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "everyone you see is really here, right now.",
+                    "you're on the welcome mat, the house is live.",
                     text,
                 )),
                 Line::default(),
@@ -977,6 +983,11 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Span::styled("[arrows/hjkl] ", key),
                     Span::styled("walk around", text),
                 ]),
+                Line::from(vec![
+                    Span::styled("[Ctrl+O] ", key),
+                    Span::styled("introduce yourself first", text),
+                ]),
+                Line::default(),
                 Line::from(Span::styled(
                     "the bartender is waving you over, head northwest to the bar.",
                     text,
@@ -990,17 +1001,8 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
             vec![
                 Line::from(vec![
                     Span::styled("[i] ", key),
-                    Span::styled("say something: it floats over your head", text),
+                    Span::styled("say something, it floats over your head", text),
                 ]),
-                Line::from(Span::styled(
-                    "and lands in #lounge on Home (page 1), where the",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "full chat lives. paste an image there to share it.",
-                    text,
-                )),
-                Line::default(),
                 Line::from(vec![
                     Span::styled("[w] ", key),
                     Span::styled("wave · ", text),
@@ -1009,9 +1011,14 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Span::styled("[t] ", key),
                     Span::styled("talk to the bartender", text),
                 ]),
+                Line::default(),
                 Line::from(vec![
-                    Span::styled("[Ctrl+O] ", key),
-                    Span::styled("fill in your profile: name, timezone, theme", text),
+                    Span::styled("[Ctrl+/] ", key),
+                    Span::styled("jump to any room or DM", text),
+                ]),
+                Line::from(vec![
+                    Span::styled("[Ctrl+]] ", key),
+                    Span::styled("pick an icon, spice up your words", text),
                 ]),
                 Line::default(),
                 Line::from(vec![
@@ -1024,18 +1031,27 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
             " ☾ make yourself at home ☽ ",
             vec![
                 Line::from(Span::styled(
-                    "the room is a map of the house. walk up and press Enter:",
+                    "the room is a map of the house, walk up and press Enter:",
                     text,
                 )),
                 Line::default(),
                 Line::from(Span::styled(
-                    "arcade cabinet (2) · heavy door (3) · big table (4)",
+                    "arcade cabinet (2) · big table (4) · artboard (5)",
                     text,
                 )),
                 Line::from(Span::styled(
-                    "easel (5) · jukebox picks the music · the dog is a dog",
+                    "heavy door (3): real NetHack, Green Dragon reborn",
                     text,
                 )),
+                Line::from(Span::styled(
+                    "jukebox picks the music · the dog is a dog",
+                    text,
+                )),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[Ctrl+G] ", key),
+                    Span::styled("the hub, quests · shop · leaderboard", text),
+                ]),
                 Line::default(),
                 Line::from(vec![
                     Span::styled("[Enter] ", key),

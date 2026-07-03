@@ -3,7 +3,11 @@
 //! walked hold an assigned spot (a random free seat, then a standing spot,
 //! then the door stack); the first movement key frees the spot and turns
 //! them into a walker with a live position that every session renders.
-//! Emotes and the dog-pet flourish live here too so everyone sees them.
+//! Emotes and the dog-pet flourish live here too so everyone sees them, and
+//! so does the dog itself: one shared wanderer that trots between the
+//! `map::DOG_WAYPOINTS`, naps at each, and holds still when petted or when
+//! a walker steps up close. It advances lazily inside `snapshot()`, rate
+//! limited by wall clock, so it only moves while somebody is watching.
 //!
 //! Single-replica by design: this is an in-process `Arc<Mutex<..>>` like the
 //! active-users map. If late-ssh ever runs more than one replica, presence
@@ -11,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use late_core::MutexRecover;
 use uuid::Uuid;
@@ -22,6 +26,12 @@ use super::map;
 pub const EMOTE_MS: u128 = 3200;
 /// How long the dog stays excited after a pet, in milliseconds.
 pub const DOG_PET_MS: u128 = 4000;
+/// How often the wandering dog takes one step, in milliseconds.
+const DOG_STEP_MS: u128 = 600;
+/// Nap length range at a reached waypoint, in seconds.
+const DOG_NAP_SECS: (u64, u64) = (6, 20);
+/// A walker this close (Chebyshev) makes the dog hold still to be petted.
+const DOG_FRIEND_RANGE: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Emote {
@@ -66,12 +76,39 @@ struct Walker {
     y: u16,
 }
 
+/// The one shared dog: a live position plus a tiny errand brain (walk to
+/// the waypoint, nap there, pick the next one).
+#[derive(Debug)]
+struct Dog {
+    x: u16,
+    y: u16,
+    facing_left: bool,
+    waypoint: (u16, u16),
+    /// Napping at a reached waypoint until this instant.
+    rest_until: Option<Instant>,
+    last_step: Instant,
+}
+
+impl Dog {
+    fn new() -> Self {
+        Self {
+            x: map::DOG_HOME.0,
+            y: map::DOG_HOME.1,
+            facing_left: false,
+            waypoint: map::DOG_HOME,
+            rest_until: None,
+            last_step: Instant::now(),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct LobbyInner {
     parked: HashMap<Uuid, Parked>,
     walkers: HashMap<Uuid, Walker>,
     emotes: HashMap<Uuid, (Emote, Instant)>,
     dog_pet: Option<(String, Instant)>,
+    dog: Dog,
     rng: u64,
 }
 
@@ -105,6 +142,29 @@ impl Placement {
     }
 }
 
+/// The dog as a render view: where it is and how the tail should behave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DogView {
+    /// The body-center cell of the `(ᴥ)` sprite.
+    pub x: u16,
+    pub y: u16,
+    /// The tail trails the walking direction.
+    pub facing_left: bool,
+    /// Napping at a waypoint: slow tail, the occasional `z`.
+    pub resting: bool,
+}
+
+impl Default for DogView {
+    fn default() -> Self {
+        Self {
+            x: map::DOG_HOME.0,
+            y: map::DOG_HOME.1,
+            facing_left: false,
+            resting: true,
+        }
+    }
+}
+
 /// Everything a session needs to draw the crowd, cloned out per tick.
 #[derive(Debug, Clone, Default)]
 pub struct LobbySnapshot {
@@ -114,6 +174,7 @@ pub struct LobbySnapshot {
     /// Milliseconds since the dog was last petted, with the petter's name,
     /// while inside the excitement window.
     pub dog_pet: Option<(String, u128)>,
+    pub dog: DogView,
 }
 
 impl LobbySnapshot {
@@ -154,6 +215,7 @@ impl SharedLobby {
                 walkers: HashMap::new(),
                 emotes: HashMap::new(),
                 dog_pet: None,
+                dog: Dog::new(),
                 rng: if seed == 0 { 0xA409_3822_299F_31D0 } else { seed },
             })),
         }
@@ -268,10 +330,13 @@ impl SharedLobby {
     }
 
     /// Clone out the render view. Seated people come out in seat order so
-    /// draw order is stable frame to frame.
+    /// draw order is stable frame to frame. Also nudges the shared dog: the
+    /// step is wall-clock rate-limited, so however many sessions snapshot,
+    /// the dog trots at one speed.
     pub fn snapshot(&self) -> LobbySnapshot {
-        let inner = self.inner.lock_recover();
+        let mut inner = self.inner.lock_recover();
         let now = Instant::now();
+        inner.step_dog(now);
         let emote_of = |id: &Uuid| {
             inner
                 .emotes
@@ -320,6 +385,12 @@ impl SharedLobby {
             people,
             door_overflow: door_count.saturating_sub(map::DOOR_STACK.len()),
             dog_pet,
+            dog: DogView {
+                x: inner.dog.x,
+                y: inner.dog.y,
+                facing_left: inner.dog.facing_left,
+                resting: inner.dog.rest_until.is_some(),
+            },
         }
     }
 }
@@ -334,6 +405,68 @@ fn placement_rank(placement: &Placement) -> (u8, usize) {
 }
 
 impl LobbyInner {
+    /// One tick of dog: at most one cell per `DOG_STEP_MS`. It freezes for
+    /// a fresh pet and whenever a walker is close (stay for the pat), naps
+    /// at reached waypoints, and otherwise steps toward the current
+    /// waypoint, larger axis first. Boxed in, it just picks a new errand.
+    fn step_dog(&mut self, now: Instant) {
+        if now.duration_since(self.dog.last_step).as_millis() < DOG_STEP_MS {
+            return;
+        }
+        self.dog.last_step = now;
+        if let Some((_, at)) = &self.dog_pet
+            && now.duration_since(*at).as_millis() < DOG_PET_MS
+        {
+            return;
+        }
+        let (dx, dy) = (self.dog.x, self.dog.y);
+        if self
+            .walkers
+            .values()
+            .any(|w| w.x.abs_diff(dx) <= DOG_FRIEND_RANGE && w.y.abs_diff(dy) <= DOG_FRIEND_RANGE)
+        {
+            return;
+        }
+        if let Some(until) = self.dog.rest_until {
+            if now < until {
+                return;
+            }
+            self.dog.rest_until = None;
+            let pick = self.next_rand(map::DOG_WAYPOINTS.len());
+            self.dog.waypoint = map::DOG_WAYPOINTS[pick];
+        }
+        let (wx, wy) = self.dog.waypoint;
+        if (dx, dy) == (wx, wy) {
+            let (lo, hi) = DOG_NAP_SECS;
+            let nap = lo + self.next_rand((hi - lo) as usize + 1) as u64;
+            self.dog.rest_until = Some(now + Duration::from_secs(nap));
+            return;
+        }
+        let step_x = (i32::from(wx) - i32::from(dx)).signum();
+        let step_y = (i32::from(wy) - i32::from(dy)).signum();
+        let mut order = [(step_x, 0), (0, step_y)];
+        if wx.abs_diff(dx) < wy.abs_diff(dy) {
+            order.reverse();
+        }
+        for (sx, sy) in order {
+            if sx == 0 && sy == 0 {
+                continue;
+            }
+            let nx = dx.wrapping_add_signed(sx as i16);
+            let ny = dy.wrapping_add_signed(sy as i16);
+            if map::walkable(nx, ny) {
+                if sx != 0 {
+                    self.dog.facing_left = sx < 0;
+                }
+                (self.dog.x, self.dog.y) = (nx, ny);
+                return;
+            }
+        }
+        // Both axes blocked: give up on this errand, sniff out another.
+        let pick = self.next_rand(map::DOG_WAYPOINTS.len());
+        self.dog.waypoint = map::DOG_WAYPOINTS[pick];
+    }
+
     fn next_rand(&mut self, upper: usize) -> usize {
         let mut x = self.rng;
         x ^= x << 13;
@@ -547,6 +680,78 @@ mod tests {
         lobby.sync(&[(id, "old".to_string())]);
         lobby.sync(&[(id, "new".to_string())]);
         assert_eq!(lobby.snapshot().people[0].username, "new");
+    }
+
+    /// Rewind the dog's step clock (and expire any nap) so the next
+    /// snapshot is guaranteed to advance it.
+    fn hurry_the_dog(lobby: &SharedLobby) {
+        let mut inner = lobby.inner.lock_recover();
+        inner.dog.last_step = Instant::now() - Duration::from_secs(1);
+        if inner.dog.rest_until.is_some() {
+            inner.dog.rest_until = Some(Instant::now() - Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn the_dog_wanders_the_waypoints_and_stays_on_walkable_floor() {
+        let lobby = SharedLobby::with_seed(7);
+        let mut visited = std::collections::HashSet::new();
+        for _ in 0..600 {
+            hurry_the_dog(&lobby);
+            let snap = lobby.snapshot();
+            assert!(
+                map::walkable(snap.dog.x, snap.dog.y),
+                "dog stood on a blocked cell at ({}, {})",
+                snap.dog.x,
+                snap.dog.y
+            );
+            if snap.dog.resting {
+                visited.insert((snap.dog.x, snap.dog.y));
+            }
+        }
+        assert!(
+            visited.len() >= 2,
+            "dog never made it to a second waypoint: {visited:?}"
+        );
+        assert!(
+            visited.iter().all(|c| map::DOG_WAYPOINTS.contains(c)),
+            "dog napped off-waypoint: {visited:?}"
+        );
+    }
+
+    #[test]
+    fn a_fresh_pet_freezes_the_dog() {
+        let lobby = SharedLobby::with_seed(7);
+        lobby.inner.lock_recover().dog.waypoint = (100, 22);
+        lobby.pet_dog("alice");
+        for _ in 0..5 {
+            hurry_the_dog(&lobby);
+            lobby.snapshot();
+        }
+        let snap = lobby.snapshot();
+        assert_eq!((snap.dog.x, snap.dog.y), map::DOG_HOME);
+    }
+
+    #[test]
+    fn the_dog_waits_when_a_walker_comes_close() {
+        let lobby = SharedLobby::with_seed(7);
+        lobby.inner.lock_recover().dog.waypoint = (100, 22);
+        let (id, name) = user(1);
+        lobby.place(id, &name, map::DOG_HOME.0 + 2, map::DOG_HOME.1);
+        for _ in 0..5 {
+            hurry_the_dog(&lobby);
+            lobby.snapshot();
+        }
+        let snap = lobby.snapshot();
+        assert_eq!((snap.dog.x, snap.dog.y), map::DOG_HOME);
+
+        // The friend wanders off; the dog resumes its errand.
+        for _ in 0..30 {
+            lobby.walk(id, &name, 1, 0);
+        }
+        hurry_the_dog(&lobby);
+        let snap = lobby.snapshot();
+        assert_ne!((snap.dog.x, snap.dog.y), map::DOG_HOME);
     }
 
     #[test]

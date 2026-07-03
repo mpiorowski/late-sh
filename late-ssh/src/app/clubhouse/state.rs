@@ -241,9 +241,11 @@ impl State {
         }
     }
 
-    /// The prop within reach of the player, if any.
+    /// The prop within reach of the player, if any. The dog wanders, so
+    /// its live cell comes from the lobby snapshot.
     pub fn nearby(&self) -> Option<map::Interactive> {
-        map::nearest_interactive(self.player_x, self.player_y)
+        let dog = (self.snapshot.dog.x, self.snapshot.dog.y);
+        map::nearest_interactive(self.player_x, self.player_y, dog)
     }
 
     /// Everyone in the room (the lobby roster includes this session's user

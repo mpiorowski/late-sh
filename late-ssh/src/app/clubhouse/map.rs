@@ -6,7 +6,9 @@
 //!
 //! Everything is drawn at "zoomed" scale, Dwarf Fortress vibes, single-width
 //! glyphs only: stools are `(_)` on a `╨` leg, tables are 10x4 ovals with a
-//! candle, people render as 3-row stick figures, the dog is three rows. Each
+//! candle, people render as 3-row stick figures, and the dog is a pocket
+//! `(ᴥ)` sprite that is not in this art at all: it wanders the room as
+//! shared lobby state (`lobby.rs`) and `ui.rs` draws it live. Each
 //! interactive landmark carries its page number in the art and doubles as a
 //! signpost: the arcade cabinet is page 2, the big wooden door is the door
 //! games on page 3, the poker table is Tables on page 4, and the easel is
@@ -43,9 +45,9 @@ pub const MAP: [&str; MAP_H as usize] = [
     "║    ░░░░░░░░░░░░░░░░░    ╰──╯                              ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░                                            ║",
     "║    ░░░░░░░░░░░░░░░░░                                      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                            ║",
     "║    ░░░░░░░░░░░░░░░░░                                      ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░            (_)                             ║",
-    "║  ♣♣♣   \\,_,/ )                                            ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░             ╨                              ║",
-    "║ ♣♣♣♣♣ ( o.o )/                                            ░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░          ╭──────╮                          ║",
-    "║  ♣♣♣   \\_u_/                                              ░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░     (_) ╭╯  ¡   ╰╮ (_)                     ║",
+    "║  ♣♣♣                                                      ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░             ╨                              ║",
+    "║ ♣♣♣♣♣                                                     ░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░          ╭──────╮                          ║",
+    "║  ♣♣♣                                                      ░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░     (_) ╭╯  ¡   ╰╮ (_)                     ║",
     "║  ╰─╯                           ╭─╮                        ░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░      ╨  ╰╮      ╭╯  ╨                      ║",
     "║                                ╰┬╯           ♣♣♣          ░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░          ╰──────╯                          ║",
     "║   ╔════════════╗                │           ♣♣♣♣♣         ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                            ║",
@@ -216,16 +218,23 @@ pub const DOOR_SIGN: Zone = Zone {
 /// from players); the torso renders one row below.
 pub const BARTENDER: (u16, u16) = (28, 6);
 
-/// Top-left of the dog sprawled beside the hearth rug (3 rows, 8 wide).
-pub const DOG: (u16, u16) = (8, 25);
+/// The dog's home cell beside the hearth rug: where the `(ᴥ)` sprite body
+/// centers when the room starts. The dog itself is shared lobby state
+/// (`lobby.rs`); it wanders between `DOG_WAYPOINTS` and naps back here.
+pub const DOG_HOME: (u16, u16) = (11, 26);
 
-/// The dog's bounding box, for proximity and styling.
-pub const DOG_ZONE: Zone = Zone {
-    x0: 8,
-    y0: 25,
-    x1: 15,
-    y1: 27,
-};
+/// The spots the wandering dog likes; the lobby picks among these.
+pub const DOG_WAYPOINTS: &[(u16, u16)] = &[
+    DOG_HOME,   // the hearth rug
+    (33, 11),   // begging at the bar
+    (54, 14),   // graybeard's corner
+    (92, 44),   // greeting arrivals on the welcome mat
+    (100, 22),  // the middle of the rug
+    (75, 32),   // among the west tables
+    (135, 24),  // the east rug edge
+    (150, 33),  // the games corner
+    (24, 42),   // the quiet table, south-west
+];
 
 /// Where the "+N at the door" overflow label is centered.
 pub const DOOR_LABEL: (u16, u16) = (108, 47);
@@ -389,8 +398,9 @@ pub enum Interactive {
     Fireplace,
 }
 
-/// The prop the player is close enough to interact with, if any.
-pub fn nearest_interactive(x: u16, y: u16) -> Option<Interactive> {
+/// The prop the player is close enough to interact with, if any. The dog
+/// wanders (lobby state), so its current body-center cell is passed in.
+pub fn nearest_interactive(x: u16, y: u16, dog: (u16, u16)) -> Option<Interactive> {
     if BAR_COUNTER.distance(x, y) <= 2 {
         return Some(Interactive::Bartender);
     }
@@ -409,7 +419,13 @@ pub fn nearest_interactive(x: u16, y: u16) -> Option<Interactive> {
     if EASEL.distance(x, y) <= 2 {
         return Some(Interactive::Easel);
     }
-    if DOG_ZONE.distance(x, y) <= 1 {
+    let dog_body = Zone {
+        x0: dog.0.saturating_sub(1),
+        y0: dog.1,
+        x1: dog.0 + 1,
+        y1: dog.1,
+    };
+    if dog_body.distance(x, y) <= 1 {
         return Some(Interactive::Dog);
     }
     if FIREPLACE.distance(x, y) <= 2 {
@@ -441,14 +457,14 @@ pub fn char_at(x: u16, y: u16) -> char {
 }
 
 /// Players can walk (climb, really) over everything: tables, stools, the
-/// dog, the fire. Only the outer walls and the bartender's alley (the shelf
-/// and workspace behind the counter) block movement — you may stand ON the
-/// counter, but never behind it.
+/// fire. Only the outer walls, the bar counter, and the bartender's alley
+/// behind it block movement. Collision counts your feet cell only, so
+/// standing in front of the bar leans your torso and head over the counter.
 pub fn walkable(x: u16, y: u16) -> bool {
     if x == 0 || y == 0 || x >= MAP_W - 1 || y >= MAP_H - 1 {
         return false;
     }
-    !(x <= BAR_COUNTER.x1 && y < BAR_COUNTER.y0)
+    !(x <= BAR_COUNTER.x1 && y <= BAR_COUNTER.y1)
 }
 
 #[cfg(test)]
@@ -491,6 +507,9 @@ mod tests {
         for &(x, y) in DOOR_STACK {
             assert!(walkable(x, y), "door-stack slot ({x}, {y}) is blocked");
         }
+        for &(x, y) in DOG_WAYPOINTS {
+            assert!(walkable(x, y), "dog waypoint ({x}, {y}) is blocked");
+        }
     }
 
     #[test]
@@ -522,15 +541,16 @@ mod tests {
 
     #[test]
     fn bar_alley_is_sealed_from_players() {
-        // The bartender's alley (behind the counter) must not be reachable:
-        // shelf rows above, counter below, wall left, seal column right.
+        // The bartender's alley (behind the counter) and the counter itself
+        // must not be reachable: shelf rows above, counter below, wall left,
+        // seal column right.
         let reachable = reachable_from_spawn();
         assert!(
             !reachable.contains(&BARTENDER),
             "players can reach the bartender's alley"
         );
-        for y in 2..9u16 {
-            for x in 1..BAR_COUNTER.x1 {
+        for y in 2..=BAR_COUNTER.y1 {
+            for x in 1..=BAR_COUNTER.x1 {
                 assert!(!reachable.contains(&(x, y)), "alley leak at ({x}, {y})");
             }
         }
@@ -568,31 +588,61 @@ mod tests {
     #[test]
     fn interactives_resolve_by_proximity() {
         // Standing in front of the bar.
-        assert_eq!(nearest_interactive(28, 12), Some(Interactive::Bartender));
+        assert_eq!(
+            nearest_interactive(28, 12, DOG_HOME),
+            Some(Interactive::Bartender)
+        );
         // Next to the jukebox.
-        assert_eq!(nearest_interactive(82, 4), Some(Interactive::Jukebox));
+        assert_eq!(
+            nearest_interactive(82, 4, DOG_HOME),
+            Some(Interactive::Jukebox)
+        );
         // In front of the arcade cabinet.
-        assert_eq!(nearest_interactive(154, 4), Some(Interactive::Arcade));
+        assert_eq!(
+            nearest_interactive(154, 4, DOG_HOME),
+            Some(Interactive::Arcade)
+        );
         // Under the big door to the door games.
-        assert_eq!(nearest_interactive(130, 8), Some(Interactive::Doors));
+        assert_eq!(
+            nearest_interactive(130, 8, DOG_HOME),
+            Some(Interactive::Doors)
+        );
         // Walking up to the poker table.
-        assert_eq!(nearest_interactive(145, 15), Some(Interactive::Poker));
+        assert_eq!(
+            nearest_interactive(145, 15, DOG_HOME),
+            Some(Interactive::Poker)
+        );
         // Admiring the easel.
-        assert_eq!(nearest_interactive(19, 33), Some(Interactive::Easel));
-        // Petting distance.
-        assert_eq!(nearest_interactive(16, 26), Some(Interactive::Dog));
+        assert_eq!(
+            nearest_interactive(19, 33, DOG_HOME),
+            Some(Interactive::Easel)
+        );
+        // Petting distance follows the dog around.
+        assert_eq!(
+            nearest_interactive(13, 26, DOG_HOME),
+            Some(Interactive::Dog)
+        );
+        assert_eq!(
+            nearest_interactive(101, 23, (100, 22)),
+            Some(Interactive::Dog)
+        );
         // Warming up by the hearth, out of the dog's reach.
-        assert_eq!(nearest_interactive(25, 23), Some(Interactive::Fireplace));
-        // Middle of the rug: nothing.
-        assert_eq!(nearest_interactive(100, 22), None);
+        assert_eq!(
+            nearest_interactive(25, 23, DOG_HOME),
+            Some(Interactive::Fireplace)
+        );
+        // Middle of the rug: nothing (while the dog is elsewhere).
+        assert_eq!(nearest_interactive(100, 22, DOG_HOME), None);
     }
 
     #[test]
-    fn only_walls_and_the_bar_alley_block_movement() {
+    fn walls_the_counter_and_the_bar_alley_block_movement() {
         assert!(!walkable(0, 25)); // west wall
         assert!(!walkable(28, 5)); // behind the counter
+        assert!(!walkable(28, 9)); // the counter top
+        assert!(!walkable(28, 10)); // the counter front
+        assert!(walkable(28, 11)); // at the bar: head leans over the counter
         assert!(walkable(67, 16)); // right over a table
-        assert!(walkable(28, 9)); // standing ON the counter is allowed
         assert!(walkable(100, 22)); // rug
         assert!(walkable(SPAWN.0, SPAWN.1)); // welcome mat
     }

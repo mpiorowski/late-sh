@@ -188,14 +188,10 @@ FIRE_CELLS = (FIRE_X + 3, FIRE_Y + 3, FIRE_X + 19, FIRE_Y + 4)
 MANTLE_CANDLES = [(FIRE_X + 4, FIRE_Y + 1), (FIRE_X + 10, FIRE_Y + 1), (FIRE_X + 16, FIRE_Y + 1)]
 for ry in (22, 23, 24):
     put(5, ry, '░' * 17)
-DOG_X, DOG_Y = 8, 25
-dog = [
-    ' \\,_,/ )',
-    '( o.o )/',
-    ' \\_u_/',
-]
-stamp(DOG_X, DOG_Y, dog, transparent=True)
-DOG = (DOG_X, DOG_Y)
+# The dog is not map art: it wanders as shared lobby state and ui.rs draws
+# it live. Its home cell and waypoints are hand-authored in RUST_TEMPLATE
+# (DOG_HOME / DOG_WAYPOINTS).
+DOG_HOME = (11, 26)
 armchair_facing_left(26, 16)
 armchair_facing_left(26, 20)
 
@@ -306,11 +302,11 @@ plant(176, 44)
 
 # ================================================================ checks
 def walkable(x, y):
-    # Mirrors map.rs: everything is climbable except the outer walls and the
-    # bartender's alley (x <= BAR_X1, y < counter row).
+    # Mirrors map.rs: everything is climbable except the outer walls, the
+    # counter, and the bartender's alley (x <= BAR_X1, y <= counter bottom).
     if x <= 0 or y <= 0 or x >= W - 1 or y >= H - 1:
         return False
-    return not (x <= BAR_X1 and y < 9)
+    return not (x <= BAR_X1 and y <= 10)
 
 for y, row in enumerate(grid):
     assert len(row) == W, y
@@ -352,7 +348,7 @@ zones = [('bar', (1, 9, BAR_X1, 10), 2), ('juke', JUKEBOX_ZONE, 2),
          ('fire', FIREPLACE_ZONE, 2)]
 for name, z, d in zones:
     assert zone_near_reachable(z, d), name
-assert zone_near_reachable((DOG_X, DOG_Y, DOG_X + 7, DOG_Y + 2), 1), 'dog'
+assert zone_near_reachable((DOG_HOME[0] - 1, DOG_HOME[1], DOG_HOME[0] + 1, DOG_HOME[1]), 1), 'dog home'
 
 print(f'OK: {len(seats)} seats, {len(STANDING)} standing, reachable: {len(seen)}')
 
@@ -844,7 +840,7 @@ if '--write' in sys.argv or '--emit' in sys.argv:
     print(f'wrote {os.path.normpath(path)}')
     print('fresh zone numbers (sync RUST_TEMPLATE if any moved):')
     print('BARTENDER', BARTENDER, 'GRAYBEARD', GRAYBEARD, 'SPAWN', SPAWN)
-    print('DOG', DOG, 'DOOR_LABEL', DOOR_LABEL, 'STANDING', STANDING)
+    print('DOG_HOME', DOG_HOME, 'DOOR_LABEL', DOOR_LABEL, 'STANDING', STANDING)
     print('BAR_COUNTER', (1, 9, BAR_X1, 10), 'BACK_BAR', (1, 2, BAR_X1 - 1, 5))
     print('JUKEBOX', JUKEBOX_ZONE, 'EQ', JUKEBOX_EQ)
     print('DOORS', DOORS_ZONE, 'ARCADE', ARCADE_ZONE, 'SCREEN', ARCADE_SCREEN)
