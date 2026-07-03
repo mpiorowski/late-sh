@@ -105,11 +105,10 @@ pub enum TweakRow {
     ComposerKeepFocused,
     StartWithMusicMuted,
     FlagFallback,
-    ShowSettingsOnConnect,
 }
 
 impl TweakRow {
-    pub const ALL: [TweakRow; 9] = [
+    pub const ALL: [TweakRow; 8] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -118,7 +117,6 @@ impl TweakRow {
         TweakRow::ComposerKeepFocused,
         TweakRow::StartWithMusicMuted,
         TweakRow::FlagFallback,
-        TweakRow::ShowSettingsOnConnect,
     ];
 }
 
@@ -759,9 +757,6 @@ impl SettingsModalState {
             }
             TweakRow::FlagFallback => {
                 self.draft.show_flag_fallback ^= true;
-            }
-            TweakRow::ShowSettingsOnConnect => {
-                self.draft.show_settings_on_connect ^= true;
             }
         }
         self.save();
@@ -1886,7 +1881,6 @@ impl SettingsModalState {
                 right_sidebar_mode: self.draft.right_sidebar_mode,
                 right_sidebar_components: self.draft.right_sidebar_components.clone(),
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
-                show_settings_on_connect: self.draft.show_settings_on_connect,
                 keep_composer_focused: self.draft.keep_composer_focused,
                 start_with_music_muted: self.draft.start_with_music_muted,
                 show_flag_fallback: self.draft.show_flag_fallback,

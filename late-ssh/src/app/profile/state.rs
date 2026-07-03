@@ -43,6 +43,10 @@ impl ProfileState {
         &self.profile
     }
 
+    pub fn service(&self) -> &ProfileService {
+        &self.profile_service
+    }
+
     pub fn theme_id(&self) -> &str {
         self.profile
             .theme_id
@@ -174,7 +178,6 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_components: profile.right_sidebar_components.clone(),
         show_room_list_sidebar: profile.show_room_list_sidebar,
-        show_settings_on_connect: profile.show_settings_on_connect,
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
         show_flag_fallback: profile.show_flag_fallback,

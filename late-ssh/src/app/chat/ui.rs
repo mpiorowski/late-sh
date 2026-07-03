@@ -111,9 +111,10 @@ pub struct ImageModalView<'a> {
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
 }
 
-/// Shared composer block rendering for both the dashboard card and the chat
-/// page. New composer states (editing, replying, …) wire here once.
-pub(super) struct ComposerBlockView<'a> {
+/// Shared composer block rendering for the dashboard card, the chat page,
+/// and the clubhouse footer. New composer states (editing, replying, …)
+/// wire here once.
+pub(crate) struct ComposerBlockView<'a> {
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub selected_message: bool,
@@ -414,7 +415,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
     Paragraph::new(placeholder)
 }
 
-pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &ComposerBlockView<'_>) {
+pub(crate) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &ComposerBlockView<'_>) {
     let composer_title = composer_title(view, area.width);
     let composer_style = if view.composing {
         Style::default().fg(theme::BORDER_ACTIVE())
@@ -511,7 +512,7 @@ pub(crate) fn chat_composer_placeholder_lines(
     }
 }
 
-fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: usize) -> usize {
+pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: usize) -> usize {
     chat_composer_placeholder_lines(
         view.composer,
         view.mention_active,

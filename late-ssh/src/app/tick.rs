@@ -125,12 +125,8 @@ impl App {
             && self.settings_modal_state.draft().username.is_empty()
             && !self.profile_state.profile().username.is_empty()
         {
-            if self.profile_state.profile().show_settings_on_connect {
-                self.settings_modal_state
-                    .open_from_profile(self.profile_state.profile());
-            } else {
-                self.show_settings = false;
-            }
+            self.settings_modal_state
+                .open_from_profile(self.profile_state.profile());
         }
 
         for msg in messages {

@@ -244,10 +244,10 @@ const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
-const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
+const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
@@ -670,6 +670,23 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&AUDIO_SOURCE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Atomically mark the clubhouse first-visit tutorial as completed.
+    pub async fn set_clubhouse_tutorial_done(client: &Client, user_id: Uuid) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, true),
+                     updated = current_timestamp
+                 WHERE id = $2",
+                &[&CLUBHOUSE_TUTORIAL_DONE_KEY, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1134,13 +1151,6 @@ pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-pub fn extract_show_settings_on_connect(settings: &Value) -> bool {
-    settings
-        .get(SHOW_SETTINGS_ON_CONNECT_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-}
-
 /// Tweak: when true, pressing Enter in the chat composer sends the message
 /// but keeps the composer focused (same behavior as Alt+S, which becomes a
 /// no-op while the tweak is on). Opt-in; defaults to false so existing
@@ -1158,6 +1168,15 @@ pub fn extract_keep_composer_focused(settings: &Value) -> bool {
 pub fn extract_start_with_music_muted(settings: &Value) -> bool {
     settings
         .get(START_WITH_MUSIC_MUTED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// True once the user has finished (or skipped) the clubhouse first-visit
+/// tutorial; defaults to false so brand-new users get the walkthrough.
+pub fn extract_clubhouse_tutorial_done(settings: &Value) -> bool {
+    settings
+        .get(CLUBHOUSE_TUTORIAL_DONE_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }

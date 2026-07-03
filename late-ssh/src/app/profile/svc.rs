@@ -388,6 +388,26 @@ impl ProfileService {
         Ok(())
     }
 
+    /// Fire-and-forget: mark the clubhouse first-visit tutorial finished so
+    /// it never runs again for this user. No event on success; a failure is
+    /// only logged (the tutorial would simply run once more next session).
+    pub fn set_clubhouse_tutorial_done(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_clubhouse_tutorial_done(&client, user_id).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist clubhouse tutorial completion");
+                }
+            }
+            .instrument(info_span!("profile.clubhouse_tutorial_task", user_id = %user_id)),
+        );
+    }
+
     pub fn delete_account(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(

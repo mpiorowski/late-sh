@@ -192,6 +192,26 @@ pub const STANDING_SPOTS: &[(u16, u16)] = &[
 /// Where your avatar appears: on the welcome mat just inside the door.
 pub const SPAWN: (u16, u16) = (92, 46);
 
+/// Render slots for the door stack: when seats and standing room are full,
+/// arrivals pile up just inside the door on these cells (they repeat once
+/// the stack outgrows them; the renderer adds a `+N` label).
+pub const DOOR_STACK: &[(u16, u16)] = &[
+    (86, 46),
+    (98, 46),
+    (82, 47),
+    (102, 47),
+    (90, 48),
+    (94, 48),
+];
+
+/// The `╡ door ╞` sign on the bottom wall; it glows when someone arrives.
+pub const DOOR_SIGN: Zone = Zone {
+    x0: 88,
+    y0: MAP_H - 1,
+    x1: 95,
+    y1: MAP_H - 1,
+};
+
 /// The bartender's head cell, in the alley behind the counter (sealed off
 /// from players); the torso renders one row below.
 pub const BARTENDER: (u16, u16) = (28, 6);
@@ -468,6 +488,17 @@ mod tests {
         for &(x, y) in STANDING_SPOTS {
             assert!(walkable(x, y), "standing spot ({x}, {y}) is blocked");
         }
+        for &(x, y) in DOOR_STACK {
+            assert!(walkable(x, y), "door-stack slot ({x}, {y}) is blocked");
+        }
+    }
+
+    #[test]
+    fn door_sign_zone_covers_the_door_lettering() {
+        let sign: String = (DOOR_SIGN.x0..=DOOR_SIGN.x1)
+            .map(|x| char_at(x, DOOR_SIGN.y0))
+            .collect();
+        assert_eq!(sign, "╡ door ╞");
     }
 
     /// Every cell a player can reach from spawn, by flood fill.

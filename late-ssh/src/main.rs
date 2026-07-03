@@ -390,6 +390,7 @@ async fn main() -> anyhow::Result<()> {
         conn_limit,
         conn_counts,
         active_users,
+        clubhouse_lobby: late_ssh::app::clubhouse::lobby::SharedLobby::new(),
         afk_users,
         username_directory: username_directory.clone(),
         activity_feed: activity_tx,

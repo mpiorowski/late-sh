@@ -182,8 +182,13 @@ struct DrawContext<'a> {
     worldcup_state: &'a crate::app::worldcup::state::State,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
-    /// Embedded #lounge chat for the clubhouse; built only on that screen.
-    clubhouse_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// The #lounge tail for clubhouse speech bubbles; empty off that screen.
+    clubhouse_lounge_messages: &'a [late_core::models::chat_message::ChatMessage],
+    /// Staff bot ids so their #lounge lines bubble over their sprites.
+    clubhouse_bartender_id: Option<uuid::Uuid>,
+    clubhouse_graybeard_id: Option<uuid::Uuid>,
+    /// The clubhouse composer footer; built only on that screen.
+    clubhouse_composer: Option<chat::ui::ComposerBlockView<'a>>,
     /// The account's flag-emoji tweak, shared with chat/shop: when set, flags
     /// are replaced by text fallbacks for terminals that can't render them.
     show_flag_fallback: bool,
@@ -742,59 +747,32 @@ impl App {
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                 });
-        // The clubhouse pins its embedded chat to #lounge; the view is only
-        // assembled while that screen is up. Mirrors the Rooms view above,
-        // with its own row cache (never share one across surfaces).
+        // The clubhouse has no chat panel: #lounge messages float over their
+        // authors' heads and the shared composer block pins to the bottom.
+        // Both are only assembled while that screen is up.
         let clubhouse_lounge_id = if screen == Screen::Clubhouse {
             self.chat.lounge_room_id()
         } else {
             None
         };
-        let clubhouse_chat_view =
-            clubhouse_lounge_id.map(|lounge_id| chat::ui::EmbeddedRoomChatView {
-                title: "#lounge",
-                messages: self.chat.messages_for_room(lounge_id),
-                overlay: self.chat.overlay(),
-                image_modal,
-                rows_cache: &mut self.clubhouse_chat_rows_cache,
-                usernames: chat_usernames,
-                countries: chat_countries,
-                friend_user_ids: self.chat.friend_user_ids(),
-                afk_user_ids: self.afk_user_ids.as_ref(),
-                message_reactions,
-                inline_images: &self.chat.inline_image_cache,
-                unread_marker: self
-                    .chat
-                    .room_unread_markers
-                    .get(&lounge_id)
-                    .copied()
-                    .flatten(),
-                current_user_id: self.user_id,
-                voice_channel_id: None,
-                voice_snapshot,
-                voice_paired_cli_supports_voice: paired_cli_supports_voice,
-                show_flag_fallback: self.profile_state.profile().show_flag_fallback,
-                selected_message_id: self.chat.selected_message_id,
-                selected_image_message: self
-                    .chat
-                    .selected_message_has_inline_image_in_room(lounge_id),
-                highlighted_message_id: self.chat.highlighted_message_id,
-                reaction_picker_active: self.chat.is_reaction_leader_active(),
-                composer: self.chat.composer(),
-                composing: self.chat.composing,
-                mention_matches: &self.chat.mention_ac.matches,
-                mention_selected: self.chat.mention_ac.selected,
-                mention_active: self.chat.mention_ac.active,
-                reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
-                is_editing: self.chat.edited_message_id.is_some(),
-                bonsai_glyphs,
-                chat_badges,
-                profile_award_badges,
-                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
-                composer_rect_slot: Some(&self.chat.last_composer_rect),
-                composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
-                chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
-            });
+        let clubhouse_lounge_messages: &[late_core::models::chat_message::ChatMessage] =
+            clubhouse_lounge_id
+                .map(|lounge_id| self.chat.messages_for_room(lounge_id))
+                .unwrap_or(&[]);
+        let clubhouse_composer = clubhouse_lounge_id.map(|_| chat::ui::ComposerBlockView {
+            composer: self.chat.composer(),
+            composing: self.chat.composing,
+            selected_message: false,
+            selected_image_message: false,
+            selected_news_message: false,
+            reaction_picker_active: false,
+            reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+            is_editing: self.chat.edited_message_id.is_some(),
+            mention_active: self.chat.mention_ac.active,
+            mention_matches: &self.chat.mention_ac.matches,
+            mention_selected: self.chat.mention_ac.selected,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+        });
         let mut terminal_image_frame = TerminalImageFrame::default();
 
         // Sixel cleanup, pre-frame phase. Sixel — unlike Kitty — has no
@@ -921,7 +899,10 @@ impl App {
                         worldcup_state: &self.worldcup,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
-                        clubhouse_chat_view,
+                        clubhouse_lounge_messages,
+                        clubhouse_bartender_id: self.clubhouse_bartender_id,
+                        clubhouse_graybeard_id: self.clubhouse_graybeard_id,
+                        clubhouse_composer,
                         show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                         terminal_is_kitty: self.terminal_is_kitty,
                         worldcup_timezone: self.profile_state.profile().timezone.as_deref(),
@@ -1053,7 +1034,7 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         screen: Screen,
-        ctx: DrawContext<'_>,
+        mut ctx: DrawContext<'_>,
         terminal_images: &mut TerminalImageFrame,
     ) {
         if ctx.show_splash {
@@ -1358,9 +1339,11 @@ impl App {
                     state: ctx.clubhouse_state,
                     own_username: ctx.clubhouse_own_username,
                     now_playing: ctx.now_playing,
-                    chat: ctx.clubhouse_chat_view,
+                    lounge_messages: ctx.clubhouse_lounge_messages,
+                    bartender_user_id: ctx.clubhouse_bartender_id,
+                    graybeard_user_id: ctx.clubhouse_graybeard_id,
+                    composer: ctx.clubhouse_composer.take(),
                 },
-                terminal_images,
             ),
         }
 
@@ -1711,7 +1694,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
             format!(
-                "· {} inside · arrows/hjkl walk · Enter interact · J/K messages ",
+                "· {} inside · arrows/hjkl walk · Enter interact · i say · w wave · x dance ",
                 ctx.clubhouse_state.headcount()
             ),
             Style::default().fg(theme::TEXT_DIM()),

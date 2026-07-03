@@ -146,6 +146,9 @@ pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 m
 const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
 const BARTENDER_USERNAME: &str = "bartender";
 const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(25);
+/// The tutorial greeting must land while the newcomer is still at the bar;
+/// past this, the scripted line goes out instead.
+const BARTENDER_GREETING_TIMEOUT: Duration = Duration::from_secs(6);
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
     You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
@@ -222,20 +225,27 @@ impl GhostService {
             }
         }
 
-        // Initialize the bartender — keeper of the clubhouse tavern.
-        if self.ai_service.is_enabled() {
-            match self.ensure_bartender_user().await {
-                Ok(bartender) => {
-                    self.set_always_on(&bartender);
+        // Initialize the bartender — keeper of the clubhouse tavern. He is
+        // clubhouse furniture (fixed spot behind the bar, tutorial greeting,
+        // speech bubbles), so he boots even without AI; only the mention
+        // responder needs the AI service.
+        match self.ensure_bartender_user().await {
+            Ok(bartender) => {
+                self.set_always_on(&bartender);
+                if self.ai_service.is_enabled() {
                     let svc = self.clone();
                     let bt_shutdown = shutdown.clone();
                     tokio::spawn(async move {
                         svc.run_bartender_mention_task(bartender, bt_shutdown).await;
                     });
+                } else {
+                    tracing::info!(
+                        "@bartender mention responder disabled because AI service is not configured"
+                    );
                 }
-                Err(err) => {
-                    tracing::error!(error = ?err, "ghost service failed to initialize @bartender user");
-                }
+            }
+            Err(err) => {
+                tracing::error!(error = ?err, "ghost service failed to initialize @bartender user");
             }
         }
 
@@ -1088,6 +1098,68 @@ impl GhostService {
             id: user.id,
             username: username.to_string(),
         })
+    }
+}
+
+/// The clubhouse tutorial's one-shot bartender welcome: one AI-flavored
+/// line in his voice, with a hard scripted fallback so the beat lands
+/// identically on AI-less installs, on errors, and on slow generations.
+/// Whatever comes back always carries the key facts: press `i` to talk,
+/// your words float over your head.
+pub async fn bartender_tutorial_greeting(ai: Option<&AiService>, username: &str) -> String {
+    let fallback = format!(
+        "@{username} well, look who found the bar. first round's on the house. \
+         press i and say something, it floats right over your head."
+    );
+    let Some(ai) = ai.filter(|ai| ai.is_enabled()) else {
+        return fallback;
+    };
+
+    let system_prompt = format!(
+        "Your username is: {username}\n\n\
+        {persona}\n\n\
+        A brand-new patron just walked up to your bar for the very first time, mid house tour. \
+        Welcome them in and slide something across the counter.\n\
+        Your reply MUST tell them to press i to say something, and that their words float over their head in the lounge.\n\
+        Keep it to 1-2 short lines. No markdown. No emoji.\n\
+        NEVER prefix your message with your own username, and do not wrap it in quotes.\n\
+        Do NOT output SKIP. Output only the message text.",
+        username = BARTENDER_USERNAME,
+        persona = BARTENDER_PERSONA,
+    );
+    let prompt = format!("The new patron's handle is @{username}. Pour the welcome.");
+
+    let reply = match tokio::time::timeout(
+        BARTENDER_GREETING_TIMEOUT,
+        ai.generate_reply(&system_prompt, &prompt),
+    )
+    .await
+    {
+        Ok(Ok(Some(reply))) => reply,
+        Ok(Ok(None)) => return fallback,
+        Ok(Err(e)) => {
+            tracing::warn!(error = ?e, "bartender tutorial greeting generation failed");
+            return fallback;
+        }
+        Err(_) => {
+            tracing::warn!("bartender tutorial greeting generation timed out");
+            return fallback;
+        }
+    };
+    let Some(safe) =
+        sanitize_generated_reply_with_line_limit(&reply, Some(BARTENDER_USERNAME), 2)
+    else {
+        return fallback;
+    };
+    // The greeting doubles as the newcomer's first mention notification.
+    let target = format!("@{username}");
+    if safe
+        .to_ascii_lowercase()
+        .starts_with(&target.to_ascii_lowercase())
+    {
+        safe
+    } else {
+        format!("{target} {safe}")
     }
 }
 

@@ -1,7 +1,9 @@
 //! Clubhouse renderer: the tavern viewport (camera-follow over the floor
-//! plan, live occupants, animated fire/jukebox/dog/candles, proximity
-//! popovers) with the embedded #lounge chat pinned to the bottom of the
-//! screen. Dwarf Fortress vibes, single-width glyphs only: walking people
+//! plan, the live shared crowd, animated fire/jukebox/dog/candles, proximity
+//! popovers) with the #lounge composer pinned to the bottom of the screen.
+//! There is no chat panel: fresh #lounge messages render as speech bubbles
+//! over their author's head, emotes play on avatars, and arrivals slip in at
+//! the door. Dwarf Fortress vibes, single-width glyphs only: walking people
 //! are 3-row stick figures (`o` head, `/|\` arms, `Λ` legs; you get an `@`),
 //! and a seated user is an `o` perched on their stool.
 
@@ -12,45 +14,65 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
+use std::collections::HashMap;
+use uuid::Uuid;
 
 use crate::app::common::theme;
-use crate::app::files::terminal_image::TerminalImageFrame;
 use late_core::api_types::NowPlaying;
+use late_core::models::chat_message::ChatMessage;
 
+use super::lobby::{Emote, Placement};
 use super::map;
-use super::state::State;
+use super::state::{State, Tutorial};
 
 const LABEL_MAX: usize = 10;
 const FIRE_CHARS: [char; 6] = ['(', ')', '~', '^', '*', '\''];
 const EQ_CHARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 /// Phosphor pixels for the arcade cabinet's attract mode.
 const SCREEN_CHARS: [char; 4] = ['▀', '▄', '·', ' '];
+/// How long a #lounge message floats over its author's head.
+const BUBBLE_MS: i64 = 10_000;
+/// Bubble width tiers: short quips stay cozy, longer messages (a bartender
+/// answer, a pasted sentence) widen before they truncate.
+const BUBBLE_WIDTHS: [usize; 3] = [28, 36, 44];
+const BUBBLE_MAX_LINES: usize = 3;
 
-pub struct ClubhouseView<'a> {
+pub(crate) struct ClubhouseView<'a> {
     pub state: &'a State,
     pub own_username: &'a str,
     pub now_playing: Option<&'a NowPlaying>,
-    pub chat: Option<crate::app::chat::ui::EmbeddedRoomChatView<'a>>,
+    /// The #lounge tail, for speech bubbles.
+    pub lounge_messages: &'a [ChatMessage],
+    /// Staff bot ids so their #lounge lines can bubble over their sprites.
+    pub bartender_user_id: Option<Uuid>,
+    pub graybeard_user_id: Option<Uuid>,
+    /// The shared composer block, pinned under the tavern. `None` only
+    /// before the #lounge room id is known.
+    pub composer: Option<crate::app::chat::ui::ComposerBlockView<'a>>,
 }
 
-pub fn draw(
-    frame: &mut Frame,
-    area: Rect,
-    view: ClubhouseView<'_>,
-    terminal_images: &mut TerminalImageFrame,
-) {
-    // Bottom ~40% is the live #lounge; the tavern gets the rest.
-    let chat_height = ((u32::from(area.height) * 2 / 5) as u16)
-        .max(8)
-        .min(area.height.saturating_sub(8));
+pub(crate) fn draw(frame: &mut Frame, area: Rect, view: ClubhouseView<'_>) {
+    let Some(composer) = &view.composer else {
+        draw_tavern(frame, area, &view);
+        return;
+    };
+    // The composer footer keeps the compact height the dashboard card uses:
+    // one placeholder line while idle, growing with the draft while typing.
+    let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
+    let composer_lines = crate::app::chat::ui::chat_composer_lines_for_height(
+        composer.composer,
+        composer_text_width,
+    )
+    .max(crate::app::chat::ui::composer_placeholder_lines(
+        composer,
+        composer_text_width,
+    ));
+    let composer_height = (composer_lines.min(4) as u16 + 2).min(area.height.saturating_sub(4));
     let layout =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(chat_height)]).split(area);
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
 
     draw_tavern(frame, layout[0], &view);
-
-    if let Some(chat) = view.chat {
-        crate::app::chat::ui::draw_embedded_room_chat(frame, layout[1], chat, terminal_images);
-    }
+    crate::app::chat::ui::draw_composer_block(frame, layout[1], composer);
 }
 
 fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
@@ -65,7 +87,9 @@ fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
 
     let mut cells = styled_base_grid();
     animate(&mut cells, view);
-    place_people(&mut cells, view);
+    let anchors = place_people(&mut cells, view);
+    draw_door_events(&mut cells, view);
+    draw_bubbles(&mut cells, view, &anchors);
 
     // Camera: follow the player, clamped to the map; center when the
     // viewport is larger than the room.
@@ -94,7 +118,7 @@ fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
     }
     frame.render_widget(Paragraph::new(lines), inner);
 
-    draw_popover(frame, inner, view);
+    draw_overlays(frame, inner, view);
 }
 
 fn camera_origin(player: usize, viewport: usize, map_len: usize) -> usize {
@@ -412,16 +436,75 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
         }
     }
 
-    // The dog: slow blinks, a wagging tail, the occasional dream.
+    // The door sign glows while someone is slipping in.
+    if view.state.door_glow() {
+        for x in map::DOOR_SIGN.x0..=map::DOOR_SIGN.x1 {
+            let ch = map::char_at(x, map::DOOR_SIGN.y0);
+            set(
+                cells,
+                x,
+                map::DOOR_SIGN.y0,
+                ch,
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+    }
+
+    // The tutorial's "find the bar" beat pulses the bar sign so the goal
+    // reads from across the room.
+    if view.state.tutorial == Tutorial::GoToBar {
+        let pulse = if (t / 8).is_multiple_of(2) {
+            theme::AMBER_GLOW()
+        } else {
+            theme::AMBER()
+        };
+        let y = map::BAR_COUNTER.y1;
+        for x in map::BAR_COUNTER.x0..=map::BAR_COUNTER.x1 {
+            let ch = map::char_at(x, y);
+            if ch != '█' && ch != ' ' {
+                set(
+                    cells,
+                    x,
+                    y,
+                    ch,
+                    Style::default().fg(pulse).add_modifier(Modifier::BOLD),
+                );
+            }
+        }
+    }
+
+    // The dog: slow blinks, a wagging tail, the occasional dream. A fresh
+    // pet doubles the wag, floats hearts, and credits the petter.
     let (dx, dy) = map::DOG;
     let amber = Style::default().fg(theme::AMBER());
-    if (t / 45).is_multiple_of(7) {
+    let petted = view.state.snapshot.dog_pet.as_ref();
+    if petted.is_none() && (t / 45).is_multiple_of(7) {
         set(cells, dx + 2, dy + 1, '-', amber);
         set(cells, dx + 4, dy + 1, '-', amber);
     }
-    let tail = if (t / 8).is_multiple_of(2) { ')' } else { '/' };
+    let wag = if petted.is_some() { 2 } else { 8 };
+    let tail = if (t / wag).is_multiple_of(2) { ')' } else { '/' };
     set(cells, dx + 7, dy, tail, amber);
-    if (t / 40).is_multiple_of(3) {
+    if let Some((name, _)) = petted {
+        let beat = ((t / 4) % 3) as u16;
+        put_if_floor(cells, dx + 2 + beat, dy.saturating_sub(1), '♥', theme::ERROR());
+        put_if_floor(
+            cells,
+            dx + 6,
+            dy.saturating_sub(1) - (beat % 2),
+            '♥',
+            theme::ERROR(),
+        );
+        put_label(
+            cells,
+            dx + 4,
+            dy + 3,
+            &format!("{} pets the dog", truncate_name(name)),
+            Style::default().fg(theme::TEXT_FAINT()),
+        );
+    } else if (t / 40).is_multiple_of(3) {
         put_if_floor(
             cells,
             dx + 8,
@@ -455,8 +538,13 @@ fn seat_head_y(seat: &map::Seat) -> u16 {
     }
 }
 
-fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) {
+/// Where speech bubbles anchor for each drawn person: the row just above
+/// their name label, keyed by user id.
+type BubbleAnchors = HashMap<Uuid, (u16, u16)>;
+
+fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> BubbleAnchors {
     let state = view.state;
+    let mut anchors: BubbleAnchors = HashMap::new();
 
     // Staff first, so patrons' labels can never erase the bartender.
     let bartender_style = if state.bartender_online {
@@ -472,74 +560,542 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) {
     set(cells, bx, by + 1, '|', bartender_style);
     set(cells, bx + 1, by + 1, '\\', bartender_style);
     put_label(cells, bx, by - 1, "bartender", bartender_style);
+    // No bubble anchor for the bartender: his lines render as the pinned
+    // banner in the top-left corner (`draw_bartender_banner`), out of the
+    // way of patron bubbles at the busy bar.
 
     if state.graybeard_online {
         let seat = map::GRAYBEARD_SEAT;
         let style = Style::default().fg(theme::TEXT_MUTED());
         set(cells, seat.x, seat_head_y(&seat), 'o', style);
         put_label(cells, seat.x, seat.y + 2, "graybeard", style);
+        if let Some(id) = view.graybeard_user_id {
+            anchors.insert(id, (seat.x, seat_head_y(&seat).saturating_sub(1)));
+        }
     }
 
-    for (seat, who) in state.seated() {
+    let own_id = state.own_user_id();
+    for who in state
+        .snapshot
+        .people
+        .iter()
+        .filter(|p| p.user_id != own_id)
+    {
         let style = Style::default().fg(occupant_color(who.user_id));
-        let head_y = seat_head_y(seat);
-        set(cells, seat.x, head_y, 'o', style);
-        let label_y = if seat.label_below {
-            seat.y + 2
-        } else {
-            head_y.saturating_sub(1).max(1)
-        };
-        put_label(
-            cells,
-            seat.x,
-            label_y,
-            &truncate_name(&who.username),
-            Style::default().fg(theme::TEXT_DIM()),
-        );
+        let label_style = Style::default().fg(theme::TEXT_DIM());
+        let anchor = draw_presence(cells, who.placement, 'o', style, &who.username, label_style);
+        anchors.insert(who.user_id, anchor);
+        if let Some(emote) = who.emote {
+            draw_emote(cells, who.placement, emote, state.anim_tick, style);
+        }
     }
 
-    for ((x, y), who) in state.standing() {
-        let style = Style::default().fg(occupant_color(who.user_id));
-        draw_figure(cells, x, y, 'o', style);
-        put_label(
-            cells,
-            x,
-            y.saturating_sub(3).max(1),
-            &truncate_name(&who.username),
-            Style::default().fg(theme::TEXT_DIM()),
-        );
-    }
-
-    let door_count = state.door_count();
-    if door_count > 0 {
+    if view.state.snapshot.door_overflow > 0 {
         put_label(
             cells,
             map::DOOR_LABEL.0,
             map::DOOR_LABEL.1,
-            &format!("+{door_count} at the door"),
+            &format!("+{} at the door", view.state.snapshot.door_overflow),
             Style::default().fg(theme::AMBER_DIM()),
         );
     }
 
     // You, last: always on top.
-    draw_figure(
+    let own_style = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let own_label_style = Style::default()
+        .fg(theme::TEXT_BRIGHT())
+        .add_modifier(Modifier::BOLD);
+    let own_placement = state
+        .snapshot
+        .find(own_id)
+        .map(|p| p.placement)
+        .unwrap_or(Placement::Walking(state.player_x, state.player_y));
+    let anchor = draw_presence(
         cells,
-        state.player_x,
-        state.player_y,
+        own_placement,
         '@',
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .add_modifier(Modifier::BOLD),
+        own_style,
+        view.own_username,
+        own_label_style,
     );
-    put_label(
-        cells,
-        state.player_x,
-        state.player_y.saturating_sub(3).max(1),
-        &truncate_name(view.own_username),
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD),
+    anchors.insert(own_id, anchor);
+    if let Some(emote) = state.snapshot.find(own_id).and_then(|p| p.emote) {
+        draw_emote(cells, own_placement, emote, state.anim_tick, own_style);
+    }
+
+    anchors
+}
+
+/// Draw one person at their placement and return their bubble anchor (the
+/// row above their name label).
+fn draw_presence(
+    cells: &mut Cells,
+    placement: Placement,
+    head: char,
+    style: Style,
+    username: &str,
+    label_style: Style,
+) -> (u16, u16) {
+    match placement {
+        Placement::Seated(i) => {
+            let seat = &map::SEATS[i.min(map::SEATS.len() - 1)];
+            let head_y = seat_head_y(seat);
+            set(cells, seat.x, head_y, head, style);
+            let label_y = if seat.label_below {
+                seat.y + 2
+            } else {
+                head_y.saturating_sub(1).max(1)
+            };
+            put_label(cells, seat.x, label_y, &truncate_name(username), label_style);
+            if seat.label_below {
+                (seat.x, head_y.saturating_sub(1))
+            } else {
+                (seat.x, label_y.saturating_sub(1))
+            }
+        }
+        Placement::Standing(_) | Placement::Door(_) | Placement::Walking(..) => {
+            let (x, y) = placement.position();
+            draw_figure(cells, x, y, head, style);
+            let label_y = y.saturating_sub(3).max(1);
+            put_label(cells, x, label_y, &truncate_name(username), label_style);
+            (x, label_y.saturating_sub(1))
+        }
+    }
+}
+
+/// Two-frame emote animation on an avatar; walkers get full-body frames,
+/// seated patrons get a marker beside the head.
+fn draw_emote(cells: &mut Cells, placement: Placement, emote: Emote, tick: u64, style: Style) {
+    let frame = (tick / 4).is_multiple_of(2);
+    let note = Style::default().fg(theme::AMBER_GLOW());
+    match placement {
+        Placement::Seated(i) => {
+            let seat = &map::SEATS[i.min(map::SEATS.len() - 1)];
+            let head_y = seat_head_y(seat);
+            match emote {
+                Emote::Wave => {
+                    let arm = if frame { '/' } else { '\'' };
+                    set(cells, seat.x + 1, head_y, arm, style);
+                }
+                Emote::Dance => {
+                    let (lx, rx) = (seat.x.saturating_sub(1), seat.x + 1);
+                    let x = if frame { lx } else { rx };
+                    set(cells, x, head_y, '♪', note.add_modifier(Modifier::BOLD));
+                }
+            }
+        }
+        Placement::Standing(_) | Placement::Door(_) | Placement::Walking(..) => {
+            let (x, y) = placement.position();
+            if y < 2 {
+                return;
+            }
+            match emote {
+                Emote::Wave => {
+                    // The right arm swings up and down.
+                    let (left, right) = if frame { ('─', '/') } else { ('/', '\\') };
+                    set(cells, x.saturating_sub(1), y - 1, left, style);
+                    set(cells, x + 1, y - 1, right, style);
+                }
+                Emote::Dance => {
+                    // Arms flail, a note bounces side to side.
+                    let (left, right) = if frame { ('\\', '/') } else { ('/', '\\') };
+                    set(cells, x.saturating_sub(1), y - 1, left, style);
+                    set(cells, x + 1, y - 1, right, style);
+                    if y >= 3 {
+                        let nx = if frame {
+                            x.saturating_sub(2)
+                        } else {
+                            x + 2
+                        };
+                        set(cells, nx, y - 2, '♪', note);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `* name slipped in` lines stacked over the welcome mat.
+fn draw_door_events(cells: &mut Cells, view: &ClubhouseView<'_>) {
+    let base_y = 41u16;
+    for (i, event) in view.state.door_events.iter().enumerate().take(4) {
+        let verb = if event.arrived {
+            "slipped in"
+        } else {
+            "headed out"
+        };
+        put_label(
+            cells,
+            map::SPAWN.0,
+            base_y + i as u16,
+            &format!("* {} {}", truncate_name(&event.username), verb),
+            Style::default().fg(theme::TEXT_FAINT()),
+        );
+    }
+}
+
+/// Fresh #lounge messages float over their author's head.
+fn draw_bubbles(cells: &mut Cells, view: &ClubhouseView<'_>, anchors: &BubbleAnchors) {
+    for message in fresh_bubble_messages(view.lounge_messages, chrono::Utc::now()) {
+        let Some(&(x, bottom_y)) = anchors.get(&message.user_id) else {
+            continue;
+        };
+        let lines = wrap_bubble_fitting(bubble_text(&message.body));
+        if lines.is_empty() {
+            continue;
+        }
+        draw_bubble_box(cells, x, bottom_y, &lines);
+    }
+}
+
+/// The bubble-worthy slice of a room tail: the newest fresh message per
+/// author. Room message lists are newest-first (see
+/// `ChatState::push_message`), so iterate in natural order and stop at the
+/// first stale message.
+fn fresh_bubble_messages(
+    messages: &[ChatMessage],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<&ChatMessage> {
+    let mut seen_authors: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut fresh = Vec::new();
+    for message in messages {
+        let age_ms = now.signed_duration_since(message.created).num_milliseconds();
+        if age_ms > BUBBLE_MS {
+            break;
+        }
+        if seen_authors.insert(message.user_id) {
+            fresh.push(message);
+        }
+    }
+    fresh
+}
+
+/// The bubble body: replies drop their quote line; whitespace collapses.
+fn bubble_text(body: &str) -> String {
+    let body = match body.split_once('\n') {
+        Some((first, rest)) if first.trim_start().starts_with("> ") && !rest.trim().is_empty() => {
+            rest
+        }
+        _ => body,
+    };
+    body.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Wrap at the narrowest width tier that fits the whole message; fall back
+/// to the widest tier with an ellipsis.
+fn wrap_bubble_fitting(text: String) -> Vec<String> {
+    for width in BUBBLE_WIDTHS {
+        let (lines, truncated) = wrap_bubble(text.clone(), width, BUBBLE_MAX_LINES);
+        if !truncated {
+            return lines;
+        }
+    }
+    wrap_bubble(text, BUBBLE_WIDTHS[BUBBLE_WIDTHS.len() - 1], BUBBLE_MAX_LINES).0
+}
+
+/// Greedy word wrap into at most `max_lines` lines of `width` chars; the
+/// last line gets an ellipsis when the text keeps going, and the flag
+/// reports whether that happened.
+fn wrap_bubble(text: String, width: usize, max_lines: usize) -> (Vec<String>, bool) {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut truncated = false;
+    for word in text.split_whitespace() {
+        let word: String = word.chars().take(width).collect();
+        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut current));
+            if lines.len() == max_lines {
+                truncated = true;
+                break;
+            }
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(&word);
+    }
+    if !current.is_empty() && lines.len() < max_lines {
+        lines.push(current);
+    } else if !current.is_empty() {
+        truncated = true;
+    }
+    if truncated && let Some(last) = lines.last_mut() {
+        while last.chars().count() >= width {
+            last.pop();
+        }
+        last.push('…');
+    }
+    (lines, truncated)
+}
+
+/// A bordered speech bubble whose bottom row sits at `bottom_y`, centered
+/// on `x`. Flips below the anchor when the top wall is too close.
+fn draw_bubble_box(cells: &mut Cells, x: u16, bottom_y: u16, lines: &[String]) {
+    let text_w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+    let box_w = text_w + 4;
+    let box_h = lines.len() as u16 + 2;
+    let mut top = bottom_y.saturating_sub(box_h - 1);
+    if top == 0 {
+        top = bottom_y.saturating_add(2).min(map::MAP_H - 1 - box_h);
+    }
+    let max_left = map::MAP_W.saturating_sub(box_w + 1);
+    let left = x.saturating_sub(box_w / 2).clamp(1, max_left.max(1));
+
+    let border = Style::default().fg(theme::TEXT_MUTED());
+    let text = Style::default().fg(theme::TEXT_BRIGHT());
+    for row in 0..box_h {
+        for col in 0..box_w {
+            let (cx, cy) = (left + col, top + row);
+            let ch = match (row, col) {
+                (0, 0) => '╭',
+                (0, c) if c == box_w - 1 => '╮',
+                (r, 0) if r == box_h - 1 => '╰',
+                (r, c) if r == box_h - 1 && c == box_w - 1 => '╯',
+                (0, _) => '─',
+                (r, _) if r == box_h - 1 => '─',
+                (_, 0) => '│',
+                (_, c) if c == box_w - 1 => '│',
+                _ => ' ',
+            };
+            let style = if ch == ' ' { text } else { border };
+            set(cells, cx, cy, ch, style);
+        }
+        if row > 0 && row < box_h - 1 {
+            let line = &lines[(row - 1) as usize];
+            for (i, ch) in line.chars().enumerate() {
+                set(cells, left + 2 + i as u16, top + row, ch, text);
+            }
+        }
+    }
+}
+
+fn draw_overlays(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
+    draw_bartender_banner(frame, inner, view);
+    if draw_tutorial(frame, inner, view) {
+        return;
+    }
+    draw_popover(frame, inner, view);
+}
+
+/// How long the bartender's latest line stays pinned; a touch longer than
+/// patron bubbles because his answers carry directions worth reading.
+const BARTENDER_BANNER_MS: i64 = 14_000;
+
+/// The bartender speaks to the whole room: his freshest #lounge line pins
+/// to the top-left corner of the viewport (camera-independent, so you never
+/// miss him from across the tavern) instead of bubbling over his sprite,
+/// where patron bubbles at the bar would collide with it.
+fn draw_bartender_banner(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
+    let Some(bartender_id) = view.bartender_user_id else {
+        return;
+    };
+    // The tail is newest-first, so the first hit is his latest line.
+    let Some(message) = view
+        .lounge_messages
+        .iter()
+        .find(|m| m.user_id == bartender_id)
+    else {
+        return;
+    };
+    let age_ms = chrono::Utc::now()
+        .signed_duration_since(message.created)
+        .num_milliseconds();
+    if age_ms > BARTENDER_BANNER_MS {
+        return;
+    }
+    let (lines, _) = wrap_bubble(bubble_text(&message.body), 44, 4);
+    if lines.is_empty() {
+        return;
+    }
+
+    let border = Style::default().fg(theme::ERROR());
+    let text = Style::default().fg(theme::TEXT_BRIGHT());
+    let title = " O the bartender ";
+    let width = (lines
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(title.chars().count())
+        + 4)
+    .min(usize::from(inner.width).saturating_sub(2)) as u16;
+    let height = (lines.len() as u16 + 2).min(inner.height);
+    let rect = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width,
+        height,
+    };
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(
+            lines
+                .into_iter()
+                .map(|l| Line::from(Span::styled(l, text)))
+                .collect::<Vec<_>>(),
+        )
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border)
+                .title(Span::styled(title, border.add_modifier(Modifier::BOLD))),
+        ),
+        rect,
     );
+}
+
+/// The first-visit walkthrough boxes. Returns true when a tutorial overlay
+/// owned the frame (prop popovers wait their turn).
+fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bool {
+    let key = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let text = Style::default().fg(theme::TEXT());
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let border = Style::default().fg(theme::AMBER());
+
+    let (title, lines): (&str, Vec<Line>) = match view.state.tutorial {
+        Tutorial::Welcome => (
+            " ☾ welcome to the late lounge ☽ ",
+            vec![
+                Line::from(Span::styled(
+                    "you're on the welcome mat, and the whole house is live:",
+                    text,
+                )),
+                Line::from(Span::styled(
+                    "everyone you see is really here, right now.",
+                    text,
+                )),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[arrows/hjkl] ", key),
+                    Span::styled("walk around", text),
+                ]),
+                Line::from(Span::styled(
+                    "the bartender is waving you over, head northwest to the bar.",
+                    text,
+                )),
+                Line::default(),
+                Line::from(Span::styled("Esc skips the tour", dim)),
+            ],
+        ),
+        Tutorial::BarLesson => (
+            " O the bartender leans in ",
+            vec![
+                Line::from(vec![
+                    Span::styled("[i] ", key),
+                    Span::styled("say something: it floats over your head", text),
+                ]),
+                Line::from(Span::styled(
+                    "and lands in #lounge on Home (page 1), where the",
+                    text,
+                )),
+                Line::from(Span::styled(
+                    "full chat lives. paste an image there to share it.",
+                    text,
+                )),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[w] ", key),
+                    Span::styled("wave · ", text),
+                    Span::styled("[x] ", key),
+                    Span::styled("dance · ", text),
+                    Span::styled("[t] ", key),
+                    Span::styled("talk to the bartender", text),
+                ]),
+                Line::from(vec![
+                    Span::styled("[Ctrl+O] ", key),
+                    Span::styled("fill in your profile: name, timezone, theme", text),
+                ]),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[Enter] ", key),
+                    Span::styled("got it", dim),
+                ]),
+            ],
+        ),
+        Tutorial::SendOff => (
+            " ☾ make yourself at home ☽ ",
+            vec![
+                Line::from(Span::styled(
+                    "the room is a map of the house. walk up and press Enter:",
+                    text,
+                )),
+                Line::default(),
+                Line::from(Span::styled(
+                    "arcade cabinet (2) · heavy door (3) · big table (4)",
+                    text,
+                )),
+                Line::from(Span::styled(
+                    "easel (5) · jukebox picks the music · the dog is a dog",
+                    text,
+                )),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[Enter] ", key),
+                    Span::styled("start the night", dim),
+                ]),
+            ],
+        ),
+        Tutorial::GoToBar => {
+            // A small nudge, pinned bottom-left, out of the walking path.
+            let lines = vec![
+                Line::from(Span::styled("find the glowing bar, northwest", text)),
+                Line::from(Span::styled("Esc skips the tour", dim)),
+            ];
+            let width = (34u16).min(inner.width.saturating_sub(2));
+            let height = 4u16.min(inner.height);
+            let rect = Rect {
+                x: inner.x + 1,
+                y: inner.y + inner.height.saturating_sub(height),
+                width,
+                height,
+            };
+            frame.render_widget(Clear, rect);
+            frame.render_widget(
+                Paragraph::new(lines).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border)
+                        .title(Span::styled(" ↖ the bar ", border)),
+                ),
+                rect,
+            );
+            return false;
+        }
+        _ => return false,
+    };
+
+    let width = (lines
+        .iter()
+        .map(Line::width)
+        .max()
+        .unwrap_or(0)
+        .max(title.chars().count())
+        + 4)
+    .min(usize::from(inner.width).saturating_sub(2)) as u16;
+    let height = (lines.len() as u16 + 2).min(inner.height.saturating_sub(1));
+    let rect = Rect {
+        x: inner.x + (inner.width.saturating_sub(width)) / 2,
+        y: inner.y + (inner.height.saturating_sub(height)) / 3,
+        width,
+        height,
+    };
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border)
+                .title(Span::styled(title, border.add_modifier(Modifier::BOLD))),
+        ),
+        rect,
+    );
+    true
 }
 
 fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
@@ -592,7 +1148,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
             vec![
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
-                    Span::styled("play — the Arcade is page 2", text),
+                    Span::styled("play, the Arcade is page 2", text),
                 ]),
                 Line::from(Span::styled("daily puzzles, high scores, chips", dim)),
             ],
@@ -603,7 +1159,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
             vec![
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
-                    Span::styled("the door games — page 3", text),
+                    Span::styled("the door games, page 3", text),
                 ]),
                 Line::from(Span::styled(
                     "Lateania · NetHack · Green Dragon · dopewars · Rebels",
@@ -617,10 +1173,10 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
             vec![
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
-                    Span::styled("the game tables — page 4", text),
+                    Span::styled("the game tables, page 4", text),
                 ]),
                 Line::from(Span::styled(
-                    "poker · blackjack · chess · tron — chips on the line",
+                    "poker · blackjack · chess · tron, chips on the line",
                     dim,
                 )),
             ],
@@ -631,7 +1187,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
             vec![
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
-                    Span::styled("the Artboard — page 5", text),
+                    Span::styled("the Artboard, page 5", text),
                 ]),
                 Line::from(Span::styled("one shared canvas, everyone paints", dim)),
             ],
@@ -639,10 +1195,16 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
         map::Interactive::Dog => (
             " ∪ the dog ",
             flavor,
-            vec![Line::from(Span::styled(
-                "thumps tail. has never once deployed on a friday.",
-                text,
-            ))],
+            vec![
+                Line::from(vec![
+                    Span::styled("[Enter] ", key),
+                    Span::styled("pet the dog", text),
+                ]),
+                Line::from(Span::styled(
+                    "thumps tail. has never once deployed on a friday.",
+                    dim,
+                )),
+            ],
         ),
         map::Interactive::Fireplace => (
             " )( fireplace ",
@@ -774,5 +1336,97 @@ mod tests {
         );
         let end: String = cells[6].iter().map(|(ch, _)| *ch).collect();
         assert!(end.trim_end().ends_with("longishname"));
+    }
+
+    #[test]
+    fn bubble_text_drops_reply_quotes_and_flattens_lines() {
+        assert_eq!(
+            bubble_text("> @alice: earlier\nthanks a lot"),
+            "thanks a lot"
+        );
+        assert_eq!(bubble_text("two\nlines  here"), "two lines here");
+    }
+
+    #[test]
+    fn wrap_bubble_wraps_and_ellipsizes() {
+        let (lines, truncated) = wrap_bubble("hello there".to_string(), 28, 3);
+        assert_eq!(lines, vec!["hello there"]);
+        assert!(!truncated);
+
+        let long = "one two three four five six seven eight nine ten eleven twelve \
+                    thirteen fourteen fifteen sixteen seventeen"
+            .to_string();
+        let (lines, truncated) = wrap_bubble(long, 12, 3);
+        assert_eq!(lines.len(), 3);
+        assert!(truncated);
+        assert!(lines.iter().all(|l| l.chars().count() <= 12));
+        assert!(lines.last().unwrap().ends_with('…'));
+
+        assert!(wrap_bubble("   ".to_string(), 10, 3).0.is_empty());
+    }
+
+    #[test]
+    fn bubbles_widen_before_they_truncate() {
+        // Fits at the cozy tier: stays narrow.
+        let lines = wrap_bubble_fitting("a short one".to_string());
+        assert_eq!(lines, vec!["a short one"]);
+
+        // Too long for 28x3 but fits wider: widens instead of cutting. This
+        // is the bartender-answer case.
+        let mid = "the arcade cabinet is page 2, the heavy door is page 3, \
+                   the big table is page 4, and the easel is page 5"
+            .to_string();
+        let lines = wrap_bubble_fitting(mid.clone());
+        assert!(lines.len() <= BUBBLE_MAX_LINES);
+        assert!(!lines.last().unwrap().ends_with('…'), "widening failed");
+        assert_eq!(lines.join(" "), mid);
+
+        // Genuinely huge: widest tier plus ellipsis.
+        let huge = "word ".repeat(80);
+        let lines = wrap_bubble_fitting(huge);
+        assert_eq!(lines.len(), BUBBLE_MAX_LINES);
+        assert!(lines.last().unwrap().ends_with('…'));
+    }
+
+    #[test]
+    fn fresh_bubbles_take_the_newest_message_per_author_from_a_newest_first_tail() {
+        let now = chrono::Utc::now();
+        let msg = |n: u128, author: u128, secs_ago: i64, body: &str| ChatMessage {
+            id: Uuid::from_u128(n),
+            created: now - chrono::Duration::seconds(secs_ago),
+            updated: now - chrono::Duration::seconds(secs_ago),
+            pinned: false,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            room_id: Uuid::from_u128(99),
+            user_id: Uuid::from_u128(author),
+            body: body.to_string(),
+        };
+        // Newest-first, like ChatState room tails.
+        let tail = vec![
+            msg(1, 1, 2, "newest from alice"),
+            msg(2, 2, 4, "from bob"),
+            msg(3, 1, 6, "older from alice"),
+            msg(4, 3, 60, "stale from carol"),
+            msg(5, 4, 3, "unreachable behind the stale break"),
+        ];
+        let picked: Vec<&str> = fresh_bubble_messages(&tail, now)
+            .iter()
+            .map(|m| m.body.as_str())
+            .collect();
+        assert_eq!(picked, vec!["newest from alice", "from bob"]);
+    }
+
+    #[test]
+    fn bubble_boxes_stay_inside_the_map() {
+        let mut cells: Cells =
+            vec![vec![(' ', Style::default()); usize::from(map::MAP_W)]; usize::from(map::MAP_H)];
+        // Anchored right at the top wall: flips below instead of clipping.
+        draw_bubble_box(&mut cells, 5, 1, &["hi".to_string()]);
+        let top_row: String = cells[0].iter().map(|(ch, _)| *ch).collect();
+        assert!(top_row.trim().is_empty(), "bubble drew over the top wall");
+        // Anchored mid-room: the border lands above the anchor.
+        draw_bubble_box(&mut cells, 90, 20, &["hello".to_string()]);
+        assert_eq!(cells[18][86].0, '╭');
     }
 }

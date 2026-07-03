@@ -133,6 +133,8 @@ pub struct State {
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
+    /// Process-global clubhouse presence: who sits where, who is walking.
+    pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
     pub afk_users: AfkUsers,
     pub username_directory: UsernameDirectory,
     pub activity_feed: broadcast::Sender<ActivityEvent>,

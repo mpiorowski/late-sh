@@ -2283,6 +2283,11 @@ fn dispatch_escape(app: &mut App) {
         app.chat.close_overlay();
         return;
     }
+    // Esc during the clubhouse tour skips the rest of it, once.
+    if ctx.screen == Screen::Clubhouse && app.clubhouse.tutorial_skip() {
+        app.persist_clubhouse_tutorial_done();
+        return;
+    }
     if ctx.screen == Screen::Artboard {
         let Some(state) = app.dartboard_state.as_ref() else {
             return;
@@ -2389,9 +2394,7 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
-    if matches!(ctx.screen, Screen::Dashboard | Screen::Clubhouse)
-        && app.chat.selected_message_id.is_some()
-    {
+    if ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some() {
         app.chat.clear_message_selection();
     }
 }
@@ -2558,11 +2561,9 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
         Screen::Artboard => {}
         Screen::Pinstar => {}
         Screen::WorldCup => app.worldcup.scroll(delta),
-        Screen::Clubhouse => {
-            if let Some(room_id) = app.chat.lounge_room_id() {
-                chat::input::handle_scroll_in_room(app, room_id, delta);
-            }
-        }
+        // The clubhouse has no scrollable chat panel; bubbles carry the
+        // conversation and the full history lives on Home.
+        Screen::Clubhouse => {}
         _ => {}
     }
 }

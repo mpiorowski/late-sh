@@ -707,7 +707,6 @@ async fn room_tail_task_loads_favorite_room_history() {
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
             show_room_list_sidebar: true,
-            show_settings_on_connect: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
             show_flag_fallback: false,
