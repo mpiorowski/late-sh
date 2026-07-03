@@ -58,10 +58,14 @@ room is the chat surface, and the full history lives in #lounge on Home.
   avatar (latest per author, up to 3 lines, width widens 28 -> 36 -> 44
   before truncating, reply-quote line stripped). Room tails are newest-first
   (`ChatState::push_message`); `fresh_bubble_messages` depends on that.
-- The bartender does not bubble over his sprite: his freshest line pins as a
-  camera-independent banner in the top-left corner (`draw_bartender_banner`,
-  ~14s), so it never collides with patron bubbles at the bar and is visible
-  from across the room. Graybeard bubbles normally.
+- The bartender does not bubble over his sprite: his lines pin as a
+  camera-independent banner in the top-left corner (`draw_bartender_banner`),
+  so they never collide with patron bubbles at the bar and are visible from
+  across the room. When several patrons ask him at once his answers queue
+  (`State::update_bartender_banner`, fed each on-screen tick from
+  `App::tick_clubhouse`): each line holds ~6s while more wait, ~14s solo;
+  lines older than 15s never enqueue and the queue caps at 8, oldest
+  dropped. Graybeard bubbles normally.
   `App.clubhouse_bartender_id`/`clubhouse_graybeard_id` are captured from
   `active_users` during roster refresh.
 - Message selection/reactions/scroll do not exist on this screen; Home owns
