@@ -591,7 +591,7 @@ impl App {
         // Drunk glow for chat author labels: copy out of the shared lobby
         // about once a second so renders read owned state, and re-reading
         // also lets the tint fade as the buzz decays.
-        if self.marquee_tick % 15 == 0 {
+        if self.marquee_tick.is_multiple_of(15) {
             self.drunk_levels = self.clubhouse.drunk_levels();
         }
 

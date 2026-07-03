@@ -1367,7 +1367,11 @@ fn parse_bartender_order(raw: &str, spendable: i64, bot_username: &str) -> Barte
     };
 
     let Some(line) = order.line.as_deref().and_then(|line| {
-        sanitize_generated_reply_with_line_limit(line, Some(bot_username), BARTENDER_REPLY_MAX_LINES)
+        sanitize_generated_reply_with_line_limit(
+            line,
+            Some(bot_username),
+            BARTENDER_REPLY_MAX_LINES,
+        )
     }) else {
         return BartenderDecision::Skip;
     };
@@ -1809,7 +1813,8 @@ hey @bot what do you think",
 
     #[test]
     fn parse_bartender_order_downgrades_unaffordable_pour() {
-        let raw = r#"{"action": "pour", "drink": "top shelf", "price": 2000, "line": "the good stuff"}"#;
+        let raw =
+            r#"{"action": "pour", "drink": "top shelf", "price": 2000, "line": "the good stuff"}"#;
         assert_eq!(
             parse_bartender_order(raw, 300, "bartender"),
             BartenderDecision::Say {
@@ -1821,7 +1826,9 @@ hey @bot what do you think",
     #[test]
     fn parse_bartender_order_chat_and_offer_never_charge() {
         for action in ["chat", "offer", "something-else"] {
-            let raw = format!(r#"{{"action": "{action}", "drink": null, "price": null, "line": "welcome in"}}"#);
+            let raw = format!(
+                r#"{{"action": "{action}", "drink": null, "price": null, "line": "welcome in"}}"#
+            );
             assert_eq!(
                 parse_bartender_order(&raw, 900, "bartender"),
                 BartenderDecision::Say {
@@ -1855,11 +1862,7 @@ hey @bot what do you think",
             BartenderDecision::Skip
         );
         assert_eq!(
-            parse_bartender_order(
-                r#"{"action": "chat", "line": "SKIP"}"#,
-                900,
-                "bartender"
-            ),
+            parse_bartender_order(r#"{"action": "chat", "line": "SKIP"}"#, 900, "bartender"),
             BartenderDecision::Skip
         );
     }

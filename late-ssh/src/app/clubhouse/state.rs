@@ -248,7 +248,9 @@ impl State {
         }
         fresh.reverse();
         for message in fresh {
-            let age_ms = now.signed_duration_since(message.created).num_milliseconds();
+            let age_ms = now
+                .signed_duration_since(message.created)
+                .num_milliseconds();
             if age_ms > BANNER_ENQUEUE_MAX_AGE_MS {
                 continue;
             }
@@ -566,7 +568,10 @@ mod tests {
             state.tick(true);
             state.update_bartender_banner(bartender, &tail, now);
         }
-        assert_eq!(state.bartender_banner_message_id(), Some(Uuid::from_u128(1)));
+        assert_eq!(
+            state.bartender_banner_message_id(),
+            Some(Uuid::from_u128(1))
+        );
 
         state.tick(true);
         state.update_bartender_banner(bartender, &tail, now);
@@ -584,7 +589,10 @@ mod tests {
         let bartender = Some(Uuid::from_u128(BARTENDER));
         let tail = vec![lounge_msg(1, BARTENDER, now)];
         state.update_bartender_banner(bartender, &tail, now);
-        assert_eq!(state.bartender_banner_message_id(), Some(Uuid::from_u128(1)));
+        assert_eq!(
+            state.bartender_banner_message_id(),
+            Some(Uuid::from_u128(1))
+        );
 
         for _ in 0..BANNER_FULL_TICKS - 1 {
             state.tick(true);
@@ -607,7 +615,11 @@ mod tests {
         let now = chrono::Utc::now();
         let bartender = Some(Uuid::from_u128(BARTENDER));
         // A line from before the screen was open never enqueues.
-        let stale = vec![lounge_msg(1, BARTENDER, now - chrono::Duration::seconds(60))];
+        let stale = vec![lounge_msg(
+            1,
+            BARTENDER,
+            now - chrono::Duration::seconds(60),
+        )];
         state.update_bartender_banner(bartender, &stale, now);
         assert_eq!(state.bartender_banner_message_id(), None);
 
@@ -615,13 +627,19 @@ mod tests {
         let mut state = state_with_lobby(false);
         let flood: Vec<ChatMessage> = (1..=BANNER_QUEUE_MAX as u128 + 3)
             .rev()
-            .map(|n| lounge_msg(n, BARTENDER, now - chrono::Duration::milliseconds(100 - n as i64)))
+            .map(|n| {
+                lounge_msg(
+                    n,
+                    BARTENDER,
+                    now - chrono::Duration::milliseconds(100 - n as i64),
+                )
+            })
             .collect();
         state.update_bartender_banner(bartender, &flood, now);
         assert_eq!(
             state.bartender_banner_message_id(),
-            Some(Uuid::from_u128(3)),
-            "two oldest of eleven dropped, the third heads the banner"
+            Some(Uuid::from_u128(4)),
+            "three oldest of eleven dropped, the fourth heads the banner"
         );
     }
 

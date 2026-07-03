@@ -66,10 +66,7 @@ impl From<tokio_postgres::Row> for UserDrinks {
 impl UserDrinks {
     /// Points remaining right now, after sobering up since the last drink.
     pub fn effective_points(&self, now: DateTime<Utc>) -> i64 {
-        decayed_points(
-            self.drunk_points,
-            (now - self.last_drink_at).num_seconds(),
-        )
+        decayed_points(self.drunk_points, (now - self.last_drink_at).num_seconds())
     }
 
     /// Render level 0-4 right now.
