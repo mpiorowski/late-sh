@@ -1847,6 +1847,17 @@ impl App {
         }
 
         self.clubhouse.refresh_snapshot();
+
+        let lounge_messages = self
+            .chat
+            .lounge_room_id()
+            .map(|lounge_id| self.chat.messages_for_room(lounge_id))
+            .unwrap_or(&[]);
+        self.clubhouse.update_bartender_banner(
+            self.clubhouse_bartender_id,
+            lounge_messages,
+            chrono::Utc::now(),
+        );
     }
 
     /// Persist "the clubhouse tutorial ran" (fire-and-forget).

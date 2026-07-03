@@ -148,8 +148,9 @@ pub fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Games, Tables, Artboard, and Directory.\n\
-        - The Games hub (page 3) is the dedicated landing for the door games Lateania, Rebels, and NetHack; each is launched from there, not from its own top-level page.\n\
+        - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar.\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Tables (4), Artboard (5), Directory (6), and World Cup (7).\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, Green Dragon, dopewars, and Rebels; each is launched from there, not from its own top-level page.\n\
         - Directory page 6 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {

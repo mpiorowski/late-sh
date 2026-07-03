@@ -48,7 +48,7 @@ const AFK_BADGE: &str = "🌙";
 fn is_bot_author(username: &str) -> bool {
     matches!(
         username.trim().to_ascii_lowercase().as_str(),
-        "bot" | "graybeard" | "dealer"
+        "bot" | "graybeard" | "dealer" | "bartender"
     )
 }
 
@@ -3970,6 +3970,7 @@ mod tests {
         assert!(is_bot_author("graybeard"));
         assert!(is_bot_author("dealer"));
         assert!(is_bot_author(" Dealer "));
+        assert!(is_bot_author("bartender"));
         assert!(!is_bot_author("mat"));
     }
 

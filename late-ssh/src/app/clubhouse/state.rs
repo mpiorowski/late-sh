@@ -8,6 +8,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
+use late_core::models::chat_message::ChatMessage;
 use uuid::Uuid;
 
 use super::lobby::{Emote, LobbySnapshot, SharedLobby};
@@ -19,6 +20,18 @@ const ROSTER_REFRESH_TICKS: u64 = 15;
 const DOOR_EVENT_TICKS: u64 = 75;
 /// How many ambience lines can stack by the door.
 const DOOR_EVENT_MAX: usize = 4;
+/// How long a bartender banner line holds when nothing waits behind it
+/// (~14s, same reading budget the banner always had).
+const BANNER_FULL_TICKS: u64 = 212;
+/// Minimum hold per line while more are queued (~6s): long enough to read
+/// three sanitized lines, short enough that a busy bar keeps moving.
+const BANNER_QUEUE_DWELL_TICKS: u64 = 90;
+/// Lines older than this never enqueue, so returning to the screen (or
+/// connecting fresh) replays only the recent beat, not the night's backlog.
+const BANNER_ENQUEUE_MAX_AGE_MS: i64 = 15_000;
+/// Waiting lines beyond this drop oldest-first; nobody wants the answer to
+/// a question from a minute ago crawling through the banner.
+const BANNER_QUEUE_MAX: usize = 8;
 
 /// A live human from the active-users map.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +46,13 @@ pub struct DoorEvent {
     pub username: String,
     pub arrived: bool,
     pub until_tick: u64,
+}
+
+/// The bartender line currently pinned in the banner.
+#[derive(Debug, Clone, Copy)]
+struct BannerEntry {
+    message_id: Uuid,
+    shown_tick: u64,
 }
 
 /// The first-visit walkthrough. `Pending` arms it until the screen is first
@@ -75,6 +95,12 @@ pub struct State {
     seen_primed: bool,
     pub door_events: VecDeque<DoorEvent>,
     pub tutorial: Tutorial,
+    /// The bartender banner plays his lines one at a time: the pinned line,
+    /// the ids waiting their turn, and the newest `created` already taken
+    /// from the tail (so each line enqueues exactly once).
+    banner_current: Option<BannerEntry>,
+    banner_queue: VecDeque<Uuid>,
+    banner_watermark: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl State {
@@ -99,6 +125,9 @@ impl State {
             seen: HashSet::new(),
             seen_primed: false,
             door_events: VecDeque::new(),
+            banner_current: None,
+            banner_queue: VecDeque::new(),
+            banner_watermark: None,
             tutorial: if tutorial_pending {
                 Tutorial::Pending
             } else {
@@ -190,6 +219,64 @@ impl State {
             self.player_x = x;
             self.player_y = y;
         }
+    }
+
+    /// Feed the newest-first #lounge tail into the bartender banner and
+    /// advance it. When several patrons ask him at once, his answers used to
+    /// overwrite each other the moment they landed; instead they queue, and
+    /// each line holds the banner for a minimum dwell before the next takes
+    /// over. Called every world tick while the screen is up.
+    pub fn update_bartender_banner(
+        &mut self,
+        bartender_id: Option<Uuid>,
+        lounge_messages: &[ChatMessage],
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let Some(bartender_id) = bartender_id else {
+            return;
+        };
+        // Collect his lines above the watermark (the tail is newest-first,
+        // so stop at the first already-seen message), then enqueue them
+        // oldest-first so answers play in the order he gave them.
+        let mut fresh: Vec<&ChatMessage> = lounge_messages
+            .iter()
+            .take_while(|m| self.banner_watermark.is_none_or(|w| m.created > w))
+            .filter(|m| m.user_id == bartender_id)
+            .collect();
+        if let Some(newest) = fresh.first() {
+            self.banner_watermark = Some(newest.created);
+        }
+        fresh.reverse();
+        for message in fresh {
+            let age_ms = now.signed_duration_since(message.created).num_milliseconds();
+            if age_ms > BANNER_ENQUEUE_MAX_AGE_MS {
+                continue;
+            }
+            self.banner_queue.push_back(message.id);
+        }
+        while self.banner_queue.len() > BANNER_QUEUE_MAX {
+            self.banner_queue.pop_front();
+        }
+
+        let advance = match &self.banner_current {
+            None => true,
+            Some(entry) => {
+                let shown = self.anim_tick.wrapping_sub(entry.shown_tick);
+                shown >= BANNER_FULL_TICKS
+                    || (!self.banner_queue.is_empty() && shown >= BANNER_QUEUE_DWELL_TICKS)
+            }
+        };
+        if advance {
+            self.banner_current = self.banner_queue.pop_front().map(|message_id| BannerEntry {
+                message_id,
+                shown_tick: self.anim_tick,
+            });
+        }
+    }
+
+    /// The bartender line the banner should render right now.
+    pub fn bartender_banner_message_id(&self) -> Option<Uuid> {
+        self.banner_current.map(|e| e.message_id)
     }
 
     fn push_door_event(&mut self, username: String, arrived: bool) {
@@ -428,6 +515,105 @@ mod tests {
         off.enter_screen();
         assert_eq!(off.tutorial, Tutorial::Off);
         assert!(!off.tutorial_skip());
+    }
+
+    const BARTENDER: u128 = 9;
+
+    fn lounge_msg(n: u128, author: u128, created: chrono::DateTime<chrono::Utc>) -> ChatMessage {
+        ChatMessage {
+            id: Uuid::from_u128(n),
+            created,
+            updated: created,
+            pinned: false,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            room_id: Uuid::from_u128(99),
+            user_id: Uuid::from_u128(author),
+            body: format!("line {n}"),
+        }
+    }
+
+    #[test]
+    fn bartender_banner_queues_a_burst_and_plays_it_in_order() {
+        let mut state = state_with_lobby(false);
+        let now = chrono::Utc::now();
+        let bartender = Some(Uuid::from_u128(BARTENDER));
+        // Newest-first tail: three answers in a burst, a patron line mixed in.
+        let tail = vec![
+            lounge_msg(3, BARTENDER, now),
+            lounge_msg(4, 2, now - chrono::Duration::milliseconds(500)),
+            lounge_msg(2, BARTENDER, now - chrono::Duration::seconds(1)),
+            lounge_msg(1, BARTENDER, now - chrono::Duration::seconds(2)),
+        ];
+        state.update_bartender_banner(bartender, &tail, now);
+        assert_eq!(
+            state.bartender_banner_message_id(),
+            Some(Uuid::from_u128(1)),
+            "the oldest answer of the burst shows first"
+        );
+
+        // The pinned line survives the dwell window even with lines waiting.
+        for _ in 0..BANNER_QUEUE_DWELL_TICKS - 1 {
+            state.tick(true);
+            state.update_bartender_banner(bartender, &tail, now);
+        }
+        assert_eq!(state.bartender_banner_message_id(), Some(Uuid::from_u128(1)));
+
+        state.tick(true);
+        state.update_bartender_banner(bartender, &tail, now);
+        assert_eq!(
+            state.bartender_banner_message_id(),
+            Some(Uuid::from_u128(2)),
+            "dwell elapsed with a queue waiting: next answer takes the banner"
+        );
+    }
+
+    #[test]
+    fn bartender_banner_holds_a_lone_line_for_the_full_window_then_clears() {
+        let mut state = state_with_lobby(false);
+        let now = chrono::Utc::now();
+        let bartender = Some(Uuid::from_u128(BARTENDER));
+        let tail = vec![lounge_msg(1, BARTENDER, now)];
+        state.update_bartender_banner(bartender, &tail, now);
+        assert_eq!(state.bartender_banner_message_id(), Some(Uuid::from_u128(1)));
+
+        for _ in 0..BANNER_FULL_TICKS - 1 {
+            state.tick(true);
+            state.update_bartender_banner(bartender, &tail, now);
+        }
+        assert_eq!(
+            state.bartender_banner_message_id(),
+            Some(Uuid::from_u128(1)),
+            "nothing queued: the line keeps the full reading window"
+        );
+
+        state.tick(true);
+        state.update_bartender_banner(bartender, &tail, now);
+        assert_eq!(state.bartender_banner_message_id(), None);
+    }
+
+    #[test]
+    fn bartender_banner_skips_stale_backlog_and_caps_the_queue() {
+        let mut state = state_with_lobby(false);
+        let now = chrono::Utc::now();
+        let bartender = Some(Uuid::from_u128(BARTENDER));
+        // A line from before the screen was open never enqueues.
+        let stale = vec![lounge_msg(1, BARTENDER, now - chrono::Duration::seconds(60))];
+        state.update_bartender_banner(bartender, &stale, now);
+        assert_eq!(state.bartender_banner_message_id(), None);
+
+        // A flood wider than the cap drops the oldest answers.
+        let mut state = state_with_lobby(false);
+        let flood: Vec<ChatMessage> = (1..=BANNER_QUEUE_MAX as u128 + 3)
+            .rev()
+            .map(|n| lounge_msg(n, BARTENDER, now - chrono::Duration::milliseconds(100 - n as i64)))
+            .collect();
+        state.update_bartender_banner(bartender, &flood, now);
+        assert_eq!(
+            state.bartender_banner_message_id(),
+            Some(Uuid::from_u128(3)),
+            "two oldest of eleven dropped, the third heads the banner"
+        );
     }
 
     #[test]

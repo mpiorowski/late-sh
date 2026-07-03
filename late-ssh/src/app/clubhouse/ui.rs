@@ -46,7 +46,6 @@ pub(crate) struct ClubhouseView<'a> {
     /// The #lounge tail, for speech bubbles.
     pub lounge_messages: &'a [ChatMessage],
     /// Staff bot ids so their #lounge lines can bubble over their sprites.
-    pub bartender_user_id: Option<Uuid>,
     pub graybeard_user_id: Option<Uuid>,
     /// The shared composer block, pinned under the tavern. `None` only
     /// before the #lounge room id is known.
@@ -914,32 +913,19 @@ fn draw_overlays(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
     draw_popover(frame, inner, view);
 }
 
-/// How long the bartender's latest line stays pinned; a touch longer than
-/// patron bubbles because his answers carry directions worth reading.
-const BARTENDER_BANNER_MS: i64 = 14_000;
-
-/// The bartender speaks to the whole room: his freshest #lounge line pins
-/// to the top-left corner of the viewport (camera-independent, so you never
-/// miss him from across the tavern) instead of bubbling over his sprite,
-/// where patron bubbles at the bar would collide with it.
+/// The bartender speaks to the whole room: his #lounge lines pin to the
+/// top-left corner of the viewport (camera-independent, so you never miss
+/// him from across the tavern) instead of bubbling over his sprite, where
+/// patron bubbles at the bar would collide with it. Which line shows, and
+/// for how long, is the banner queue's call (`State::update_bartender_banner`):
+/// a burst of answers plays one at a time instead of overwriting itself.
 fn draw_bartender_banner(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
-    let Some(bartender_id) = view.bartender_user_id else {
+    let Some(message_id) = view.state.bartender_banner_message_id() else {
         return;
     };
-    // The tail is newest-first, so the first hit is his latest line.
-    let Some(message) = view
-        .lounge_messages
-        .iter()
-        .find(|m| m.user_id == bartender_id)
-    else {
+    let Some(message) = view.lounge_messages.iter().find(|m| m.id == message_id) else {
         return;
     };
-    let age_ms = chrono::Utc::now()
-        .signed_duration_since(message.created)
-        .num_milliseconds();
-    if age_ms > BARTENDER_BANNER_MS {
-        return;
-    }
     // Roomy on purpose: his replies are up to three sanitized lines of real
     // directions, and the banner is the only place they render.
     let width_budget = usize::from(inner.width.saturating_sub(6)).min(56);
