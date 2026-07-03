@@ -197,14 +197,8 @@ pub const SPAWN: (u16, u16) = (92, 46);
 /// Render slots for the door stack: when seats and standing room are full,
 /// arrivals pile up just inside the door on these cells (they repeat once
 /// the stack outgrows them; the renderer adds a `+N` label).
-pub const DOOR_STACK: &[(u16, u16)] = &[
-    (86, 46),
-    (98, 46),
-    (82, 47),
-    (102, 47),
-    (90, 48),
-    (94, 48),
-];
+pub const DOOR_STACK: &[(u16, u16)] =
+    &[(86, 46), (98, 46), (82, 47), (102, 47), (90, 48), (94, 48)];
 
 /// The `╡ door ╞` sign on the bottom wall; it glows when someone arrives.
 pub const DOOR_SIGN: Zone = Zone {
@@ -225,15 +219,15 @@ pub const DOG_HOME: (u16, u16) = (11, 26);
 
 /// The spots the wandering dog likes; the lobby picks among these.
 pub const DOG_WAYPOINTS: &[(u16, u16)] = &[
-    DOG_HOME,   // the hearth rug
-    (33, 11),   // begging at the bar
-    (54, 14),   // graybeard's corner
-    (92, 44),   // greeting arrivals on the welcome mat
-    (100, 22),  // the middle of the rug
-    (75, 32),   // among the west tables
-    (135, 24),  // the east rug edge
-    (150, 33),  // the games corner
-    (24, 42),   // the quiet table, south-west
+    DOG_HOME,  // the hearth rug
+    (33, 11),  // begging at the bar
+    (54, 14),  // graybeard's corner
+    (92, 44),  // greeting arrivals on the welcome mat
+    (100, 22), // the middle of the rug
+    (75, 32),  // among the west tables
+    (135, 24), // the east rug edge
+    (150, 33), // the games corner
+    (24, 42),  // the quiet table, south-west
 ];
 
 /// Where the "+N at the door" overflow label is centered.

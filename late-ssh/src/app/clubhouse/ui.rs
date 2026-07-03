@@ -490,7 +490,11 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
     } else {
         5
     };
-    let tail = if (t / wag).is_multiple_of(2) { '/' } else { '\\' };
+    let tail = if (t / wag).is_multiple_of(2) {
+        '/'
+    } else {
+        '\\'
+    };
     let tail_x = if dog.facing_left {
         dx + 2
     } else {
@@ -521,7 +525,13 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
             Style::default().fg(theme::TEXT_FAINT()),
         );
     } else if dog.resting && (t / 40).is_multiple_of(3) {
-        put_if_floor(cells, dx + 2, dy.saturating_sub(1), 'z', theme::TEXT_FAINT());
+        put_if_floor(
+            cells,
+            dx + 2,
+            dy.saturating_sub(1),
+            'z',
+            theme::TEXT_FAINT(),
+        );
     }
 }
 
@@ -585,12 +595,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> BubbleAnchors {
     }
 
     let own_id = state.own_user_id();
-    for who in state
-        .snapshot
-        .people
-        .iter()
-        .filter(|p| p.user_id != own_id)
-    {
+    for who in state.snapshot.people.iter().filter(|p| p.user_id != own_id) {
         let style = Style::default().fg(occupant_color(who.user_id));
         let label_style = Style::default().fg(theme::TEXT_DIM());
         let anchor = draw_presence(cells, who.placement, 'o', style, &who.username, label_style);
@@ -658,7 +663,13 @@ fn draw_presence(
             } else {
                 head_y.saturating_sub(1).max(1)
             };
-            put_label(cells, seat.x, label_y, &truncate_name(username), label_style);
+            put_label(
+                cells,
+                seat.x,
+                label_y,
+                &truncate_name(username),
+                label_style,
+            );
             if seat.label_below {
                 (seat.x, head_y.saturating_sub(1))
             } else {
@@ -714,11 +725,7 @@ fn draw_emote(cells: &mut Cells, placement: Placement, emote: Emote, tick: u64, 
                     set(cells, x.saturating_sub(1), y - 1, left, style);
                     set(cells, x + 1, y - 1, right, style);
                     if y >= 3 {
-                        let nx = if frame {
-                            x.saturating_sub(2)
-                        } else {
-                            x + 2
-                        };
+                        let nx = if frame { x.saturating_sub(2) } else { x + 2 };
                         set(cells, nx, y - 2, '♪', note);
                     }
                 }
@@ -771,7 +778,9 @@ fn fresh_bubble_messages(
     let mut seen_authors: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     let mut fresh = Vec::new();
     for message in messages {
-        let age_ms = now.signed_duration_since(message.created).num_milliseconds();
+        let age_ms = now
+            .signed_duration_since(message.created)
+            .num_milliseconds();
         if age_ms > BUBBLE_MS {
             break;
         }
@@ -802,7 +811,12 @@ fn wrap_bubble_fitting(text: String) -> Vec<String> {
             return lines;
         }
     }
-    wrap_bubble(text, BUBBLE_WIDTHS[BUBBLE_WIDTHS.len() - 1], BUBBLE_MAX_LINES).0
+    wrap_bubble(
+        text,
+        BUBBLE_WIDTHS[BUBBLE_WIDTHS.len() - 1],
+        BUBBLE_MAX_LINES,
+    )
+    .0
 }
 
 /// Greedy word wrap into at most `max_lines` lines of `width` chars; the
@@ -1052,6 +1066,10 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Span::styled("[Ctrl+G] ", key),
                     Span::styled("the hub, quests · shop · leaderboard", text),
                 ]),
+                Line::from(vec![
+                    Span::styled("[?] ", key),
+                    Span::styled("the full guide, any time", text),
+                ]),
                 Line::default(),
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
@@ -1158,6 +1176,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                     Line::from(Span::styled("v v music booth · v x cycle source", text)),
                     Line::from(Span::styled("v s skip vote · v 1-4 pick a station", text)),
                     Line::from(Span::styled("m mute · +/- volume · Enter opens booth", dim)),
+                    Line::from(Span::styled("[?] full guide, opens on the Pair tab", dim)),
                 ],
             )
         }

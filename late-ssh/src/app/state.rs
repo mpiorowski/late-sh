@@ -991,7 +991,7 @@ impl App {
             // of late.sh (and the first-visit tutorial starts there).
             screen: Screen::Clubhouse,
             banner: None,
-            show_settings: true,
+            show_settings: false,
             show_splash: true,
             splash_ticks: 0,
             marquee_tick: 0,

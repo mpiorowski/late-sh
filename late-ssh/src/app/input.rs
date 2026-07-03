@@ -4258,7 +4258,10 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
 pub(crate) fn try_open_icon_picker(app: &mut App) {
     let ctx = InputContext::from_app(app);
     // Only chat composers can receive icons.
-    if !matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) {
+    if !matches!(
+        ctx.screen,
+        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
+    ) {
         return;
     }
     if !ctx.chat_composing {
@@ -4269,6 +4272,10 @@ pub(crate) fn try_open_icon_picker(app: &mut App) {
         } else if ctx.screen == Screen::Rooms {
             if let Some(room) = app.rooms_active_room.as_ref() {
                 app.chat.start_composing_in_room(room.chat_room_id);
+            }
+        } else if ctx.screen == Screen::Clubhouse {
+            if let Some(lounge_id) = app.chat.lounge_room_id() {
+                app.chat.start_composing_in_room(lounge_id);
             }
         } else {
             app.chat.start_composing();
@@ -4418,7 +4425,11 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
             }
 
             let ctx = InputContext::from_app(app);
-            if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && ctx.chat_composing {
+            if matches!(
+                ctx.screen,
+                Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
+            ) && ctx.chat_composing
+            {
                 for ch in icon_str.chars() {
                     app.chat.composer_push(ch);
                 }

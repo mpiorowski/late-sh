@@ -53,10 +53,7 @@ impl Spot {
     /// pattern so stacked patrons stay tellable-apart).
     pub fn position(&self) -> (u16, u16) {
         match *self {
-            Spot::Seat(i) => map::SEATS
-                .get(i)
-                .map(|s| (s.x, s.y))
-                .unwrap_or(map::SPAWN),
+            Spot::Seat(i) => map::SEATS.get(i).map(|s| (s.x, s.y)).unwrap_or(map::SPAWN),
             Spot::Standing(i) => map::STANDING_SPOTS.get(i).copied().unwrap_or(map::SPAWN),
             Spot::Door(i) => map::DOOR_STACK[i % map::DOOR_STACK.len()],
         }
@@ -216,7 +213,11 @@ impl SharedLobby {
                 emotes: HashMap::new(),
                 dog_pet: None,
                 dog: Dog::new(),
-                rng: if seed == 0 { 0xA409_3822_299F_31D0 } else { seed },
+                rng: if seed == 0 {
+                    0xA409_3822_299F_31D0
+                } else {
+                    seed
+                },
             })),
         }
     }
@@ -345,7 +346,8 @@ impl SharedLobby {
                 .map(|(emote, _)| *emote)
         };
 
-        let mut people: Vec<Presence> = Vec::with_capacity(inner.parked.len() + inner.walkers.len());
+        let mut people: Vec<Presence> =
+            Vec::with_capacity(inner.parked.len() + inner.walkers.len());
         let mut door_count = 0usize;
         for (id, parked) in inner.parked.iter() {
             let placement = match parked.spot {
@@ -372,9 +374,11 @@ impl SharedLobby {
             });
         }
         // Stable order: seats, standing, door, walkers; each by index/name.
-        people.sort_by(|a, b| placement_rank(&a.placement)
-            .cmp(&placement_rank(&b.placement))
-            .then_with(|| a.username.to_lowercase().cmp(&b.username.to_lowercase())));
+        people.sort_by(|a, b| {
+            placement_rank(&a.placement)
+                .cmp(&placement_rank(&b.placement))
+                .then_with(|| a.username.to_lowercase().cmp(&b.username.to_lowercase()))
+        });
 
         let dog_pet = inner.dog_pet.as_ref().and_then(|(name, at)| {
             let elapsed = now.duration_since(*at).as_millis();
@@ -552,10 +556,11 @@ mod tests {
         cells.sort_unstable();
         cells.dedup();
         assert_eq!(cells.len(), 20, "two patrons share a spot");
-        assert!(snap
-            .people
-            .iter()
-            .all(|p| matches!(p.placement, Placement::Seated(_))));
+        assert!(
+            snap.people
+                .iter()
+                .all(|p| matches!(p.placement, Placement::Seated(_)))
+        );
     }
 
     #[test]
@@ -763,6 +768,9 @@ mod tests {
         lobby.pet_dog(&name);
         let snap = lobby.snapshot();
         assert_eq!(snap.find(id).unwrap().emote, Some(Emote::Wave));
-        assert_eq!(snap.dog_pet.as_ref().map(|(n, _)| n.as_str()), Some("user001"));
+        assert_eq!(
+            snap.dog_pet.as_ref().map(|(n, _)| n.as_str()),
+            Some("user001")
+        );
     }
 }

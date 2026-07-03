@@ -1146,8 +1146,7 @@ pub async fn bartender_tutorial_greeting(ai: Option<&AiService>, username: &str)
             return fallback;
         }
     };
-    let Some(safe) =
-        sanitize_generated_reply_with_line_limit(&reply, Some(BARTENDER_USERNAME), 2)
+    let Some(safe) = sanitize_generated_reply_with_line_limit(&reply, Some(BARTENDER_USERNAME), 2)
     else {
         return fallback;
     };

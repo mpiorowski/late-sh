@@ -12,9 +12,9 @@ use super::user::{
     extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
     extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_dashboard_header,
     extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
-    extract_start_with_music_muted, extract_terminal,
-    extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
-    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
+    extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
+    extract_theme_id, extract_timezone, normalize_right_sidebar_components,
+    normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
