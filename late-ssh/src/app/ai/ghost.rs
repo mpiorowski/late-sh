@@ -146,9 +146,12 @@ pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 m
 const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
 const BARTENDER_USERNAME: &str = "bartender";
 const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(25);
-/// The tutorial greeting must land while the newcomer is still at the bar;
-/// past this, the scripted line goes out instead.
-const BARTENDER_GREETING_TIMEOUT: Duration = Duration::from_secs(6);
+/// Cap on the tutorial greeting generation before the scripted line goes out
+/// instead. The greeting uses `generate_short_reply` (ungrounded, small output
+/// cap), which returns in ~1-2s, so this only needs to bound a slow or hung
+/// call. The old 6s budget paired with a grounded call timed out every time
+/// and the newcomer only ever saw the fallback.
+const BARTENDER_GREETING_TIMEOUT: Duration = Duration::from_secs(10);
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
     You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
@@ -566,9 +569,11 @@ impl GhostService {
             gb.username
         );
 
+        // Graybeard just riffs on what was said in his own voice; he never
+        // needs a web lookup, so the cheap ungrounded path fits him exactly.
         let Some(reply) = self
             .ai_service
-            .generate_reply(&system_prompt, &history_with_prompt)
+            .generate_short_reply(&system_prompt, &history_with_prompt)
             .await?
         else {
             return Ok(());
@@ -858,9 +863,10 @@ impl GhostService {
             new_balance = trigger.new_balance,
         );
 
+        // A one-line table quip — no web lookup, so use the cheap path.
         let Some(reply) = self
             .ai_service
-            .generate_reply(&system_prompt, &prompt)
+            .generate_short_reply(&system_prompt, &prompt)
             .await?
         else {
             return Ok(());
@@ -979,9 +985,10 @@ impl GhostService {
             dealer = dealer.username
         );
 
+        // In-character dealer banter; no lookup needed, so the cheap path fits.
         let Some(reply) = self
             .ai_service
-            .generate_reply(&system_prompt, &prompt)
+            .generate_short_reply(&system_prompt, &prompt)
             .await?
         else {
             return Ok(());
@@ -1131,7 +1138,7 @@ pub async fn bartender_tutorial_greeting(ai: Option<&AiService>, username: &str)
 
     let reply = match tokio::time::timeout(
         BARTENDER_GREETING_TIMEOUT,
-        ai.generate_reply(&system_prompt, &prompt),
+        ai.generate_short_reply(&system_prompt, &prompt),
     )
     .await
     {

@@ -93,6 +93,30 @@ impl AiService {
         system_prompt: &str,
         history: &str,
     ) -> Result<Option<String>> {
+        // The default reply is grounded with Google Search and allowed a large
+        // output; correct for news/mentions that may need to look things up.
+        self.generate(system_prompt, history, true, 8192).await
+    }
+
+    /// A cheap, snappy reply: no Google Search grounding and a small output
+    /// cap. Use for short in-character lines (a tavern welcome, a one-liner)
+    /// where a grounded lookup is pure latency and cost. Returns in ~1-2s
+    /// instead of the ~8-15s a grounded call takes.
+    pub async fn generate_short_reply(
+        &self,
+        system_prompt: &str,
+        history: &str,
+    ) -> Result<Option<String>> {
+        self.generate(system_prompt, history, false, 256).await
+    }
+
+    async fn generate(
+        &self,
+        system_prompt: &str,
+        history: &str,
+        grounded: bool,
+        max_output_tokens: u32,
+    ) -> Result<Option<String>> {
         if !self.is_enabled() {
             return Ok(None);
         }
@@ -114,12 +138,14 @@ impl AiService {
             }],
             generation_config: GeminiConfig {
                 temperature: 0.8,
-                max_output_tokens: 8192,
+                max_output_tokens,
                 response_mime_type: None,
             },
-            tools: Some(vec![GeminiTool {
-                google_search: GeminiGoogleSearch {},
-            }]),
+            tools: grounded.then(|| {
+                vec![GeminiTool {
+                    google_search: GeminiGoogleSearch {},
+                }]
+            }),
         };
 
         let res = self.client.post(&url).json(&req).send_traced().await?;
