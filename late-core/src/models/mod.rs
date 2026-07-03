@@ -15,6 +15,7 @@ pub mod chat_poll;
 pub mod chat_room;
 pub mod chat_room_member;
 pub mod chips;
+pub mod drinks;
 pub mod game_payout;
 pub mod game_room;
 pub mod greendragon_character;

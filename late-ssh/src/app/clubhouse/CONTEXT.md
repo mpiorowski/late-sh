@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-07-03 (opened to everyone: admin gate removed, `0` joins the top nav and Tab cycle, sessions land here on connect; AI bartender greeting with scripted fallback; bartender banner top-left; shared multiplayer lobby, spawn-in-seat, speech bubbles replace the embedded chat panel, emotes, door ambience, dog petting, first-visit tutorial)
+- Last updated: 2026-07-03 (bartender sells drinks for Late Chips: grounded JSON order flow in `ai/ghost.rs`, floor-guarded debit + `user_drinks` buzz tracking, drunk-level glow under username labels here and on chat author labels. Previously: opened to everyone: admin gate removed, `0` joins the top nav and Tab cycle, sessions land here on connect; AI bartender greeting with scripted fallback; bartender banner top-left; shared multiplayer lobby, spawn-in-seat, speech bubbles replace the embedded chat panel, emotes, door ambience, dog petting, first-visit tutorial)
 - Status: Active
 
 ## 1. Summary
@@ -45,6 +45,16 @@ room is the chat surface, and the full history lives in #lounge on Home.
   render snapshot every world tick. Sessions off the screen touch nothing.
 - Emotes (`w` wave, `x` dance) and dog pets are lobby state with wall-clock
   windows (`EMOTE_MS`, `DOG_PET_MS`), so every session plays them.
+- **Drunk glow:** the lobby also carries per-user drunk state (raw
+  `drunk_points` + `last_drink_at`, mirrored from the `user_drinks` table).
+  `Presence.drunk_level` (0 sober .. 4 wasted, decayed at read time via
+  `late_core::models::drinks`) tints the background of the username label
+  (`theme::DRUNK_LABEL_BG`, light green -> yellow -> orange -> red).
+  `GhostService` seeds the map from DB every 60s (`run_drunk_glow_task`) and
+  bumps the buyer instantly after a pour; the same map feeds chat author
+  label tinting everywhere via `App.drunk_levels` (copied ~1/s in
+  `App::tick`). The drunk map is NOT pruned on roster sync, so recent
+  drinkers who logged out keep tinting their chat history until they decay.
 
 ## 4. Chat: bubbles, not a panel
 
@@ -68,6 +78,14 @@ room is the chat surface, and the full history lives in #lounge on Home.
   dropped. Graybeard bubbles normally.
   `App.clubhouse_bartender_id`/`clubhouse_graybeard_id` are captured from
   `active_users` during roster refresh.
+- **Drinks cost chips:** `@bartender` mentions (from anywhere, but usually
+  `t` at the bar) run a grounded JSON decision in `ai/ghost.rs`
+  (`pour`/`offer`/`chat`): the prompt carries the patron's live balance and
+  spendable amount (balance minus the 100-chip floor), the model prices the
+  drink 100-2000 chips, and the server clamps, floor-guards, and debits via
+  `ChipService::buy_drink` (atomic with the `user_drinks` buzz upsert;
+  ledger reason `drink_purchase`, source_ref = drink name). Unaffordable or
+  chatty mentions charge nothing. The tutorial greeting stays free.
 - Message selection/reactions/scroll do not exist on this screen; Home owns
   them. The lounge is still pinned as the visible chat room for read cursors
   (`sync_visible_chat_room`).

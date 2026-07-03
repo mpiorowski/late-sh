@@ -7,7 +7,7 @@ use crossterm::{
 use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame};
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     io::{self, Write},
     sync::{Arc, Mutex},
     time::Instant,
@@ -390,6 +390,9 @@ pub struct App {
     /// tutorial's bartender greeting.
     pub(crate) clubhouse_bartender_id: Option<Uuid>,
     pub(crate) clubhouse_graybeard_id: Option<Uuid>,
+    /// Per-author drunk levels (1-4) copied from the shared lobby about once
+    /// a second; chat author labels tint from this owned map, never the mutex.
+    pub(crate) drunk_levels: HashMap<Uuid, u8>,
     pub(super) ai_service: Option<crate::app::ai::svc::AiService>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
@@ -1042,6 +1045,7 @@ impl App {
             ),
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,
+            drunk_levels: HashMap::new(),
             ai_service: config.ai_service.clone(),
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),

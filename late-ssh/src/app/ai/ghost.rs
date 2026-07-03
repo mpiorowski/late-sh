@@ -11,8 +11,12 @@
 //!
 //! - `generate_reply` — grounded with Google Search, large output cap
 //!   (~8-15s, more expensive). Use ONLY when a reply may need real-world or
-//!   current info: the general **@bot**, and the **@bartender mention** (house
-//!   Q&A that can spill into web questions).
+//!   current info: the general **@bot**.
+//! - `generate_json_with_search` — grounded like `generate_reply`, but the
+//!   response is forced to JSON. The **@bartender mention** uses this: one
+//!   call both answers house Q&A (which can spill into web questions) and
+//!   decides drink orders (`pour`/`offer`/`chat` + a priced drink), so the
+//!   reply must come back structured.
 //! - `generate_short_reply` — ungrounded, small output cap (~1-2s, cheap).
 //!   Use for pure in-character banter that never needs a lookup: **@graybeard
 //!   mentions**, both **@dealer** paths (blackjack quips + mentions), and the
@@ -31,6 +35,8 @@ use late_core::{
         chat_message::ChatMessage,
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
+        chips::{CHIP_FLOOR, UserChips},
+        drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks},
         game_room::{GameKind, GameRoom},
         user::{User, UserParams},
     },
@@ -45,6 +51,8 @@ use crate::{
     app::activity::event::ActivityEvent,
     app::ai::svc::AiService,
     app::chat::svc::{ChatEvent, ChatService},
+    app::clubhouse::lobby::SharedLobby,
+    app::games::chips::svc::ChipService,
     app::help_modal::data::bot_app_context,
     app::rooms::blackjack::{manager::BlackjackTableManager, state::Outcome, svc::BlackjackEvent},
     state::{ActiveUser, ActiveUsers},
@@ -59,6 +67,8 @@ pub struct GhostService {
     active_users: ActiveUsers,
     activity_tx: broadcast::Sender<ActivityEvent>,
     username_directory: crate::usernames::UsernameDirectory,
+    chip_service: ChipService,
+    clubhouse_lobby: SharedLobby,
 }
 
 #[derive(Clone)]
@@ -178,10 +188,24 @@ const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(25);
 /// and the newcomer only ever saw the fallback.
 const BARTENDER_GREETING_TIMEOUT: Duration = Duration::from_secs(10);
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
+/// Cap on the grounded JSON order call; on timeout the mention is dropped
+/// (never charged) and the 25s cooldown lets the patron re-ask.
+const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(30);
+/// Scripted line for the rare race where the model priced a pour against a
+/// balance that was spent before the debit landed. No charge happens.
+const BARTENDER_TAB_BOUNCED_LINE: &str =
+    "easy now, your tab just bounced. come back when your chips catch up to your thirst.";
+/// How often the DB-backed drunk levels are re-seeded into the shared lobby.
+const DRUNK_SEED_INTERVAL: Duration = Duration::from_secs(60);
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
     You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
     You pour imaginary drinks with terminal-flavored names (a double SIGTERM neat, a Bash Old Fashioned, \
-    a Segfault Sour, warm milk for the juniors, decaf for anyone shipping on a Friday) and you never charge — first round is always on the house. \
+    a Segfault Sour, warm milk for the juniors, decaf for anyone shipping on a Friday). \
+    The welcome pour for a brand-new face is on the house, but after that drinks go on the tab and cost Late Chips: \
+    a plain ale runs about 100 chips, the good stuff climbs from there, and the top shelf touches 2000. \
+    You invent the drink and set the price yourself, always a round number that fits the pour. \
+    You never pour what a patron cannot afford; you slide them something in their range instead, kindly. \
+    When a patron is clearly wasted you lean toward water and a gentle word before you pour anything stronger. \
     You know the house inside out. When someone asks how something works, give a real, correct answer from the app context, \
     phrased like a bartender giving directions: short, concrete, pointing at the right key or page. \
     You listen more than you talk. You remember regulars fondly, notice who has been up too late, and gently suggest water, sleep, or one more song. \
@@ -192,6 +216,7 @@ const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Loun
     If someone just says hi, welcome them in, slide something across the counter, and ask what they are having or what they are building.";
 
 impl GhostService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db: Db,
         chat_service: ChatService,
@@ -200,6 +225,8 @@ impl GhostService {
         active_users: ActiveUsers,
         activity_tx: broadcast::Sender<ActivityEvent>,
         username_directory: crate::usernames::UsernameDirectory,
+        chip_service: ChipService,
+        clubhouse_lobby: SharedLobby,
     ) -> Self {
         Self {
             db,
@@ -209,6 +236,8 @@ impl GhostService {
             active_users,
             activity_tx,
             username_directory,
+            chip_service,
+            clubhouse_lobby,
         }
     }
 
@@ -223,6 +252,15 @@ impl GhostService {
                 return;
             }
         };
+
+        // Mirror drunk levels from DB into the shared lobby, AI or not.
+        {
+            let svc = self.clone();
+            let glow_shutdown = shutdown.clone();
+            tokio::spawn(async move {
+                svc.run_drunk_glow_task(glow_shutdown).await;
+            });
+        }
 
         if self.ai_service.is_enabled() {
             let svc = self.clone();
@@ -685,7 +723,7 @@ impl GhostService {
         bartender: BotUser,
         trigger_message: ChatMessage,
     ) -> Result<()> {
-        let messages = {
+        let (messages, balance, drunk_word) = {
             let client = self.db.get().await?;
             ChatRoomMember::auto_join_public_rooms(&client, bartender.id).await?;
 
@@ -693,12 +731,23 @@ impl GhostService {
                 return Ok(());
             }
 
-            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
+            let messages = ChatMessage::list_recent(
+                &client,
+                trigger_message.room_id,
+                GHOST_MENTION_HISTORY_SIZE,
+            )
+            .await?;
+            let chips = UserChips::ensure(&client, trigger_message.user_id).await?;
+            let drunk_level = UserDrinks::find(&client, trigger_message.user_id)
                 .await?
+                .map(|drinks| drinks.level(chrono::Utc::now()))
+                .unwrap_or(0);
+            (messages, chips.balance, drunk_level_word(drunk_level))
         };
         if messages.is_empty() {
             return Ok(());
         }
+        let spendable = (balance - CHIP_FLOOR).max(0);
 
         let (history_str, usernames) = self.build_chat_history(&messages).await?;
         let patron = mention_target_for_user(
@@ -712,47 +761,124 @@ impl GhostService {
             {app_context}\n\n\
             Someone at the bar mentioned you. You always answer a patron.\n\
             When they ask how the house works, answer from the app context above — correct keys, correct pages.\n\
-            You may address them as {patron}.\n\
-            Keep it to 1-3 short lines. No markdown. No emoji.\n\
-            NEVER prefix your message with your own username, and do not wrap it in quotes.\n\
-            Do NOT output SKIP. Output only the message text.",
+            You may address them as {patron}.\n\n\
+            THE PATRON'S TAB:\n\
+            - chip balance: {balance}\n\
+            - spendable on drinks: {spendable} (house rule: a patron always keeps {floor} chips; you can only pour a price that fits inside spendable)\n\
+            - current state: {drunk_word}\n\n\
+            Decide ONE action:\n\
+            - \"pour\": the patron clearly ordered a drink AND you can price it within their spendable chips. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and write your line handing it over, mentioning the price.\n\
+            - \"offer\": the patron ordered but cannot afford it (or asked for more than their spendable). Charge nothing; counter-offer something within their range, with its price, kindly.\n\
+            - \"chat\": everything else — greetings, house questions, banter. Answer exactly as you always do. No charge.\n\n\
+            Return ONLY a JSON object, no markdown fences:\n\
+            {{\"action\": \"pour\" | \"offer\" | \"chat\", \"drink\": string or null, \"price\": integer or null, \"line\": string}}\n\
+            \"line\" is your chat message: 1-3 short lines, no markdown, no emoji, never prefixed with your own username, never SKIP.",
             username = bartender.username,
             persona = BARTENDER_PERSONA,
             app_context = bot_app_context(),
+            floor = CHIP_FLOOR,
+            price_min = DRINK_PRICE_MIN,
+            price_max = DRINK_PRICE_MAX,
         );
 
         let history_with_prompt = format!(
-            "{history_str}---\nThe latest message mentioned @{}. Pour your reply.",
+            "{history_str}---\nThe latest message mentioned @{}. Decide your action and return the JSON.",
             bartender.username
         );
 
-        let Some(reply) = self
-            .ai_service
-            .generate_reply(&system_prompt, &history_with_prompt)
-            .await?
-        else {
-            return Ok(());
+        let reply = match tokio::time::timeout(
+            BARTENDER_ORDER_TIMEOUT,
+            self.ai_service
+                .generate_json_with_search(&system_prompt, &history_with_prompt),
+        )
+        .await
+        {
+            Ok(Ok(Some(reply))) => reply,
+            Ok(Ok(None)) => return Ok(()),
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                tracing::warn!("bartender order generation timed out");
+                return Ok(());
+            }
         };
 
-        let Some(safe_reply) = sanitize_generated_reply_with_line_limit(
-            &reply,
-            Some(&bartender.username),
-            BARTENDER_REPLY_MAX_LINES,
-        ) else {
-            return Ok(());
-        };
+        let decision = parse_bartender_order(&reply, spendable, &bartender.username);
 
         let mut rng = TinyRng::seeded();
         let delay = rng.next_between_inclusive(2, 6) as u64;
+
+        let body = match decision {
+            BartenderDecision::Skip => return Ok(()),
+            BartenderDecision::Say { line } => line,
+            BartenderDecision::Pour { drink, price, line } => {
+                match self
+                    .chip_service
+                    .buy_drink(trigger_message.user_id, price, &drink)
+                    .await?
+                {
+                    Some(purchase) => {
+                        self.clubhouse_lobby.record_drink(
+                            trigger_message.user_id,
+                            purchase.drunk_points,
+                            purchase.last_drink_at,
+                        );
+                        tracing::info!(
+                            user_id = %trigger_message.user_id,
+                            price,
+                            drink = %drink,
+                            new_balance = purchase.balance,
+                            "bartender poured a drink"
+                        );
+                        line
+                    }
+                    // The balance moved between the prompt and the debit; the
+                    // floor guard refused the pour. Never retry, never charge.
+                    None => format!("{patron} {BARTENDER_TAB_BOUNCED_LINE}"),
+                }
+            }
+        };
+
         tokio::time::sleep(Duration::from_secs(delay)).await;
 
         self.chat_service.send_bot_reply_task(
             bartender.id,
             trigger_message.room_id,
-            safe_reply,
+            body,
             Some(trigger_message.user_id),
         );
 
+        Ok(())
+    }
+
+    /// Periodically mirror DB drunk state into the shared lobby so every
+    /// session's clubhouse labels and chat author tints agree. Runs even
+    /// without AI: drinks are DB rows, not model output.
+    async fn run_drunk_glow_task(self, shutdown: late_core::shutdown::CancellationToken) {
+        let mut interval = tokio::time::interval(DRUNK_SEED_INTERVAL);
+        tracing::info!("clubhouse drunk glow seeder started");
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    tracing::info!("clubhouse drunk glow seeder shutting down");
+                    break;
+                }
+                _ = interval.tick() => {
+                    if let Err(err) = self.seed_drunk_levels().await {
+                        tracing::warn!(error = ?err, "failed to seed clubhouse drunk levels");
+                    }
+                }
+            }
+        }
+    }
+
+    async fn seed_drunk_levels(&self) -> Result<()> {
+        let client = self.db.get().await?;
+        let rows = UserDrinks::all_active(&client).await?;
+        self.clubhouse_lobby.set_drunk_states(
+            rows.into_iter()
+                .map(|drinks| (drinks.user_id, drinks.drunk_points, drinks.last_drink_at))
+                .collect(),
+        );
         Ok(())
     }
 
@@ -1194,6 +1320,88 @@ pub async fn bartender_tutorial_greeting(ai: Option<&AiService>, username: &str)
     }
 }
 
+/// What the bartender decided to do with a mention, after server-side
+/// validation of the model's JSON.
+#[derive(Debug, PartialEq, Eq)]
+enum BartenderDecision {
+    /// Charge `price` chips and post `line`.
+    Pour {
+        drink: String,
+        price: i64,
+        line: String,
+    },
+    /// Post `line`, charge nothing (chat, counter-offer, or a downgraded
+    /// pour the server refused to price).
+    Say { line: String },
+    /// Nothing usable came back; stay silent.
+    Skip,
+}
+
+#[derive(serde::Deserialize)]
+struct BartenderOrderRaw {
+    action: Option<String>,
+    drink: Option<String>,
+    price: Option<i64>,
+    line: Option<String>,
+}
+
+/// Strip a wrapping markdown code fence, which Gemini sometimes adds even in
+/// JSON mode.
+fn strip_code_fence(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
+    let rest = rest.strip_prefix("json").unwrap_or(rest);
+    rest.trim().strip_suffix("```").unwrap_or(rest).trim()
+}
+
+/// Validate the bartender's raw JSON into an executable decision. The server
+/// is the authority: prices are clamped into range, and a pour the patron
+/// cannot afford (model error — the prompt carries their spendable chips) is
+/// downgraded to an uncharged line rather than attempting a forbidden debit.
+fn parse_bartender_order(raw: &str, spendable: i64, bot_username: &str) -> BartenderDecision {
+    let Ok(order) = serde_json::from_str::<BartenderOrderRaw>(strip_code_fence(raw)) else {
+        tracing::warn!(raw_len = raw.len(), "bartender order json failed to parse");
+        return BartenderDecision::Skip;
+    };
+
+    let Some(line) = order.line.as_deref().and_then(|line| {
+        sanitize_generated_reply_with_line_limit(line, Some(bot_username), BARTENDER_REPLY_MAX_LINES)
+    }) else {
+        return BartenderDecision::Skip;
+    };
+
+    if order.action.as_deref() != Some("pour") {
+        return BartenderDecision::Say { line };
+    }
+
+    let price = order
+        .price
+        .unwrap_or(DRINK_PRICE_MIN)
+        .clamp(DRINK_PRICE_MIN, DRINK_PRICE_MAX);
+    if price > spendable {
+        return BartenderDecision::Say { line };
+    }
+    let drink = order
+        .drink
+        .map(|drink| drink.trim().to_string())
+        .filter(|drink| !drink.is_empty())
+        .unwrap_or_else(|| "house pour".to_string());
+    BartenderDecision::Pour { drink, price, line }
+}
+
+/// The patron's state, phrased for the bartender's prompt.
+fn drunk_level_word(level: u8) -> &'static str {
+    match level {
+        0 => "sober",
+        1 => "tipsy",
+        2 => "buzzed",
+        3 => "sloshed",
+        _ => "wasted",
+    }
+}
+
 fn merge_ghost_settings(existing: &serde_json::Value) -> serde_json::Value {
     match existing.clone() {
         serde_json::Value::Object(mut obj) => {
@@ -1567,6 +1775,101 @@ hey @bot what do you think",
             bot,
             "bot"
         ));
+    }
+
+    #[test]
+    fn parse_bartender_order_pours_within_spendable() {
+        let raw = r#"{"action": "pour", "drink": "Segfault Sour", "price": 400, "line": "one segfault sour, that is 400 chips"}"#;
+        assert_eq!(
+            parse_bartender_order(raw, 900, "bartender"),
+            BartenderDecision::Pour {
+                drink: "Segfault Sour".to_string(),
+                price: 400,
+                line: "one segfault sour, that is 400 chips".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_bartender_order_clamps_price_into_range() {
+        let cheap = r#"{"action": "pour", "drink": "tap water", "price": 5, "line": "here"}"#;
+        let BartenderDecision::Pour { price, .. } = parse_bartender_order(cheap, 5000, "bartender")
+        else {
+            panic!("expected a pour");
+        };
+        assert_eq!(price, DRINK_PRICE_MIN);
+
+        let dear = r#"{"action": "pour", "drink": "the vault", "price": 99999, "line": "here"}"#;
+        let BartenderDecision::Pour { price, .. } = parse_bartender_order(dear, 5000, "bartender")
+        else {
+            panic!("expected a pour");
+        };
+        assert_eq!(price, DRINK_PRICE_MAX);
+    }
+
+    #[test]
+    fn parse_bartender_order_downgrades_unaffordable_pour() {
+        let raw = r#"{"action": "pour", "drink": "top shelf", "price": 2000, "line": "the good stuff"}"#;
+        assert_eq!(
+            parse_bartender_order(raw, 300, "bartender"),
+            BartenderDecision::Say {
+                line: "the good stuff".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_bartender_order_chat_and_offer_never_charge() {
+        for action in ["chat", "offer", "something-else"] {
+            let raw = format!(r#"{{"action": "{action}", "drink": null, "price": null, "line": "welcome in"}}"#);
+            assert_eq!(
+                parse_bartender_order(&raw, 900, "bartender"),
+                BartenderDecision::Say {
+                    line: "welcome in".to_string()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn parse_bartender_order_accepts_fenced_json_and_defaults_drink() {
+        let raw = "```json\n{\"action\": \"pour\", \"price\": 200, \"line\": \"here you go\"}\n```";
+        assert_eq!(
+            parse_bartender_order(raw, 900, "bartender"),
+            BartenderDecision::Pour {
+                drink: "house pour".to_string(),
+                price: 200,
+                line: "here you go".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_bartender_order_skips_garbage_and_empty_lines() {
+        assert_eq!(
+            parse_bartender_order("not json at all", 900, "bartender"),
+            BartenderDecision::Skip
+        );
+        assert_eq!(
+            parse_bartender_order(r#"{"action": "pour", "price": 200}"#, 900, "bartender"),
+            BartenderDecision::Skip
+        );
+        assert_eq!(
+            parse_bartender_order(
+                r#"{"action": "chat", "line": "SKIP"}"#,
+                900,
+                "bartender"
+            ),
+            BartenderDecision::Skip
+        );
+    }
+
+    #[test]
+    fn drunk_level_words() {
+        assert_eq!(drunk_level_word(0), "sober");
+        assert_eq!(drunk_level_word(1), "tipsy");
+        assert_eq!(drunk_level_word(4), "wasted");
+        assert_eq!(drunk_level_word(9), "wasted");
     }
 
     #[test]

@@ -3885,6 +3885,35 @@ pub fn BG_HIGHLIGHT() -> Color {
     current_palette().bg_highlight
 }
 
+/// Background tint under a username for the tavern drunk glow: level 1
+/// (tipsy) light green through level 4 (wasted) heavy red, level 0 nothing.
+/// Anchors are blended toward the active canvas so the tint stays quiet on
+/// dark themes and pastel on light ones; "wasted" blends least so it reads
+/// unmistakably. Derived, so no per-palette field is needed.
+#[allow(non_snake_case)]
+pub fn DRUNK_LABEL_BG(level: u8) -> Option<Color> {
+    let (anchor, toward_canvas) = match level {
+        0 => return None,
+        1 => (Color::Rgb(70, 140, 60), 0.62),
+        2 => (Color::Rgb(180, 150, 40), 0.60),
+        3 => (Color::Rgb(200, 110, 30), 0.55),
+        _ => (Color::Rgb(190, 45, 40), 0.40),
+    };
+    Some(blend_toward(anchor, BG_CANVAS(), toward_canvas))
+}
+
+/// Linear blend `t` of the way from `a` to `b` (0.0 = `a`, 1.0 = `b`).
+/// Falls back to `a` for non-RGB colors (the palette backgrounds are RGB).
+fn blend_toward(a: Color, b: Color, t: f32) -> Color {
+    match (a, b) {
+        (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) => {
+            let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+            Color::Rgb(mix(ar, br), mix(ag, bg), mix(ab, bb))
+        }
+        _ => a,
+    }
+}
+
 #[allow(non_snake_case)]
 pub fn BORDER_DIM() -> Color {
     current_palette().border_dim

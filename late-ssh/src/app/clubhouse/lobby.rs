@@ -17,7 +17,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use late_core::MutexRecover;
+use late_core::models::drinks::{decayed_points, drunk_level};
 use uuid::Uuid;
 
 use super::map;
@@ -99,11 +101,31 @@ impl Dog {
     }
 }
 
+/// A user's raw buzz as last written to the DB; the effective level decays
+/// against wall clock at read time (see `late_core::models::drinks`).
+#[derive(Debug, Clone, Copy)]
+struct DrunkEntry {
+    points: i64,
+    last_drink_at: DateTime<Utc>,
+}
+
+impl DrunkEntry {
+    fn level(&self, now: DateTime<Utc>) -> u8 {
+        drunk_level(decayed_points(
+            self.points,
+            (now - self.last_drink_at).num_seconds(),
+        ))
+    }
+}
+
 #[derive(Debug)]
 struct LobbyInner {
     parked: HashMap<Uuid, Parked>,
     walkers: HashMap<Uuid, Walker>,
     emotes: HashMap<Uuid, (Emote, Instant)>,
+    /// Not pruned on roster sync: a drinker who logs out keeps tinting their
+    /// chat history until the buzz decays or the seed task replaces the map.
+    drunk: HashMap<Uuid, DrunkEntry>,
     dog_pet: Option<(String, Instant)>,
     dog: Dog,
     rng: u64,
@@ -116,6 +138,8 @@ pub struct Presence {
     pub username: String,
     pub placement: Placement,
     pub emote: Option<Emote>,
+    /// Current drunk level 0 (sober) through 4 (wasted), already decayed.
+    pub drunk_level: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,6 +235,7 @@ impl SharedLobby {
                 parked: HashMap::new(),
                 walkers: HashMap::new(),
                 emotes: HashMap::new(),
+                drunk: HashMap::new(),
                 dog_pet: None,
                 dog: Dog::new(),
                 rng: if seed == 0 {
@@ -330,6 +355,52 @@ impl SharedLobby {
         inner.dog_pet = Some((username.to_string(), Instant::now()));
     }
 
+    /// Record a fresh pour so the buyer's glow updates instantly, ahead of
+    /// the next DB seed pass.
+    pub fn record_drink(&self, user_id: Uuid, points: i64, last_drink_at: DateTime<Utc>) {
+        let mut inner = self.inner.lock_recover();
+        inner.drunk.insert(
+            user_id,
+            DrunkEntry {
+                points,
+                last_drink_at,
+            },
+        );
+    }
+
+    /// Wholesale replace the drunk map from a DB seed pass. Passing only
+    /// still-active rows also prunes users who sobered up or were deleted.
+    pub fn set_drunk_states(&self, entries: Vec<(Uuid, i64, DateTime<Utc>)>) {
+        let mut inner = self.inner.lock_recover();
+        inner.drunk = entries
+            .into_iter()
+            .map(|(user_id, points, last_drink_at)| {
+                (
+                    user_id,
+                    DrunkEntry {
+                        points,
+                        last_drink_at,
+                    },
+                )
+            })
+            .collect();
+    }
+
+    /// Current drunk levels for everyone the lobby knows about, omitting the
+    /// sober. Chat author labels read this instead of the DB.
+    pub fn drunk_levels(&self) -> HashMap<Uuid, u8> {
+        let inner = self.inner.lock_recover();
+        let now = Utc::now();
+        inner
+            .drunk
+            .iter()
+            .filter_map(|(id, entry)| {
+                let level = entry.level(now);
+                (level > 0).then_some((*id, level))
+            })
+            .collect()
+    }
+
     /// Clone out the render view. Seated people come out in seat order so
     /// draw order is stable frame to frame. Also nudges the shared dog: the
     /// step is wall-clock rate-limited, so however many sessions snapshot,
@@ -338,12 +409,20 @@ impl SharedLobby {
         let mut inner = self.inner.lock_recover();
         let now = Instant::now();
         inner.step_dog(now);
+        let now_utc = Utc::now();
         let emote_of = |id: &Uuid| {
             inner
                 .emotes
                 .get(id)
                 .filter(|(_, at)| now.duration_since(*at).as_millis() < EMOTE_MS)
                 .map(|(emote, _)| *emote)
+        };
+        let drunk_of = |id: &Uuid| {
+            inner
+                .drunk
+                .get(id)
+                .map(|entry| entry.level(now_utc))
+                .unwrap_or(0)
         };
 
         let mut people: Vec<Presence> =
@@ -363,6 +442,7 @@ impl SharedLobby {
                 username: parked.username.clone(),
                 placement,
                 emote: emote_of(id),
+                drunk_level: drunk_of(id),
             });
         }
         for (id, walker) in inner.walkers.iter() {
@@ -371,6 +451,7 @@ impl SharedLobby {
                 username: walker.username.clone(),
                 placement: Placement::Walking(walker.x, walker.y),
                 emote: emote_of(id),
+                drunk_level: drunk_of(id),
             });
         }
         // Stable order: seats, standing, door, walkers; each by index/name.
@@ -757,6 +838,33 @@ mod tests {
         hurry_the_dog(&lobby);
         let snap = lobby.snapshot();
         assert_ne!((snap.dog.x, snap.dog.y), map::DOG_HOME);
+    }
+
+    #[test]
+    fn drunk_levels_decay_and_prune() {
+        let lobby = SharedLobby::with_seed(7);
+        let (id, name) = user(1);
+        lobby.sync(&[(id, name)]);
+
+        let now = Utc::now();
+        lobby.record_drink(id, 2_000, now);
+        assert_eq!(lobby.snapshot().find(id).unwrap().drunk_level, 4);
+        assert_eq!(lobby.drunk_levels().get(&id), Some(&4));
+
+        // A drink from hours ago has partially worn off.
+        lobby.record_drink(id, 2_000, now - chrono::Duration::hours(5));
+        let level = lobby.snapshot().find(id).unwrap().drunk_level;
+        assert_eq!(level, 2, "5h decay of 2000 points should read buzzed");
+
+        // Fully sober entries drop out of the chat-facing map entirely.
+        lobby.record_drink(id, 100, now - chrono::Duration::hours(10));
+        assert_eq!(lobby.snapshot().find(id).unwrap().drunk_level, 0);
+        assert!(lobby.drunk_levels().is_empty());
+
+        // A seed pass replaces everything.
+        lobby.record_drink(id, 2_000, now);
+        lobby.set_drunk_states(Vec::new());
+        assert!(lobby.drunk_levels().is_empty());
     }
 
     #[test]

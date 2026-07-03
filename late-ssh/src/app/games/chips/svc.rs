@@ -1,7 +1,8 @@
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::asterion::ASTERION_ESCAPE_LEDGER_REASON;
 use late_core::models::chips::UserChips;
+use late_core::models::drinks::UserDrinks;
 use late_core::models::game_payout::{GamePayout, GamePayoutClaim};
 use late_core::models::reward::{
     ASTERION_DAILY_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, REWARD_CLAIM_POLICY_PER_EVENT,
@@ -28,6 +29,14 @@ pub struct RewardGrant {
     pub credited: bool,
     pub balance: i64,
     pub amount: i64,
+}
+
+/// Result of a successful bartender drink purchase.
+#[derive(Debug, Clone, Copy)]
+pub struct DrinkPurchase {
+    pub balance: i64,
+    pub drunk_points: i64,
+    pub last_drink_at: DateTime<Utc>,
 }
 
 impl ChipService {
@@ -93,6 +102,29 @@ impl ChipService {
         let client = self.db.get().await?;
         let chips = UserChips::deduct(&client, user_id, amount).await?;
         Ok(chips.map(|c| c.balance))
+    }
+
+    /// Charge a bartender drink (floor-guarded) and record the buzz in one
+    /// transaction, so a crash can't charge without pouring. Returns None
+    /// when the user can't cover the drink and keep the chip floor.
+    pub async fn buy_drink(
+        &self,
+        user_id: Uuid,
+        price: i64,
+        drink: &str,
+    ) -> anyhow::Result<Option<DrinkPurchase>> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let Some(chips) = UserChips::deduct_for_drink(&tx, user_id, price, drink).await? else {
+            return Ok(None);
+        };
+        let drinks = UserDrinks::record_purchase(&tx, user_id, price).await?;
+        tx.commit().await?;
+        Ok(Some(DrinkPurchase {
+            balance: chips.balance,
+            drunk_points: drinks.drunk_points,
+            last_drink_at: drinks.last_drink_at,
+        }))
     }
 
     pub async fn credit_payout(&self, user_id: Uuid, amount: i64) -> anyhow::Result<i64> {

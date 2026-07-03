@@ -588,6 +588,13 @@ impl App {
             self.chip_balance = balance;
         }
 
+        // Drunk glow for chat author labels: copy out of the shared lobby
+        // about once a second so renders read owned state, and re-reading
+        // also lets the tint fade as the buzz decays.
+        if self.marquee_tick % 15 == 0 {
+            self.drunk_levels = self.clubhouse.drunk_levels();
+        }
+
         // Leaderboard
         if let Some(rx) = &mut self.leaderboard_rx
             && rx.has_changed().unwrap_or(false)

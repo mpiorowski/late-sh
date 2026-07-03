@@ -6,7 +6,7 @@
 //! the latest lobby snapshot, door arrival/departure ambience, and the
 //! first-visit tutorial state machine.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use late_core::models::chat_message::ChatMessage;
 use uuid::Uuid;
@@ -343,6 +343,15 @@ impl State {
 
     pub fn own_user_id(&self) -> Uuid {
         self.user_id
+    }
+
+    /// Current drunk levels from the shared lobby (empty on headless/test
+    /// paths). Chat author labels tint from this, so it must not hit the DB.
+    pub fn drunk_levels(&self) -> HashMap<Uuid, u8> {
+        self.lobby
+            .as_ref()
+            .map(|lobby| lobby.drunk_levels())
+            .unwrap_or_default()
     }
 
     /// GoToBar -> BarLesson when the player reaches the counter. Returns
