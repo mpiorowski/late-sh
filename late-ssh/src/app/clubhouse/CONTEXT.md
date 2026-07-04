@@ -79,10 +79,12 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `App.clubhouse_bartender_id`/`clubhouse_graybeard_id` are captured from
   `active_users` during roster refresh.
 - **Drinks cost chips:** `@bartender` mentions (from anywhere, but usually
-  `t` at the bar) run a grounded JSON decision in `ai/ghost.rs`
+  `t` at the bar) run an ungrounded, schema-enforced JSON decision in `ai/ghost.rs`
   (`pour`/`offer`/`chat`): the prompt carries the patron's live balance and
   spendable amount (balance minus the 100-chip floor), the model prices the
-  drink 100-2000 chips, and the server clamps, floor-guards, and debits via
+  drink 100-1000 chips, and the server refuses any out-of-range or unaffordable
+  price (served uncharged, so the debit always matches the quoted line),
+  floor-guards, and debits via
   `ChipService::buy_drink` (atomic with the `user_drinks` buzz upsert;
   ledger reason `drink_purchase`, source_ref = drink name). Unaffordable or
   chatty mentions charge nothing. The tutorial greeting stays free.
