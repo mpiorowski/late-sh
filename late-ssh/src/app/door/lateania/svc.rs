@@ -26,7 +26,7 @@ use late_core::{
         mud_world_state::MudWorldState,
         profile_award::{
             LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY, award_badge,
-            grant_lateania_boss_award,
+            grant_unique_milestone_award,
         },
         reward::{LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY},
         user::User,
@@ -161,6 +161,8 @@ const PET_FEED_COST: i64 = 20;
 const PET_WOUND_PCT: i32 = 30;
 /// Resource a caster spends to perform the Resurrection rite.
 const RESURRECT_COST: i32 = 30;
+/// Monk "Iron Body": percent reduction to incoming physical blows.
+const IRON_BODY_PCT: i32 = 15;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
 /// Normal death removes this share of carried gold; banked gold is protected.
@@ -381,8 +383,10 @@ pub struct HousingEntryView {
     /// Compact detail, e.g. "4 rooms" for a deed or the furnishing's flavour.
     pub detail: String,
     pub affordable: bool,
-    /// For deeds: already claimed by someone (and not buyable).
+    /// For deeds: already claimed by someone else (and not buyable).
     pub taken: bool,
+    /// For deeds: this is the viewing player's own plot.
+    pub owned: bool,
 }
 
 /// The housing ledger panel: deeds at the clerk, or furnishings inside an owned
@@ -1244,7 +1248,7 @@ impl LateaniaService {
             if let Ok(grant) = &payout {
                 match db.get().await {
                     Ok(client) => {
-                        if let Err(error) = grant_lateania_boss_award(
+                        if let Err(error) = grant_unique_milestone_award(
                             &client,
                             outcome.user_id,
                             achievement.award_category,
@@ -1271,13 +1275,9 @@ impl LateaniaService {
                 }
             }
 
-            let detail = match payout {
-                Ok(grant) if grant.credited => Some(format!(
-                    "defeated {} (+{} chips, badge {})",
-                    achievement.mob_name, grant.amount, badge
-                )),
-                _ => Some(format!("defeated {}", achievement.mob_name)),
-            };
+            // Keep the feed line short: chips/badge are recorded on the profile,
+            // not spelled out in the activity stream.
+            let detail = Some(format!("defeated {}", achievement.mob_name));
             activity.game_won_task(outcome.user_id, ActivityGame::Mud, detail, None);
         });
     }
@@ -1977,14 +1977,14 @@ impl WorldState {
         };
         if let Some(p) = self.players.get_mut(&user_id) {
             p.archetype = Some(def);
-            // The max-HP bonus may have lifted the ceiling — top up to it.
+            // The max-HP bonus may have lifted the ceiling; top up to it.
             p.hp = p.max_hp();
         }
         self.log_to(
             user_id,
             LogKind::System,
             format!(
-                "You embrace the path of the {} — a {} calling.",
+                "You embrace the path of the {}, a {} calling.",
                 def.name,
                 def.role.label(),
             ),
@@ -2116,6 +2116,11 @@ impl WorldState {
                 .and_then(super::classes::archetype_by_key)
                 .filter(|a| a.class == class);
             // Restore the companion (full health; loyalty carries its level).
+            if let Some(key) = saved.pet.as_deref()
+                && pet_species_by_key(key).is_none()
+            {
+                tracing::warn!(%user_id, key, "dropping saved pet with unknown species key");
+            }
             p.pet = saved
                 .pet
                 .as_deref()
@@ -2131,16 +2136,25 @@ impl WorldState {
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
         }
         // Re-register housing ownership + furnishings (service-side side-state).
-        if let Some(plot) = saved.owned_plot.map(|p| p as usize)
-            && plot < housing::TIERS.len()
-        {
-            self.plot_owner.insert(plot, user_id);
-            for (room, key) in &saved.house_furniture {
-                if plot_of_room(*room) == Some(plot)
-                    && let Some(furn) = furniture_by_key(key)
-                {
-                    self.house_furniture.entry(*room).or_default().push(furn);
+        if let Some(plot) = saved.owned_plot.map(|p| p as usize) {
+            if plot < housing::TIERS.len() {
+                self.plot_owner.insert(plot, user_id);
+                for (room, key) in &saved.house_furniture {
+                    if plot_of_room(*room) == Some(plot) {
+                        if let Some(furn) = furniture_by_key(key) {
+                            self.house_furniture.entry(*room).or_default().push(furn);
+                        } else {
+                            tracing::warn!(%user_id, key, "dropping saved furniture with unknown key");
+                        }
+                    }
                 }
+            } else {
+                tracing::warn!(
+                    %user_id,
+                    plot,
+                    tiers = housing::TIERS.len(),
+                    "dropping saved home: plot index out of range"
+                );
             }
         }
         let name = class.name();
@@ -4129,7 +4143,7 @@ impl WorldState {
             .collect();
 
         for user_id in fighters {
-            let (mob_id, base_atk, opening, frenzy_pct) = match self.players.get(&user_id) {
+            let (mob_id, base_atk, opening, frenzy_pct, class) = match self.players.get(&user_id) {
                 Some(p) => {
                     // Berserker "Frenzy": no bonus above half health, then up to
                     // +50% damage as it falls from half toward death.
@@ -4140,7 +4154,7 @@ impl WorldState {
                     } else {
                         0
                     };
-                    (p.target, p.attack(), p.opening_strike, frenzy)
+                    (p.target, p.attack(), p.opening_strike, frenzy, p.class)
                 }
                 None => continue,
             };
@@ -4152,10 +4166,23 @@ impl WorldState {
                 }
                 continue;
             }
+            // Ranger "Hunter's Instinct": strikes against a wounded foe (below half
+            // health) bite harder, on auto-attacks as well as abilities.
+            let ranger_wounded = class == Some(Class::Ranger)
+                && self
+                    .mobs
+                    .get(&mob_id)
+                    .is_some_and(|m| m.hp * 2 < m.spawn.max_hp);
             // Opportunist: the Rogue's opening strike of a fight lands as a crit.
             let player_atk = if opening { base_atk * 2 } else { base_atk };
             // Berserker Frenzy scales the blow up as health runs low.
             let player_atk = player_atk * (100 + frenzy_pct) / 100;
+            // Hunter's Instinct: extra damage into the wounded foe.
+            let player_atk = if ranger_wounded {
+                player_atk + player_atk / 4
+            } else {
+                player_atk
+            };
             if opening {
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.opening_strike = false;
@@ -4672,6 +4699,10 @@ impl WorldState {
             armor / 4
         };
         let mut dmg = (raw - reduction).max(1);
+        // Monk "Iron Body": the trained body blunts physical blows.
+        if p.class == Some(Class::Monk) && dtype == DamageType::Physical {
+            dmg = (dmg - dmg * IRON_BODY_PCT / 100).max(1);
+        }
         // Tank-archetype mitigation reduces every incoming blow.
         let (_, mitigation_pct, _, _) = p.archetype_mods();
         if mitigation_pct > 0 {
@@ -5388,6 +5419,7 @@ impl WorldState {
                                 detail: format!("{} rooms - {}", t.rooms(), t.blurb),
                                 affordable: player.gold >= t.price,
                                 taken: owner.is_some_and(|o| *o != *user_id),
+                                owned: owner == Some(user_id),
                             }
                         })
                         .collect(),
@@ -5407,6 +5439,7 @@ impl WorldState {
                             detail: f.desc.to_string(),
                             affordable: player.gold >= f.price,
                             taken: false,
+                            owned: false,
                         })
                         .collect(),
                 })
@@ -6116,6 +6149,28 @@ mod tests {
         assert!(
             tanked < plain,
             "tank archetype should reduce the hit ({tanked} vs {plain})"
+        );
+    }
+
+    #[test]
+    fn monk_iron_body_blunts_physical_but_not_elemental() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Monk);
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        let base_hp = 500;
+        p.base_max_hp = base_hp;
+        p.hp = base_hp;
+        // A physical blow is blunted by Iron Body...
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let physical = base_hp - s.players[&uid(1)].hp;
+        // ...while an elemental blow of the same size lands in full.
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Fire, "test");
+        let fire = base_hp - s.players[&uid(1)].hp;
+        assert!(
+            physical < fire,
+            "Iron Body should reduce physical but not fire ({physical} vs {fire})"
         );
     }
 

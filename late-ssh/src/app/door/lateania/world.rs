@@ -140,7 +140,7 @@ impl MobSpawn {
 
 /// What a mob *does*, beyond standing at its home and trading blows. Stored in a
 /// side map (`World::behaviors`) keyed by spawn id so the 37 hand-authored
-/// `MobSpawn` literals stay untouched — the same layering the wildlife system
+/// `MobSpawn` literals stay untouched, the same layering the wildlife system
 /// uses. A spawn with no entry behaves as [`MobBehavior::Sentinel`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MobBehavior {
@@ -4599,7 +4599,7 @@ const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20]
     ),
 ];
 
-/// Number of Frontier zones — and so the number of zone quests (slay each boss).
+/// Number of Frontier zones, and so the number of zone quests (slay each boss).
 pub fn frontier_zone_count() -> usize {
     FRONTIER_ZONES_DATA.len()
 }
@@ -4609,7 +4609,7 @@ pub fn frontier_zone_info(z: usize) -> Option<(&'static str, &'static str)> {
     FRONTIER_ZONES_DATA.get(z).map(|d| (d.0, d.6))
 }
 
-/// The Frontier zone whose boss bears this name, if any — used to credit a
+/// The Frontier zone whose boss bears this name, if any, used to credit a
 /// zone quest when its boss is slain.
 pub fn frontier_zone_of_boss(name: &str) -> Option<usize> {
     FRONTIER_ZONES_DATA.iter().position(|d| d.6 == name)
@@ -5841,7 +5841,11 @@ fn extend_housing(rooms: &mut HashMap<RoomId, Room>) {
         for k in 0..n {
             let id = base + k as RoomId;
             let mut exits: Vec<(Dir, RoomId)> = Vec::new();
-            // The entrance room links back out to the close.
+            // The entrance room links back out to the close. Interior rooms chain
+            // North/South (not East/West) so this back-to-close direction can
+            // never collide with the forward link and overwrite it - the Longhouse
+            // door faces East, which was exactly the old chain direction, so its
+            // way out was clobbered and anyone who entered was trapped.
             if k == 0 {
                 exits.push((tier_dirs[i].opposite(), HOUSING_BASE));
             }
@@ -5849,7 +5853,7 @@ fn extend_housing(rooms: &mut HashMap<RoomId, Room>) {
             if k > 0 {
                 let stair = k == t.ground;
                 exits.push((
-                    if stair { Dir::Down } else { Dir::West },
+                    if stair { Dir::Down } else { Dir::North },
                     base + k as RoomId - 1,
                 ));
             }
@@ -5857,7 +5861,7 @@ fn extend_housing(rooms: &mut HashMap<RoomId, Room>) {
             if k + 1 < n {
                 let stair = k + 1 == t.ground;
                 exits.push((
-                    if stair { Dir::Up } else { Dir::East },
+                    if stair { Dir::Up } else { Dir::South },
                     base + k as RoomId + 1,
                 ));
             }
@@ -6999,6 +7003,40 @@ mod tests {
     }
 
     #[test]
+    fn every_home_has_a_way_back_out() {
+        use super::super::housing as housing_mod;
+        let world = seed_world();
+        // Can `from` reach `target` by following exits across the whole graph?
+        let can_reach = |from: RoomId, target: RoomId| -> bool {
+            let mut seen = std::collections::HashSet::from([from]);
+            let mut stack = vec![from];
+            while let Some(r) = stack.pop() {
+                if r == target {
+                    return true;
+                }
+                if let Some(room) = world.room(r) {
+                    for &to in room.exits.values() {
+                        if seen.insert(to) {
+                            stack.push(to);
+                        }
+                    }
+                }
+            }
+            false
+        };
+        // No home may be a trap: every housing room must be able to get back to
+        // the start room (this catches a door whose only exit leads deeper).
+        for &id in world.rooms.keys() {
+            if housing_mod::is_housing_room(id) {
+                assert!(
+                    can_reach(id, world.start_room),
+                    "housing room {id} is trapped - no way back out without recall"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn start_room_exists_and_is_safe() {
         let world = seed_world();
         let start = world.room(world.start_room).expect("start room exists");
@@ -7108,7 +7146,7 @@ mod tests {
             .collect();
         assert_eq!(catacomb_rooms.len(), CATACOMBS_W * CATACOMBS_H);
         // A maze has dead-ends (one exit, ignoring the safe entrance's portal)
-        // and junctions (3+ exits) — a uniform grid would have neither in the
+        // and junctions (3+ exits); a uniform grid would have neither in the
         // interior. Confirm both shapes exist.
         let dead_ends = catacomb_rooms
             .iter()

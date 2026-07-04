@@ -10,12 +10,14 @@ use crate::app::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DoorGameId {
     Lateania,
+    GreenDragon,
 }
 
 impl DoorGameId {
     pub fn key(self) -> &'static str {
         match self {
             Self::Lateania => "lateania",
+            Self::GreenDragon => "greendragon",
         }
     }
 }

@@ -88,6 +88,10 @@ pub struct DashboardRenderInput<'a> {
     /// Mouse-wheel scroll offset for the Activity panel. `0` shows the
     /// newest event at the top; larger values reveal older events.
     pub activity_scroll: u16,
+    /// Free-running frame counter (advances every world tick). Long event
+    /// rows that overflow their width scroll horizontally off this so the
+    /// whole message is readable without wrapping.
+    pub marquee_tick: usize,
     /// Cell that, when present, receives the Activity panel's rendered
     /// rect so mouse-wheel hit-testing in `app::input` can route scroll
     /// events to it.
@@ -103,6 +107,7 @@ struct TopStripData<'a> {
     cycle_secs: u64,
     usernames: &'a UsernameLookup<'a>,
     activity_scroll: u16,
+    marquee_tick: usize,
     activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
@@ -158,6 +163,7 @@ pub fn draw_dashboard(
                 cycle_secs: view.dashboard_cycle_secs,
                 usernames: view.chat_view.usernames,
                 activity_scroll: view.activity_scroll,
+                marquee_tick: view.marquee_tick,
                 activity_rect_slot: view.activity_rect_slot,
             },
         );
@@ -211,6 +217,7 @@ pub fn draw_chat_with_top_strip(
             cycle_secs: view.dashboard_cycle_secs,
             usernames: view.chat_view.usernames,
             activity_scroll: view.activity_scroll,
+            marquee_tick: view.marquee_tick,
             activity_rect_slot: view.activity_rect_slot,
         },
     );
@@ -332,6 +339,7 @@ fn draw_top_strip(frame: &mut Frame, area: Rect, data: TopStripData<'_>) {
         data.online_count,
         data.active_friend_names,
         data.activity_scroll,
+        data.marquee_tick,
         data.activity_rect_slot,
     );
     draw_box_multiplayer_rooms(frame, cols[2], data.multiplayer_rooms, data.usernames);
@@ -526,6 +534,7 @@ fn draw_quest_meta(frame: &mut Frame, area: Rect, item: &QuestItem) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_box_activity(
     frame: &mut Frame,
     area: Rect,
@@ -533,6 +542,7 @@ fn draw_box_activity(
     online_count: usize,
     active_friend_names: &[String],
     activity_scroll: u16,
+    marquee_tick: usize,
     activity_rect_slot: Option<&std::cell::Cell<Option<Rect>>>,
 ) {
     let area = horizontal_padding(area, 1);
@@ -583,12 +593,13 @@ fn draw_box_activity(
     let visible = event_rows.len();
     let max_offset = activity.len().saturating_sub(visible);
     let offset = (activity_scroll as usize).min(max_offset);
+    // One row per event. The action shares the row with the name and
+    // timestamp; when it's too long to fit, it scrolls horizontally so the
+    // whole message can be read without wrapping or being cut.
+    let mut events = activity.iter().rev().skip(offset);
     let mut drawn = 0;
-    for (row, event) in event_rows
-        .iter()
-        .copied()
-        .zip(activity.iter().rev().skip(offset))
-    {
+    for &row in event_rows {
+        let Some(event) = events.next() else { break };
         let body_w = row.width as usize;
         let elapsed = event.at.elapsed().as_secs();
         let ago = if elapsed < 60 {
@@ -600,8 +611,9 @@ fn draw_box_activity(
         };
         let user = truncate(&event.username, 12);
         let user_part = format!("@{}", user);
+        // Columns the action gets, sharing the row with the name and timestamp.
         let action_w = body_w.saturating_sub(user_part.chars().count() + ago.chars().count() + 4);
-        let action = truncate(&event.action, action_w);
+        let action = marquee_text(&event.action, action_w, marquee_tick);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(user_part, Style::default().fg(theme::TEXT())),
@@ -737,6 +749,34 @@ fn truncate(text: &str, max: usize) -> String {
     out
 }
 
+/// Render `text` into a `width`-column window. Text that fits is returned
+/// unchanged; longer text scrolls back and forth so the whole thing can be
+/// read in place. `tick` advances once per world tick (~66ms); the window
+/// holds briefly at each end before reversing so both edges stay readable.
+fn marquee_text(text: &str, width: usize, tick: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if width == 0 || chars.len() <= width {
+        return text.to_string();
+    }
+    let travel = chars.len() - width; // furthest left the window can scroll
+    let hold = 20; // ticks paused at each extreme (~1.3s) before reversing
+    let step = 3; // ticks per column of movement
+    let sweep = travel * step;
+    let period = 2 * hold + 2 * sweep;
+    let t = tick % period;
+    let offset = if t < hold {
+        0
+    } else if t < hold + sweep {
+        (t - hold) / step
+    } else if t < 2 * hold + sweep {
+        travel
+    } else {
+        travel - (t - 2 * hold - sweep) / step
+    }
+    .min(travel);
+    chars[offset..offset + width].iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,6 +794,7 @@ mod tests {
             updated: now,
             pinned: true,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id: Uuid::nil(),
             user_id: Uuid::nil(),
             body: body.to_string(),

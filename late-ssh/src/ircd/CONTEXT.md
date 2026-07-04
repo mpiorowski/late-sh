@@ -119,7 +119,7 @@ Token model:
 Registration rules:
 - Clients must send PASS, NICK, and USER before registration completes.
 - The requested IRC nick is ignored except as a registration signal.
-- The registered nick is locked to the late.sh username. IRC `NICK` changes are refused.
+- The registered nick is locked to the late.sh username projected for IRC; `.` is displayed as `^`. IRC `NICK` changes are refused.
 - Auth rejects bad tokens, deleted users, user server bans, and active IP server bans.
 
 Do not add alternate IRC-only identities. IRC should remain another view of the same late.sh account.

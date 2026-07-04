@@ -45,6 +45,16 @@ impl ActivityPublisher {
         });
     }
 
+    pub fn game_event_task(&self, user_id: Uuid, game: ActivityGame, action: String) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher
+                .tx
+                .send(ActivityEvent::game_event(user_id, username, game, action));
+        });
+    }
+
     pub fn game_played_task(&self, user_id: Uuid, game: ActivityGame, detail: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {

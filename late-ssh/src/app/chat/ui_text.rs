@@ -1,13 +1,71 @@
 use ratatui::{
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 
+use crate::app::chat::action::parse_action_body;
 use crate::app::common::{markdown::render_body_to_lines, theme};
 use late_core::models::{article::NEWS_MARKER, chat_message_reaction::ChatMessageReactionSummary};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const NEWS_SEPARATOR: &str = " || ";
+
+/// A background tint painted under the bare username inside the author
+/// header (the tavern drunk glow). `range` is the username's byte range
+/// within the prefix string, so badges and flags stay untinted. `word` is the
+/// drunk state printed after the header (e.g. "wasted"), present only once the
+/// drinker is soused enough to earn a label; the glow alone carries lighter
+/// states.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AuthorTint {
+    pub range: (usize, usize),
+    pub bg: Color,
+    pub word: Option<&'static str>,
+}
+
+/// The trailing ` (word)` span appended after the author header for a drinker
+/// deep enough to warrant a printed label. Faint and italic so it reads as an
+/// aside next to the name, not another badge.
+fn drunk_word_span(word: &str) -> Span<'static> {
+    Span::styled(
+        format!(" ({word})"),
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    )
+}
+
+/// The author header's prefix spans: one span when untinted (byte-identical
+/// to the historical output), three when a drunk tint splits the username
+/// out. Falls back to the single span on any out-of-bounds range.
+fn push_author_prefix_spans(
+    spans: &mut Vec<Span<'static>>,
+    prefix: &str,
+    author_style: Style,
+    tint: Option<AuthorTint>,
+) {
+    if let Some(tint) = tint {
+        let (start, end) = tint.range;
+        if start < end
+            && end <= prefix.len()
+            && prefix.is_char_boundary(start)
+            && prefix.is_char_boundary(end)
+        {
+            if start > 0 {
+                spans.push(Span::styled(prefix[..start].to_string(), author_style));
+            }
+            spans.push(Span::styled(
+                prefix[start..end].to_string(),
+                author_style.bg(tint.bg),
+            ));
+            if end < prefix.len() {
+                spans.push(Span::styled(prefix[end..].to_string(), author_style));
+            }
+            return;
+        }
+    }
+    spans.push(Span::styled(prefix.to_string(), author_style));
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn wrap_message_to_lines(
@@ -16,6 +74,7 @@ pub(super) fn wrap_message_to_lines(
     prefix: &str,
     width: usize,
     author_style: Style,
+    author_tint: Option<AuthorTint>,
     body_style: Style,
     mentions_us: bool,
     continuation: bool,
@@ -28,14 +87,16 @@ pub(super) fn wrap_message_to_lines(
     };
 
     if !continuation {
-        lines.push(Line::from(vec![
-            pad.clone(),
-            Span::styled(prefix.to_string(), author_style),
-            Span::styled(
-                format!(" {stamp}"),
-                Style::default().fg(theme::TEXT_FAINT()),
-            ),
-        ]));
+        let mut spans = vec![pad.clone()];
+        push_author_prefix_spans(&mut spans, prefix, author_style, author_tint);
+        if let Some(word) = author_tint.and_then(|tint| tint.word) {
+            spans.push(drunk_word_span(word));
+        }
+        spans.push(Span::styled(
+            format!(" {stamp}"),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+        lines.push(Line::from(spans));
     }
 
     if body.is_empty() {
@@ -54,6 +115,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     prefix: &str,
     width: usize,
     author_style: Style,
+    author_tint: Option<AuthorTint>,
     body_style: Style,
     mentions_us: bool,
     continuation: bool,
@@ -66,13 +128,20 @@ pub(super) fn wrap_chat_entry_to_lines(
         Span::raw(" ")
     };
     let news_payload = parse_news_payload(body);
+    let action_payload = news_payload
+        .is_none()
+        .then(|| parse_action_body(body))
+        .flatten();
     // Only normal (non-news), non-continuation messages emit a clickable
     // author header for mouse hit-testing — news cards have their own
     // card layout, and continuation messages omit the header so a run
     // reads as one block.
-    let header_line_index = (news_payload.is_none() && !continuation).then_some(0);
+    let header_line_index =
+        (news_payload.is_none() && action_payload.is_none() && !continuation).then_some(0);
     let mut lines = if let Some(news) = news_payload {
         wrap_news_to_lines(stamp, prefix, width, author_style, news)
+    } else if let Some(action) = action_payload {
+        wrap_action_to_lines(action, prefix, width, body_style, mentions_us)
     } else {
         wrap_message_to_lines(
             body,
@@ -80,6 +149,7 @@ pub(super) fn wrap_chat_entry_to_lines(
             prefix,
             width,
             author_style,
+            author_tint,
             body_style,
             mentions_us,
             continuation,
@@ -104,6 +174,22 @@ pub(super) fn wrap_chat_entry_to_lines(
         header_line_index,
         image_line_range,
     }
+}
+
+fn wrap_action_to_lines(
+    action: &str,
+    prefix: &str,
+    width: usize,
+    body_style: Style,
+    mentions_us: bool,
+) -> Vec<Line<'static>> {
+    let pad = if mentions_us {
+        Span::styled("│", Style::default().fg(theme::MENTION()))
+    } else {
+        Span::raw(" ")
+    };
+    let style = body_style.add_modifier(Modifier::ITALIC);
+    render_body_to_lines(&format!("* {prefix} {action}"), width, pad, style)
 }
 
 pub(super) struct WrappedChatEntry {
@@ -490,6 +576,26 @@ mod tests {
     }
 
     #[test]
+    fn wrap_chat_entry_to_lines_renders_action_message() {
+        let body = crate::app::chat::action::encode_action_body("waves").expect("action");
+        let wrapped = wrap_chat_entry_to_lines(
+            &body,
+            "[now]",
+            "mat",
+            80,
+            Style::default(),
+            None,
+            Style::default(),
+            false,
+            false,
+            None,
+            &[],
+        );
+        assert_eq!(lines_to_strings(&wrapped.lines), vec![" * mat waves"]);
+        assert_eq!(wrapped.header_line_index, None);
+    }
+
+    #[test]
     fn format_news_ascii_art_for_display_limits_to_requested_rows() {
         let art = "abc\ndef\nghi\njkl";
         let lines = format_news_ascii_art_for_display(art, 2);
@@ -598,6 +704,7 @@ mod tests {
             "alice",
             80,
             Style::default(),
+            None,
             Style::default(),
             false,
             false,
@@ -626,6 +733,7 @@ mod tests {
             "alice",
             80,
             Style::default(),
+            None,
             Style::default(),
             false,
             false,
@@ -643,6 +751,7 @@ mod tests {
             "bob",
             80,
             Style::default(),
+            None,
             Style::default(),
             false,
             false,
@@ -662,11 +771,124 @@ mod tests {
             "alice",
             80,
             Style::default(),
+            None,
             Style::default(),
             false,
             false,
         );
         assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn wrap_message_author_tint_splits_only_the_username() {
+        let tint = AuthorTint {
+            range: (4, 9), // "alice" inside "★ alice 🌱" ("★" is 3 bytes)
+            bg: Color::Rgb(10, 20, 30),
+            word: None,
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "[1m]",
+            "★ alice 🌱",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + prefix-before + tinted-username + prefix-after + stamp
+        let header = &lines[0];
+        assert_eq!(header.spans.len(), 5);
+        assert_eq!(header.spans[2].content.as_ref(), "alice");
+        assert_eq!(header.spans[2].style.bg, Some(Color::Rgb(10, 20, 30)));
+        assert_eq!(header.spans[1].style.bg, None);
+        assert_eq!(header.spans[3].style.bg, None);
+        // Text is identical to the untinted render.
+        let untinted = wrap_message_to_lines(
+            "hello",
+            "[1m]",
+            "★ alice 🌱",
+            80,
+            Style::default(),
+            None,
+            Style::default(),
+            false,
+            false,
+        );
+        assert_eq!(lines_to_strings(&lines), lines_to_strings(&untinted));
+    }
+
+    #[test]
+    fn wrap_message_author_tint_ignores_bad_ranges() {
+        let tint = AuthorTint {
+            range: (0, 99),
+            bg: Color::Rgb(10, 20, 30),
+            word: None,
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "[1m]",
+            "alice",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        assert_eq!(lines[0].spans.len(), 3);
+        assert_eq!(lines[0].spans[1].style.bg, None);
+    }
+
+    #[test]
+    fn wrap_message_prints_drunk_word_between_name_and_stamp() {
+        let tint = AuthorTint {
+            range: (0, 5),
+            bg: Color::Rgb(10, 20, 30),
+            word: Some("wasted"),
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "12:04",
+            "alice",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + tinted-username + " (wasted)" + " 12:04"
+        let header = &lines[0];
+        assert_eq!(header.spans.len(), 4);
+        assert_eq!(header.spans[2].content.as_ref(), " (wasted)");
+        assert!(header.spans[2].style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(header.spans[3].content.as_ref(), " 12:04");
+    }
+
+    #[test]
+    fn wrap_message_omits_drunk_word_when_absent() {
+        // The glow can be present with no word (light buzz): header stays lean.
+        let tint = AuthorTint {
+            range: (0, 5),
+            bg: Color::Rgb(10, 20, 30),
+            word: None,
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "12:04",
+            "alice",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + tinted-username + " 12:04" — no aside.
+        assert_eq!(lines[0].spans.len(), 3);
+        assert_eq!(lines[0].spans[2].content.as_ref(), " 12:04");
     }
 
     #[test]

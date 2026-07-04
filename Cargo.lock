@@ -3767,6 +3767,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "late-dopewars"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "getrandom 0.4.2",
+ "nix 0.29.0",
+ "russh",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "late-nethack"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "getrandom 0.4.2",
+ "nix 0.29.0",
+ "russh",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "late-ssh"
 version = "0.1.0"
 dependencies = [
@@ -3796,6 +3824,7 @@ dependencies = [
  "kdl",
  "late-core",
  "nes",
+ "nix 0.29.0",
  "opentelemetry",
  "opentelemetry-http",
  "qrcodegen",

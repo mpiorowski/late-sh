@@ -785,7 +785,7 @@ pub const DEFAULT_ID: &str = "contrast";
 
 const PALETTE_LATE: Palette = Palette {
     bg_canvas: Color::Rgb(0, 0, 0),
-    bg_selection: Color::Rgb(30, 25, 22),
+    bg_selection: Color::Rgb(64, 50, 36),
     bg_highlight: Color::Rgb(40, 33, 28),
     border_dim: Color::Rgb(50, 42, 36),
     border: Color::Rgb(68, 56, 46),
@@ -3578,6 +3578,7 @@ const PALETTE_TERMINAL: Palette = Palette {
 
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Contrast) };
+    static TEXT_BRIGHTNESS_ADJUSTMENT: Cell<i32> = const { Cell::new(0) };
 }
 
 pub fn normalize_id(id: &str) -> &'static str {
@@ -3586,6 +3587,10 @@ pub fn normalize_id(id: &str) -> &'static str {
 
 pub fn set_current_by_id(id: &str) {
     CURRENT_THEME.with(|current| current.set(option_by_id(id).kind));
+}
+
+pub fn set_text_brightness_adjustment(adjustment: i32) {
+    TEXT_BRIGHTNESS_ADJUSTMENT.with(|current| current.set(adjustment.clamp(-5, 5)));
 }
 
 pub fn current_kind() -> ThemeKind {
@@ -3634,6 +3639,87 @@ fn option_by_id(id: &str) -> ThemeOption {
 
 fn current_palette() -> Palette {
     CURRENT_THEME.with(|current| *palette_for_kind(current.get()))
+}
+
+fn current_text_brightness_adjustment() -> i32 {
+    TEXT_BRIGHTNESS_ADJUSTMENT.with(|current| current.get())
+}
+
+fn adjusted_text(color: Color) -> Color {
+    adjust_color_lightness(color, current_text_brightness_adjustment())
+}
+
+fn adjust_color_lightness(color: Color, adjustment: i32) -> Color {
+    let adjustment = adjustment.clamp(-5, 5);
+    if adjustment == 0 {
+        return color;
+    }
+
+    let Some((r, g, b)) = color_rgb(color) else {
+        return color;
+    };
+    let target = if adjustment > 0 { 255 } else { 0 };
+    let amount = adjustment.unsigned_abs() as i32;
+    Color::Rgb(
+        mix_channel(r, target, amount),
+        mix_channel(g, target, amount),
+        mix_channel(b, target, amount),
+    )
+}
+
+fn color_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Black => Some((0, 0, 0)),
+        Color::DarkGray => Some((84, 84, 84)),
+        Color::Gray => Some((168, 168, 168)),
+        Color::White => Some((255, 255, 255)),
+        Color::Indexed(idx) => indexed_rgb(idx),
+        _ => None,
+    }
+}
+
+fn indexed_rgb(idx: u8) -> Option<(u8, u8, u8)> {
+    match idx {
+        0 => Some((0, 0, 0)),
+        1 => Some((170, 0, 0)),
+        2 => Some((0, 170, 0)),
+        3 => Some((170, 85, 0)),
+        4 => Some((0, 0, 170)),
+        5 => Some((170, 0, 170)),
+        6 => Some((0, 170, 170)),
+        7 => Some((170, 170, 170)),
+        8 => Some((85, 85, 85)),
+        9 => Some((255, 85, 85)),
+        10 => Some((85, 255, 85)),
+        11 => Some((255, 255, 85)),
+        12 => Some((85, 85, 255)),
+        13 => Some((255, 85, 255)),
+        14 => Some((85, 255, 255)),
+        15 => Some((255, 255, 255)),
+        _ => None,
+    }
+}
+
+fn mix_channel(channel: u8, target: i32, amount: i32) -> u8 {
+    const STEP_BASIS_POINTS: i32 = 1200;
+    const LIGHTEN_STEP_BASIS_POINTS: i32 = 1300;
+    let channel = channel as i32;
+    let delta = target - channel;
+    let step = if delta > 0 {
+        LIGHTEN_STEP_BASIS_POINTS
+    } else {
+        STEP_BASIS_POINTS
+    };
+    (channel + div_round(delta * amount * step, 10_000)).clamp(0, 255) as u8
+}
+
+fn div_round(value: i32, divisor: i32) -> i32 {
+    if value >= 0 {
+        (value + divisor / 2) / divisor
+    } else {
+        (value - divisor / 2) / divisor
+    }
 }
 
 fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
@@ -3799,6 +3885,35 @@ pub fn BG_HIGHLIGHT() -> Color {
     current_palette().bg_highlight
 }
 
+/// Background tint under a username for the tavern drunk glow: level 1
+/// (tipsy) light green through level 4 (wasted) heavy red, level 0 nothing.
+/// Anchors are blended toward the active canvas so the tint stays quiet on
+/// dark themes and pastel on light ones; "wasted" blends least so it reads
+/// unmistakably. Derived, so no per-palette field is needed.
+#[allow(non_snake_case)]
+pub fn DRUNK_LABEL_BG(level: u8) -> Option<Color> {
+    let (anchor, toward_canvas) = match level {
+        0 => return None,
+        1 => (Color::Rgb(70, 140, 60), 0.62),
+        2 => (Color::Rgb(180, 150, 40), 0.60),
+        3 => (Color::Rgb(200, 110, 30), 0.55),
+        _ => (Color::Rgb(190, 45, 40), 0.40),
+    };
+    Some(blend_toward(anchor, BG_CANVAS(), toward_canvas))
+}
+
+/// Linear blend `t` of the way from `a` to `b` (0.0 = `a`, 1.0 = `b`).
+/// Falls back to `a` for non-RGB colors (the palette backgrounds are RGB).
+fn blend_toward(a: Color, b: Color, t: f32) -> Color {
+    match (a, b) {
+        (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) => {
+            let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+            Color::Rgb(mix(ar, br), mix(ag, bg), mix(ab, bb))
+        }
+        _ => a,
+    }
+}
+
 #[allow(non_snake_case)]
 pub fn BORDER_DIM() -> Color {
     current_palette().border_dim
@@ -3816,27 +3931,27 @@ pub fn BORDER_ACTIVE() -> Color {
 
 #[allow(non_snake_case)]
 pub fn TEXT_FAINT() -> Color {
-    current_palette().text_faint
+    adjusted_text(current_palette().text_faint)
 }
 
 #[allow(non_snake_case)]
 pub fn TEXT_DIM() -> Color {
-    current_palette().text_dim
+    adjusted_text(current_palette().text_dim)
 }
 
 #[allow(non_snake_case)]
 pub fn TEXT_MUTED() -> Color {
-    current_palette().text_muted
+    adjusted_text(current_palette().text_muted)
 }
 
 #[allow(non_snake_case)]
 pub fn TEXT() -> Color {
-    current_palette().text
+    adjusted_text(current_palette().text)
 }
 
 #[allow(non_snake_case)]
 pub fn TEXT_BRIGHT() -> Color {
-    current_palette().text_bright
+    adjusted_text(current_palette().text_bright)
 }
 
 #[allow(non_snake_case)]
@@ -3856,7 +3971,7 @@ pub fn AMBER_GLOW() -> Color {
 
 #[allow(non_snake_case)]
 pub fn CHAT_BODY() -> Color {
-    current_palette().chat_body
+    adjusted_text(current_palette().chat_body)
 }
 
 #[allow(non_snake_case)]
@@ -3940,6 +4055,41 @@ mod tests {
 
         assert_eq!(cycle_id(last, true), first);
         assert_eq!(cycle_id(first, false), last);
+    }
+
+    #[test]
+    fn text_brightness_adjustment_lightens_and_darkens_primary_text() {
+        assert_eq!(
+            adjust_color_lightness(Color::Rgb(100, 150, 200), 5),
+            Color::Rgb(201, 218, 236)
+        );
+        assert_eq!(
+            adjust_color_lightness(Color::Rgb(100, 150, 200), -5),
+            Color::Rgb(40, 60, 80)
+        );
+        assert_eq!(
+            adjust_color_lightness(Color::Rgb(100, 150, 200), 0),
+            Color::Rgb(100, 150, 200)
+        );
+
+        set_current_by_id("late");
+        set_text_brightness_adjustment(0);
+        assert_eq!(TEXT(), Color::Rgb(175, 158, 138));
+        assert_eq!(TEXT_BRIGHT(), Color::Rgb(200, 182, 158));
+        assert_eq!(CHAT_BODY(), Color::Rgb(190, 178, 165));
+
+        set_text_brightness_adjustment(-5);
+        assert_eq!(TEXT(), Color::Rgb(70, 63, 55));
+        assert_eq!(TEXT_BRIGHT(), Color::Rgb(80, 73, 63));
+        assert_eq!(CHAT_BODY(), Color::Rgb(76, 71, 66));
+
+        set_text_brightness_adjustment(5);
+        assert_eq!(TEXT(), Color::Rgb(227, 221, 214));
+        assert_eq!(TEXT_BRIGHT(), Color::Rgb(236, 229, 221));
+        assert_eq!(CHAT_BODY(), Color::Rgb(232, 228, 224));
+
+        set_text_brightness_adjustment(0);
+        set_current_by_id("late");
     }
 
     #[test]

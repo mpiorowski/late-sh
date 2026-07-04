@@ -41,13 +41,13 @@ pub fn handle_single_line_edit(
         ParsedInput::Byte(0x1F) => {
             ta.undo();
         }
-        ParsedInput::Byte(0x7F) => {
+        ParsedInput::Byte(0x7F | 0x08) => {
             ta.delete_char();
         }
         ParsedInput::Delete => {
             ta.delete_next_char();
         }
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
+        ParsedInput::CtrlBackspace => {
             ta.delete_word();
         }
         ParsedInput::CtrlDelete => {
@@ -96,13 +96,13 @@ pub fn handle_multiline_edit(
         ParsedInput::Byte(0x17) => {
             ta.delete_word();
         }
-        ParsedInput::Byte(0x7F) => {
+        ParsedInput::Byte(0x7F | 0x08) => {
             ta.delete_char();
         }
         ParsedInput::Delete => {
             ta.delete_next_char();
         }
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
+        ParsedInput::CtrlBackspace => {
             ta.delete_word();
         }
         ParsedInput::CtrlDelete => {

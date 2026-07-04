@@ -77,6 +77,10 @@ tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry-http = { workspace = true, optional = true }
 rand.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# PTY allocation for the nethack door game (openpty/setsid/TIOCSWINSZ).
+nix = { workspace = true, features = ["term", "process"] }
+
 [dev-dependencies]
 late-core = { workspace = true, features = ["testing"] }
 rstest.workspace = true

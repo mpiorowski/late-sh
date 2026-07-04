@@ -2,8 +2,12 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use late_core::models::{
-    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+    chat_message::ChatMessage,
+    chat_room::ChatRoom,
+    chat_room_member::ChatRoomMember,
     irc_token::IrcToken,
+    profile::ProfileParams,
+    user::{RightSidebarMode, default_right_sidebar_components},
 };
 use late_core::shutdown::CancellationToken;
 use late_core::test_utils::{TestDb, create_test_user};
@@ -229,6 +233,60 @@ async fn authenticates_with_token_and_forces_lounge_join() {
 }
 
 #[tokio::test]
+async fn projects_dotted_usernames_to_irc_nicks() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc.dot.user").await;
+    let nick = "irc^dot^user";
+    let mut client = server.connect(&user.token).await;
+
+    let welcome = client.read_until(" 001 ").await;
+    assert!(
+        welcome.contains(&format!(" 001 {nick} ")),
+        "welcome should use IRC-safe nick: {welcome}"
+    );
+    client.read_until(" 376 ").await;
+    client
+        .read_until(&format!(":{nick}!{nick}@late.sh JOIN #lounge"))
+        .await;
+    let names = client.read_until(" 353 ").await;
+    assert!(
+        names.contains(nick) && !names.contains(&user.username),
+        "NAMES should include projected nick, not raw dotted username: {names}"
+    );
+    client.read_until(" 366 ").await;
+
+    client
+        .write_line(&format!("WHOIS {nick}"))
+        .await
+        .expect("send WHOIS");
+    let whois = client.read_until(" 311 ").await;
+    assert!(
+        whois.contains(nick) && !whois.contains(&user.username),
+        "WHOIS should resolve projected nick: {whois}"
+    );
+
+    client
+        .write_line(&format!("USERHOST {nick}"))
+        .await
+        .expect("send USERHOST");
+    let userhost = client.read_until(" 302 ").await;
+    assert!(
+        userhost.contains(&format!("{nick}=+{nick}@late.sh")),
+        "USERHOST should return projected nick and ident: {userhost}"
+    );
+
+    client
+        .write_line(&format!("ISON {nick}"))
+        .await
+        .expect("send ISON");
+    let ison = client.read_until(" 303 ").await;
+    assert!(
+        ison.contains(nick) && !ison.contains(&user.username),
+        "ISON should return projected nick: {ison}"
+    );
+}
+
+#[tokio::test]
 async fn rejects_bad_token_without_registering() {
     let server = IrcTestServer::start().await;
     let mut client = server.connect("late-irc-NOTAREALTOKEN").await;
@@ -293,6 +351,61 @@ async fn irc_only_connection_counts_as_active_until_disconnect() {
 }
 
 #[tokio::test]
+async fn profile_username_change_projects_to_live_irc_session() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-rename-old").await;
+    let mut client = server.connect(&user.token).await;
+
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    server.state.profile_service.edit_profile(
+        user.id,
+        ProfileParams {
+            username: "irc.rename.new".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            ide: None,
+            terminal: None,
+            os: None,
+            langs: Vec::new(),
+            notify_kinds: Vec::new(),
+            notify_bell: false,
+            notify_cooldown_mins: 0,
+            notify_format: None,
+            theme_id: None,
+            enable_background_color: false,
+            text_brightness_adjustment: 0,
+            show_dashboard_header: false,
+            show_right_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_components: default_right_sidebar_components(),
+            show_room_list_sidebar: true,
+            keep_composer_focused: false,
+            start_with_music_muted: false,
+            show_flag_fallback: false,
+            favorite_room_ids: Vec::new(),
+            birthday: None,
+        },
+    );
+
+    let nick = client.read_until(" NICK ").await;
+    assert!(
+        nick.contains(":irc-rename-old!irc-rename-old@late.sh NICK irc^rename^new"),
+        "profile rename should project as IRC NICK: {nick}"
+    );
+
+    client.write_line("LUSERS").await.expect("send LUSERS");
+    let lusers = client.read_until(" 251 ").await;
+    assert!(
+        lusers.contains(" 251 irc^rename^new "),
+        "subsequent numerics should target the new nick: {lusers}"
+    );
+}
+
+#[tokio::test]
 async fn refuses_part_lounge_and_rejoins() {
     let server = IrcTestServer::start().await;
     let user = server.seed_user("irc-sticky-user").await;
@@ -347,6 +460,62 @@ async fn privmsg_lounge_persists_to_chat() {
             .iter()
             .any(|line| line.contains("PRIVMSG #lounge :hello from irc")),
         "sender connection should suppress one self echo: {lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn irc_payload_mentions_are_rewritten_to_late_usernames() {
+    let server = IrcTestServer::start().await;
+    let mentioned = server.seed_user("irc.mention.target").await;
+    let sender = server.seed_user("irc-mention-sender").await;
+    let mut client = server.connect(&sender.token).await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    client
+        .write_line("PRIVMSG #lounge :@irc^mention^target hello")
+        .await
+        .expect("send PRIVMSG");
+
+    wait_until(
+        || async {
+            let client = server.state.db.get().await.expect("db client");
+            let messages = ChatMessage::list_recent(&client, sender.lounge_id, 5)
+                .await
+                .expect("recent messages");
+            messages.iter().any(|msg| {
+                msg.user_id == sender.id && msg.body == format!("@{} hello", mentioned.username)
+            })
+        },
+        "IRC mention persisted as late.sh username",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn late_payload_mentions_are_rewritten_to_irc_nicks() {
+    let server = IrcTestServer::start().await;
+    let mentioned = server.seed_user("irc.payload.target").await;
+    let sender = server.seed_user("irc-payload-sender").await;
+    let mut client = server.connect(&mentioned.token).await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    server.state.chat_service.send_message_task(
+        sender.id,
+        sender.lounge_id,
+        Some("lounge".to_string()),
+        format!("@{} hello", mentioned.username),
+        uuid::Uuid::new_v4(),
+        false,
+    );
+
+    let line = client.read_until("PRIVMSG #lounge").await;
+    assert!(
+        line.contains("@irc^payload^target hello"),
+        "IRC payload should mention projected nick: {line}"
     );
 }
 

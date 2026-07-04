@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-06-17
+- Last updated: 2026-06-22
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -153,7 +153,7 @@
 - A seated player who misses 3 deals without a locked bet is removed from the table.
 - A seated player who sends no active-room input for 5 minutes is removed from the table; active-room keys, arrows, and scrolls refresh this room timer while seated.
 - Settlements use `ChipService`: zero-credit losses call `restore_floor`, payouts call `credit_payout`, and `BlackjackEvent::HandSettled` updates client balances. Initial-deal settlements, such as natural blackjack, can happen inside bet submission; the bet confirmation must use the settled balance when available so it cannot overwrite the payout with the earlier post-debit balance.
-- Every Blackjack settlement publishes a hidden quest Activity played-hand event. Winning settlements (`PlayerWin` or `PlayerBlackjack`) also publish visible `ActivityGame::Blackjack` win events with the bet in `detail`.
+- Blackjack Activity events are gated on multiplayer rounds: `SharedTableState.round_player_count` (captured at deal time in `start_round`, before settlements clear bets) must be `>= 2` for any event to fire. When 2+ players were dealt in, each settlement publishes a hidden quest Activity played-hand event, and winning settlements (`PlayerWin` or `PlayerBlackjack`) also publish visible `ActivityGame::Blackjack` win events with the bet in `detail`. Solo play against the dealer is still allowed and pays chips normally, but earns no quest/daily credit and does not appear in the dashboard activity feed.
 - House rules: 6-deck shoe, reshuffle at 52-card penetration, dealer stands on soft 17, natural blackjack requires exactly two cards, and blackjack pays 3:2.
 - `Phase::BetPending` exists in the shared enum and input/UI paths, but current pending debit state is expressed per seat as `SeatPhase::BetPending`; the service does not currently transition the whole table into `Phase::BetPending`.
 - `BlackjackService::deal_task` exists as a manual deal API, but active room input does not currently route a key to it. Normal play deals by all seated players locking bets or by the 30s betting cap.
@@ -179,7 +179,7 @@
 ## Chess Runtime
 - `ChessTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `ChessService`.
 - Restarting the SSH process drops in-memory boards/clocks. Existing open `game_rooms` survive, but re-entering creates a fresh board.
-- There are two seats: White and Black. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open color. `n` starts a game when both seats are occupied and the board is waiting or finished.
+- There are two seats: White and Black. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open color. `n` starts a game when both seats are occupied and both players have readied; daily games use the same seating/readiness flow as blitz and rapid.
 - Chess uses `cozy-chess` for legal move generation and game status. The service stores only public state; no private snapshot channel is needed.
 - Chess UI seat labels must distinguish `None` seats from occupied seats whose username is absent from the shared username directory: empty seats render as `open seat`, while occupied-but-unresolved seats render as `player`.
 - Chess move records store Standard Algebraic Notation labels (`Nc3`, `exd5`, `O-O`) for the right-sidebar move list and status-line last move, not raw coordinate notation.

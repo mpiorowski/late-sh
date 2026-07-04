@@ -172,8 +172,14 @@ impl ChatRoomMember {
     pub async fn auto_join_public_rooms(client: &Client, user_id: Uuid) -> Result<u64> {
         let count = client
             .execute(
-                "INSERT INTO chat_room_members (room_id, user_id)
-                 SELECT id, $1
+                // Auto-joined rooms start "read" so new users aren't flooded
+                // with unread badges - EXCEPT #announcements, which is joined
+                // with a NULL cursor so the login splash surfaces the recent
+                // announcements the user has never seen.
+                "INSERT INTO chat_room_members (room_id, user_id, last_read_at)
+                 SELECT id, $1,
+                        CASE WHEN slug = 'announcements' THEN NULL
+                             ELSE current_timestamp END
                  FROM chat_rooms
                  WHERE visibility = 'public' AND auto_join = true
                    AND NOT EXISTS (

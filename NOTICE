@@ -1,0 +1,62 @@
+Third-Party Notices
+===================
+
+late.sh's own source is licensed under FSL-1.1-MIT (see LICENSE and
+LICENSING.md). This file lists third-party programs that late.sh bundles,
+installs, or runs, together with their licenses and where their source can be
+obtained. It does not change the license of late.sh itself.
+
+
+NetHack
+-------
+
+late.sh hosts NetHack as a door game (the "NetHack" screen). The game binary is
+compiled from official upstream source inside the service container (see the
+"nethack-build" stage in the Dockerfile) and is run as a local child process;
+players reach it remotely over the late.sh SSH server.
+
+  Program:    NetHack 5.0.0
+  License:    NetHack General Public License (NGPL)
+              https://www.nethack.org/common/license.html
+  Copyright:  NetHack, Copyright 1985-2026
+              by Stichting Mathematisch Centrum and M. Stephenson.
+  Upstream:   https://www.nethack.org/
+              https://github.com/NetHack/NetHack
+  Installed:  Built from the official upstream source release in the Dockerfile
+              ("nethack-build" stage). The source tarball's SHA-256 is verified
+              against the checksum published on nethack.org before building.
+  Source:     The complete, corresponding machine-readable source is the pinned
+              upstream release tarball recorded in the Dockerfile
+              (NETHACK_URL / NETHACK_VERSION / NETHACK_SHA256), also available
+              from the upstream sites above. Our build recipe is the Dockerfile.
+  Modified:   Yes, build configuration only. Before compiling, the
+              "nethack-build" stage edits include/unixconf.h via the sed commands
+              in the Dockerfile (these are part of our corresponding build
+              recipe):
+                - sets VAR_PLAYGROUND="/var/games/nethack-var" so writable game
+                  state (saves, bones, locks, record) lives on a persistent
+                  volume separate from the read-only data directory;
+                - removes the SHELL and SUSPEND defines to disable NetHack's
+                  in-game shell-escape ('!') and suspend ('^Z') commands, since
+                  the game runs as the service user inside the late.sh container.
+              No other source is patched and no game data files are altered.
+
+NGPL compliance notes:
+
+  - NetHack's own copyright, license, and warranty-disclaimer notices are part
+    of the upstream source tree we build and are kept intact in the service
+    image (e.g. the distributed dat/license and the source's copyright headers).
+  - late.sh does not distribute copies of the NetHack program to players; it
+    only lets them play it over the network. The NGPL is a GPLv2-style license
+    with no network-service copyleft clause, so remote play does not trigger a
+    source-distribution obligation.
+  - Because we now build the binary ourselves, if you redistribute a build of
+    late.sh that includes the NetHack binary (for example, by publishing the
+    Docker image), the NGPL requires you to also make the corresponding source
+    available. Keep the pinned "Source" pointer above (the exact upstream
+    tarball we compile) and the Dockerfile build recipe with the distribution so
+    recipients can obtain and rebuild that source, and keep NetHack's bundled
+    license notices in place.
+
+NetHack is a trademark in some jurisdictions; the name is used here only to
+identify the game, not to imply endorsement by the NetHack DevTeam.

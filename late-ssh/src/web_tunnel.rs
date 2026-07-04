@@ -11,6 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use late_core::{
     MutexRecover,
     models::{
+        article_feed_read::ArticleFeedRead,
         server_ban::ServerBan,
         user::{User, UserParams},
     },
@@ -563,6 +564,9 @@ async fn ensure_web_tunnel_user(state: &State, peer_ip: IpAddr) -> Result<(User,
     User::ensure_ssh_key(&client, user.id, fingerprint).await?;
     if let Err(err) = state.chat_service.auto_join_public_rooms(user.id).await {
         tracing::warn!(user_id = %user.id, error = ?err, "failed to seed web tunnel chat rooms");
+    }
+    if let Err(err) = ArticleFeedRead::seed_read_for_new_user(&client, user.id).await {
+        tracing::warn!(user_id = %user.id, error = ?err, "failed to seed web tunnel news read cursor");
     }
     Ok((user, true))
 }

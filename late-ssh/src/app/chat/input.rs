@@ -90,9 +90,9 @@ pub fn handle_compose_input(
         }
         b => {
             // Hand remaining Ctrl+<letter> chords to ratatui-textarea so its
-            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/etc. ^W and ^H
-            // are intercepted earlier in app::input for delete-word-left
-            // and don't reach this point.
+            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/etc. ^W and ^H (both
+            // delete-word-left) are intercepted earlier in app::input and don't
+            // reach this point.
             if let Some(input) = ctrl_byte_to_input(b) {
                 app.chat.composer_input(input);
                 app.chat.update_autocomplete();
@@ -405,6 +405,12 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 return true;
             }
         }
+        // `g` always jumps to a reply's referenced message. Enter is overloaded
+        // (image/News modals take precedence), so a reply that contains an image
+        // can't be followed with Enter alone; `g` reaches the parent regardless.
+        b'g' | b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
+            return true;
+        }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {
             return true;
         }
@@ -518,6 +524,13 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
+    // While the Discover filter is open it owns every byte (including space and
+    // h/l, which would otherwise trigger room-jump / room-switch) so the user
+    // can type an unrestricted query.
+    if app.chat.discover_selected && app.chat.discover.is_filtering() {
+        return super::discover::input::handle_byte(app, byte);
+    }
+
     if app.chat.room_jump_active {
         match byte {
             b' ' => {
@@ -563,34 +576,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::discover::input::handle_byte(app, byte);
-    }
-
-    if let Some(room_id) = app.chat.selected_bumped_join_room_id() {
-        if is_next_room_key(byte) {
-            switch_room(app, 1);
-            return true;
-        }
-        if is_prev_room_key(byte) {
-            switch_room(app, -1);
-            return true;
-        }
-        if matches!(byte, b'\r' | b'\n') {
-            let slug = app
-                .shop_state
-                .active_room_effects()
-                .get(&room_id)
-                .and_then(|effects| effects.first())
-                .and_then(|effect| effect.room_slug.clone());
-            if let Some(slug) = slug {
-                app.banner = Some(app.chat.join_bumped_public_room(room_id, slug));
-            } else {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Could not join bumped room",
-                ));
-            }
-            return true;
-        }
-        return false;
     }
 
     if app.chat.feeds_selected {

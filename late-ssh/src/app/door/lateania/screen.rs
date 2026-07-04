@@ -12,6 +12,7 @@ use crate::app::{
     activity::event::ActivityGame,
     common::{primitives::Banner, theme},
     door::game::{DoorGame, DoorGameId},
+    door::landing,
     files::inline_image::{InlineImageRenderSettings, render_rgba_preview},
     files::terminal_image::{
         TerminalImageData, TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol,
@@ -44,7 +45,7 @@ impl DoorGame for LateaniaDoorGame {
     }
 
     fn description(&self) -> &'static str {
-        "A persistent terminal world with shared rooms, classes, quests, shops, titles, and loot."
+        "A persistent terminal world with shared rooms, twelve classes, quests, player housing, companions, titles, and loot."
     }
 
     fn activity_game(&self) -> Option<ActivityGame> {
@@ -79,6 +80,8 @@ pub struct LateaniaScreenView<'a> {
     pub state: Option<&'a super::state::State>,
     pub usernames: &'a UsernameLookup<'a>,
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
+    /// Players currently in the Lateania world, shown on the landing.
+    pub online: usize,
 }
 
 fn draw_screen(
@@ -101,6 +104,7 @@ fn draw_screen(
         frame,
         area,
         view.delete_confirm,
+        view.online,
         view.terminal_image_protocol,
         terminal_images,
     );
@@ -194,10 +198,13 @@ fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
     true
 }
 
-fn draw_landing(
+/// Two-column Lateania landing, used both by the standalone screen fallback and
+/// the Games hub when Lateania is the selected card.
+pub fn draw_landing(
     frame: &mut Frame,
     area: Rect,
     delete_confirm: bool,
+    online: usize,
     terminal_image_protocol: Option<TerminalImageProtocol>,
     terminal_images: &mut TerminalImageFrame,
 ) {
@@ -210,13 +217,13 @@ fn draw_landing(
         })
         .split(area);
 
-    draw_launch_copy(frame, layout[0], delete_confirm);
+    draw_launch_copy(frame, layout[0], delete_confirm, online);
     if layout.len() > 1 && layout[1].width > 0 {
         draw_frontier_art(frame, layout[1], terminal_image_protocol, terminal_images);
     }
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool) {
+fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online: usize) {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -242,47 +249,50 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         ),
     ]));
     lines.push(Line::from(Span::styled(
-        "Shared rooms, old-school classes, frontier quests, shops, titles, loot, and real persistence.",
+        "Shared rooms, twelve classes, frontier quests, player housing, companions, titles, loot, and real persistence.",
         Style::default().fg(theme::TEXT_DIM()),
     )));
     lines.push(Line::raw(""));
-    lines.extend(world_stats());
+    lines.extend(world_stats(online));
     lines.push(Line::raw(""));
-    lines.push(section("Boss Achievements"));
-    lines.push(stat_line(
+    lines.push(landing::heading("Boss Achievements"));
+    lines.push(landing::stat(
         "Archdemon Mal'gareth",
         "10,000 chips + LAD badge, once per account",
+        22,
     ));
-    lines.push(stat_line(
+    lines.push(landing::stat(
         "Frontier King",
         "20,000 chips + LFK badge, once per account",
+        22,
     ));
     lines.push(Line::from(Span::styled(
         "  Repeat clears keep titles and loot, but these chip payouts are lifetime claims.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));
-    lines.push(section("Enter The World"));
-    lines.push(action_line(
+    lines.push(landing::heading("Enter The World"));
+    lines.push(landing::action(
         ">",
         "Enter",
         "step through the gate",
         theme::SUCCESS(),
     ));
-    lines.push(action_line(
+    lines.push(landing::action(
         " ",
         "d",
         "reset your saved character",
         theme::ERROR(),
     ));
-    lines.push(action_line(" ", "?", "open the guide", theme::AMBER()));
+    lines.push(landing::action(" ", "?", "open the guide", theme::AMBER()));
     lines.push(Line::raw(""));
-    lines.push(section("Once Inside"));
-    lines.push(hint_line("w/a/s/d + arrows", "move"));
-    lines.push(hint_line("space / 1-9 / z", "fight, cast, flee"));
-    lines.push(hint_line(
+    lines.push(landing::heading("Once Inside"));
+    lines.push(landing::hint("w/a/s/d + arrows", "move", 19));
+    lines.push(landing::hint("space / 1-9 / z", "fight, cast, flee", 19));
+    lines.push(landing::hint(
         "o / j / k / r / f",
         "look, quests, titles, recall, follow",
+        19,
     ));
 
     if delete_confirm {
@@ -339,9 +349,9 @@ fn draw_frontier_art(
         )),
         Line::raw(""),
         fact_line("20", "frontier zones"),
-        fact_line("1,565", "rooms in the world"),
-        fact_line("100", "generated frontier items"),
-        fact_line("5", "classes with unlockable abilities"),
+        fact_line("1,500+", "rooms in the world"),
+        fact_line("12", "classes, each with two archetype paths"),
+        fact_line("5", "home tiers to buy and furnish"),
         fact_line("30k", "one-time chips across final boss achievements"),
         Line::raw(""),
         Line::from(Span::styled(
@@ -367,6 +377,14 @@ fn draw_native_frontier_banner(
     let Some(protocol) = protocol else {
         return false;
     };
+    // Sixel has no delete-by-id, so a non-modal banner that appears and
+    // vanishes on hub-card / screen changes leaves stale raster pixels behind
+    // (see pre_frame_sixel_wipe_bytes). Render the ASCII preview instead on
+    // Sixel terminals; Kitty/iTerm2 (delete-by-id) keep the native banner.
+    // Full-quality Sixel still applies to the chat image modal, a separate path.
+    if protocol == TerminalImageProtocol::Sixel {
+        return false;
+    }
     let Some(data) = frontier_terminal_image(protocol) else {
         return false;
     };
@@ -413,42 +431,35 @@ fn lateania_logo() -> Vec<Line<'static>> {
     .collect()
 }
 
-fn world_stats() -> Vec<Line<'static>> {
+fn world_stats(online: usize) -> Vec<Line<'static>> {
+    let online_label = if online == 1 {
+        "1 adventurer".to_string()
+    } else {
+        format!("{online} adventurers")
+    };
     vec![
-        stat_line(
+        landing::stat(&online_label, "in the world right now", 22),
+        landing::stat(
             "20 frontier zones",
             "boss quests, titles, and bounty rewards",
+            22,
         ),
-        stat_line("LAD / LFK", "profile badges for the two final clears"),
-        stat_line(
-            "1,565 rooms",
-            "towns, capitals, wilds, a crypt + forest maze, and a cave",
+        landing::stat(
+            "1,500+ rooms",
+            "towns, capitals, wilds, mazes, a cave, and homes",
+            22,
         ),
-        stat_line("5 classes", "Warrior, Mage, Cleric, Rogue, Ranger"),
-        stat_line("shared runtime", "mob state and combat persist server-side"),
+        landing::stat(
+            "12 classes",
+            "the five originals plus seven new callings",
+            22,
+        ),
+        landing::stat(
+            "shared runtime",
+            "mob state and combat persist server-side",
+            22,
+        ),
     ]
-}
-
-fn section(title: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        title.to_string(),
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    ))
-}
-
-fn stat_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{label:<22}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(value.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
 }
 
 fn fact_line(value: &str, label: &str) -> Line<'static> {
@@ -458,35 +469,6 @@ fn fact_line(value: &str, label: &str) -> Line<'static> {
             Style::default()
                 .fg(theme::BADGE_GOLD())
                 .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-fn action_line(
-    marker: &str,
-    key: &str,
-    label: &str,
-    color: ratatui::style::Color,
-) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("{marker} "),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-fn hint_line(key: &str, label: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("  {key:<19}  "),
-            Style::default().fg(theme::AMBER_DIM()),
         ),
         Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
     ])

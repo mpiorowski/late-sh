@@ -6,14 +6,15 @@ use uuid::Uuid;
 
 use super::chips::INITIAL_CHIP_BALANCE;
 use super::user::{
-    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, extract_bio, extract_birthday,
+    RightSidebarComponentSetting, RightSidebarMode, User, extract_bio, extract_birthday,
     extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
     extract_keep_composer_focused, extract_langs, extract_notify_bell,
     extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
-    extract_right_sidebar_mode, extract_right_sidebar_screens, extract_show_dashboard_header,
+    extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_dashboard_header,
     extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
-    extract_show_settings_on_connect, extract_start_with_music_muted, extract_terminal,
-    extract_theme_id, extract_timezone,
+    extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
+    extract_theme_id, extract_timezone, normalize_right_sidebar_components,
+    normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -34,17 +35,15 @@ pub struct Profile {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
+    pub text_brightness_adjustment: i32,
     /// Controls the lounge top info boxes.
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
-    /// Per-screen visibility when `right_sidebar_mode == Custom`. Each entry is
-    /// a 1-based screen index in `1..=RIGHT_SIDEBAR_SCREEN_COUNT`
-    /// (Dashboard=1, Arcade=2, Rooms=3).
-    pub right_sidebar_screens: Vec<u8>,
+    /// Ordered list of sidebar panels with their on/off state. List order is
+    /// the render order (top to bottom); the clock is pinned above it.
+    pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
     pub show_room_list_sidebar: bool,
-    /// When false, the settings modal is not auto-opened on connect.
-    pub show_settings_on_connect: bool,
     /// Tweak: pressing Enter in the chat composer sends without closing it.
     /// While on, the Alt+S shortcut becomes a no-op.
     pub keep_composer_focused: bool,
@@ -83,12 +82,12 @@ impl Default for Profile {
             notify_format: None,
             theme_id: None,
             enable_background_color: true,
+            text_brightness_adjustment: 0,
             show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            right_sidebar_components: super::user::default_right_sidebar_components(),
             show_room_list_sidebar: true,
-            show_settings_on_connect: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
             show_flag_fallback: false,
@@ -114,12 +113,12 @@ pub struct ProfileParams {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
+    pub text_brightness_adjustment: i32,
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
-    pub right_sidebar_screens: Vec<u8>,
+    pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
     pub show_room_list_sidebar: bool,
-    pub show_settings_on_connect: bool,
     pub keep_composer_focused: bool,
     pub start_with_music_muted: bool,
     pub show_flag_fallback: bool,
@@ -180,9 +179,10 @@ impl Profile {
 
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
-    /// enable_background_color/show_dashboard_header/show_right_sidebar/
-    /// right_sidebar_mode/right_sidebar_screens/
-    /// show_room_list_sidebar/show_settings_on_connect/keep_composer_focused/
+    /// enable_background_color/text_brightness_adjustment/
+    /// show_dashboard_header/show_right_sidebar/
+    /// right_sidebar_mode/right_sidebar_components/
+    /// show_room_list_sidebar/keep_composer_focused/
     /// start_with_music_muted/show_flag_fallback into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
     /// unrelated keys (ignored_user_ids) are preserved.
@@ -195,9 +195,17 @@ impl Profile {
                 .map(Uuid::to_string)
                 .collect::<Vec<_>>(),
         )?;
-        let right_sidebar_screens_json = serde_json::to_value(normalize_right_sidebar_screens(
-            &params.right_sidebar_screens,
-        ))?;
+        let right_sidebar_components_json = serde_json::to_value(
+            normalize_right_sidebar_components(&params.right_sidebar_components)
+                .into_iter()
+                .map(|setting| {
+                    serde_json::json!({
+                        "key": setting.component.as_str(),
+                        "enabled": setting.enabled,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
         let cooldown = params.notify_cooldown_mins.max(0);
         let bio = params.bio.trim().to_string();
         let country = params
@@ -254,13 +262,13 @@ impl Profile {
                          'notify_cooldown_mins', $7::int,
                          'theme_id', $8::text,
                          'enable_background_color', $9::bool,
-                         'notify_format', $10::text,
-                         'show_dashboard_header', $11::bool,
-                         'show_right_sidebar', $12::bool,
-                         'right_sidebar_mode', $13::text,
-                         'right_sidebar_screens', $14::jsonb,
-                         'show_room_list_sidebar', $15::bool,
-                         'show_settings_on_connect', $16::bool,
+                         'text_brightness_adjustment', $10::int,
+                         'notify_format', $11::text,
+                         'show_dashboard_header', $12::bool,
+                         'show_right_sidebar', $13::bool,
+                         'right_sidebar_mode', $14::text,
+                         'right_sidebar_components', $15::jsonb,
+                         'show_room_list_sidebar', $16::bool,
                          'favorite_room_ids', $17::jsonb,
                          'ide', $18::text,
                          'terminal', $19::text,
@@ -284,13 +292,13 @@ impl Profile {
                     &cooldown,
                     &theme_id,
                     &params.enable_background_color,
+                    &normalize_text_brightness_adjustment(params.text_brightness_adjustment),
                     &notify_format,
                     &params.show_dashboard_header,
                     &params.show_right_sidebar,
                     &params.right_sidebar_mode.as_str(),
-                    &right_sidebar_screens_json,
+                    &right_sidebar_components_json,
                     &params.show_room_list_sidebar,
-                    &params.show_settings_on_connect,
                     &favorite_room_ids_json,
                     &ide,
                     &terminal,
@@ -325,12 +333,12 @@ impl Profile {
             notify_format: extract_notify_format(&user.settings),
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
+            text_brightness_adjustment: extract_text_brightness_adjustment(&user.settings),
             show_dashboard_header: extract_show_dashboard_header(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),
             right_sidebar_mode: extract_right_sidebar_mode(&user.settings),
-            right_sidebar_screens: extract_right_sidebar_screens(&user.settings),
+            right_sidebar_components: extract_right_sidebar_components(&user.settings),
             show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
-            show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
             keep_composer_focused: extract_keep_composer_focused(&user.settings),
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
             show_flag_fallback: extract_show_flag_fallback(&user.settings),
@@ -338,16 +346,6 @@ impl Profile {
             birthday: extract_birthday(&user.settings),
         }
     }
-}
-
-fn normalize_right_sidebar_screens(screens: &[u8]) -> Vec<u8> {
-    let mut seen = BTreeSet::new();
-    for screen in screens {
-        if (1..=RIGHT_SIDEBAR_SCREEN_COUNT).contains(screen) {
-            seen.insert(*screen);
-        }
-    }
-    seen.into_iter().collect()
 }
 
 fn normalize_profile_text(value: Option<&str>) -> Option<String> {

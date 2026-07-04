@@ -155,33 +155,6 @@ impl ShopState {
         &self.snapshot.active_room_effects
     }
 
-    pub fn active_bumped_join_room_ids(&self) -> Vec<Uuid> {
-        let mut rooms = self
-            .snapshot
-            .active_room_effects
-            .iter()
-            .filter_map(|(room_id, effects)| {
-                let first = effects.first()?;
-                effects
-                    .iter()
-                    .any(|effect| effect.effect_kind == "room_bump")
-                    .then_some(first)
-                    .filter(|effect| {
-                        effect.room_kind == "topic"
-                            && effect.room_visibility == "public"
-                            && !effect.room_permanent
-                            && effect
-                                .room_slug
-                                .as_deref()
-                                .is_some_and(|slug| !slug.is_empty())
-                    })
-                    .map(|effect| (effect.room_slug.clone().unwrap_or_default(), *room_id))
-            })
-            .collect::<Vec<_>>();
-        rooms.sort_by(|(a, _), (b, _)| a.cmp(b));
-        rooms.into_iter().map(|(_, room_id)| room_id).collect()
-    }
-
     pub fn bot_username_color_active(&self) -> bool {
         self.snapshot.bot_username_color_active
             && self

@@ -1,11 +1,10 @@
 use crate::app::input::{MouseButton, MouseEventKind, ParsedInput, sanitize_paste_markers};
 use crate::app::state::App;
-use late_core::models::user::RightSidebarMode;
 
 use super::gem::GemKey;
 use super::state::{
     AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, IrcTokenFocus, LinkAccountEnterCodeFocus,
-    LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN, Tab, USERNAME_MAX_LEN,
+    LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN, Tab, TweakRow, USERNAME_MAX_LEN,
 };
 use crate::app::common::textarea_input::{
     EditOutcome, handle_multiline_edit, handle_single_line_edit,
@@ -28,8 +27,8 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.settings_modal_state.right_sidebar_custom_open() {
-        handle_right_sidebar_custom_input(app, event);
+    if app.settings_modal_state.right_sidebar_components_open() {
+        handle_right_sidebar_components_input(app, event);
         return;
     }
 
@@ -121,9 +120,8 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_row(-1),
         ParsedInput::Arrow(b'C') => app.settings_modal_state.cycle_setting(true),
         ParsedInput::Arrow(b'D') => app.settings_modal_state.cycle_setting(false),
-        ParsedInput::Byte(b' ') => activate_selected_row(app, false),
-        ParsedInput::Byte(b'\r') => activate_selected_row(app, true),
-        ParsedInput::Char('e') | ParsedInput::Char('E') => activate_selected_row(app, true),
+        ParsedInput::Byte(b' ') | ParsedInput::Byte(b'\r') => activate_selected_row(app),
+        ParsedInput::Char('e') | ParsedInput::Char('E') => activate_selected_row(app),
         _ => {}
     }
 }
@@ -172,8 +170,8 @@ fn handle_feeds_tab_input(app: &mut App, event: ParsedInput) {
 }
 
 /// Tweaks tab: a list of fine-grained behavior toggles plus the gem easter
-/// egg. `j`/`k`/arrows move between rows, `Enter`/`Space`/`←`/`→` flip the
-/// selected toggle, `h`/`l` feed the gem, and a left-click on the gem
+/// egg. `j`/`k`/arrows move between rows, `Enter`/`Space` flip the selected
+/// toggle, `←`/`→` cycle enum-like rows, `h`/`l` feed the gem, and a left-click on the gem
 /// footprint counts as a gem interaction.
 fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
     match event {
@@ -184,10 +182,18 @@ fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
         | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_tweak_row(-1),
-        ParsedInput::Byte(b'\r')
-        | ParsedInput::Byte(b' ')
-        | ParsedInput::Arrow(b'C')
-        | ParsedInput::Arrow(b'D') => app.settings_modal_state.toggle_selected_tweak(),
+        // Enter on the Right sidebar row opens the panel editor; everywhere
+        // else (and Space / ← / →) it just flips the selected toggle.
+        ParsedInput::Byte(b'\r') | ParsedInput::Char('e' | 'E')
+            if app.settings_modal_state.selected_tweak_row() == TweakRow::RightSidebar =>
+        {
+            app.settings_modal_state.open_right_sidebar_components();
+        }
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => {
+            app.settings_modal_state.toggle_selected_tweak()
+        }
+        ParsedInput::Arrow(b'C') => app.settings_modal_state.cycle_selected_tweak(true),
+        ParsedInput::Arrow(b'D') => app.settings_modal_state.cycle_selected_tweak(false),
         ParsedInput::Byte(b'h') | ParsedInput::Char('h') => {
             app.settings_modal_state.gem_mut().handle_key(GemKey::H);
         }
@@ -320,7 +326,7 @@ fn is_close_event(event: &ParsedInput) -> bool {
     )
 }
 
-fn activate_selected_row(app: &mut App, open_custom_sidebar: bool) {
+fn activate_selected_row(app: &mut App) {
     match app.settings_modal_state.selected_row() {
         Row::Username => app.settings_modal_state.start_username_edit(),
         Row::Birthday | Row::Ide | Row::Terminal | Row::Os | Row::Langs => {
@@ -331,43 +337,42 @@ fn activate_selected_row(app: &mut App, open_custom_sidebar: bool) {
             }
         }
         Row::Theme
-        | Row::BackgroundColor
-        | Row::RoomListSidebar
-        | Row::LoungeInfo
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents
         | Row::Bell
         | Row::Cooldown
         | Row::NotifyFormat => app.settings_modal_state.cycle_setting(true),
-        Row::RightSidebar => {
-            if open_custom_sidebar
-                && app.settings_modal_state.draft().right_sidebar_mode == RightSidebarMode::Custom
-            {
-                app.settings_modal_state.open_right_sidebar_custom();
-            } else {
-                app.settings_modal_state.cycle_setting(true);
-            }
-        }
         Row::Country => app.settings_modal_state.open_picker(PickerKind::Country),
         Row::Timezone => app.settings_modal_state.open_picker(PickerKind::Timezone),
     }
 }
 
-fn handle_right_sidebar_custom_input(app: &mut App, event: ParsedInput) {
+fn handle_right_sidebar_components_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
-            app.settings_modal_state.close_right_sidebar_custom();
+            app.settings_modal_state.close_right_sidebar_components();
         }
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B') => app.settings_modal_state.move_right_sidebar_custom(1),
+        | ParsedInput::Arrow(b'B') => app
+            .settings_modal_state
+            .move_right_sidebar_components_cursor(1),
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_right_sidebar_custom(-1),
-        ParsedInput::Byte(b' ' | b'\r') | ParsedInput::Char('e' | 'E') => app
+        | ParsedInput::Arrow(b'A') => app
             .settings_modal_state
-            .toggle_right_sidebar_custom_screen(),
+            .move_right_sidebar_components_cursor(-1),
+        // [ / ] reorder the selected panel up / down.
+        ParsedInput::Byte(b'[') | ParsedInput::Char('[') => {
+            app.settings_modal_state.move_right_sidebar_component(-1)
+        }
+        ParsedInput::Byte(b']') | ParsedInput::Char(']') => {
+            app.settings_modal_state.move_right_sidebar_component(1)
+        }
+        ParsedInput::Byte(b' ' | b'\r') | ParsedInput::Char('e' | 'E') => {
+            app.settings_modal_state.toggle_right_sidebar_component()
+        }
         _ => {}
     }
 }
@@ -433,11 +438,9 @@ fn handle_link_account_dialog_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x05) => state.link_account_cursor_end(),
         ParsedInput::Home => state.link_account_cursor_home(),
         ParsedInput::End => state.link_account_cursor_end(),
-        ParsedInput::Byte(0x7F) => state.link_account_backspace(),
+        ParsedInput::Byte(0x7F | 0x08) => state.link_account_backspace(),
         ParsedInput::Delete => state.link_account_delete_right(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
-            state.link_account_delete_word_left()
-        }
+        ParsedInput::CtrlBackspace => state.link_account_delete_word_left(),
         ParsedInput::CtrlDelete => state.link_account_delete_word_right(),
         ParsedInput::Arrow(b'C') => state.link_account_cursor_right(),
         ParsedInput::Arrow(b'D') => state.link_account_cursor_left(),
@@ -479,11 +482,9 @@ fn handle_delete_account_dialog_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x05) => state.delete_account_cursor_end(),
         ParsedInput::Home => state.delete_account_cursor_home(),
         ParsedInput::End => state.delete_account_cursor_end(),
-        ParsedInput::Byte(0x7F) => state.delete_account_backspace(),
+        ParsedInput::Byte(0x7F | 0x08) => state.delete_account_backspace(),
         ParsedInput::Delete => state.delete_account_delete_right(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
-            state.delete_account_delete_word_left()
-        }
+        ParsedInput::CtrlBackspace => state.delete_account_delete_word_left(),
         ParsedInput::CtrlDelete => state.delete_account_delete_word_right(),
         ParsedInput::Arrow(b'C') => state.delete_account_cursor_right(),
         ParsedInput::Arrow(b'D') => state.delete_account_cursor_left(),

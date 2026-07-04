@@ -40,11 +40,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
             update_autocomplete(app);
         }
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => submit(app),
-        ParsedInput::Byte(0x7F) => {
+        ParsedInput::Byte(0x7F | 0x08) => {
             app.mod_modal_state.input(key_input(Key::Backspace));
             update_autocomplete(app);
         }
-        ParsedInput::Byte(0x08) | ParsedInput::CtrlBackspace => {
+        ParsedInput::CtrlBackspace => {
             app.mod_modal_state.input(ctrl_input('w'));
             update_autocomplete(app);
         }

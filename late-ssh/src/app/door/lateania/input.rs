@@ -12,7 +12,8 @@
 //     buys the selected beast and x feeds/tends the one you have. n opens the
 //     housing ledger (buy a deed at the clerk, furnish a home you own from inside).
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
-//     w/s move the cursor, x sells (inventory).
+//     w/s move the cursor, x sells (inventory). List panels auto-scroll to
+//     follow the cursor; [ / ] scroll the cursor-less text panels.
 //   - Esc leaves the world for the Lateania landing page.
 //
 // A full typed command prompt needs an input-capture mode; deferred.
@@ -161,7 +162,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'k' | b'K' => {
-            // Titles: a selectable list — choose which one to display.
+            // Titles: a selectable list; choose which one to display.
             state.toggle_panel(Panel::Titles);
             InputAction::Handled
         }
@@ -255,6 +256,16 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         }
         b'z' | b'Z' => {
             state.flee();
+            InputAction::Handled
+        }
+        // Manual scroll for cursor-less text panels (character/abilities/quests).
+        // List panels auto-follow their cursor, so these are no-ops there.
+        b'[' => {
+            state.scroll_text_up();
+            InputAction::Handled
+        }
+        b']' => {
+            state.scroll_text_down();
             InputAction::Handled
         }
         _ => InputAction::Ignored,

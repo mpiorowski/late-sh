@@ -19,12 +19,17 @@ use late_core::{
     },
 };
 use rand_core::{OsRng, RngCore};
-use ratatui::layout::Rect;
+use ratatui::{
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
+use crate::app::common::theme;
 
 use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
@@ -39,7 +44,7 @@ use super::{
     discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
-    svc::{ChatEvent, ChatService, ChatSnapshot},
+    svc::{ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, RoomMemberListItem},
     ui_text::{NewsPayload, parse_news_payload},
     work,
 };
@@ -187,7 +192,6 @@ pub(crate) enum VoiceCommand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
-    BumpedJoin(Uuid),
     Feeds,
     News,
     Notifications,
@@ -248,7 +252,6 @@ impl RoomSection {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SelectedRoomSlotState {
     pub selected_room_id: Option<Uuid>,
-    pub selected_bumped_join_room_id: Option<Uuid>,
     pub feeds_selected: bool,
     pub news_selected: bool,
     pub notifications_selected: bool,
@@ -266,17 +269,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
-                && selected.selected_bumped_join_room_id.is_none()
                 && selected.selected_room_id == Some(room_id)
-        }
-        RoomSlot::BumpedJoin(room_id) => {
-            !selected.feeds_selected
-                && !selected.news_selected
-                && !selected.notifications_selected
-                && !selected.discover_selected
-                && !selected.showcase_selected
-                && !selected.work_selected
-                && selected.selected_bumped_join_room_id == Some(room_id)
         }
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
@@ -294,7 +287,6 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
-        || selected.selected_bumped_join_room_id.is_some()
 }
 
 fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
@@ -315,9 +307,6 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.work_selected {
         return Some(RoomSlot::Work);
-    }
-    if let Some(room_id) = state.selected_bumped_join_room_id {
-        return Some(RoomSlot::BumpedJoin(room_id));
     }
     state.selected_room_id.map(RoomSlot::Room)
 }
@@ -384,6 +373,7 @@ pub struct ChatState {
     image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
+    pub(crate) room_unread_markers: HashMap<Uuid, Option<DateTime<Utc>>>,
     pending_read_rooms: HashSet<Uuid>,
     pending_read_flush: PendingReadCursorFlush,
     visible_room_id: Option<Uuid>,
@@ -392,8 +382,6 @@ pub struct ChatState {
     refresh_room_id: Option<Uuid>,
     loading_tail_rooms: HashSet<Uuid>,
     pub(crate) selected_room_id: Option<Uuid>,
-    pub(crate) selected_bumped_join_room_id: Option<Uuid>,
-    active_bumped_join_room_ids: Vec<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
     pub(crate) composing: bool,
@@ -583,6 +571,7 @@ impl ChatState {
             image_modal_capacity: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
+            room_unread_markers: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             pending_read_flush: PendingReadCursorFlush::default(),
             visible_room_id: None,
@@ -591,8 +580,6 @@ impl ChatState {
             refresh_room_id: None,
             loading_tail_rooms: HashSet::new(),
             selected_room_id: None,
-            selected_bumped_join_room_id: None,
-            active_bumped_join_room_ids: Vec::new(),
             room_jump_active: false,
             composer: new_chat_textarea(),
             composing: false,
@@ -999,7 +986,6 @@ impl ChatState {
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
-            || self.selected_bumped_join_room_id.is_some()
         {
             return None;
         }
@@ -1077,7 +1063,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_room_id = Some(room_id);
         self.selected_message_id = Some(message_id);
         self.highlighted_message_id = Some(message_id);
@@ -1428,7 +1413,6 @@ impl ChatState {
     fn selected_slot_state(&self) -> SelectedRoomSlotState {
         SelectedRoomSlotState {
             selected_room_id: self.selected_room_id,
-            selected_bumped_join_room_id: self.selected_bumped_join_room_id,
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
             notifications_selected: self.notifications_selected,
@@ -1486,7 +1470,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
 
         if self.selected_room_id.is_none() {
             self.selected_room_id = self
@@ -1521,28 +1504,6 @@ impl ChatState {
         &self.favorite_room_ids
     }
 
-    pub(crate) fn set_active_bumped_join_room_ids(&mut self, room_ids: Vec<Uuid>) -> bool {
-        if self.active_bumped_join_room_ids == room_ids {
-            return false;
-        }
-
-        self.active_bumped_join_room_ids = room_ids;
-        if let Some(selected_room_id) = self.selected_bumped_join_room_id
-            && !self.active_bumped_join_room_ids.contains(&selected_room_id)
-        {
-            self.selected_bumped_join_room_id = None;
-            if self.selected_room_id.is_none()
-                && let Some(slot) = self
-                    .visual_order()
-                    .into_iter()
-                    .find(|slot| !matches!(slot, RoomSlot::BumpedJoin(_)))
-            {
-                self.select_room_slot(slot);
-            }
-        }
-        true
-    }
-
     pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
         if self.feeds_selected
             || self.news_selected
@@ -1564,13 +1525,7 @@ impl ChatState {
     /// Order matches the cozy rail exactly: favorites, core/mentions/news/rss,
     /// channels, updates, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        let mut order = self
-            .active_bumped_join_room_ids
-            .iter()
-            .copied()
-            .map(RoomSlot::BumpedJoin)
-            .collect::<Vec<_>>();
-        order.extend(visual_order_for_rooms(RoomVisualOrderInput {
+        visual_order_for_rooms(RoomVisualOrderInput {
             rooms: &self.rooms,
             user_id: self.user_id,
             usernames: &self.usernames,
@@ -1579,8 +1534,8 @@ impl ChatState {
             feeds_available: self.feeds.has_feeds(),
             favorite_room_ids: &self.favorite_room_ids,
             collapsed_sections: &self.collapsed_sections,
-        }));
-        order
+            ignored_user_ids: &self.ignored_user_ids,
+        })
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -1635,25 +1590,6 @@ impl ChatState {
                 self.select_work();
                 changed
             }
-            RoomSlot::BumpedJoin(next_id) => {
-                let changed = self.feeds_selected
-                    || self.news_selected
-                    || self.notifications_selected
-                    || self.discover_selected
-                    || self.showcase_selected
-                    || self.work_selected
-                    || self.selected_bumped_join_room_id != Some(next_id)
-                    || self.selected_room_id.is_some();
-                self.feeds_selected = false;
-                self.news_selected = false;
-                self.notifications_selected = false;
-                self.discover_selected = false;
-                self.showcase_selected = false;
-                self.work_selected = false;
-                self.selected_room_id = None;
-                self.selected_bumped_join_room_id = Some(next_id);
-                changed
-            }
             RoomSlot::Room(next_id) => {
                 if !self
                     .rooms
@@ -1675,7 +1611,6 @@ impl ChatState {
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
-                self.selected_bumped_join_room_id = None;
                 self.selected_room_id = Some(next_id);
                 if !changed {
                     self.mark_room_read(next_id);
@@ -1726,8 +1661,6 @@ impl ChatState {
             RoomSlot::Work
         } else if self.news_selected {
             RoomSlot::News
-        } else if let Some(room_id) = self.selected_bumped_join_room_id {
-            RoomSlot::BumpedJoin(room_id)
         } else {
             self.selected_room_id
                 .map(RoomSlot::Room)
@@ -1804,6 +1737,13 @@ impl ChatState {
             return;
         }
         self.overlay = Some(Overlay::new(title, lines));
+    }
+
+    fn open_members_overlay(&mut self, title: &str, members: Vec<RoomMemberListItem>) {
+        self.overlay = Some(Overlay::styled(
+            title,
+            format_member_overlay_lines(&members, self.active_users.as_ref()),
+        ));
     }
 
     fn reaction_owner_lines(&self, owners: &[ChatMessageReactionOwners]) -> Vec<String> {
@@ -2131,6 +2071,22 @@ impl ChatState {
             return None;
         }
 
+        if let Some(parsed) = parse_gift_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                GiftParse::Invalid => {
+                    return Some(Banner::error("Usage: /gift @user <amount>"));
+                }
+                GiftParse::Gift { username, amount } => {
+                    self.service
+                        .gift_chips_task(self.user_id, username.clone(), amount);
+                    return Some(Banner::success(&format!(
+                        "Sending {amount} chips to @{username}..."
+                    )));
+                }
+            }
+        }
+
         if body.trim() == "/list" {
             self.clear_composer_after_submit();
             self.service.list_public_rooms_task(self.user_id);
@@ -2309,6 +2265,31 @@ impl ChatState {
                     room_id,
                     room_slug: self.room_slug(room_id),
                     body: art,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
+        }
+
+        if let Some(parsed) = parse_me_command(&body) {
+            let Some(action_body) = parsed else {
+                self.clear_composer_after_submit();
+                return Some(Banner::error("Usage: /me <action>"));
+            };
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Send actions from inside a room"));
+            };
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: action_body,
                     reply_to_message_id: None,
                     request_id,
                     is_admin: self.is_admin,
@@ -2885,7 +2866,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.feeds.list();
@@ -2900,7 +2880,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.news.list_articles();
@@ -2919,7 +2898,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.notifications.list();
@@ -2934,7 +2912,6 @@ impl ChatState {
         self.news_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.discover.start_loading();
@@ -2949,7 +2926,6 @@ impl ChatState {
         self.notifications_selected = false;
         self.news_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.showcase.list();
@@ -2964,7 +2940,6 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
@@ -2976,16 +2951,6 @@ impl ChatState {
         self.service
             .join_public_room_task(self.user_id, item.room_id, item.slug.clone());
         Some(Banner::success(&format!("Joining #{}...", item.slug)))
-    }
-
-    pub fn join_bumped_public_room(&mut self, room_id: Uuid, slug: String) -> Banner {
-        self.service
-            .join_public_room_task(self.user_id, room_id, slug.clone());
-        Banner::success(&format!("Joining #{slug}..."))
-    }
-
-    pub fn selected_bumped_join_room_id(&self) -> Option<Uuid> {
-        self.selected_bumped_join_room_id
     }
 
     pub fn cursor_visible(&self) -> bool {
@@ -3156,6 +3121,10 @@ impl ChatState {
         &self.friend_user_ids
     }
 
+    pub fn ignored_user_ids(&self) -> &HashSet<Uuid> {
+        &self.ignored_user_ids
+    }
+
     pub fn active_friend_names(&self) -> Vec<String> {
         let Some(active_users) = &self.active_users else {
             return Vec::new();
@@ -3290,12 +3259,9 @@ impl ChatState {
                     }
                     // Desktop notification queueing. target_user_ids is Some for
                     // DM/private rooms, None for public rooms. Don't notify on
-                    // messages we authored ourselves.
-                    let in_dm_room = self
-                        .rooms
-                        .iter()
-                        .any(|(room, _)| room.id == message.room_id && room.kind == "dm");
-                    let ignored_author = !in_dm_room && self.message_is_ignored(&message);
+                    // messages we authored ourselves, or on ignored users
+                    // (including DMs, so ignore silences DMs too).
+                    let ignored_author = self.message_is_ignored(&message);
                     if message.user_id != self.user_id && !ignored_author {
                         let nickname = self
                             .usernames
@@ -3350,6 +3316,7 @@ impl ChatState {
                 ChatEvent::RoomTailLoaded {
                     user_id,
                     room_id,
+                    last_read_at,
                     messages,
                     message_reactions,
                     usernames,
@@ -3373,6 +3340,14 @@ impl ChatState {
                     self.bonsai_glyphs.extend(bonsai_glyphs);
                     self.chat_badges.extend(chat_badges);
                     self.profile_award_badges.extend(profile_award_badges);
+                    if messages.iter().any(|message| {
+                        last_read_at.is_none_or(|read_at| message.created > read_at)
+                            && message.user_id != self.user_id
+                    }) {
+                        self.room_unread_markers.insert(room_id, last_read_at);
+                    } else {
+                        self.room_unread_markers.remove(&room_id);
+                    }
                     self.merge_room_tail(room_id, messages);
                     for (message_id, reactions) in message_reactions {
                         self.message_reactions.insert(message_id, reactions);
@@ -3399,7 +3374,6 @@ impl ChatState {
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
-                    self.selected_bumped_join_room_id = None;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3448,7 +3422,6 @@ impl ChatState {
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
-                    self.selected_bumped_join_room_id = None;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3480,7 +3453,6 @@ impl ChatState {
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
-                    self.selected_bumped_join_room_id = None;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3621,7 +3593,21 @@ impl ChatState {
                     title,
                     members,
                 } if self.user_id == user_id => {
-                    self.open_overlay(&title, members);
+                    self.open_members_overlay(&title, members);
+                }
+                ChatEvent::GiftSucceeded {
+                    user_id,
+                    recipient_username,
+                    amount,
+                    sender_balance,
+                    recipient_balance,
+                } if self.user_id == user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "Gifted {amount} chips to @{recipient_username} ({sender_balance} left, recipient {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GiftFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
                 }
                 ChatEvent::PublicRoomsListed {
                     user_id,
@@ -3753,17 +3739,12 @@ impl ChatState {
     fn push_message(&mut self, message: ChatMessage) {
         let room_id = message.room_id;
         let created = message.created;
-        let Some(in_dm_room) = self
-            .rooms
-            .iter()
-            .find(|(room, _)| room.id == room_id)
-            .map(|(room, _)| room.kind == "dm")
-        else {
+        if !self.rooms.iter().any(|(room, _)| room.id == room_id) {
             return;
-        };
+        }
 
         let is_viewing_room = Some(room_id) == self.visible_room_id;
-        if !in_dm_room && self.message_is_ignored(&message) {
+        if self.message_is_ignored(&message) {
             if is_viewing_room {
                 self.mark_room_read(room_id);
             }
@@ -3825,8 +3806,7 @@ impl ChatState {
     }
 
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
-        let Some((room, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id)
-        else {
+        let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
             return;
         };
 
@@ -3840,15 +3820,11 @@ impl ChatState {
         merged.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
         merged.truncate(500);
 
-        *stored = if room.kind == "dm" {
-            merged
-        } else {
-            let ignored = &self.ignored_user_ids;
-            merged
-                .into_iter()
-                .filter(|message| !ignored.contains(&message.user_id))
-                .collect()
-        };
+        let ignored = &self.ignored_user_ids;
+        *stored = merged
+            .into_iter()
+            .filter(|message| !message_is_ignored_in(ignored, message))
+            .collect();
     }
 
     fn replace_message(&mut self, message: ChatMessage) {
@@ -3883,12 +3859,7 @@ impl ChatState {
                 } else {
                     messages
                 };
-                // DMs: don't filter. Users leave the DM room if they want it gone.
-                let messages = if room.kind == "dm" {
-                    messages
-                } else {
-                    self.filter_messages(messages)
-                };
+                let messages = self.filter_messages(messages);
                 (room, messages)
             })
             .collect()
@@ -3962,21 +3933,28 @@ impl ChatState {
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
-        self.ignored_user_ids.contains(&message.user_id)
+        message_is_ignored_in(&self.ignored_user_ids, message)
     }
 
-    /// Strip already-stored messages from any newly-ignored author.
-    /// DM rooms are exempt -leaving the DM room is the way to dismiss them.
+    /// Strip already-stored messages from any newly-ignored author, including
+    /// DMs and bot replies directed at the newly-ignored user.
     fn refilter_local_messages(&mut self) {
         let ignored = &self.ignored_user_ids;
-        for (room, messages) in &mut self.rooms {
-            if room.kind == "dm" {
-                continue;
-            }
-            messages.retain(|m| !ignored.contains(&m.user_id));
+        for (_, messages) in &mut self.rooms {
+            messages.retain(|m| !message_is_ignored_in(ignored, m));
         }
         self.sync_selection();
     }
+}
+
+/// A message is ignored if its author is ignored, or if it is a bot/automated
+/// reply directed at an ignored user (so an ignored user can't be heard by
+/// proxy through a bot).
+fn message_is_ignored_in(ignored: &HashSet<Uuid>, message: &ChatMessage) -> bool {
+    ignored.contains(&message.user_id)
+        || message
+            .reply_to_user_id
+            .is_some_and(|target| ignored.contains(&target))
 }
 
 fn inline_image_request_candidates(
@@ -4066,6 +4044,7 @@ pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
     pub feeds_available: bool,
     pub favorite_room_ids: &'a [Uuid],
     pub collapsed_sections: &'a HashSet<RoomSection>,
+    pub ignored_user_ids: &'a HashSet<Uuid>,
 }
 
 pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
@@ -4080,6 +4059,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         feeds_available,
         favorite_room_ids,
         collapsed_sections,
+        ignored_user_ids,
     } = input;
 
     let mut order = Vec::new();
@@ -4091,10 +4071,11 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // then only appends to `order` when the section is expanded.
     let favorites_collapsed = collapsed_sections.contains(&RoomSection::Favorites);
     for favorite_id in favorite_room_ids {
-        if rooms
-            .iter()
-            .any(|(room, _)| room.id == *favorite_id && is_chat_list_room(room))
-            && pushed_rooms.insert(*favorite_id)
+        if rooms.iter().any(|(room, _)| {
+            room.id == *favorite_id
+                && is_chat_list_room(room)
+                && !dm_peer_is_ignored(room, user_id, ignored_user_ids)
+        }) && pushed_rooms.insert(*favorite_id)
             && !favorites_collapsed
         {
             order.push(RoomSlot::Room(*favorite_id));
@@ -4120,6 +4101,8 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         if feeds_available {
             order.push(RoomSlot::Feeds);
         }
+        // Discover ("browse rooms") lives at the bottom of Core.
+        order.push(RoomSlot::Discover);
     }
 
     // Channels: all non-DM rooms outside Core, public + private merged.
@@ -4136,8 +4119,14 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
 
     // DMs: unread rooms first, then newest message, then display name.
+    // Hide DMs whose other participant is ignored so an ignored user can't
+    // resurface the DM (and its unread badge) by sending again.
     let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
-    let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
+    let mut dms: Vec<_> = rooms
+        .iter()
+        .filter(|(r, _)| r.kind == "dm")
+        .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
+        .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
             a_room,
@@ -4151,7 +4140,6 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     order.extend(dms.iter().filter_map(|(r, _)| {
         (pushed_rooms.insert(r.id) && !dms_collapsed).then_some(RoomSlot::Room(r.id))
     }));
-    order.push(RoomSlot::Discover);
 
     order
 }
@@ -4185,18 +4173,29 @@ pub(crate) fn room_activity_at(
     room_last_message_at.get(&room_id).cloned().flatten()
 }
 
+/// The other participant in a DM room, from `user_id`'s perspective.
+fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
+    if room.dm_user_a == Some(user_id) {
+        room.dm_user_b
+    } else {
+        room.dm_user_a
+    }
+}
+
+/// Whether `room` is a DM whose other participant is ignored. Such DMs are
+/// hidden from every room-list section (favorites included) so an ignored peer
+/// can't resurface the DM or its unread state by sending again.
+fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
+    room.kind == "dm" && dm_peer_id(room, user_id).is_some_and(|peer| ignored.contains(&peer))
+}
+
 /// Sort key for DMs: resolves the other participant's username.
 fn dm_sort_key(
     room: &ChatRoom,
     user_id: Uuid,
     usernames: &(impl UsernameResolver + ?Sized),
 ) -> String {
-    let other_id = if room.dm_user_a == Some(user_id) {
-        room.dm_user_b
-    } else {
-        room.dm_user_a
-    };
-    other_id
+    dm_peer_id(room, user_id)
         .and_then(|id| usernames.username(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
@@ -4271,6 +4270,97 @@ fn parse_dm_command(input: &str) -> Option<&str> {
         return None;
     }
     Some(username)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GiftParse {
+    Invalid,
+    Gift { username: String, amount: i64 },
+}
+
+pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
+    let rest = input.trim().strip_prefix("/gift")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut parts = rest.split_whitespace();
+    let Some(username) = parts.next() else {
+        return Some(GiftParse::Invalid);
+    };
+    let Some(amount) = parts.next() else {
+        return Some(GiftParse::Invalid);
+    };
+    if parts.next().is_some() {
+        return Some(GiftParse::Invalid);
+    }
+    let username = username.strip_prefix('@').unwrap_or(username).trim();
+    let Ok(amount) = amount.parse::<i64>() else {
+        return Some(GiftParse::Invalid);
+    };
+    if username.is_empty() || amount <= 0 || amount > GIFT_MAX_AMOUNT {
+        return Some(GiftParse::Invalid);
+    }
+    Some(GiftParse::Gift {
+        username: username.to_string(),
+        amount,
+    })
+}
+
+fn parse_me_command(input: &str) -> Option<Option<String>> {
+    let trimmed = input.trim();
+    if trimmed == "/me" {
+        return Some(None);
+    }
+    let rest = trimmed.strip_prefix("/me ")?;
+    Some(super::action::encode_action_body(rest))
+}
+
+fn format_member_overlay_lines(
+    members: &[RoomMemberListItem],
+    active_users: Option<&ActiveUsers>,
+) -> Vec<Line<'static>> {
+    let online_ids = active_users
+        .map(|users| users.lock_recover().keys().copied().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let mut rows = members
+        .iter()
+        .map(|member| {
+            let online = online_ids.contains(&member.user_id);
+            let label = member
+                .username
+                .as_deref()
+                .map(|username| format!("@{username}"))
+                .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(member.user_id)));
+            (online, label.to_ascii_lowercase(), label)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    rows.into_iter()
+        .map(|(online, _, label)| {
+            let (status, status_style, name_style) = if online {
+                (
+                    "[on ]",
+                    Style::default()
+                        .fg(theme::SUCCESS())
+                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::TEXT()),
+                )
+            } else {
+                (
+                    "[off]",
+                    Style::default().fg(theme::TEXT_DIM()),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )
+            };
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(status, status_style),
+                Span::raw(" "),
+                Span::styled(label, name_style),
+            ])
+        })
+        .collect()
 }
 
 /// Parse `/leave` from the composer text.
@@ -4636,8 +4726,7 @@ fn adjacent_composer_room(
         .iter()
         .filter_map(|slot| match slot {
             RoomSlot::Room(room_id) => Some(*room_id),
-            RoomSlot::BumpedJoin(_)
-            | RoomSlot::Feeds
+            RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
             | RoomSlot::Discover
@@ -4968,6 +5057,41 @@ mod tests {
         assert_eq!(global_char_to_line_col(text, 2), (0, 2));
         assert_eq!(global_char_to_line_col(text, 3), (1, 0));
         assert_eq!(global_char_to_line_col(text, 5), (1, 2));
+    }
+
+    #[test]
+    fn parse_gift_command_accepts_at_optional_username() {
+        assert_eq!(
+            parse_gift_command("/gift @alice 500"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+            })
+        );
+        assert_eq!(
+            parse_gift_command("/gift alice 500"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_gift_command_rejects_invalid_amounts_and_junk() {
+        assert_eq!(parse_gift_command("/gift"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gift @a 0"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gift @a -1"), Some(GiftParse::Invalid));
+        assert_eq!(
+            parse_gift_command("/gift @a 1000001"),
+            Some(GiftParse::Invalid)
+        );
+        assert_eq!(parse_gift_command("/gift @a wat"), Some(GiftParse::Invalid));
+        assert_eq!(
+            parse_gift_command("/gift @a 5 extra"),
+            Some(GiftParse::Invalid)
+        );
+        assert_eq!(parse_gift_command("/gifted @a 5"), None);
     }
 
     #[test]
@@ -5568,6 +5692,7 @@ mod tests {
                 feeds_available: true,
                 favorite_room_ids: &[],
                 collapsed_sections: &HashSet::new(),
+                ignored_user_ids: &HashSet::new(),
             }),
             vec![
                 RoomSlot::Room(lounge),
@@ -5575,12 +5700,12 @@ mod tests {
                 RoomSlot::Notifications,
                 RoomSlot::News,
                 RoomSlot::Feeds,
+                RoomSlot::Discover,
                 RoomSlot::Room(public_zeta),
                 RoomSlot::Room(private_beta),
                 RoomSlot::Room(public_alpha),
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
-                RoomSlot::Discover,
             ]
         );
     }
@@ -5631,6 +5756,7 @@ mod tests {
                 feeds_available: false,
                 favorite_room_ids: &[],
                 collapsed_sections: collapsed,
+                ignored_user_ids: &HashSet::new(),
             })
         };
 
@@ -5655,6 +5781,8 @@ mod tests {
         assert!(!co.contains(&RoomSlot::Room(announcements)));
         assert!(!co.contains(&RoomSlot::Notifications));
         assert!(!co.contains(&RoomSlot::News));
+        // Discover now lives at the bottom of Core, so it collapses with it.
+        assert!(!co.contains(&RoomSlot::Discover));
         assert!(co.contains(&RoomSlot::Room(public_alpha)));
 
         // Updates is now hosted by the Directory page, not the Home rail.
@@ -5663,7 +5791,7 @@ mod tests {
         assert!(u.contains(&RoomSlot::News));
         assert!(!u.contains(&RoomSlot::Showcase));
         assert!(!u.contains(&RoomSlot::Work));
-        // Discover is not part of a collapsible section — always present.
+        // Discover lives in Core, which is expanded here, so it stays present.
         assert!(u.contains(&RoomSlot::Discover));
 
         // DMs collapsed: the DM drops out.
@@ -5713,6 +5841,7 @@ mod tests {
             feeds_available: false,
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &HashSet::new(),
         });
         let dm_order: Vec<_> = order
             .into_iter()
@@ -5723,6 +5852,83 @@ mod tests {
             .collect();
 
         assert_eq!(dm_order, vec![dm_bob.id, dm_alice.id]);
+    }
+
+    #[test]
+    fn visual_order_hides_dm_with_ignored_peer() {
+        let me = Uuid::from_u128(1);
+        let alice = Uuid::from_u128(2);
+        let bob = Uuid::from_u128(3);
+        let dm_alice = make_dm(me, alice);
+        let dm_bob = make_dm(me, bob);
+
+        let mut usernames = HashMap::new();
+        usernames.insert(alice, "alice".to_string());
+        usernames.insert(bob, "bob".to_string());
+
+        let rooms = vec![(dm_alice.clone(), Vec::new()), (dm_bob.clone(), Vec::new())];
+        let ignored = HashSet::from([bob]);
+
+        let order = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            favorite_room_ids: &[],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &ignored,
+        });
+
+        assert!(order.contains(&RoomSlot::Room(dm_alice.id)));
+        // The ignored peer's DM must not resurface in the rail.
+        assert!(!order.contains(&RoomSlot::Room(dm_bob.id)));
+
+        // Even when favorited, an ignored peer's DM stays hidden from every
+        // section so it can't be jump-addressable via the favorites path.
+        let favorited = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            favorite_room_ids: &[dm_bob.id],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &ignored,
+        });
+        assert!(!favorited.contains(&RoomSlot::Room(dm_bob.id)));
+    }
+
+    #[test]
+    fn message_is_ignored_in_covers_author_and_reply_target() {
+        let ignored_user = Uuid::from_u128(2);
+        let other = Uuid::from_u128(3);
+        let bot = Uuid::from_u128(4);
+        let ignored = HashSet::from([ignored_user]);
+
+        // Author ignored.
+        let mut by_author = make_msg(Uuid::from_u128(10));
+        by_author.user_id = ignored_user;
+        assert!(message_is_ignored_in(&ignored, &by_author));
+
+        // Bot reply directed at the ignored user.
+        let mut bot_reply = make_msg(Uuid::from_u128(11));
+        bot_reply.user_id = bot;
+        bot_reply.reply_to_user_id = Some(ignored_user);
+        assert!(message_is_ignored_in(&ignored, &bot_reply));
+
+        // Bot reply directed at someone else is kept.
+        let mut other_reply = make_msg(Uuid::from_u128(12));
+        other_reply.user_id = bot;
+        other_reply.reply_to_user_id = Some(other);
+        assert!(!message_is_ignored_in(&ignored, &other_reply));
+
+        // Ordinary message from a non-ignored author is kept.
+        let mut normal = make_msg(Uuid::from_u128(13));
+        normal.user_id = other;
+        assert!(!message_is_ignored_in(&ignored, &normal));
     }
 
     #[test]
@@ -6222,6 +6428,7 @@ mod tests {
             updated: chrono::Utc::now(),
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id: Uuid::from_u128(999),
             user_id: Uuid::from_u128(999),
             body: String::new(),

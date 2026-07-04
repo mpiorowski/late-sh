@@ -198,16 +198,21 @@ impl ChessService {
     pub fn sit_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let seat_joined = {
+            let (seat_joined, deadline) = {
                 let mut state = svc.state.lock().await;
                 let seat_joined = state.sit(user_id);
                 svc.publish(&state);
-                if seat_joined.is_some() {
+                let deadline = if seat_joined.is_some() {
                     state.bump_runtime_revision();
                     svc.persist_runtime_state(&state);
-                }
-                seat_joined
+                    // Seating may arm a paused daily clock once both sides fill.
+                    state.current_deadline()
+                } else {
+                    None
+                };
+                (seat_joined, deadline)
             };
+            svc.schedule_deadline(deadline);
             if seat_joined.is_some() {
                 let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                     room_id: svc.room_id,
@@ -507,6 +512,11 @@ impl SharedState {
             position_history,
         };
         state.restore_active_clock(runtime.active_deadline_at);
+        if state.phase == ChessPhase::Active && state.seats.iter().any(Option::is_none) {
+            state.reset_board();
+            state.phase = ChessPhase::Waiting;
+            state.status_message = "Need both White and Black seated.".to_string();
+        }
         Some(state)
     }
 
@@ -841,6 +851,17 @@ impl SharedState {
             self.active_deadline = None;
             return None;
         }
+        // Active games should always have both seats occupied, but old
+        // persisted runtime state can be inconsistent. Avoid arming a timer
+        // for an empty side.
+        if self
+            .user_for_color(chess_color(self.board.side_to_move()))
+            .is_none()
+        {
+            self.active_started_at = None;
+            self.active_deadline = None;
+            return None;
+        }
         self.deadline_generation = self.deadline_generation.wrapping_add(1);
         self.active_started_at = Some(now);
         let deadline_at = match self.settings.time_control.mode() {
@@ -883,6 +904,10 @@ impl SharedState {
     }
 
     fn finish_timeout(&mut self, loser: ChessColor) -> Option<GameEndEvents> {
+        // A timeout can only be awarded when both seats are occupied.
+        if self.seats.iter().any(Option::is_none) {
+            return None;
+        }
         let winner = loser.other();
         self.finish(ChessGameResult::Timeout { winner });
         self.status_message = format!(
@@ -1202,6 +1227,38 @@ mod tests {
     }
 
     #[test]
+    fn daily_games_use_the_same_both_ready_start_flow() {
+        let white = Uuid::now_v7();
+        let black = Uuid::now_v7();
+        let mut state = SharedState::new(
+            Uuid::now_v7(),
+            ChessTableSettings {
+                time_control: ChessTimeControl::Daily,
+            },
+        );
+
+        assert_eq!(state.sit(white), Some(ChessColor::White.seat_index()));
+        let missing_black = state.start_game(white);
+        assert!(missing_black.deadline.is_none());
+        assert!(!missing_black.changed);
+        assert_eq!(state.phase, ChessPhase::Waiting);
+        assert_eq!(state.status_message, "Need both White and Black seated.");
+
+        assert_eq!(state.sit(black), Some(ChessColor::Black.seat_index()));
+        let first_ready = state.start_game(white);
+        assert!(first_ready.deadline.is_none());
+        assert!(first_ready.changed);
+        assert_eq!(state.phase, ChessPhase::Ready);
+        assert_eq!(state.ready, [true, false]);
+
+        let started = state.start_game(black);
+        assert!(started.deadline.is_some());
+        assert!(started.changed);
+        assert_eq!(state.phase, ChessPhase::Active);
+        assert_eq!(state.ready, [false, false]);
+    }
+
+    #[test]
     fn move_history_labels_use_san_not_coordinate_notation() {
         let white = Uuid::now_v7();
         let black = Uuid::now_v7();
@@ -1264,6 +1321,34 @@ mod tests {
             Some("Nf3")
         );
         assert_eq!(restored.runtime_revision, 1);
+    }
+
+    #[test]
+    fn runtime_state_with_active_missing_seat_restores_to_waiting() {
+        let room_id = Uuid::now_v7();
+        let white = Uuid::now_v7();
+        let mut state = SharedState::new(
+            room_id,
+            ChessTableSettings {
+                time_control: ChessTimeControl::Daily,
+            },
+        );
+        state.seats = [Some(white), None];
+        state.phase = ChessPhase::Active;
+        state.active_deadline = Some(Instant::now() + Duration::from_secs(60));
+
+        let runtime = state.runtime_state();
+        let restored = SharedState::from_runtime_state(room_id, state.settings, &runtime)
+            .expect("runtime state restores");
+
+        assert_eq!(restored.phase, ChessPhase::Waiting);
+        assert_eq!(restored.seats, [Some(white), None]);
+        assert_eq!(
+            format!("{}", restored.board),
+            format!("{}", Board::default())
+        );
+        assert_eq!(restored.status_message, "Need both White and Black seated.");
+        assert!(restored.active_deadline.is_none());
     }
 
     #[test]

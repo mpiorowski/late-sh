@@ -48,35 +48,58 @@ impl Banner {
 pub enum Screen {
     Dashboard,
     Arcade,
+    Games,
     Rooms,
     Lateania,
     Rebels,
+    Nethack,
+    Dopewars,
+    GreenDragon,
     Artboard,
     Pinstar,
+    WorldCup,
+    Clubhouse,
 }
 
 impl Screen {
+    /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
+    /// through World Cup (`7`). The door games (Lateania, Rebels, Nethack,
+    /// Green Dragon) are reached through the Games hub, not the tab bar, so
+    /// they are absent from the cycle; if one is somehow current,
+    /// `next`/`prev` fall back to the hub that owns them.
     pub fn next(self) -> Self {
         match self {
+            Screen::Clubhouse => Screen::Dashboard,
             Screen::Dashboard => Screen::Arcade,
-            Screen::Arcade => Screen::Rooms,
+            Screen::Arcade => Screen::Games,
+            Screen::Games => Screen::Rooms,
             Screen::Rooms => Screen::Artboard,
-            Screen::Artboard => Screen::Lateania,
-            Screen::Lateania => Screen::Rebels,
-            Screen::Rebels => Screen::Pinstar,
-            Screen::Pinstar => Screen::Dashboard,
+            Screen::Artboard => Screen::Pinstar,
+            Screen::Pinstar => Screen::WorldCup,
+            Screen::WorldCup => Screen::Clubhouse,
+            Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dopewars
+            | Screen::GreenDragon => Screen::Games,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Pinstar,
+            Screen::Clubhouse => Screen::WorldCup,
+            Screen::Dashboard => Screen::Clubhouse,
             Screen::Arcade => Screen::Dashboard,
-            Screen::Rooms => Screen::Arcade,
+            Screen::Games => Screen::Arcade,
+            Screen::Rooms => Screen::Games,
             Screen::Artboard => Screen::Rooms,
-            Screen::Lateania => Screen::Artboard,
-            Screen::Rebels => Screen::Lateania,
-            Screen::Pinstar => Screen::Rebels,
+            Screen::Pinstar => Screen::Artboard,
+            Screen::WorldCup => Screen::Pinstar,
+            Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dopewars
+            | Screen::GreenDragon => Screen::Games,
         }
     }
 }
@@ -91,12 +114,18 @@ pub fn format_duration_mmss(duration: Duration) -> String {
 pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     let label = match current {
         Screen::Dashboard => "Dashboard",
+        Screen::Games => "Games",
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
+        Screen::Nethack => "NetHack",
+        Screen::Dopewars => "dopewars",
+        Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "Arcade",
         Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
+        Screen::WorldCup => "World Cup",
+        Screen::Clubhouse => "Clubhouse",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -174,25 +203,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn screen_next_cycles_all_screens() {
+    fn screen_next_cycles_top_level_screens() {
+        assert_eq!(Screen::Clubhouse.next(), Screen::Dashboard);
         assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
-        assert_eq!(Screen::Arcade.next(), Screen::Rooms);
+        assert_eq!(Screen::Arcade.next(), Screen::Games);
+        assert_eq!(Screen::Games.next(), Screen::Rooms);
         assert_eq!(Screen::Rooms.next(), Screen::Artboard);
-        assert_eq!(Screen::Artboard.next(), Screen::Lateania);
-        assert_eq!(Screen::Lateania.next(), Screen::Rebels);
-        assert_eq!(Screen::Rebels.next(), Screen::Pinstar);
-        assert_eq!(Screen::Pinstar.next(), Screen::Dashboard);
+        assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
+        assert_eq!(Screen::Pinstar.next(), Screen::WorldCup);
+        assert_eq!(Screen::WorldCup.next(), Screen::Clubhouse);
     }
 
     #[test]
-    fn screen_prev_cycles_all_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::Pinstar);
+    fn screen_prev_cycles_top_level_screens() {
+        assert_eq!(Screen::Clubhouse.prev(), Screen::WorldCup);
+        assert_eq!(Screen::Dashboard.prev(), Screen::Clubhouse);
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
-        assert_eq!(Screen::Rooms.prev(), Screen::Arcade);
+        assert_eq!(Screen::Games.prev(), Screen::Arcade);
+        assert_eq!(Screen::Rooms.prev(), Screen::Games);
         assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
-        assert_eq!(Screen::Lateania.prev(), Screen::Artboard);
-        assert_eq!(Screen::Rebels.prev(), Screen::Lateania);
-        assert_eq!(Screen::Pinstar.prev(), Screen::Rebels);
+        assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
+        assert_eq!(Screen::WorldCup.prev(), Screen::Pinstar);
+    }
+
+    #[test]
+    fn door_games_are_outside_the_tab_cycle_and_fall_back_to_the_hub() {
+        for door in [
+            Screen::Lateania,
+            Screen::Rebels,
+            Screen::Nethack,
+            Screen::Dopewars,
+            Screen::GreenDragon,
+        ] {
+            assert_eq!(door.next(), Screen::Games);
+            assert_eq!(door.prev(), Screen::Games);
+        }
     }
 
     #[test]

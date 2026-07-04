@@ -123,6 +123,28 @@
         try { return state.player.getVideoData().video_id || null; } catch (e) { return null; }
       }
 
+      // Whether the player is actually playing/buffering right now. After a
+      // mute stopVideo() the player still reports its old video_id, so this is
+      // how we tell "same video already running" (a heartbeat to ignore) apart
+      // from "same video but stopped" (an unmute resume we must reload + seek).
+      function playerIsActive() {
+        if (!state.player || !state.player.getPlayerState) return false;
+        try {
+          const ps = state.player.getPlayerState();
+          return ps === 1 || ps === 3; // playing or buffering
+        } catch (e) { return false; }
+      }
+
+      // Stop the stream while muted so nothing downloads in the background. The
+      // current item stays held; unmuting resumes it (the server re-sends
+      // load_video seeked to the live position).
+      function pauseForMute() {
+        if (state.player && state.player.stopVideo) {
+          try { state.player.stopVideo(); } catch (e) {}
+        }
+        setStatus("muted");
+      }
+
       function applyAudioSettings() {
         if (!state.player) return;
         try {
@@ -151,11 +173,23 @@
         if (!state.player || !state.playerReady || !state.player.loadVideoById) return;
         const switching = state.currentItem && !isSameItem(state.currentItem, item);
         if (switching && state.player.stopVideo) state.player.stopVideo();
-        const alreadyLoaded = !switching && loadedVideoId() === item.videoId;
+        // Only treat the video as "already loaded" (resume with a bare
+        // playVideo) when it's actually playing. After a mute stopVideo() the
+        // player still reports the same video_id but is cued at 0, so a bare
+        // playVideo would start from 0 and ignore startSeconds; we must fall
+        // through to loadVideoById() to reload and seek to the live position.
+        const alreadyLoaded =
+          !switching && loadedVideoId() === item.videoId && playerIsActive();
         state.currentItem = item;
         state.pendingItem = null;
         state.currentItemStarted = false;
         state.autoplayBlocked = false;
+        // While muted, hold the item but don't download or play. Also avoids
+        // YouTube's loadVideoById briefly un-muting on a track change.
+        if (state.userMuted) {
+          pauseForMute();
+          return;
+        }
         applyAudioSettings();
         if (alreadyLoaded && state.player.playVideo) {
           state.player.playVideo();
@@ -220,8 +254,13 @@
               item.startSeconds = state.currentItem.startSeconds;
             }
           }
-          // Heartbeat no-op: same item, same loaded video. Don't restart.
-          if (isSameItem(state.currentItem, item) && loadedVideoId() === item.videoId) {
+          // Heartbeat no-op: same item, same loaded video, still actively
+          // playing. Don't restart. The playerIsActive() guard is what lets an
+          // unmute resume through: after muting we stopVideo()'d, so the player
+          // reports the same video_id but is no longer active, and we fall
+          // through to playItem() to reload at the seeked position.
+          if (isSameItem(state.currentItem, item) && loadedVideoId() === item.videoId
+              && playerIsActive()) {
             return;
           }
           state.pendingItem = item;
@@ -239,12 +278,23 @@
         },
 
         audioSettings: function (payload) {
+          const wasMuted = state.userMuted;
           state.userMuted = !!payload.muted;
           const nextVolume = Number(payload.volume_percent);
           if (Number.isFinite(nextVolume)) {
             state.volumePercent = Math.max(0, Math.min(100, Math.round(nextVolume)));
           }
           applyAudioSettings();
+          if (state.userMuted) {
+            pauseForMute();
+            return;
+          }
+          // Unmuting (muted -> unmuted): the player was stopped, and the server
+          // follows this with a load_video seeked to the live position. Calling
+          // playVideo() here would start the stopped player from 0 and that
+          // seeking load would then be suppressed as a no-op. Let the load_video
+          // do the resume; only nudge playback for non-unmute settings changes.
+          if (wasMuted) return;
           if (state.player && state.player.playVideo && state.sourceMode === "youtube") {
             try { state.player.playVideo(); } catch (e) {}
           }

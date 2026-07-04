@@ -15,6 +15,8 @@ impl App {
     pub fn tick(&mut self) {
         crate::app::input::flush_pending_escape(self);
 
+        self.marquee_tick = self.marquee_tick.saturating_add(1);
+
         if self.show_splash {
             self.splash_ticks = self.splash_ticks.saturating_add(1);
             if self.splash_ticks > 90 {
@@ -30,6 +32,7 @@ impl App {
         }
 
         self.sync_visible_chat_room();
+        self.tick_clubhouse();
 
         // Services
         if let Some(b) = self.chat.tick() {
@@ -122,12 +125,8 @@ impl App {
             && self.settings_modal_state.draft().username.is_empty()
             && !self.profile_state.profile().username.is_empty()
         {
-            if self.profile_state.profile().show_settings_on_connect {
-                self.settings_modal_state
-                    .open_from_profile(self.profile_state.profile());
-            } else {
-                self.show_settings = false;
-            }
+            self.settings_modal_state
+                .open_from_profile(self.profile_state.profile());
         }
 
         for msg in messages {
@@ -270,6 +269,40 @@ impl App {
         }
         if let Some(state) = self.rebels_state.as_mut() {
             state.tick();
+        }
+        if let Some(state) = self.nethack_state.as_mut() {
+            state.tick();
+        }
+        if let Some(state) = self.dopewars_state.as_mut() {
+            state.tick();
+        }
+        if let Some(state) = self.greendragon_state.as_mut() {
+            state.tick();
+        }
+        // Door games are launched from the Games hub, so they return there when
+        // they exit. Rebels flips out of Running the tick its proxy closes;
+        // NetHack does the same but first holds a short input grace (so a dying
+        // player's key-mashing can't fall through), so wait that out first.
+        if self.screen == Screen::Rebels
+            && self.rebels_state.as_ref().is_none_or(|s| !s.is_running())
+        {
+            self.set_screen(Screen::Games);
+        }
+        if self.screen == Screen::Nethack
+            && self
+                .nethack_state
+                .as_ref()
+                .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+        {
+            self.set_screen(Screen::Games);
+        }
+        if self.screen == Screen::Dopewars
+            && self
+                .dopewars_state
+                .as_ref()
+                .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+        {
+            self.set_screen(Screen::Games);
         }
         // Pinstar Browser Actions
         if let Some(action) = self.pinstar_browser.pending_action.take() {
@@ -555,6 +588,13 @@ impl App {
             self.chip_balance = balance;
         }
 
+        // Drunk glow for chat author labels: copy out of the shared lobby
+        // about once a second so renders read owned state, and re-reading
+        // also lets the tint fade as the buzz decays.
+        if self.marquee_tick.is_multiple_of(15) {
+            self.drunk_levels = self.clubhouse.drunk_levels();
+        }
+
         // Leaderboard
         if let Some(rx) = &mut self.leaderboard_rx
             && rx.has_changed().unwrap_or(false)
@@ -593,13 +633,6 @@ impl App {
             let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
-            let active_bumped_join_room_ids = self.shop_state.active_bumped_join_room_ids();
-            if self
-                .chat
-                .set_active_bumped_join_room_ids(active_bumped_join_room_ids)
-            {
-                self.sync_visible_chat_room();
-            }
             self.aquarium_state
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
             self.aquarium_state

@@ -7,6 +7,7 @@ pub mod audio;
 pub mod bonsai;
 pub(crate) mod bonsai_v2;
 pub mod chat;
+pub mod clubhouse;
 pub mod common;
 pub mod dashboard;
 pub(crate) mod directory;
@@ -33,6 +34,7 @@ pub mod state;
 mod tick;
 pub(crate) mod ultimates;
 pub mod voice;
+pub mod worldcup;
 
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;

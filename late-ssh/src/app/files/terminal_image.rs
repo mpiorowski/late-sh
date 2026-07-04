@@ -153,6 +153,11 @@ pub(crate) struct TerminalImageRenderState {
 struct SixelIntent {
     image_modal_msg_id: Option<Uuid>,
     overlay_blocks_sixel: bool,
+    /// Stable per-screen tag (`Screen as u16`). Non-modal Sixel placements
+    /// like the Lateania landing banner appear and vanish on screen/selection
+    /// changes that touch neither flag above, so a screen change is its own
+    /// wipe trigger — otherwise those pixels leak onto the next screen.
+    screen_tag: u16,
 }
 
 impl TerminalImageRenderState {
@@ -167,17 +172,20 @@ impl TerminalImageRenderState {
     /// Sixel pixels are gone.
     ///
     /// Only fires on transitions that actually change what should be
-    /// visible — image modal closed, image swapped, overlay opened — so a
+    /// visible — image modal closed, image swapped, overlay opened, or the
+    /// screen changed out from under a non-modal placement — so a
     /// steady-state image modal does not trigger a wipe + re-emit each
     /// frame.
     pub(crate) fn pre_frame_sixel_wipe_bytes(
         &mut self,
         image_modal_msg_id: Option<Uuid>,
         overlay_blocks_sixel: bool,
+        screen_tag: u16,
     ) -> Vec<u8> {
         let current_intent = SixelIntent {
             image_modal_msg_id,
             overlay_blocks_sixel,
+            screen_tag,
         };
         let was_sixel = self.protocol == Some(TerminalImageProtocol::Sixel);
         if !was_sixel || self.placements.is_empty() {
@@ -189,7 +197,8 @@ impl TerminalImageRenderState {
         let last = self.last_intent;
         let modal_closed_or_swapped = image_modal_msg_id != last.image_modal_msg_id;
         let overlay_state_changed = overlay_blocks_sixel != last.overlay_blocks_sixel;
-        let needs_wipe = modal_closed_or_swapped || overlay_state_changed;
+        let screen_changed = screen_tag != last.screen_tag;
+        let needs_wipe = modal_closed_or_swapped || overlay_state_changed || screen_changed;
         self.last_intent = current_intent;
         if !needs_wipe {
             return Vec::new();
@@ -422,6 +431,15 @@ pub(crate) fn protocol_from_terminal_features(features: &str) -> Option<Terminal
 /// use this to fill in a protocol when nothing better was detected.
 pub(crate) fn protocol_from_device_attributes(attrs: &[u16]) -> Option<TerminalImageProtocol> {
     attrs.contains(&4).then_some(TerminalImageProtocol::Sixel)
+}
+
+/// True when a terminal identity string (TERM, `TERM_PROGRAM`, or the raw
+/// XTVERSION reply) names kitty specifically — not the wider kitty-graphics
+/// family (ghostty, rio, …), which render regional-indicator flags fine. kitty
+/// alone desyncs its cursor from ratatui's cell-width model, so the World Cup
+/// overview drops flags from its rightmost (bracket) column only for it.
+pub(crate) fn identity_is_kitty(value: &str) -> bool {
+    value.to_ascii_lowercase().contains("kitty")
 }
 
 fn protocol_from_identity(value: &str) -> Option<TerminalImageProtocol> {
@@ -798,12 +816,17 @@ mod tests {
         }
     }
 
+    // Tag the seeded "previous frame" screen so tests that should NOT fire a
+    // wipe can hold the screen constant; the screen-change test flips it.
+    const SEED_SCREEN_TAG: u16 = 0;
+
     fn seed_sixel_state(state: &mut TerminalImageRenderState, msg_id: Uuid) {
         state.protocol = Some(TerminalImageProtocol::Sixel);
         state.placements = vec![sixel_placement_key(msg_id, 2, 3, 5, 2)];
         state.last_intent = SixelIntent {
             image_modal_msg_id: Some(msg_id),
             overlay_blocks_sixel: false,
+            screen_tag: SEED_SCREEN_TAG,
         };
     }
 
@@ -812,8 +835,8 @@ mod tests {
         let mut state = TerminalImageRenderState::default();
         let msg = Uuid::new_v4();
         seed_sixel_state(&mut state, msg);
-        // Same modal, no overlay → no wipe, no churn.
-        let out = state.pre_frame_sixel_wipe_bytes(Some(msg), false);
+        // Same modal, no overlay, same screen → no wipe, no churn.
+        let out = state.pre_frame_sixel_wipe_bytes(Some(msg), false, SEED_SCREEN_TAG);
         assert!(out.is_empty());
         assert_eq!(state.placements.len(), 1);
     }
@@ -823,7 +846,7 @@ mod tests {
         let mut state = TerminalImageRenderState::default();
         let msg = Uuid::new_v4();
         seed_sixel_state(&mut state, msg);
-        let out = state.pre_frame_sixel_wipe_bytes(None, false);
+        let out = state.pre_frame_sixel_wipe_bytes(None, false, SEED_SCREEN_TAG);
         assert!(!out.is_empty(), "expected wipe bytes when modal closed");
         // Each wiped row writes a cursor sequence; 2 rows for a 5x2 rect.
         let wipe = String::from_utf8_lossy(&out);
@@ -843,7 +866,7 @@ mod tests {
         let old_msg = Uuid::new_v4();
         let new_msg = Uuid::new_v4();
         seed_sixel_state(&mut state, old_msg);
-        let out = state.pre_frame_sixel_wipe_bytes(Some(new_msg), false);
+        let out = state.pre_frame_sixel_wipe_bytes(Some(new_msg), false, SEED_SCREEN_TAG);
         assert!(!out.is_empty());
         assert!(state.placements.is_empty());
     }
@@ -854,7 +877,7 @@ mod tests {
         let msg = Uuid::new_v4();
         seed_sixel_state(&mut state, msg);
         // Same modal still open, but a foreground overlay (icon picker) opened.
-        let out = state.pre_frame_sixel_wipe_bytes(Some(msg), true);
+        let out = state.pre_frame_sixel_wipe_bytes(Some(msg), true, SEED_SCREEN_TAG);
         assert!(
             !out.is_empty(),
             "expected wipe when overlay opens on top of Sixel"
@@ -862,9 +885,25 @@ mod tests {
     }
 
     #[test]
+    fn pre_frame_wipe_fires_when_screen_changes() {
+        let mut state = TerminalImageRenderState::default();
+        let msg = Uuid::new_v4();
+        seed_sixel_state(&mut state, msg);
+        // No modal/overlay change, but the screen changed out from under a
+        // non-modal Sixel placement (e.g. leaving the Lateania landing banner).
+        // The leftover pixels must be wiped or they leak onto the next screen.
+        let out = state.pre_frame_sixel_wipe_bytes(Some(msg), false, SEED_SCREEN_TAG + 1);
+        assert!(
+            !out.is_empty(),
+            "expected wipe when the screen changes while Sixel was visible"
+        );
+        assert!(state.placements.is_empty());
+    }
+
+    #[test]
     fn pre_frame_wipe_noop_when_no_prior_sixel() {
         let mut state = TerminalImageRenderState::default();
-        let out = state.pre_frame_sixel_wipe_bytes(None, false);
+        let out = state.pre_frame_sixel_wipe_bytes(None, false, SEED_SCREEN_TAG);
         assert!(out.is_empty());
     }
 
@@ -907,6 +946,17 @@ mod tests {
                 protocol_from_identity(value),
                 Some(TerminalImageProtocol::Kitty)
             );
+        }
+    }
+
+    #[test]
+    fn identity_is_kitty_matches_only_kitty() {
+        for value in ["kitty", "xterm-kitty", "kitty(0.32.2)"] {
+            assert!(identity_is_kitty(value), "{value} should be kitty");
+        }
+        // Rest of the kitty-graphics family render flags fine — not kitty.
+        for value in ["ghostty", "xterm-ghostty", "rio", "WarpTerminal", "konsole"] {
+            assert!(!identity_is_kitty(value), "{value} should not be kitty");
         }
     }
 

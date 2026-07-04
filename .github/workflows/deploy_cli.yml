@@ -136,6 +136,20 @@ jobs:
       - name: install_rust_target
         run: rustup target add ${{ matrix.target }}
 
+      - name: stamp_cli_version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.release_tag }}"
+          else
+            tag="${{ github.event.release.tag_name }}"
+          fi
+          test -n "$tag"
+          echo "stamping CLI version: ${tag}"
+          # build.rs reads this and embeds it as the binary version, matching
+          # the VERSION file published by publish_cli for the same tag.
+          echo "LATE_CLI_VERSION=${tag}" >> "$GITHUB_ENV"
+
       - name: cargo_build_cli
         if: matrix.android != true
         run: cargo build --locked --release -p late-cli --bin late --target ${{ matrix.target }}

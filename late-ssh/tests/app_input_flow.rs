@@ -134,18 +134,15 @@ async fn screen_number_keys_switch_between_pages_including_pinstar() {
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"3");
-    wait_for_render_contains(&mut app, " Tables ").await;
+    wait_for_render_contains(&mut app, " Games ").await;
 
     app.handle_input(b"4");
-    wait_for_render_contains(&mut app, "Mode       view").await;
+    wait_for_render_contains(&mut app, " Tables ").await;
 
     app.handle_input(b"5");
-    wait_for_render_contains(&mut app, " Lateania ").await;
+    wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"6");
-    wait_for_render_contains(&mut app, " Rebels ").await;
-
-    app.handle_input(b"7");
     wait_for_render_contains(&mut app, " Directory ").await;
 
     app.handle_input(b"1");
@@ -166,19 +163,22 @@ async fn shift_tab_cycles_screens_backwards() {
     let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
 
     app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, "FIFA World Cup").await;
+
+    app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Directory").await;
-
-    app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Rebels ").await;
-
-    app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Tables ").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Games ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " The Arcade ").await;
@@ -204,19 +204,22 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Games ").await;
+
+    app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Tables ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Lateania ").await;
-
-    app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Rebels ").await;
-
-    app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Directory ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, "FIFA World Cup").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Home ").await;
@@ -394,11 +397,15 @@ async fn question_mark_opens_lateania_guide_on_lateania_screen() {
     let mut app = make_app(test_db.db.clone(), user.id, "lateania-guide-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
 
-    app.handle_input(b"5");
+    // Lateania has no top-level key now: open the Games hub and launch the
+    // selected (default) Lateania card.
+    app.handle_input(b"3");
+    wait_for_render_contains(&mut app, " Games ").await;
+    app.handle_input(b"\r");
     wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Lateania is the persistent BBS-style world.").await;
+    wait_for_render_contains(&mut app, "Lateania is the persistent BBS-style world").await;
 
     let frame = render_plain(&mut app);
     assert!(
@@ -413,7 +420,7 @@ async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
     let user = create_test_user(&test_db.db, "artboard-view-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-view-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
     wait_for_render_contains(&mut app, "Cursor     0,0").await;
 
@@ -430,7 +437,7 @@ async fn artboard_view_mode_click_enters_active_mode_at_clicked_canvas_cell() {
     let user = create_test_user(&test_db.db, "artboard-click-enter-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-click-enter-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
     wait_for_render_contains(&mut app, "Cursor     0,0").await;
 
@@ -445,7 +452,7 @@ async fn artboard_ban_locks_user_in_view_mode() {
     let user = create_test_user(&test_db.db, "artboard-banned-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-banned-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
     app.set_artboard_banned_for_tests(true);
 
@@ -476,7 +483,7 @@ async fn active_artboard_blocks_screen_number_hotkeys_until_escape() {
     let user = create_test_user(&test_db.db, "artboard-active-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-active-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"i");
@@ -507,7 +514,7 @@ async fn active_artboard_ctrl_c_copies_without_quitting() {
     let user = create_test_user(&test_db.db, "artboard-ctrl-c-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-ctrl-c-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"i");
@@ -532,7 +539,7 @@ async fn artboard_help_modal_tab_switches_help_tabs_instead_of_pages() {
     let user = create_test_user(&test_db.db, "artboard-help-tab-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-help-tab-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x10");
@@ -554,7 +561,7 @@ async fn artboard_view_mode_question_mark_opens_local_help() {
     let user = create_test_user(&test_db.db, "artboard-view-help-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-view-help-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"?");
@@ -573,7 +580,7 @@ async fn active_artboard_question_mark_types_into_canvas_instead_of_opening_help
     let user = create_test_user(&test_db.db, "artboard-questionmark-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-questionmark-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
     wait_for_render_contains(&mut app, "Cursor     0,0").await;
 
@@ -814,7 +821,10 @@ async fn chat_room_list_is_mouse_clickable() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    app.handle_input(b"\x1b[<0;5;9M");
+    // Click the #rust row in the sidebar. It sits below the Core section
+    // (lounge, mentions, news, "+ browse rooms") and the Channels header, at
+    // rail row 10 (SGR mouse rows are 1-based).
+    app.handle_input(b"\x1b[<0;5;10M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }
@@ -1223,9 +1233,9 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     wait_for_render_contains(&mut app, "dnd").await;
 
     // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
-    // then dnd (channels section). Press l three times to reach dnd from
-    // lounge.
-    app.handle_input(b"lll");
+    // "+ browse rooms" (Discover, last in Core), then dnd (channels section).
+    // Press l four times to reach dnd from lounge.
+    app.handle_input(b"llll");
     wait_for_render_contains(&mut app, "Home · dnd").await;
 
     app.handle_input(b"i");

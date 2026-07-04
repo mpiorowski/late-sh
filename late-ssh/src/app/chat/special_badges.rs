@@ -12,7 +12,7 @@ const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("kirii.md", &[MODERATOR, ARTIST]),
     ("kirii.exe", &[MODERATOR, ARTIST]),
     ("ricott1", &[DEVELOPER]),
-    ("wranglyph", &[MODERATOR]),
+    ("odd", &[MODERATOR]),
     ("tasmania", &[MODERATOR, DEVELOPER]),
 ];
 
@@ -52,8 +52,8 @@ mod tests {
     }
 
     #[test]
-    fn wranglyph_has_mod_only() {
-        assert_eq!(special_badges("wranglyph"), &[MODERATOR]);
+    fn odd_has_mod_only() {
+        assert_eq!(special_badges("odd"), &[MODERATOR]);
     }
 
     #[test]

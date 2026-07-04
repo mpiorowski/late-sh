@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -635,39 +635,26 @@ fn draw_footer(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
         return;
     }
 
-    let mut spans: Vec<Span> = vec![
-        hint_pair("j/k", "navigate"),
-        Span::raw(" · "),
-        hint_pair("Enter", "join"),
-        Span::raw(" · "),
-        hint_pair("h/l", "filter"),
-        Span::raw(" · "),
-        hint_pair("/", "search"),
-        Span::raw(" · "),
-        hint_pair("n", "new"),
+    // Shared bottom-hint recipe (amber keys, dim labels, faint `·`, one leading
+    // space) so this foot reads the same as the Games hub and Directory footers.
+    let mut hints: Vec<(&str, &str)> = vec![
+        ("j/k", "navigate"),
+        ("Enter", "join"),
+        ("h/l", "filter"),
+        ("/", "search"),
+        ("n", "new"),
     ];
-
     if view.is_admin {
-        spans.push(Span::raw(" · "));
-        spans.push(hint_pair("d", "delete"));
+        hints.push(("d", "delete"));
     }
-
     if view.is_admin || view.is_moderator {
-        spans.push(Span::raw(" · "));
-        spans.push(hint_pair("Esc", "back"));
+        hints.push(("Esc", "back"));
     }
 
     frame.render_widget(
-        Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
+        Paragraph::new(crate::app::common::primitives::hint_line(&hints)),
         area,
     );
-}
-
-fn hint_pair(key: &'static str, label: &'static str) -> Span<'static> {
-    Span::styled(
-        format!("{} {}", key, label),
-        Style::default().fg(theme::TEXT_DIM()),
-    )
 }
 
 fn real_status(status: &str) -> (&'static str, ratatui::style::Color) {

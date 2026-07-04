@@ -2,6 +2,8 @@
 members = [
     "late-cli",
     "late-core",
+    "late-dopewars",
+    "late-nethack",
     "late-ssh",
     "late-web",
 ]

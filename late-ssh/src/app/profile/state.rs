@@ -43,6 +43,10 @@ impl ProfileState {
         &self.profile
     }
 
+    pub fn service(&self) -> &ProfileService {
+        &self.profile_service
+    }
+
     pub fn theme_id(&self) -> &str {
         self.profile
             .theme_id
@@ -168,12 +172,12 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
                 .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         ),
         enable_background_color: profile.enable_background_color,
+        text_brightness_adjustment: profile.text_brightness_adjustment,
         show_dashboard_header: profile.show_dashboard_header,
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
-        right_sidebar_screens: profile.right_sidebar_screens.clone(),
+        right_sidebar_components: profile.right_sidebar_components.clone(),
         show_room_list_sidebar: profile.show_room_list_sidebar,
-        show_settings_on_connect: profile.show_settings_on_connect,
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
         show_flag_fallback: profile.show_flag_fallback,
