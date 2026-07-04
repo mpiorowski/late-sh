@@ -39,6 +39,11 @@ struct GeminiConfig {
     max_output_tokens: u32,
     #[serde(rename = "responseMimeType", skip_serializing_if = "Option::is_none")]
     response_mime_type: Option<String>,
+    /// A JSON schema Gemini must conform the output to. Only honored when no
+    /// tools are attached (grounding and schema enforcement are mutually
+    /// exclusive), which is exactly why the schema path is ungrounded.
+    #[serde(rename = "responseSchema", skip_serializing_if = "Option::is_none")]
+    response_schema: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -145,6 +150,7 @@ impl AiService {
                 temperature: 0.8,
                 max_output_tokens,
                 response_mime_type: None,
+                response_schema: None,
             },
             tools: grounded.then(|| {
                 vec![GeminiTool {
@@ -206,10 +212,74 @@ impl AiService {
                 temperature: 0.8,
                 max_output_tokens: 8192,
                 response_mime_type: Some("application/json".to_string()),
+                response_schema: None,
             },
             tools: Some(vec![GeminiTool {
                 google_search: GeminiGoogleSearch {},
             }]),
+        };
+
+        let res = self.client.post(&url).json(&req).send_traced().await?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            anyhow::bail!("Gemini API error: {} - {}", status, text);
+        }
+
+        let body_text = res.text().await?;
+        tracing::debug!(raw_response = %body_text, "Full Gemini API response");
+        let body: GeminiResponse = serde_json::from_str(&body_text)?;
+        if let Some(candidates) = body.candidates
+            && let Some(first) = candidates.into_iter().next()
+            && let Some(content) = first.content
+            && let Some(parts) = content.parts
+            && let Some(part) = parts.into_iter().next()
+        {
+            return Ok(part.text);
+        }
+
+        Ok(None)
+    }
+
+    /// A JSON reply Gemini must conform to `schema`, ungrounded (no Google
+    /// Search). Because no tool is attached, the schema is hard-enforced, so
+    /// the output is always well-formed JSON matching the shape — no fences, no
+    /// stray quotes, nothing to repair. Use for structured bot decisions that
+    /// answer from their own prompt rather than the live web. The cap is
+    /// generous so a thinking model's reasoning tokens don't crowd out the
+    /// (small) JSON payload.
+    pub async fn generate_json(
+        &self,
+        system_prompt: &str,
+        prompt: &str,
+        schema: serde_json::Value,
+    ) -> Result<Option<String>> {
+        if !self.is_enabled() {
+            return Ok(None);
+        }
+
+        let api_key = self.api_key.as_ref().context("missing api key")?;
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+            self.model, api_key
+        );
+
+        let req = GeminiRequest {
+            system_instruction: Some(GeminiContent {
+                parts: vec![GeminiPart {
+                    text: system_prompt,
+                }],
+            }),
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart { text: prompt }],
+            }],
+            generation_config: GeminiConfig {
+                temperature: 0.8,
+                max_output_tokens: 4096,
+                response_mime_type: Some("application/json".to_string()),
+                response_schema: Some(schema),
+            },
+            tools: None,
         };
 
         let res = self.client.post(&url).json(&req).send_traced().await?;

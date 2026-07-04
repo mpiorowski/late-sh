@@ -13,10 +13,14 @@
 //!   (~8-15s, more expensive). Use ONLY when a reply may need real-world or
 //!   current info: the general **@bot**.
 //! - `generate_json_with_search` — grounded like `generate_reply`, but the
-//!   response is forced to JSON. The **@bartender mention** uses this: one
-//!   call both answers house Q&A (which can spill into web questions) and
-//!   decides drink orders (`pour`/`offer`/`chat` + a priced drink), so the
-//!   reply must come back structured.
+//!   response is JSON. Used by **news processing**, which genuinely needs the
+//!   web. Note: with a tool attached the JSON mime type is only a hint, so the
+//!   output can come back malformed — don't use it where the shape must hold.
+//! - `generate_json` — ungrounded JSON with a hard-enforced `responseSchema`
+//!   (only possible without a tool). The **@bartender mention** uses this: it
+//!   answers house Q&A from the injected app context and decides drink orders
+//!   (`pour`/`offer`/`chat` + a priced drink) as guaranteed well-formed JSON.
+//!   It trades live web lookups for a reply shape that never breaks the parser.
 //! - `generate_short_reply` — ungrounded (no web lookup, so no grounded-call
 //!   latency), cheap. The output cap carries enough headroom for a thinking
 //!   model's reasoning tokens so the visible line isn't sheared off mid-thought.
@@ -796,10 +800,16 @@ impl GhostService {
             bartender.username
         );
 
+        // Ungrounded + schema-enforced: the bartender answers from his persona
+        // and the app context, not the web, so we trade live search for JSON
+        // that Gemini guarantees is well-formed (no parse failures to recover).
         let reply = match tokio::time::timeout(
             BARTENDER_ORDER_TIMEOUT,
-            self.ai_service
-                .generate_json_with_search(&system_prompt, &history_with_prompt),
+            self.ai_service.generate_json(
+                &system_prompt,
+                &history_with_prompt,
+                bartender_order_schema(),
+            ),
         )
         .await
         {
@@ -1400,6 +1410,24 @@ struct BartenderOrderRaw {
     line: Option<String>,
 }
 
+/// The response schema Gemini must conform the bartender's order to. Enforced
+/// server-side (only possible ungrounded), so the reply is always valid JSON in
+/// this exact shape — `action` is one of the three verbs, `line` is always
+/// present, and `drink`/`price` may be null for chat/offer.
+fn bartender_order_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "action": { "type": "string", "enum": ["pour", "offer", "chat"] },
+            "drink": { "type": "string", "nullable": true },
+            "price": { "type": "integer", "nullable": true },
+            "line": { "type": "string" }
+        },
+        "required": ["action", "line"],
+        "propertyOrdering": ["action", "drink", "price", "line"]
+    })
+}
+
 /// Strip a wrapping markdown code fence, which Gemini sometimes adds even in
 /// JSON mode.
 fn strip_code_fence(raw: &str) -> &str {
@@ -1411,14 +1439,88 @@ fn strip_code_fence(raw: &str) -> &str {
     rest.trim().strip_suffix("```").unwrap_or(rest).trim()
 }
 
+/// Pull one `"field": "value"` string out of not-quite-valid JSON by hand,
+/// decoding the common escapes and stopping at the first *unescaped* closing
+/// quote. Tolerant of the model's usual slips — a stray extra quote, junk after
+/// the value, an unbalanced brace — so one of those doesn't nuke the whole
+/// reply. Returns None for a missing field or an explicit `null`.
+fn extract_json_string_field(raw: &str, field: &str) -> Option<String> {
+    let key = format!("\"{field}\"");
+    let after_key = &raw[raw.find(&key)? + key.len()..];
+    let after_colon = after_key.trim_start().strip_prefix(':')?.trim_start();
+    let body = match after_colon.strip_prefix('"') {
+        Some(body) => body,
+        // `null` (or anything not a string) — treat as absent.
+        None => return None,
+    };
+    let mut out = String::new();
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('u') => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        Some(ch) => out.push(ch),
+                        None => out.push_str(&format!("\\u{hex}")),
+                    }
+                }
+                Some(other) => out.push(other),
+                None => break,
+            },
+            '"' => return Some(out),
+            _ => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+/// Pull one `"field": <integer>` out of loose JSON. Returns None if absent,
+/// `null`, or non-numeric.
+fn extract_json_int_field(raw: &str, field: &str) -> Option<i64> {
+    let key = format!("\"{field}\"");
+    let after_key = &raw[raw.find(&key)? + key.len()..];
+    let after_colon = after_key.trim_start().strip_prefix(':')?.trim_start();
+    let digits: String = after_colon
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    digits.parse().ok()
+}
+
+/// Last-ditch recovery when strict parsing rejects the model's JSON: rebuild
+/// the order field by field. `line` is required (no line, nothing to say);
+/// the rest are best-effort.
+fn recover_bartender_order(raw: &str) -> Option<BartenderOrderRaw> {
+    Some(BartenderOrderRaw {
+        action: extract_json_string_field(raw, "action"),
+        drink: extract_json_string_field(raw, "drink"),
+        price: extract_json_int_field(raw, "price"),
+        line: Some(extract_json_string_field(raw, "line")?),
+    })
+}
+
 /// Validate the bartender's raw JSON into an executable decision. The server
 /// is the authority: prices are clamped into range, and a pour the patron
 /// cannot afford (model error — the prompt carries their spendable chips) is
 /// downgraded to an uncharged line rather than attempting a forbidden debit.
 fn parse_bartender_order(raw: &str, spendable: i64, bot_username: &str) -> BartenderDecision {
-    let Ok(order) = serde_json::from_str::<BartenderOrderRaw>(strip_code_fence(raw)) else {
-        tracing::warn!(raw_len = raw.len(), "bartender order json failed to parse");
-        return BartenderDecision::Skip;
+    let cleaned = strip_code_fence(raw);
+    let order = match serde_json::from_str::<BartenderOrderRaw>(cleaned) {
+        Ok(order) => order,
+        Err(_) => match recover_bartender_order(cleaned) {
+            Some(order) => {
+                tracing::warn!(raw_len = raw.len(), "bartender order json repaired after parse failure");
+                order
+            }
+            None => {
+                tracing::warn!(raw_len = raw.len(), "bartender order json failed to parse");
+                return BartenderDecision::Skip;
+            }
+        },
     };
 
     let Some(line) = order.line.as_deref().and_then(|line| {
@@ -1909,6 +2011,46 @@ hey @bot what do you think",
             parse_bartender_order(r#"{"action": "chat", "line": "SKIP"}"#, 900, "bartender"),
             BartenderDecision::Skip
         );
+    }
+
+    #[test]
+    fn parse_bartender_order_recovers_from_stray_trailing_quote() {
+        // The exact shape Gemini produced: a spurious quote line after `line`,
+        // which strict serde rejects outright. Recovery must still surface the
+        // chat line instead of leaving the bartender mute.
+        let raw = "{\n  \"action\": \"chat\",\n  \"drink\": null,\n  \"price\": null,\n  \"line\": \"The top shelf is closed for you tonight, friend. Here is ice water.\"\n\"\n}";
+        assert_eq!(
+            parse_bartender_order(raw, 900, "bartender"),
+            BartenderDecision::Say {
+                line: "The top shelf is closed for you tonight, friend. Here is ice water.".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_bartender_order_recovers_pour_fields_when_json_is_broken() {
+        // A pour with the same trailing-quote corruption: action, drink, and
+        // price all survive the hand-rolled recovery.
+        let raw = "{\"action\": \"pour\", \"drink\": \"Kernel Panic Punch\", \"price\": 250, \"line\": \"one Kernel Panic Punch, 250 chips.\"\"}";
+        assert_eq!(
+            parse_bartender_order(raw, 900, "bartender"),
+            BartenderDecision::Pour {
+                drink: "Kernel Panic Punch".to_string(),
+                price: 250,
+                line: "one Kernel Panic Punch, 250 chips.".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn extract_json_string_field_stops_at_first_unescaped_quote() {
+        let raw = r#"{"line": "he said \"hi\" then left.""#;
+        assert_eq!(
+            extract_json_string_field(raw, "line").as_deref(),
+            Some(r#"he said "hi" then left."#)
+        );
+        assert_eq!(extract_json_string_field(r#"{"drink": null}"#, "drink"), None);
+        assert_eq!(extract_json_string_field(r#"{"a": 1}"#, "line"), None);
     }
 
     #[test]
