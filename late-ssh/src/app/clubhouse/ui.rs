@@ -1013,8 +1013,6 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     "the bartender is waving you over, head northwest to the bar.",
                     text,
                 )),
-                Line::default(),
-                Line::from(Span::styled("Esc skips the tour", dim)),
             ],
         ),
         Tutorial::BarLesson => (
@@ -1086,12 +1084,12 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
         ),
         Tutorial::GoToBar => {
             // A small nudge, pinned bottom-left, out of the walking path.
-            let lines = vec![
-                Line::from(Span::styled("find the glowing bar, northwest", text)),
-                Line::from(Span::styled("Esc skips the tour", dim)),
-            ];
+            let lines = vec![Line::from(Span::styled(
+                "find the glowing bar, northwest",
+                text,
+            ))];
             let width = (34u16).min(inner.width.saturating_sub(2));
-            let height = 4u16.min(inner.height);
+            let height = 3u16.min(inner.height);
             let rect = Rect {
                 x: inner.x + 1,
                 y: inner.y + inner.height.saturating_sub(height),

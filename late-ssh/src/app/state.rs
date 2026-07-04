@@ -242,6 +242,7 @@ pub struct SessionConfig {
     pub ultimate_service: crate::app::ultimates::UltimateService,
     pub initial_ultimate_cooldowns: Vec<late_core::models::ultimate_cooldown::UltimateCooldown>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
+    pub chip_service: crate::app::games::chips::svc::ChipService,
     pub initial_chip_balance: i64,
 
     /// Session / connection
@@ -386,6 +387,8 @@ pub struct App {
     pub(crate) worldcup: crate::app::worldcup::state::State,
     /// Admin-gated clubhouse tavern (page `0`): avatar, crowd, animations.
     pub(crate) clubhouse: crate::app::clubhouse::state::State,
+    /// Chips backend, kept for the clubhouse's on-the-house welcome pour.
+    pub(crate) chip_service: crate::app::games::chips::svc::ChipService,
     /// Staff bot ids from the active-users map, for speech bubbles and the
     /// tutorial's bartender greeting.
     pub(crate) clubhouse_bartender_id: Option<Uuid>,
@@ -1043,6 +1046,7 @@ impl App {
                 config.username.clone(),
                 !config.clubhouse_tutorial_done,
             ),
+            chip_service: config.chip_service,
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,
             drunk_levels: HashMap::new(),
@@ -1882,11 +1886,32 @@ impl App {
         let Some(lounge_id) = self.chat.lounge_room_id() else {
             return;
         };
+        // Reaching the bar is the tutorial's finish line: the welcome round is
+        // on the house, so lock the walkthrough in as done and comp the pour.
+        self.persist_clubhouse_tutorial_done();
         let username = self.profile_state.profile().username.clone();
         let chat_service = self.chat.service.clone();
         let ai_service = self.ai_service.clone();
+        let chip_service = self.chip_service.clone();
+        let lobby = self.clubhouse.lobby_handle();
         let target = self.user_id;
         tokio::spawn(async move {
+            // Comp the welcome drink first so the newcomer is already glowing
+            // when the bartender's line lands. A failed comp is non-fatal: the
+            // greeting still goes out, just without the buzz.
+            match chip_service
+                .grant_free_drink(target, late_core::models::drinks::WELCOME_DRINK_POINTS)
+                .await
+            {
+                Ok(drinks) => {
+                    if let Some(lobby) = lobby {
+                        lobby.record_drink(target, drinks.drunk_points, drinks.last_drink_at);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = ?err, user_id = %target, "welcome drink comp failed");
+                }
+            }
             let body =
                 crate::app::ai::ghost::bartender_tutorial_greeting(ai_service.as_ref(), &username)
                     .await;

@@ -879,6 +879,7 @@ impl russh::server::Handler for ClientHandler {
             ultimate_service: self.state.ultimate_service.clone(),
             initial_ultimate_cooldowns,
             nonogram_library,
+            chip_service: self.state.chip_service.clone(),
             initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),
 

@@ -36,7 +36,7 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
-        drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks},
+        drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks, drunk_level_word},
         game_room::{GameKind, GameRoom},
         user::{User, UserParams},
     },
@@ -1395,17 +1395,6 @@ fn parse_bartender_order(raw: &str, spendable: i64, bot_username: &str) -> Barte
     BartenderDecision::Pour { drink, price, line }
 }
 
-/// The patron's state, phrased for the bartender's prompt.
-fn drunk_level_word(level: u8) -> &'static str {
-    match level {
-        0 => "sober",
-        1 => "tipsy",
-        2 => "buzzed",
-        3 => "sloshed",
-        _ => "wasted",
-    }
-}
-
 fn merge_ghost_settings(existing: &serde_json::Value) -> serde_json::Value {
     match existing.clone() {
         serde_json::Value::Object(mut obj) => {
@@ -1865,14 +1854,6 @@ hey @bot what do you think",
             parse_bartender_order(r#"{"action": "chat", "line": "SKIP"}"#, 900, "bartender"),
             BartenderDecision::Skip
         );
-    }
-
-    #[test]
-    fn drunk_level_words() {
-        assert_eq!(drunk_level_word(0), "sober");
-        assert_eq!(drunk_level_word(1), "tipsy");
-        assert_eq!(drunk_level_word(4), "wasted");
-        assert_eq!(drunk_level_word(9), "wasted");
     }
 
     #[test]

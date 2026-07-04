@@ -472,7 +472,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
-            chip_service,
+            chip_service.clone(),
             db.clone(),
         ),
         rooms_service: RoomsService::new(db.clone()),
@@ -496,6 +496,7 @@ fn make_app_with_chat_service_and_permissions(
         ultimate_service,
         initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
+        chip_service: chip_service.clone(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
         web_url: "http://localhost:3000".to_string(),
@@ -630,7 +631,7 @@ pub fn make_app_with_paired_client(
         ),
         greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
-            chip_service,
+            chip_service.clone(),
             db.clone(),
         ),
         rooms_service: RoomsService::new(db.clone()),
@@ -654,6 +655,7 @@ pub fn make_app_with_paired_client(
         ultimate_service,
         initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
+        chip_service: chip_service.clone(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
         web_url: "http://localhost:3000".to_string(),

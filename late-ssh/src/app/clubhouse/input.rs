@@ -28,9 +28,8 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     if let Some(byte) = event_byte(event) {
-        // A tutorial popup wants Enter before anything else; Esc resolves
-        // through `dispatch_escape` in `app::input`, which owns the
-        // tutorial-skip arm.
+        // A tutorial popup wants Enter before anything else. There is no Esc
+        // skip: the tour only ends by reaching the bartender.
         if matches!(byte, b'\r' | b'\n') && app.clubhouse.tutorial_capturing_keys() {
             if app.clubhouse.tutorial_advance() {
                 app.persist_clubhouse_tutorial_done();

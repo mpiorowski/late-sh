@@ -551,7 +551,12 @@ fn draw_room_glow(frame: &mut Frame, area: Rect) {
     if area.width < 4 || area.height < 2 {
         return;
     }
-    let tick = Utc::now().timestamp_millis().div_euclid(260) as u16;
+    // A warm halo that breathes in from the edges. It only tints the
+    // background of the outer ring, never stamps glyphs, so text (including
+    // the first message) stays fully readable underneath the light.
+    let phase = Utc::now().timestamp_millis().rem_euclid(2600) as f32 / 2600.0;
+    let breath = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
+    let glow = theme::AMBER_GLOW();
     let buf = frame.buffer_mut();
     let max_x = area.right().saturating_sub(1);
     let max_y = area.bottom().saturating_sub(1);
@@ -565,22 +570,26 @@ fn draw_room_glow(frame: &mut Frame, area: Rect) {
             if edge_distance > 1 {
                 continue;
             }
-            if let Some(cell) = buf.cell_mut((x, y))
-                && (edge_distance == 0 || x.wrapping_add(y).wrapping_add(tick) % 5 == 0)
-            {
-                let symbol = if edge_distance == 0 { "·" } else { "░" };
-                cell.set_symbol(symbol).set_fg(theme::AMBER_GLOW());
+            let base = if edge_distance == 0 { 0.30 } else { 0.14 };
+            let strength = base + 0.10 * breath;
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_bg(blend_room_glow(cell.bg, glow, strength));
             }
         }
     }
+}
 
-    let shimmer_count = (u16::min(area.width, area.height).max(3) / 3).clamp(2, 8);
-    for index in 0..shimmer_count {
-        let x = area.x + (tick.wrapping_mul(5).wrapping_add(index * 13) % area.width);
-        let y = area.y + (tick.wrapping_add(index * 7) % area.height);
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_symbol("·").set_fg(theme::AMBER_DIM());
+fn blend_room_glow(base: Color, glow: Color, t: f32) -> Color {
+    let base = match base {
+        Color::Rgb(..) => base,
+        _ => theme::BG_CANVAS(),
+    };
+    match (base, glow) {
+        (Color::Rgb(br, bg, bb), Color::Rgb(gr, gg, gb)) => {
+            let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+            Color::Rgb(mix(br, gr), mix(bg, gg), mix(bb, gb))
         }
+        _ => base,
     }
 }
 
@@ -1372,10 +1381,11 @@ fn ensure_chat_rows_cache(
         let author_tint = ctx
             .drunk_levels
             .get(&msg.user_id)
-            .and_then(|level| theme::DRUNK_LABEL_BG(*level))
-            .map(|bg| AuthorTint {
+            .and_then(|level| theme::DRUNK_LABEL_BG(*level).map(|bg| (*level, bg)))
+            .map(|(level, bg)| AuthorTint {
                 range: author_range,
                 bg,
+                word: late_core::models::drinks::drunk_label_word(level),
             });
 
         let reactions = ctx

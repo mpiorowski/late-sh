@@ -15,15 +15,43 @@ use uuid::Uuid;
 
 /// Bounds on what the bartender may charge for a single pour.
 pub const DRINK_PRICE_MIN: i64 = 100;
-pub const DRINK_PRICE_MAX: i64 = 2_000;
+pub const DRINK_PRICE_MAX: i64 = 1_000;
+/// Buzz comped to a newcomer on their first walk up to the bar. Sized to land
+/// exactly on the first drunk level so the welcome round already glows.
+pub const WELCOME_DRINK_POINTS: i64 = 100;
 /// How fast the buzz wears off, in drunk points (= chips) per hour.
 pub const DRUNK_DECAY_PER_HOUR: i64 = 300;
 /// Hard cap on stored points so one binge can't glow for days. At the decay
 /// rate above a maxed-out patron is fully sober in 20 hours.
 pub const MAX_DRUNK_POINTS: i64 = 6_000;
 
-/// Level thresholds on effective (decayed) points. Level 0 renders nothing.
-const DRUNK_LEVEL_THRESHOLDS: [i64; 4] = [1, 500, 1_000, 2_000];
+/// Level thresholds on effective (decayed) points. Level 0 renders nothing;
+/// level 4 ("fully wasted") lands at 3000, three top-shelf pours deep. Level 1
+/// (the welcome round) glows without a word; the printed drunk label only kicks
+/// in at level 2, i.e. 500 points, so a first sip stays quiet.
+const DRUNK_LEVEL_THRESHOLDS: [i64; 4] = [1, 500, 1_500, 3_000];
+
+/// Lowest level that earns a printed "(word)" label next to the name. Below it,
+/// the glow carries the state on its own.
+pub const DRUNK_LABEL_MIN_LEVEL: u8 = 2;
+
+/// The patron's state as a single word, for the bartender prompt and the
+/// clubhouse name label. Level 0 is sober; 4 is fully wasted.
+pub fn drunk_level_word(level: u8) -> &'static str {
+    match level {
+        0 => "sober",
+        1 => "tipsy",
+        2 => "buzzed",
+        3 => "sloshed",
+        _ => "wasted",
+    }
+}
+
+/// The word shown beside a drinker's name, or `None` when they are too sober
+/// (below [`DRUNK_LABEL_MIN_LEVEL`]) to warrant one.
+pub fn drunk_label_word(level: u8) -> Option<&'static str> {
+    (level >= DRUNK_LABEL_MIN_LEVEL).then(|| drunk_level_word(level))
+}
 
 /// Effective points after `elapsed_seconds` of sobering up.
 pub fn decayed_points(points: i64, elapsed_seconds: i64) -> i64 {
@@ -74,37 +102,68 @@ impl UserDrinks {
         drunk_level(self.effective_points(now))
     }
 
-    /// Record a paid drink: decay the stored buzz to now, add the price, cap,
-    /// and bump the permanent tallies. One statement, so concurrent buys from
-    /// two sessions can't double-count the decay window.
-    pub async fn record_purchase(
+    /// Shared upsert behind [`Self::record_purchase`] and
+    /// [`Self::record_free_pour`]: decay the stored buzz to now, add `buzz`,
+    /// cap, and bump the tallies. `tab` is the chips actually charged (0 for a
+    /// comped pour), tracked apart from `buzz` so a free round lights the glow
+    /// without inflating `lifetime_spent`. One statement, so concurrent buys
+    /// from two sessions can't double-count the decay window. Every numeric
+    /// parameter is cast to bigint so Postgres never infers a `LEAST`/
+    /// `GREATEST` argument as text.
+    async fn record(
         client: &impl GenericClient,
         user_id: Uuid,
-        price: i64,
+        buzz: i64,
+        tab: i64,
     ) -> Result<Self> {
         let row = client
             .query_one(
                 "INSERT INTO user_drinks
                     (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
-                 VALUES ($1, LEAST($2, $4), $2, 1, current_timestamp)
+                 VALUES ($1, LEAST($2::bigint, $5::bigint), $3::bigint, 1, current_timestamp)
                  ON CONFLICT (user_id) DO UPDATE SET
                     drunk_points = LEAST(
                         GREATEST(
                             user_drinks.drunk_points
-                                - (EXTRACT(EPOCH FROM (current_timestamp - user_drinks.last_drink_at))::bigint * $3 / 3600),
+                                - (EXTRACT(EPOCH FROM (current_timestamp - user_drinks.last_drink_at))::bigint * $4::bigint / 3600),
                             0
-                        ) + $2,
-                        $4
+                        ) + $2::bigint,
+                        $5::bigint
                     ),
-                    lifetime_spent = user_drinks.lifetime_spent + $2,
+                    lifetime_spent = user_drinks.lifetime_spent + $3::bigint,
                     drink_count = user_drinks.drink_count + 1,
                     last_drink_at = current_timestamp,
                     updated = current_timestamp
                  RETURNING *",
-                &[&user_id, &price, &DRUNK_DECAY_PER_HOUR, &MAX_DRUNK_POINTS],
+                &[
+                    &user_id,
+                    &buzz,
+                    &tab,
+                    &DRUNK_DECAY_PER_HOUR,
+                    &MAX_DRUNK_POINTS,
+                ],
             )
             .await?;
         Ok(Self::from(row))
+    }
+
+    /// Record a paid drink: `price` chips become both buzz and tab.
+    pub async fn record_purchase(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        price: i64,
+    ) -> Result<Self> {
+        Self::record(client, user_id, price, price).await
+    }
+
+    /// Comp a drink on the house: `points` of buzz with no chips charged, so
+    /// `lifetime_spent` stays put. Backs the tutorial's welcome round.
+    pub async fn record_free_pour(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        points: i64,
+    ) -> Result<Self> {
+        Self::record(client, user_id, points, 0).await
     }
 
     pub async fn find(client: &Client, user_id: Uuid) -> Result<Option<Self>> {
@@ -166,14 +225,26 @@ mod tests {
     fn drunk_level_buckets() {
         assert_eq!(drunk_level(0), 0);
         assert_eq!(drunk_level(1), 1);
-        assert_eq!(drunk_level(100), 1);
+        // The welcome round lands on level 1: a glow, but no printed word yet.
+        assert_eq!(drunk_level(WELCOME_DRINK_POINTS), 1);
         assert_eq!(drunk_level(499), 1);
         assert_eq!(drunk_level(500), 2);
-        assert_eq!(drunk_level(999), 2);
-        assert_eq!(drunk_level(1000), 3);
-        assert_eq!(drunk_level(1999), 3);
-        assert_eq!(drunk_level(2000), 4);
+        assert_eq!(drunk_level(1499), 2);
+        assert_eq!(drunk_level(1500), 3);
+        assert_eq!(drunk_level(2999), 3);
+        assert_eq!(drunk_level(3000), 4);
         assert_eq!(drunk_level(MAX_DRUNK_POINTS), 4);
+    }
+
+    #[test]
+    fn drunk_label_word_starts_at_level_two() {
+        // Below 500 points the glow stands alone; from level 2 up a word prints.
+        assert_eq!(drunk_label_word(0), None);
+        assert_eq!(drunk_label_word(1), None);
+        assert_eq!(drunk_label_word(drunk_level(WELCOME_DRINK_POINTS)), None);
+        assert_eq!(drunk_label_word(2), Some("buzzed"));
+        assert_eq!(drunk_label_word(3), Some("sloshed"));
+        assert_eq!(drunk_label_word(4), Some("wasted"));
     }
 
     #[test]

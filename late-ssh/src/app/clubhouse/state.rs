@@ -56,7 +56,8 @@ struct BannerEntry {
 }
 
 /// The first-visit walkthrough. `Pending` arms it until the screen is first
-/// opened; every step is skippable and `Done` is persisted once.
+/// opened; it ends by walking up to the bartender (no Esc skip, so a stray
+/// keypress can't cut it short), and `Done` is persisted once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tutorial {
     /// Nothing to run (returning user).
@@ -347,6 +348,12 @@ impl State {
         self.user_id
     }
 
+    /// Clone the shared lobby handle, if this session is wired to one. Lets an
+    /// off-thread task (the welcome pour) push a glow update after its DB write.
+    pub fn lobby_handle(&self) -> Option<SharedLobby> {
+        self.lobby.clone()
+    }
+
     /// Current drunk levels from the shared lobby (empty on headless/test
     /// paths). Chat author labels tint from this, so it must not hit the DB.
     pub fn drunk_levels(&self) -> HashMap<Uuid, u8> {
@@ -383,19 +390,7 @@ impl State {
         }
     }
 
-    /// Esc: skip the rest of the walkthrough. Returns true when this ended
-    /// a live tutorial and should be persisted.
-    pub fn tutorial_skip(&mut self) -> bool {
-        match self.tutorial {
-            Tutorial::Welcome | Tutorial::GoToBar | Tutorial::BarLesson | Tutorial::SendOff => {
-                self.tutorial = Tutorial::Done;
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// True while a tutorial popup wants Enter/Esc before anything else.
+    /// True while a tutorial popup wants Enter before anything else.
     pub fn tutorial_capturing_keys(&self) -> bool {
         matches!(self.tutorial, Tutorial::BarLesson | Tutorial::SendOff)
     }
@@ -512,20 +507,6 @@ mod tests {
         assert_eq!(state.tutorial, Tutorial::SendOff);
         assert!(state.tutorial_advance());
         assert_eq!(state.tutorial, Tutorial::Done);
-    }
-
-    #[test]
-    fn tutorial_skip_persists_once() {
-        let mut state = state_with_lobby(true);
-        state.enter_screen();
-        assert!(state.tutorial_skip());
-        assert_eq!(state.tutorial, Tutorial::Done);
-        assert!(!state.tutorial_skip());
-
-        let mut off = state_with_lobby(false);
-        off.enter_screen();
-        assert_eq!(off.tutorial, Tutorial::Off);
-        assert!(!off.tutorial_skip());
     }
 
     const BARTENDER: u128 = 9;

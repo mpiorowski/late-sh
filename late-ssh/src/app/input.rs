@@ -2281,11 +2281,6 @@ fn dispatch_escape(app: &mut App) {
         app.chat.close_overlay();
         return;
     }
-    // Esc during the clubhouse tour skips the rest of it, once.
-    if ctx.screen == Screen::Clubhouse && app.clubhouse.tutorial_skip() {
-        app.persist_clubhouse_tutorial_done();
-        return;
-    }
     if ctx.screen == Screen::Artboard {
         let Some(state) = app.dartboard_state.as_ref() else {
             return;

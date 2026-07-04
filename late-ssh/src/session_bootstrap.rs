@@ -365,6 +365,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         ultimate_service: state.ultimate_service.clone(),
         initial_ultimate_cooldowns,
         nonogram_library: state.nonogram_library.clone(),
+        chip_service: state.chip_service.clone(),
         initial_chip_balance,
         web_url: state.config.web_url.clone(),
         rebels_enabled: state.config.rebels_enabled,

@@ -12,11 +12,27 @@ const NEWS_SEPARATOR: &str = " || ";
 
 /// A background tint painted under the bare username inside the author
 /// header (the tavern drunk glow). `range` is the username's byte range
-/// within the prefix string, so badges and flags stay untinted.
+/// within the prefix string, so badges and flags stay untinted. `word` is the
+/// drunk state printed after the header (e.g. "wasted"), present only once the
+/// drinker is soused enough to earn a label; the glow alone carries lighter
+/// states.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AuthorTint {
     pub range: (usize, usize),
     pub bg: Color,
+    pub word: Option<&'static str>,
+}
+
+/// The trailing ` (word)` span appended after the author header for a drinker
+/// deep enough to warrant a printed label. Faint and italic so it reads as an
+/// aside next to the name, not another badge.
+fn drunk_word_span(word: &str) -> Span<'static> {
+    Span::styled(
+        format!(" ({word})"),
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    )
 }
 
 /// The author header's prefix spans: one span when untinted (byte-identical
@@ -73,6 +89,9 @@ pub(super) fn wrap_message_to_lines(
     if !continuation {
         let mut spans = vec![pad.clone()];
         push_author_prefix_spans(&mut spans, prefix, author_style, author_tint);
+        if let Some(word) = author_tint.and_then(|tint| tint.word) {
+            spans.push(drunk_word_span(word));
+        }
         spans.push(Span::styled(
             format!(" {stamp}"),
             Style::default().fg(theme::TEXT_FAINT()),
@@ -765,6 +784,7 @@ mod tests {
         let tint = AuthorTint {
             range: (4, 9), // "alice" inside "★ alice 🌱" ("★" is 3 bytes)
             bg: Color::Rgb(10, 20, 30),
+            word: None,
         };
         let lines = wrap_message_to_lines(
             "hello",
@@ -804,6 +824,7 @@ mod tests {
         let tint = AuthorTint {
             range: (0, 99),
             bg: Color::Rgb(10, 20, 30),
+            word: None,
         };
         let lines = wrap_message_to_lines(
             "hello",
@@ -818,6 +839,56 @@ mod tests {
         );
         assert_eq!(lines[0].spans.len(), 3);
         assert_eq!(lines[0].spans[1].style.bg, None);
+    }
+
+    #[test]
+    fn wrap_message_prints_drunk_word_between_name_and_stamp() {
+        let tint = AuthorTint {
+            range: (0, 5),
+            bg: Color::Rgb(10, 20, 30),
+            word: Some("wasted"),
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "12:04",
+            "alice",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + tinted-username + " (wasted)" + " 12:04"
+        let header = &lines[0];
+        assert_eq!(header.spans.len(), 4);
+        assert_eq!(header.spans[2].content.as_ref(), " (wasted)");
+        assert!(header.spans[2].style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(header.spans[3].content.as_ref(), " 12:04");
+    }
+
+    #[test]
+    fn wrap_message_omits_drunk_word_when_absent() {
+        // The glow can be present with no word (light buzz): header stays lean.
+        let tint = AuthorTint {
+            range: (0, 5),
+            bg: Color::Rgb(10, 20, 30),
+            word: None,
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "12:04",
+            "alice",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + tinted-username + " 12:04" — no aside.
+        assert_eq!(lines[0].spans.len(), 3);
+        assert_eq!(lines[0].spans[2].content.as_ref(), " 12:04");
     }
 
     #[test]
