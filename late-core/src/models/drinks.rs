@@ -35,6 +35,11 @@ const DRUNK_LEVEL_THRESHOLDS: [i64; 4] = [1, 500, 1_500, 3_000];
 /// the glow carries the state on its own.
 pub const DRUNK_LABEL_MIN_LEVEL: u8 = 2;
 
+/// The top drunk level ("wasted"). The bar keeps pouring the strong stuff right
+/// up to here so a patron can actually climb the ladder; only once they hit it
+/// does the bartender cut them off.
+pub const DRUNK_MAX_LEVEL: u8 = DRUNK_LEVEL_THRESHOLDS.len() as u8;
+
 /// The patron's state as a single word, for the bartender prompt and the
 /// clubhouse name label. Level 0 is sober; 4 is fully wasted.
 pub fn drunk_level_word(level: u8) -> &'static str {

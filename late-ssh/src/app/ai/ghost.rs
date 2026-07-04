@@ -207,7 +207,7 @@ const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Loun
     a plain ale runs about 100 chips, the good stuff climbs from there, and the top shelf runs up near a thousand. \
     You invent the drink and set the price yourself, always a round number that fits the pour. \
     You never pour what a patron cannot afford; you slide them something in their range instead, kindly. \
-    When a patron is clearly wasted you lean toward water and a gentle word before you pour anything stronger. \
+    You keep the good stuff coming while a patron can still hold it; only once someone is truly wasted, barely upright, do you switch them to water and a gentle word instead of anything stronger. \
     You know the house inside out. When someone asks how something works, give a real, correct answer from the app context, \
     phrased like a bartender giving directions: short, concrete, pointing at the right key or page. \
     You listen more than you talk. You remember regulars fondly, notice who has been up too late, and gently suggest water, sleep, or one more song. \
@@ -725,7 +725,7 @@ impl GhostService {
         bartender: BotUser,
         trigger_message: ChatMessage,
     ) -> Result<()> {
-        let (messages, balance, drunk_word) = {
+        let (messages, balance, drunk_level) = {
             let client = self.db.get().await?;
             ChatRoomMember::auto_join_public_rooms(&client, bartender.id).await?;
 
@@ -744,12 +744,20 @@ impl GhostService {
                 .await?
                 .map(|drinks| drinks.level(chrono::Utc::now()))
                 .unwrap_or(0);
-            (messages, chips.balance, drunk_level_word(drunk_level))
+            (messages, chips.balance, drunk_level)
         };
         if messages.is_empty() {
             return Ok(());
         }
         let spendable = (balance - CHIP_FLOOR).max(0);
+        let drunk_word = drunk_level_word(drunk_level);
+        // Cut off only at the very top: below it, pour whatever they order so a
+        // patron can actually drink their way up to wasted.
+        let serving_note = if drunk_level >= late_core::models::drinks::DRUNK_MAX_LEVEL {
+            "they have hit the ceiling — cut them off the hard stuff now, steer them to water, coffee, or a kind no, nothing stronger"
+        } else {
+            "still fine to serve — pour whatever they order, the strong stuff included; do not cut them off or push water yet"
+        };
 
         let (history_str, usernames) = self.build_chat_history(&messages).await?;
         let patron = mention_target_for_user(
@@ -767,7 +775,7 @@ impl GhostService {
             THE PATRON'S TAB:\n\
             - chip balance: {balance}\n\
             - spendable on drinks: {spendable} (house rule: a patron always keeps {floor} chips; you can only pour a price that fits inside spendable)\n\
-            - current state: {drunk_word}\n\n\
+            - current state: {drunk_word} ({serving_note})\n\n\
             Decide ONE action:\n\
             - \"pour\": the patron clearly ordered a drink AND you can price it within their spendable chips. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and write your line handing it over, mentioning the price.\n\
             - \"offer\": the patron ordered but cannot afford it (or asked for more than their spendable). Charge nothing; counter-offer something within their range, with its price, kindly.\n\
