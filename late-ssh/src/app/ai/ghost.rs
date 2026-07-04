@@ -17,7 +17,9 @@
 //!   call both answers house Q&A (which can spill into web questions) and
 //!   decides drink orders (`pour`/`offer`/`chat` + a priced drink), so the
 //!   reply must come back structured.
-//! - `generate_short_reply` — ungrounded, small output cap (~1-2s, cheap).
+//! - `generate_short_reply` — ungrounded (no web lookup, so no grounded-call
+//!   latency), cheap. The output cap carries enough headroom for a thinking
+//!   model's reasoning tokens so the visible line isn't sheared off mid-thought.
 //!   Use for pure in-character banter that never needs a lookup: **@graybeard
 //!   mentions**, both **@dealer** paths (blackjack quips + mentions), and the
 //!   **@bartender tutorial greeting**. The greeting in particular MUST use
@@ -202,7 +204,7 @@ const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Loun
     You pour imaginary drinks with terminal-flavored names (a double SIGTERM neat, a Bash Old Fashioned, \
     a Segfault Sour, warm milk for the juniors, decaf for anyone shipping on a Friday). \
     The welcome pour for a brand-new face is on the house, but after that drinks go on the tab and cost Late Chips: \
-    a plain ale runs about 100 chips, the good stuff climbs from there, and the top shelf touches 2000. \
+    a plain ale runs about 100 chips, the good stuff climbs from there, and the top shelf runs up near a thousand. \
     You invent the drink and set the price yourself, always a round number that fits the pour. \
     You never pour what a patron cannot afford; you slide them something in their range instead, kindly. \
     When a patron is clearly wasted you lean toward water and a gentle word before you pour anything stronger. \
@@ -1259,33 +1261,78 @@ impl GhostService {
     }
 }
 
-/// The clubhouse tutorial's one-shot bartender welcome: one AI-flavored
-/// line in his voice, with a hard scripted fallback so the beat lands
-/// identically on AI-less installs, on errors, and on slow generations.
-/// Whatever comes back always carries the key facts: press `i` to talk,
-/// your words float over your head.
+/// Angles the welcome can take, one picked at random per visit so the greeting
+/// never reads the same twice.
+const GREETING_BEATS: [&str; 8] = [
+    "open with a wry line about how late it is",
+    "ask what they're building or what dragged them in tonight",
+    "make them feel like the newest regular the room's been waiting on",
+    "keep it to one warm, quiet line and let them settle",
+    "riff gently on the rain-outside, jukebox-humming mood",
+    "greet them like you've somehow been expecting them",
+    "note the good seat they just took, and pour before they ask",
+    "lead with a small dry joke, then the drink",
+];
+
+/// Flavor directions for the comped pour, so the on-the-house drink varies
+/// instead of always landing on the same house special.
+const GREETING_POURS: [&str; 8] = [
+    "cold and hoppy",
+    "a warming top-shelf nightcap",
+    "an easy, low-proof cooler",
+    "coffee-forward and dark",
+    "a stiff, stirred classic",
+    "bright and citrusy, served short",
+    "smooth and a little sweet",
+    "something odd off the back shelf",
+];
+
+/// Scripted welcomes for AI-less installs, errors, and slow generations. Still
+/// a small pool so even the fallback has some variety.
+const GREETING_FALLBACKS: [&str; 4] = [
+    "well, look who found the bar. first round's on the house, settle in.",
+    "new face at this hour. pull up a stool; the first pour's on me.",
+    "evening. you took the good seat. first one's always the house's treat.",
+    "there you are. let me slide you something on the house, catch your breath.",
+];
+
+/// The clubhouse tutorial's one-shot bartender welcome: one AI-flavored line in
+/// his voice, comping the newcomer's first drink. A random angle and pour are
+/// seeded in per call (see [`GREETING_BEATS`] / [`GREETING_POURS`]) so no two
+/// welcomes read alike, backed by [`GREETING_FALLBACKS`] when the AI is off,
+/// erroring, or slow. It stays pure flavor now: the "press i to talk" mechanic
+/// is taught by the BarLesson popup that follows.
 pub async fn bartender_tutorial_greeting(ai: Option<&AiService>, username: &str) -> String {
+    let mut rng = TinyRng::seeded();
     let fallback = format!(
-        "@{username} well, look who found the bar. first round's on the house. \
-         press i and say something, it floats right over your head."
+        "@{username} {}",
+        GREETING_FALLBACKS[rng.next_usize(GREETING_FALLBACKS.len())]
     );
     let Some(ai) = ai.filter(|ai| ai.is_enabled()) else {
         return fallback;
     };
 
+    // A fresh angle and pour each visit so the welcome stays interesting.
+    let beat = GREETING_BEATS[rng.next_usize(GREETING_BEATS.len())];
+    let pour = GREETING_POURS[rng.next_usize(GREETING_POURS.len())];
+
     let system_prompt = format!(
         "Your username is: {username}\n\n\
         {persona}\n\n\
         A brand-new patron just walked up to your bar for the very first time, mid house tour. \
-        Welcome them in and slide something across the counter.\n\
-        Your reply MUST tell them to press i to say something, and that their words float over their head in the lounge.\n\
-        Keep it to 1-2 short lines. No markdown. No emoji.\n\
+        Welcome them in and slide their first drink across the counter, on the house.\n\
+        Angle for this one: {beat}.\n\
+        Make the comped pour {pour} — give it a fresh terminal-flavored name; do NOT default to a Bash Old Fashioned.\n\
+        Keep it to 1-2 short lines, all in your voice. No markdown. No emoji.\n\
+        Do not explain the controls or how to chat; just be the bartender.\n\
         NEVER prefix your message with your own username, and do not wrap it in quotes.\n\
         Do NOT output SKIP. Output only the message text.",
         username = BARTENDER_USERNAME,
         persona = BARTENDER_PERSONA,
     );
-    let prompt = format!("The new patron's handle is @{username}. Pour the welcome.");
+    let prompt = format!(
+        "The new patron's handle is @{username}. Pour the welcome — {beat}, and make it {pour}."
+    );
 
     let reply = match tokio::time::timeout(
         BARTENDER_GREETING_TIMEOUT,

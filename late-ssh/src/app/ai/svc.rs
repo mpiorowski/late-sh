@@ -98,16 +98,21 @@ impl AiService {
         self.generate(system_prompt, history, true, 8192).await
     }
 
-    /// A cheap, snappy reply: no Google Search grounding and a small output
-    /// cap. Use for short in-character lines (a tavern welcome, a one-liner)
-    /// where a grounded lookup is pure latency and cost. Returns in ~1-2s
-    /// instead of the ~8-15s a grounded call takes.
+    /// A cheap reply for short in-character lines (a tavern welcome, a
+    /// one-liner): no Google Search grounding, so it skips the ~8-15s a
+    /// grounded lookup costs. The output cap is generous rather than tight —
+    /// on a thinking model the reasoning tokens count against `maxOutputTokens`
+    /// too, and a cap sized only for the visible reply (e.g. 256) gets consumed
+    /// mid-thought and hands back a sentence sheared off partway. The line
+    /// itself stays short (the caller sanitizes it down to a couple of lines);
+    /// the headroom just keeps the model from running out of budget before it
+    /// starts writing.
     pub async fn generate_short_reply(
         &self,
         system_prompt: &str,
         history: &str,
     ) -> Result<Option<String>> {
-        self.generate(system_prompt, history, false, 256).await
+        self.generate(system_prompt, history, false, 2048).await
     }
 
     async fn generate(
