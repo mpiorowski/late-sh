@@ -104,102 +104,417 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
   see CONTEXT.md).
 - `suicide` searching: stock default **off** — correctly absent.
 
-## Phase 1 — the dead realm (`graveyard.php`, `shades.php`, `lib/graveyard/`)
+## Phase 1 — the dead realm (`graveyard.php`, `shades.php`, `lib/graveyard/case_*.php`)
 
-- Soulpoints are the dead player's HP pool; max = `level·5 + 50`; dead
-  atk/def = `10 + round((level−1)·1.5)`.
-- Graveyard fights: `gravefightsperday` 10; graveyard creature pool at player
-  level with `atk = 9+shift+int((level−1)·1.5)`, `def = int(9+shift+(level−1)·1.5)·0.7`
-  (shift −1 under level 5), `hp = level·5+50`; victory pays **favor**
-  (`deathpower`) `e_rand(10+round(level/3), 20+round(level/3))`; defeat ends
-  the day's torments; flee 1/3, escape costs `min(favor, 5+e_rand(0,level))`.
-- Mausoleum: restore soul for `round(10·(max−soul)/max)` favor; at ≥25 favor
-  unlock haunt (PvP, phase 4); at ≥100 favor **resurrection**: −100 favor,
-  immediate new day at −6 turns (spirits "Resurrected").
-- New-day resets while dead only partially (no soulpoint/gravefight refresh on
-  resurrection days).
+Everything below was verified against the upstream source (re-clone
+`jimlunsford/lotgd` if the file needs re-checking). This section is written to
+be implementable without other notes.
+
+- **New `Character` fields** (serde defaults 0): `favor` (upstream
+  `deathpower`, the death-realm currency) and `grave_fights` (daily torment
+  fights, upstream `gravefights`). Both refresh on a *normal* new day
+  (`grave_fights = 10` via `gravefightsperday`, soulpoints `= 50 + 5·level`)
+  but **not** on a resurrection day (upstream skips `playerfights`/
+  `soulpoints`/`gravefights` resets when `resurrection=true`).
+- **While dead**: the graveyard replaces the village as the hub (upstream
+  redirects village→shades when dead, shades→village when alive). All combat
+  buffs are stripped on entry (`strip_all_buffs`). **Soulpoints are the HP
+  pool**: fight setup swaps `hitpoints = soulpoints`, dead-player attack and
+  defense are both `10 + round((level−1)·1.5)` (gear/level irrelevant), and
+  after the fight the remaining pool is written back to soulpoints — damage
+  persists between torment fights. Max soulpoints is always computed
+  `level·5 + 50`, never stored.
+- **Torment fights** (`case_battle_search.php`): gated on `grave_fights > 0`,
+  one spent per search. The foe is a random *graveyard* creature — a separate
+  original-name roster is needed (upstream has a `graveyard=1` creature pool;
+  names ours, a handful is enough). Its stats override the seed row entirely:
+  `shift = -1 if level < 5 else 0`; `atk = 9 + shift + int((level−1)·1.5)`;
+  `def = int(9 + shift + (level−1)·1.5) · 0.7`; `hp = level·5 + 50`;
+  its "exp" is the **favor payout** `e_rand(10+round(level/3),
+  20+round(level/3))` (this is favor, not experience). Victory: `favor +=
+  payout`. Defeat: `grave_fights = 0` (done tormenting today), no further
+  penalty. Flee: 1-in-3 escape; a successful escape costs
+  `min(favor, 5 + e_rand(0, level))` favor; failure continues the fight.
+- **Mausoleum** (`case_enter/restore.php`): "restore soul" heals soulpoints
+  to max for `favortoheal = round(10 · (max − soulpoints) / max)` favor
+  (0..10, scaling with depletion); only offered when below max and
+  affordable.
+- **Favor tiers** (`case_question.php`): at ≥25 favor the haunt option
+  unlocks (25 favor; PvP-only — defer to phase 4, but keep the tier
+  messaging); at ≥100 favor **resurrection** unlocks.
+- **Resurrection** (`case_resurrection.php` + `newday.php`): costs 100 favor
+  and triggers an immediate new day with `spirits = -6` ("Resurrected"
+  label) and `resurrection_turns = -6` (floored at `-(base + ff)`), i.e. the
+  player rises today with 4 + ff turns instead of waiting. Our existing
+  passive path (wait for the next real day, −6 turns) stays as the free
+  alternative. Upstream deducts the 100 favor inside newday; deduct at the
+  moment of resurrection.
+- **Death news hook**: graveyard defeats and resurrections write daily news
+  upstream — no-op until phase 3's news lands, then wire them.
 
 ## Phase 2 — races + titles
 
-- Race chosen at new day (upstream `setrace` gate). Human +`bonus`(2) daily
-  turns; Elf +`1+floor(level/5)` defense; Troll same on attack; Dwarf ×1.2
-  forest gold; goldmine death chance 90% (5% dwarf). All names/villages ours.
-- DK titles (`titles` table, `lib/titles.php`): gendered pairs keyed by
-  dragon-kill threshold, highest `dk ≤ kills` wins, random among ties;
-  re-titled on each kill. Title strings original.
+Sources: `modules/race{human,elf,dwarf,troll}.php`, `lib/newday/setrace.php`,
+`lib/titles.php`, `titleedit.php`. Written to be implementable standalone.
+
+- **Gate order** (upstream `newday.php`): dragon points → race → specialty.
+  Race is a forced one-time choice at the gate, exactly like our
+  `Mode::SpendDragonPoints` (add `Mode::ChooseRace`, armed on load when race
+  is unset). Keep the existing village specialty chooser; optionally fold it
+  into the gate order later. New `Character` field `race` (enum None/4
+  races, serde default None). A phase-3 potion resets race to None so the
+  gate re-arms next day.
+- **Race effects** (all numbers exact; our race/village names original):
+  - *Human-analog*: +2 forest fights per day (`bonus` setting, range 1–3,
+    default **2**). Applied in `roll_new_day` alongside `dragon_ff_bonus`.
+  - *Elf-analog*: +`1 + floor(level/5)` defense (so +1 at 1–4, +2 at 5–9,
+    +3 at 10–14, +4 at 15). Upstream implements this as a permanent
+    `defmod` buff recomputed each newday; a flat add into
+    `Character::defense()` is numerically identical and simpler — do that.
+  - *Troll-analog*: same formula on attack, into `Character::attack()`.
+  - *Dwarf-analog*: forest creature gold ×1.2 (rounded), applied per foe at
+    spawn (upstream `creatureencounter` hook — apply after `buff_foe`, before
+    thrill ×1.1... upstream hook order is buffbadguy→hook, thrill after, so:
+    buff_foe → dwarf ×1.2 → thrill ×1.1).
+  - **Goldmine death chance** (`raceminedeath`, used by the existing
+    goldmine event's cave-in): default **90%** for all races, **5%** for the
+    dwarf-analog. Note: our `events.rs` goldmine currently uses the stock
+    1-in-20-table cave-in; when races land, the cave-in *severity* roll gains
+    the race gate: on a cave-in result, roll `e_rand(1,100) <= chance` for
+    death vs a lucky escape (dwarves almost always escape).
+  - Upstream also gives elf/troll targets the same bonus in PvP
+    (`pvpadjust`) — phase 4 concern, note only.
+  - The dwarf-analog's exclusive mercenary (a bear-type companion: atk 1
+    +2/lvl, def 5 +2/lvl, hp 25 +25/lvl, ability defend, cost 4 gems + 600
+    gold) joins the phase-3 mercenary camp as a race-gated listing.
+- **DK titles** (`titles` table): rows of `(dk_threshold, style_a, style_b)`
+  — upstream stores male/female string pairs; we key them off the phase-3
+  **address style** choice instead (see phase 3 note). Selection: highest
+  `threshold <= dragon_kills`, random among rows sharing that threshold;
+  re-titled on every dragon kill; shown before the name in the stat rail and
+  (later) news. Write ~10–15 original title pairs at thresholds like
+  0/1/2/3/4/5/7/10/15/20. Store `title: String` on `Character` (empty until
+  first assignment at creation with the threshold-0 row).
 
 ## Phase 3 — single-player buildings
 
-- **Stables** (`stables.php`): 3 mounts, gems 6/10/16, +1/+2/+3 daily forest
-  fights, offense buff atkmod 1.2 for 20/40/60 rounds, ⅔ trade-in refund;
-  feeding gated off by default (`allowfeed` 0).
-- **Mercenary camp** (`mercenarycamp.php`, `companions` seed): 2 hires —
-  fighter (573 gold: atk 5+2/lvl, def 1+2/lvl, hp 20+20/lvl, fight) and
-  healer (1000 gold: atk 1+1/lvl, def 5+5/lvl, hp 15+10/lvl, heal 2);
-  stats scale with level at purchase; cap `companionsallowed` 1 (summons
-  bypass via ignorelimit); heal cost `round(ln(level+1)·(missing+10)·1.33)`.
-- **Inn** (`inn.php` + modules):
-  - Room: `round(level·(10+ln(level)))` gold, once/day, logs you out
-    (PvP-attackable there in phase 4).
-  - Barkeep bribes: gems ⇒ 30%/gem success; gold tiers `level·10/50/100` ⇒
-    25% / ≈47.2% / 75% (`(amt/level−10)·(50/90)+25`); paid regardless;
-    unlocks intel + **specialty switch** (keeps skill points).
-  - Cedrik's potions (gems, default 2/dose): +1 charm; +1 permanent max HP;
-    overheal +20 HP; specialty reset; race reset + sickness debuff
-    (atk/def ×0.75, 10 turns, survives newday).
-  - Bard's song: once/day, `e_rand(0,18)` outcome table (turns ±, gold
-    10–50, gems 1, heals ±10/20%, charm ±1).
-  - Drinks + drunkenness: 3 stock drinks (cost/level 10/15/25, drunkenness
-    +33/+50/+50, buffs: atk 1.25×10r / atk 1.1 def 0.9 dmg 1.5×12r /
-    dmg 1.3 shield 1.3×15r); hard-drink limit 3/day; refuse above 66 drunk;
-    hangover −1 turn above 66 at newday; drink names ours.
-  - Violet/Seth flirting: threshold ladder T = 2/4/7/11/14/18 (roll
-    `e_rand(charm,T) ≥ T`), marriage at charm ≥22, failed proposal zeroes
-    the day's turns; marriage upkeep `charm −= e_rand(1, max(1,round(0.85·√kills)))`
-    daily, divorce at 0; married visit: 1/4 rebuff (−1 charm) else buff
-    (defmod 1.2 × 60 rounds) +1 charm.
-- **Outhouse** (forest, once/day): private 5 gold ⇒ wash: 60% refund 3 gold,
-  25% +1 gem; public free ⇒ 60%·⅓ find 3 gold; no-wash 50% lose 1 gold +
-  embarrassing news.
-- **Dark Horse Tavern** (mount-gated in stock; we surface it as the restored
-  `events::Tavern`): dice (keep/reroll ≤3 vs old man AI: keeps on
-  beat-or-6, then beat-or-equal, then final), Five Sixes (5 gold, 5d6,
-  3/4/5 sixes pay 5%/10%/100% of shared jackpot seeded 100 cap 5000,
-  10 plays/day), Stones (6 red + 10 blue drawn in pairs, like/unlike bet,
-  first past 8 wins).
-- **Daily news** (`addnews`): schema (text, day, author), day-paged view,
-  180-day expiry; writers: deaths, dragon kills, master defeats, marriages,
-  jackpots, resurrections.
-- **Healer/creature leftovers**: per-creature win/lose taunt hooks; the few
-  stock creature AI behaviors (e.g. a bandit pickpocketing 20% of carried
-  gold once, 1/8 if gold>200) — ours with original names.
+Sources: `stables.php`, `mercenarycamp.php` + the `companions` installer
+seed, `inn.php` + `lib/inn/*`, `modules/cedrikspotions.php`,
+`modules/sethsong.php`, `modules/drinks.php` + its installer seed,
+`modules/lovers.php` + `modules/lovers/*`, `modules/outhouse.php`,
+`modules/darkhorse.php`, `modules/game_{dice,fivesix,stones}.php`,
+`news.php` + `lib/addnews.php`. Each block below is standalone.
+
+Suggested slice order: **daily news first** (half the buildings write to
+it, and phase 1's death/resurrection hooks are waiting), then stables +
+mercenary camp (small, self-contained), then the inn stack (room → bribes →
+potions → bard → drinks → romance), then outhouse, then the Dark Horse
+games.
+
+**Cross-cutting: the address-style choice.** Upstream keys titles, the
+romance partner, and one bard outcome off a binary `sex` field. Adapt: a
+one-time **address style** choice at character creation (or the newday gate)
+with two flavors; it picks the title column, which of the two original
+romance NPCs is "your partner", and bard outcome 15. Field
+`style: u8`/enum on `Character`, serde default.
+
+**New daily-flag fields on `Character`** (all reset in `roll_new_day`):
+`lodged_today`, `flirted_today`, `heard_bard_today` (count vs 1/day),
+`used_outhouse_today`, `hard_drinks_today`, `fivesix_plays_today`,
+`drunkenness` (0–100, survives the day, see hangover), `mount_rounds_left`.
+
+### Stables
+- 3 mounts (original names), priced in **gems** 6 / 10 / 16 (gold 0):
+  +1 / +2 / +3 daily forest fights (into `roll_new_day` like `ff` points) and
+  an **offense buff, player attack ×1.2**, lasting 20 / 40 / 60 combat
+  rounds per day (`mount_rounds_left` refreshed to the mount's rounds each
+  newday; decrement per fight round while >0; while >0 fold atkmod 1.2 into
+  the round mods).
+- Trade-in when switching or selling: refund `round(cost·2/3)` (gems);
+  affordability check counts the refund. Selling outright pays the same ⅔.
+- Feeding exists upstream but `allowfeed` defaults **0** — skip it.
+- Field: `mount: u8` (0 = none, else mount id).
+
+### Mercenary camp
+- 2 stock hires (original names; the dwarf-analog bear from phase 2 is a
+  third, race-gated):
+  1. fighter — **573 gold**; atk `5 + 2·level`, def `1 + 2·level`,
+     maxhp `20 + 20·level` (level = buyer's level at purchase); ability
+     **fight**.
+  2. field-medic — **1000 gold**; atk `1 + 1·level`, def `5 + 5·level`,
+     maxhp `15 + 10·level`; ability **heal 2** (restores up to 2 HP to the
+     most-wounded ally each round: player first, then other companions,
+     then itself — and still makes its fight roll).
+- Cap: **1 hired companion** (`companionsallowed` 1). Summons (Bonecall)
+  bypass the cap (upstream `ignorelimit`) — mark summoned companions with a
+  flag so the cap query skips them. No duplicate same-name hires.
+- Healing companions (here and at the healer):
+  `round(ln(level+1) · (missing + 10) · 1.33)` gold → full HP.
+- Companion struct gains `ability` (Fight/Defend/Heal(n)/Magic(n)) and
+  `ignore_limit: bool`; hired ones persist across days; all wiped on dragon
+  kill (already true) and on death (already true).
+- Upstream extras we defer: `defend` (one companion soaks/round) and
+  `magic` (self-HP-cost nuke) have no stock sellers — implement the enum
+  arms when content needs them.
+
+### The Inn (hub with sub-rooms)
+- **Room for the night**: `round(level · (10 + ln(level)))` gold, once/day
+  (`lodged_today`). Paying from the bank adds a **5% fee**. Effect today:
+  flavor + the flag; in phase 4 the flag makes you PvP-attackable at the inn
+  (upstream stores it as the "bodyguard level" too — flavor only in 1.1.2).
+- **Barkeep bribes** (paid whether or not they work):
+  gems: 1/2/3 gems ⇒ success `amount · 30`% (30/60/90).
+  gold: `level·10` / `level·50` / `level·100` ⇒ success
+  `(amount/level − 10) · (50/90) + 25`% = 25% / ≈47.2% / 75%.
+  Success unlocks (per visit): the **specialty switch** (change path, keep
+  `specialty_skill`; uses recompute) and, in phase 4, the who's-lodged PvP
+  list. Single-player: switch is the real prize.
+- **Potion shelf** (upstream Cedrik's; our NPC name original; all prices in
+  gems, default **2 gems per dose**; buying N gems of one potion gives
+  `floor(N/2)` doses, remainder refunded; the reset potions cap at 1 dose):
+  1. charm potion: +1 charm per dose.
+  2. vitality potion: **permanent** +1 max HP (and +1 current) per dose;
+     survives dragon kills (upstream `carrydk` default 1) — implement as its
+     own counter field folded into `max_hitpoints()`, NOT `dragon_hp_bonus`
+     (which feeds investment scaling; upstream's extra-HP pref does feed
+     `buffbadguy`'s `(maxhp − level·10)/5` term, so DO include it in
+     `investment_points()`).
+  3. mending draught: heal to max, then **overheal +20** per dose (the
+     healer's normalize clips it free later — correct, upstream matches).
+  4. forgetting potion: specialty → None (village chooser re-arms). 1 dose.
+  5. transmutation potion: race → None (gate re-arms next day) + a sickness
+     debuff: atk ×0.75, def ×0.75, **10 rounds, survives the new day**
+     (needs a small persisted-debuff slot on `Character`). 1 dose.
+- **The bard** (once/day): roll `e_rand(0,18)`:
+  0: +2 turns · 1,2,6,13,14: +1 turn · 3: +`e_rand(10,50)` gold ·
+  4: HP = `round(max(maxhp,hp) · 1.2)` (overheal) · 5,11: −1 turn (floor 0) ·
+  7: −`round(maxhp·0.10)` HP (min 1) · 8: −5 gold (if ≥5) · 9: +1 gem ·
+  10,12: heal to max · 15: +1 charm (style A) / +1 turn (style B) ·
+  16: −`round(maxhp·0.20)` HP (min 1) · 17: nothing · 18: −1 charm.
+- **Drinks + drunkenness** (3 originals mirroring the stock stat lines;
+  cost = `level × costperlevel`; refuse service above **66** drunkenness;
+  max **3 hard drinks**/day):
+  1. house brew — 10/level, +33 drunk, not hard; roll 2:1 →
+     2/3: heal `+10% of maxhp`; 1/3: +1 turn; buff: atk ×1.25, 10 rounds.
+  2. fire shot — 15/level, +50 drunk, **hard**; ALWAYS both: HP
+     `e_rand(−5,15)` and turns `e_rand(−1,1)`; buff: atk ×1.1, def ×0.9,
+     dmg ×1.5, 12 rounds.
+  3. black cask — 25/level, +50 drunk, **hard**; roll 2:3 →
+     2/5: HP `e_rand(−10,−1)`; 3/5: turns `e_rand(1,3)`; buff: dmg ×1.3,
+     damage-shield ×1.3, 15 rounds.
+  HP results floor at 1; turn results floor at 0. **Hangover**: at newday,
+  if drunkenness > 66 ⇒ −1 turn; drunkenness and hard-drink count reset to 0
+  daily either way; death/dragon kill also zero drunkenness. **Sober-up**:
+  each forest search multiplies drunkenness by 0.9 (round). Comment slurring
+  is a phase-4 chat concern.
+- **Romance** (upstream lovers module; our two partner NPCs original; partner
+  = opposite style). Once/day (`flirted_today`). Flirt ladder — success test
+  `e_rand(charm, T) >= T` (guaranteed at charm ≥ T):
+  | # | T | success | failure |
+  |---|---|---------|---------|
+  | 1 | 2 | +1 charm (cap 4) | — |
+  | 2 | 4 | +1 charm (cap 7) | — |
+  | 3 | 7 | +1 charm (cap 11) | — |
+  | 4 | 11 | +1 charm (cap 14) | −1 charm (if 0<charm<10) |
+  | 5 | 14 | +1 charm (cap 18) | −1 charm (if 0<charm<13) |
+  | 6 | 18 | −2 turns, +1 charm (cap 25), news item | −1 charm |
+  | 7 (marry) | needs charm ≥ 22 | married (sentinel field), news | **turns = 0** |
+  Married daily visit replaces flirting: 1/4 chance of a rebuff (−1 charm),
+  else +1 charm and a "protection" buff (def ×1.2, 60 rounds). Marriage
+  upkeep at newday: `charm −= e_rand(1, max(1, round(0.85·sqrt(dragon_kills))))`;
+  at charm ≤ 0 ⇒ divorced (field cleared, charm 0, news). Field
+  `married: bool` (upstream uses an INT_MAX sentinel in `marriedto`).
+- **Non-flirt chat**: pure flavor bucketed by `charm + e_rand(-1,1)` in
+  threes (≤0, 1–3, …, 16–18, 19+) — write 8 original lines per partner.
+
+### The outhouse (forest nav, once/day)
+- Private stall: pay **5 gold** (needs the gold) → wash-up: 60% refund **3
+  gold**, then independent 25% **+1 gem**; also sober-up ×0.9.
+- Free public stall → wash-up: 60% then 1/3 → find 3 gold.
+- Skipping the wash: 50% → lose 1 gold (if any) + an embarrassing news item.
+
+### Dark Horse Tavern (restore `events::Tavern` into a full room)
+Menu: the old gambler (3 games), the tavern board + enemy intel (phase 4),
+leave. Games:
+- **Dice**: bet any amount ≤ gold. Player rolls d6, may keep or reroll
+  (max 3 rolls). Old man then rolls with this AI: roll 1 — keep if
+  `r > player || r == 6`; roll 2 — keep if `r >= player`; roll 3 — forced.
+  Outcome: his final > yours ⇒ lose the bet; equal ⇒ push; less ⇒ win.
+- **Five Sixes**: pay **5 gold** (10 plays/day). The pot: starts **100**,
+  +5 per play, hard cap **5000** (overflow pocketed by the house). Roll
+  5d6 and count sixes: 5 ⇒ win the whole pot (pot resets to 100, news);
+  4 ⇒ win `round(pot·0.10)` (deducted, news); 3 ⇒ `round(pot·0.05)`
+  (deducted, news); ≤2 ⇒ nothing. **The pot is one shared global** — needs
+  a tiny shared store (a one-row table or kv; LISTEN/NOTIFY not needed, read
+  fresh per play inside a transaction).
+- **Stones**: a bag of **6 red + 10 blue**. Bet on "matched pair" or "mixed
+  pair". Draw two random stones at a time: same color ⇒ +2 stones to the
+  matched pile, different ⇒ +2 to the mixed pile. Stop when the bag empties
+  or either pile exceeds 8. Bigger pile wins the bet; tie is a push.
+
+### Daily news
+- New table `greendragon_news` (migration + `late-core` model, patterned on
+  the existing `greendragon_characters`): id, utc day-number, `user_id`
+  (nullable — null = system), body text, created_at. **180-day expiry** on
+  read or via the daily rollover.
+- Village menu entry "Daily News": day-paged view (today, yesterday, …),
+  newest first, ~50/page.
+- Writers (all landed phases): forest/graveyard deaths (with an original
+  taunt line pool), dragon kills (+ new title), master-challenge losses,
+  marriages/divorces/the ladder-6 flirt, Five Sixes wins, resurrections,
+  outhouse embarrassment. Phase 4 adds PvP and bounty items.
+- Write an original **taunt pool** (~15 lines) picked at random for death
+  news — upstream has a `taunts` table; strings must be ours.
+
+### Creature flavor leftovers
+- Optional per-creature win/lose one-liners (ours) shown on kill/death.
+- One bandit-type creature AI: if the player carries > 200 gold, 1/8 chance
+  (once per fight) it steals 20% of carried gold, announced in the round
+  log. Data-driven flag on the creature name entry.
 
 ## Phase 4 — multiplayer
 
-- **`commentary` primitive first**: table (section, author, ≤200-char body,
-  timestamp); 5 posts/section/day (limit/2 of display 10; inn 10, gypsy/clan
-  12); `:`/`::`/`/me` emotes; double-post + empty-post rejection; newest-first
-  pagination. Sections: village square, inn, gardens, darkhorse, shade,
-  veterans, clan-{id}, waiting.
-- **Roster + Hall of Fame**: online = active ≤15 min; HoF rankings
-  (dragonkills, gold fuzzed ±5%, gems, charm, maxhp, resurrections,
-  best dragon-kill speed), "your rank" percentile.
-- **Gypsy**: `level·20` gold to read/post the shade section.
-- **PvP** (`pvp.php`): targets level −1..+2, offline >15 min, alive,
-  not immune (age ≤5 days, 0 kills, 0 pk, exp <1500); 3 fights/day;
-  win: `round(10·lvl·ln(max(1,gold)))` gold + 10% victim exp (±10%/level
-  diff), victim −5% exp and dies; attacker death: −15% exp, gold 0.
-  Level-15 winners get nothing ("prowess"). Inn sleepers attackable.
-- **Dag bounties**: place 50–200 gold/level (min/max), +10% fee, ≤5/day,
-  target level ≥3 and not immune, active after `e_rand(0,4h)` delay; paid on
-  PvP win (own bounties forfeit); cleared on target dragon kill.
-- **Haunt** (graveyard, ≥25 favor): −25 favor, roll `e_rand(0,yourLvl) >
-  e_rand(0,targetLvl)` ⇒ target loses 1 turn next newday.
-- **Mail**: 50-message inbox (unread), 1024-char bodies, 14-day retention.
-- **Clans**: found 10000 gold + 15 gems, name 5–50 / tag 2–5 chars, ranks
-  0/10/20/30/31, hall commentary + shared waiting area, officer app mail.
-- **Gardens**: commentary room, 0% event chance (stock default).
-- Wire the dragon-kill chip/activity reward (`svc` holds the deps).
+Sources: `lib/commentary.php`, `pvp.php` + `lib/pvplist.php`, `news.php`,
+`mail.php` + `lib/mail/*` + `lib/systemmail.php`, `gypsy.php`, `clan.php` +
+`lib/clan/*`, `modules/dag.php`, `hof.php`, `list.php`, `gardens.php`,
+`rock.php`, `lib/graveyard/case_haunt*.php`. Written to be implementable
+standalone. **Architectural shift**: `svc` grows a read-other-characters /
+online-roster path; the session stays authoritative for its own character
+(see CONTEXT.md "toward multiplayer" notes).
+
+### Build order
+commentary → roster/HoF → gypsy → PvP → bounties + haunt → clans → mail(?)
+→ gardens/veterans' rock. Commentary first: five other features are just
+sections of it.
+
+### `commentary` — the one chat primitive
+- Table `greendragon_commentary`: id, `section` (varchar ~24), `user_id`
+  (nullable; null = system line), `body` (≤200 chars), created_at. Index on
+  (section, id desc).
+- **Post limit**: a user may post while their posts-today-in-section <
+  `round(display_limit / 2)` — display limit is per room: village square 10
+  (⇒5/day), inn 20 (⇒10), shade + clan hall 25 (⇒12), others 10. Show
+  "N left" when under 3 remain.
+- **Emotes**: leading `:`, `::`, or `/me` renders as third-person action
+  (name + rest) instead of quoted speech. Strip newlines; insert a space
+  into any 45+-char unbroken run; cap color/format codes if applicable.
+- **Rejections**: empty (or bare `:`/`::`/`/me`) posts; exact double-post
+  (same author + identical body as the section's newest row).
+- **Display**: newest-first, paginated by the room's display limit;
+  per-room talk verb (square "says", shade "projects", clan hall custom).
+- Rooms landing with it: village square, the inn, the Dark Horse board, the
+  shade channel (gypsy/graveyard), the veterans' rock (dragon-killers only,
+  `dragon_kills > 0` gate), gardens, clan halls + one shared clan waiting
+  room.
+
+### Online roster + Hall of Fame
+- **Online** = a live SSH session in the door OR activity within 15 min
+  (upstream `laston > now − 900s && loggedin`). Add `last_played_at` to the
+  save row (or a svc-held session registry — one process today, but prod
+  may go multi-replica: prefer the DB column).
+- **Warrior list**: all characters, 50/page, name search; columns: alive /
+  level / name / location-ish / online marker.
+- **Hall of Fame** rankings (each with most/least toggle where noted, all
+  tie-broken level → experience → id):
+  dragon kills (columns: kills, days-into-run `dragon_age`, best
+  `best_dragon_age`) · richest (gold + bank, **fuzzed ±5%** with a fresh
+  random each render so exact wealth never leaks) · gems · charm
+  (most/least) · max HP (most/least) · resurrections · fastest kill
+  (ascending `best_dragon_age`, only kills > 0).
+  Needs new fields: `dragon_age` (days since run start — increment on
+  newday, reset on dragon kill), `best_dragon_age` (min at kill time),
+  `resurrections` (count, increment on any revive).
+- "Your rank": `count(stat >= yours) / total` as a percentile line.
+
+### Gypsy tent (village)
+- Pay `level · 20` gold per visit → read/post the **shade** commentary
+  section (the dead post there free from the graveyard). That's the whole
+  building; menu: pay / leave.
+
+### PvP ("slay other warriors", village + inn)
+- **Target list**: level in `[mine−1, mine+2]`, alive, not currently
+  in-session (online-blocked), not attacked in the last 10 min
+  (`pvpflag`/`pvptimeout` 600s), not immune. **Immunity**: character age
+  ≤ 5 days AND 0 dragon kills AND never PK'd AND experience < 1500.
+  Attacking anyone while you yourself are immune permanently clears your
+  immunity (`pk = 1`).
+- **3 attacks/day** (`player_fights`, reset at newday; not reset on
+  resurrection days).
+- Combat: the existing engine vs the target's stored stats (level, gear,
+  boons, race bonus per phase 2); target is passive (their buffs
+  suspended); companions flagged `allowinpvp` only (stock hires: no).
+- **You win**: gold `round(10 · targetLevel · ln(max(1, targetGold)))`
+  where targetGold = min(gold at engage, gold now); exp gain
+  `round(0.10 · targetExp)` adjusted `±10%` per level difference
+  (`round(exp·(1 + 0.1·(tLvl−mLvl)) − exp)` bonus). **A level-15 attacker
+  gets zero gold and exp** ("no prowess" rule). Victim: −5% experience,
+  loses the taken gold (bank absorbs any shortfall), `alive = false`
+  (graveyard next login), gets a system mail/notification with details;
+  news item (field-kill or inn-break-in variant).
+- **You lose** (their sleeping body bests you): you die — gold 0,
+  **−15% experience**, graveyard; the defender gains `round(0.10 · yourExp)`
+  and the same gold formula on you (zeroed if the defender is level 15);
+  mail + news both ways.
+- **Inn attacks**: `lodged_today` characters are listed at the inn
+  (unlocked via the barkeep bribe) and attackable there even if otherwise
+  location-filtered.
+- Snapshot `pvpflag` timestamp on engage so a target can't be dogpiled
+  within the 10-min window.
+
+### Bounty board (upstream Dag; our NPC name original; sits in the inn)
+- Table `greendragon_bounties`: id, target user_id, setter user_id
+  (nullable = system), amount, set_at (**activation delay**: becomes
+  visible/collectable `e_rand(0, 14400)` seconds after placement), status
+  (open/closed), winner, closed_at.
+- **Placing** (≤5/day): target must be level ≥ 3 and not PvP-immune; min
+  `50 · targetLevel`, max total open on that target `200 · targetLevel`;
+  cost = `round(amount · 1.10)` (10% fee). Refuse self-bounties.
+- **Collecting**: on a PvP win, all open matured bounties on the victim pay
+  out to the winner — **except ones the winner set** (forfeit); news item.
+- Cleared (no payout) when the target slays the dragon or is deleted.
+- Wanted list: aggregated open+matured per target, sortable by amount/level.
+
+### Haunt (graveyard, needs the phase-1 favor economy)
+- At ≥25 favor: pick a living target (name search) with no active haunt on
+  them; pay **25 favor**; success roll `e_rand(0, yourLevel) >
+  e_rand(0, targetLevel)`. Success: mark `haunted_by` on the target — at
+  their next newday they lose **1 turn** and the mark clears; notify + news.
+
+### Clans
+- Table `greendragon_clans`: id, name (5–50 chars, unique), tag (2–5
+  letters, unique), motd/desc (authored), custom talk verb (≤15 chars).
+  Membership on `Character`: `clan_id`, `clan_rank`
+  (0 applicant / 10 member / 20 officer / 30 leader / 31 founder),
+  `clan_joined_at`. All three survive dragon kills.
+- **Founding**: 10,000 gold + 15 gems.
+- Applying sets rank 0 + notifies officers+ (rank ≥ 20); withdraw clears.
+  Officers+ manage: promote/demote/remove only at-or-below their own rank.
+  A leaderless clan auto-promotes its highest-ranked/oldest member on hall
+  view.
+- Hall = commentary section `clan-{id}` (limit 25, custom verb) + the
+  shared `waiting` section; show member counts per rank + total clan dragon
+  kills. Tag prepended to the member's name in commentary. No stat buffs —
+  clans are social only in stock.
+
+### Mail — integration decision, not a build
+- Upstream: 50-unread inbox cap, 1024-char bodies, 14-day retention,
+  system mail from id 0. late.sh **already has DMs and notifications** —
+  default plan: map "systemmail" moments (PvP results, bounty payouts, clan
+  applications, haunts) onto the existing notification/DM systems instead of
+  building an in-door mailbox. Revisit only if in-door mail proves wanted.
+
+### Gardens + the veterans' rock
+- Gardens: a commentary room with a 0% random-event chance (stock default)
+  — pure social corner, plus the nav.
+- Veterans' rock: commentary room gated on `dragon_kills > 0`; non-veterans
+  see only a flavor dead-end.
+
+### Rewards wiring (the long-standing TODO)
+- `svc` already holds `ActivityPublisher` + `ChipService`: on dragon kill,
+  publish a dashboard activity item and pay a chip reward via a
+  `reward_templates` seed migration (mirror Lateania's `086` pattern);
+  consider a one-time `profile_awards` badge for the first kill, like
+  NetHack's `NHA`/`NHY` pair.
 
 ## Out of scope (not stock / not portable)
 
