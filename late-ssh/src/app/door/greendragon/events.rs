@@ -251,16 +251,31 @@ impl ForestEvent {
                     "A rich pocket! You haul out {gold} gold and {gems} gem(s), losing a forest fight to the labor."
                 )]
             }
-            // 19..=20: greed brings the roof down. Upstream still credits 10%
-            // experience ("you learned about mining") and leaves gold/gems be.
+            // 19..=20: greed brings the roof down. The race decides whether it
+            // kills (`raceminedeath`, rolled `e_rand(1,100) < chance`: 90
+            // default, 5 for the Deepfolk). Death still credits 10% experience
+            // ("you learned about mining") and leaves gold/gems be; a lucky
+            // escape shakes you too badly to fight again today (`turns = 0`).
             _ => {
-                let learned = (ch.experience as f64 * 0.1).round() as u64;
-                ch.experience = ch.experience.saturating_add(learned);
-                ch.alive = false;
-                ch.hitpoints = 0;
-                vec![format!(
-                    "You spot a huge gem and swing too hard. The roof comes down in a roar of dust. In your last moments you grasp what went wrong (+{learned} experience), and that is the end of you."
-                )]
+                if rng.gen_range(1..=100) < ch.race.mine_death_percent() {
+                    let learned = (ch.experience as f64 * 0.1).round() as u64;
+                    ch.experience = ch.experience.saturating_add(learned);
+                    ch.alive = false;
+                    ch.hitpoints = 0;
+                    vec![format!(
+                        "You spot a huge gem and swing too hard. The roof comes down in a roar of dust. In your last moments you grasp what went wrong (+{learned} experience), and that is the end of you."
+                    )]
+                } else {
+                    ch.turns = 0;
+                    let escape = if ch.race == super::model::Race::Deepfolk {
+                        "You spot a huge gem and swing too hard. The roof comes down in a roar of dust, but your people were born under stone: you read the groan of the timbers and roll clear."
+                    } else {
+                        "You spot a huge gem and swing too hard. The roof comes down in a roar of dust, and by sheer luck you stumble clear of the fall."
+                    };
+                    vec![format!(
+                        "{escape} The close call leaves you too shaken to face anything else today (all forest fights lost)."
+                    )]
+                }
             }
         }
     }
@@ -489,6 +504,42 @@ mod tests {
         ForestEvent::GlowingStream.resolve(false, &mut c, &mut rng);
         assert_eq!(c.hitpoints, before.hitpoints);
         assert!(c.alive);
+    }
+
+    #[test]
+    fn goldmine_cave_in_spares_the_deepfolk() {
+        use super::super::model::Race;
+        // Sweep seeds until each race hits the cave-in arm (roll 19..=20) and
+        // compare fates: default races nearly always die, Deepfolk nearly
+        // always walk. A survived cave-in always zeroes the day's turns.
+        let mut default_deaths = 0;
+        let mut deepfolk_deaths = 0;
+        let mut cave_ins = 0;
+        for seed in 0..4000 {
+            let mut c = hero(7);
+            c.turns = 5;
+            ForestEvent::GoldMine.resolve(true, &mut c, &mut StdRng::seed_from_u64(seed));
+            // The cave-in arm is the only outcome that kills or zeroes turns.
+            if !c.alive || c.turns == 0 {
+                cave_ins += 1;
+                default_deaths += u32::from(!c.alive);
+                if c.alive {
+                    assert_eq!(c.turns, 0); // the escape costs the day
+                }
+                let mut d = hero(7);
+                d.race = Race::Deepfolk;
+                d.turns = 5;
+                ForestEvent::GoldMine.resolve(true, &mut d, &mut StdRng::seed_from_u64(seed));
+                deepfolk_deaths += u32::from(!d.alive);
+            }
+        }
+        assert!(cave_ins > 20, "expected many cave-ins, got {cave_ins}");
+        // 90% vs 5% death chance (upstream raceminedeath defaults).
+        assert!(default_deaths * 2 > cave_ins, "default races should mostly die");
+        assert!(
+            deepfolk_deaths * 4 < cave_ins,
+            "deepfolk should rarely die: {deepfolk_deaths}/{cave_ins}"
+        );
     }
 
     #[test]

@@ -182,49 +182,63 @@ originally shipped with:
 - Searching with an empty soul pool isn't blocked (upstream doesn't gate on
   soulpoints either): the fight opens at 0 and the first blow ends it.
 
-## Phase 2 — races + titles
+## Phase 2 — races + titles — DONE
 
 Sources: `modules/race{human,elf,dwarf,troll}.php`, `lib/newday/setrace.php`,
-`lib/titles.php`, `titleedit.php`. Written to be implementable standalone.
+`lib/titles.php`, `titleedit.php`. Implemented 2026-07, verified line-by-line
+against the local `upstream-lotgd/` clone. Source-audit corrections to what
+this section originally claimed:
 
-- **Gate order** (upstream `newday.php`): dragon points → race → specialty.
-  Race is a forced one-time choice at the gate, exactly like our
-  `Mode::SpendDragonPoints` (add `Mode::ChooseRace`, armed on load when race
-  is unset). Keep the existing village specialty chooser; optionally fold it
-  into the gate order later. New `Character` field `race` (enum None/4
-  races, serde default None). A phase-3 potion resets race to None so the
-  gate re-arms next day.
-- **Race effects** (all numbers exact; our race/village names original):
-  - *Human-analog*: +2 forest fights per day (`bonus` setting, range 1–3,
-    default **2**). Applied in `roll_new_day` alongside `dragon_ff_bonus`.
-  - *Elf-analog*: +`1 + floor(level/5)` defense (so +1 at 1–4, +2 at 5–9,
-    +3 at 10–14, +4 at 15). Upstream implements this as a permanent
-    `defmod` buff recomputed each newday; a flat add into
-    `Character::defense()` is numerically identical and simpler — do that.
-  - *Troll-analog*: same formula on attack, into `Character::attack()`.
-  - *Dwarf-analog*: forest creature gold ×1.2 (rounded), applied per foe at
-    spawn (upstream `creatureencounter` hook — apply after `buff_foe`, before
-    thrill ×1.1... upstream hook order is buffbadguy→hook, thrill after, so:
-    buff_foe → dwarf ×1.2 → thrill ×1.1).
-  - **Goldmine death chance** (`raceminedeath`, used by the existing
-    goldmine event's cave-in): default **90%** for all races, **5%** for the
-    dwarf-analog. Note: our `events.rs` goldmine currently uses the stock
-    1-in-20-table cave-in; when races land, the cave-in *severity* roll gains
-    the race gate: on a cave-in result, roll `e_rand(1,100) <= chance` for
-    death vs a lucky escape (dwarves almost always escape).
-  - Upstream also gives elf/troll targets the same bonus in PvP
-    (`pvpadjust`) — phase 4 concern, note only.
-  - The dwarf-analog's exclusive mercenary (a bear-type companion: atk 1
-    +2/lvl, def 5 +2/lvl, hp 25 +25/lvl, ability defend, cost 4 gems + 600
-    gold) joins the phase-3 mercenary camp as a race-gated listing.
-- **DK titles** (`titles` table): rows of `(dk_threshold, style_a, style_b)`
-  — upstream stores male/female string pairs; we key them off the phase-3
-  **address style** choice instead (see phase 3 note). Selection: highest
-  `threshold <= dragon_kills`, random among rows sharing that threshold;
-  re-titled on every dragon kill; shown before the name in the stat rail and
-  (later) news. Write ~10–15 original title pairs at thresholds like
-  0/1/2/3/4/5/7/10/15/20. Store `title: String` on `Character` (empty until
-  first assignment at creation with the threshold-0 row).
+1. **The cave-in death roll is strict**: `e_rand(1,100) < $vals['chance']`
+   (`goldmine.php`), not `<=` — 90 ⇒ 89% death, 5 ⇒ 4%. Ported as `<`.
+2. **A survived cave-in zeroes the day's turns** ("your close call scared
+   you so badly that you cannot face any more opponents today"), it isn't a
+   free walk-away. `percentgoldloss`/`percentgemloss` default 0, so a mine
+   death costs no gold/gems (unlike a forest death).
+3. **The race `newday` hook fires on the paid resurrection too**
+   (`newday.php` runs `modulehook("newday")` regardless of the flag), so the
+   human-analog's bonus fights soften the −6 dock: `10 + 2 − 6 = 6` turns.
+
+- [x] **Gate order** (upstream `newday.php:100-104`): dragon points → race →
+  specialty. `Mode::ChooseRace` is a forced one-time choice, armed on load
+  when `race` is unset and chained after the dragon-point gate; Esc leaves
+  the door and the gate re-arms. The village specialty chooser stays as-is.
+  `Character.race` (enum, serde default `None`); phase 3's transmutation
+  potion resets it so the gate re-arms.
+- [x] **Race effects** (numbers exact; race names original — Plainsborn /
+  Wealdkin / Deepfolk / Cragborn for the human/elf/dwarf/troll analogs):
+  - *Plainsborn*: +2 forest fights per day (`bonus` default **2**), in
+    `roll_new_day` and `resurrect` (correction 3).
+  - *Wealdkin*: +`1 + floor(level/5)` defense, a flat add in
+    `Character::defense()` (numerically identical to upstream's recomputed
+    `defmod` buff). No effect while dead (`dead_combatant` ignores it, as
+    upstream strips buffs at the graveyard).
+  - *Cragborn*: same formula on attack, in `Character::attack()`.
+  - *Deepfolk*: forest creature gold ×1.2 rounded, applied after `buff_foe`
+    and before thrill ×1.1 (verified: the `creatureencounter` hook fires at
+    the tail of `buffbadguy()`, `lib/forestoutcomes.php:200`; thrill applies
+    after in `forest.php`).
+  - **Goldmine cave-in** (`raceminedeath`): on the 19–20 roll,
+    `e_rand(1,100) < chance` (90 default / 5 Deepfolk) kills; otherwise the
+    lucky escape zeroes the day's turns (corrections 1–2).
+  - Elf/troll `pvpadjust` (same bonus defending in PvP) — phase 4, note only.
+  - The dwarf-analog's exclusive mercenary (bear companion: atk 1 +2/lvl,
+    def 5 +2/lvl, hp 25 +25/lvl, ability defend, 4 gems + 600 gold) joins
+    the phase-3 mercenary camp as a race-gated listing.
+- [x] **DK titles** (`titles` table + `lib/titles.php` `get_dk_title`):
+  `data::TITLES` holds `(threshold, first-style, second-style)` rows at
+  0/1/2/3/4/5/7/10/15/20 — **all title strings original** (upstream's
+  Farmboy→Undergod ladder is theirs). Selection: highest `threshold <=
+  dragon_kills`, random among rows sharing it; re-rolled on every dragon
+  kill (`dragon.php`) and stamped onto never-titled saves at load; shown
+  before the name in the stat rail (news wiring lands with phase 3).
+  `Character.title: String` (serde default empty = never titled).
+- [x] **Address style**: `Character.style` (enum `First`/`Second`, serde
+  default `First`) picks the title column where upstream reads `sex`. The
+  actual one-time chooser is phase 3's (with the romance/bard hooks); until
+  then everyone renders first-style titles.
+- [ ] **Title news hook**: upstream `dragon.php` writes "has earned the
+  title X" to the daily news — no-op until phase 3's news lands.
 
 ## Phase 3 — single-player buildings
 

@@ -442,6 +442,42 @@ pub const DRAGON_HP: u32 = 300;
 /// setting defaults to "Ramius", which is theirs.
 pub const DEATH_OVERLORD: &str = "Morvane";
 
+/// The dragon-kill title ladder (`titles` table + `lib/titles.php`): rows of
+/// `(dk_threshold, first-style title, second-style title)`. Selection takes
+/// the highest threshold at or below the character's kills, picking randomly
+/// among rows that share it (upstream supports several per threshold). The
+/// two columns are keyed by [`super::model::AddressStyle`] where upstream
+/// keys male/female. **All title strings are original to late.sh** — the
+/// upstream Farmboy-to-Undergod ladder is theirs.
+pub const TITLES: &[(u32, &str, &str)] = &[
+    (0, "Mudfoot", "Mudlark"),
+    (1, "Wyrmscarred", "Wyrmscarred"),
+    (2, "Cinderhand", "Cinderhand"),
+    (3, "Scalebreaker", "Scalebreaker"),
+    (4, "Greenbane", "Greenbane"),
+    (5, "Wyrmreaper", "Wyrmreaper"),
+    (7, "Ashlord", "Ashlady"),
+    (10, "Dragonlord", "Dragonlady"),
+    (15, "Doomscale", "Doomscale"),
+    (20, "Wrath of Duskmere", "Wrath of Duskmere"),
+];
+
+/// Pick the `(first-style, second-style)` title pair for `dragon_kills`: the
+/// rows at the highest threshold not exceeding the kill count, chosen at
+/// random among ties (`get_dk_title`). The ladder always has a threshold-0
+/// row, so this never comes up empty.
+pub fn dk_title_pair(dragon_kills: u32, rng: &mut impl rand::Rng) -> (&'static str, &'static str) {
+    let threshold = TITLES
+        .iter()
+        .filter(|(dk, _, _)| *dk <= dragon_kills)
+        .map(|(dk, _, _)| *dk)
+        .max()
+        .unwrap_or(0);
+    let rows: Vec<_> = TITLES.iter().filter(|(dk, _, _)| *dk == threshold).collect();
+    let (_, a, b) = rows[rng.gen_range(0..rows.len())];
+    (a, b)
+}
+
 /// Original (name, weapon) flavor for the graveyard's tormentable souls.
 /// Upstream flags its entire forest roster `graveyard=1` and overrides every
 /// stat at spawn (`case_battle_search.php`), so the pool is pure flavor; ours
@@ -534,6 +570,22 @@ mod tests {
         assert_eq!(graveyard_favor_range(1), (10, 20));
         assert_eq!(graveyard_favor_range(5), (12, 22));
         assert!(!GRAVEYARD_CREATURES.is_empty());
+    }
+
+    #[test]
+    fn title_ladder_picks_the_highest_earned_threshold() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(1);
+        // Fresh characters get the threshold-0 pair.
+        assert_eq!(dk_title_pair(0, &mut rng), ("Mudfoot", "Mudlark"));
+        // Between thresholds the last earned one holds (5 covers 5..7).
+        assert_eq!(dk_title_pair(6, &mut rng).0, "Wyrmreaper");
+        // Exact thresholds and the open top end.
+        assert_eq!(dk_title_pair(10, &mut rng), ("Dragonlord", "Dragonlady"));
+        assert_eq!(dk_title_pair(99, &mut rng).0, "Wrath of Duskmere");
+        // The ladder starts at 0 and rises monotonically.
+        assert_eq!(TITLES[0].0, 0);
+        assert!(TITLES.windows(2).all(|w| w[0].0 <= w[1].0));
     }
 
     #[test]

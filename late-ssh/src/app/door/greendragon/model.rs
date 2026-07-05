@@ -63,6 +63,15 @@ pub const RESURRECTION_FAVOR_COST: u32 = 100;
 /// The 25-favor haunt itself is PvP and lands in phase 4; the tier messaging
 /// exists now.
 pub const HAUNT_FAVOR_THRESHOLD: u32 = 25;
+/// Extra daily forest fights for the Plainsborn (LoGD `racehuman.php`'s
+/// `bonus` setting, default 2). Like upstream's `newday` hook it applies to
+/// every new day, including the paid resurrection's.
+pub const PLAINSBORN_FOREST_BONUS: u32 = 2;
+/// Percent chance of dying under a goldmine cave-in (`raceminedeath`):
+/// the default for most races, and the Deepfolk's miner's instinct
+/// (`racedwarf.php`'s `minedeathchance`, default 5).
+pub const MINE_DEATH_PERCENT: u32 = 90;
+pub const DEEPFOLK_MINE_DEATH_PERCENT: u32 = 5;
 
 /// The forest hunting intensities. LoGD offers easier/harder pickings that
 /// shift the creature level relative to the player's own level.
@@ -170,6 +179,15 @@ pub struct Character {
     /// Persistent combat companions (e.g. a Bonecall skeleton). They fight
     /// alongside you across battles until destroyed (LoGD `apply_companion`).
     pub companions: Vec<Companion>,
+    /// Chosen ancestry (LoGD's race). `None` arms the forced choice gate on
+    /// load; permanent once picked (until phase 3's transmutation potion).
+    pub race: Race,
+    /// The current dragon-kill title, shown before the name. Assigned from the
+    /// title ladder at first load and re-rolled on every dragon kill
+    /// (`dragon.php` + `lib/titles.php`). Empty only on a never-titled save.
+    pub title: String,
+    /// Which title column (and later, phase-3 flavor) this character uses.
+    pub style: AddressStyle,
     /// Chosen combat specialty, picked once and largely permanent. `None` until
     /// the player decides (LoGD sets it on the first new day).
     pub specialty: Specialty,
@@ -208,6 +226,114 @@ impl DragonPointKind {
             DragonPointKind::Defense => "+1 defense",
         }
     }
+}
+
+/// The four ancestries, mirroring LoGD's stock race modules
+/// (`racehuman`/`raceelf`/`racedwarf`/`racetroll`). A forced one-time choice at
+/// the new-day gate; `None` re-arms it (fresh characters, and phase 3's
+/// transmutation potion). **Effect numbers are upstream's exactly; the race
+/// names are original to late.sh** (the generic analogs are noted per variant).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Race {
+    /// Unchosen; the race gate arms on load.
+    #[default]
+    None,
+    /// The human-analog: tireless plains stock, +2 forest fights per day.
+    Plainsborn,
+    /// The elf-analog: wary forest folk, `+1 + level/5` defense.
+    Wealdkin,
+    /// The dwarf-analog: delvers of the under-roads, creature gold x1.2 and
+    /// a near-immunity to mine cave-ins.
+    Deepfolk,
+    /// The troll-analog: crag-born brutes, `+1 + level/5` attack.
+    Cragborn,
+}
+
+/// The four choosable ancestries, in menu order.
+pub const RACES: [Race; 4] = [
+    Race::Plainsborn,
+    Race::Wealdkin,
+    Race::Deepfolk,
+    Race::Cragborn,
+];
+
+impl Race {
+    /// Short display label for the stat rail.
+    pub fn name(self) -> &'static str {
+        match self {
+            Race::None => "Unchosen",
+            Race::Plainsborn => "Plainsborn",
+            Race::Wealdkin => "Wealdkin",
+            Race::Deepfolk => "Deepfolk",
+            Race::Cragborn => "Cragborn",
+        }
+    }
+
+    /// The level-scaled stat bonus the elf/troll analogs share:
+    /// `1 + floor(level / 5)` (`raceelf.php`/`racetroll.php` `adjuststats`).
+    fn scaling_bonus(level: u8) -> u32 {
+        1 + level as u32 / 5
+    }
+
+    /// Permanent attack bonus (the Cragborn's brawn). Upstream implements this
+    /// as a `racialbenefit` buff recomputed each new day; a flat add into the
+    /// attack stat is numerically identical. Buffs don't follow the dead, and
+    /// neither does this: [`Character::dead_combatant`] ignores it.
+    pub fn attack_bonus(self, level: u8) -> u32 {
+        match self {
+            Race::Cragborn => Self::scaling_bonus(level),
+            _ => 0,
+        }
+    }
+
+    /// Permanent defense bonus (the Wealdkin's wariness); see
+    /// [`Race::attack_bonus`] for the shape.
+    pub fn defense_bonus(self, level: u8) -> u32 {
+        match self {
+            Race::Wealdkin => Self::scaling_bonus(level),
+            _ => 0,
+        }
+    }
+
+    /// Extra daily forest fights (`racehuman.php`'s `newday` hook). Applies to
+    /// the paid resurrection's docked day too, exactly like the upstream hook.
+    pub fn daily_forest_bonus(self) -> u32 {
+        match self {
+            Race::Plainsborn => PLAINSBORN_FOREST_BONUS,
+            _ => 0,
+        }
+    }
+
+    /// Scale a forest creature's gold drop (`racedwarf.php`'s
+    /// `creatureencounter` hook: `round(gold * 1.2)`). Fires where upstream's
+    /// hook does: after `buff_foe`, before the thrillseeking x1.1.
+    pub fn creature_gold(self, gold: u32) -> u32 {
+        match self {
+            Race::Deepfolk => (gold as f64 * 1.2).round() as u32,
+            _ => gold,
+        }
+    }
+
+    /// Percent chance a goldmine cave-in kills (`raceminedeath`): rolled as
+    /// `e_rand(1,100) < chance`, so the Deepfolk almost always dig free.
+    pub fn mine_death_percent(self) -> u32 {
+        match self {
+            Race::Deepfolk => DEEPFOLK_MINE_DEATH_PERCENT,
+            _ => MINE_DEATH_PERCENT,
+        }
+    }
+}
+
+/// The two address styles. Upstream keys DK titles (and, come phase 3, the
+/// romance partner and one bard outcome) off a binary `sex` field; our
+/// adaptation is a flavor choice that picks the title column. The chooser
+/// itself lands with phase 3's character-creation flow; until then everyone
+/// defaults to the first style.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AddressStyle {
+    #[default]
+    First,
+    Second,
 }
 
 /// The three combat specialties, mirroring LoGD's `MP`/`DA`/`TS`. The in-fight
@@ -266,6 +392,9 @@ impl Default for Character {
             // fills the daily torment pool; seed it directly.
             grave_fights: GRAVE_FIGHTS_PER_DAY,
             companions: Vec::new(),
+            race: Race::None,
+            title: String::new(),
+            style: AddressStyle::First,
             specialty: Specialty::None,
             specialty_skill: 0,
             specialty_uses: 0,
@@ -289,16 +418,22 @@ impl Character {
         HP_PER_LEVEL * self.level as u32 + self.dragon_hp_bonus
     }
 
-    /// Attack stat fed to the combat roll: `level + weapon_tier` plus any
-    /// permanent Gypsy (Might) bonus.
+    /// Attack stat fed to the combat roll: `level + weapon_tier` plus dragon
+    /// boons and any level-scaled ancestry bonus.
     pub fn attack(&self) -> u32 {
-        self.level as u32 + self.weapon_tier as u32 + self.dragon_attack_bonus
+        self.level as u32
+            + self.weapon_tier as u32
+            + self.dragon_attack_bonus
+            + self.race.attack_bonus(self.level)
     }
 
-    /// Defense stat fed to the combat roll: `level + armor_tier` plus any
-    /// permanent Gypsy (Guard) bonus.
+    /// Defense stat fed to the combat roll: `level + armor_tier` plus dragon
+    /// boons and any level-scaled ancestry bonus.
     pub fn defense(&self) -> u32 {
-        self.level as u32 + self.armor_tier as u32 + self.dragon_defense_bonus
+        self.level as u32
+            + self.armor_tier as u32
+            + self.dragon_defense_bonus
+            + self.race.defense_bonus(self.level)
     }
 
     /// The player as a [`Combatant`] for [`super::combat::resolve_round`].
@@ -364,13 +499,31 @@ impl Character {
         }
         self.favor -= RESURRECTION_FAVOR_COST;
         self.apply_new_day_interest(interest_percent);
-        let turns = TURNS_PER_DAY as i32 + self.dragon_ff_bonus as i32 + RESURRECTION_TURNS;
+        // The race's `newday` hook fires on the resurrection day too
+        // (`newday.php` runs `modulehook("newday")` regardless of the flag),
+        // so a Plainsborn's bonus fights soften the -6 dock.
+        let turns = TURNS_PER_DAY as i32
+            + self.dragon_ff_bonus as i32
+            + self.race.daily_forest_bonus() as i32
+            + RESURRECTION_TURNS;
         self.turns = turns.max(0) as u32;
         self.refresh_specialty_uses();
         self.alive = true;
         self.seen_dragon = false;
         self.hitpoints = self.max_hitpoints();
         true
+    }
+
+    /// Re-roll the dragon-kill title off the ladder for the current kill
+    /// count (`dragon.php` re-titles on every kill; the load path uses this to
+    /// stamp never-titled saves). The address style picks the column.
+    pub fn reroll_title(&mut self, rng: &mut impl Rng) {
+        let (first, second) = data::dk_title_pair(self.dragon_kills, rng);
+        self.title = match self.style {
+            AddressStyle::First => first,
+            AddressStyle::Second => second,
+        }
+        .to_string();
     }
 
     /// Experience required to advance to the next level (with DK scaling).
@@ -819,7 +972,10 @@ impl Character {
         // Interest is settled before turns refill, so it can read how many of
         // yesterday's turns went unused (LoGD's "work for it" gate).
         self.apply_new_day_interest(interest_percent);
-        let turns = TURNS_PER_DAY as i32 + self.dragon_ff_bonus as i32 + spirits;
+        let turns = TURNS_PER_DAY as i32
+            + self.dragon_ff_bonus as i32
+            + self.race.daily_forest_bonus() as i32
+            + spirits;
         self.turns = turns.max(0) as u32;
         self.refresh_specialty_uses();
         self.alive = true;
@@ -1399,6 +1555,59 @@ mod tests {
         let stat_points = (a - base.0) + (d - base.1) + (h - base.2) / 5;
         assert_eq!(stat_points, 9);
         assert!(a >= base.0 && d >= base.1 && h >= base.2);
+    }
+
+    #[test]
+    fn race_stat_bonuses_scale_with_level() {
+        // The elf/troll formula: 1 + floor(level/5) — +1 at 1..=4, +2 at
+        // 5..=9, +3 at 10..=14, +4 at 15.
+        let mut c = Character::new("weald", 0);
+        c.race = Race::Wealdkin;
+        assert_eq!(c.defense(), 1 + 1); // level 1 + armor 0 + bonus 1
+        assert_eq!(c.attack(), 1); // no attack bonus for the Wealdkin
+        c.level = 5;
+        assert_eq!(c.defense(), 5 + 2);
+        c.level = 15;
+        assert_eq!(c.defense(), 15 + 4);
+
+        let mut t = Character::new("crag", 0);
+        t.race = Race::Cragborn;
+        t.level = 10;
+        assert_eq!(t.attack(), 10 + 3);
+        assert_eq!(t.defense(), 10);
+
+        // The dead fight on level alone: no race bonus beyond the grave.
+        let dead = t.dead_combatant();
+        t.race = Race::None;
+        assert_eq!(t.dead_combatant().attack, dead.attack);
+        assert_eq!(t.dead_combatant().defense, dead.defense);
+    }
+
+    #[test]
+    fn plainsborn_gain_bonus_fights_each_day() {
+        let mut c = Character::new("plains", 10);
+        c.race = Race::Plainsborn;
+        c.roll_new_day(11, 0, 0);
+        assert_eq!(c.turns, TURNS_PER_DAY + PLAINSBORN_FOREST_BONUS);
+
+        // The race's newday hook fires on the paid resurrection too:
+        // 10 + 2 - 6 = 6 turns.
+        c.die();
+        c.favor = 100;
+        assert!(c.resurrect(0));
+        assert_eq!(
+            c.turns,
+            (TURNS_PER_DAY as i32 + PLAINSBORN_FOREST_BONUS as i32 + RESURRECTION_TURNS) as u32
+        );
+    }
+
+    #[test]
+    fn deepfolk_scale_gold_and_shrug_off_cave_ins() {
+        assert_eq!(Race::Deepfolk.creature_gold(100), 120);
+        assert_eq!(Race::Deepfolk.creature_gold(97), 116); // round(116.4)
+        assert_eq!(Race::Plainsborn.creature_gold(100), 100);
+        assert_eq!(Race::Deepfolk.mine_death_percent(), 5);
+        assert_eq!(Race::Wealdkin.mine_death_percent(), 90);
     }
 
     #[test]

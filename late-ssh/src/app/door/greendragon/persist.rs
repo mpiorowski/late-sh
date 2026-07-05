@@ -103,6 +103,22 @@ mod tests {
     }
 
     #[test]
+    fn pre_race_blobs_arm_the_race_gate() {
+        use super::super::model::{AddressStyle, Race};
+        // Saves from before phase 2 have no race/title/style: plain serde
+        // defaults, no migration needed. An unset race arms the choice gate
+        // on load; an empty title is stamped off the ladder there too.
+        let blob = json!({
+            "schema_version": 2,
+            "character": { "name": "vet", "level": 9, "dragon_kills": 3 }
+        });
+        let c = from_json(&blob);
+        assert_eq!(c.race, Race::None);
+        assert_eq!(c.title, "");
+        assert_eq!(c.style, AddressStyle::First);
+    }
+
+    #[test]
     fn corrupt_blob_falls_back_to_default() {
         let c = from_json(&json!({ "nonsense": true }));
         assert_eq!(c.level, 1);

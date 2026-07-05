@@ -69,13 +69,20 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
     };
 
     let exp_target = c.exp_for_next_level();
+    // The dragon-kill title precedes the name (LoGD renders "Farmboy Name").
+    let titled_name = if c.title.is_empty() {
+        c.name.clone()
+    } else {
+        format!("{} {}", c.title, c.name)
+    };
     let mut lines = vec![
         Line::from(Span::styled(
-            c.name.clone(),
+            titled_name,
             bright.add_modifier(Modifier::BOLD),
         )),
         Line::raw(""),
         stat("Level", c.level.to_string(), bright),
+        stat("Race", c.race.name().to_string(), bright),
         stat(
             "HP",
             format!("{}/{}", c.hitpoints, c.max_hitpoints()),
@@ -293,6 +300,14 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    if state.mode() == Mode::ChooseRace {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "A new day stirs old memories. Whose blood runs in your veins? The choice is permanent, and each people carries its own gift.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+
     if state.mode() == Mode::ChooseSpecialty {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
@@ -379,6 +394,7 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Bank => "The Coinvault",
         Mode::Training => "The Proving Yard",
         Mode::Event => "A Forest Happening",
+        Mode::ChooseRace => "Remember Your Blood",
         Mode::ChooseSpecialty => "Choose Your Path",
         Mode::Graveyard => "The Graveyard",
         Mode::SpendDragonPoints => "Dragon Points",
@@ -390,6 +406,7 @@ fn controls_hint(mode: Mode) -> &'static str {
         Mode::Fight => "up/down select   Enter act   Esc try to flee",
         Mode::Village | Mode::Graveyard => "up/down move   Enter choose   Esc leave the game",
         Mode::SpendDragonPoints => "up/down move   Enter spend   Esc leave the game",
+        Mode::ChooseRace => "up/down move   Enter choose   Esc leave the game",
         _ => "up/down move   Enter choose   Esc back to village",
     }
 }

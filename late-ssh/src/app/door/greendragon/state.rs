@@ -14,7 +14,7 @@ use uuid::Uuid;
 use super::combat::{Buff, Combatant, resolve_extra_foe_strike, resolve_round_buffed};
 use super::data;
 use super::events::{self, ForestEvent};
-use super::model::{self, Character, DragonPointKind, ForestHunt, SlainFoe, Specialty};
+use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
 use super::svc::{CharacterLoad, GreenDragonService};
 
@@ -41,6 +41,10 @@ pub enum Mode {
     Training,
     /// A forest special event awaiting the player's accept/decline choice.
     Event,
+    /// The forced one-time ancestry chooser (LoGD's race gate): armed on load
+    /// while the race is unset, after any pending dragon points are spent
+    /// (upstream `newday.php` gates dragon points, then race, then specialty).
+    ChooseRace,
     /// The one-time specialty chooser (Mystical / Dark Arts / Thief).
     ChooseSpecialty,
     /// The graveyard: the dead realm's hub, replacing the village until the
@@ -159,10 +163,18 @@ impl State {
             CharacterLoad::Ready(character) => Some((**character).clone()),
             CharacterLoad::Loading => None,
         };
-        if let Some(character) = ready {
-            // Unspent dragon points gate everything, like LoGD's new-day gate.
+        if let Some(mut character) = ready {
+            // A never-titled save (fresh characters, pre-title saves) gets its
+            // rank off the ladder before anything renders.
+            if character.title.is_empty() {
+                character.reroll_title(&mut rand::thread_rng());
+            }
+            // The new-day gates, in upstream's order (`newday.php`): unspent
+            // dragon points first, then the one-time race choice.
             self.mode = if character.dragon_points_unspent > 0 {
                 Mode::SpendDragonPoints
+            } else if character.race == Race::None {
+                Mode::ChooseRace
             } else if character.alive {
                 Mode::Village
             } else {
@@ -220,6 +232,7 @@ impl State {
             Mode::Training => training_menu(c),
             Mode::Fight => fight_menu(c),
             Mode::Event => event_menu(c, self.pending_event),
+            Mode::ChooseRace => race_menu(),
             Mode::ChooseSpecialty => specialty_menu(),
             Mode::Graveyard => graveyard_menu(c),
             Mode::SpendDragonPoints => dragon_point_menu(),
@@ -259,6 +272,7 @@ impl State {
             Mode::Training => self.select_training(),
             Mode::Fight => self.select_fight(),
             Mode::Event => self.select_event(),
+            Mode::ChooseRace => self.select_race(),
             Mode::ChooseSpecialty => self.select_specialty(),
             Mode::Graveyard => self.select_graveyard(),
             Mode::SpendDragonPoints => self.select_dragon_point(),
@@ -283,9 +297,9 @@ impl State {
                 self.cursor = 1;
                 self.select_event()
             }
-            // The spend gate can't be backed out of into play — but leaving
-            // the door entirely is fine; the gate re-arms on re-entry.
-            Mode::SpendDragonPoints => Selection::Leave,
+            // The gates can't be backed out of into play — but leaving the
+            // door entirely is fine; they re-arm on re-entry.
+            Mode::SpendDragonPoints | Mode::ChooseRace => Selection::Leave,
             // The dead realm is the hub while dead: Esc leaves the game, the
             // village stays out of reach until a revival.
             Mode::Graveyard => Selection::Leave,
@@ -434,8 +448,11 @@ impl State {
                 let (n, w) = names[rng.gen_range(0..names.len())];
                 (n, w, level)
             };
-            // Investment scaling + flux (buffbadguy), then the thrill bonus.
+            // Investment scaling + flux (buffbadguy), then the Deepfolk gold
+            // nose (upstream's creatureencounter hook fires inside buffbadguy,
+            // before the thrill bonus), then the thrill bonus.
             let mut tier = c.buff_foe(data::creature_tier(stat_level), &mut rng);
+            tier.gold = c.race.creature_gold(tier.gold);
             if matches!(hunt, ForestHunt::Thrillseeking) {
                 tier.gold = (tier.gold as f64 * 1.10).round() as u32;
                 tier.exp = (tier.exp as f64 * 1.10).round() as u32;
@@ -527,6 +544,27 @@ impl State {
         let alive = self.character.as_ref().unwrap().alive;
         self.goto(if alive { Mode::Forest } else { Mode::Graveyard });
         self.save();
+    }
+
+    // --- race gate ------------------------------------------------------------
+
+    /// Apply the one-time ancestry choice (`lib/newday/setrace.php`) and drop
+    /// into play: the village, or the graveyard if the gate caught a dead
+    /// character at load.
+    fn select_race(&mut self) -> Selection {
+        let Some(&race) = model::RACES.get(self.cursor) else {
+            return Selection::Stay;
+        };
+        let c = self.character.as_mut().unwrap();
+        c.race = race;
+        let alive = c.alive;
+        self.push_log(format!(
+            "You remember who you are: {} blood runs in your veins.",
+            race.name()
+        ));
+        self.save();
+        self.goto(if alive { Mode::Village } else { Mode::Graveyard });
+        Selection::Stay
     }
 
     // --- specialty chooser --------------------------------------------------
@@ -1014,8 +1052,12 @@ impl State {
             }
             FoeKind::Dragon => {
                 let flawless = !enc.took_damage;
-                self.character.as_mut().unwrap().slay_dragon(flawless);
-                let kills = self.character.as_ref().unwrap().dragon_kills;
+                let c = self.character.as_mut().unwrap();
+                c.slay_dragon(flawless);
+                // Every kill re-rolls the title off the ladder (`dragon.php`).
+                let old_title = std::mem::take(&mut c.title);
+                c.reroll_title(&mut rand::thread_rng());
+                let (kills, title) = (c.dragon_kills, c.title.clone());
                 let mut msg = format!(
                     "THE GREEN DRAGON IS SLAIN! Dragon kill #{kills}. A dragon point is yours to spend."
                 );
@@ -1023,6 +1065,9 @@ impl State {
                     msg.push_str(" Flawless - not a scratch on you! Bonus gold and a gem.");
                 }
                 self.push_log(msg);
+                if title != old_title {
+                    self.push_log(format!("The realm knows you now as {title}."));
+                }
                 self.encounter = None;
                 // The kill banks a dragon point; the spend gate opens at once.
                 self.goto(Mode::SpendDragonPoints);
@@ -1188,9 +1233,17 @@ impl State {
         }
         let left = c.dragon_points_unspent;
         let alive = c.alive;
+        let race = c.race;
         self.push_log(format!("Dragon point spent: {}.", kind.label()));
         if left == 0 {
-            self.goto(if alive { Mode::Village } else { Mode::Graveyard });
+            // The next gate in upstream's order: race, then play.
+            self.goto(if race == Race::None {
+                Mode::ChooseRace
+            } else if alive {
+                Mode::Village
+            } else {
+                Mode::Graveyard
+            });
         }
         self.save();
         Selection::Stay
@@ -1317,6 +1370,24 @@ fn graveyard_menu(c: &Character) -> Vec<(String, bool)> {
         ),
         ("Wait for a new day (leave the realm)".into(), true),
     ]
+}
+
+/// The four ancestry choices for the forced race gate, in [`model::RACES`]
+/// order. Perk numbers are upstream's; the names and framing are ours.
+fn race_menu() -> Vec<(String, bool)> {
+    model::RACES
+        .iter()
+        .map(|race| {
+            let perk = match race {
+                Race::Plainsborn => "tireless: +2 forest fights each day",
+                Race::Wealdkin => "wary: bonus defense that grows with level",
+                Race::Deepfolk => "gold-nosed: +20% creature gold, safe in mines",
+                Race::Cragborn => "brutal: bonus attack that grows with level",
+                Race::None => unreachable!("RACES holds only choosable races"),
+            };
+            (format!("The {} ({perk})", race.name()), true)
+        })
+        .collect()
 }
 
 /// The three specialty choices for the one-time chooser.
@@ -1582,6 +1653,15 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, "Attack");
         assert_eq!(rows[1].0, "Flee");
+    }
+
+    #[test]
+    fn race_menu_offers_the_four_ancestries() {
+        let rows = race_menu();
+        assert_eq!(rows.len(), model::RACES.len());
+        assert!(rows.iter().all(|(_, enabled)| *enabled));
+        assert!(rows[0].0.contains("Plainsborn"));
+        assert!(rows[2].0.contains("+20% creature gold"));
     }
 
     #[test]
