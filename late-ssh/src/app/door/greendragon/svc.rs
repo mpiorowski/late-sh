@@ -153,10 +153,9 @@ impl GreenDragonService {
                 character.name = name;
             }
             // Refill forest turns / heal / revive if a new day has rolled over
-            // since the last save. Banked dragon kills add extra daily turns; the
-            // bank pays a freshly-rolled interest rate; the day's "spirits"
+            // since the last save. Spent ff dragon points add extra daily turns;
+            // the bank pays a freshly-rolled interest rate; the day's "spirits"
             // (e_rand(-1,1) twice, -2..+2) jitter the forest fights, LoGD-style.
-            let forest_bonus = character.dk_forest_bonus();
             let (interest, spirits) = {
                 let mut rng = rand::thread_rng();
                 let interest =
@@ -164,7 +163,7 @@ impl GreenDragonService {
                 let spirits = rng.gen_range(-1..=1) + rng.gen_range(-1..=1);
                 (interest, spirits)
             };
-            let rolled = character.roll_new_day(day, forest_bonus, interest, spirits);
+            let rolled = character.roll_new_day(day, interest, spirits);
             // Persist the rollover immediately: otherwise an instant disconnect
             // drops the spent turns/interest, letting a player reconnect to
             // re-roll a favorable interest rate or dodge the resurrection cost.

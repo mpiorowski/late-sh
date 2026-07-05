@@ -514,6 +514,39 @@ pub fn resolve_round_buffed(
     }
 }
 
+/// One extra foe's strike on the player — the multi-fight case where the
+/// player attacks only their target while every other living foe still gets
+/// its round (and the failed-flee free round). Mirrors the incoming-damage
+/// half of `rolldamage` with the active buff multipliers folded in: signed,
+/// negative = the blow glanced (heals the player).
+pub fn resolve_extra_foe_strike(rng: &mut impl Rng, player: Combatant, foe: Combatant, buffs: &[Buff]) -> i32 {
+    let mut m = Mods::default();
+    for b in buffs.iter() {
+        m.defmod *= b.player_def_mod as f64;
+        m.badguyatkmod *= b.enemy_atk_mod as f64;
+        m.badguydmgmod *= b.enemy_dmg_mod as f64;
+        m.dmgmod *= b.player_dmg_mod as f64;
+        if b.invulnerable {
+            m.invulnerable = true;
+        }
+    }
+    let adjusted_self_def = player.defense as f64 * m.adjustment * m.defmod;
+    let foe_attack = foe.attack as f64 * m.badguyatkmod;
+    let pdefroll = bell_rand(rng, adjusted_self_def);
+    let fatkroll = bell_rand(rng, foe_attack);
+    let mut sd = -trunc(pdefroll - fatkroll);
+    if sd < 0 {
+        sd = trunc(sd as f64 / 2.0);
+        sd = iround(sd as f64 * m.dmgmod);
+    } else if sd > 0 {
+        sd = iround(sd as f64 * m.badguydmgmod);
+    }
+    if m.invulnerable {
+        sd = -sd.abs();
+    }
+    sd
+}
+
 /// How a fully simulated fight ended. Used by tests and balance checks; the
 /// live game steps one [`resolve_round`] per player action instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

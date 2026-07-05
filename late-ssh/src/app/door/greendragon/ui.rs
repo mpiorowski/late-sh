@@ -105,6 +105,26 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         ),
         stat("Turns", c.turns.to_string(), bright),
         stat("Dragons", c.dragon_kills.to_string(), gold),
+        stat(
+            "DK pts",
+            format!("{} to spend", c.dragon_points_unspent),
+            if c.dragon_points_unspent > 0 {
+                gold
+            } else {
+                dim
+            },
+        ),
+        stat(
+            "Boons",
+            format!(
+                "{}a {}d {}hp {}ff",
+                c.dragon_attack_bonus,
+                c.dragon_defense_bonus,
+                c.dragon_hp_bonus,
+                c.dragon_ff_bonus
+            ),
+            dim,
+        ),
         stat("Charm", c.charm.to_string(), bright),
         stat("Soul", c.soulpoints.to_string(), bright),
     ];
@@ -162,30 +182,48 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
             .add_modifier(Modifier::BOLD),
     ))];
 
-    // Fight panels get a foe banner above the action list.
+    // Fight panels get a foe banner above the action list. Multi-fights list
+    // every foe; the first living one is the player's current target.
     if state.mode() == Mode::Fight
         && let Some(enc) = state.encounter()
     {
         lines.push(Line::raw(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                enc.name.clone(),
+        let target = enc.target();
+        for (i, foe) in enc.foes.iter().enumerate() {
+            let dead = foe.hp == 0;
+            let name_style = if dead {
+                Style::default().fg(theme::TEXT_FAINT())
+            } else {
                 Style::default()
                     .fg(theme::ERROR())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("  wields {}", enc.weapon),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ]));
+                    .add_modifier(Modifier::BOLD)
+            };
+            let mut spans = vec![
+                Span::styled(foe.name.clone(), name_style),
+                Span::styled(
+                    format!("  wields {}", foe.weapon),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    if dead {
+                        "slain".to_string()
+                    } else {
+                        format!("{}/{} HP", foe.hp, foe.max_hp)
+                    },
+                    Style::default().fg(if dead { theme::TEXT_FAINT() } else { theme::ERROR() }),
+                ),
+            ];
+            if target == Some(i) && enc.foes.len() > 1 {
+                spans.push(Span::styled(
+                    "  < target",
+                    Style::default().fg(theme::AMBER()),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
         lines.push(Line::from(vec![
-            Span::styled("Foe HP ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                format!("{}/{}", enc.hp, enc.max_hp),
-                Style::default().fg(theme::ERROR()),
-            ),
-            Span::styled("   Your HP ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Your HP ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 format!("{}/{}", c.hitpoints, c.max_hitpoints()),
                 Style::default().fg(theme::SUCCESS()),
@@ -218,6 +256,18 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
             "Choose the craft you'll hone against the forest. The choice is permanent; you'll spend daily \"uses\" on its skills mid-fight.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+
+    if state.mode() == Mode::SpendDragonPoints {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "The dragon's fall left you changed. Spend your {} unspent dragon point{} before returning to the village; each buys a permanent boon.",
+                c.dragon_points_unspent,
+                if c.dragon_points_unspent == 1 { "" } else { "s" }
+            ),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
@@ -290,13 +340,15 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Event => "A Forest Happening",
         Mode::ChooseSpecialty => "Choose Your Path",
         Mode::Graveyard => "The Graveyard",
+        Mode::SpendDragonPoints => "Dragon Points",
     }
 }
 
 fn controls_hint(mode: Mode) -> &'static str {
     match mode {
-        Mode::Fight => "up/down select   Enter act   Esc flee",
+        Mode::Fight => "up/down select   Enter act   Esc try to flee",
         Mode::Village => "up/down move   Enter choose   Esc leave the game",
+        Mode::SpendDragonPoints => "up/down move   Enter spend   Esc leave the game",
         _ => "up/down move   Enter choose   Esc back to village",
     }
 }

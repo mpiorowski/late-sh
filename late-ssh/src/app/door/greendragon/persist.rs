@@ -7,9 +7,10 @@ use serde_json::{Value, json};
 
 use super::model::Character;
 
-/// Bump when the save shape changes in a way that needs migration logic. Today
-/// serde defaults absorb additions, so v1 covers all current changes.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Bump when the save shape changes in a way that needs migration logic.
+/// Plain field additions are absorbed by serde defaults; v2 marks the switch
+/// from auto-applied dragon-kill boons to chooseable dragon points.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Serialize a character into the stored blob shape.
 pub fn to_json(character: &Character) -> Value {
@@ -22,9 +23,29 @@ pub fn to_json(character: &Character) -> Value {
 /// Deserialize a stored blob back into a character. Falls back to a default
 /// character if the blob is missing/corrupt (the caller sets the name).
 pub fn from_json(blob: &Value) -> Character {
-    blob.get("character")
+    let version = blob
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+    let mut c = blob
+        .get("character")
         .and_then(|c| serde_json::from_value::<Character>(c.clone()).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if version < 2 {
+        migrate_v1_dragon_boons(&mut c);
+    }
+    c
+}
+
+/// v1 saves auto-applied +1 atk / +1 def / +5 HP per dragon kill *and* granted
+/// an implicit +1 daily forest fight per kill (capped at 10). v2 makes dragon
+/// points a one-per-kill player choice. Legacy characters keep their (over-
+/// granted) boons and have the implicit ff turned into spent ff points, so
+/// nothing they had regresses; they simply hold no unspent points.
+fn migrate_v1_dragon_boons(c: &mut Character) {
+    if c.dragon_kills > 0 && c.dragon_ff_bonus == 0 && c.dragon_points_unspent == 0 {
+        c.dragon_ff_bonus = c.dragon_kills.min(10);
+    }
 }
 
 #[cfg(test)]
@@ -56,6 +77,29 @@ mod tests {
         assert_eq!(c.level, 3);
         assert_eq!(c.gold, super::super::model::START_GOLD); // defaulted
         assert!(c.alive);
+    }
+
+    #[test]
+    fn v1_blobs_grandfather_the_implicit_ff_bonus() {
+        // A v1 save with kills gets its old implicit daily-turn bonus turned
+        // into spent ff points (capped at 10), with no unspent points.
+        let blob = json!({
+            "schema_version": 1,
+            "character": { "name": "vet", "dragon_kills": 14, "dragon_attack_bonus": 14 }
+        });
+        let c = from_json(&blob);
+        assert_eq!(c.dragon_ff_bonus, 10);
+        assert_eq!(c.dragon_points_unspent, 0);
+        assert_eq!(c.dragon_attack_bonus, 14); // boons kept
+
+        // A v2 save is taken at face value: a zero ff bonus stays zero.
+        let blob = json!({
+            "schema_version": 2,
+            "character": { "name": "new", "dragon_kills": 3, "dragon_points_unspent": 1 }
+        });
+        let c = from_json(&blob);
+        assert_eq!(c.dragon_ff_bonus, 0);
+        assert_eq!(c.dragon_points_unspent, 1);
     }
 
     #[test]

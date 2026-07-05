@@ -159,7 +159,13 @@ fn send_error_message(error: &anyhow::Error) -> String {
         let room = parts
             .next()
             .filter(|room| !room.is_empty())
-            .map(|room| format!("#{room}"))
+            .map(|room| {
+                if room == "server" {
+                    "server".to_string()
+                } else {
+                    format!("#{room}")
+                }
+            })
             .unwrap_or_else(|| "this room".to_string());
         format!(
             "Slow mode in {room}: wait {} before sending again.",
@@ -188,17 +194,12 @@ fn format_cooldown(secs: u64) -> String {
     }
 }
 
-async fn slow_mode_remaining(
+async fn slow_mode_remaining_for_mode(
     client: &tokio_postgres::Client,
     room_id: Uuid,
     user_id: Uuid,
+    slow_mode: ChatSlowMode,
 ) -> Result<Option<Duration>> {
-    let Some(slow_mode) =
-        ChatSlowMode::find_active_for_room_and_user(client, room_id, user_id).await?
-    else {
-        return Ok(None);
-    };
-
     let Some(row) = client
         .query_opt(
             "SELECT created
@@ -224,6 +225,63 @@ async fn slow_mode_remaining(
     } else {
         Ok(None)
     }
+}
+
+async fn server_slow_mode_remaining_for_mode(
+    client: &tokio_postgres::Client,
+    user_id: Uuid,
+    slow_mode: ChatSlowMode,
+) -> Result<Option<Duration>> {
+    let Some(row) = client
+        .query_opt(
+            "SELECT cm.created
+             FROM chat_messages cm
+             JOIN chat_rooms cr ON cr.id = cm.room_id
+             WHERE cm.user_id = $1 AND cr.kind <> 'dm'
+             ORDER BY cm.created DESC, cm.id DESC
+             LIMIT 1",
+            &[&user_id],
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    let last_sent: DateTime<Utc> = row.get("created");
+    let elapsed = Utc::now()
+        .signed_duration_since(last_sent)
+        .num_seconds()
+        .max(0);
+    let remaining = i64::from(slow_mode.interval_secs) - elapsed;
+    if remaining > 0 {
+        Ok(Some(Duration::from_secs(remaining as u64)))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn slow_mode_remaining(
+    client: &tokio_postgres::Client,
+    room: &ChatRoom,
+    user_id: Uuid,
+) -> Result<Option<(Duration, &'static str)>> {
+    if let Some(slow_mode) =
+        ChatSlowMode::find_active_for_room_and_user(client, room.id, user_id).await?
+        && let Some(remaining) =
+            slow_mode_remaining_for_mode(client, room.id, user_id, slow_mode).await?
+    {
+        return Ok(Some((remaining, "room")));
+    }
+
+    if room.kind != "dm"
+        && let Some(slow_mode) = ChatSlowMode::find_active_server_for_user(client, user_id).await?
+        && let Some(remaining) =
+            server_slow_mode_remaining_for_mode(client, user_id, slow_mode).await?
+    {
+        return Ok(Some((remaining, "server")));
+    }
+
+    Ok(None)
 }
 
 /// Account-age tiers for the chat link rate limit. An account under a day old may
@@ -1923,13 +1981,18 @@ impl ChatService {
         if RoomBan::is_active_for_room_and_user(&client, room_id, user_id).await? {
             anyhow::bail!("user is banned from this room");
         }
-        if !is_admin && let Some(remaining) = slow_mode_remaining(&client, room_id, user_id).await?
+        let room = ChatRoom::get(&client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("room not found"))?;
+        if !is_admin
+            && let Some((remaining, scope)) = slow_mode_remaining(&client, &room, user_id).await?
         {
-            anyhow::bail!(
-                "slow-mode:{}:{}",
-                remaining.as_secs(),
-                room_slug.as_deref().unwrap_or("")
-            );
+            let label = if scope == "server" {
+                "server".to_string()
+            } else {
+                room_slug.clone().unwrap_or_default()
+            };
+            anyhow::bail!("slow-mode:{}:{}", remaining.as_secs(), label);
         }
 
         // Account-age link rate limit: younger accounts can only post a link
@@ -1951,9 +2014,6 @@ impl ChatService {
                 anyhow::bail!("reply target is not in this room");
             }
         }
-        let room = ChatRoom::get(&client, room_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("room not found"))?;
         if room.kind == "dm" {
             let user_a = room
                 .dm_user_a

@@ -11,10 +11,10 @@ use std::collections::VecDeque;
 use rand::Rng;
 use uuid::Uuid;
 
-use super::combat::{Buff, Combatant, resolve_round_buffed};
+use super::combat::{Buff, Combatant, resolve_extra_foe_strike, resolve_round_buffed};
 use super::data;
 use super::events::{self, ForestEvent};
-use super::model::{Character, ForestHunt, Specialty};
+use super::model::{Character, DragonPointKind, ForestHunt, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
 use super::svc::{CharacterLoad, GreenDragonService};
 
@@ -45,6 +45,9 @@ pub enum Mode {
     ChooseSpecialty,
     /// The graveyard: shown while dead, until the next new day.
     Graveyard,
+    /// The forced dragon-point spend gate: play is blocked while points from a
+    /// dragon kill sit unallocated (LoGD's new-day gate).
+    SpendDragonPoints,
 }
 
 /// What kind of foe the current encounter is, deciding the victory handler.
@@ -55,22 +58,56 @@ pub enum FoeKind {
     Dragon,
 }
 
-/// A live combat encounter.
+/// One foe in a live encounter. Master and dragon fights hold exactly one;
+/// forest multi-fights (unlocked at 10 dragon kills) can hold up to a pack.
 #[derive(Clone, Debug)]
-pub struct Encounter {
+pub struct Foe {
     pub name: String,
     pub weapon: String,
-    pub foe: Combatant,
+    pub combatant: Combatant,
     pub hp: u32,
     pub max_hp: u32,
     pub reward_gold: u32,
     pub reward_exp: u32,
+    pub level: u8,
+}
+
+/// A live combat encounter: the player strikes the first living foe each
+/// round; every living foe strikes back.
+#[derive(Clone, Debug)]
+pub struct Encounter {
+    pub foes: Vec<Foe>,
     pub kind: FoeKind,
     /// Active specialty buffs, ticked each round by [`resolve_round_buffed`].
     pub buffs: Vec<Buff>,
-    /// Whether the player has taken any damage this fight (drives the dragon's
-    /// flawless-kill bonus).
+    /// Whether the player has taken any damage this fight (drives flawless
+    /// bonuses: the dragon's extra loot, the forest's turn refund).
     pub took_damage: bool,
+    /// Foes already slain this fight, banked for the victory settlement.
+    pub slain: Vec<SlainFoe>,
+}
+
+impl Encounter {
+    /// A single-foe encounter (masters, the dragon, ordinary forest fights).
+    fn single(foe: Foe, kind: FoeKind) -> Self {
+        Encounter {
+            foes: vec![foe],
+            kind,
+            buffs: Vec::new(),
+            took_damage: false,
+            slain: Vec::new(),
+        }
+    }
+
+    /// Index of the player's current target: the first living foe.
+    pub fn target(&self) -> Option<usize> {
+        self.foes.iter().position(|f| f.hp > 0)
+    }
+
+    /// Living foes remaining.
+    pub fn living(&self) -> usize {
+        self.foes.iter().filter(|f| f.hp > 0).count()
+    }
 }
 
 const LOG_CAP: usize = 7;
@@ -119,7 +156,10 @@ impl State {
             CharacterLoad::Loading => None,
         };
         if let Some(character) = ready {
-            self.mode = if character.alive {
+            // Unspent dragon points gate everything, like LoGD's new-day gate.
+            self.mode = if character.dragon_points_unspent > 0 {
+                Mode::SpendDragonPoints
+            } else if character.alive {
                 Mode::Village
             } else {
                 Mode::Graveyard
@@ -178,6 +218,7 @@ impl State {
             Mode::Event => event_menu(c, self.pending_event),
             Mode::ChooseSpecialty => specialty_menu(),
             Mode::Graveyard => vec![("Wait for a new day (leave)".into(), true)],
+            Mode::SpendDragonPoints => dragon_point_menu(),
             Mode::Loading => Vec::new(),
         }
     }
@@ -216,6 +257,7 @@ impl State {
             Mode::Event => self.select_event(),
             Mode::ChooseSpecialty => self.select_specialty(),
             Mode::Graveyard => Selection::Leave,
+            Mode::SpendDragonPoints => self.select_dragon_point(),
             Mode::Loading => Selection::Stay,
         }
     }
@@ -225,13 +267,10 @@ impl State {
     pub fn back(&mut self) -> Selection {
         match self.mode {
             Mode::Village | Mode::Loading => Selection::Leave,
+            // Esc during a fight attempts to flee (a 1-in-3 roll, like the
+            // Flee row). Leaving mid-fight is never free.
             Mode::Fight => {
-                // Esc during a fight flees back to the village (the turn is
-                // already spent). Persist so the fled fight stays fled.
-                self.push_log("You flee back to the safety of the village.".into());
-                self.encounter = None;
-                self.goto(Mode::Village);
-                self.save();
+                self.attempt_flee();
                 Selection::Stay
             }
             Mode::Event => {
@@ -240,6 +279,9 @@ impl State {
                 self.cursor = 1;
                 self.select_event()
             }
+            // The spend gate can't be backed out of into play — but leaving
+            // the door entirely is fine; the gate re-arms on re-entry.
+            Mode::SpendDragonPoints => Selection::Leave,
             _ => {
                 self.goto(Mode::Village);
                 Selection::Stay
@@ -264,7 +306,17 @@ impl State {
             s if s.starts_with("Seek Out the Green Dragon") => self.start_dragon(),
             s if s.starts_with("Ironroost") => self.goto(Mode::WeaponShop),
             s if s.starts_with("Duskmail") => self.goto(Mode::ArmorShop),
-            s if s.starts_with("The Mendery") => self.goto(Mode::Healer),
+            s if s.starts_with("The Mendery") => {
+                // Over-healed visitors are clipped back to max, free of charge
+                // (healer.php's forced over-max branch).
+                if self.character.as_mut().unwrap().normalize_overheal() {
+                    self.push_log(
+                        "The healer eyes your unnatural vigor and drains it off, no charge.".into(),
+                    );
+                    self.save();
+                }
+                self.goto(Mode::Healer)
+            }
             s if s.starts_with("The Coinvault") => self.goto(Mode::Bank),
             s if s.starts_with("Leave") => return Selection::Leave,
             _ => {}
@@ -301,47 +353,117 @@ impl State {
             return;
         }
         c.turns -= 1;
-        let player_level = c.level;
-        // The hunt sets a ±1 base shift; LoGD then layers a small random jitter:
-        // roughly a third of searches nudge the level up (1/5) and/or down (1/3).
-        let mut level = hunt.creature_level(player_level) as i16;
-        if rng.gen_range(0..3) == 0 {
-            if rng.gen_range(0..5) == 0 {
-                level += 1;
-            }
-            if rng.gen_range(0..3) == 0 {
-                level -= 1;
-            }
+        let player_level = c.level as i32;
+
+        // The base level jitter (`forest.php`): a third of searches roll a
+        // nudge, +1 with odds 1/5 and -1 with odds 1/3; slumming shifts down
+        // one, thrillseeking up one.
+        let (mut plev, mut nlev) = (0i32, 0i32);
+        if rng.gen_range(0..=2) == 1 {
+            plev = i32::from(rng.gen_range(1..=5) == 1);
+            nlev = i32::from(rng.gen_range(1..=3) == 1);
         }
-        let level = level.clamp(1, 16) as u8;
-        let tier = data::creature_tier(level);
-        let names = data::CREATURE_NAMES[(level - 1) as usize];
-        let (name, weapon) = names[rng.gen_range(0..names.len())];
-        // Thrillseeking pays 10% more gold and experience for the added risk.
-        let (reward_gold, reward_exp) = if matches!(hunt, ForestHunt::Thrillseeking) {
-            (
-                (tier.gold as f64 * 1.10).round() as u32,
-                (tier.exp as f64 * 1.10).round() as u32,
-            )
-        } else {
-            (tier.gold, tier.exp)
+        match hunt {
+            ForestHunt::Slumming => nlev += 1,
+            ForestHunt::Thrillseeking => plev += 1,
+            ForestHunt::Hunt => {}
+        }
+        let mut target = player_level + plev - nlev;
+        let mut min_target = target;
+
+        // Multi-fights unlock at 10 dragon kills: a quarter of searches spawn
+        // 2-3 foes, slumming shaving the count and level floor, thrillseeking
+        // raising both.
+        let mut multi = 1i32;
+        if c.dragon_kills >= 10 && rng.gen_range(1..=100) <= 25 {
+            multi = rng.gen_range(2..=3);
+            match hunt {
+                ForestHunt::Slumming => {
+                    multi -= rng.gen_range(0..=1);
+                    min_target = target - if rng.gen_range(0..=1) == 1 { 1 } else { 2 };
+                }
+                ForestHunt::Thrillseeking => {
+                    multi += rng.gen_range(1..=2);
+                    if rng.gen_range(0..=1) == 1 {
+                        target += 1;
+                    }
+                    min_target = target - 1;
+                }
+                ForestHunt::Hunt => {}
+            }
+            multi = multi.min(player_level);
+        }
+        let mut multi = multi.max(1);
+        target = target.max(1);
+        min_target = min_target.clamp(1, target);
+        // Overflow past the table's cap converts to extra foes (upstream caps
+        // at its level-17 rows; our table ends at 16 — see PARITY.md).
+        if target > 16 {
+            multi += target - 16;
+            target = 16;
+        }
+
+        // A pack (1-in-6 when multi) clones one creature: the stat block and
+        // name are drawn once from the level range, while each clone's nominal
+        // level is rolled separately (it feeds the exp-bonus and flawless
+        // math). Otherwise each foe is an independent creature in the range.
+        let pack = multi > 1 && rng.gen_range(0..=5) == 0;
+        let pack_level = rng.gen_range(min_target..=target) as u8;
+        let pack_name = {
+            let names = data::CREATURE_NAMES[(pack_level - 1) as usize];
+            names[rng.gen_range(0..names.len())]
         };
+        let mut foes = Vec::with_capacity(multi as usize);
+        for _ in 0..multi {
+            let level = if multi > 1 {
+                rng.gen_range(min_target..=target) as u8
+            } else {
+                target as u8
+            };
+            let (name, weapon, stat_level) = if pack {
+                (pack_name.0, pack_name.1, pack_level)
+            } else {
+                let names = data::CREATURE_NAMES[(level - 1) as usize];
+                let (n, w) = names[rng.gen_range(0..names.len())];
+                (n, w, level)
+            };
+            // Investment scaling + flux (buffbadguy), then the thrill bonus.
+            let mut tier = c.buff_foe(data::creature_tier(stat_level), &mut rng);
+            if matches!(hunt, ForestHunt::Thrillseeking) {
+                tier.gold = (tier.gold as f64 * 1.10).round() as u32;
+                tier.exp = (tier.exp as f64 * 1.10).round() as u32;
+            }
+            foes.push(Foe {
+                name: name.to_string(),
+                weapon: weapon.to_string(),
+                combatant: Combatant {
+                    attack: tier.attack,
+                    defense: tier.defense,
+                },
+                hp: tier.hp,
+                max_hp: tier.hp,
+                reward_gold: tier.gold,
+                reward_exp: tier.exp,
+                level,
+            });
+        }
+        if foes.len() > 1 {
+            self.push_log(format!(
+                "A band of {} foes closes in, led by {}!",
+                foes.len(),
+                foes[0].name
+            ));
+        } else {
+            let (name, weapon) = (&foes[0].name, &foes[0].weapon);
+            self.push_log(format!("You encounter {name} wielding {weapon}!"));
+        }
         self.encounter = Some(Encounter {
-            name: name.to_string(),
-            weapon: weapon.to_string(),
-            foe: Combatant {
-                attack: tier.attack,
-                defense: tier.defense,
-            },
-            hp: tier.hp,
-            max_hp: tier.hp,
-            reward_gold,
-            reward_exp,
+            foes,
             kind: FoeKind::Creature,
             buffs: Vec::new(),
             took_damage: false,
+            slain: Vec::new(),
         });
-        self.push_log(format!("You encounter {name} wielding {weapon}!"));
         self.goto(Mode::Fight);
         // Persist the spent forest turn now, so a disconnect mid-fight can't
         // refund it on reconnect.
@@ -429,18 +551,19 @@ impl State {
         let Some((master, foe, hp)) = c.scaled_master(&mut rand::thread_rng()) else {
             return Selection::Stay;
         };
-        self.encounter = Some(Encounter {
-            name: master.name.to_string(),
-            weapon: master.weapon.to_string(),
-            foe,
-            hp,
-            max_hp: hp,
-            reward_gold: 0,
-            reward_exp: 0,
-            kind: FoeKind::Master,
-            buffs: Vec::new(),
-            took_damage: false,
-        });
+        self.encounter = Some(Encounter::single(
+            Foe {
+                name: master.name.to_string(),
+                weapon: master.weapon.to_string(),
+                combatant: foe,
+                hp,
+                max_hp: hp,
+                reward_gold: 0,
+                reward_exp: 0,
+                level: c.level,
+            },
+            FoeKind::Master,
+        ));
         self.push_log(format!("{} steps forward to test you!", master.name));
         self.goto(Mode::Fight);
         Selection::Stay
@@ -455,19 +578,21 @@ impl State {
             return;
         }
         c.seen_dragon = true;
+        let level = c.level;
         let (attack, defense, hp) = c.scaled_dragon(&mut rand::thread_rng());
-        self.encounter = Some(Encounter {
-            name: "The Green Dragon".to_string(),
-            weapon: "Fearsome Claws and Flame".to_string(),
-            foe: Combatant { attack, defense },
-            hp,
-            max_hp: hp,
-            reward_gold: 0,
-            reward_exp: 0,
-            kind: FoeKind::Dragon,
-            buffs: Vec::new(),
-            took_damage: false,
-        });
+        self.encounter = Some(Encounter::single(
+            Foe {
+                name: "The Green Dragon".to_string(),
+                weapon: "Fearsome Claws and Flame".to_string(),
+                combatant: Combatant { attack, defense },
+                hp,
+                max_hp: hp,
+                reward_gold: 0,
+                reward_exp: 0,
+                level,
+            },
+            FoeKind::Dragon,
+        ));
         self.push_log("You step into the dragon's lair. The air turns to fire.".into());
         self.goto(Mode::Fight);
         // Persist `seen_dragon` now so the once-per-run dragon seek can't be
@@ -492,7 +617,66 @@ impl State {
         } else if cursor <= skill_count {
             self.cast_specialty_skill(cursor - 1)
         } else {
-            self.back() // Flee
+            self.attempt_flee(); // Flee
+            Selection::Stay
+        }
+    }
+
+    /// Try to flee the fight: a 1-in-3 roll (`forest.php` `op=run`). Success
+    /// drops the encounter; failure means the foes still get their round.
+    fn attempt_flee(&mut self) {
+        if self.encounter.is_none() {
+            self.goto(Mode::Village);
+            return;
+        }
+        let mut rng = rand::thread_rng();
+        if rng.gen_range(0..3) == 0 {
+            self.push_log("You slip away and flee back to the village.".into());
+            self.encounter = None;
+            self.goto(Mode::Village);
+            self.save();
+            return;
+        }
+        self.push_log("You try to flee, but your foe cuts off your escape!".into());
+        let Some(mut enc) = self.encounter.take() else {
+            return;
+        };
+        self.foes_strike(&mut enc, None);
+        if self.character.as_ref().unwrap().hitpoints == 0 {
+            self.defeat(&enc);
+            return;
+        }
+        self.encounter = Some(enc);
+        self.save();
+    }
+
+    /// Every living foe (except `skip`, which already struck through the main
+    /// resolver) takes its swing at the player. Marks `took_damage` and floors
+    /// HP at zero; the caller checks for death.
+    fn foes_strike(&mut self, enc: &mut Encounter, skip: Option<usize>) {
+        let mut rng = rand::thread_rng();
+        let player = self.character.as_ref().unwrap().combatant();
+        let player_max = self.character.as_ref().unwrap().max_hitpoints();
+        for i in 0..enc.foes.len() {
+            if Some(i) == skip || enc.foes[i].hp == 0 {
+                continue;
+            }
+            let dmg = resolve_extra_foe_strike(&mut rng, player, enc.foes[i].combatant, &enc.buffs);
+            if dmg > 0 {
+                enc.took_damage = true;
+            }
+            let c = self.character.as_mut().unwrap();
+            c.hitpoints = apply_signed(c.hitpoints, dmg, player_max);
+            let hp = c.hitpoints;
+            let name = enc.foes[i].name.clone();
+            if dmg >= 0 {
+                self.push_log(format!("{name} hits you for {dmg} ({hp} HP left)."));
+            } else {
+                self.push_log(format!("{name} fumbles its strike ({hp} HP left)."));
+            }
+            if hp == 0 {
+                return;
+            }
         }
     }
 
@@ -500,14 +684,25 @@ impl State {
         let Some(mut enc) = self.encounter.take() else {
             return;
         };
+        let Some(target) = enc.target() else {
+            self.victory(&enc);
+            return;
+        };
         let mut rng = rand::thread_rng();
         let player = self.character.as_ref().unwrap().combatant();
         let player_max = self.character.as_ref().unwrap().max_hitpoints();
         // Companions live on the character and fight each round; the resolver
-        // mutates their HP and removes any that fall.
+        // mutates their HP and removes any that fall. The player and their
+        // companions all strike the current target.
         let outcome = {
             let c = self.character.as_mut().unwrap();
-            resolve_round_buffed(&mut rng, player, enc.foe, &mut enc.buffs, &mut c.companions)
+            resolve_round_buffed(
+                &mut rng,
+                player,
+                enc.foes[target].combatant,
+                &mut enc.buffs,
+                &mut c.companions,
+            )
         };
 
         if outcome.player_crit {
@@ -522,42 +717,59 @@ impl State {
         }
 
         // Damage is signed: a glancing blow (negative) heals the target.
-        enc.hp = apply_signed(enc.hp, outcome.damage_to_enemy, enc.max_hp);
+        let foe = &mut enc.foes[target];
+        foe.hp = apply_signed(foe.hp, outcome.damage_to_enemy, foe.max_hp);
+        let (foe_name, foe_hp) = (foe.name.clone(), foe.hp);
         if outcome.damage_to_enemy >= 0 {
             self.push_log(format!(
-                "You hit {} for {} ({} HP left).",
-                enc.name, outcome.damage_to_enemy, enc.hp
+                "You hit {foe_name} for {} ({foe_hp} HP left).",
+                outcome.damage_to_enemy
             ));
         } else {
             self.push_log(format!(
-                "Your blow glances off {}; it recovers {} HP ({} left).",
-                enc.name, -outcome.damage_to_enemy, enc.hp
+                "Your blow glances off {foe_name}; it recovers {} HP ({foe_hp} left).",
+                -outcome.damage_to_enemy
             ));
         }
-
-        if enc.hp == 0 {
-            self.victory(&enc);
-            return;
+        if foe_hp == 0 {
+            let foe = &enc.foes[target];
+            enc.slain.push(SlainFoe {
+                level: foe.level,
+                gold: foe.reward_gold,
+                exp: foe.reward_exp,
+            });
+            self.push_log(format!("{foe_name} falls!"));
+            if enc.living() == 0 {
+                self.victory(&enc);
+                return;
+            }
         }
 
-        // Foe strikes back. A hit that lands marks the fight as no longer
-        // flawless (the dragon's flawless bonus rides on this).
+        // The target's counterstrike came out of the main resolver; every
+        // other living foe swings too. Any landed hit spoils flawless.
         if outcome.damage_to_player > 0 {
             enc.took_damage = true;
         }
-        let c = self.character.as_mut().unwrap();
-        c.hitpoints = apply_signed(c.hitpoints, outcome.damage_to_player, player_max);
-        if outcome.player_heal > 0 {
-            c.hitpoints = (c.hitpoints + outcome.player_heal).min(c.max_hitpoints());
+        {
+            let c = self.character.as_mut().unwrap();
+            c.hitpoints = apply_signed(c.hitpoints, outcome.damage_to_player, player_max);
+            if outcome.player_heal > 0 {
+                c.hitpoints = (c.hitpoints + outcome.player_heal).min(c.max_hitpoints());
+            }
         }
-        let hp = c.hitpoints;
-        if outcome.damage_to_player >= 0 {
+        let hp = self.character.as_ref().unwrap().hitpoints;
+        if outcome.damage_to_player > 0 {
+            let parting = if enc.foes[target].hp == 0 {
+                " with a parting blow"
+            } else {
+                ""
+            };
             self.push_log(format!(
-                "{} hits you for {} ({} HP left).",
-                enc.name, outcome.damage_to_player, hp
+                "{foe_name} hits you{parting} for {} ({hp} HP left).",
+                outcome.damage_to_player
             ));
-        } else {
-            self.push_log(format!("{} fumbles its strike ({} HP left).", enc.name, hp));
+        } else if enc.foes[target].hp > 0 {
+            self.push_log(format!("{foe_name} fumbles its strike ({hp} HP left)."));
         }
         if outcome.player_heal > 0 {
             self.push_log(format!(
@@ -565,8 +777,12 @@ impl State {
                 outcome.player_heal
             ));
         }
-
         if hp == 0 {
+            self.defeat(&enc);
+            return;
+        }
+        self.foes_strike(&mut enc, Some(target));
+        if self.character.as_ref().unwrap().hitpoints == 0 {
             self.defeat(&enc);
             return;
         }
@@ -613,12 +829,28 @@ impl State {
     fn victory(&mut self, enc: &Encounter) {
         match enc.kind {
             FoeKind::Creature => {
+                let flawless = !enc.took_damage;
+                let mut rng = rand::thread_rng();
                 let c = self.character.as_mut().unwrap();
-                c.grant_rewards(enc.reward_gold, enc.reward_exp);
+                let v = c.forest_victory(&enc.slain, flawless, &mut rng);
                 self.push_log(format!(
-                    "You slay {}! +{} gold, +{} experience.",
-                    enc.name, enc.reward_gold, enc.reward_exp
+                    "Victory! +{} gold, +{} experience.",
+                    v.gold, v.exp
                 ));
+                if v.gem {
+                    self.push_log("Something glitters in the remains: A GEM!".into());
+                }
+                if v.flawless {
+                    if v.turn_refunded {
+                        self.push_log(
+                            "A flawless fight - you press on without spending a turn!".into(),
+                        );
+                    } else {
+                        self.push_log(
+                            "A flawless fight - a worthier foe would have spared the turn.".into(),
+                        );
+                    }
+                }
                 self.encounter = None;
                 // Stay in the forest to fight again if turns remain.
                 self.goto(Mode::Forest);
@@ -629,7 +861,7 @@ impl State {
                 let lvl = c.level;
                 self.push_log(format!(
                     "You defeat {}! You advance to level {} and are fully healed.",
-                    enc.name, lvl
+                    enc.foes[0].name, lvl
                 ));
                 self.encounter = None;
                 self.goto(Mode::Village);
@@ -639,14 +871,15 @@ impl State {
                 self.character.as_mut().unwrap().slay_dragon(flawless);
                 let kills = self.character.as_ref().unwrap().dragon_kills;
                 let mut msg = format!(
-                    "THE GREEN DRAGON IS SLAIN! Dragon kill #{kills}. Your strength and guard harden for the run ahead."
+                    "THE GREEN DRAGON IS SLAIN! Dragon kill #{kills}. A dragon point is yours to spend."
                 );
                 if flawless {
                     msg.push_str(" Flawless - not a scratch on you! Bonus gold and a gem.");
                 }
                 self.push_log(msg);
                 self.encounter = None;
-                self.goto(Mode::Village);
+                // The kill banks a dragon point; the spend gate opens at once.
+                self.goto(Mode::SpendDragonPoints);
             }
         }
         self.save();
@@ -654,6 +887,13 @@ impl State {
 
     fn defeat(&mut self, enc: &Encounter) {
         let c = self.character.as_mut().unwrap();
+        // The killer for the log: the first foe still standing.
+        let killer = enc
+            .foes
+            .iter()
+            .find(|f| f.hp > 0)
+            .map(|f| f.name.clone())
+            .unwrap_or_else(|| enc.foes[0].name.clone());
         match enc.kind {
             FoeKind::Master => {
                 // A training loss isn't lethal in LoGD: the master halts before
@@ -661,8 +901,7 @@ impl State {
                 // you off to train harder. No death, no penalty.
                 c.hitpoints = c.max_hitpoints();
                 self.push_log(format!(
-                    "{} bests you, then stays the final blow and heals your wounds. Train harder.",
-                    enc.name
+                    "{killer} bests you, then stays the final blow and heals your wounds. Train harder."
                 ));
                 self.encounter = None;
                 self.goto(Mode::Village);
@@ -670,8 +909,7 @@ impl State {
             _ => {
                 c.die();
                 self.push_log(format!(
-                    "{} has slain you! Your gold is lost and you are dragged to the graveyard.",
-                    enc.name
+                    "{killer} has slain you! Your gold is lost and you are dragged to the graveyard."
                 ));
                 self.encounter = None;
                 self.goto(Mode::Graveyard);
@@ -717,14 +955,20 @@ impl State {
             self.push_log("You are already at full health.".into());
             return Selection::Stay;
         }
-        let cost = c.full_heal_cost();
-        if c.buy_full_heal() {
-            self.push_log(format!(
-                "The healer restores you to full health for {cost} gold."
-            ));
-            self.save();
-        } else {
-            self.push_log("You can't afford a full healing.".into());
+        // Rows run 100%, 90%, ... 10% (healer.php's potion shelf).
+        let pct = 100u32.saturating_sub(self.cursor as u32 * 10);
+        if !(10..=100).contains(&pct) {
+            return Selection::Stay;
+        }
+        let cost = c.heal_cost(pct);
+        match c.buy_heal(pct) {
+            Some(healed) => {
+                self.push_log(format!(
+                    "The healer's draught knits {healed} HP back for {cost} gold."
+                ));
+                self.save();
+            }
+            None => self.push_log("You can't afford that draught.".into()),
         }
         Selection::Stay
     }
@@ -737,14 +981,58 @@ impl State {
             0 => {
                 let amount = c.gold;
                 c.deposit(amount);
-                self.push_log(format!("You deposit {amount} gold."));
+                if c.gold_in_bank < 0 {
+                    let debt = -c.gold_in_bank;
+                    self.push_log(format!(
+                        "You pay {amount} gold toward your debt ({debt} still owed)."
+                    ));
+                } else {
+                    self.push_log(format!("You deposit {amount} gold."));
+                }
             }
             1 => {
-                let amount = c.gold_in_bank;
+                let amount = c.gold_in_bank.max(0) as u64;
                 c.withdraw(amount);
                 self.push_log(format!("You withdraw {amount} gold."));
             }
+            2 => {
+                let amount = c.borrow(c.borrow_available());
+                if amount > 0 {
+                    self.push_log(format!(
+                        "The banker counts out a loan of {amount} gold. Debt gathers interest daily."
+                    ));
+                } else {
+                    self.push_log("The bank won't extend you any more credit.".into());
+                }
+            }
             _ => return Selection::Stay,
+        }
+        self.save();
+        Selection::Stay
+    }
+
+    // --- dragon points --------------------------------------------------------
+
+    /// Spend one dragon point on the highlighted upgrade; the gate lifts once
+    /// the last point is allocated.
+    fn select_dragon_point(&mut self) -> Selection {
+        let kind = match self.cursor {
+            0 => DragonPointKind::Hp,
+            1 => DragonPointKind::ForestFights,
+            2 => DragonPointKind::Attack,
+            3 => DragonPointKind::Defense,
+            _ => return Selection::Stay,
+        };
+        let c = self.character.as_mut().unwrap();
+        if !c.spend_dragon_point(kind) {
+            self.goto(Mode::Village);
+            return Selection::Stay;
+        }
+        let left = c.dragon_points_unspent;
+        let alive = c.alive;
+        self.push_log(format!("Dragon point spent: {}.", kind.label()));
+        if left == 0 {
+            self.goto(if alive { Mode::Village } else { Mode::Graveyard });
         }
         self.save();
         Selection::Stay
@@ -809,7 +1097,7 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
     rows.push(("Duskmail Armoury".into(), true));
     rows.push((
         "The Mendery (healer)".into(),
-        c.hitpoints < c.max_hitpoints(),
+        c.hitpoints != c.max_hitpoints(),
     ));
     rows.push(("The Coinvault (bank)".into(), true));
     rows.push(("Leave the realm".into(), true));
@@ -862,19 +1150,56 @@ fn event_menu(c: &Character, event: Option<ForestEvent>) -> Vec<(String, bool)> 
     }
 }
 
+/// The healer's shelf: a complete heal, then the discount draughts at 90%
+/// down to 10% of the damage (LoGD `healer.php` sells every step of ten).
 fn healer_menu(c: &Character) -> Vec<(String, bool)> {
     let needs = c.hitpoints < c.max_hitpoints();
-    vec![(format!("Heal fully ({} gold)", c.full_heal_cost()), needs)]
+    let mut rows = vec![(
+        format!("Complete healing ({} gold)", c.heal_cost(100)),
+        needs && c.gold >= c.heal_cost(100),
+    )];
+    for pct in (10..=90).rev().step_by(10) {
+        rows.push((
+            format!("Heal {pct}% ({} gold)", c.heal_cost(pct)),
+            needs && c.gold >= c.heal_cost(pct),
+        ));
+    }
+    rows
 }
 
 fn bank_menu(c: &Character) -> Vec<(String, bool)> {
-    vec![
-        (format!("Deposit all ({} gold)", c.gold), c.gold > 0),
+    let balance_row = if c.gold_in_bank < 0 {
         (
-            format!("Withdraw all ({} gold)", c.gold_in_bank),
+            format!("Pay down debt ({} owed) with all gold", -c.gold_in_bank),
+            c.gold > 0,
+        )
+    } else {
+        (format!("Deposit all ({} gold)", c.gold), c.gold > 0)
+    };
+    vec![
+        balance_row,
+        (
+            format!("Withdraw all ({} gold)", c.gold_in_bank.max(0)),
             c.gold_in_bank > 0,
         ),
+        (
+            format!("Take a loan ({} gold available)", c.borrow_available()),
+            c.borrow_available() > 0,
+        ),
     ]
+}
+
+/// The forced dragon-point allocation gate (LoGD's new-day spend screen).
+fn dragon_point_menu() -> Vec<(String, bool)> {
+    [
+        DragonPointKind::Hp,
+        DragonPointKind::ForestFights,
+        DragonPointKind::Attack,
+        DragonPointKind::Defense,
+    ]
+    .into_iter()
+    .map(|k| (k.label().to_string(), true))
+    .collect()
 }
 
 fn training_menu(c: &Character) -> Vec<(String, bool)> {
@@ -1003,5 +1328,41 @@ mod tests {
         let rows = bank_menu(&c);
         assert!(rows[0].1); // can deposit
         assert!(!rows[1].1); // nothing to withdraw
+        // The loan row offers the full level-scaled credit line (3 * 20).
+        assert!(rows[2].0.contains("60 gold available"));
+        assert!(rows[2].1);
+
+        // In debt: the deposit row becomes a pay-down and the credit shrinks.
+        c.gold_in_bank = -40;
+        let rows = bank_menu(&c);
+        assert!(rows[0].0.starts_with("Pay down debt (40 owed)"));
+        assert!(!rows[1].1); // nothing (positive) to withdraw
+        assert!(rows[2].0.contains("20 gold available"));
+    }
+
+    #[test]
+    fn healer_menu_stocks_the_full_percent_shelf() {
+        let mut c = lvl(5);
+        c.hitpoints = c.max_hitpoints() - 20; // full cost 48
+        c.gold = 24;
+        let rows = healer_menu(&c);
+        // 100% plus 90..10 by tens.
+        assert_eq!(rows.len(), 10);
+        assert!(rows[0].0.starts_with("Complete healing (48 gold)"));
+        assert!(!rows[0].1); // can't afford 48
+        assert!(rows[1].0.starts_with("Heal 90%"));
+        // 50% costs 24 — exactly affordable (row index 5: 100,90,80,70,60,50).
+        assert!(rows[5].0.starts_with("Heal 50% (24 gold)"));
+        assert!(rows[5].1);
+        assert!(rows[9].0.starts_with("Heal 10% (5 gold)"));
+    }
+
+    #[test]
+    fn dragon_point_menu_offers_the_four_boons() {
+        let rows = dragon_point_menu();
+        assert_eq!(rows.len(), 4);
+        assert!(rows.iter().all(|(_, enabled)| *enabled));
+        assert!(rows[0].0.contains("max hitpoints"));
+        assert!(rows[1].0.contains("forest fight"));
     }
 }

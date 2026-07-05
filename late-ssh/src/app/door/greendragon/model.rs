@@ -23,30 +23,26 @@ pub const EXP_KEEP_ON_DEATH: f64 = 0.90;
 /// `fightsforinterest`). Leave more than this unused and you didn't work for it.
 pub const FIGHTS_FOR_INTEREST: u32 = 4;
 /// Bank balance at/above which no interest is paid (LoGD `maxgoldforinterest`).
-pub const MAX_GOLD_FOR_INTEREST: u64 = 100_000;
+pub const MAX_GOLD_FOR_INTEREST: i64 = 100_000;
 /// Daily bank interest is a random percent in this inclusive range, rolled fresh
 /// each new day (LoGD `mininterest`/`maxinterest` defaults).
 pub const MIN_INTEREST_PERCENT: u32 = 1;
 pub const MAX_INTEREST_PERCENT: u32 = 10;
-/// Gold ceiling carried into a fresh run after a dragon kill, before the
-/// flawless bonus (LoGD `maxrestartgold`). Retained on-hand gold plus
-/// [`START_GOLD`] per kill is capped here.
+/// Gold carried into a fresh run after a dragon kill, before the flawless
+/// bonus (LoGD `maxrestartgold`): [`START_GOLD`] plus [`START_GOLD`] per kill,
+/// capped here. On-hand gold is *not* retained — the run reset wipes it.
 pub const DRAGON_RUN_GOLD_CAP: u64 = 300;
 /// Gem ceiling carried into a fresh run after a dragon kill (LoGD
 /// `maxrestartgems`).
 pub const MAX_RESTART_GEMS: u32 = 10;
-/// Permanent attack/defense gained each dragon kill — LoGD's retained
-/// dragon-point boons, auto-applied on the kill (no Gypsy shop). The endgame
-/// dragon scales against this investment (`scaled_dragon`).
-pub const DK_ATTACK_PER_KILL: u32 = 1;
-pub const DK_DEFENSE_PER_KILL: u32 = 1;
-/// Permanent max-HP retained each dragon kill (one dragon point's worth of HP,
-/// 5 HP, mirroring LoGD's earned-HP retention across the run reset).
-pub const DK_HP_PER_KILL: u32 = 5;
-/// Extra daily forest fights granted per banked dragon kill (LoGD's `dkff`
-/// dragon-kill fights), capped so the day doesn't balloon.
-pub const DK_FOREST_FIGHTS_PER_KILL: u32 = 1;
-pub const DK_FOREST_FIGHTS_CAP: u32 = 10;
+/// Max HP granted per dragon point spent on `hp` (LoGD `dragonpointspend`).
+pub const HP_PER_DRAGON_POINT: u32 = 5;
+/// Gold the bank will lend per character level (LoGD `borrowperlevel`). Debt is
+/// a negative balance and accrues interest daily.
+pub const BORROW_PER_LEVEL: i64 = 20;
+/// One-in-this chance of a gem on a forest victory under level 15 (LoGD
+/// `forestgemchance`).
+pub const FOREST_GEM_CHANCE: u32 = 25;
 /// Charm gained per dragon kill (LoGD `charm += 5`).
 pub const CHARM_PER_DRAGON_KILL: u32 = 5;
 /// Bonus gold (3x [`START_GOLD`]) and a gem for a flawless, no-damage dragon
@@ -84,6 +80,24 @@ impl ForestHunt {
     }
 }
 
+/// One slain foe's contribution to a forest victory settlement.
+#[derive(Clone, Copy, Debug)]
+pub struct SlainFoe {
+    pub level: u8,
+    pub gold: u32,
+    pub exp: u32,
+}
+
+/// What a settled forest victory paid out, for logging.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForestVictory {
+    pub gold: u64,
+    pub exp: u64,
+    pub gem: bool,
+    pub flawless: bool,
+    pub turn_refunded: bool,
+}
+
 /// A persistent Green Dragon character. One per user, stored as a JSON blob.
 ///
 /// Stats that are fully derivable (attack, defense, max HP) are *not* stored —
@@ -103,7 +117,9 @@ pub struct Character {
     /// Equipped armor tier, 0 (none) ..= 15.
     pub armor_tier: u8,
     pub gold: u64,
-    pub gold_in_bank: u64,
+    /// Banked gold. **Signed**: a negative balance is a live loan (LoGD lets
+    /// you borrow up to `level * BORROW_PER_LEVEL`), and debt accrues interest.
+    pub gold_in_bank: i64,
     /// Forest fights remaining today.
     pub turns: u32,
     /// False after a forest death; revived on the next new day.
@@ -112,12 +128,18 @@ pub struct Character {
     pub seen_dragon: bool,
     /// Lifetime dragon kills.
     pub dragon_kills: u32,
-    /// Permanent retained max-HP from dragon kills (LoGD's earned-HP retention).
+    /// Permanent max-HP bought with `hp` dragon points (+5 each).
     pub dragon_hp_bonus: u32,
-    /// Permanent retained attack from dragon kills (LoGD's `at` dragon points).
+    /// Permanent attack bought with `at` dragon points (+1 each).
     pub dragon_attack_bonus: u32,
-    /// Permanent retained defense from dragon kills (LoGD's `de` dragon points).
+    /// Permanent defense bought with `de` dragon points (+1 each).
     pub dragon_defense_bonus: u32,
+    /// Permanent extra daily forest fights bought with `ff` dragon points
+    /// (+1/day each, LoGD's `dkff`).
+    pub dragon_ff_bonus: u32,
+    /// Dragon points earned (one per kill) but not yet allocated. While any are
+    /// unspent the spend gate blocks play, exactly like LoGD's new-day gate.
+    pub dragon_points_unspent: u32,
     /// Gems: the second currency, found in the forest and spent advancing your
     /// specialty (LoGD's gem economy). Distinct from gold.
     pub gems: u64,
@@ -141,6 +163,33 @@ pub struct Character {
     pub specialty_uses: u32,
     /// UTC day-number of the last new-day reset, for turn/heal regeneration.
     pub last_day: i64,
+}
+
+/// The four permanent upgrades a dragon point can buy (LoGD `dragonpointspend`:
+/// `hp`/`ff`/`at`/`de`). One point is earned per dragon kill and must be
+/// allocated before the next day's play begins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DragonPointKind {
+    /// +5 permanent max hitpoints.
+    Hp,
+    /// +1 permanent daily forest fight.
+    ForestFights,
+    /// +1 permanent attack.
+    Attack,
+    /// +1 permanent defense.
+    Defense,
+}
+
+impl DragonPointKind {
+    /// Short display label for the spend menu.
+    pub fn label(self) -> &'static str {
+        match self {
+            DragonPointKind::Hp => "+5 max hitpoints",
+            DragonPointKind::ForestFights => "+1 forest fight per day",
+            DragonPointKind::Attack => "+1 attack",
+            DragonPointKind::Defense => "+1 defense",
+        }
+    }
 }
 
 /// The three combat specialties, mirroring LoGD's `MP`/`DA`/`TS`. The in-fight
@@ -188,6 +237,8 @@ impl Default for Character {
             dragon_hp_bonus: 0,
             dragon_attack_bonus: 0,
             dragon_defense_bonus: 0,
+            dragon_ff_bonus: 0,
+            dragon_points_unspent: 0,
             gems: 0,
             charm: 0,
             // Fresh level-1 soulpoints: 50 + 5*1 (LoGD new-day formula).
@@ -251,12 +302,6 @@ impl Character {
     /// sought this run.
     pub fn can_seek_dragon(&self) -> bool {
         self.level >= data::MAX_LEVEL && !self.seen_dragon
-    }
-
-    /// Apply a forest/master victory's gold and experience rewards.
-    pub fn grant_rewards(&mut self, gold: u32, exp: u32) {
-        self.gold = self.gold.saturating_add(gold as u64);
-        self.experience = self.experience.saturating_add(exp as u64);
     }
 
     /// Advance one level after beating the master: +1 level (so +10 max HP, +1
@@ -407,31 +452,189 @@ impl Character {
             .max(0.0) as u64
     }
 
+    /// Price of a partial heal of `pct` percent of the damage taken:
+    /// `round(cost * pct / 100)` off the rounded full-heal price (`healer.php`
+    /// sells 100% down to 10% in steps of ten).
+    pub fn heal_cost(&self, pct: u32) -> u64 {
+        (self.full_heal_cost() as f64 * pct as f64 / 100.0).round() as u64
+    }
+
+    /// Pay for a heal of `pct` percent of the missing HP (`round(missing *
+    /// pct / 100)`). Returns the HP restored, or `None` if unaffordable.
+    pub fn buy_heal(&mut self, pct: u32) -> Option<u32> {
+        let cost = self.heal_cost(pct);
+        if self.gold < cost {
+            return None;
+        }
+        self.gold -= cost;
+        let missing = self.max_hitpoints().saturating_sub(self.hitpoints);
+        let healed = (missing as f64 * pct as f64 / 100.0).round() as u32;
+        self.hitpoints += healed;
+        Some(healed)
+    }
+
     /// Pay to fully heal if affordable. Returns true on success (including the
     /// free level-1 case).
     pub fn buy_full_heal(&mut self) -> bool {
-        let cost = self.full_heal_cost();
-        if self.gold >= cost {
-            self.gold -= cost;
-            self.hitpoints = self.max_hitpoints();
-            true
-        } else {
-            false
-        }
+        self.buy_heal(100).is_some()
     }
 
-    /// Deposit on-hand gold into the bank (clamped to what's on hand).
+    /// The healer's free forced normalize: HP above max (a lapsed overheal) is
+    /// clipped back down, no charge (`healer.php`'s over-max branch). Returns
+    /// true if anything was clipped.
+    pub fn normalize_overheal(&mut self) -> bool {
+        if self.hitpoints > self.max_hitpoints() {
+            self.hitpoints = self.max_hitpoints();
+            return true;
+        }
+        false
+    }
+
+    /// Deposit on-hand gold into the bank (clamped to what's on hand). Paying
+    /// down debt is the same move: a deposit into a negative balance.
     pub fn deposit(&mut self, amount: u64) {
         let amount = amount.min(self.gold);
         self.gold -= amount;
-        self.gold_in_bank = self.gold_in_bank.saturating_add(amount);
+        self.gold_in_bank = self.gold_in_bank.saturating_add(amount as i64);
     }
 
-    /// Withdraw banked gold to hand (clamped to what's banked).
+    /// Withdraw banked gold to hand (clamped to the positive balance). Going
+    /// below zero is a loan — see [`Character::borrow`].
     pub fn withdraw(&mut self, amount: u64) {
-        let amount = amount.min(self.gold_in_bank);
+        let amount = (amount as i64).min(self.gold_in_bank).max(0);
         self.gold_in_bank -= amount;
+        self.gold = self.gold.saturating_add(amount as u64);
+    }
+
+    /// The bank's lending ceiling: debt may reach `-level * BORROW_PER_LEVEL`
+    /// (`bank.php` `borrowperlevel`).
+    pub fn max_borrow(&self) -> i64 {
+        self.level as i64 * BORROW_PER_LEVEL
+    }
+
+    /// Gold still borrowable before the balance hits the lending floor.
+    pub fn borrow_available(&self) -> u64 {
+        (self.gold_in_bank + self.max_borrow()).max(0) as u64
+    }
+
+    /// Take a loan of `amount` gold (clamped to [`Character::borrow_available`]):
+    /// the balance goes negative and the gold lands on hand. Returns the amount
+    /// actually borrowed.
+    pub fn borrow(&mut self, amount: u64) -> u64 {
+        let amount = amount.min(self.borrow_available());
+        self.gold_in_bank -= amount as i64;
         self.gold = self.gold.saturating_add(amount);
+        amount
+    }
+
+    /// Perturb a creature's stat block by the player's banked investment —
+    /// LoGD's `buffbadguy` (`lib/forestoutcomes.php`), applied to every forest
+    /// creature at spawn:
+    /// - scaling pool `dk = round(investment * (0.25 + 0.05 * kills / 100))`
+    ///   (creatures harden as dragon kills accumulate),
+    /// - experience flux of `±round(exp / 10)`,
+    /// - the pool split randomly into +attack / +defense / +5 HP per point,
+    /// - gold/exp compensated by `1 + .03*(atk+def) + .001*hp`.
+    pub fn buff_foe(&self, base: data::CreatureTier, rng: &mut impl Rng) -> data::CreatureTier {
+        let add = (self.dragon_kills as f64 / 100.0) * 0.05;
+        let dk = (self.investment_points() as f64 * (0.25 + add)).round() as u32;
+
+        let mut foe = base;
+        let expflux = (foe.exp as f64 / 10.0).round() as i32;
+        let exp = foe.exp as i64 + rng.gen_range(-expflux..=expflux) as i64;
+        foe.exp = exp.max(0) as u32;
+
+        let atkflux = rng.gen_range(0..=dk);
+        let defflux = rng.gen_range(0..=(dk - atkflux));
+        let hpflux = (dk - atkflux - defflux) * 5;
+        foe.attack += atkflux;
+        foe.defense += defflux;
+        foe.hp += hpflux;
+
+        let bonus = 1.0 + 0.03 * (atkflux + defflux) as f64 + 0.001 * hpflux as f64;
+        foe.gold = (foe.gold as f64 * bonus).round() as u32;
+        foe.exp = (foe.exp as f64 * bonus).round() as u32;
+        foe
+    }
+
+    /// Settle a won forest fight — LoGD's `forestvictory`
+    /// (`lib/forestoutcomes.php`), covering single kills and multi-fights:
+    /// - each foe's gold is rolled `e_rand(0, gold)`, then the total re-rolled
+    ///   `e_rand(avg, avg * round((n+1) * 1.2^(n-1)))` (a single kill pays
+    ///   `e_rand(g, 2g)` of the first roll; packs multiply),
+    /// - experience is the per-foe average plus a level-difference bonus of
+    ///   `round(exp * (1 + .25*(foe_level - level)) - exp)` per foe (plus
+    ///   `kills * level` on multi-fights), floored at `-exp+1`, a positive
+    ///   bonus scaled by `1.05^(n-1)`,
+    /// - under level 15, a 1-in-[`FOREST_GEM_CHANCE`] gem,
+    /// - a flawless fight refunds the turn if `level <= max_foe_level +
+    ///   0.5*(n-1)`,
+    /// - a player at 0 HP on a victory is saved at 1 (the mushroom clamp).
+    pub fn forest_victory(
+        &mut self,
+        foes: &[SlainFoe],
+        flawless: bool,
+        rng: &mut impl Rng,
+    ) -> ForestVictory {
+        let n = foes.len().max(1) as u32;
+        let mut gold_sum: u64 = 0;
+        let mut exp_sum: u64 = 0;
+        let mut exp_bonus: i64 = 0;
+        let mut max_foe_level: u8 = 0;
+        for foe in foes {
+            gold_sum += rng.gen_range(0..=foe.gold) as u64;
+            exp_sum += foe.exp as u64;
+            let scaled =
+                foe.exp as f64 * (1.0 + 0.25 * (foe.level as f64 - self.level as f64));
+            exp_bonus += (scaled - foe.exp as f64).round() as i64;
+            max_foe_level = max_foe_level.max(foe.level);
+        }
+        if n > 1 {
+            exp_bonus += (self.dragon_kills as u64 * self.level as u64) as i64;
+        }
+
+        let exp = (exp_sum as f64 / n as f64).round() as i64;
+        let avg_gold = (gold_sum as f64 / n as f64).round() as u64;
+        let gold_hi = avg_gold * ((n as f64 + 1.0) * 1.2f64.powi(n as i32 - 1)).round() as u64;
+        let gold = rng.gen_range(avg_gold..=gold_hi.max(avg_gold));
+
+        let mut exp_bonus = (exp_bonus as f64 / n as f64).round() as i64;
+        if exp + exp_bonus < 0 {
+            exp_bonus = -exp + 1;
+        }
+        if exp_bonus > 0 {
+            exp_bonus = (exp_bonus as f64 * 1.05f64.powi(n as i32 - 1)).round() as i64;
+        }
+        let exp_won = (exp + exp_bonus).max(0) as u64;
+
+        self.gold = self.gold.saturating_add(gold);
+        self.experience = self.experience.saturating_add(exp_won);
+
+        let gem = self.level < data::MAX_LEVEL && rng.gen_range(1..=FOREST_GEM_CHANCE) == 1;
+        if gem {
+            self.gems += 1;
+        }
+
+        // Flawless fights refund the turn, but only when the foes were a real
+        // match; packs count for half a level each past the first.
+        let effective_level = max_foe_level as f64 + 0.5 * (n as f64 - 1.0);
+        let turn_refunded = flawless && self.level as f64 <= effective_level;
+        if turn_refunded {
+            self.turns += 1;
+        }
+
+        // The mushroom save: a victory never leaves you dead on the ground.
+        if self.hitpoints == 0 {
+            self.hitpoints = 1;
+        }
+
+        ForestVictory {
+            gold,
+            exp: exp_won,
+            gem,
+            flawless,
+            turn_refunded,
+        }
     }
 
     /// Resolve a forest/PvE death: all on-hand gold lost, 10% experience lost,
@@ -445,34 +648,54 @@ impl Character {
         self.companions.clear();
     }
 
-    /// Extra daily forest fights earned from banked dragon kills (LoGD `dkff`):
-    /// one per kill, capped.
+    /// Extra daily forest fights bought with `ff` dragon points (LoGD `dkff`).
     pub fn dk_forest_bonus(&self) -> u32 {
-        (self.dragon_kills * DK_FOREST_FIGHTS_PER_KILL).min(DK_FOREST_FIGHTS_CAP)
+        self.dragon_ff_bonus
+    }
+
+    /// Spend one unspent dragon point on `kind`. Returns false (spending
+    /// nothing) if none are unspent. An `ff` point also grows *today's* pool by
+    /// one, since LoGD spends points before the new day's turns are assembled;
+    /// an `hp` point raises current HP alongside the max for the same reason.
+    pub fn spend_dragon_point(&mut self, kind: DragonPointKind) -> bool {
+        if self.dragon_points_unspent == 0 {
+            return false;
+        }
+        self.dragon_points_unspent -= 1;
+        match kind {
+            DragonPointKind::Hp => {
+                self.dragon_hp_bonus += HP_PER_DRAGON_POINT;
+                self.hitpoints += HP_PER_DRAGON_POINT;
+            }
+            DragonPointKind::ForestFights => {
+                self.dragon_ff_bonus += 1;
+                self.turns += 1;
+            }
+            DragonPointKind::Attack => self.dragon_attack_bonus += 1,
+            DragonPointKind::Defense => self.dragon_defense_bonus += 1,
+        }
+        true
     }
 
     /// Reward a Green Dragon kill (`dragon.php`), then reset to a fresh,
     /// fully-healed run. `flawless` is true if no damage was taken in the fight.
     ///
-    /// Faithful to upstream: on-hand gold is **retained** and topped up by
-    /// [`START_GOLD`] per kill (capped at [`DRAGON_RUN_GOLD_CAP`]); gems accrue
-    /// `max(0, kills-7)` (capped); charm `+5`; and the permanent dragon-point
-    /// boons (attack/defense + earned HP) are auto-applied across the reset —
-    /// there is no Gypsy shop. A flawless kill adds [`FLAWLESS_GOLD_BONUS`] gold
-    /// (over the cap) and a gem. The specialty skill/uses restart at zero.
+    /// Faithful to upstream: the run's gold is wiped and restarted at
+    /// [`START_GOLD`] plus [`START_GOLD`] per kill (capped at
+    /// [`DRAGON_RUN_GOLD_CAP`]); gems accrue `max(0, kills-7)` (capped); charm
+    /// `+5`; companions are wiped; and the kill banks **one dragon point** to
+    /// spend at the gate ([`Character::spend_dragon_point`]). A flawless kill
+    /// adds [`FLAWLESS_GOLD_BONUS`] gold (over the cap) and a gem. The
+    /// specialty skill/uses restart at zero.
     pub fn slay_dragon(&mut self, flawless: bool) {
         self.dragon_kills = self.dragon_kills.saturating_add(1);
-        // Permanent retained boons, auto-applied (replacing the Gypsy shop).
-        self.dragon_attack_bonus = self.dragon_attack_bonus.saturating_add(DK_ATTACK_PER_KILL);
-        self.dragon_defense_bonus = self
-            .dragon_defense_bonus
-            .saturating_add(DK_DEFENSE_PER_KILL);
-        self.dragon_hp_bonus = self.dragon_hp_bonus.saturating_add(DK_HP_PER_KILL);
+        self.dragon_points_unspent = self.dragon_points_unspent.saturating_add(1);
         self.charm = self.charm.saturating_add(CHARM_PER_DRAGON_KILL);
         let restart_gems = self.dragon_kills.saturating_sub(7).min(MAX_RESTART_GEMS);
         self.gems = self.gems.saturating_add(restart_gems as u64);
-        // Retain on-hand gold + START_GOLD per kill, capped.
-        self.gold = (self.gold + START_GOLD * self.dragon_kills as u64).min(DRAGON_RUN_GOLD_CAP);
+        // The reset wipes on-hand gold: you restart with 50 + 50/kill, capped.
+        self.gold =
+            (START_GOLD + START_GOLD * self.dragon_kills as u64).min(DRAGON_RUN_GOLD_CAP);
         if flawless {
             // The flawless bonus lands on top of the cap.
             self.gold = self.gold.saturating_add(FLAWLESS_GOLD_BONUS);
@@ -499,13 +722,7 @@ impl Character {
     /// `e_rand(-1,1)+e_rand(-1,1)` (-2..+2) turn jitter — both supplied by the
     /// caller's RNG. A new day after a death also docks [`RESURRECTION_TURNS`].
     /// Returns true if a reset happened.
-    pub fn roll_new_day(
-        &mut self,
-        today: i64,
-        dk_forest_bonus: u32,
-        interest_percent: u32,
-        spirits: i32,
-    ) -> bool {
+    pub fn roll_new_day(&mut self, today: i64, interest_percent: u32, spirits: i32) -> bool {
         if today <= self.last_day {
             return false;
         }
@@ -515,7 +732,7 @@ impl Character {
         // yesterday's turns went unused (LoGD's "work for it" gate).
         self.apply_new_day_interest(interest_percent);
         let resurrection = if was_dead { RESURRECTION_TURNS } else { 0 };
-        let turns = TURNS_PER_DAY as i32 + dk_forest_bonus as i32 + spirits + resurrection;
+        let turns = TURNS_PER_DAY as i32 + self.dragon_ff_bonus as i32 + spirits + resurrection;
         self.turns = turns.max(0) as u32;
         self.refresh_specialty_uses();
         self.alive = true;
@@ -565,21 +782,28 @@ impl Character {
         true
     }
 
-    /// Pay the day's bank interest, gated exactly like LoGD: nothing if more than
-    /// [`FIGHTS_FOR_INTEREST`] of yesterday's turns went unused, or the balance
-    /// is already at/above [`MAX_GOLD_FOR_INTEREST`]. Must be called before turns
-    /// are refilled so `self.turns` still holds yesterday's leftover.
+    /// Pay the day's bank interest, gated exactly like LoGD: a *positive*
+    /// balance earns nothing if more than [`FIGHTS_FOR_INTEREST`] of
+    /// yesterday's turns went unused, or if it is at/above
+    /// [`MAX_GOLD_FOR_INTEREST`]. **Debt always compounds** — the "work for
+    /// it" gate only skips positive balances (`newday.php`). Must be called
+    /// before turns are refilled so `self.turns` still holds yesterday's
+    /// leftover.
     fn apply_new_day_interest(&mut self, interest_percent: u32) {
-        if self.turns > FIGHTS_FOR_INTEREST || self.gold_in_bank >= MAX_GOLD_FOR_INTEREST {
+        if self.turns > FIGHTS_FOR_INTEREST && self.gold_in_bank >= 0 {
+            return;
+        }
+        if self.gold_in_bank >= MAX_GOLD_FOR_INTEREST {
             return;
         }
         self.apply_bank_interest(interest_percent);
     }
 
-    /// Apply a daily bank interest multiplier (percent, e.g. 7 for 7%).
+    /// Apply a daily bank interest multiplier (percent, e.g. 7 for 7%) to the
+    /// signed balance — growth when positive, compounding debt when negative.
     pub fn apply_bank_interest(&mut self, percent: u32) {
         let factor = 1.0 + percent as f64 / 100.0;
-        self.gold_in_bank = (self.gold_in_bank as f64 * factor).round() as u64;
+        self.gold_in_bank = (self.gold_in_bank as f64 * factor).round() as i64;
     }
 }
 
@@ -635,7 +859,7 @@ mod tests {
         c.choose_specialty(Specialty::Mystical);
         c.specialty_skill = 9; // floor(9/3) = 3, plus the +1 chosen bonus
         c.specialty_uses = 0; // spent down during the day
-        c.roll_new_day(1, 0, 0, 0);
+        c.roll_new_day(1, 0, 0);
         assert_eq!(c.specialty_uses, 4);
     }
 
@@ -717,7 +941,7 @@ mod tests {
         c.die();
         // Revives, but a death docks RESURRECTION_TURNS from the day's fights:
         // 10 base - 6 resurrection + 0 spirits = 4.
-        assert!(c.roll_new_day(11, 0, 0, 0));
+        assert!(c.roll_new_day(11, 0, 0));
         assert_eq!(c.turns, (TURNS_PER_DAY as i32 + RESURRECTION_TURNS) as u32);
         assert!(c.alive);
         assert_eq!(c.hitpoints, c.max_hitpoints());
@@ -725,7 +949,7 @@ mod tests {
         assert_eq!(c.soulpoints, 50 + 5 * 3);
         // Same day again: no reset.
         c.turns = 3;
-        assert!(!c.roll_new_day(11, 0, 0, 0));
+        assert!(!c.roll_new_day(11, 0, 0));
         assert_eq!(c.turns, 3);
     }
 
@@ -733,11 +957,16 @@ mod tests {
     fn new_day_spirits_jitter_turns() {
         // A live player (no resurrection penalty): base 10 + spirits.
         let mut high = Character::new("high", 10);
-        high.roll_new_day(11, 0, 0, 2); // very high spirits
+        high.roll_new_day(11, 0, 2); // very high spirits
         assert_eq!(high.turns, 12);
         let mut low = Character::new("low", 10);
-        low.roll_new_day(11, 0, 0, -2); // very low spirits
+        low.roll_new_day(11, 0, -2); // very low spirits
         assert_eq!(low.turns, 8);
+        // ff dragon points feed the daily pool.
+        let mut invested = Character::new("ff", 10);
+        invested.dragon_ff_bonus = 4;
+        invested.roll_new_day(11, 0, 0);
+        assert_eq!(invested.turns, 14);
     }
 
     #[test]
@@ -746,52 +975,111 @@ mod tests {
         let mut worker = Character::new("worker", 10);
         worker.gold_in_bank = 1000;
         worker.turns = 0;
-        worker.roll_new_day(11, 0, 10, 0); // 10% rolled
+        worker.roll_new_day(11, 10, 0); // 10% rolled
         assert_eq!(worker.gold_in_bank, 1100);
 
         // Slacked off: left more than the threshold unused → no interest.
         let mut slacker = Character::new("slacker", 10);
         slacker.gold_in_bank = 1000;
         slacker.turns = FIGHTS_FOR_INTEREST + 1;
-        slacker.roll_new_day(11, 0, 10, 0);
+        slacker.roll_new_day(11, 10, 0);
         assert_eq!(slacker.gold_in_bank, 1000);
 
         // Over the ceiling → no interest no matter how hard you worked.
         let mut rich = Character::new("rich", 10);
         rich.gold_in_bank = MAX_GOLD_FOR_INTEREST;
         rich.turns = 0;
-        rich.roll_new_day(11, 0, 10, 0);
+        rich.roll_new_day(11, 10, 0);
         assert_eq!(rich.gold_in_bank, MAX_GOLD_FOR_INTEREST);
+
+        // Debt compounds even when turns went unused (no "work for it" gate
+        // on negative balances).
+        let mut debtor = Character::new("debtor", 10);
+        debtor.gold_in_bank = -100;
+        debtor.turns = FIGHTS_FOR_INTEREST + 5;
+        debtor.roll_new_day(11, 10, 0);
+        assert_eq!(debtor.gold_in_bank, -110);
     }
 
     #[test]
-    fn dragon_kill_retains_boons_and_resets_run() {
+    fn borrowing_drives_the_balance_negative() {
+        let mut c = Character::new("hero", 0);
+        c.level = 5; // lending ceiling 5 * 20 = 100
+        assert_eq!(c.max_borrow(), 100);
+        assert_eq!(c.borrow_available(), 100);
+        assert_eq!(c.borrow(60), 60);
+        assert_eq!(c.gold_in_bank, -60);
+        assert_eq!(c.gold, 50 + 60);
+        // Only 40 left before the floor; requests clamp.
+        assert_eq!(c.borrow_available(), 40);
+        assert_eq!(c.borrow(500), 40);
+        assert_eq!(c.gold_in_bank, -100);
+        // A positive balance raises the headroom.
+        c.gold_in_bank = 30;
+        assert_eq!(c.borrow_available(), 130);
+        // Plain withdrawals never dip below zero.
+        c.withdraw(500);
+        assert_eq!(c.gold_in_bank, 0);
+        // Deposits pay debt down.
+        c.gold_in_bank = -50;
+        c.gold = 80;
+        c.deposit(80);
+        assert_eq!(c.gold_in_bank, 30);
+    }
+
+    #[test]
+    fn partial_heals_price_and_heal_by_percent() {
+        let mut c = Character::new("hero", 0);
+        c.level = 5;
+        c.hitpoints = c.max_hitpoints() - 20; // 20 missing
+        // Full price: round(ln(5) * 30) = 48; 50% = round(48*0.5) = 24.
+        assert_eq!(c.heal_cost(100), 48);
+        assert_eq!(c.heal_cost(50), 24);
+        assert_eq!(c.heal_cost(10), 5);
+        c.gold = 24;
+        // 50% heals round(20 * 0.5) = 10 HP.
+        assert_eq!(c.buy_heal(50), Some(10));
+        assert_eq!(c.hitpoints, c.max_hitpoints() - 10);
+        assert_eq!(c.gold, 0);
+        // Can't afford the rest.
+        assert_eq!(c.buy_heal(100), None);
+    }
+
+    #[test]
+    fn overheal_normalizes_free() {
+        let mut c = Character::new("hero", 0);
+        c.hitpoints = c.max_hitpoints() + 7;
+        assert!(c.normalize_overheal());
+        assert_eq!(c.hitpoints, c.max_hitpoints());
+        assert!(!c.normalize_overheal());
+    }
+
+    #[test]
+    fn dragon_kill_banks_a_point_and_resets_run() {
         let mut c = Character::new("hero", 0);
         c.level = 15;
         c.weapon_tier = 15;
         c.armor_tier = 12;
         c.experience = 99999;
-        c.gold = 40; // retained on-hand gold
+        c.gold = 4000; // wiped by the reset, not retained
         c.specialty = Specialty::Mystical;
         c.specialty_skill = 12;
         c.slay_dragon(false);
 
         assert_eq!(c.dragon_kills, 1);
-        // Permanent boons auto-applied (no Gypsy shop).
-        assert_eq!(c.dragon_attack_bonus, DK_ATTACK_PER_KILL);
-        assert_eq!(c.dragon_defense_bonus, DK_DEFENSE_PER_KILL);
-        assert_eq!(c.dragon_hp_bonus, DK_HP_PER_KILL);
+        // One chooseable dragon point banked; no boons auto-applied.
+        assert_eq!(c.dragon_points_unspent, 1);
+        assert_eq!(c.dragon_attack_bonus, 0);
+        assert_eq!(c.dragon_defense_bonus, 0);
+        assert_eq!(c.dragon_hp_bonus, 0);
         assert_eq!(c.charm, CHARM_PER_DRAGON_KILL);
-        // Run reset, but boons carry through the derived stats.
+        // Run reset.
         assert_eq!(c.level, 1);
         assert_eq!(c.weapon_tier, 0);
         assert_eq!(c.armor_tier, 0);
         assert_eq!(c.experience, 0);
-        assert_eq!(c.max_hitpoints(), HP_PER_LEVEL + DK_HP_PER_KILL);
-        assert_eq!(c.attack(), 1 + DK_ATTACK_PER_KILL);
-        assert_eq!(c.defense(), 1 + DK_DEFENSE_PER_KILL);
-        // On-hand gold retained + 50/kill: 40 + 50 = 90.
-        assert_eq!(c.gold, 90);
+        // Restart gold: 50 + 50*1 = 100 (on-hand gold not retained).
+        assert_eq!(c.gold, 100);
         // First kill is below the gem threshold (kills-7).
         assert_eq!(c.gems, 0);
         // Specialty path kept, skill/uses restart.
@@ -808,20 +1096,128 @@ mod tests {
         c.gold = 100;
         c.slay_dragon(true);
         assert_eq!(c.dragon_kills, 10);
-        // 100 + 50*10 = 600, capped to 300, then +150 flawless = 450.
+        // 50 + 50*10 = 550, capped to 300, then +150 flawless = 450.
         assert_eq!(c.gold, DRAGON_RUN_GOLD_CAP + FLAWLESS_GOLD_BONUS);
         // Gems: max(0, 10-7) = 3, plus 1 flawless = 4.
         assert_eq!(c.gems, 4);
     }
 
     #[test]
-    fn dk_forest_bonus_grows_with_kills() {
+    fn dragon_points_spend_into_permanent_boons() {
         let mut c = Character::new("hero", 0);
-        assert_eq!(c.dk_forest_bonus(), 0);
-        c.dragon_kills = 3;
-        assert_eq!(c.dk_forest_bonus(), 3);
-        c.dragon_kills = 99;
-        assert_eq!(c.dk_forest_bonus(), DK_FOREST_FIGHTS_CAP);
+        c.dragon_points_unspent = 4;
+        assert!(c.spend_dragon_point(DragonPointKind::Hp));
+        assert_eq!(c.dragon_hp_bonus, HP_PER_DRAGON_POINT);
+        assert_eq!(c.hitpoints, HP_PER_LEVEL + HP_PER_DRAGON_POINT);
+        assert!(c.spend_dragon_point(DragonPointKind::Attack));
+        assert!(c.spend_dragon_point(DragonPointKind::Defense));
+        assert_eq!(c.attack(), 2);
+        assert_eq!(c.defense(), 2);
+        let before = c.turns;
+        assert!(c.spend_dragon_point(DragonPointKind::ForestFights));
+        assert_eq!(c.dragon_ff_bonus, 1);
+        assert_eq!(c.turns, before + 1); // today's pool grows immediately
+        // Pool exhausted.
+        assert_eq!(c.dragon_points_unspent, 0);
+        assert!(!c.spend_dragon_point(DragonPointKind::Attack));
+    }
+
+    #[test]
+    fn forest_victory_pays_rolls_and_refunds_flawless_turns() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut c = Character::new("hero", 0);
+        c.level = 3;
+        let turns_before = c.turns;
+        let foe = SlainFoe {
+            level: 3,
+            gold: 148,
+            exp: 34,
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+        let v = c.forest_victory(&[foe], true, &mut rng);
+        // Single foe at your level: no level-diff bonus, exp = the foe's exp.
+        assert_eq!(v.exp, 34);
+        // Gold: e_rand(0,148) then e_rand(roll, 2*roll) — bounded by 2x base.
+        assert!(v.gold <= 296);
+        // Flawless at-level fight refunds the turn.
+        assert!(v.turn_refunded);
+        assert_eq!(c.turns, turns_before + 1);
+        assert_eq!(c.experience, 34);
+
+        // Over-leveled flawless fights refund nothing.
+        let mut over = Character::new("over", 0);
+        over.level = 10;
+        let weak = SlainFoe {
+            level: 3,
+            gold: 10,
+            exp: 34,
+        };
+        let v = over.forest_victory(&[weak], true, &mut rng);
+        assert!(!v.turn_refunded);
+        // Level-diff penalty: bonus round(34*(1+.25*(3-10)) - 34) = -60 drives
+        // the total negative, so the -exp+1 floor pays exactly 1 exp.
+        assert_eq!(v.exp, 1);
+    }
+
+    #[test]
+    fn forest_victory_multi_fight_bonuses() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut c = Character::new("hero", 0);
+        c.level = 5;
+        c.dragon_kills = 12;
+        let foe = SlainFoe {
+            level: 5,
+            gold: 198,
+            exp: 55,
+        };
+        let mut rng = StdRng::seed_from_u64(3);
+        let v = c.forest_victory(&[foe, foe, foe], false, &mut rng);
+        // Per-foe exp average is 55; the multi bonus adds
+        // round(dragonkills*level / n) = round(60/3) = 20, scaled by
+        // 1.05^2 → round(20 * 1.1025) = 22. Total 77.
+        assert_eq!(v.exp, 77);
+        assert!(!v.turn_refunded);
+    }
+
+    #[test]
+    fn mushroom_save_clamps_victory_at_one_hp() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut c = Character::new("hero", 0);
+        c.hitpoints = 0;
+        let foe = SlainFoe {
+            level: 1,
+            gold: 0,
+            exp: 0,
+        };
+        c.forest_victory(&[foe], false, &mut StdRng::seed_from_u64(1));
+        assert_eq!(c.hitpoints, 1);
+    }
+
+    #[test]
+    fn buff_foe_scales_with_investment() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let base = data::creature_tier(5);
+        // No investment: the stat pool is 0, only the exp flux moves.
+        let fresh = Character::new("fresh", 0);
+        let foe = fresh.buff_foe(base, &mut StdRng::seed_from_u64(2));
+        assert_eq!(foe.attack, base.attack);
+        assert_eq!(foe.defense, base.defense);
+        assert_eq!(foe.hp, base.hp);
+        let expflux = (base.exp as f64 / 10.0).round() as u32;
+        assert!(foe.exp >= base.exp - expflux && foe.exp <= base.exp + expflux);
+
+        // Invested: dk = round(20 * (0.25 + 0.05*100/100)) = 6 points spread
+        // over attack/defense/+5hp, with gold/exp compensation.
+        let mut vet = Character::new("vet", 0);
+        vet.dragon_kills = 100;
+        vet.dragon_attack_bonus = 8;
+        vet.dragon_defense_bonus = 7;
+        vet.dragon_hp_bonus = 25; // 5 points
+        let foe = vet.buff_foe(base, &mut StdRng::seed_from_u64(2));
+        let spent =
+            (foe.attack - base.attack) + (foe.defense - base.defense) + (foe.hp - base.hp) / 5;
+        assert_eq!(spent, 6);
+        assert!(foe.gold >= base.gold);
     }
 
     #[test]

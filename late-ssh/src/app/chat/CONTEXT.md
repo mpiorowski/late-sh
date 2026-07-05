@@ -144,10 +144,10 @@ Messages:
 - `pinned` is a global message-level flag with a partial pinned index.
 
 Slow modes:
-- `chat_slow_modes` is a room-scoped per-user throttle, not a ban. One row per `(room_id, target_user_id)` stores `interval_secs`, nullable `expires_at` (`NULL` = permanent), actor, and reason.
-- Enforcement happens in `ChatService::send_message` after membership/room-ban checks and before insert. Admin sends bypass the throttle; moderators are not inherently exempt unless they are admins.
+- `chat_slow_modes` is a per-user throttle, not a ban. `room_id` set means room-scoped; `room_id NULL` means server-scoped. Unique indexes enforce one row per `(room_id, target_user_id)` for room scope and one server row per target. Rows store `interval_secs`, nullable `expires_at` (`NULL` = permanent), actor, and reason.
+- Enforcement happens in `ChatService::send_message` after membership/room-ban checks and before insert. Room-slow is checked first; server-slow applies to non-DM chat rooms only, so DMs are not throttled. Admin sends bypass the throttle; moderators are not inherently exempt unless they are admins.
 - A slowed user keeps room membership. Early sends are rejected privately with a `Slow mode in #room: wait ...` banner; messages are not queued.
-- `/mod slow #room @user <interval> <duration|permanent> [reason...]` applies it, `/mod unslow #room @user [reason...]` removes it, and `/mod view slows [#room] [page]` lists active slow modes. Applying/removing slow mode uses targeted session toasts and writes moderation audit actions `room_slow` / `room_unslow`.
+- `/mod slow <server|#room> @user <interval> <duration|permanent> [reason...]` applies it, `/mod unslow <server|#room> @user [reason...]` removes it, and `/mod view slows [server|#room] [page]` lists active slow modes. Applying/removing slow mode uses targeted session toasts and writes moderation audit actions `room_slow` / `room_unslow` or `server_slow` / `server_unslow`.
 
 Reactions:
 - `chat_message_reactions` primary key is `(message_id, user_id)`.
@@ -300,8 +300,8 @@ Moderation modal commands:
 - `kick <server|voice|#room> @name [reason...]`
 - `ban <server|#room|artboard|audio> @name [duration] [reason...]`
 - `unban <server|#room|artboard|audio|voice> @name [reason...]`
-- `slow #room @name <interval> <duration|permanent> [reason...]`
-- `unslow #room @name [reason...]`
+- `slow <server|#room> @name <interval> <duration|permanent> [reason...]`
+- `unslow <server|#room> @name [reason...]`
 - `admin`
 - `admin grant mod @name`
 - `admin revoke mod @name`
