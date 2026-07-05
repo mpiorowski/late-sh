@@ -468,6 +468,123 @@ pub fn taunt(rng: &mut impl rand::Rng) -> &'static str {
     TAUNTS[rng.gen_range(0..TAUNTS.len())]
 }
 
+// --- phase-3 building NPCs (all names original to late.sh) -------------------
+
+/// The inn (upstream's setting defaults name it; ours is our own).
+pub const INN_NAME: &str = "The Sleeping Stag";
+/// The barkeep who takes bribes and stocks the potion shelf (Cedrik-analog).
+pub const BARKEEP: &str = "Hobb";
+/// The bard whose song is a nightly gamble (Seth-analog). Doubles as the
+/// romance partner for first-style characters, exactly as upstream's bard
+/// doubles for its.
+pub const BARD: &str = "Alder";
+/// The barmaid, the romance partner for second-style characters
+/// (Violet-analog).
+pub const BARMAID: &str = "Wren";
+/// The ostler who runs the stables.
+pub const OSTLER: &str = "Fenwick";
+/// The one-eyed gambler at the Dark Horse Tavern (the "old man").
+pub const GAMBLER: &str = "the one-eyed gambler";
+
+/// The romance partner for an address style: first-style characters court
+/// the barmaid, second-style ones the bard (upstream keys this off `sex`;
+/// unchosen characters render first-style everywhere).
+pub fn partner(style: super::model::AddressStyle) -> &'static str {
+    match style {
+        super::model::AddressStyle::Second => BARD,
+        _ => BARMAID,
+    }
+}
+
+/// A stable mount (`stables.php` + the mounts seed). Numbers are upstream's
+/// stock three exactly (gems 6/10/16, +1/+2/+3 daily fights, 20/40/60 buffed
+/// rounds, attack x1.2); names original.
+#[derive(Clone, Copy, Debug)]
+pub struct Mount {
+    pub name: &'static str,
+    pub cost_gems: u64,
+    /// Extra forest fights each new day (`mountforestfights`).
+    pub forest_fights: u32,
+    /// Mounted combat rounds per day (the mount buff's `rounds`).
+    pub buff_rounds: u32,
+}
+
+/// The stock stable, cheapest first. 1-based `Character::mount` indexes this.
+pub const MOUNTS: [Mount; 3] = [
+    Mount {
+        name: "Moor Pony",
+        cost_gems: 6,
+        forest_fights: 1,
+        buff_rounds: 20,
+    },
+    Mount {
+        name: "Dun Courser",
+        cost_gems: 10,
+        forest_fights: 2,
+        buff_rounds: 40,
+    },
+    Mount {
+        name: "Black Destrier",
+        cost_gems: 16,
+        forest_fights: 3,
+        buff_rounds: 60,
+    },
+];
+
+/// Attack multiplier while riding (`mountbuff` `atkmod`, all stock mounts).
+pub const MOUNT_ATK_MOD: f32 = 1.2;
+
+/// A mercenary for hire (`mercenarycamp.php` + the companions seed). Stats
+/// are `base + per_level * buyer_level`, baked at purchase; names original.
+#[derive(Clone, Copy, Debug)]
+pub struct Mercenary {
+    pub name: &'static str,
+    pub cost_gold: u64,
+    pub cost_gems: u64,
+    pub attack: (u32, u32),
+    pub defense: (u32, u32),
+    pub hp: (u32, u32),
+    pub ability: super::combat::CompanionAbility,
+    pub dying_text: &'static str,
+}
+
+/// The two stock hires (upstream's javelin man and healer, 573g+4gems and
+/// 1000g+3gems).
+pub const MERCENARIES: [Mercenary; 2] = [
+    Mercenary {
+        name: "Skarn the Pikeman",
+        cost_gold: 573,
+        cost_gems: 4,
+        attack: (5, 2),
+        defense: (1, 2),
+        hp: (20, 20),
+        ability: super::combat::CompanionAbility::Fight,
+        dying_text: "Skarn drops his pike and crumples without a sound.",
+    },
+    Mercenary {
+        name: "Elsbet the Field-Medic",
+        cost_gold: 1000,
+        cost_gems: 3,
+        attack: (1, 1),
+        defense: (5, 5),
+        hp: (15, 10),
+        ability: super::combat::CompanionAbility::Heal(2),
+        dying_text: "Elsbet's satchel spills open as she falls, bandages unspooling.",
+    },
+];
+
+/// The Deepfolk-only hire (`racedwarf.php`'s bear: 600g+4gems, defend-only).
+pub const DEEPFOLK_BEAR: Mercenary = Mercenary {
+    name: "Crag Bear",
+    cost_gold: 600,
+    cost_gems: 4,
+    attack: (1, 2),
+    defense: (5, 2),
+    hp: (25, 25),
+    ability: super::combat::CompanionAbility::Defend,
+    dying_text: "The crag bear takes one blow too many and lumbers off into the trees.",
+};
+
 /// The dragon-kill title ladder (`titles` table + `lib/titles.php`): rows of
 /// `(dk_threshold, first-style title, second-style title)`. Selection takes
 /// the highest threshold at or below the character's kills, picking randomly

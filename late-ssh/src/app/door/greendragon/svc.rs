@@ -186,22 +186,36 @@ impl GreenDragonService {
             // since the last save. Spent ff dragon points add extra daily turns;
             // the bank pays a freshly-rolled interest rate; the day's "spirits"
             // (e_rand(-1,1) twice, -2..+2) jitter the forest fights, LoGD-style.
-            let (interest, spirits) = {
+            // The RNG stays inside a sync block (thread_rng isn't Send).
+            let rolled = {
                 let mut rng = rand::thread_rng();
                 let interest =
                     rng.gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
                 let spirits = rng.gen_range(-1..=1) + rng.gen_range(-1..=1);
-                (interest, spirits)
+                character.roll_new_day(day, interest, spirits, &mut rng)
             };
-            let rolled = character.roll_new_day(day, interest, spirits);
             // Persist the rollover immediately: otherwise an instant disconnect
             // drops the spent turns/interest, letting a player reconnect to
             // re-roll a favorable interest rate or dodge the resurrection cost.
-            if rolled {
+            if let Some(fx) = rolled {
                 let seq = inner.next_seq();
                 let gate = inner.gate(user_id);
                 let blob = persist::to_json(&character);
                 tokio::spawn(commit_save(inner.db.clone(), gate, seq, user_id, blob));
+                // A dawn divorce makes the paper (`lovers.php`'s addnews).
+                if fx.divorced {
+                    let body = format!(
+                        "{} has left {} to pursue other interests.",
+                        crate::app::door::greendragon::data::partner(character.style),
+                        character.titled_name(),
+                    );
+                    if let Ok(client) = inner.db.get().await
+                        && let Err(e) =
+                            GreenDragonNews::add(&client, day, Some(user_id), &body).await
+                    {
+                        tracing::warn!("greendragon divorce news write failed: {e}");
+                    }
+                }
             }
             let _ = tx.send(CharacterLoad::Ready(Box::new(character)));
         });

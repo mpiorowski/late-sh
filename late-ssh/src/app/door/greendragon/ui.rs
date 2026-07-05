@@ -69,15 +69,10 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
     };
 
     let exp_target = c.exp_for_next_level();
-    // The dragon-kill title precedes the name (LoGD renders "Farmboy Name").
-    let titled_name = if c.title.is_empty() {
-        c.name.clone()
-    } else {
-        format!("{} {}", c.title, c.name)
-    };
     let mut lines = vec![
+        // The dragon-kill title precedes the name (LoGD renders "Farmboy Name").
         Line::from(Span::styled(
-            titled_name,
+            c.titled_name(),
             bright.add_modifier(Modifier::BOLD),
         )),
         Line::raw(""),
@@ -300,6 +295,47 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // The daily news: one day per page, newest first (news.php).
+    if state.mode() == Mode::News {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        let (days_back, lines_opt) = state.news_page();
+        let day_label = match days_back {
+            0 => "Today in Duskmere".to_string(),
+            1 => "Yesterday in Duskmere".to_string(),
+            n => format!("Duskmere, {n} days ago"),
+        };
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            day_label,
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        )));
+        match lines_opt {
+            None => lines.push(Line::from(Span::styled(
+                "The crier is still clearing his throat...",
+                dim,
+            ))),
+            Some([]) => lines.push(Line::from(Span::styled(
+                "Nothing of note happened this day.",
+                dim,
+            ))),
+            Some(items) => {
+                for item in items {
+                    lines.push(Line::from(Span::styled(format!("- {item}"), dim)));
+                }
+            }
+        }
+    }
+
+    if state.mode() == Mode::ChooseStyle {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "How shall the realm address you? The choice colors your titles, and whose eye you catch at the inn. Pick the style that suits you; it is yours for good.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+
     if state.mode() == Mode::ChooseRace {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
@@ -394,10 +430,12 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Bank => "The Coinvault",
         Mode::Training => "The Proving Yard",
         Mode::Event => "A Forest Happening",
+        Mode::ChooseStyle => "A Manner of Address",
         Mode::ChooseRace => "Remember Your Blood",
         Mode::ChooseSpecialty => "Choose Your Path",
         Mode::Graveyard => "The Graveyard",
         Mode::SpendDragonPoints => "Dragon Points",
+        Mode::News => "The Daily News",
     }
 }
 
@@ -406,7 +444,7 @@ fn controls_hint(mode: Mode) -> &'static str {
         Mode::Fight => "up/down select   Enter act   Esc try to flee",
         Mode::Village | Mode::Graveyard => "up/down move   Enter choose   Esc leave the game",
         Mode::SpendDragonPoints => "up/down move   Enter spend   Esc leave the game",
-        Mode::ChooseRace => "up/down move   Enter choose   Esc leave the game",
+        Mode::ChooseStyle | Mode::ChooseRace => "up/down move   Enter choose   Esc leave the game",
         _ => "up/down move   Enter choose   Esc back to village",
     }
 }

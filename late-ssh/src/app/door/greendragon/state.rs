@@ -41,6 +41,11 @@ pub enum Mode {
     Training,
     /// A forest special event awaiting the player's accept/decline choice.
     Event,
+    /// The one-time address-style chooser: picks the DK-title column, the
+    /// romance partner, and one bard outcome (upstream reads `sex` for all
+    /// three; ours is a flavor choice). Armed on load while unchosen, between
+    /// the dragon-point and race gates.
+    ChooseStyle,
     /// The forced one-time ancestry chooser (LoGD's race gate): armed on load
     /// while the race is unset, after any pending dragon points are spent
     /// (upstream `newday.php` gates dragon points, then race, then specialty).
@@ -183,9 +188,11 @@ impl State {
                 character.reroll_title(&mut rand::thread_rng());
             }
             // The new-day gates, in upstream's order (`newday.php`): unspent
-            // dragon points first, then the one-time race choice.
+            // dragon points first, then the one-time style and race choices.
             self.mode = if character.dragon_points_unspent > 0 {
                 Mode::SpendDragonPoints
+            } else if character.style == model::AddressStyle::Unchosen {
+                Mode::ChooseStyle
             } else if character.race == Race::None {
                 Mode::ChooseRace
             } else if character.alive {
@@ -254,6 +261,7 @@ impl State {
             Mode::Training => training_menu(c),
             Mode::Fight => fight_menu(c),
             Mode::Event => event_menu(c, self.pending_event),
+            Mode::ChooseStyle => style_menu(),
             Mode::ChooseRace => race_menu(),
             Mode::ChooseSpecialty => specialty_menu(),
             Mode::Graveyard => graveyard_menu(c),
@@ -295,6 +303,7 @@ impl State {
             Mode::Training => self.select_training(),
             Mode::Fight => self.select_fight(),
             Mode::Event => self.select_event(),
+            Mode::ChooseStyle => self.select_style(),
             Mode::ChooseRace => self.select_race(),
             Mode::ChooseSpecialty => self.select_specialty(),
             Mode::Graveyard => self.select_graveyard(),
@@ -323,7 +332,7 @@ impl State {
             }
             // The gates can't be backed out of into play — but leaving the
             // door entirely is fine; they re-arm on re-entry.
-            Mode::SpendDragonPoints | Mode::ChooseRace => Selection::Leave,
+            Mode::SpendDragonPoints | Mode::ChooseStyle | Mode::ChooseRace => Selection::Leave,
             // The dead realm is the hub while dead: Esc leaves the game, the
             // village stays out of reach until a revival.
             Mode::Graveyard => Selection::Leave,
@@ -388,6 +397,11 @@ impl State {
         if c.turns == 0 {
             self.push_log("You are too tired to fight. Come back tomorrow.".into());
             return;
+        }
+        // Facing death sobers you up a little: every search shaves 10% off
+        // the drunkenness (the `soberup` hook `forest.php` fires).
+        if c.drunkenness > 0 {
+            c.sober_up();
         }
         // A fraction of searches turn up a special event instead of a fight. The
         // event itself doesn't spend the forest turn (some, like the mine, spend
@@ -513,10 +527,65 @@ impl State {
             took_damage: false,
             slain: Vec::new(),
         });
+        self.inject_persistent_buffs();
         self.goto(Mode::Fight);
         // Persist the spent forest turn now, so a disconnect mid-fight can't
         // refund it on reconnect.
         self.save();
+    }
+
+    /// Carry the character's persistent buffs (drinks, the lover's ward,
+    /// sickness) and any mounted rounds into the fight that just opened. The
+    /// encounter ticks them like any buff; [`State::writeback_buffs`] banks
+    /// what's left when it ends. The dead carry nothing (upstream strips
+    /// buffs at the graveyard).
+    fn inject_persistent_buffs(&mut self) {
+        let Some(enc) = self.encounter.as_mut() else {
+            return;
+        };
+        if enc.kind == FoeKind::Torment {
+            return;
+        }
+        let c = self.character.as_ref().unwrap();
+        for pb in &c.persistent_buffs {
+            enc.buffs.push(pb.as_buff());
+        }
+        if c.mount_rounds_left > 0
+            && let Some(mount) = c.mount_data()
+        {
+            let mut buff = Buff::new(mount.name, c.mount_rounds_left);
+            buff.player_atk_mod = data::MOUNT_ATK_MOD;
+            buff.wearoff = format!("Your {} is winded and falls behind.", mount.name);
+            enc.buffs.push(buff);
+        }
+    }
+
+    /// Bank the leftover rounds of persistent buffs (and the mount) when a
+    /// fight ends. A buff missing from the encounter expired mid-fight.
+    fn writeback_buffs(&mut self, enc: &Encounter) {
+        if enc.kind == FoeKind::Torment {
+            return;
+        }
+        let c = self.character.as_mut().unwrap();
+        c.persistent_buffs.retain_mut(|pb| {
+            match enc.buffs.iter().find(|b| b.name == pb.name) {
+                Some(b) if b.rounds_left > 0 => {
+                    pb.rounds_left = b.rounds_left;
+                    true
+                }
+                _ => false,
+            }
+        });
+        if c.mount_rounds_left > 0
+            && let Some(mount) = c.mount_data()
+        {
+            c.mount_rounds_left = enc
+                .buffs
+                .iter()
+                .find(|b| b.name == mount.name)
+                .map(|b| b.rounds_left)
+                .unwrap_or(0);
+        }
     }
 
     // --- forest special events ----------------------------------------------
@@ -557,6 +626,21 @@ impl State {
         let lines = event.resolve(accepted, self.character.as_mut().unwrap(), &mut rng);
         for line in lines {
             self.push_log(line);
+        }
+        // Event deaths make the paper (`goldmine.php` / `glowingstream.php`
+        // both addnews their kills; neither carries a taunt upstream).
+        let c = self.character.as_ref().unwrap();
+        if !c.alive {
+            let who = c.titled_name();
+            match event {
+                ForestEvent::GoldMine => self.news(format!(
+                    "{who} was buried alive digging too greedily in an abandoned mine."
+                )),
+                ForestEvent::GlowingStream => self.news(format!(
+                    "{who} drank from a glowing stream deep in the forest and was never seen again."
+                )),
+                _ => {}
+            }
         }
         self.after_event();
         Selection::Stay
@@ -612,6 +696,34 @@ impl State {
     /// to this character.
     fn news(&self, body: String) {
         self.svc.publish_news(Some(self.user_id), body);
+    }
+
+    // --- style gate -----------------------------------------------------------
+
+    /// Apply the one-time address-style choice, re-stamp the title off the
+    /// chosen column, and fall through to the next gate (race, then play).
+    fn select_style(&mut self) -> Selection {
+        let style = match self.cursor {
+            0 => model::AddressStyle::First,
+            1 => model::AddressStyle::Second,
+            _ => return Selection::Stay,
+        };
+        let c = self.character.as_mut().unwrap();
+        c.style = style;
+        c.reroll_title(&mut rand::thread_rng());
+        let (title, race, alive) = (c.title.clone(), c.race, c.alive);
+        self.push_log(format!(
+            "So it is settled: the realm will know you as {title} and its like."
+        ));
+        self.save();
+        self.goto(if race == Race::None {
+            Mode::ChooseRace
+        } else if alive {
+            Mode::Village
+        } else {
+            Mode::Graveyard
+        });
+        Selection::Stay
     }
 
     // --- race gate ------------------------------------------------------------
@@ -680,14 +792,38 @@ impl State {
             2 => {
                 // The paid resurrection is an extra new day: roll its bank
                 // interest like any other dawn.
-                let interest = rand::thread_rng()
-                    .gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
+                let mut rng = rand::thread_rng();
+                let interest =
+                    rng.gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
                 let c = self.character.as_mut().unwrap();
-                if c.resurrect(interest) {
-                    let turns = c.turns;
+                if let Some(fx) = c.resurrect(interest, &mut rng) {
+                    let (turns, who) = (c.turns, c.titled_name());
                     self.push_log(format!(
                         "Life burns back into your bones! You rise with {turns} turns left in the day."
                     ));
+                    // Resurrections make the paper (`newday.php`'s addnews).
+                    self.news(format!(
+                        "{} has bartered {who} back from the dead.",
+                        data::DEATH_OVERLORD
+                    ));
+                    // The newday module effects fire on this day too.
+                    if fx.hangover {
+                        self.push_log(
+                            "You come back hungover, of all things. It costs you a turn.".into(),
+                        );
+                    }
+                    if fx.divorced {
+                        let (partner, who) = {
+                            let c = self.character.as_ref().unwrap();
+                            (data::partner(c.style), c.titled_name())
+                        };
+                        self.push_log(format!(
+                            "{partner} has had enough of loving the briefly dead. The marriage is over."
+                        ));
+                        self.news(format!(
+                            "{partner} has left {who} to pursue other interests."
+                        ));
+                    }
                     self.goto(Mode::Village);
                     self.save();
                 } else {
@@ -768,6 +904,7 @@ impl State {
             },
             FoeKind::Master,
         ));
+        self.inject_persistent_buffs();
         self.push_log(format!("{} steps forward to test you!", master.name));
         self.goto(Mode::Fight);
         Selection::Stay
@@ -797,6 +934,7 @@ impl State {
             },
             FoeKind::Dragon,
         ));
+        self.inject_persistent_buffs();
         self.push_log("You step into the dragon's lair. The air turns to fire.".into());
         self.goto(Mode::Fight);
         // Persist `seen_dragon` now so the once-per-run dragon seek can't be
@@ -854,6 +992,11 @@ impl State {
         };
         let mut rng = rand::thread_rng();
         if rng.gen_range(0..3) == 0 {
+            // A successful escape banks whatever buff rounds are left.
+            if let Some(enc) = self.encounter.take() {
+                self.writeback_buffs(&enc);
+                self.encounter = Some(enc);
+            }
             if kind == FoeKind::Torment {
                 let c = self.character.as_mut().unwrap();
                 let cost = (5 + rng.gen_range(0..=c.level as u32)).min(c.favor);
@@ -886,6 +1029,51 @@ impl State {
         }
         self.encounter = Some(enc);
         self.save();
+    }
+
+    /// Each living healer companion restores up to its rating: to the player
+    /// while wounded, else the most wounded companion, else itself (LoGD's
+    /// `heal` ability order). Logs what was bandaged.
+    fn companion_heals(&mut self, player_max: u32) {
+        let c = self.character.as_mut().unwrap();
+        let mut logs = Vec::new();
+        for i in 0..c.companions.len() {
+            let super::combat::CompanionAbility::Heal(rating) = c.companions[i].ability else {
+                continue;
+            };
+            if c.companions[i].hitpoints == 0 || rating == 0 {
+                continue;
+            }
+            let medic = c.companions[i].name.clone();
+            let missing = player_max.saturating_sub(c.hitpoints);
+            if c.hitpoints > 0 && missing > 0 {
+                let healed = rating.min(missing);
+                c.hitpoints += healed;
+                logs.push(format!("{medic} binds your wounds for {healed} HP."));
+                continue;
+            }
+            // The most wounded companion (itself included).
+            if let Some(j) = (0..c.companions.len())
+                .filter(|&j| {
+                    c.companions[j].hitpoints > 0
+                        && c.companions[j].hitpoints < c.companions[j].max_hitpoints
+                })
+                .max_by_key(|&j| c.companions[j].max_hitpoints - c.companions[j].hitpoints)
+            {
+                let comp = &mut c.companions[j];
+                let healed = rating.min(comp.max_hitpoints - comp.hitpoints);
+                comp.hitpoints += healed;
+                let target = comp.name.clone();
+                if j == i {
+                    logs.push(format!("{medic} patches their own wounds for {healed} HP."));
+                } else {
+                    logs.push(format!("{medic} tends {target} for {healed} HP."));
+                }
+            }
+        }
+        for line in logs {
+            self.push_log(line);
+        }
     }
 
     /// Every living foe (except `skip`, which already struck through the main
@@ -927,6 +1115,10 @@ impl State {
         };
         let mut rng = rand::thread_rng();
         let (player, player_max) = self.player_fight_stats(enc.kind);
+        // Field-medics bandage before the blades cross (upstream activates
+        // `heal` first each round): the player first, then the most wounded
+        // companion, then themselves. They still swing in the resolver below.
+        self.companion_heals(player_max);
         // Companions live on the character and fight each round; the resolver
         // mutates their HP and removes any that fall. The player and their
         // companions all strike the current target.
@@ -990,7 +1182,9 @@ impl State {
             let c = self.character.as_mut().unwrap();
             c.hitpoints = apply_signed(c.hitpoints, outcome.damage_to_player, player_max);
             if outcome.player_heal > 0 {
-                c.hitpoints = (c.hitpoints + outcome.player_heal).min(player_max);
+                // Regen tops up to max, but never clips an active overheal.
+                let cap = player_max.max(c.hitpoints);
+                c.hitpoints = (c.hitpoints + outcome.player_heal).min(cap);
             }
         }
         let hp = self.character.as_ref().unwrap().hitpoints;
@@ -1063,6 +1257,7 @@ impl State {
     }
 
     fn victory(&mut self, enc: &Encounter) {
+        self.writeback_buffs(enc);
         match enc.kind {
             FoeKind::Creature => {
                 let flawless = !enc.took_damage;
@@ -1095,9 +1290,15 @@ impl State {
                 let c = self.character.as_mut().unwrap();
                 c.advance_level();
                 let lvl = c.level;
+                let who = c.titled_name();
                 self.push_log(format!(
                     "You defeat {}! You advance to level {} and are fully healed.",
                     enc.foes[0].name, lvl
+                ));
+                // Level-ups make the paper (`train.php`'s victory addnews).
+                self.news(format!(
+                    "{who} bested {} at the Proving Yard and rose to level {lvl}.",
+                    enc.foes[0].name
                 ));
                 self.encounter = None;
                 self.goto(Mode::Village);
@@ -1136,6 +1337,20 @@ impl State {
                 if title != old_title {
                     self.push_log(format!("The realm knows you now as {title}."));
                 }
+                // The kill and the earned title both make the paper
+                // (`dragon.php`'s two addnews calls).
+                let who = self.character.as_ref().unwrap().titled_name();
+                let name = self.character.as_ref().unwrap().name.clone();
+                if kills == 1 {
+                    self.news(format!("{who} has slain the terrible Green Dragon!"));
+                } else {
+                    self.news(format!(
+                        "{who} has slain the terrible Green Dragon! It is their dragon kill #{kills}."
+                    ));
+                }
+                if title != old_title {
+                    self.news(format!("{name} has earned the title {title}."));
+                }
                 self.encounter = None;
                 // The kill banks a dragon point; the spend gate opens at once.
                 self.goto(Mode::SpendDragonPoints);
@@ -1145,7 +1360,9 @@ impl State {
     }
 
     fn defeat(&mut self, enc: &Encounter) {
+        self.writeback_buffs(enc);
         let c = self.character.as_mut().unwrap();
+        let (who, level) = (c.titled_name(), c.level);
         // The killer for the log: the first foe still standing.
         let killer = enc
             .foes
@@ -1153,6 +1370,9 @@ impl State {
             .find(|f| f.hp > 0)
             .map(|f| f.name.clone())
             .unwrap_or_else(|| enc.foes[0].name.clone());
+        // Every defeat makes the paper with a taunt appended, exactly the
+        // upstream set (forest, dragon, graveyard, master — all taunted).
+        let taunt = data::taunt(&mut rand::thread_rng());
         match enc.kind {
             FoeKind::Master => {
                 // A training loss isn't lethal in LoGD: the master halts before
@@ -1161,6 +1381,9 @@ impl State {
                 c.hitpoints = c.max_hitpoints();
                 self.push_log(format!(
                     "{killer} bests you, then stays the final blow and heals your wounds. Train harder."
+                ));
+                self.news(format!(
+                    "{who} challenged {killer} at the Proving Yard and was sent home schooled. {taunt}"
                 ));
                 self.encounter = None;
                 self.goto(Mode::Village);
@@ -1174,6 +1397,9 @@ impl State {
                 self.push_log(format!(
                     "{killer} scatters your essence. You can torment no more souls today."
                 ));
+                self.news(format!(
+                    "{who}'s restless spirit was scattered by {killer} among the graves. {taunt}"
+                ));
                 self.encounter = None;
                 self.goto(Mode::Graveyard);
             }
@@ -1182,6 +1408,15 @@ impl State {
                 self.push_log(format!(
                     "{killer} has slain you! Your gold is lost and you are dragged to the graveyard."
                 ));
+                if enc.kind == FoeKind::Dragon {
+                    self.news(format!(
+                        "{who} (level {level}) was burned to ash beneath the Green Dragon's flame. {taunt}"
+                    ));
+                } else {
+                    self.news(format!(
+                        "{who} (level {level}) was slain in the forest by {killer}. {taunt}"
+                    ));
+                }
                 self.encounter = None;
                 self.goto(Mode::Graveyard);
             }
@@ -1302,10 +1537,13 @@ impl State {
         let left = c.dragon_points_unspent;
         let alive = c.alive;
         let race = c.race;
+        let style = c.style;
         self.push_log(format!("Dragon point spent: {}.", kind.label()));
         if left == 0 {
-            // The next gate in upstream's order: race, then play.
-            self.goto(if race == Race::None {
+            // The next gate in upstream's order: style, race, then play.
+            self.goto(if style == model::AddressStyle::Unchosen {
+                Mode::ChooseStyle
+            } else if race == Race::None {
                 Mode::ChooseRace
             } else if alive {
                 Mode::Village
@@ -1341,10 +1579,14 @@ impl State {
     }
 }
 
-/// Apply signed combat damage to an HP pool, clamping into `0..=max`. Positive
-/// damage subtracts; negative damage (a glancing blow) heals the target.
+/// Apply signed combat damage to an HP pool. Positive damage subtracts;
+/// negative damage (a glancing blow) heals the target. Heals cap at `max` —
+/// but an *existing* overheal (a mending draught, the bard's boost) is never
+/// clipped by taking damage, matching how upstream lets HP ride above max
+/// until the healer's normalize.
 fn apply_signed(hp: u32, dmg: i32, max: u32) -> u32 {
-    (hp as i64 - dmg as i64).clamp(0, max as i64) as u32
+    let cap = max.max(hp) as i64;
+    (hp as i64 - dmg as i64).clamp(0, cap) as u32
 }
 
 /// The result of activating a menu row.
@@ -1379,8 +1621,18 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
         c.hitpoints != c.max_hitpoints(),
     ));
     rows.push(("The Coinvault (bank)".into(), true));
+    rows.push(("The Daily News".into(), true));
     rows.push(("Leave the realm".into(), true));
     rows
+}
+
+/// The daily news pager: one day per page, like upstream's `news.php`.
+fn news_menu(days_back: i64) -> Vec<(String, bool)> {
+    vec![
+        ("Earlier news (the day before)".into(), true),
+        ("Later news (the day after)".into(), days_back > 0),
+        ("Back to the village square".into(), true),
+    ]
 }
 
 fn forest_menu(c: &Character) -> Vec<(String, bool)> {
@@ -1456,6 +1708,21 @@ fn race_menu() -> Vec<(String, bool)> {
             (format!("The {} ({perk})", race.name()), true)
         })
         .collect()
+}
+
+/// The two address styles for the one-time chooser, with example titles off
+/// the ladder so the choice is legible.
+fn style_menu() -> Vec<(String, bool)> {
+    vec![
+        (
+            "The first style of address (Ashlord, Dragonlord)".into(),
+            true,
+        ),
+        (
+            "The second style of address (Ashlady, Dragonlady)".into(),
+            true,
+        ),
+    ]
 }
 
 /// The three specialty choices for the one-time chooser.

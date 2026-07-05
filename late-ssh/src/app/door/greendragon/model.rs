@@ -8,7 +8,7 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use super::combat::{Combatant, Companion};
+use super::combat::{Buff, Combatant, Companion};
 use super::data;
 
 /// Starting on-hand gold for a fresh character (`newplayerstartgold`).
@@ -72,6 +72,21 @@ pub const PLAINSBORN_FOREST_BONUS: u32 = 2;
 /// (`racedwarf.php`'s `minedeathchance`, default 5).
 pub const MINE_DEATH_PERCENT: u32 = 90;
 pub const DEEPFOLK_MINE_DEATH_PERCENT: u32 = 5;
+/// Hard drinks the inn will pour per day (`drinks.php` `hardlimit`).
+pub const HARD_DRINKS_PER_DAY: u32 = 3;
+/// Drunkenness above which the barkeep refuses service (`maxdrunk`), and the
+/// hangover threshold at dawn (upstream hardcodes the same 66 there).
+pub const MAX_DRUNKENNESS_SERVED: u32 = 66;
+/// Five Sixes plays allowed per day (`game_fivesix` `dailyuses`).
+pub const FIVESIX_PLAYS_PER_DAY: u32 = 10;
+/// Gold staked per Five Sixes play; each play also grows the shared pot by
+/// this much (`game_fivesix` `cost`).
+pub const FIVESIX_COST: u64 = 5;
+/// The shared Five Sixes pot's ceiling; growth past it is pocketed by the
+/// house (`maxjackpot`).
+pub const FIVESIX_MAX_POT: u64 = 5000;
+/// Charm required to propose marriage (rung 7 checks `charm >= 22` directly).
+pub const MARRY_CHARM_REQUIRED: u32 = 22;
 
 /// The forest hunting intensities. LoGD offers easier/harder pickings that
 /// shift the creature level relative to the player's own level.
@@ -188,17 +203,132 @@ pub struct Character {
     pub title: String,
     /// Which title column (and later, phase-3 flavor) this character uses.
     pub style: AddressStyle,
-    /// Chosen combat specialty, picked once and largely permanent. `None` until
-    /// the player decides (LoGD sets it on the first new day).
+    /// Chosen combat specialty, picked once but switchable at the inn's
+    /// barkeep. `None` until the player decides (LoGD sets it on the first
+    /// new day).
     pub specialty: Specialty,
-    /// Lifetime skill points in the chosen specialty. Advanced by training
+    /// Lifetime skill points in the *current* specialty. Advanced by training
     /// (gems) and by certain forest events. Every 3rd point grants a use.
     pub specialty_skill: u32,
     /// Spendable specialty "uses" for today: `floor(skill/3)` refreshed each new
     /// day, +1 bonus for the specialty you actually chose.
     pub specialty_uses: u32,
+    /// Benched (skill, uses) per specialty path, indexed by
+    /// [`specialty_index`]. Upstream keeps each specialty module's skill/uses
+    /// in its own prefs, so switching paths at the barkeep resumes the other
+    /// path where it left off ("you'll have to build up some points in this
+    /// one") instead of carrying the current skill across.
+    pub benched_specialties: [(u32, u32); 3],
+    /// Permanent max-HP bought from the inn's vitality tonic (+1 per dose).
+    /// Survives dragon kills (`carrydk` default 1) and feeds investment
+    /// scaling exactly like boon HP (upstream's extra HP rides
+    /// `maxhitpoints`, which `buffbadguy` reads).
+    pub vitality_hp: u32,
+    /// Buffs that outlive a single encounter (drinks, the lover's ward,
+    /// transmutation sickness). Injected into each fight and ticked down by
+    /// combat rounds; stripped by death, dragon kills, and (unless flagged)
+    /// the new day.
+    pub persistent_buffs: Vec<PersistedBuff>,
+    /// Stabled mount: 0 = none, else 1-based index into [`data::MOUNTS`].
+    pub mount: u8,
+    /// Mounted combat rounds left today: while > 0, fight rounds ride the
+    /// mount's attack bonus and burn one each. Refreshed to the mount's
+    /// allowance each new day.
+    pub mount_rounds_left: u32,
+    /// Married to the realm's romance NPC (upstream's INT_MAX `marriedto`
+    /// sentinel). Which partner is implied by [`Character::style`].
+    pub married: bool,
+    /// Drunkenness 0..=100. Sobers by 10% per forest search, resets at dawn
+    /// (with a hangover turn dock above 66), on death, and on a dragon kill.
+    pub drunkenness: u32,
+    /// Hard drinks downed today (max [`HARD_DRINKS_PER_DAY`]).
+    pub hard_drinks_today: u32,
+    /// Paid for an inn room today (`boughtroomtoday`).
+    pub lodged_today: bool,
+    /// Spent time with the partner today (`seenlover`).
+    pub flirted_today: bool,
+    /// Heard the bard today (`sethsong` allows one song per day).
+    pub heard_bard_today: bool,
+    /// Used the forest outhouse today.
+    pub used_outhouse_today: bool,
+    /// Five Sixes plays today (max [`FIVESIX_PLAYS_PER_DAY`]).
+    pub fivesix_plays_today: u32,
     /// UTC day-number of the last new-day reset, for turn/heal regeneration.
     pub last_day: i64,
+}
+
+/// A buff that persists on the character between fights (a drink's buzz, the
+/// lover's ward, transmutation sickness). A serde-able core of the in-fight
+/// [`Buff`]: the fields any village-granted buff actually uses. `slot` mirrors
+/// upstream's `apply_buff` key — re-applying to an occupied slot replaces it
+/// (a new drink replaces the old buzz), except sickness which stacks rounds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PersistedBuff {
+    /// The `apply_buff` slot key ("drink", "lover", "transmute", ...).
+    pub slot: String,
+    /// Display name.
+    pub name: String,
+    /// Combat rounds left before it wears off.
+    pub rounds_left: u32,
+    pub player_atk_mod: f32,
+    pub player_def_mod: f32,
+    pub player_dmg_mod: f32,
+    /// Reflected fraction of damage taken (the black cask's kickback).
+    pub damage_shield: f32,
+    /// Survives the daily reset (transmutation sickness does; drinks don't).
+    pub survives_new_day: bool,
+    /// Flavor logged the round it wears off.
+    pub wearoff: String,
+}
+
+impl Default for PersistedBuff {
+    fn default() -> Self {
+        PersistedBuff {
+            slot: String::new(),
+            name: String::new(),
+            rounds_left: 0,
+            player_atk_mod: 1.0,
+            player_def_mod: 1.0,
+            player_dmg_mod: 1.0,
+            damage_shield: 0.0,
+            survives_new_day: false,
+            wearoff: String::new(),
+        }
+    }
+}
+
+impl PersistedBuff {
+    /// The in-fight buff this persists. The encounter ticks it; the leftover
+    /// rounds are written back when the fight ends.
+    pub fn as_buff(&self) -> Buff {
+        let mut b = Buff::new(self.name.clone(), self.rounds_left);
+        b.player_atk_mod = self.player_atk_mod;
+        b.player_def_mod = self.player_def_mod;
+        b.player_dmg_mod = self.player_dmg_mod;
+        b.damage_shield = self.damage_shield;
+        b.wearoff = self.wearoff.clone();
+        b
+    }
+}
+
+/// What a new day's shared module effects did (for log/news wiring).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NewDayFx {
+    /// The marriage ended at dawn (charm ran out) — makes the paper.
+    pub divorced: bool,
+    /// Woke up hungover (-1 turn).
+    pub hangover: bool,
+}
+
+/// Index of a chooseable specialty into [`Character::benched_specialties`].
+pub fn specialty_index(s: Specialty) -> Option<usize> {
+    match s {
+        Specialty::None => None,
+        Specialty::Mystical => Some(0),
+        Specialty::DarkArts => Some(1),
+        Specialty::Thief => Some(2),
+    }
 }
 
 /// The four permanent upgrades a dragon point can buy (LoGD `dragonpointspend`:
@@ -324,14 +454,16 @@ impl Race {
     }
 }
 
-/// The two address styles. Upstream keys DK titles (and, come phase 3, the
-/// romance partner and one bard outcome) off a binary `sex` field; our
-/// adaptation is a flavor choice that picks the title column. The chooser
-/// itself lands with phase 3's character-creation flow; until then everyone
-/// defaults to the first style.
+/// The two address styles. Upstream keys DK titles, the romance partner, and
+/// one bard outcome off a binary `sex` field; our adaptation is a flavor
+/// choice that picks the title column (and the partner, and bard outcome 15).
+/// `Unchosen` arms the one-time chooser gate at load; until it's picked,
+/// first-style titles render.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AddressStyle {
+    /// Not yet picked; the style gate arms on load.
     #[default]
+    Unchosen,
     First,
     Second,
 }
@@ -398,6 +530,19 @@ impl Default for Character {
             specialty: Specialty::None,
             specialty_skill: 0,
             specialty_uses: 0,
+            benched_specialties: [(0, 0); 3],
+            vitality_hp: 0,
+            persistent_buffs: Vec::new(),
+            mount: 0,
+            mount_rounds_left: 0,
+            married: false,
+            drunkenness: 0,
+            hard_drinks_today: 0,
+            lodged_today: false,
+            flirted_today: false,
+            heard_bard_today: false,
+            used_outhouse_today: false,
+            fivesix_plays_today: 0,
             last_day: 0,
         }
     }
@@ -413,9 +558,20 @@ impl Character {
         }
     }
 
-    /// Maximum hitpoints: `10 * level` plus any retained dragon-kill bonus.
+    /// The name as the realm knows it: the dragon-kill title, then the name
+    /// (LoGD renders "Farmboy Name" everywhere).
+    pub fn titled_name(&self) -> String {
+        if self.title.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} {}", self.title, self.name)
+        }
+    }
+
+    /// Maximum hitpoints: `10 * level` plus any retained dragon-kill bonus and
+    /// vitality-tonic doses.
     pub fn max_hitpoints(&self) -> u32 {
-        HP_PER_LEVEL * self.level as u32 + self.dragon_hp_bonus
+        HP_PER_LEVEL * self.level as u32 + self.dragon_hp_bonus + self.vitality_hp
     }
 
     /// Attack stat fed to the combat roll: `level + weapon_tier` plus dragon
@@ -489,13 +645,15 @@ impl Character {
     /// `resurrection=true`): [`RESURRECTION_FAVOR_COST`] favor buys an
     /// immediate extra new day — revive, heal to full, and take
     /// `base + ff + `[`RESURRECTION_TURNS`] turns for what's left of today.
-    /// Like upstream's flagged new day it settles bank interest and refreshes
-    /// specialty uses, but does **not** refill soulpoints or grave fights, and
-    /// leaves `last_day` alone so the real next dawn still rolls a full day.
-    /// Returns false (spending nothing) if alive or short on favor.
-    pub fn resurrect(&mut self, interest_percent: u32) -> bool {
+    /// Like upstream's flagged new day it settles bank interest, refreshes
+    /// specialty uses, and runs the daily module effects (mount, hangover,
+    /// marriage upkeep — `modulehook("newday")` fires regardless of the
+    /// flag), but does **not** refill soulpoints or grave fights, and leaves
+    /// `last_day` alone so the real next dawn still rolls a full day.
+    /// Returns `None` (spending nothing) if alive or short on favor.
+    pub fn resurrect(&mut self, interest_percent: u32, rng: &mut impl Rng) -> Option<NewDayFx> {
         if self.alive || self.favor < RESURRECTION_FAVOR_COST {
-            return false;
+            return None;
         }
         self.favor -= RESURRECTION_FAVOR_COST;
         self.apply_new_day_interest(interest_percent);
@@ -507,11 +665,12 @@ impl Character {
             + self.race.daily_forest_bonus() as i32
             + RESURRECTION_TURNS;
         self.turns = turns.max(0) as u32;
+        let fx = self.newday_shared_effects(rng);
         self.refresh_specialty_uses();
         self.alive = true;
         self.seen_dragon = false;
         self.hitpoints = self.max_hitpoints();
-        true
+        Some(fx)
     }
 
     /// Re-roll the dragon-kill title off the ladder for the current kill
@@ -520,8 +679,9 @@ impl Character {
     pub fn reroll_title(&mut self, rng: &mut impl Rng) {
         let (first, second) = data::dk_title_pair(self.dragon_kills, rng);
         self.title = match self.style {
-            AddressStyle::First => first,
             AddressStyle::Second => second,
+            // The unchosen render first-style until the gate is answered.
+            AddressStyle::First | AddressStyle::Unchosen => first,
         }
         .to_string();
     }
@@ -577,10 +737,14 @@ impl Character {
     // out-gearing a fixed foe. Without this, enough Gypsy purchases make you
     // undefeatable; this is LoGD's fix, transcribed.
 
-    /// Banked permanent power the endgame scales against: attack + defense boons,
-    /// plus earned HP over the level-15 base (each 5 HP = 1 point).
+    /// Banked permanent power the endgame scales against: attack + defense
+    /// boons, plus earned HP over the level-15 base (each 5 HP = 1 point).
+    /// Vitality-tonic HP counts too — upstream's extra HP rides
+    /// `maxhitpoints`, which feeds `buffbadguy`'s `(maxhp - level*10)/5` term.
     fn investment_points(&self) -> u32 {
-        self.dragon_attack_bonus + self.dragon_defense_bonus + self.dragon_hp_bonus / 5
+        self.dragon_attack_bonus
+            + self.dragon_defense_bonus
+            + (self.dragon_hp_bonus + self.vitality_hp) / 5
     }
 
     /// Randomly split `points` into (attack, defense, hp) flux: +1 attack or
@@ -885,6 +1049,10 @@ impl Character {
         self.hitpoints = 0;
         // Your companions don't follow you past the grave.
         self.companions.clear();
+        // Neither do your buffs (upstream strips them at the graveyard), and
+        // death sobers you right up (the `header-graveyard` drinks hook).
+        self.persistent_buffs.clear();
+        self.drunkenness = 0;
     }
 
     /// Extra daily forest fights bought with `ff` dragon points (LoGD `dkff`).
@@ -948,25 +1116,38 @@ impl Character {
         self.seen_dragon = false;
         self.alive = true;
         // The specialty path is kept, but its skill/uses restart (LoGD's
-        // per-module dragonkill hook).
+        // per-module dragonkill hook fires for every specialty, benched ones
+        // included).
         self.specialty_skill = 0;
         self.specialty_uses = 0;
+        self.benched_specialties = [(0, 0); 3];
         self.companions.clear();
+        // The drinks module sobers a dragon-slayer up; buffs don't outlive
+        // the old run either. The mount does (upstream keeps `hashorse`).
+        self.drunkenness = 0;
+        self.persistent_buffs.clear();
         self.hitpoints = self.max_hitpoints();
     }
 
     /// Run the daily reset if `today` is past the stored day: pay bank interest,
-    /// refill forest turns and grave fights, fully heal, revive, and refresh
-    /// soulpoints. `interest_percent` is the day's rolled rate and `spirits` is
-    /// the day's `e_rand(-1,1)+e_rand(-1,1)` (-2..+2) turn jitter — both
-    /// supplied by the caller's RNG. Returns true if a reset happened.
+    /// refill forest turns and grave fights, fully heal, revive, refresh
+    /// soulpoints, and run the daily module effects (mount, hangover, marriage
+    /// upkeep, the once-a-day flags). `interest_percent` is the day's rolled
+    /// rate and `spirits` is the day's `e_rand(-1,1)+e_rand(-1,1)` (-2..+2)
+    /// turn jitter. Returns what happened, or `None` if the day already rolled.
     ///
     /// A dawn revives the dead at no extra cost: upstream's `-6` turn dock and
     /// skipped soulpoint/grave-fight refills apply only to the *paid*
     /// resurrection ([`Character::resurrect`]), never this passive path.
-    pub fn roll_new_day(&mut self, today: i64, interest_percent: u32, spirits: i32) -> bool {
+    pub fn roll_new_day(
+        &mut self,
+        today: i64,
+        interest_percent: u32,
+        spirits: i32,
+        rng: &mut impl Rng,
+    ) -> Option<NewDayFx> {
         if today <= self.last_day {
-            return false;
+            return None;
         }
         self.last_day = today;
         // Interest is settled before turns refill, so it can read how many of
@@ -977,6 +1158,7 @@ impl Character {
             + self.race.daily_forest_bonus() as i32
             + spirits;
         self.turns = turns.max(0) as u32;
+        let fx = self.newday_shared_effects(rng);
         self.refresh_specialty_uses();
         self.alive = true;
         // The dragon may be sought once per day (`newday.php` clears
@@ -985,12 +1167,63 @@ impl Character {
         self.soulpoints = self.max_soulpoints();
         self.grave_fights = GRAVE_FIGHTS_PER_DAY;
         self.hitpoints = self.max_hitpoints();
-        true
+        Some(fx)
+    }
+
+    /// The daily effects shared by every kind of new day (upstream's newday
+    /// module hooks plus its unconditional user-field resets — they run on
+    /// the paid resurrection too): the mount's bonus fights and refreshed
+    /// buff rounds, the hangover dock and the drink slate, the once-a-day
+    /// flags, buffs fading at dawn, and marriage upkeep. Runs after the day's
+    /// turns are assembled (the hangover docks them) and before
+    /// [`Character::refresh_specialty_uses`].
+    fn newday_shared_effects(&mut self, rng: &mut impl Rng) -> NewDayFx {
+        // The stable refreshes the mount (`newday.php`: bonus forest fights
+        // + the buff's daily round allowance).
+        if let Some(mount) = self.mount_data() {
+            self.turns += mount.forest_fights;
+            self.mount_rounds_left = mount.buff_rounds;
+        }
+        // Drinks: the hangover (drunkenness > 66 at dawn costs a turn), then
+        // the day's slate is wiped either way.
+        let hangover = self.drunkenness > MAX_DRUNKENNESS_SERVED;
+        if hangover {
+            self.turns = self.turns.saturating_sub(1);
+        }
+        self.drunkenness = 0;
+        self.hard_drinks_today = 0;
+        // The once-a-day flags re-arm.
+        self.lodged_today = false;
+        self.flirted_today = false;
+        self.heard_bard_today = false;
+        self.used_outhouse_today = false;
+        self.fivesix_plays_today = 0;
+        // Buffs fade at dawn unless flagged (transmutation sickness).
+        self.persistent_buffs.retain(|b| b.survives_new_day);
+        // Marriage upkeep (`lovers.php`): the partner's patience erodes by
+        // `e_rand(1, max(1, round(0.85 * sqrt(dragon_kills))))` charm; at
+        // zero the marriage ends.
+        let mut divorced = false;
+        if self.married {
+            let cap = ((0.85 * (self.dragon_kills as f64).sqrt()).round() as u32).max(1);
+            let loss = rng.gen_range(1..=cap);
+            self.charm = self.charm.saturating_sub(loss);
+            if self.charm == 0 {
+                self.married = false;
+                divorced = true;
+            }
+        }
+        NewDayFx { divorced, hangover }
     }
 
     /// Refill the day's specialty uses: `floor(skill/3)`, plus 1 for having
-    /// chosen a specialty at all (LoGD's `specialtybonus`). No-op while undecided.
+    /// chosen a specialty at all (LoGD's `specialtybonus` goes to the active
+    /// path only). Benched paths refresh their own pools too, exactly like
+    /// each upstream module's own newday hook. No-op while undecided.
     pub fn refresh_specialty_uses(&mut self) {
+        for (skill, uses) in self.benched_specialties.iter_mut() {
+            *uses = *skill / 3;
+        }
         if self.specialty == Specialty::None {
             self.specialty_uses = 0;
             return;
@@ -998,11 +1231,212 @@ impl Character {
         self.specialty_uses = self.specialty_skill / 3 + 1;
     }
 
-    /// Pick a specialty (LoGD chooses on the first new day; here it's a one-time
-    /// choice). Seeds the first day's uses immediately.
+    /// Pick a specialty (LoGD chooses on the first new day; here it's the
+    /// village chooser). A fresh path seeds the first day's uses immediately;
+    /// a path benched earlier (the forgetting potion) resumes where it left
+    /// off, like upstream's per-module prefs.
     pub fn choose_specialty(&mut self, specialty: Specialty) {
         self.specialty = specialty;
+        if let Some(idx) = specialty_index(specialty) {
+            let (skill, uses) = self.benched_specialties[idx];
+            if skill > 0 || uses > 0 {
+                self.benched_specialties[idx] = (0, 0);
+                self.specialty_skill = skill;
+                self.specialty_uses = uses;
+                return;
+            }
+        }
+        self.specialty_skill = 0;
         self.refresh_specialty_uses();
+    }
+
+    /// Switch the active specialty at the barkeep (`inn_bartender.php`):
+    /// upstream only rewrites the `specialty` field — each path's skill and
+    /// uses live in its own prefs — so the current pair is benched and the
+    /// target path resumes its own ("you'll have to build up some points in
+    /// this one"). Returns false for a no-op or invalid target.
+    pub fn switch_specialty(&mut self, to: Specialty) -> bool {
+        if to == self.specialty {
+            return false;
+        }
+        let Some(to_idx) = specialty_index(to) else {
+            return false;
+        };
+        if let Some(cur) = specialty_index(self.specialty) {
+            self.benched_specialties[cur] = (self.specialty_skill, self.specialty_uses);
+        }
+        let (skill, uses) = self.benched_specialties[to_idx];
+        self.benched_specialties[to_idx] = (0, 0);
+        self.specialty = to;
+        self.specialty_skill = skill;
+        self.specialty_uses = uses;
+        true
+    }
+
+    /// The forgetting potion: drop the specialty entirely (the village
+    /// chooser re-arms). The path's progress is benched, not lost, exactly
+    /// like upstream clearing only the `specialty` field.
+    pub fn forget_specialty(&mut self) {
+        if let Some(idx) = specialty_index(self.specialty) {
+            self.benched_specialties[idx] = (self.specialty_skill, self.specialty_uses);
+        }
+        self.specialty = Specialty::None;
+        self.specialty_skill = 0;
+        self.specialty_uses = 0;
+    }
+
+    /// Apply (or refresh) a persistent buff. Occupied slots are replaced —
+    /// upstream's `apply_buff` keys by slot, so a new drink replaces the old
+    /// buzz — except transmutation sickness, which stacks its rounds.
+    pub fn apply_persistent_buff(&mut self, buff: PersistedBuff) {
+        if let Some(existing) = self
+            .persistent_buffs
+            .iter_mut()
+            .find(|b| b.slot == buff.slot)
+        {
+            if buff.slot == "transmute" {
+                existing.rounds_left += buff.rounds_left;
+            } else {
+                *existing = buff;
+            }
+        } else {
+            self.persistent_buffs.push(buff);
+        }
+    }
+
+    /// Reduce drunkenness by 10% (the `soberup` hook: each forest search and
+    /// an outhouse wash both pass `soberval = 0.9`).
+    pub fn sober_up(&mut self) {
+        self.drunkenness = (self.drunkenness as f64 * 0.9).round() as u32;
+    }
+
+    /// The inn's room price: `round(level * (10 + ln(level)))`
+    /// (`inn_room.php`).
+    pub fn inn_room_cost(&self) -> u64 {
+        (self.level as f64 * (10.0 + (self.level as f64).ln())).round() as u64
+    }
+
+    /// The room price when charged to the bank: the base plus the inn's 5%
+    /// convenience fee (`innfee` default "5%").
+    pub fn inn_room_bank_cost(&self) -> u64 {
+        let cost = self.inn_room_cost();
+        cost + (cost as f64 * 5.0 / 100.0).round() as u64
+    }
+
+    /// The stabled mount's data row, if any.
+    pub fn mount_data(&self) -> Option<&'static data::Mount> {
+        if self.mount == 0 {
+            return None;
+        }
+        data::MOUNTS.get(self.mount as usize - 1)
+    }
+
+    /// The gem refund for parting with the current mount:
+    /// `round(cost * 2/3)` (`stables.php`).
+    pub fn mount_refund(&self) -> u64 {
+        self.mount_data()
+            .map(|m| (m.cost_gems as f64 * 2.0 / 3.0).round() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Buy the mount at 1-based `index`, trading in any current mount at the
+    /// ⅔ refund (affordability counts the refund, like upstream). The new
+    /// mount is saddled at once: its bonus fights and buff rounds join today.
+    pub fn buy_mount(&mut self, index: u8) -> bool {
+        let Some(mount) = data::MOUNTS.get(index as usize - 1) else {
+            return false;
+        };
+        if self.mount == index {
+            return false;
+        }
+        let refund = self.mount_refund();
+        if self.gems + refund < mount.cost_gems {
+            return false;
+        }
+        self.gems = self.gems + refund - mount.cost_gems;
+        self.mount = index;
+        self.mount_rounds_left = mount.buff_rounds;
+        self.turns += mount.forest_fights;
+        true
+    }
+
+    /// Sell the current mount for the ⅔ refund. Returns the gems paid, or
+    /// `None` without a mount.
+    pub fn sell_mount(&mut self) -> Option<u64> {
+        if self.mount == 0 {
+            return None;
+        }
+        let refund = self.mount_refund();
+        self.gems += refund;
+        self.mount = 0;
+        self.mount_rounds_left = 0;
+        Some(refund)
+    }
+
+    /// Hired companions on the payroll (summons carry `ignore_limit` and
+    /// don't count — LoGD's `companionsallowed`, default 1).
+    pub fn hired_companions(&self) -> usize {
+        self.companions.iter().filter(|c| !c.ignore_limit).count()
+    }
+
+    /// Whether this mercenary can be hired right now: the one-hire cap has
+    /// room, no companion already answers to the name, and the purse covers
+    /// both currencies.
+    pub fn can_hire(&self, merc: &data::Mercenary) -> bool {
+        self.hired_companions() == 0
+            && !self.companions.iter().any(|c| c.name == merc.name)
+            && self.gold >= merc.cost_gold
+            && self.gems >= merc.cost_gems
+    }
+
+    /// Hire a mercenary (`mercenarycamp.php`): stats are baked from the
+    /// buyer's level at purchase (`base + per_level * level`) and never
+    /// recalculated. Returns false if [`Character::can_hire`] says no.
+    pub fn hire_mercenary(&mut self, merc: &data::Mercenary) -> bool {
+        if !self.can_hire(merc) {
+            return false;
+        }
+        self.gold -= merc.cost_gold;
+        self.gems -= merc.cost_gems;
+        let level = self.level as u32;
+        let hp = merc.hp.0 + merc.hp.1 * level;
+        self.companions.push(Companion {
+            name: merc.name.to_string(),
+            hitpoints: hp,
+            max_hitpoints: hp,
+            attack: merc.attack.0 + merc.attack.1 * level,
+            defense: merc.defense.0 + merc.defense.1 * level,
+            dying_text: merc.dying_text.to_string(),
+            ability: merc.ability,
+            ignore_limit: false,
+        });
+        true
+    }
+
+    /// Gold the camp's sawbones charges to patch companion `idx` to full:
+    /// `round(ln(level + 1) * (missing + 10) * 1.33)` (`mercenarycamp.php`).
+    pub fn companion_heal_cost(&self, idx: usize) -> Option<u64> {
+        let comp = self.companions.get(idx)?;
+        let missing = comp.max_hitpoints.saturating_sub(comp.hitpoints);
+        if missing == 0 {
+            return None;
+        }
+        Some(
+            (((self.level as f64) + 1.0).ln() * (missing as f64 + 10.0) * 1.33).round() as u64,
+        )
+    }
+
+    /// Pay to heal companion `idx` to full. Returns the gold spent, or `None`
+    /// if whole or unaffordable.
+    pub fn heal_companion(&mut self, idx: usize) -> Option<u64> {
+        let cost = self.companion_heal_cost(idx)?;
+        if self.gold < cost {
+            return None;
+        }
+        self.gold -= cost;
+        let comp = &mut self.companions[idx];
+        comp.hitpoints = comp.max_hitpoints;
+        Some(cost)
     }
 
     /// Advance the chosen specialty by one skill point. Every third point also
@@ -1106,7 +1540,7 @@ mod tests {
         c.choose_specialty(Specialty::Mystical);
         c.specialty_skill = 9; // floor(9/3) = 3, plus the +1 chosen bonus
         c.specialty_uses = 0; // spent down during the day
-        c.roll_new_day(1, 0, 0);
+        c.roll_new_day(1, 0, 0, &mut rand::thread_rng());
         assert_eq!(c.specialty_uses, 4);
     }
 
@@ -1191,7 +1625,7 @@ mod tests {
         // The free path: wait for the dawn and rise with a *full* day — the
         // -6 dock belongs to the paid resurrection only (newday.php applies
         // resurrectionturns only when resurrection=true).
-        assert!(c.roll_new_day(11, 0, 0));
+        assert!(c.roll_new_day(11, 0, 0, &mut rand::thread_rng()).is_some());
         assert_eq!(c.turns, TURNS_PER_DAY);
         assert!(c.alive);
         assert_eq!(c.hitpoints, c.max_hitpoints());
@@ -1202,7 +1636,7 @@ mod tests {
         assert!(!c.seen_dragon);
         // Same day again: no reset.
         c.turns = 3;
-        assert!(!c.roll_new_day(11, 0, 0));
+        assert!(c.roll_new_day(11, 0, 0, &mut rand::thread_rng()).is_none());
         assert_eq!(c.turns, 3);
     }
 
@@ -1249,13 +1683,13 @@ mod tests {
         // Alive or broke: no sale.
         let mut alive = Character::new("alive", 10);
         alive.favor = 500;
-        assert!(!alive.resurrect(0));
+        assert!(alive.resurrect(0, &mut rand::thread_rng()).is_none());
         let mut broke = Character::new("broke", 10);
         broke.die();
         broke.favor = 99;
-        assert!(!broke.resurrect(0));
+        assert!(broke.resurrect(0, &mut rand::thread_rng()).is_none());
 
-        assert!(c.resurrect(0));
+        assert!(c.resurrect(0, &mut rand::thread_rng()).is_some());
         assert!(c.alive);
         assert_eq!(c.favor, 20);
         // Turns for the rest of today: base 10 - 6 = 4 (plus any ff points).
@@ -1272,15 +1706,15 @@ mod tests {
     fn new_day_spirits_jitter_turns() {
         // A live player (no resurrection penalty): base 10 + spirits.
         let mut high = Character::new("high", 10);
-        high.roll_new_day(11, 0, 2); // very high spirits
+        high.roll_new_day(11, 0, 2, &mut rand::thread_rng()); // very high spirits
         assert_eq!(high.turns, 12);
         let mut low = Character::new("low", 10);
-        low.roll_new_day(11, 0, -2); // very low spirits
+        low.roll_new_day(11, 0, -2, &mut rand::thread_rng()); // very low spirits
         assert_eq!(low.turns, 8);
         // ff dragon points feed the daily pool.
         let mut invested = Character::new("ff", 10);
         invested.dragon_ff_bonus = 4;
-        invested.roll_new_day(11, 0, 0);
+        invested.roll_new_day(11, 0, 0, &mut rand::thread_rng());
         assert_eq!(invested.turns, 14);
     }
 
@@ -1290,21 +1724,21 @@ mod tests {
         let mut worker = Character::new("worker", 10);
         worker.gold_in_bank = 1000;
         worker.turns = 0;
-        worker.roll_new_day(11, 10, 0); // 10% rolled
+        worker.roll_new_day(11, 10, 0, &mut rand::thread_rng()); // 10% rolled
         assert_eq!(worker.gold_in_bank, 1100);
 
         // Slacked off: left more than the threshold unused → no interest.
         let mut slacker = Character::new("slacker", 10);
         slacker.gold_in_bank = 1000;
         slacker.turns = FIGHTS_FOR_INTEREST + 1;
-        slacker.roll_new_day(11, 10, 0);
+        slacker.roll_new_day(11, 10, 0, &mut rand::thread_rng());
         assert_eq!(slacker.gold_in_bank, 1000);
 
         // Over the ceiling → no interest no matter how hard you worked.
         let mut rich = Character::new("rich", 10);
         rich.gold_in_bank = MAX_GOLD_FOR_INTEREST;
         rich.turns = 0;
-        rich.roll_new_day(11, 10, 0);
+        rich.roll_new_day(11, 10, 0, &mut rand::thread_rng());
         assert_eq!(rich.gold_in_bank, MAX_GOLD_FOR_INTEREST);
 
         // Debt compounds even when turns went unused (no "work for it" gate
@@ -1312,7 +1746,7 @@ mod tests {
         let mut debtor = Character::new("debtor", 10);
         debtor.gold_in_bank = -100;
         debtor.turns = FIGHTS_FOR_INTEREST + 5;
-        debtor.roll_new_day(11, 10, 0);
+        debtor.roll_new_day(11, 10, 0, &mut rand::thread_rng());
         assert_eq!(debtor.gold_in_bank, -110);
     }
 
@@ -1587,14 +2021,14 @@ mod tests {
     fn plainsborn_gain_bonus_fights_each_day() {
         let mut c = Character::new("plains", 10);
         c.race = Race::Plainsborn;
-        c.roll_new_day(11, 0, 0);
+        c.roll_new_day(11, 0, 0, &mut rand::thread_rng());
         assert_eq!(c.turns, TURNS_PER_DAY + PLAINSBORN_FOREST_BONUS);
 
         // The race's newday hook fires on the paid resurrection too:
         // 10 + 2 - 6 = 6 turns.
         c.die();
         c.favor = 100;
-        assert!(c.resurrect(0));
+        assert!(c.resurrect(0, &mut rand::thread_rng()).is_some());
         assert_eq!(
             c.turns,
             (TURNS_PER_DAY as i32 + PLAINSBORN_FOREST_BONUS as i32 + RESURRECTION_TURNS) as u32

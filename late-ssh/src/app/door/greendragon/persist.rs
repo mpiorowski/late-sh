@@ -9,8 +9,10 @@ use super::model::Character;
 
 /// Bump when the save shape changes in a way that needs migration logic.
 /// Plain field additions are absorbed by serde defaults; v2 marks the switch
-/// from auto-applied dragon-kill boons to chooseable dragon points.
-pub const SCHEMA_VERSION: u32 = 2;
+/// from auto-applied dragon-kill boons to chooseable dragon points; v3 marks
+/// the address style becoming a real one-time choice (phase-2 saves carried a
+/// stamped `First` nobody ever picked, so the chooser re-arms for them).
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Serialize a character into the stored blob shape.
 pub fn to_json(character: &Character) -> Value {
@@ -33,6 +35,11 @@ pub fn from_json(blob: &Value) -> Character {
         .unwrap_or_default();
     if version < 2 {
         migrate_v1_dragon_boons(&mut c);
+    }
+    if version < 3 {
+        // Pre-phase-3 saves never chose an address style — the field was a
+        // placeholder stamp. Re-arm the one-time chooser for them.
+        c.style = super::model::AddressStyle::Unchosen;
     }
     c
 }
@@ -115,7 +122,24 @@ mod tests {
         let c = from_json(&blob);
         assert_eq!(c.race, Race::None);
         assert_eq!(c.title, "");
-        assert_eq!(c.style, AddressStyle::First);
+        assert_eq!(c.style, AddressStyle::Unchosen);
+    }
+
+    #[test]
+    fn pre_v3_blobs_rearm_the_style_chooser() {
+        use super::super::model::AddressStyle;
+        // A v2 save carries a stamped "First" nobody chose: the v3 migration
+        // clears it so the one-time chooser fires. A v3 save keeps its pick.
+        let blob = json!({
+            "schema_version": 2,
+            "character": { "name": "vet", "style": "First" }
+        });
+        assert_eq!(from_json(&blob).style, AddressStyle::Unchosen);
+        let blob = json!({
+            "schema_version": 3,
+            "character": { "name": "new", "style": "Second" }
+        });
+        assert_eq!(from_json(&blob).style, AddressStyle::Second);
     }
 
     #[test]
