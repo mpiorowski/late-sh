@@ -8,6 +8,11 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
 
 - **Source of truth: `jimlunsford/lotgd`** (github mirror of DragonPrime
   1.1.2, the final content-complete classic release; project ceased Sept 2019).
+- **Local reference clone: `upstream-lotgd/` at the repo root** (gitignored).
+  Always verify formulas against these files directly — never from memory or
+  ad-hoc web fetches. If missing, re-fetch with
+  `git clone --depth 1 https://github.com/jimlunsford/lotgd upstream-lotgd`.
+  CC BY-NC-SA source: consult it, never copy prose/names or commit it.
 - Newer lineages checked (2026-07): **NB-Core/lotgd** ("+nb", v2.0.5, Apr 2024)
   and **stephenKise/Legend-of-the-Green-Dragon** are PHP-8/MySQL-8/security
   modernizations of the *same game* — explicitly no new content or mechanics.
@@ -30,7 +35,8 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
   (non-lethal loss, +5 soulpoints on win); shop ladder + 75% trade-in +
   level gating; healer full-heal cost `round(ln(level)·(missing+10))`;
   8 stock forest events at 15% (`forestchance`); exp curve + DK scaling;
-  new-day spirits `e_rand(-1,1)+e_rand(-1,1)`, resurrection −6 turns;
+  new-day spirits `e_rand(-1,1)+e_rand(-1,1)` (the −6 turn dock belongs to
+  the *paid* resurrection only — see phase 1);
   interest gating (>4 unused turns or ≥100k ⇒ none).
 
 ## Phase 0 — core fidelity fixes (this pass)
@@ -92,6 +98,13 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
 - [x] **Creature roster variety**: multiple original-named creatures per
   level (upstream ships ~250 forest rows; same-level rows share the band
   stats, so names-only variety is 1=1).
+- [x] **`seendragon` is a daily flag** (`newday.php` clears it every dawn):
+  fleeing or dying to the dragon no longer locks the seek out for the rest of
+  the run. Found and fixed during the phase-1 source audit.
+- [ ] **`seenmaster` daily gate** (`train.php`): upstream allows one master
+  challenge per day (`seenmaster` set on challenge, cleared on a win and at
+  newday); our Proving Yard allows immediate rechallenges after a loss.
+  Found during the phase-1 source audit — not yet ported.
 
 ### Known deliberate deviations (single-player shape, documented)
 
@@ -104,53 +117,70 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
   see CONTEXT.md).
 - `suicide` searching: stock default **off** — correctly absent.
 
-## Phase 1 — the dead realm (`graveyard.php`, `shades.php`, `lib/graveyard/case_*.php`)
+## Phase 1 — the dead realm (`graveyard.php`, `shades.php`, `lib/graveyard/case_*.php`) — DONE
 
-Everything below was verified against the upstream source (re-clone
-`jimlunsford/lotgd` if the file needs re-checking). This section is written to
-be implementable without other notes.
+Implemented 2026-07, re-verified line-by-line against the local
+`upstream-lotgd/` clone. The audit corrected two claims this section
+originally shipped with:
 
-- **New `Character` fields** (serde defaults 0): `favor` (upstream
-  `deathpower`, the death-realm currency) and `grave_fights` (daily torment
-  fights, upstream `gravefights`). Both refresh on a *normal* new day
-  (`grave_fights = 10` via `gravefightsperday`, soulpoints `= 50 + 5·level`)
-  but **not** on a resurrection day (upstream skips `playerfights`/
-  `soulpoints`/`gravefights` resets when `resurrection=true`).
-- **While dead**: the graveyard replaces the village as the hub (upstream
-  redirects village→shades when dead, shades→village when alive). All combat
-  buffs are stripped on entry (`strip_all_buffs`). **Soulpoints are the HP
-  pool**: fight setup swaps `hitpoints = soulpoints`, dead-player attack and
-  defense are both `10 + round((level−1)·1.5)` (gear/level irrelevant), and
-  after the fight the remaining pool is written back to soulpoints — damage
-  persists between torment fights. Max soulpoints is always computed
-  `level·5 + 50`, never stored.
-- **Torment fights** (`case_battle_search.php`): gated on `grave_fights > 0`,
-  one spent per search. The foe is a random *graveyard* creature — a separate
-  original-name roster is needed (upstream has a `graveyard=1` creature pool;
-  names ours, a handful is enough). Its stats override the seed row entirely:
+1. **The passive wait-for-dawn revival is a plain new day.** `checkday()`
+   redirects a dead player to bare `newday.php` (no `resurrection=true`), so
+   turns are the full base + spirits + ff, and soulpoints/gravefights DO
+   refresh. The −6 `resurrectionturns` dock and the skipped
+   `playerfights`/`soulpoints`/`gravefights` resets apply **only to the paid
+   resurrection**. (Our port used to dock −6 on the passive path — fixed.)
+2. **A "graveyard-only roster" doesn't exist upstream**: the installer flags
+   the *entire* forest table `graveyard=1` and `case_battle_search.php`
+   overrides every stat anyway. The pool is pure flavor; we use a dedicated
+   10-entry original-name cast (`data::GRAVEYARD_CREATURES`).
+
+- [x] **New `Character` fields**: `favor` (upstream `deathpower`) and
+  `grave_fights` (upstream `gravefights`), serde-defaulted. Both refresh on a
+  normal new day (`grave_fights = 10` via `gravefightsperday`, soulpoints
+  `= 50 + 5·level`) but not via the paid resurrection.
+- [x] **While dead**: the graveyard replaces the village as the hub (Esc
+  leaves the game; the village is unreachable until revival). Combat buffs
+  can't follow (encounter-scoped) and specialty skills are hidden — upstream
+  strips buffs on entry and calls `fightnav(false, ...)` (no specials).
+  **Soulpoints are the HP pool**: fight setup swaps `hitpoints = soulpoints`,
+  dead attack and defense are both `10 + round((level−1)·1.5)` (gear/boons
+  irrelevant), and the remaining pool is written back after the fight —
+  damage persists between torments. Max soulpoints is always computed
+  `level·5 + 50` (`Character::max_soulpoints`), never stored.
+- [x] **Torment fights** (`case_battle_search.php`): gated on
+  `grave_fights > 0`, one spent per search (persisted at fight start, like
+  forest turns). Foe stats override the flavor roster entirely:
   `shift = -1 if level < 5 else 0`; `atk = 9 + shift + int((level−1)·1.5)`;
-  `def = int(9 + shift + (level−1)·1.5) · 0.7`; `hp = level·5 + 50`;
-  its "exp" is the **favor payout** `e_rand(10+round(level/3),
-  20+round(level/3))` (this is favor, not experience). Victory: `favor +=
-  payout`. Defeat: `grave_fights = 0` (done tormenting today), no further
-  penalty. Flee: 1-in-3 escape; a successful escape costs
-  `min(favor, 5 + e_rand(0, level))` favor; failure continues the fight.
-- **Mausoleum** (`case_enter/restore.php`): "restore soul" heals soulpoints
-  to max for `favortoheal = round(10 · (max − soulpoints) / max)` favor
-  (0..10, scaling with depletion); only offered when below max and
-  affordable.
-- **Favor tiers** (`case_question.php`): at ≥25 favor the haunt option
-  unlocks (25 favor; PvP-only — defer to phase 4, but keep the tier
-  messaging); at ≥100 favor **resurrection** unlocks.
-- **Resurrection** (`case_resurrection.php` + `newday.php`): costs 100 favor
-  and triggers an immediate new day with `spirits = -6` ("Resurrected"
-  label) and `resurrection_turns = -6` (floored at `-(base + ff)`), i.e. the
-  player rises today with 4 + ff turns instead of waiting. Our existing
-  passive path (wait for the next real day, −6 turns) stays as the free
-  alternative. Upstream deducts the 100 favor inside newday; deduct at the
-  moment of resurrection.
-- **Death news hook**: graveyard defeats and resurrections write daily news
-  upstream — no-op until phase 3's news lands, then wire them.
+  `def = atk · 0.7`; `hp = level·5 + 50`; its "exp" slot carries the **favor
+  payout** `e_rand(10+round(level/3), 20+round(level/3))`. Victory: `favor +=
+  payout`. Defeat: `grave_fights = 0`, soul pool written back at 0, no other
+  penalty. Flee: 1-in-3 escape costing `min(favor, 5 + e_rand(0, level))`
+  favor; failure gives the shade its round.
+- [x] **Mausoleum** (`case_restore.php`): restore soulpoints to max for
+  `round(10 · (max − soulpoints) / max)` favor (0..10 with depletion);
+  enabled only when below max and affordable.
+- [x] **Favor tiers** (`case_question.php`): tier messaging at <25 / ≥25 /
+  ≥100 favor renders in the graveyard panel. The 25-favor haunt itself is
+  PvP-only and stays deferred to phase 4 (`HAUNT_FAVOR_THRESHOLD` is ready).
+- [x] **Paid resurrection** (`case_resurrection.php` + `newday.php`
+  `resurrection=true`): 100 favor (deducted at the moment of resurrection),
+  an immediate extra new day — bank interest settles, specialty uses refresh,
+  full heal, `seendragon` clears, turns = `base + ff − 6` (floored at 0);
+  soulpoints/grave fights are NOT refilled and `last_day` is untouched, so
+  the real next dawn still rolls a full day.
+- [x] **Death overlord NPC**: original name (`data::DEATH_OVERLORD`,
+  "Morvane"); upstream's "Ramius" is theirs. All graveyard prose original.
+- [ ] **Death news hook**: graveyard defeats and resurrections write daily
+  news upstream — no-op until phase 3's news lands, then wire them.
+
+### Phase 1 deliberate deviations
+
+- Shade defense is upstream's PHP float `(int)(9+shift+(level−1)·1.5) · 0.7`
+  fed straight to combat; our integer combatant rounds it (±0.5).
+- Torment foes draw from a 10-entry original dead-realm cast instead of the
+  whole forest roster (upstream's pool is names-only there anyway).
+- Searching with an empty soul pool isn't blocked (upstream doesn't gate on
+  soulpoints either): the fight opens at 0 and the first blow ends it.
 
 ## Phase 2 — races + titles
 

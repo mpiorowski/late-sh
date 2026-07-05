@@ -33,3 +33,8 @@ assets/dragon/raw/
 
 # Local dumps of user chat content (scripts/dump_chat_room.sh); keep off git.
 chat_dumps/
+
+# Local clone of the Green Dragon parity reference (jimlunsford/lotgd,
+# DragonPrime 1.1.2). CC BY-NC-SA source: consult, never copy or commit.
+# Re-fetch: git clone --depth 1 https://github.com/jimlunsford/lotgd upstream-lotgd
+upstream-lotgd/

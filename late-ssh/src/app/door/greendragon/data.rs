@@ -438,6 +438,51 @@ pub const DRAGON_ATTACK: u32 = 45;
 pub const DRAGON_DEFENSE: u32 = 25;
 pub const DRAGON_HP: u32 = 300;
 
+/// The death realm's overlord NPC. Original name — upstream's `deathoverlord`
+/// setting defaults to "Ramius", which is theirs.
+pub const DEATH_OVERLORD: &str = "Morvane";
+
+/// Original (name, weapon) flavor for the graveyard's tormentable souls.
+/// Upstream flags its entire forest roster `graveyard=1` and overrides every
+/// stat at spawn (`case_battle_search.php`), so the pool is pure flavor; ours
+/// is a dedicated dead-realm cast. Stats come from [`graveyard_creature_stats`].
+pub const GRAVEYARD_CREATURES: [(&str, &str); 10] = [
+    ("Restless Shade", "Cold Whisper"),
+    ("Grave-bound Wisp", "Flickering Chill"),
+    ("The Hollow Mourner", "Endless Keening"),
+    ("Chainrattle Spirit", "Dragging Fetters"),
+    ("Candlewax Phantom", "Guttering Flame"),
+    ("The Unburied Duelist", "Remembered Grudge"),
+    ("Sexton's Regret", "Rusted Spade"),
+    ("Weeping Reliquary", "Saint's Splinters"),
+    ("The Toll-less Ferryman", "Empty Palm"),
+    ("Mausoleum Draft", "Creeping Numbness"),
+];
+
+/// A graveyard shade's combat stats (attack, defense, hp) for a player of
+/// `level` (`lib/graveyard/case_battle_search.php`). Every stat derives from
+/// the *player's* level; the seed row is overridden entirely:
+/// `shift = -1` under level 5, `attack = 9 + shift + (int)((level-1)*1.5)`,
+/// `defense = attack * 0.7` ("make graveyard creatures easier"),
+/// `hp = level*5 + 50`. Upstream keeps the defense as a PHP float; our
+/// integer combatant rounds it.
+pub fn graveyard_creature_stats(level: u8) -> (u32, u32, u32) {
+    let level = level.clamp(1, MAX_LEVEL) as i32;
+    let shift = if level < 5 { -1 } else { 0 };
+    let base = 9 + shift + ((level - 1) * 3) / 2; // (int)((level-1) * 1.5)
+    let attack = base as u32;
+    let defense = (base as f64 * 0.7).round() as u32;
+    let hp = level as u32 * 5 + 50;
+    (attack, defense, hp)
+}
+
+/// The inclusive favor payout range a tormented shade offers on victory (its
+/// "exp" slot upstream): `e_rand(10 + round(level/3), 20 + round(level/3))`.
+pub fn graveyard_favor_range(level: u8) -> (u32, u32) {
+    let bump = (level as f64 / 3.0).round() as u32;
+    (10 + bump, 20 + bump)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,6 +520,20 @@ mod tests {
     fn every_creature_level_has_at_least_one_name() {
         assert!(CREATURE_NAMES.iter().all(|names| !names.is_empty()));
         assert_eq!(CREATURE_NAMES.len(), CREATURES.len());
+    }
+
+    #[test]
+    fn graveyard_shades_scale_off_the_player_level() {
+        // Level 1: shift -1, base 8; defense round(8*0.7) = 6; hp 55.
+        assert_eq!(graveyard_creature_stats(1), (8, 6, 55));
+        // Level 4: shift -1, base 9 - 1 + (int)(4.5) = 12; def round(8.4) = 8.
+        assert_eq!(graveyard_creature_stats(4), (12, 8, 70));
+        // Level 15: no shift, base 9 + 21 = 30; def round(21.0) = 21.
+        assert_eq!(graveyard_creature_stats(15), (30, 21, 125));
+        // Favor payout range: 10..20 plus round(level/3).
+        assert_eq!(graveyard_favor_range(1), (10, 20));
+        assert_eq!(graveyard_favor_range(5), (12, 22));
+        assert!(!GRAVEYARD_CREATURES.is_empty());
     }
 
     #[test]

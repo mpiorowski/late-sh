@@ -50,9 +50,19 @@ pub const CHARM_PER_DRAGON_KILL: u32 = 5;
 pub const FLAWLESS_GOLD_BONUS: u64 = START_GOLD * 3;
 /// Soulpoints awarded for beating a master (LoGD `train.php`).
 pub const SOULPOINTS_PER_MASTER: u32 = 5;
-/// Forest turns docked the day after a death/resurrection (LoGD
-/// `resurrectionturns`, default -6).
+/// Forest turns docked by the *paid* resurrection's immediate new day (LoGD
+/// `resurrectionturns`, default -6; `newday.php` applies it only when
+/// `resurrection=true`). Waiting out the night for free costs nothing extra.
 pub const RESURRECTION_TURNS: i32 = -6;
+/// Torment fights granted per day in the graveyard (LoGD `gravefightsperday`).
+pub const GRAVE_FIGHTS_PER_DAY: u32 = 10;
+/// Favor the death overlord charges to resurrect you on the spot
+/// (`lib/graveyard/case_resurrection.php`).
+pub const RESURRECTION_FAVOR_COST: u32 = 100;
+/// Favor at which the overlord starts granting favors (`case_question.php`).
+/// The 25-favor haunt itself is PvP and lands in phase 4; the tier messaging
+/// exists now.
+pub const HAUNT_FAVOR_THRESHOLD: u32 = 25;
 
 /// The forest hunting intensities. LoGD offers easier/harder pickings that
 /// shift the creature level relative to the player's own level.
@@ -146,9 +156,17 @@ pub struct Character {
     /// Charm: LoGD's social stat, gained on dragon kills (`+5`). Feeds the
     /// not-yet-built flirting/marriage systems; tracked for parity.
     pub charm: u32,
-    /// Soulpoints: LoGD's alignment/resurrection currency. Refilled each new day
-    /// to `50 + 5*level`, `+5` per master beaten. Tracked for parity.
+    /// Soulpoints: the dead-realm HP pool (see [`Character::max_soulpoints`]).
+    /// Refilled each new day to `50 + 5*level`, `+5` per master beaten; while
+    /// dead, torment fights spend it and damage persists between them.
     pub soulpoints: u32,
+    /// Favor with the death overlord (LoGD `deathpower`): earned tormenting
+    /// souls while dead, spent restoring the soul pool, fleeing torments, and
+    /// buying the paid resurrection. Persists across days and revivals.
+    pub favor: u32,
+    /// Torment fights remaining today in the graveyard (LoGD `gravefights`).
+    /// Refilled on a normal new day, *not* by the paid resurrection.
+    pub grave_fights: u32,
     /// Persistent combat companions (e.g. a Bonecall skeleton). They fight
     /// alongside you across battles until destroyed (LoGD `apply_companion`).
     pub companions: Vec<Companion>,
@@ -243,6 +261,10 @@ impl Default for Character {
             charm: 0,
             // Fresh level-1 soulpoints: 50 + 5*1 (LoGD new-day formula).
             soulpoints: 55,
+            favor: 0,
+            // Upstream rolls a new day at a fresh account's first login, which
+            // fills the daily torment pool; seed it directly.
+            grave_fights: GRAVE_FIGHTS_PER_DAY,
             companions: Vec::new(),
             specialty: Specialty::None,
             specialty_skill: 0,
@@ -285,6 +307,70 @@ impl Character {
             attack: self.attack(),
             defense: self.defense(),
         }
+    }
+
+    /// Maximum soulpoints, the dead-realm HP pool ceiling: `5*level + 50`.
+    /// LoGD computes this fresh everywhere and never stores it.
+    pub fn max_soulpoints(&self) -> u32 {
+        5 * self.level as u32 + 50
+    }
+
+    /// The player as a combatant while dead (`graveyard.php`): gear and boons
+    /// mean nothing beyond the grave — attack and defense are both
+    /// `10 + round((level - 1) * 1.5)`.
+    pub fn dead_combatant(&self) -> Combatant {
+        let stat = 10 + ((self.level as f64 - 1.0) * 1.5).round() as u32;
+        Combatant {
+            attack: stat,
+            defense: stat,
+        }
+    }
+
+    /// Favor the mausoleum charges to restore the soul pool to max:
+    /// `round(10 * missing / max)` (`lib/graveyard/case_restore.php`), 0..=10
+    /// scaling with depletion.
+    pub fn soul_restore_cost(&self) -> u32 {
+        let max = self.max_soulpoints();
+        let missing = max.saturating_sub(self.soulpoints);
+        (10.0 * missing as f64 / max as f64).round() as u32
+    }
+
+    /// Pay favor to restore soulpoints to max. Returns the favor spent, or
+    /// `None` if already whole or the favor can't cover the price.
+    pub fn restore_soul(&mut self) -> Option<u32> {
+        if self.soulpoints >= self.max_soulpoints() {
+            return None;
+        }
+        let cost = self.soul_restore_cost();
+        if self.favor < cost {
+            return None;
+        }
+        self.favor -= cost;
+        self.soulpoints = self.max_soulpoints();
+        Some(cost)
+    }
+
+    /// The paid resurrection (`case_resurrection.php` + `newday.php` with
+    /// `resurrection=true`): [`RESURRECTION_FAVOR_COST`] favor buys an
+    /// immediate extra new day — revive, heal to full, and take
+    /// `base + ff + `[`RESURRECTION_TURNS`] turns for what's left of today.
+    /// Like upstream's flagged new day it settles bank interest and refreshes
+    /// specialty uses, but does **not** refill soulpoints or grave fights, and
+    /// leaves `last_day` alone so the real next dawn still rolls a full day.
+    /// Returns false (spending nothing) if alive or short on favor.
+    pub fn resurrect(&mut self, interest_percent: u32) -> bool {
+        if self.alive || self.favor < RESURRECTION_FAVOR_COST {
+            return false;
+        }
+        self.favor -= RESURRECTION_FAVOR_COST;
+        self.apply_new_day_interest(interest_percent);
+        let turns = TURNS_PER_DAY as i32 + self.dragon_ff_bonus as i32 + RESURRECTION_TURNS;
+        self.turns = turns.max(0) as u32;
+        self.refresh_specialty_uses();
+        self.alive = true;
+        self.seen_dragon = false;
+        self.hitpoints = self.max_hitpoints();
+        true
     }
 
     /// Experience required to advance to the next level (with DK scaling).
@@ -717,26 +803,31 @@ impl Character {
     }
 
     /// Run the daily reset if `today` is past the stored day: pay bank interest,
-    /// refill forest turns, fully heal, revive, and refresh soulpoints.
-    /// `interest_percent` is the day's rolled rate and `spirits` is the day's
-    /// `e_rand(-1,1)+e_rand(-1,1)` (-2..+2) turn jitter — both supplied by the
-    /// caller's RNG. A new day after a death also docks [`RESURRECTION_TURNS`].
-    /// Returns true if a reset happened.
+    /// refill forest turns and grave fights, fully heal, revive, and refresh
+    /// soulpoints. `interest_percent` is the day's rolled rate and `spirits` is
+    /// the day's `e_rand(-1,1)+e_rand(-1,1)` (-2..+2) turn jitter — both
+    /// supplied by the caller's RNG. Returns true if a reset happened.
+    ///
+    /// A dawn revives the dead at no extra cost: upstream's `-6` turn dock and
+    /// skipped soulpoint/grave-fight refills apply only to the *paid*
+    /// resurrection ([`Character::resurrect`]), never this passive path.
     pub fn roll_new_day(&mut self, today: i64, interest_percent: u32, spirits: i32) -> bool {
         if today <= self.last_day {
             return false;
         }
-        let was_dead = !self.alive;
         self.last_day = today;
         // Interest is settled before turns refill, so it can read how many of
         // yesterday's turns went unused (LoGD's "work for it" gate).
         self.apply_new_day_interest(interest_percent);
-        let resurrection = if was_dead { RESURRECTION_TURNS } else { 0 };
-        let turns = TURNS_PER_DAY as i32 + self.dragon_ff_bonus as i32 + spirits + resurrection;
+        let turns = TURNS_PER_DAY as i32 + self.dragon_ff_bonus as i32 + spirits;
         self.turns = turns.max(0) as u32;
         self.refresh_specialty_uses();
         self.alive = true;
-        self.soulpoints = 50 + 5 * self.level as u32;
+        // The dragon may be sought once per day (`newday.php` clears
+        // `seendragon` daily): a fled attempt doesn't lock out the run.
+        self.seen_dragon = false;
+        self.soulpoints = self.max_soulpoints();
+        self.grave_fights = GRAVE_FIGHTS_PER_DAY;
         self.hitpoints = self.max_hitpoints();
         true
     }
@@ -938,19 +1029,87 @@ mod tests {
         let mut c = Character::new("hero", 10);
         c.turns = 0;
         c.level = 3;
+        c.grave_fights = 0;
+        c.seen_dragon = true;
         c.die();
-        // Revives, but a death docks RESURRECTION_TURNS from the day's fights:
-        // 10 base - 6 resurrection + 0 spirits = 4.
+        // The free path: wait for the dawn and rise with a *full* day — the
+        // -6 dock belongs to the paid resurrection only (newday.php applies
+        // resurrectionturns only when resurrection=true).
         assert!(c.roll_new_day(11, 0, 0));
-        assert_eq!(c.turns, (TURNS_PER_DAY as i32 + RESURRECTION_TURNS) as u32);
+        assert_eq!(c.turns, TURNS_PER_DAY);
         assert!(c.alive);
         assert_eq!(c.hitpoints, c.max_hitpoints());
-        // Soulpoints refill to 50 + 5*level.
+        // Soulpoints refill to 50 + 5*level; grave fights to the daily pool;
+        // the dragon may be sought again.
         assert_eq!(c.soulpoints, 50 + 5 * 3);
+        assert_eq!(c.grave_fights, GRAVE_FIGHTS_PER_DAY);
+        assert!(!c.seen_dragon);
         // Same day again: no reset.
         c.turns = 3;
         assert!(!c.roll_new_day(11, 0, 0));
         assert_eq!(c.turns, 3);
+    }
+
+    #[test]
+    fn dead_stats_ignore_gear_and_track_level() {
+        let mut c = Character::new("ghost", 0);
+        c.weapon_tier = 15;
+        c.armor_tier = 15;
+        c.dragon_attack_bonus = 9;
+        // Level 1: 10 + round(0) on both sides, gear irrelevant.
+        assert_eq!(c.dead_combatant().attack, 10);
+        assert_eq!(c.dead_combatant().defense, 10);
+        assert_eq!(c.max_soulpoints(), 55);
+        // Level 4: 10 + round(4.5) = 15 (PHP half-away rounding).
+        c.level = 4;
+        assert_eq!(c.dead_combatant().attack, 15);
+        assert_eq!(c.max_soulpoints(), 70);
+    }
+
+    #[test]
+    fn soul_restoration_prices_by_depletion() {
+        let mut c = Character::new("ghost", 0); // level 1, max soul 55
+        c.soulpoints = 0;
+        assert_eq!(c.soul_restore_cost(), 10); // fully drained: the cap
+        c.soulpoints = 27; // missing 28: round(280/55) = 5
+        assert_eq!(c.soul_restore_cost(), 5);
+        c.favor = 4;
+        assert_eq!(c.restore_soul(), None); // can't afford
+        c.favor = 5;
+        assert_eq!(c.restore_soul(), Some(5));
+        assert_eq!(c.soulpoints, 55);
+        assert_eq!(c.favor, 0);
+        assert_eq!(c.restore_soul(), None); // already whole
+    }
+
+    #[test]
+    fn paid_resurrection_is_a_docked_extra_day() {
+        let mut c = Character::new("hero", 10);
+        c.level = 3;
+        c.favor = 120;
+        c.die();
+        c.soulpoints = 12;
+        c.grave_fights = 2;
+        // Alive or broke: no sale.
+        let mut alive = Character::new("alive", 10);
+        alive.favor = 500;
+        assert!(!alive.resurrect(0));
+        let mut broke = Character::new("broke", 10);
+        broke.die();
+        broke.favor = 99;
+        assert!(!broke.resurrect(0));
+
+        assert!(c.resurrect(0));
+        assert!(c.alive);
+        assert_eq!(c.favor, 20);
+        // Turns for the rest of today: base 10 - 6 = 4 (plus any ff points).
+        assert_eq!(c.turns, (TURNS_PER_DAY as i32 + RESURRECTION_TURNS) as u32);
+        assert_eq!(c.hitpoints, c.max_hitpoints());
+        // Soulpoints and grave fights are NOT refreshed by the paid path.
+        assert_eq!(c.soulpoints, 12);
+        assert_eq!(c.grave_fights, 2);
+        // last_day untouched: the real next dawn still rolls a full day.
+        assert_eq!(c.last_day, 10);
     }
 
     #[test]

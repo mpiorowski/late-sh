@@ -14,8 +14,8 @@ use crate::app::common::theme;
 use crate::app::door::landing;
 
 use super::data;
-use super::model::{Character, Specialty};
-use super::state::{Mode, State};
+use super::model::{self, Character, Specialty};
+use super::state::{FoeKind, Mode, State};
 
 /// Draw the live Green Dragon game (called when a character is loaded).
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
@@ -126,7 +126,12 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
             dim,
         ),
         stat("Charm", c.charm.to_string(), bright),
-        stat("Soul", c.soulpoints.to_string(), bright),
+        stat(
+            "Soul",
+            format!("{}/{}", c.soulpoints, c.max_soulpoints()),
+            bright,
+        ),
+        stat("Favor", c.favor.to_string(), bright),
     ];
 
     // Living companions (e.g. a Bonecall skeleton), if any are at your side.
@@ -222,21 +227,57 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
             }
             lines.push(Line::from(spans));
         }
+        // Torment fights run on the soul pool, not the body's hitpoints.
+        let (label, max) = if enc.kind == FoeKind::Torment {
+            ("Your soul ", c.max_soulpoints())
+        } else {
+            ("Your HP ", c.max_hitpoints())
+        };
         lines.push(Line::from(vec![
-            Span::styled("Your HP ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(label, Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
-                format!("{}/{}", c.hitpoints, c.max_hitpoints()),
+                format!("{}/{}", c.hitpoints, max),
                 Style::default().fg(theme::SUCCESS()),
             ),
         ]));
     }
 
     if state.mode() == Mode::Graveyard {
+        let dim = Style::default().fg(theme::TEXT_DIM());
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
-            "You are dead. Rest here until a new day dawns and you rise renewed.",
-            Style::default().fg(theme::TEXT_DIM()),
+            format!(
+                "You are dead. Broken tombstones crowd a weed-choked yard, and at its heart looms the mausoleum of {}, warden of the dead.",
+                data::DEATH_OVERLORD
+            ),
+            dim,
         )));
+        lines.push(Line::from(Span::styled(
+            "Your soul is your strength here; torment the lost to earn the warden's favor, or rest until a new day returns you to the living.",
+            dim,
+        )));
+        let c_favor = c.favor;
+        let tier = if c_favor >= model::RESURRECTION_FAVOR_COST {
+            format!(
+                "{} is impressed indeed. He will barter your life back for {} favor.",
+                data::DEATH_OVERLORD,
+                model::RESURRECTION_FAVOR_COST
+            )
+        } else if c_favor >= model::HAUNT_FAVOR_THRESHOLD {
+            format!(
+                "{} is moderately impressed. At {} favor he will barter your life back.",
+                data::DEATH_OVERLORD,
+                model::RESURRECTION_FAVOR_COST
+            )
+        } else {
+            format!(
+                "{} is not yet impressed with your efforts ({} favor stirs his interest; {} buys your life back).",
+                data::DEATH_OVERLORD,
+                model::HAUNT_FAVOR_THRESHOLD,
+                model::RESURRECTION_FAVOR_COST
+            )
+        };
+        lines.push(Line::from(Span::styled(tier, dim)));
     }
 
     // A forest event shows its framing narration above the accept/decline rows.
@@ -347,7 +388,7 @@ fn panel_title(mode: Mode) -> &'static str {
 fn controls_hint(mode: Mode) -> &'static str {
     match mode {
         Mode::Fight => "up/down select   Enter act   Esc try to flee",
-        Mode::Village => "up/down move   Enter choose   Esc leave the game",
+        Mode::Village | Mode::Graveyard => "up/down move   Enter choose   Esc leave the game",
         Mode::SpendDragonPoints => "up/down move   Enter spend   Esc leave the game",
         _ => "up/down move   Enter choose   Esc back to village",
     }

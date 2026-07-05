@@ -14,7 +14,7 @@ use uuid::Uuid;
 use super::combat::{Buff, Combatant, resolve_extra_foe_strike, resolve_round_buffed};
 use super::data;
 use super::events::{self, ForestEvent};
-use super::model::{Character, DragonPointKind, ForestHunt, SlainFoe, Specialty};
+use super::model::{self, Character, DragonPointKind, ForestHunt, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
 use super::svc::{CharacterLoad, GreenDragonService};
 
@@ -43,7 +43,8 @@ pub enum Mode {
     Event,
     /// The one-time specialty chooser (Mystical / Dark Arts / Thief).
     ChooseSpecialty,
-    /// The graveyard: shown while dead, until the next new day.
+    /// The graveyard: the dead realm's hub, replacing the village until the
+    /// player revives (torment fights, the mausoleum, resurrection).
     Graveyard,
     /// The forced dragon-point spend gate: play is blocked while points from a
     /// dragon kill sit unallocated (LoGD's new-day gate).
@@ -56,6 +57,9 @@ pub enum FoeKind {
     Creature,
     Master,
     Dragon,
+    /// A graveyard torment fight, fought dead on the soulpoint pool; its
+    /// "reward" is favor with the death overlord.
+    Torment,
 }
 
 /// One foe in a live encounter. Master and dragon fights hold exactly one;
@@ -217,7 +221,7 @@ impl State {
             Mode::Fight => fight_menu(c),
             Mode::Event => event_menu(c, self.pending_event),
             Mode::ChooseSpecialty => specialty_menu(),
-            Mode::Graveyard => vec![("Wait for a new day (leave)".into(), true)],
+            Mode::Graveyard => graveyard_menu(c),
             Mode::SpendDragonPoints => dragon_point_menu(),
             Mode::Loading => Vec::new(),
         }
@@ -256,7 +260,7 @@ impl State {
             Mode::Fight => self.select_fight(),
             Mode::Event => self.select_event(),
             Mode::ChooseSpecialty => self.select_specialty(),
-            Mode::Graveyard => Selection::Leave,
+            Mode::Graveyard => self.select_graveyard(),
             Mode::SpendDragonPoints => self.select_dragon_point(),
             Mode::Loading => Selection::Stay,
         }
@@ -282,6 +286,9 @@ impl State {
             // The spend gate can't be backed out of into play — but leaving
             // the door entirely is fine; the gate re-arms on re-entry.
             Mode::SpendDragonPoints => Selection::Leave,
+            // The dead realm is the hub while dead: Esc leaves the game, the
+            // village stays out of reach until a revival.
+            Mode::Graveyard => Selection::Leave,
             _ => {
                 self.goto(Mode::Village);
                 Selection::Stay
@@ -540,6 +547,97 @@ impl State {
         Selection::Stay
     }
 
+    // --- the graveyard (the dead realm's hub) --------------------------------
+
+    /// Activate the highlighted graveyard row: torment, the mausoleum, the
+    /// paid resurrection, or waiting out the day (which leaves the door).
+    fn select_graveyard(&mut self) -> Selection {
+        match self.cursor {
+            0 => self.start_torment_fight(),
+            1 => {
+                let c = self.character.as_mut().unwrap();
+                match c.restore_soul() {
+                    Some(cost) => {
+                        let soul = c.soulpoints;
+                        self.push_log(format!(
+                            "{} scoffs at your frailty, takes {cost} favor, and knits your soul whole ({soul}).",
+                            data::DEATH_OVERLORD
+                        ));
+                        self.save();
+                    }
+                    None => self.push_log(format!(
+                        "{} turns away. Earn more favor before asking for restoration.",
+                        data::DEATH_OVERLORD
+                    )),
+                }
+            }
+            2 => {
+                // The paid resurrection is an extra new day: roll its bank
+                // interest like any other dawn.
+                let interest = rand::thread_rng()
+                    .gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
+                let c = self.character.as_mut().unwrap();
+                if c.resurrect(interest) {
+                    let turns = c.turns;
+                    self.push_log(format!(
+                        "Life burns back into your bones! You rise with {turns} turns left in the day."
+                    ));
+                    self.goto(Mode::Village);
+                    self.save();
+                } else {
+                    self.push_log(format!(
+                        "{} will not barter your life back for so little favor.",
+                        data::DEATH_OVERLORD
+                    ));
+                }
+            }
+            3 => return Selection::Leave,
+            _ => {}
+        }
+        Selection::Stay
+    }
+
+    /// Spend a grave fight to torment a lost soul (`case_battle_search.php`).
+    /// While dead the soul pool *is* the HP pool: `hitpoints` holds the
+    /// soulpoints for the fight's duration and is written back when it ends
+    /// (victory, defeat, or a paid escape).
+    fn start_torment_fight(&mut self) {
+        let c = self.character.as_mut().unwrap();
+        if c.grave_fights == 0 {
+            self.push_log("The dead will suffer no more of you today.".into());
+            return;
+        }
+        c.grave_fights -= 1;
+        c.hitpoints = c.soulpoints;
+        let mut rng = rand::thread_rng();
+        let (name, weapon) =
+            data::GRAVEYARD_CREATURES[rng.gen_range(0..data::GRAVEYARD_CREATURES.len())];
+        let (attack, defense, hp) = data::graveyard_creature_stats(c.level);
+        let (favor_lo, favor_hi) = data::graveyard_favor_range(c.level);
+        let favor = rng.gen_range(favor_lo..=favor_hi);
+        let level = c.level;
+        self.encounter = Some(Encounter::single(
+            Foe {
+                name: name.to_string(),
+                weapon: weapon.to_string(),
+                combatant: Combatant { attack, defense },
+                hp,
+                max_hp: hp,
+                reward_gold: 0,
+                // The favor payout rides the exp slot, exactly like upstream
+                // stuffs it into `creatureexp`.
+                reward_exp: favor,
+                level,
+            },
+            FoeKind::Torment,
+        ));
+        self.push_log(format!("You corner {name} among the graves!"));
+        self.goto(Mode::Fight);
+        // Persist the spent grave fight now, so a disconnect mid-fight can't
+        // refund it on reconnect (same rationale as forest turns).
+        self.save();
+    }
+
     // --- training (master fight) -------------------------------------------
 
     fn select_training(&mut self) -> Selection {
@@ -606,9 +704,26 @@ impl State {
         self.cursor
     }
 
+    /// The player's combat stats for this encounter: the usual gear-derived
+    /// combatant, or the level-only dead stats with the soul pool's ceiling
+    /// during graveyard torments.
+    fn player_fight_stats(&self, kind: FoeKind) -> (Combatant, u32) {
+        let c = self.character.as_ref().unwrap();
+        match kind {
+            FoeKind::Torment => (c.dead_combatant(), c.max_soulpoints()),
+            _ => (c.combatant(), c.max_hitpoints()),
+        }
+    }
+
     fn select_fight(&mut self) -> Selection {
         let c = self.character.as_ref().unwrap();
-        let skill_count = specialty::skills(c.specialty).len();
+        // The dead fight with bare essence: no specialty skills in the menu
+        // (upstream's graveyard passes `fightnav(false, ...)`).
+        let skill_count = if c.alive {
+            specialty::skills(c.specialty).len()
+        } else {
+            0
+        };
         let cursor = self.fight_menu_action();
         // Layout: [0] Attack, [1..=skill_count] skills, [last] Flee.
         if cursor == 0 {
@@ -622,18 +737,35 @@ impl State {
         }
     }
 
-    /// Try to flee the fight: a 1-in-3 roll (`forest.php` `op=run`). Success
-    /// drops the encounter; failure means the foes still get their round.
+    /// Try to flee the fight: a 1-in-3 roll (`forest.php` / `graveyard.php`
+    /// `op=run`). Success drops the encounter — a torment escape additionally
+    /// costs `min(favor, 5 + e_rand(0, level))` favor for the cowardice —
+    /// while failure means the foes still get their round.
     fn attempt_flee(&mut self) {
-        if self.encounter.is_none() {
+        let Some(kind) = self.encounter.as_ref().map(|e| e.kind) else {
             self.goto(Mode::Village);
             return;
-        }
+        };
         let mut rng = rand::thread_rng();
         if rng.gen_range(0..3) == 0 {
-            self.push_log("You slip away and flee back to the village.".into());
-            self.encounter = None;
-            self.goto(Mode::Village);
+            if kind == FoeKind::Torment {
+                let c = self.character.as_mut().unwrap();
+                let cost = (5 + rng.gen_range(0..=c.level as u32)).min(c.favor);
+                c.favor -= cost;
+                // Write the battered soul pool back and rest the body again.
+                c.soulpoints = c.hitpoints;
+                c.hitpoints = 0;
+                self.push_log(format!(
+                    "You slip back among the graves. {} curses your cowardice: -{cost} favor.",
+                    data::DEATH_OVERLORD
+                ));
+                self.encounter = None;
+                self.goto(Mode::Graveyard);
+            } else {
+                self.push_log("You slip away and flee back to the village.".into());
+                self.encounter = None;
+                self.goto(Mode::Village);
+            }
             self.save();
             return;
         }
@@ -655,8 +787,7 @@ impl State {
     /// HP at zero; the caller checks for death.
     fn foes_strike(&mut self, enc: &mut Encounter, skip: Option<usize>) {
         let mut rng = rand::thread_rng();
-        let player = self.character.as_ref().unwrap().combatant();
-        let player_max = self.character.as_ref().unwrap().max_hitpoints();
+        let (player, player_max) = self.player_fight_stats(enc.kind);
         for i in 0..enc.foes.len() {
             if Some(i) == skip || enc.foes[i].hp == 0 {
                 continue;
@@ -689,8 +820,7 @@ impl State {
             return;
         };
         let mut rng = rand::thread_rng();
-        let player = self.character.as_ref().unwrap().combatant();
-        let player_max = self.character.as_ref().unwrap().max_hitpoints();
+        let (player, player_max) = self.player_fight_stats(enc.kind);
         // Companions live on the character and fight each round; the resolver
         // mutates their HP and removes any that fall. The player and their
         // companions all strike the current target.
@@ -754,7 +884,7 @@ impl State {
             let c = self.character.as_mut().unwrap();
             c.hitpoints = apply_signed(c.hitpoints, outcome.damage_to_player, player_max);
             if outcome.player_heal > 0 {
-                c.hitpoints = (c.hitpoints + outcome.player_heal).min(c.max_hitpoints());
+                c.hitpoints = (c.hitpoints + outcome.player_heal).min(player_max);
             }
         }
         let hp = self.character.as_ref().unwrap().hitpoints;
@@ -866,6 +996,22 @@ impl State {
                 self.encounter = None;
                 self.goto(Mode::Village);
             }
+            FoeKind::Torment => {
+                let favor = enc.foes[0].reward_exp;
+                let name = enc.foes[0].name.clone();
+                let c = self.character.as_mut().unwrap();
+                c.favor = c.favor.saturating_add(favor);
+                // The fight ran on the soul pool; write what's left back and
+                // lay the body down again (graveyard.php's post-battle swap).
+                c.soulpoints = c.hitpoints;
+                c.hitpoints = 0;
+                self.push_log(format!(
+                    "{name} breaks beneath your torment. {} grants you {favor} favor.",
+                    data::DEATH_OVERLORD
+                ));
+                self.encounter = None;
+                self.goto(Mode::Graveyard);
+            }
             FoeKind::Dragon => {
                 let flawless = !enc.took_damage;
                 self.character.as_mut().unwrap().slay_dragon(flawless);
@@ -905,6 +1051,18 @@ impl State {
                 ));
                 self.encounter = None;
                 self.goto(Mode::Village);
+            }
+            FoeKind::Torment => {
+                // A graveyard defeat only drains the pool and ends today's
+                // torments — gold, experience, and the bank are already
+                // beyond a dead man's losing (`gravefights = 0`, no penalty).
+                c.soulpoints = c.hitpoints; // zero: the pool was the fight
+                c.grave_fights = 0;
+                self.push_log(format!(
+                    "{killer} scatters your essence. You can torment no more souls today."
+                ));
+                self.encounter = None;
+                self.goto(Mode::Graveyard);
             }
             _ => {
                 c.die();
@@ -1118,19 +1276,47 @@ fn forest_menu(c: &Character) -> Vec<(String, bool)> {
 /// between Attack and Flee so those two keep stable positions.
 fn fight_menu(c: &Character) -> Vec<(String, bool)> {
     let mut rows = vec![("Attack".into(), true)];
-    for skill in specialty::skills(c.specialty) {
-        rows.push((
-            format!(
-                "{} ({} use{})",
-                skill.name,
-                skill.cost,
-                if skill.cost == 1 { "" } else { "s" }
-            ),
-            c.specialty_uses >= skill.cost,
-        ));
+    // The dead fight with bare essence: no specialty skills beyond the grave
+    // (upstream's graveyard calls `fightnav(false, ...)`).
+    if c.alive {
+        for skill in specialty::skills(c.specialty) {
+            rows.push((
+                format!(
+                    "{} ({} use{})",
+                    skill.name,
+                    skill.cost,
+                    if skill.cost == 1 { "" } else { "s" }
+                ),
+                c.specialty_uses >= skill.cost,
+            ));
+        }
     }
     rows.push(("Flee".into(), true));
     rows
+}
+
+/// The dead realm's hub (`graveyard.php` + the mausoleum): torment souls for
+/// favor, restore the soul pool, buy a resurrection, or wait out the day.
+fn graveyard_menu(c: &Character) -> Vec<(String, bool)> {
+    let restore = c.soul_restore_cost();
+    vec![
+        (
+            format!("Torment a lost soul ({} left today)", c.grave_fights),
+            c.grave_fights > 0,
+        ),
+        (
+            format!("The Mausoleum: restore your soul ({restore} favor)"),
+            c.soulpoints < c.max_soulpoints() && c.favor >= restore,
+        ),
+        (
+            format!(
+                "Rise from the grave ({} favor)",
+                model::RESURRECTION_FAVOR_COST
+            ),
+            c.favor >= model::RESURRECTION_FAVOR_COST,
+        ),
+        ("Wait for a new day (leave the realm)".into(), true),
+    ]
 }
 
 /// The three specialty choices for the one-time chooser.
@@ -1355,6 +1541,47 @@ mod tests {
         assert!(rows[5].0.starts_with("Heal 50% (24 gold)"));
         assert!(rows[5].1);
         assert!(rows[9].0.starts_with("Heal 10% (5 gold)"));
+    }
+
+    #[test]
+    fn graveyard_menu_gates_on_favor_and_fights() {
+        let mut c = lvl(5); // max soulpoints 75
+        c.die();
+        c.grave_fights = 0;
+        c.favor = 0;
+        c.soulpoints = 55; // missing 20: restore costs round(200/75) = 3
+        let rows = graveyard_menu(&c);
+        assert!(rows[0].0.contains("0 left today"));
+        assert!(!rows[0].1); // no torments left
+        assert!(rows[1].0.contains("(3 favor)"));
+        assert!(!rows[1].1); // can't afford restoration
+        assert!(!rows[2].1); // resurrection needs 100 favor
+        assert!(rows[3].1); // waiting always works
+
+        c.grave_fights = 4;
+        c.favor = 100;
+        let rows = graveyard_menu(&c);
+        assert!(rows[0].1);
+        assert!(rows[1].1);
+        assert!(rows[2].1);
+
+        // A whole soul has nothing to restore, whatever the favor.
+        c.soulpoints = c.max_soulpoints();
+        assert!(!graveyard_menu(&c)[1].1);
+    }
+
+    #[test]
+    fn fight_menu_hides_skills_from_the_dead() {
+        let mut c = lvl(5);
+        c.choose_specialty(Specialty::Thief);
+        // Alive: Attack + 4 skills + Flee.
+        assert_eq!(fight_menu(&c).len(), 6);
+        // Dead (a torment fight): bare essence only.
+        c.die();
+        let rows = fight_menu(&c);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "Attack");
+        assert_eq!(rows[1].0, "Flee");
     }
 
     #[test]
