@@ -304,7 +304,7 @@ fn draw_side(
     let (lines, selected) = match state.panel() {
         Panel::Room => unreachable!("room panel is rendered by draw_room_side"),
         Panel::Character => (character_panel(view), None),
-        Panel::Abilities => (abilities_panel(view), None),
+        Panel::Abilities => abilities_panel(view, state.cursor()),
         Panel::Inventory => inventory_panel(view, state.cursor()),
         Panel::Shop => shop_panel(view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
@@ -313,6 +313,7 @@ fn draw_side(
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
         Panel::Stable => stable_panel(view, state.cursor()),
         Panel::Housing => housing_panel(view, state.cursor()),
+        Panel::Appearance => (appearance_panel(view, state.cursor()), None),
     };
     let off = scroll_offset(
         state.list_scroll(),
@@ -597,8 +598,14 @@ fn room_panel(
     if !view.features.is_empty() {
         lines.push(section("Of note"));
         for feat in &view.features {
+            // Actionable things get a diamond marker so they pop like loot.
+            let label = if is_actionable_feature(&feat.kind) {
+                format!("◆ {}", feat.name)
+            } else {
+                format!("· {}", feat.name)
+            };
             lines.extend(side_text_wrap(
-                feat.name.as_str(),
+                &label,
                 interactable_color(&feat.kind),
                 width,
             ));
@@ -1112,6 +1119,14 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
             .add_modifier(Modifier::BOLD),
     )));
     lines.extend(wrap(&view.trait_desc, 30));
+    if !view.bio.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("Bio"));
+        for l in wrap(&view.bio, 30) {
+            lines.push(l);
+        }
+        lines.push(hint("e", "edit appearance"));
+    }
     if !view.titles.is_empty() {
         lines.push(Line::raw(""));
         lines.push(section("Titles"));
@@ -1162,16 +1177,22 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Optio
         } else {
             format!(" [{}]", feat.kind)
         };
+        let actionable = is_actionable_feature(&feat.kind);
         let style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .bg(theme::BG_SELECTION())
                 .add_modifier(Modifier::BOLD)
+        } else if actionable {
+            Style::default()
+                .fg(interactable_color(&feat.kind))
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(interactable_color(&feat.kind))
         };
+        let bullet = if actionable { "◆" } else { marker };
         lines.push(Line::from(Span::styled(
-            format!("{marker} {}{}", feat.name, tag),
+            format!("{bullet} {}{}", feat.name, tag),
             style,
         )));
     }
@@ -1198,23 +1219,35 @@ fn score_row(view: &PlayerView) -> Line<'static> {
     Line::from(spans)
 }
 
-fn abilities_panel(view: &PlayerView) -> Vec<Line<'static>> {
+fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Abilities")];
+    let mut sel_line = None;
     if view.abilities.is_empty() {
         lines.push(Line::from(Span::styled(
             "  none yet",
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
-    for a in &view.abilities {
+    for (i, a) in view.abilities.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let color = if a.ready {
             theme::TEXT_BRIGHT()
         } else {
             theme::TEXT_FAINT()
         };
+        let marker = if selected { ">" } else { " " };
         lines.push(Line::from(vec![
             Span::styled(
-                format!(" {} ", a.slot),
+                marker.to_string(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{:>2} ", a.slot),
                 Style::default().fg(theme::BG_CANVAS()).bg(if a.ready {
                     theme::AMBER()
                 } else {
@@ -1232,10 +1265,10 @@ fn abilities_panel(view: &PlayerView) -> Vec<Line<'static>> {
         ]));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("1-9", "use ability in combat"));
+    lines.push(hint("Enter", "cast selected  1-9 cast that slot"));
+    lines.push(hint("0", "casts slot 10 while adventuring"));
     lines.push(hint("v", "close"));
-    lines.push(hint("[ ]", "scroll"));
-    lines
+    (lines, sel_line)
 }
 
 fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
@@ -1540,6 +1573,73 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn appearance_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Appearance & Bio",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+    ];
+    for (i, (label, value)) in view.appearance.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { ">" } else { " " };
+        let row_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{marker} {label:<9} "),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled(value.clone(), row_style),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "Your bio:",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    for l in wrap_plain(&view.bio, 30) {
+        lines.push(Line::from(Span::styled(
+            l,
+            Style::default()
+                .fg(theme::TEXT())
+                .add_modifier(Modifier::ITALIC),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "field  Enter next  x prev"));
+    lines.push(hint("e", "close"));
+    lines
+}
+
+/// Word-wrap a plain string to `width` columns.
+fn wrap_plain(s: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for word in s.split_whitespace() {
+        if !line.is_empty() && line.len() + 1 + word.len() > width {
+            out.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
 fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![section("Commands")];
     if view.dead {
@@ -1561,7 +1661,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     }
     if view.in_combat_with.is_some() {
         lines.push(hint("space/x", "strike"));
-        lines.push(hint("1-9", "use ability"));
+        lines.push(hint("1-9 0", "use ability"));
         lines.push(hint("z", "flee"));
     } else {
         lines.push(hint("wasd/arrows", "move"));
@@ -1995,6 +2095,20 @@ fn follow_panel(
             tag,
         ));
     }
+    // Profile the highlighted adventurer: show their chosen bio.
+    if let Some(occ) = view.occupants.get(cursor)
+        && !occ.bio.is_empty()
+    {
+        lines.push(Line::raw(""));
+        for l in wrap_plain(&occ.bio, 30) {
+            lines.push(Line::from(Span::styled(
+                l,
+                Style::default()
+                    .fg(theme::TEXT())
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        }
+    }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter follow/stop"));
     if view.following.is_some() {
@@ -2015,13 +2129,21 @@ fn rarity_color(rarity: &str) -> ratatui::style::Color {
 }
 
 /// Colour for an interactable room feature, so things you can act on stand out
-/// from plain room text: usable things (a fountain you can drink from) read
-/// green; everything else you can examine reads cyan.
+/// from plain room text the way loot does. A fountain you drink from reads
+/// green; vendors and usables you trade/act at read gold; purely lookable
+/// scenery (a plaque, a vista) reads a softer cyan "examine me".
 fn interactable_color(kind: &str) -> ratatui::style::Color {
     match kind {
         "fountain" => theme::SUCCESS(),
+        "bank" | "board" | "stable" | "clerk" => theme::AMBER_GLOW(),
         _ => theme::MENTION(),
     }
+}
+
+/// Whether a feature kind is something you actively use/trade at (vs. just look
+/// at). Drives a brighter, bolder treatment so actionable things pop.
+fn is_actionable_feature(kind: &str) -> bool {
+    matches!(kind, "fountain" | "bank" | "board" | "stable" | "clerk")
 }
 
 #[cfg(test)]

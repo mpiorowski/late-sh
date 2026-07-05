@@ -42,6 +42,9 @@ pub enum Panel {
     /// The housing ledger: buy a deed at the clerk, or (inside a home you own)
     /// buy and place a furnishing. `Enter` activates the selected row.
     Housing,
+    /// The appearance/bio builder: pick a field with the cursor, `Enter` cycles
+    /// its option forward and `x` cycles back.
+    Appearance,
 }
 
 pub struct State {
@@ -182,12 +185,14 @@ impl State {
     fn list_len(&self) -> usize {
         match self.panel {
             Panel::Inventory => self.view().inventory.len(),
+            Panel::Abilities => self.view().abilities.len(),
             Panel::Shop => self.view().shop.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Examine => self.view().features.len(),
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
             Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
+            Panel::Appearance => self.view().appearance.len(),
             _ => 0,
         }
     }
@@ -361,6 +366,14 @@ impl State {
                     }
                 }
             }
+            Panel::Abilities => {
+                // Cast the highlighted ability; this is how slots past the 1-9
+                // hotbar (deep rosters, capstones) are reached.
+                if let Some(a) = self.view().abilities.get(self.cursor) {
+                    let slot = a.slot;
+                    self.svc.ability_task(self.user_id, slot);
+                }
+            }
             Panel::Shop => {
                 if let Some(shop) = self.view().shop
                     && let Some(entry) = shop.entries.get(self.cursor)
@@ -390,8 +403,22 @@ impl State {
                     }
                 }
             }
+            Panel::Appearance => self.cycle_appearance(1),
             _ => {}
         }
+    }
+
+    /// Cycle the highlighted appearance field forward (+1) or back (-1).
+    pub fn cycle_appearance(&mut self, delta: i8) {
+        if self.ensure_player_present() {
+            self.svc
+                .cycle_appearance_task(self.user_id, self.cursor, delta);
+        }
+    }
+
+    /// Open the appearance/bio builder.
+    pub fn open_appearance(&mut self) {
+        self.toggle_panel(Panel::Appearance);
     }
 
     /// Secondary action: sell the selected inventory row at a shop.

@@ -489,8 +489,9 @@ impl User {
                  LEFT JOIN LATERAL (
                     SELECT string_agg(
                         CASE category
-                          WHEN 'lateania_archdemon' THEN 'LAD'
-                          WHEN 'lateania_frontier_king' THEN 'LFK'
+                          WHEN 'lateania_archdemon' THEN 'LMG'
+                          WHEN 'lateania_frontier_king' THEN 'LKN'
+                          WHEN 'lateania_sundering_deep' THEN 'LYS'
                           WHEN 'nethack_amulet' THEN 'NHA'
                           WHEN 'nethack_ascension' THEN 'NHY'
                           ELSE (
@@ -934,14 +935,17 @@ pub struct ChatAuthorMetadata {
 
 fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
-    // Collapse the lesser milestone when its superseding one is present: the
-    // Frontier King implies the Archdemon, and an Ascension implies the Amulet.
-    // Profile views still show both; chat author labels show only the higher.
-    let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LFK");
+    // Collapse the lesser milestone when its superseding one is present:
+    // Yssgar implies the Frontier King implies the Archdemon, and an Ascension
+    // implies the Amulet. Profile views still show all; chat author labels
+    // show only the highest.
+    let has_sundering_deep = raw.split_whitespace().any(|badge| badge == "LYS");
+    let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LKN");
     let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
     let badges = raw
         .split_whitespace()
-        .filter(|badge| !(has_frontier_king && *badge == "LAD"))
+        .filter(|badge| !(has_sundering_deep && (*badge == "LKN" || *badge == "LMG")))
+        .filter(|badge| !(has_frontier_king && *badge == "LMG"))
         .filter(|badge| !(has_ascension && *badge == "NHA"))
         .collect::<Vec<_>>()
         .join(" ");
@@ -1367,24 +1371,36 @@ mod tests {
     #[test]
     fn chat_profile_award_badges_prefer_frontier_king_over_archdemon() {
         assert_eq!(
-            chat_profile_award_badges(Some("LAD LFK".to_string())).as_deref(),
-            Some("LFK")
+            chat_profile_award_badges(Some("LMG LKN".to_string())).as_deref(),
+            Some("LKN")
         );
         assert_eq!(
-            chat_profile_award_badges(Some("AW1 LAD LFK CHIP2".to_string())).as_deref(),
-            Some("AW1 LFK CHIP2")
+            chat_profile_award_badges(Some("AW1 LMG LKN CHIP2".to_string())).as_deref(),
+            Some("AW1 LKN CHIP2")
+        );
+    }
+
+    #[test]
+    fn chat_profile_award_badges_prefer_sundering_deep_over_the_lesser_crowns() {
+        assert_eq!(
+            chat_profile_award_badges(Some("LMG LKN LYS".to_string())).as_deref(),
+            Some("LYS")
+        );
+        assert_eq!(
+            chat_profile_award_badges(Some("AW1 LMG LYS CHIP2".to_string())).as_deref(),
+            Some("AW1 LYS CHIP2")
         );
     }
 
     #[test]
     fn chat_profile_award_badges_keep_archdemon_when_it_is_the_best_lateania_badge() {
         assert_eq!(
-            chat_profile_award_badges(Some("AW1 LAD CHIP2".to_string())).as_deref(),
-            Some("AW1 LAD CHIP2")
+            chat_profile_award_badges(Some("AW1 LMG CHIP2".to_string())).as_deref(),
+            Some("AW1 LMG CHIP2")
         );
         assert_eq!(
-            chat_profile_award_badges(Some("LAD".to_string())).as_deref(),
-            Some("LAD")
+            chat_profile_award_badges(Some("LMG".to_string())).as_deref(),
+            Some("LMG")
         );
     }
 

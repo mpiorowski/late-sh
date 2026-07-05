@@ -130,11 +130,7 @@ impl ChipService {
     /// Comp the newcomer's welcome pour: record the buzz with no chip debit
     /// (it's on the house) and hand back the fresh buzz so the clubhouse glow
     /// can light up immediately.
-    pub async fn grant_free_drink(
-        &self,
-        user_id: Uuid,
-        points: i64,
-    ) -> anyhow::Result<UserDrinks> {
+    pub async fn grant_free_drink(&self, user_id: Uuid, points: i64) -> anyhow::Result<UserDrinks> {
         let client = self.db.get().await?;
         UserDrinks::record_free_pour(&client, user_id, points).await
     }

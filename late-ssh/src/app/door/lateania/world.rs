@@ -2573,6 +2573,15 @@ pub fn seed_world() -> World {
     extend_thornwood(&mut rooms, &mut spawns, &mut behaviors);
     extend_caverns(&mut rooms, &mut spawns, &mut behaviors);
 
+    // Append the Sundered Reaches: a second ~900-room continent (rooms 10000+),
+    // a drowned sea-realm of braided mazes and organic caverns hung off the
+    // Matlatesh capital. Runs after the maze regions so its free-direction
+    // gateway search avoids the cavern portal.
+    extend_reaches(&mut rooms, &mut spawns, &mut behaviors);
+
+    // Flesh out the four capitals with a district of new safe rooms each.
+    extend_cities(&mut rooms);
+
     // Append the player-housing district (Hearthward Close, rooms 9000+), a
     // public street of claimable homes hung off Embergate's Market Row. No mobs:
     // homes are safe. Ownership and furnishings are runtime side-state.
@@ -3670,10 +3679,14 @@ fn is_living_dark_spawn(id: u32) -> bool {
 
 fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
     for spawn in spawns {
-        let frontier = spawn.id >= FRONTIER_SPAWN_ID_START;
+        let frontier = (FRONTIER_SPAWN_ID_START..REACHES_SPAWN_ID_START).contains(&spawn.id);
+        // The Reaches deliberately ride the Frontier multipliers: their authored
+        // base stats sit on the same pre-scale curve, entering just under the
+        // King Who Was Promised Nothing and climbing well past him by Yssgar.
+        let reaches = spawn.id >= REACHES_SPAWN_ID_START;
         let living_dark = is_living_dark_spawn(spawn.id);
         let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) =
-            match (frontier, living_dark, spawn.boss) {
+            match (frontier || reaches, living_dark, spawn.boss) {
                 (true, _, true) => (12, 5, 21, 10, 4, 3),
                 (true, _, false) => (2, 1, 19, 10, 3, 2),
                 (false, true, true) => (6, 1, 7, 2, 2, 1),
@@ -3685,7 +3698,7 @@ fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
         spawn.damage = scale_i32(spawn.damage, dmg_num, dmg_den);
         spawn.xp = scale_i32(spawn.xp, xp_num, xp_den);
         if !spawn.boss {
-            spawn.respawn_secs = if frontier {
+            spawn.respawn_secs = if frontier || reaches {
                 scale_u64(spawn.respawn_secs, 3, 4).max(60)
             } else {
                 scale_u64(spawn.respawn_secs, 4, 5).max(25)
@@ -3716,6 +3729,698 @@ pub fn frontier_entrance_room() -> RoomId {
 
 pub fn is_frontier_room(id: RoomId) -> bool {
     (FRONTIER_BASE..FRONTIER_BASE + FRONTIER_ZONES as u32 * FRONTIER_W * FRONTIER_H).contains(&id)
+}
+
+// ---- City districts: flesh out the four capitals (rooms 3000+) ------------
+//
+// Each capital gains a short district of safe, flavourful rooms hung off its
+// square via a free direction, so the cities feel like places to linger rather
+// than waypoints. Rooms are authored from a per-city theme; ids start at 3000
+// (free, between the Frontier band and the living-world mazes).
+fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
+    // (square, city name, district label, [4 (room-name, room-desc) pairs]).
+    // Each description is at least two sentences and a paragraph long, to satisfy
+    // the world invariants. Ids start at 3000 (free, between Frontier and mazes).
+    #[allow(clippy::type_complexity)]
+    const CITIES: [(RoomId, &str, &str, [(&str, &str); 4]); 4] = [
+        (
+            1,
+            "Embergate",
+            "the Lamplit Quarter",
+            [
+                (
+                    "the Lamplit Baths",
+                    "Vaulted bath-houses breathe steam into the lamplight, and off-duty guards and road-worn travellers soak the miles from their bones in tiled pools. An attendant moves among them hawking hot towels and colder gossip, and for a copper you may join them and hear the whole city's business.",
+                ),
+                (
+                    "the Adventurers' Guildhall",
+                    "A long timbered hall hangs with battered shields and the pennants of a hundred dead and living companies, its walls papered with maps and notices of the missing. The ale is bad on purpose so no one lingers past their business, yet somehow the benches are always full of half-told stories.",
+                ),
+                (
+                    "Tinker's Row",
+                    "A crooked lane of workshops where smiths, gluers, and gear-cutters ply their trades cheek by jowl. The air is bright with sparks and loud with the ring of small hammers and smaller arguments, and a careful eye can find a clever thing here that no shop would ever stock.",
+                ),
+                (
+                    "the Shrine Garden",
+                    "Behind the temple a walled garden keeps its quiet, its pale gravel raked into slow rings around a single old plum tree. Here the grieving and the grateful sit alike on stone benches beneath the Dawn's open sky, and even the noise of the square seems to lower its voice at the gate.",
+                ),
+            ],
+        ),
+        (
+            TASMANIA_SQUARE,
+            "Tasmania",
+            "the Saltwind Wharves",
+            [
+                (
+                    "the Fishmarket",
+                    "Trestle stalls glitter with the morning's catch laid out on crushed ice, and fishwives cry their prices over the wheeling gulls. Beneath the boards the harbour cats conduct their own grey commerce, and the whole quarter smells of brine, smoke, and money changing hands.",
+                ),
+                (
+                    "the Cartographers' Loft",
+                    "Up a salt-bleached stair waits a loft of long tables where chart-makers ink the coasts in patient, hair-fine lines. The smell is of vellum and pitch and cold tea, and every wall holds a painted sea you have not yet sailed and perhaps were never meant to.",
+                ),
+                (
+                    "the Harbourmaster's Office",
+                    "A brass-and-mahogany office smelling of tar and ledgers stands with its windows full of swaying masts. The harbourmaster knows every hull in the bay and the debts of every captain besides, and very little crosses this water that she has not already written down.",
+                ),
+                (
+                    "the Storm-Chapel",
+                    "A squat chapel of black sea-rock crouches at the wharf's end, where sailors light candles before a voyage and leave them burning long after. Its altar lies heaped with the small offerings of those who go down to the sea, and the wind through its door sounds remarkably like a hymn.",
+                ),
+            ],
+        ),
+        (
+            MELVANALA_SQUARE,
+            "Melvanala",
+            "the Hightarn Terraces",
+            [
+                (
+                    "the Mirrorlake Walk",
+                    "A balustraded walk runs along the lakeshore where the water lies so still it doubles the snow-peaks upon its face. At dusk the lamplighters move along it in slow procession, and the whole terrace seems to hang suspended between two identical skies.",
+                ),
+                (
+                    "the Stonecutters' Court",
+                    "A court stands ringed with the workshops of masons and lapidaries, its ground gone pale with a permanent dust of stone. Here and there it glints where some careless apprentice spilled a pocket of uncut gems, and the patient tap of chisels never altogether stops.",
+                ),
+                (
+                    "the Alewife's Longhall",
+                    "A warm, low longhall sits thick with peat-smoke and the rise and fall of song, its rafters black with the winters of its hearth. The famous highland brew is poured here by the yard, and strangers who come in cold leave as friends, as kin, or not at all.",
+                ),
+                (
+                    "the Snowmelt Spring",
+                    "A carved grotto receives the mountain's coldest, clearest water into a worn stone basin fed from somewhere far above. Pilgrims kneel to drink and rise gasping at the chill, and they will swear to you afterward that it carried off whatever ailed them.",
+                ),
+            ],
+        ),
+        (
+            MATLATESH_SQUARE,
+            "Matlatesh",
+            "the Sunbaked Bazaar",
+            [
+                (
+                    "the Spice Bazaar",
+                    "A canvas-shaded maze of stalls lies heaped with saffron, dried citron, and peppers that seem to colour the very air you breathe. The haggling here never altogether stops, and a glass of sweet mint tea is always pressed upon you before any honest price is named.",
+                ),
+                (
+                    "the Glassblowers' Souk",
+                    "A souk of roaring furnaces opens off the lane, where glassblowers spin molten gobs into lamps, beads, and impossible birds. The heat stands like a wall at its mouth, and the finished wares catch the desert light along the shelves like rows of trapped and patient fire.",
+                ),
+                (
+                    "the Caravanserai",
+                    "A great mud-brick courtyard receives the caravans, where weary beasts and wearier drivers rest beneath the arcades. The air is loud with camels and a dozen tongues at once, and every traveller here carries a rumour, a contract, or a knife from somewhere even drier.",
+                ),
+                (
+                    "the Oasis Conservatory",
+                    "A high-walled garden the desert is forbidden to enter keeps its date palms, its tiled pool, and its astonishing birdsong. It is kept green at ruinous expense as a standing boast against the dunes, and to sit in its shade is the closest thing to wealth a poor traveller may borrow.",
+                ),
+            ],
+        ),
+    ];
+
+    for (c, &(square, city, district, district_rooms)) in CITIES.iter().enumerate() {
+        let base = 3000 + (c as RoomId) * 10;
+        // Find a free direction off the square to open the district.
+        let portal = [
+            Dir::North,
+            Dir::South,
+            Dir::East,
+            Dir::West,
+            Dir::Up,
+            Dir::Down,
+        ]
+        .into_iter()
+        .find(|d| rooms.get(&square).is_some_and(|r| !r.exits.contains_key(d)))
+        .unwrap_or(Dir::Up);
+        let back_to_square = portal.opposite();
+        // Fan the four district rooms onto distinct directions, never reusing the
+        // direction that leads back out to the square.
+        let fan: Vec<Dir> = [
+            Dir::North,
+            Dir::East,
+            Dir::South,
+            Dir::West,
+            Dir::Up,
+            Dir::Down,
+        ]
+        .into_iter()
+        .filter(|d| *d != back_to_square)
+        .take(4)
+        .collect();
+        let zone: &'static str = district;
+        let spine = base;
+        let mut spine_exits: Vec<(Dir, RoomId)> = vec![(back_to_square, square)];
+        for (k, &dir) in fan.iter().enumerate() {
+            spine_exits.push((dir, base + 1 + k as RoomId));
+        }
+        rooms.insert(
+            spine,
+            Room {
+                id: spine,
+                name: zone,
+                zone,
+                safe: true,
+                desc: Box::leak(
+                    format!(
+                        "{district} opens off the {city} square, the livelier heart of the city where folk gather to trade, to drink, to worship, and to waste an idle hour. Lanes run off in every direction to its several haunts, and the ordinary noise of living fills the air from dawn until well past dark."
+                    )
+                    .into_boxed_str(),
+                ),
+                exits: spine_exits.into_iter().collect(),
+            },
+        );
+        if let Some(sq) = rooms.get_mut(&square) {
+            sq.exits.insert(portal, spine);
+        }
+        for (k, (rname, rdesc)) in district_rooms.iter().enumerate() {
+            let id = base + 1 + k as RoomId;
+            let back = fan[k].opposite();
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name: rname,
+                    zone,
+                    safe: true,
+                    desc: rdesc,
+                    exits: [(back, spine)].into_iter().collect(),
+                },
+            );
+        }
+    }
+}
+
+// ---- The Sundered Reaches: a second 1000-room continent (rooms 10000+) -----
+//
+// A drowned, storm-wracked sea-realm of sinking isles, sunken cities, and the
+// abyss below - the same proven 20-zone × 10×5-grid generator as the Frontier,
+// with its own themed zones, a named boss per zone, and tier-scaled loot. Hung
+// off the Matlatesh desert capital via a sea-gate. Generation is data-driven and
+// deterministic, so the strict world invariants stay green.
+const REACHES_BASE: RoomId = 10_000;
+const REACHES_W: usize = 10;
+const REACHES_H: usize = 5;
+const REACHES_ZONES: usize = REACHES_ZONES_DATA.len();
+const REACHES_SPAWN_ID_START: u32 = 950_000;
+const REACHES_SEED: u64 = 0x5EA_D4EAD_u64;
+/// Each zone reserves this many room ids (a `REACHES_W`×`REACHES_H` cell field).
+const REACHES_ZONE_STRIDE: u32 = (REACHES_W * REACHES_H) as u32;
+
+/// Which Reaches zones are carved as organic caverns rather than braided mazes -
+/// the deep, drowned, cave-like ones. The rest are mazes.
+const fn reaches_zone_is_cavern(z: usize) -> bool {
+    matches!(z, 7 | 9 | 13 | 15 | 17 | 19)
+}
+
+pub fn is_reaches_room(id: RoomId) -> bool {
+    (REACHES_BASE..REACHES_BASE + REACHES_ZONES as u32 * REACHES_ZONE_STRIDE).contains(&id)
+}
+
+/// Twenty zones of the Sundered Reaches: (zone, adjective, ground, landmark,
+/// creatures, three mob names, boss). Reuses `frontier_desc` for prose.
+#[allow(clippy::type_complexity)]
+const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+    (
+        "Saltmarsh Shallows",
+        "brackish",
+        "sucking tidal mud",
+        "a half-sunk fishing shrine",
+        "marsh-lurkers",
+        [
+            "a bog-drowned thrall",
+            "a reed-stalker",
+            "a brine-bloated hound",
+        ],
+        "Old Maw the Tidejaw",
+    ),
+    (
+        "Wreckers' Coast",
+        "wind-scoured",
+        "shingle and broken spar",
+        "the ribs of a shattered galleon",
+        "wreck-ghouls",
+        [
+            "a drowned wrecker",
+            "a barnacled brute",
+            "a gull-eyed scavenger",
+        ],
+        "Captain Sull the Unsunk",
+    ),
+    (
+        "Weeping Cliffs",
+        "rain-lashed",
+        "slick black basalt",
+        "a weather-worn lighthouse",
+        "cliff-harpies",
+        ["a storm-harpy", "a cliff-clinger", "a salt-mad hermit"],
+        "Maelys of the Hundred Falls",
+    ),
+    (
+        "Kelpwood Drowned",
+        "green-gloomed",
+        "rotting kelp",
+        "a forest of petrified masts",
+        "kelp-stranglers",
+        ["a kelp-strangler", "a drowned dryad", "a tide-wight"],
+        "The Verdant Drowned King",
+    ),
+    (
+        "Sirens' Reef",
+        "coral-jagged",
+        "razor coral",
+        "a reef of singing bones",
+        "siren-kin",
+        [
+            "a luring siren",
+            "a reef-shark thrall",
+            "a pearl-eyed drowner",
+        ],
+        "Nauthis the Reefsinger",
+    ),
+    (
+        "Sinking Isles",
+        "fog-bound",
+        "subsiding sand",
+        "a town swallowed to its rooftops",
+        "isle-revenants",
+        [
+            "a sinking-isle ghoul",
+            "a fog-walker",
+            "a drowned bellringer",
+        ],
+        "The Warden of Nine Sunk Bells",
+    ),
+    (
+        "Stormwall Straits",
+        "thunder-haunted",
+        "wave-swept rock",
+        "a broken sea-fort",
+        "storm-thralls",
+        [
+            "a stormbound corsair",
+            "a lightning-scarred brute",
+            "a gale-wraith",
+        ],
+        "Vexhal, Voice of the Storm",
+    ),
+    (
+        "Brine Caverns",
+        "lightless",
+        "tide-cut limestone",
+        "a cavern of dripping stalactites",
+        "cave-anglers",
+        ["a blind cave-angler", "a brine-crawler", "a pallid drowner"],
+        "The Lanternless Hunger",
+    ),
+    (
+        "Sunken Valmaris",
+        "moss-drowned",
+        "silted marble",
+        "the flooded plaza of a dead city",
+        "city-drowned",
+        [
+            "a Valmaran revenant",
+            "a coral-grown sentinel",
+            "a drowned magister",
+        ],
+        "Empress Calyx, Still Crowned",
+    ),
+    (
+        "Pearl Abyss",
+        "black-fathomed",
+        "abyssal silt",
+        "a trench of bioluminal bloom",
+        "abyss-things",
+        [
+            "an abyssal feeler",
+            "a glow-lure horror",
+            "a pressure-wraith",
+        ],
+        "That Which Pearls the Dark",
+    ),
+    (
+        "Coral Throne Reach",
+        "blood-coral",
+        "calcified bone",
+        "a throne grown of living reef",
+        "throne-guard",
+        ["a coral knight", "a reef-bound zealot", "a polyp-swarm"],
+        "The Coral Tyrant",
+    ),
+    (
+        "Glass Currents",
+        "glassy",
+        "obsidian shard-sand",
+        "a river of slow black glass",
+        "glass-stalkers",
+        [
+            "a glass-skinned hunter",
+            "a shard-revenant",
+            "a mirror-drowner",
+        ],
+        "Sieth of the Cutting Tide",
+    ),
+    (
+        "Leviathan's Wake",
+        "oil-dark",
+        "whale-bone scree",
+        "the spine of a beached leviathan",
+        "wake-feeders",
+        ["a leviathan parasite", "a bone-picker", "a gut-crawler"],
+        "The Wake-Thing",
+    ),
+    (
+        "Mourning Depths",
+        "ash-grey",
+        "drowned grave-silt",
+        "a fathom-deep field of cairns",
+        "depth-mourners",
+        [
+            "a mourning revenant",
+            "a grave-tide wraith",
+            "a sorrow-drowned",
+        ],
+        "The Keeper of Drowned Years",
+    ),
+    (
+        "Tempest Spire Reach",
+        "storm-crowned",
+        "wind-bared stone",
+        "a spire that splits the lightning",
+        "spire-stalkers",
+        [
+            "a tempest acolyte",
+            "a thunder-thrall",
+            "a stormcalled wraith",
+        ],
+        "Aurex, the Spire's Wrath",
+    ),
+    (
+        "Trench of Maws",
+        "abyssal",
+        "trench-dark muck",
+        "a chasm lined with teeth",
+        "trench-maws",
+        ["a trench-maw spawn", "a gulper horror", "a swallowing dark"],
+        "The All-Devouring Trench",
+    ),
+    (
+        "Drowned Pantheon",
+        "god-haunted",
+        "temple silt",
+        "the toppled idols of drowned gods",
+        "godless-drowned",
+        [
+            "a fallen god's herald",
+            "a temple-drowned zealot",
+            "an idol-wraith",
+        ],
+        "The Last Drowned God",
+    ),
+    (
+        "Black Maelstrom",
+        "vortex-torn",
+        "spinning wrack",
+        "the eye of an endless whirlpool",
+        "maelstrom-born",
+        [
+            "a maelstrom revenant",
+            "a churning horror",
+            "a vortex-wraith",
+        ],
+        "The Maelstrom's Heart",
+    ),
+    (
+        "Abyssal Court",
+        "crushing-dark",
+        "court-silt of the deep",
+        "a sunken court of cold thrones",
+        "court-drowned",
+        [
+            "an abyssal courtier",
+            "a deep-bound knight",
+            "a fathom-lord's guard",
+        ],
+        "The Fathom Lord",
+    ),
+    (
+        "Sundering Deep",
+        "world-ending dark",
+        "the floor of all seas",
+        "the wound where the world drinks",
+        "the unsounded",
+        [
+            "a herald of the deep",
+            "an unsounded terror",
+            "a drowner-of-worlds",
+        ],
+        "Yssgar, the Sundering Deep",
+    ),
+];
+
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_reaches(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (REACHES_W, REACHES_H);
+    let n = w * h;
+    let mut spawn_id: u32 = REACHES_SPAWN_ID_START;
+    // The deepest (boss) room of the previous zone, to chain the realm together.
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
+        REACHES_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = REACHES_BASE + (z as u32) * REACHES_ZONE_STRIDE;
+        let tier = (z + 12) as i32; // the Reaches sit beyond even the Frontier's tiers
+        let mut rng = MazeRng::new(REACHES_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Carve the zone as either a braided maze or an organic cavern, and reduce
+        // both to a common form: which cells are real rooms, their distance from
+        // the entrance, and their open exits. No uniform grids here. A cavern that
+        // comes out too sparse on its seed falls back to a maze so no zone is empty.
+        let cavern_floor = if reaches_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 20).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        // The zone boss waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Tidewatch").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Drowned Heart").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", FRONTIER_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str = Box::leak(
+                frontier_desc(adj, ground, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    safe: is_entrance && z == 0, // only the realm's sea-gate is safe
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            // Behaviour-driven foes by the room's role: dead-ends ambush, junctions
+            // swarm, corridors patrol or cast; the deepest cell holds the boss.
+            let depth = dist[cell] as i32;
+            let storm = z >= 6; // the deeper Reaches crackle with the storm
+            let (mob_name, behavior, boss_mob, hp, dmg) = if is_boss {
+                (
+                    boss,
+                    MobBehavior::Brute,
+                    true,
+                    1400 + tier * 230,
+                    64 + tier * 6,
+                )
+            } else if degree == 1 {
+                (
+                    mob_names[0],
+                    MobBehavior::Ambusher,
+                    false,
+                    820 + tier * 60 + depth * 6,
+                    56 + tier * 4 + depth,
+                )
+            } else if degree >= 3 {
+                (
+                    mob_names[1],
+                    if rng.chance(50) {
+                        MobBehavior::PackHunter
+                    } else {
+                        MobBehavior::Summoner
+                    },
+                    false,
+                    900 + tier * 70 + depth * 6,
+                    58 + tier * 5 + depth,
+                )
+            } else {
+                // Leave some corridors quiet so the realm breathes.
+                if rng.chance(35) {
+                    continue;
+                }
+                let behavior = match rng.below(4) {
+                    0 => MobBehavior::Wanderer,
+                    1 => MobBehavior::Patroller,
+                    2 => MobBehavior::Hunter,
+                    _ => MobBehavior::Caster(if storm {
+                        DamageType::Lightning
+                    } else {
+                        DamageType::Frost
+                    }),
+                };
+                (
+                    mob_names[2],
+                    behavior,
+                    false,
+                    820 + tier * 60 + depth * 6,
+                    56 + tier * 4 + depth,
+                )
+            };
+            let profile = match behavior {
+                MobBehavior::Caster(school) => DamageProfile::new(school, None, None),
+                _ => DamageProfile::new(DamageType::Physical, None, None),
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                // XP hands off from the late Frontier and climbs past it: entry
+                // bosses trail the King a little, Yssgar clears him by half again.
+                xp: if boss_mob {
+                    720 + tier * 90
+                } else {
+                    200 + tier * 40 + depth * 5
+                },
+                respawn_secs: if boss_mob { 600 } else { 90 },
+                loot: super::items::reaches_loot(z),
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior boss room descends to
+        // this zone's sea-gate, and back up again.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang the sea-gate off the Matlatesh desert capital so the whole realm is
+    // reachable; the first zone's entrance is the only safe waystation.
+    let entrance = REACHES_BASE;
+    let portal = [Dir::Down, Dir::Up, Dir::West]
+        .into_iter()
+        .find(|d| {
+            rooms
+                .get(&MATLATESH_SQUARE)
+                .is_some_and(|r| !r.exits.contains_key(d))
+        })
+        .unwrap_or(Dir::Down);
+    if let Some(hub) = rooms.get_mut(&MATLATESH_SQUARE) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), MATLATESH_SQUARE);
+    }
 }
 
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
@@ -3894,7 +4599,7 @@ const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20]
         "Caldera the Heartfire",
     ),
     (
-        "The Hollow Crown",
+        "Hollow Crown",
         "god-haunted",
         "starless black marble",
         "the broken throne of a dead god",
@@ -6361,7 +7066,10 @@ mod tests {
         // 198 base + extension rooms, 100 overworld rooms, and the 1000
         // procedural Frontier rooms (rooms 2000+) all sit below room 5000.
         let original = count_in(0, 5000);
-        assert_eq!(original, 1298, "expected 1298 original rooms");
+        assert_eq!(
+            original, 1318,
+            "expected 1318 original rooms (incl. 20 city-district rooms)"
+        );
         // The two maze regions are full grids of rooms; the cave is sparse
         // (only the largest connected pocket survives), so it is bounded but
         // not exact.
@@ -6382,10 +7090,21 @@ mod tests {
         let housing = count_in(housing_mod::HOUSING_BASE, housing_mod::HOUSING_BASE + 1000);
         let expected_housing = 1 + housing_mod::TIERS.iter().map(|t| t.rooms()).sum::<usize>();
         assert_eq!(housing, expected_housing, "housing district room count");
-        // No stray rooms outside the five known groups.
+        // The Sundered Reaches: a second continent of braided mazes and organic
+        // caverns. Mazes fill their cell field; caverns are sparse, so the total
+        // is a sane band below the 1000-cell id range rather than an exact count.
+        let reaches = count_in(
+            REACHES_BASE,
+            REACHES_BASE + REACHES_ZONES as RoomId * REACHES_ZONE_STRIDE,
+        );
+        assert!(
+            (750..=1000).contains(&reaches),
+            "the Sundered Reaches should be ~900 rooms, got {reaches}"
+        );
+        // No stray rooms outside the six known groups.
         assert_eq!(
             world.rooms.len(),
-            original + catacombs + thornwood + caverns + housing,
+            original + catacombs + thornwood + caverns + housing + reaches,
             "every room should belong to a known region"
         );
         for spawn in &world.spawns {
@@ -6397,6 +7116,31 @@ mod tests {
                 spawn.home
             );
         }
+    }
+
+    #[test]
+    fn the_reaches_are_mazes_and_caverns_not_grids() {
+        let world = seed_world();
+        let reaches: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| is_reaches_room(r.id))
+            .collect();
+        // Plenty of rooms - a real continent.
+        assert!(reaches.len() >= 750, "the Reaches are sizeable");
+        // A uniform grid has no dead-ends; a braided maze/cavern has many. The
+        // presence of degree-1 rooms (and varied degree overall) proves shape.
+        let dead_ends = reaches.iter().filter(|r| r.exits.len() == 1).count();
+        assert!(
+            dead_ends >= 20,
+            "the Reaches should wind into dead-ends, not be square blocks (got {dead_ends})"
+        );
+        let degrees: std::collections::HashSet<usize> =
+            reaches.iter().map(|r| r.exits.len()).collect();
+        assert!(
+            degrees.len() >= 3,
+            "rooms should vary in how many ways they branch (got {degrees:?})"
+        );
     }
 
     #[test]
@@ -6991,5 +7735,49 @@ mod tests {
                 .any(|c| matches!(*c, MapCell::TrailH | MapCell::TrailV)),
             "the route from previous room to current room should be highlighted"
         );
+    }
+
+    #[test]
+    fn reaches_zone_labels_are_not_doubled() {
+        let world = seed_world();
+        for room in world.rooms.values() {
+            assert!(
+                !room.zone.starts_with("The The "),
+                "room {} has a doubled zone label {:?}",
+                room.id,
+                room.zone
+            );
+        }
+        assert!(
+            world.rooms.values().any(|r| r.zone == "The Sundering Deep"),
+            "the deepest Reaches zone should carry its board-quest label"
+        );
+    }
+
+    #[test]
+    fn yssgar_out_toughens_and_out_earns_the_frontier_king() {
+        // The Reaches deliberately ride the Frontier's balance multipliers, so
+        // pin the intended outcome: the new continent's crowned boss stands
+        // above the King Who Was Promised Nothing in threat and in XP.
+        let world = seed_world();
+        let king = world
+            .spawns
+            .iter()
+            .find(|s| s.name == "the King Who Was Promised Nothing")
+            .expect("the Frontier king spawns");
+        let yssgar = world
+            .spawns
+            .iter()
+            .find(|s| s.name == "Yssgar, the Sundering Deep")
+            .expect("the Reaches' crowned boss spawns");
+        assert!(
+            yssgar.max_hp > king.max_hp,
+            "Yssgar should out-last the King"
+        );
+        assert!(
+            yssgar.damage > king.damage,
+            "Yssgar should out-hit the King"
+        );
+        assert!(yssgar.xp > king.xp, "Yssgar should out-reward the King");
     }
 }

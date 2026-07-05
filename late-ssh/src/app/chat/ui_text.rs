@@ -863,7 +863,12 @@ mod tests {
         let header = &lines[0];
         assert_eq!(header.spans.len(), 4);
         assert_eq!(header.spans[2].content.as_ref(), " (wasted)");
-        assert!(header.spans[2].style.add_modifier.contains(Modifier::ITALIC));
+        assert!(
+            header.spans[2]
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC)
+        );
         assert_eq!(header.spans[3].content.as_ref(), " 12:04");
     }
 

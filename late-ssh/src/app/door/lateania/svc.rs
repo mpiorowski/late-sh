@@ -25,8 +25,8 @@ use late_core::{
         mud_character::MudCharacter,
         mud_world_state::MudWorldState,
         profile_award::{
-            LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY, award_badge,
-            grant_unique_milestone_award,
+            LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+            LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
         },
         reward::{LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY},
         user::User,
@@ -42,6 +42,7 @@ use crate::app::{
 };
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
+use super::appearance;
 use super::classes::{ARCHETYPE_LEVEL, ArchetypeDef, Class, level_for_xp, xp_for_level};
 use super::damage::{DamageProfile, DamageType, Defense};
 use super::housing::{self, furniture_by_key, plot_of_room};
@@ -179,6 +180,8 @@ const FRONTIER_REQUIRED_TITLES: [&str; 4] = [
     THORNWOOD_GATE_TITLE,
     CAVERNS_GATE_TITLE,
 ];
+/// The Sundered Reaches open only to whoever has unmade the Frontier's crown.
+const REACHES_GATE_TITLE: &str = "Bane of the King Who Was Promised Nothing";
 
 /// How often the world autosaves every present character's progress.
 const AUTOSAVE_SECS: u64 = 60;
@@ -191,23 +194,41 @@ const LATEANIA_FRONTIER_KING_LEDGER_REASON: &str = "lateania_frontier_king_defea
 #[derive(Clone, Copy)]
 struct BossAchievement {
     mob_name: &'static str,
+    award_category: &'static str,
+    /// Once-per-account chip payout via a reward template. `None` means the
+    /// profile badge is the whole prize.
+    payout: Option<BossPayout>,
+}
+
+#[derive(Clone, Copy)]
+struct BossPayout {
     reward_key: &'static str,
     ledger_reason: &'static str,
-    award_category: &'static str,
 }
 
 const ARCHDEMON_ACHIEVEMENT: BossAchievement = BossAchievement {
     mob_name: "the Archdemon Mal'gareth",
-    reward_key: LATEANIA_ARCHDEMON_REWARD_KEY,
-    ledger_reason: LATEANIA_ARCHDEMON_LEDGER_REASON,
     award_category: LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+    payout: Some(BossPayout {
+        reward_key: LATEANIA_ARCHDEMON_REWARD_KEY,
+        ledger_reason: LATEANIA_ARCHDEMON_LEDGER_REASON,
+    }),
 };
 
 const FRONTIER_KING_ACHIEVEMENT: BossAchievement = BossAchievement {
     mob_name: "the King Who Was Promised Nothing",
-    reward_key: LATEANIA_FRONTIER_KING_REWARD_KEY,
-    ledger_reason: LATEANIA_FRONTIER_KING_LEDGER_REASON,
     award_category: LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+    payout: Some(BossPayout {
+        reward_key: LATEANIA_FRONTIER_KING_REWARD_KEY,
+        ledger_reason: LATEANIA_FRONTIER_KING_LEDGER_REASON,
+    }),
+};
+
+const SUNDERING_DEEP_ACHIEVEMENT: BossAchievement = BossAchievement {
+    mob_name: "Yssgar, the Sundering Deep",
+    award_category: LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
+    // The deepest crown pays no chips: the LYS badge alone marks it.
+    payout: None,
 };
 
 /// Account age (in days) at which an adventurer is a "citizen" of Lateania and
@@ -290,6 +311,8 @@ pub struct OccupantView {
     pub in_combat: bool,
     /// False when this adventurer is a corpse awaiting resurrection or release.
     pub alive: bool,
+    /// The adventurer's composed bio, shown when you profile them.
+    pub bio: String,
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -455,6 +478,10 @@ pub struct PlayerView {
     pub stable: Option<StableView>,
     /// The housing ledger, present at the clerk or inside a home you own.
     pub housing: Option<HousingView>,
+    /// The composed character bio (from the appearance choices).
+    pub bio: String,
+    /// The appearance/bio builder rows: (field label, chosen option).
+    pub appearance: Vec<(String, String)>,
     pub log: Vec<LogLine>,
     pub respawning: bool,
     /// True while this player is a corpse (fallen, awaiting rez or release).
@@ -531,6 +558,8 @@ impl PlayerView {
             pet: None,
             stable: None,
             housing: None,
+            bio: String::new(),
+            appearance: Vec::new(),
             log: Vec::new(),
             respawning: false,
             dead: false,
@@ -1053,6 +1082,11 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.buy_furniture(user_id, &key));
     }
 
+    /// Cycle appearance field `field` by `delta` (+1 / -1) on the bio builder.
+    pub fn cycle_appearance_task(&self, user_id: Uuid, field: usize, delta: i8) {
+        self.mutate(user_id, move |s| s.cycle_appearance(user_id, field, delta));
+    }
+
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
         self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
@@ -1203,42 +1237,52 @@ impl LateaniaService {
         let activity = self.activity.clone();
         let db = self.db.clone();
         tokio::spawn(async move {
-            let payout = chip_svc
-                .credit_lifetime_reward_template(
-                    outcome.user_id,
-                    achievement.reward_key,
-                    achievement.ledger_reason,
-                )
-                .await;
-            match &payout {
-                Ok(grant) if !grant.credited => {
-                    tracing::info!(
-                        user_id = %outcome.user_id,
-                        payout = grant.amount,
-                        boss = achievement.mob_name,
-                        "suppressed Lateania boss chips because lifetime payout was already claimed"
-                    );
+            // The badge's recorded score is the chip amount for paying bosses
+            // and 0 for badge-only crowns like Yssgar.
+            let mut badge_score = 0_i64;
+            let mut grant_badge = true;
+            if let Some(pay) = achievement.payout {
+                let payout = chip_svc
+                    .credit_lifetime_reward_template(
+                        outcome.user_id,
+                        pay.reward_key,
+                        pay.ledger_reason,
+                    )
+                    .await;
+                match &payout {
+                    Ok(grant) if !grant.credited => {
+                        tracing::info!(
+                            user_id = %outcome.user_id,
+                            payout = grant.amount,
+                            boss = achievement.mob_name,
+                            "suppressed Lateania boss chips because lifetime payout was already claimed"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::error!(
+                            ?error,
+                            user_id = %outcome.user_id,
+                            boss = achievement.mob_name,
+                            "failed to credit Lateania boss chips"
+                        );
+                    }
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::error!(
-                        ?error,
-                        user_id = %outcome.user_id,
-                        boss = achievement.mob_name,
-                        "failed to credit Lateania boss chips"
-                    );
+                match &payout {
+                    Ok(grant) => badge_score = grant.amount,
+                    Err(_) => grant_badge = false,
                 }
             }
 
             let badge = award_badge(achievement.award_category, 1);
-            if let Ok(grant) = &payout {
+            if grant_badge {
                 match db.get().await {
                     Ok(client) => {
                         if let Err(error) = grant_unique_milestone_award(
                             &client,
                             outcome.user_id,
                             achievement.award_category,
-                            grant.amount,
+                            badge_score,
                         )
                         .await
                         {
@@ -1362,6 +1406,8 @@ struct PlayerState {
     /// The combat companion bought from a Stable; travels with and fights for
     /// the player. At most one at a time.
     pet: Option<Pet>,
+    /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
+    appearance: [u8; appearance::N_FIELDS],
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -1660,6 +1706,57 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         repeat: Repeat::Once,
         blurb: "Old Pell knows the tides. Bring him safe to the drowned dark.",
     },
+    // ---- The Sundered Reaches (off Matlatesh) ----------------------------
+    BoardQuest {
+        id: 13,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Stem the Drowned Tide",
+        objective: Objective::Bounty {
+            name_contains: "drowned",
+            count: 6,
+        },
+        reward_gold: 360,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "The Reaches vomit up their dead onto the shore. Put six of the drowned down again.",
+    },
+    BoardQuest {
+        id: 14,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Lay the Revenants",
+        objective: Objective::Bounty {
+            name_contains: "revenant",
+            count: 5,
+        },
+        reward_gold: 400,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "Restless revenants stalk the sunken cities. Lay five of them to their long rest.",
+    },
+    BoardQuest {
+        id: 15,
+        board: super::world::MATLATESH_SQUARE,
+        title: "The Sea-Gate",
+        objective: Objective::Reach {
+            zone: "The Saltmarsh Shallows",
+        },
+        reward_gold: 140,
+        reward_title: Some("Reach-Walker"),
+        repeat: Repeat::Once,
+        blurb: "A drowned realm lies beyond the desert's edge. Pass the sea-gate and set foot in it.",
+    },
+    BoardQuest {
+        id: 16,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Sound the Deepest Dark",
+        objective: Objective::Reach {
+            zone: "The Sundering Deep",
+        },
+        reward_gold: 600,
+        reward_title: Some("Sounder of the Deep"),
+        repeat: Repeat::Once,
+        blurb: "Few return from the floor of all seas. Reach the Sundering Deep and prove it can be done.",
+    },
 ];
 
 fn board_quest(id: u32) -> Option<&'static BoardQuest> {
@@ -1838,6 +1935,7 @@ impl WorldState {
             quest_cooldowns: Vec::new(),
             archetype: None,
             pet: None,
+            appearance: [0; appearance::N_FIELDS],
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
@@ -2058,6 +2156,11 @@ impl WorldState {
                 .as_deref()
                 .and_then(pet_species_by_key)
                 .map(|species| Pet::new(species, saved.pet_loyalty));
+            // Restore the appearance/bio choices (clamped to valid options).
+            for i in 0..appearance::N_FIELDS {
+                let v = saved.appearance.get(i).copied().unwrap_or(0);
+                p.appearance[i] = v % appearance::option_count(i).max(1) as u8;
+            }
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
@@ -2146,6 +2249,7 @@ impl WorldState {
                         .collect()
                 })
                 .unwrap_or_default(),
+            appearance: p.appearance.to_vec(),
         }))
     }
 
@@ -2305,7 +2409,21 @@ impl WorldState {
         if !self.can_cross_progression_gate(user_id, from, dest) {
             return;
         }
-        if self.is_frontier_gateway(from, dest) {
+        let descent_warning = if self.is_frontier_gateway(from, dest) {
+            Some(format!(
+                "The way {} opens into the Frontier: older, meaner country meant for seasoned adventurers. Press {} again if you truly want to go.",
+                dir.label(),
+                dir_input_hint(dir)
+            ))
+        } else if self.is_reaches_gateway(from, dest) {
+            Some(format!(
+                "Beyond the sea-gate lie the Sundered Reaches: a drowned realm crueller than any Frontier mile. Press {} again if you truly mean to pass.",
+                dir_input_hint(dir)
+            ))
+        } else {
+            None
+        };
+        if let Some(warning) = descent_warning {
             let confirmed = self
                 .players
                 .get(&user_id)
@@ -2314,15 +2432,7 @@ impl WorldState {
                 if let Some(player) = self.players.get_mut(&user_id) {
                     player.frontier_descent_pending = true;
                 }
-                self.log_to(
-                    user_id,
-                    LogKind::System,
-                    format!(
-                        "The way {} opens into the Frontier: older, meaner country meant for seasoned adventurers. Press {} again if you truly want to go.",
-                        dir.label(),
-                        dir_input_hint(dir)
-                    ),
-                );
+                self.log_to(user_id, LogKind::System, warning);
                 return;
             }
         } else if let Some(player) = self.players.get_mut(&user_id) {
@@ -2341,6 +2451,11 @@ impl WorldState {
 
     fn is_frontier_gateway(&self, from: RoomId, dest: RoomId) -> bool {
         from == self.world.start_room && dest == frontier_entrance_room()
+    }
+
+    /// The sea-gate: stepping from Matlatesh's square into the Sundered Reaches.
+    fn is_reaches_gateway(&self, from: RoomId, dest: RoomId) -> bool {
+        from == super::world::MATLATESH_SQUARE && super::world::is_reaches_room(dest)
     }
 
     fn can_cross_progression_gate(&mut self, user_id: Uuid, from: RoomId, dest: RoomId) -> bool {
@@ -2378,6 +2493,18 @@ impl WorldState {
                 user_id,
                 LogKind::System,
                 format!("The Frontier stair stays cold and shut. {missing}"),
+            );
+            return false;
+        }
+
+        if self.is_reaches_gateway(from, dest)
+            && !self.player_has_title(user_id, REACHES_GATE_TITLE)
+        {
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "The sea-gate stands sealed. Only one crowned Bane of the King Who Was Promised Nothing may pass into the Sundered Reaches.".to_string(),
             );
             return false;
         }
@@ -2444,6 +2571,8 @@ impl WorldState {
     fn exit_label(&self, from: RoomId, dir: Dir, dest: RoomId) -> String {
         if self.is_frontier_gateway(from, dest) {
             format!("{} (dangerous Frontier)", dir.label())
+        } else if self.is_reaches_gateway(from, dest) {
+            format!("{} (the Sundered Reaches)", dir.label())
         } else {
             dir.label().to_string()
         }
@@ -3510,11 +3639,16 @@ impl WorldState {
         }
         let achievement = boss_achievement_for(&mob_name);
         if let Some(achievement) = achievement {
+            let prize = if achievement.payout.is_some() {
+                "chips and badge"
+            } else {
+                "badge"
+            };
             self.log_to(
                 user_id,
                 LogKind::Loot,
                 format!(
-                    "First defeat of {} can award chips and badge {} once per account.",
+                    "First defeat of {} can award {prize} {} once per account.",
                     achievement.mob_name,
                     award_badge(achievement.award_category, 1)
                 ),
@@ -5109,6 +5243,19 @@ impl WorldState {
         self.dirty = true;
     }
 
+    /// Cycle one appearance/bio field forward (+1) or back (-1), wrapping.
+    fn cycle_appearance(&mut self, user_id: Uuid, field: usize, delta: i8) {
+        if field >= appearance::N_FIELDS {
+            return;
+        }
+        let count = appearance::option_count(field) as i32;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            let cur = p.appearance[field] as i32;
+            p.appearance[field] = (cur + delta as i32).rem_euclid(count) as u8;
+            self.dirty = true;
+        }
+    }
+
     fn log_to(&mut self, user_id: Uuid, kind: LogKind, text: String) {
         if let Some(player) = self.players.get_mut(&user_id) {
             push_log(&mut player.log, kind, text);
@@ -5169,6 +5316,7 @@ impl WorldState {
                     max_hp: other.max_hp(),
                     in_combat: other.target.is_some(),
                     alive: !other.dead,
+                    bio: appearance::compose_bio(&other.appearance),
                 })
                 .collect();
             let corpse_here = occupants.iter().any(|o| !o.alive);
@@ -5450,6 +5598,15 @@ impl WorldState {
                     pet,
                     stable,
                     housing,
+                    bio: appearance::compose_bio(&player.appearance),
+                    appearance: (0..appearance::N_FIELDS)
+                        .map(|i| {
+                            (
+                                appearance::field_label(i).to_string(),
+                                appearance::option(i, player.appearance[i]).to_string(),
+                            )
+                        })
+                        .collect(),
                     log: player.log.clone(),
                     respawning: player.respawn_at.is_some(),
                     dead: player.dead,
@@ -5567,6 +5724,7 @@ fn boss_achievement_for(mob_name: &str) -> Option<BossAchievement> {
     match mob_name {
         "the Archdemon Mal'gareth" => Some(ARCHDEMON_ACHIEVEMENT),
         "the King Who Was Promised Nothing" => Some(FRONTIER_KING_ACHIEVEMENT),
+        "Yssgar, the Sundering Deep" => Some(SUNDERING_DEEP_ACHIEVEMENT),
         _ => None,
     }
 }
@@ -6552,6 +6710,34 @@ mod tests {
     }
 
     #[test]
+    fn appearance_cycles_wrap_and_compose_the_bio() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Cycling the Build field forward changes the composed bio.
+        let before = appearance::compose_bio(&s.players[&uid(1)].appearance);
+        s.cycle_appearance(uid(1), 0, 1);
+        let after = appearance::compose_bio(&s.players[&uid(1)].appearance);
+        assert_ne!(before, after, "cycling a field changes the bio");
+        // Cycling back returns to the original selection (wrapping arithmetic).
+        s.cycle_appearance(uid(1), 0, -1);
+        assert_eq!(s.players[&uid(1)].appearance[0], 0, "cycle wraps cleanly");
+        // An out-of-range field is ignored, not a panic.
+        s.cycle_appearance(uid(1), 99, 1);
+    }
+
+    #[test]
+    fn the_sundered_reaches_adds_twenty_new_bosses() {
+        let s = world();
+        let reaches_bosses = s
+            .mobs
+            .values()
+            .filter(|m| super::super::world::is_reaches_room(m.spawn.home) && m.spawn.boss)
+            .count();
+        assert_eq!(reaches_bosses, 20, "one boss per Reaches zone");
+    }
+
+    #[test]
     fn every_capital_has_a_stable() {
         use super::super::world::{MATLATESH_SQUARE, MELVANALA_SQUARE, TASMANIA_SQUARE};
         for square in [1, TASMANIA_SQUARE, MELVANALA_SQUARE, MATLATESH_SQUARE] {
@@ -6802,15 +6988,20 @@ mod tests {
     fn final_bosses_map_to_lifetime_achievements() {
         let archdemon = boss_achievement_for("the Archdemon Mal'gareth")
             .expect("authored final boss should grant an achievement");
-        assert_eq!(archdemon.reward_key, LATEANIA_ARCHDEMON_REWARD_KEY);
-        assert_eq!(archdemon.ledger_reason, LATEANIA_ARCHDEMON_LEDGER_REASON);
+        let archdemon_payout = archdemon.payout.expect("archdemon pays chips");
+        assert_eq!(archdemon_payout.reward_key, LATEANIA_ARCHDEMON_REWARD_KEY);
+        assert_eq!(
+            archdemon_payout.ledger_reason,
+            LATEANIA_ARCHDEMON_LEDGER_REASON
+        );
         assert_eq!(archdemon.award_category, LATEANIA_ARCHDEMON_AWARD_CATEGORY);
 
         let frontier_king = boss_achievement_for("the King Who Was Promised Nothing")
             .expect("last Frontier boss should grant an achievement");
-        assert_eq!(frontier_king.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
+        let king_payout = frontier_king.payout.expect("frontier king pays chips");
+        assert_eq!(king_payout.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
         assert_eq!(
-            frontier_king.ledger_reason,
+            king_payout.ledger_reason,
             LATEANIA_FRONTIER_KING_LEDGER_REASON
         );
         assert_eq!(
@@ -6818,7 +7009,83 @@ mod tests {
             LATEANIA_FRONTIER_KING_AWARD_CATEGORY
         );
 
+        let yssgar = boss_achievement_for("Yssgar, the Sundering Deep")
+            .expect("the Reaches' crowned boss should grant an achievement");
+        assert!(
+            yssgar.payout.is_none(),
+            "Yssgar's badge is the whole prize; no chip payout"
+        );
+        assert_eq!(
+            yssgar.award_category,
+            LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY
+        );
+
         assert!(boss_achievement_for("the Elder Treant").is_none());
+    }
+
+    #[test]
+    fn reach_and_escort_quest_zones_exist_in_the_world() {
+        let w = seed_world();
+        let zones: std::collections::HashSet<&str> = w.rooms.values().map(|r| r.zone).collect();
+        for q in BOARD_QUESTS {
+            match q.objective {
+                Objective::Reach { zone } => assert!(
+                    zones.contains(zone),
+                    "quest {} targets zone {zone:?} which no room carries",
+                    q.id
+                ),
+                Objective::Escort { dest_zone, .. } => assert!(
+                    zones.contains(dest_zone),
+                    "quest {} escorts to zone {dest_zone:?} which no room carries",
+                    q.id
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn sea_gate_requires_the_frontier_kings_bane() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let gate_dir = *s
+            .world
+            .room(super::super::world::MATLATESH_SQUARE)
+            .expect("Matlatesh square exists")
+            .exits
+            .iter()
+            .find(|(_, dest)| super::super::world::is_reaches_room(**dest))
+            .expect("Matlatesh carries the sea-gate")
+            .0;
+        if let Some(p) = s.players.get_mut(&uid(1)) {
+            p.room = super::super::world::MATLATESH_SQUARE;
+        }
+
+        // Without the King's bane the gate refuses, even on a second press.
+        s.move_player(uid(1), gate_dir);
+        s.move_player(uid(1), gate_dir);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            super::super::world::MATLATESH_SQUARE,
+            "sea-gate should hold without the King's bane"
+        );
+
+        // With the title, the first press warns and the second passes.
+        if let Some(p) = s.players.get_mut(&uid(1)) {
+            p.titles.push(REACHES_GATE_TITLE.to_string());
+        }
+        s.move_player(uid(1), gate_dir);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            super::super::world::MATLATESH_SQUARE,
+            "first press should only warn"
+        );
+        s.move_player(uid(1), gate_dir);
+        assert!(
+            super::super::world::is_reaches_room(s.players[&uid(1)].room),
+            "second press should pass the sea-gate"
+        );
     }
 
     #[test]
