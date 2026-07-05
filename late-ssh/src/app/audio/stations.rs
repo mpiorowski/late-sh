@@ -41,7 +41,7 @@ fn radio_station_url(station: RadioStation) -> &'static str {
         RadioStation::Nightride => "https://stream.nightride.fm/nightride.mp3",
         RadioStation::Datawave => "https://stream.nightride.fm/datawave.mp3",
         RadioStation::Spacesynth => "https://stream.nightride.fm/spacesynth.mp3",
-        RadioStation::Ambient => "https://stream.nightride.fm/rekt.mp3",
+        RadioStation::Ambient => "https://stream.nightride.fm/rektify.mp3",
     }
 }
 

@@ -21,7 +21,7 @@ Owned by this domain:
 - Procedural browser-pair visualizer fallback used when browser playback is the audible surface.
 - Now-playing poller for the Icecast track title.
 - The `/audio` and `/audio fallback` SSH chat commands (staff-only).
-- Direct-client radio source for approved external stations, currently Nightride Chillsynth, Nightride, Datawave, Spacesynth, and Ambient (Nightride's `rekt.mp3`). This must not proxy/restream third-party audio through late.sh Icecast/Liquidsoap; paired CLI/browser clients connect directly to official station stream URLs.
+- Direct-client radio source for approved external stations, currently Nightride Chillsynth, Nightride, Datawave, Spacesynth, and Ambient (Nightride's `rektify.mp3`). This must not proxy/restream third-party audio through late.sh Icecast/Liquidsoap; paired CLI/browser clients connect directly to official station stream URLs.
 
 Out of scope here (lives elsewhere):
 - LiveKit voice rooms, CLI microphone/remote voice playout, TUI voice controls/status, and pair-WS voice messages — see `../voice/CONTEXT.md`.
@@ -449,7 +449,7 @@ Test coverage (inline `#[cfg(test)]`): `music_stage_chrome_rows_never_move` (tit
 
 ### Nightride direct-radio source
 
-Nightride FM approved inclusion as an optional direct-client source, with the main condition that late.sh show attribution for the artists playing when possible. The `radio` source is selected by `v+x`; within it, `v+1`..`v+5` pick between Chillsynth, Nightride, Datawave, Spacesynth, and Ambient (persisted as `users.settings.radio_station`; Ambient persists as `rekt`, matching its `/meta` station key even though its label is `ambient`). Users are never defaulted onto Nightride — icecast/chill stays the default source.
+Nightride FM approved inclusion as an optional direct-client source, with the main condition that late.sh show attribution for the artists playing when possible. The `radio` source is selected by `v+x`; within it, `v+1`..`v+5` pick between Chillsynth, Nightride, Datawave, Spacesynth, and Ambient (persisted as `users.settings.radio_station`; Ambient persists as `rektify`, matching its `/meta` station key even though its label is `ambient`). Users are never defaulted onto Nightride — icecast/chill stays the default source.
 
 Implementation constraints:
 - Do not route Nightride audio through Icecast or Liquidsoap. `radio_meta` fetches METADATA only; never proxy/restream Nightride audio.
@@ -460,7 +460,7 @@ Implementation constraints:
 
 Metadata: **implemented** as `radio_meta/svc.rs::RadioMetaService` — a background audio-domain service (never the render loop):
 - One `tokio::spawn` SSE loop per process, started in `main.rs` next to the now-playing poller, shut down via the shared `CancellationToken`.
-- Connects to `https://nightride.fm/meta` with `accept: text/event-stream`. Each event is one `data:` line containing a JSON array of station records (`station`, `artist`, `title`, plus fields we ignore: `album`, `comment`, sometimes `dj`). Stations observed include `chillsynth`, `nightride`, `datawave`, `spacesynth`, `rekt` (surfaced as the `ambient` station), `darksynth`, `horrorsynth`, and `ebsm`.
+- Connects to `https://nightride.fm/meta` with `accept: text/event-stream`. Each event is one `data:` line containing a JSON array of station records (`station`, `artist`, `title`, plus fields we ignore: `album`, `comment`, sometimes `dj`). Stations observed include `chillsynth`, `nightride`, `datawave`, `spacesynth`, `rektify` (surfaced as the `ambient` station), `darksynth`, `horrorsynth`, and `ebsm`.
 - `parse_meta_line` skips records with an empty station/artist/title; valid records merge into the `watch<HashMap<String, ArtistTitle>>` via `send_modify` (merge, not replace, so a partial event doesn't blank other stations).
 - Reconnect with backoff: 1s doubling to 60s, reset after a received event. On disconnect the map is cleared (`send_replace(HashMap::new())`) so the UI falls back to station display names instead of showing stale tracks.
 - Consumers: `app/render.rs` formats `Artist - Title` for the user's selected station and threads it to the sidebar as `radio_now_playing` (§12); the pair WS broadcasts the map as `radio_meta_update` via `AudioService::start_meta_forward_task` (§5, consumed by the connect page §9); and `GET /api/radio-meta` (`api.rs`) exposes it over HTTP for non-paired consumers. A missing/absent entry falls back to the station display name.

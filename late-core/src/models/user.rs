@@ -77,15 +77,15 @@ pub enum RadioStation {
 impl RadioStation {
     /// Settings/persistence key, also used to look up live now-playing
     /// metadata in the Nightride `/meta` feed. The feed keys stations by
-    /// their stream filename, so `Ambient` must key on `"rekt"` (its
-    /// `rekt.mp3` stream) even though its display label is `"ambient"`.
+    /// their stream filename, so `Ambient` must key on `"rektify"` (its
+    /// `rektify.mp3` stream) even though its display label is `"ambient"`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Chillsynth => "chillsynth",
             Self::Nightride => "nightride",
             Self::Datawave => "datawave",
             Self::Spacesynth => "spacesynth",
-            Self::Ambient => "rekt",
+            Self::Ambient => "rektify",
         }
     }
 
@@ -94,7 +94,7 @@ impl RadioStation {
             "nightride" => Self::Nightride,
             "datawave" => Self::Datawave,
             "spacesynth" => Self::Spacesynth,
-            "rekt" => Self::Ambient,
+            "rektify" => Self::Ambient,
             _ => Self::Chillsynth,
         }
     }
