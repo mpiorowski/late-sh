@@ -20,6 +20,8 @@ pub mod drinks;
 pub mod game_payout;
 pub mod game_room;
 pub mod greendragon_character;
+pub mod greendragon_news;
+pub mod greendragon_setting;
 pub mod irc_token;
 pub mod le_word;
 pub mod leaderboard;

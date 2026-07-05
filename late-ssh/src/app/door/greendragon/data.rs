@@ -442,6 +442,32 @@ pub const DRAGON_HP: u32 = 300;
 /// setting defaults to "Ramius", which is theirs.
 pub const DEATH_OVERLORD: &str = "Morvane";
 
+/// The taunt pool appended to death news items (upstream's `taunts` table +
+/// `lib/taunt.php`, picked uniformly at random). **All lines original to
+/// late.sh** — the seed's ~26 taunts are theirs.
+pub const TAUNTS: [&str; 15] = [
+    "\"The forest keeps what it kills,\" say the old folk, nodding.",
+    "The village children are already re-enacting it with sticks.",
+    "A bard has begun a ballad about it. It is not flattering.",
+    "The crows held a moment of silence, then a feast.",
+    "The gravedigger measures by eye these days. Practice.",
+    "Somewhere, a master shakes their head and pockets the tuition.",
+    "\"Could've been me,\" mutters a farmer, comfortably alive.",
+    "The armory has already re-stocked the departed's size.",
+    "Duskmere's obituary column grows another line longer.",
+    "The worms send their regards, and their thanks.",
+    "An empty stool at the tavern is filled before it cools.",
+    "The healer notes, dryly, that prevention was cheaper.",
+    "Wagers were settled at the gate before the body was cold.",
+    "The dragon, informed, was heard to yawn.",
+    "A moment of silence was proposed, and voted down.",
+];
+
+/// Pick one random death taunt.
+pub fn taunt(rng: &mut impl rand::Rng) -> &'static str {
+    TAUNTS[rng.gen_range(0..TAUNTS.len())]
+}
+
 /// The dragon-kill title ladder (`titles` table + `lib/titles.php`): rows of
 /// `(dk_threshold, first-style title, second-style title)`. Selection takes
 /// the highest threshold at or below the character's kills, picking randomly

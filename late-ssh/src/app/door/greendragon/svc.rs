@@ -12,7 +12,13 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Utc;
-use late_core::{db::Db, models::greendragon_character::GreenDragonCharacter};
+use late_core::{
+    db::Db,
+    models::{
+        greendragon_character::GreenDragonCharacter, greendragon_news::GreenDragonNews,
+        greendragon_setting::GreenDragonSetting,
+    },
+};
 use rand::Rng;
 use serde_json::Value;
 use tokio::sync::{Mutex as TokioMutex, watch};
@@ -31,6 +37,30 @@ pub enum CharacterLoad {
     /// Loaded (or freshly created) and ready to play.
     Ready(Box<Character>),
 }
+
+/// The async result of loading one day's news page.
+#[derive(Clone)]
+pub enum NewsLoad {
+    Loading,
+    /// The day's lines, newest first. Empty means a quiet day (or a failed
+    /// read — the village paper doesn't distinguish).
+    Ready(Arc<Vec<String>>),
+}
+
+/// The async result of settling a Five Sixes play against the shared pot.
+#[derive(Clone)]
+pub enum FiveSixLoad {
+    Loading,
+    /// `(pot the roll was played against, gold left in the pot afterwards)`.
+    /// The win is the difference — or the whole pot on five sixes.
+    Ready { pot: u64, left_over: u64 },
+    /// The DB failed; the caller refunds the stake and shrugs it off.
+    Failed,
+}
+
+/// Cap for one day's news page. Upstream pages 50 at a time with page links;
+/// a single generous cap stands in for the pager.
+const NEWS_PAGE_LIMIT: i64 = 200;
 
 #[derive(Clone)]
 pub struct GreenDragonService {
@@ -195,5 +225,94 @@ impl GreenDragonService {
         let gate = self.inner.gate(user_id);
         let db = self.inner.db.clone();
         tokio::spawn(commit_delete(db, gate, seq, user_id));
+    }
+
+    /// Append a line to the village's daily news, fire-and-forget (LoGD
+    /// `addnews`). `user_id` is the item's subject; `None` marks a system line.
+    pub fn publish_news(&self, user_id: Option<Uuid>, body: String) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(e) = GreenDragonNews::add(&client, today(), user_id, &body).await {
+                        tracing::warn!("greendragon news write failed: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("greendragon db get failed on news write: {e}"),
+            }
+        });
+    }
+
+    /// Load the news page for `days_back` days ago (0 = today). Expired items
+    /// are reaped first — upstream prunes at view time too (`news.php`).
+    pub fn load_news(&self, days_back: i64) -> watch::Receiver<NewsLoad> {
+        let (tx, rx) = watch::channel(NewsLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let day = today() - days_back;
+            let lines = match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(e) = GreenDragonNews::prune(&client, today()).await {
+                        tracing::warn!("greendragon news prune failed: {e}");
+                    }
+                    match GreenDragonNews::list_for_day(&client, day, NEWS_PAGE_LIMIT).await {
+                        Ok(lines) => lines,
+                        Err(e) => {
+                            tracing::warn!("greendragon news read failed: {e}");
+                            Vec::new()
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("greendragon db get failed on news read: {e}");
+                    Vec::new()
+                }
+            };
+            let _ = tx.send(NewsLoad::Ready(Arc::new(lines)));
+        });
+        rx
+    }
+
+    /// Read the current Five Sixes jackpot (for the tavern's signboard).
+    pub fn load_fivesix_pot(&self) -> watch::Receiver<Option<u64>> {
+        let (tx, rx) = watch::channel(None);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            if let Ok(client) = inner.db.get().await
+                && let Ok(Some(pot)) = GreenDragonSetting::get(&client, "fivesix_jackpot").await
+            {
+                let _ = tx.send(Some(pot.max(0) as u64));
+            }
+        });
+        rx
+    }
+
+    /// Settle a Five Sixes play (`cost` staked, `sixes` rolled) against the
+    /// one shared jackpot, atomically. The caller has already taken the stake
+    /// off the character; the receiver reports what the pot paid.
+    pub fn settle_fivesix(&self, cost: u64, max_pot: u64, sixes: u32) -> watch::Receiver<FiveSixLoad> {
+        let (tx, rx) = watch::channel(FiveSixLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let settled = match inner.db.get().await {
+                Ok(client) => {
+                    GreenDragonSetting::settle_fivesix(&client, cost as i64, max_pot as i64, sixes)
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+            let msg = match settled {
+                Ok((pot, left_over)) => FiveSixLoad::Ready {
+                    pot: pot.max(0) as u64,
+                    left_over: left_over.max(0) as u64,
+                },
+                Err(e) => {
+                    tracing::warn!("greendragon fivesix settle failed: {e}");
+                    FiveSixLoad::Failed
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
     }
 }

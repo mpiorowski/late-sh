@@ -16,7 +16,7 @@ use super::data;
 use super::events::{self, ForestEvent};
 use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
-use super::svc::{CharacterLoad, GreenDragonService};
+use super::svc::{CharacterLoad, GreenDragonService, NewsLoad};
 
 /// Which Green Dragon screen the session is looking at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +53,8 @@ pub enum Mode {
     /// The forced dragon-point spend gate: play is blocked while points from a
     /// dragon kill sit unallocated (LoGD's new-day gate).
     SpendDragonPoints,
+    /// The village's daily news, paged one day at a time (`news.php`).
+    News,
 }
 
 /// What kind of foe the current encounter is, deciding the victory handler.
@@ -131,6 +133,12 @@ pub struct State {
     encounter: Option<Encounter>,
     /// The forest event awaiting an accept/decline choice, while in [`Mode::Event`].
     pending_event: Option<ForestEvent>,
+    /// Days back the news view is showing (0 = today).
+    news_offset: i64,
+    /// The in-flight news page load, drained by [`State::tick`].
+    news_rx: Option<tokio::sync::watch::Receiver<NewsLoad>>,
+    /// The loaded news page for `news_offset`, newest first.
+    news_lines: Option<std::sync::Arc<Vec<String>>>,
 }
 
 impl State {
@@ -149,11 +157,16 @@ impl State {
             log: VecDeque::new(),
             encounter: None,
             pending_event: None,
+            news_offset: 0,
+            news_rx: None,
+            news_lines: None,
         }
     }
 
-    /// Drain the initial character load. Called every app tick.
+    /// Drain pending async loads (the initial character, a news page). Called
+    /// every app tick.
     pub fn tick(&mut self) {
+        self.tick_news();
         if self.character.is_some() {
             return;
         }
@@ -213,6 +226,15 @@ impl State {
         self.pending_event
     }
 
+    /// The news page being viewed: `(days back, lines)`. `None` lines mean the
+    /// page is still loading.
+    pub fn news_page(&self) -> (i64, Option<&[String]>) {
+        (
+            self.news_offset,
+            self.news_lines.as_ref().map(|l| l.as_slice()),
+        )
+    }
+
     pub fn log_lines(&self) -> impl Iterator<Item = &str> {
         self.log.iter().map(String::as_str)
     }
@@ -236,6 +258,7 @@ impl State {
             Mode::ChooseSpecialty => specialty_menu(),
             Mode::Graveyard => graveyard_menu(c),
             Mode::SpendDragonPoints => dragon_point_menu(),
+            Mode::News => news_menu(self.news_offset),
             Mode::Loading => Vec::new(),
         }
     }
@@ -276,6 +299,7 @@ impl State {
             Mode::ChooseSpecialty => self.select_specialty(),
             Mode::Graveyard => self.select_graveyard(),
             Mode::SpendDragonPoints => self.select_dragon_point(),
+            Mode::News => self.select_news(),
             Mode::Loading => Selection::Stay,
         }
     }
@@ -339,6 +363,7 @@ impl State {
                 self.goto(Mode::Healer)
             }
             s if s.starts_with("The Coinvault") => self.goto(Mode::Bank),
+            s if s.starts_with("The Daily News") => self.open_news(0),
             s if s.starts_with("Leave") => return Selection::Leave,
             _ => {}
         }
@@ -544,6 +569,49 @@ impl State {
         let alive = self.character.as_ref().unwrap().alive;
         self.goto(if alive { Mode::Forest } else { Mode::Graveyard });
         self.save();
+    }
+
+    // --- the daily news -------------------------------------------------------
+
+    /// Open the news page `days_back` days ago (0 = today), kicking off the
+    /// async page load; [`State::tick`] lands it.
+    fn open_news(&mut self, days_back: i64) {
+        self.news_offset = days_back.max(0);
+        self.news_lines = None;
+        self.news_rx = Some(self.svc.load_news(self.news_offset));
+        self.goto(Mode::News);
+    }
+
+    /// Drain a finished news page load into the view.
+    fn tick_news(&mut self) {
+        let Some(rx) = self.news_rx.as_mut() else {
+            return;
+        };
+        let ready = match &*rx.borrow_and_update() {
+            NewsLoad::Ready(lines) => Some(lines.clone()),
+            NewsLoad::Loading => None,
+        };
+        if let Some(lines) = ready {
+            self.news_lines = Some(lines);
+            self.news_rx = None;
+        }
+    }
+
+    /// Page the news view (older / newer / back to the village).
+    fn select_news(&mut self) -> Selection {
+        match self.cursor {
+            0 => self.open_news(self.news_offset + 1),
+            1 if self.news_offset > 0 => self.open_news(self.news_offset - 1),
+            2 => self.goto(Mode::Village),
+            _ => {}
+        }
+        Selection::Stay
+    }
+
+    /// Write a line to the village's daily news (LoGD `addnews`), attributed
+    /// to this character.
+    fn news(&self, body: String) {
+        self.svc.publish_news(Some(self.user_id), body);
     }
 
     // --- race gate ------------------------------------------------------------
