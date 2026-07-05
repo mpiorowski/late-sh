@@ -185,6 +185,7 @@ impl State {
     fn list_len(&self) -> usize {
         match self.panel {
             Panel::Inventory => self.view().inventory.len(),
+            Panel::Abilities => self.view().abilities.len(),
             Panel::Shop => self.view().shop.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Examine => self.view().features.len(),
             Panel::Titles => self.view().titles.len(),
@@ -363,6 +364,14 @@ impl State {
                     } else {
                         self.svc.use_item_task(self.user_id, row.item_id);
                     }
+                }
+            }
+            Panel::Abilities => {
+                // Cast the highlighted ability; this is how slots past the 1-9
+                // hotbar (deep rosters, capstones) are reached.
+                if let Some(a) = self.view().abilities.get(self.cursor) {
+                    let slot = a.slot;
+                    self.svc.ability_task(self.user_id, slot);
                 }
             }
             Panel::Shop => {

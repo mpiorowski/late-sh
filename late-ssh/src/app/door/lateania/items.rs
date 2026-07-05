@@ -965,18 +965,28 @@ pub fn item(id: u32) -> Option<&'static Item> {
         .iter()
         .find(|i| i.id == id)
         .or_else(|| frontier_items().iter().find(|i| i.id == id))
+        .or_else(|| reaches_items().iter().find(|i| i.id == id))
 }
 
-// ---- Frontier catalog (procedural) --------------------------------------
+// ---- Generated catalogs (Frontier and Sundered Reaches) ------------------
 //
 // The frontier expansion (see world::extend_frontier) is too large to author
 // item-by-item, so its loot is generated: one tier per zone - twenty tiers x ten
 // slots = 200 items, scaling with depth so each of the twenty zones drops its own
 // progressively stronger gear. Built once and leaked to 'static so it slots into
-// the same `item(id)` lookup as the hand-authored `ITEMS`. IDs live in 3000..3200.
+// the same `item(id)` lookup as the hand-authored `ITEMS`. Frontier IDs live in
+// 3000..3200; the Sundered Reaches continue the same curve in 3200..3400, with
+// Reaches tier 0 picking up just above Frontier tier 19 so the new continent
+// is a real gear step past the King.
 
 /// Number of frontier loot tiers - one per zone (see world::FRONTIER_ZONES_DATA).
 pub const FRONTIER_TIERS: usize = 20;
+
+/// Number of Sundered Reaches loot tiers - one per zone (see world::REACHES_ZONES_DATA).
+pub const REACHES_TIERS: usize = 20;
+
+const FRONTIER_ITEM_BASE: u32 = 3000;
+const REACHES_ITEM_BASE: u32 = 3200;
 
 /// The full generated frontier item catalog (200 items).
 pub fn frontier_items() -> &'static [Item] {
@@ -984,28 +994,45 @@ pub fn frontier_items() -> &'static [Item] {
     CATALOG.get_or_init(build_frontier_items)
 }
 
+/// The full generated Sundered Reaches item catalog (200 items).
+pub fn reaches_items() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_reaches_items)
+}
+
 /// The drop table for a frontier zone (tier 0..FRONTIER_TIERS): representative
 /// weapon, head, chest, hands, ring, draught, and relic entries from that tier.
 /// Tiers past the last clamp to the deepest table.
 pub fn frontier_loot(tier: usize) -> &'static [u32] {
     static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
-    let tables = TABLES.get_or_init(|| {
-        (0..FRONTIER_TIERS as u32)
-            .map(|t| {
-                let base = 3000 + t * 10;
-                vec![
-                    base,
-                    base + 1,
-                    base + 2,
-                    base + 4,
-                    base + 6,
-                    base + 8,
-                    base + 9,
-                ]
-            })
-            .collect()
-    });
+    let tables =
+        TABLES.get_or_init(|| generated_loot_tables(FRONTIER_ITEM_BASE, FRONTIER_TIERS));
     tables[tier.min(FRONTIER_TIERS - 1)].as_slice()
+}
+
+/// The drop table for a Sundered Reaches zone (tier 0..REACHES_TIERS), same
+/// shape as `frontier_loot` but drawn from the Reaches catalog.
+pub fn reaches_loot(tier: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| generated_loot_tables(REACHES_ITEM_BASE, REACHES_TIERS));
+    tables[tier.min(REACHES_TIERS - 1)].as_slice()
+}
+
+fn generated_loot_tables(base_id: u32, tiers: usize) -> Vec<Vec<u32>> {
+    (0..tiers as u32)
+        .map(|t| {
+            let base = base_id + t * 10;
+            vec![
+                base,
+                base + 1,
+                base + 2,
+                base + 4,
+                base + 6,
+                base + 8,
+                base + 9,
+            ]
+        })
+        .collect()
 }
 
 fn build_frontier_items() -> Vec<Item> {
@@ -1055,6 +1082,74 @@ fn build_frontier_items() -> Vec<Item> {
         Rarity::Legendary,
         Rarity::Legendary,
     ];
+    build_generated_items(GeneratedRealm {
+        base_id: FRONTIER_ITEM_BASE,
+        power_offset: 0,
+        materials: &MATERIALS,
+        rarities: &TIER_RARITY,
+        gear_desc: |type_name| {
+            format!("Frontier-forged {type_name}, scarred by the deep wilds and all the keener for it.")
+        },
+        draught_desc: "A restorative brew distilled from frontier herbs.",
+        relic_desc: "A frontier curio with no combat use; merchants buy these for good gold.",
+    })
+}
+
+fn build_reaches_items() -> Vec<Item> {
+    // One material per zone, low to high - matched to the twenty REACHES_ZONES.
+    const MATERIALS: [&str; REACHES_TIERS] = [
+        "Saltwrought",
+        "Wrecksteel",
+        "Weepstone",
+        "Kelpbound",
+        "Sirenscale",
+        "Drownwood",
+        "Galewrought",
+        "Brineglass",
+        "Valmaric",
+        "Pearlbound",
+        "Coralwrought",
+        "Tideglass",
+        "Leviathanbone",
+        "Mourningsilver",
+        "Tempestcore",
+        "Mawbone",
+        "Drownedgold",
+        "Stormheart",
+        "Abyssglass",
+        "Sundersteel",
+    ];
+    // The whole continent sits past the Frontier's top tier, so every Reaches
+    // tier reads as endgame gear.
+    const TIER_RARITY: [Rarity; REACHES_TIERS] = [Rarity::Legendary; REACHES_TIERS];
+    build_generated_items(GeneratedRealm {
+        base_id: REACHES_ITEM_BASE,
+        // Continue the Frontier's power curve: Reaches tier 0 lands just above
+        // Frontier tier 19.
+        power_offset: FRONTIER_TIERS as i32,
+        materials: &MATERIALS,
+        rarities: &TIER_RARITY,
+        gear_desc: |type_name| {
+            format!("Drowned-realm {type_name}, raised from the Sundered Reaches and cold with the weight of the deep.")
+        },
+        draught_desc: "A briny restorative pressed from abyssal kelp and pearl-dust.",
+        relic_desc: "A relic of the drowned realm with no combat use; merchants pay dearly for these.",
+    })
+}
+
+struct GeneratedRealm {
+    base_id: u32,
+    /// Added to the 1-based tier before computing stats, so a later realm's
+    /// tiers continue an earlier realm's power curve instead of restarting it.
+    power_offset: i32,
+    materials: &'static [&'static str; 20],
+    rarities: &'static [Rarity; 20],
+    gear_desc: fn(&str) -> String,
+    draught_desc: &'static str,
+    relic_desc: &'static str,
+}
+
+fn build_generated_items(realm: GeneratedRealm) -> Vec<Item> {
     const SLOTS: [(Slot, &str); 8] = [
         (Slot::Weapon, "Blade"),
         (Slot::Head, "Helm"),
@@ -1066,20 +1161,17 @@ fn build_frontier_items() -> Vec<Item> {
         (Slot::Trinket, "Charm"),
     ];
 
-    let mut out = Vec::with_capacity(FRONTIER_TIERS * 10);
-    for tier in 0..FRONTIER_TIERS {
-        let t = (tier + 1) as i32;
-        let rarity = TIER_RARITY[tier];
-        let mat = MATERIALS[tier];
+    let tiers = realm.materials.len();
+    let mut out = Vec::with_capacity(tiers * 10);
+    for tier in 0..tiers {
+        let t = realm.power_offset + (tier + 1) as i32;
+        let rarity = realm.rarities[tier];
+        let mat = realm.materials[tier];
         for (i, (slot, type_name)) in SLOTS.iter().enumerate() {
-            let id = 3000 + (tier as u32) * 10 + i as u32;
+            let id = realm.base_id + (tier as u32) * 10 + i as u32;
             let name: &'static str = Box::leak(format!("{mat} {type_name}").into_boxed_str());
             let desc: &'static str = Box::leak(
-                format!(
-                    "Frontier-forged {}, scarred by the deep wilds and all the keener for it.",
-                    type_name.to_ascii_lowercase()
-                )
-                .into_boxed_str(),
+                (realm.gear_desc)(&type_name.to_ascii_lowercase()).into_boxed_str(),
             );
             let (attack, max_hp, armor) = match slot {
                 Slot::Weapon => (30 + t * 3, 0, 0),
@@ -1109,9 +1201,9 @@ fn build_frontier_items() -> Vec<Item> {
         // A restorative draught and a sellable relic round out each tier.
         let draught: &'static str = Box::leak(format!("{mat} Draught").into_boxed_str());
         out.push(Item {
-            id: 3000 + (tier as u32) * 10 + 8,
+            id: realm.base_id + (tier as u32) * 10 + 8,
             name: draught,
-            desc: "A restorative brew distilled from frontier herbs.",
+            desc: realm.draught_desc,
             kind: ItemKind::Consumable {
                 heal: 120 + t * 20,
                 restore: 60 + t * 10,
@@ -1123,9 +1215,9 @@ fn build_frontier_items() -> Vec<Item> {
         });
         let relic: &'static str = Box::leak(format!("{mat} Relic").into_boxed_str());
         out.push(Item {
-            id: 3000 + (tier as u32) * 10 + 9,
+            id: realm.base_id + (tier as u32) * 10 + 9,
             name: relic,
-            desc: "A frontier curio with no combat use; merchants buy these for good gold.",
+            desc: realm.relic_desc,
             kind: ItemKind::Valuable,
             rarity,
             mods: StatMods::default(),
@@ -1194,7 +1286,12 @@ mod tests {
 
     #[test]
     fn item_ids_are_unique() {
-        let mut ids: Vec<u32> = ITEMS.iter().map(|i| i.id).collect();
+        let mut ids: Vec<u32> = ITEMS
+            .iter()
+            .chain(frontier_items().iter())
+            .chain(reaches_items().iter())
+            .map(|i| i.id)
+            .collect();
         ids.sort_unstable();
         let n = ids.len();
         ids.dedup();
@@ -1303,8 +1400,49 @@ mod tests {
     }
 
     #[test]
+    fn reaches_loot_outclasses_the_deepest_frontier_tier() {
+        // The Reaches continue the Frontier's power curve: entry-tier Reaches
+        // gear must beat the Frontier's top tier, and the whole catalog must
+        // resolve through item(id) in the 3200..3400 range.
+        let frontier_top = item(3000 + 19 * 10).expect("deepest frontier blade exists");
+        let reaches_entry = item(REACHES_ITEM_BASE).expect("first reaches blade exists");
+        assert!(
+            reaches_entry.mods.attack > frontier_top.mods.attack,
+            "reaches entry gear should out-damage the deepest frontier gear"
+        );
+        for tier in 0..REACHES_TIERS as u32 {
+            for i in 0..10 {
+                let id = REACHES_ITEM_BASE + tier * 10 + i;
+                assert!(item(id).is_some(), "reaches item {id} should resolve");
+                assert!(
+                    id < REACHES_ITEM_BASE + 200,
+                    "reaches ids must stay in 3200..3400"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reaches_relics_state_they_are_not_combat_items() {
+        for tier in 0..REACHES_TIERS {
+            let id = REACHES_ITEM_BASE + (tier as u32) * 10 + 9;
+            let relic = item(id).expect("reaches relic should exist");
+            assert_eq!(relic.kind, ItemKind::Valuable);
+            assert!(
+                relic.desc.contains("no combat use"),
+                "{} should explain its lack of combat use",
+                relic.name
+            );
+        }
+    }
+
+    #[test]
     fn valuables_explain_their_sell_use() {
-        for it in ITEMS.iter().chain(frontier_items().iter()) {
+        for it in ITEMS
+            .iter()
+            .chain(frontier_items().iter())
+            .chain(reaches_items().iter())
+        {
             if it.kind == ItemKind::Valuable {
                 let summary = it.stat_summary();
                 assert!(

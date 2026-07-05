@@ -4,7 +4,8 @@
 //   - Before choosing a class: 1-5 pick Warrior/Mage/Cleric/Rogue/Ranger.
 //   - Movement: w/a/s/d and arrows (N/S/E/W); < or , up and
 //     > or . down (also shown as a hint in-game when a room has a vertical exit).
-//   - Combat: space/x attack; 1-9 use the ability in that action-bar slot; z flee.
+//   - Combat: space/x attack; 1-9 use the ability in that action-bar slot (0 is
+//     slot 10; deeper rosters cast from the Abilities panel); z flee.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
@@ -103,6 +104,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Stable
             | Panel::Housing
             | Panel::Appearance
+            | Panel::Abilities
     );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
@@ -116,6 +118,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         } else {
             state.use_ability(byte - b'0');
         }
+        return InputAction::Handled;
+    }
+
+    // `0` reaches the tenth hotbar slot; rosters deeper than that cast from
+    // the Abilities panel (v, then Enter on the row).
+    if byte == b'0' && !in_list {
+        state.use_ability(10);
         return InputAction::Handled;
     }
 

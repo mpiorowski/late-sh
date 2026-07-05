@@ -304,7 +304,7 @@ fn draw_side(
     let (lines, selected) = match state.panel() {
         Panel::Room => unreachable!("room panel is rendered by draw_room_side"),
         Panel::Character => (character_panel(view), None),
-        Panel::Abilities => (abilities_panel(view), None),
+        Panel::Abilities => abilities_panel(view, state.cursor()),
         Panel::Inventory => inventory_panel(view, state.cursor()),
         Panel::Shop => shop_panel(view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
@@ -1219,23 +1219,33 @@ fn score_row(view: &PlayerView) -> Line<'static> {
     Line::from(spans)
 }
 
-fn abilities_panel(view: &PlayerView) -> Vec<Line<'static>> {
+fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Abilities")];
+    let mut sel_line = None;
     if view.abilities.is_empty() {
         lines.push(Line::from(Span::styled(
             "  none yet",
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
-    for a in &view.abilities {
+    for (i, a) in view.abilities.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let color = if a.ready {
             theme::TEXT_BRIGHT()
         } else {
             theme::TEXT_FAINT()
         };
+        let marker = if selected { ">" } else { " " };
         lines.push(Line::from(vec![
             Span::styled(
-                format!(" {} ", a.slot),
+                marker.to_string(),
+                Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{:>2} ", a.slot),
                 Style::default().fg(theme::BG_CANVAS()).bg(if a.ready {
                     theme::AMBER()
                 } else {
@@ -1253,10 +1263,10 @@ fn abilities_panel(view: &PlayerView) -> Vec<Line<'static>> {
         ]));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("1-9", "use ability in combat"));
+    lines.push(hint("Enter", "cast selected  1-9 cast that slot"));
+    lines.push(hint("0", "casts slot 10 while adventuring"));
     lines.push(hint("v", "close"));
-    lines.push(hint("[ ]", "scroll"));
-    lines
+    (lines, sel_line)
 }
 
 fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
@@ -1649,7 +1659,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     }
     if view.in_combat_with.is_some() {
         lines.push(hint("space/x", "strike"));
-        lines.push(hint("1-9", "use ability"));
+        lines.push(hint("1-9 0", "use ability"));
         lines.push(hint("z", "flee"));
     } else {
         lines.push(hint("wasd/arrows", "move"));

@@ -258,12 +258,17 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online:
     lines.push(landing::heading("Boss Achievements"));
     lines.push(landing::stat(
         "Archdemon Mal'gareth",
-        "10,000 chips + LAD badge, once per account",
+        "10,000 chips + LMG badge, once per account",
         22,
     ));
     lines.push(landing::stat(
         "Frontier King",
-        "20,000 chips + LFK badge, once per account",
+        "20,000 chips + LKN badge, once per account",
+        22,
+    ));
+    lines.push(landing::stat(
+        "Yssgar, Sundering Deep",
+        "LYS badge, once per account; no chips, only glory",
         22,
     ));
     lines.push(Line::from(Span::styled(

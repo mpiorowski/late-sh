@@ -3679,10 +3679,14 @@ fn is_living_dark_spawn(id: u32) -> bool {
 
 fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
     for spawn in spawns {
-        let frontier = spawn.id >= FRONTIER_SPAWN_ID_START;
+        let frontier = (FRONTIER_SPAWN_ID_START..REACHES_SPAWN_ID_START).contains(&spawn.id);
+        // The Reaches deliberately ride the Frontier multipliers: their authored
+        // base stats sit on the same pre-scale curve, entering just under the
+        // King Who Was Promised Nothing and climbing well past him by Yssgar.
+        let reaches = spawn.id >= REACHES_SPAWN_ID_START;
         let living_dark = is_living_dark_spawn(spawn.id);
         let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) =
-            match (frontier, living_dark, spawn.boss) {
+            match (frontier || reaches, living_dark, spawn.boss) {
                 (true, _, true) => (12, 5, 21, 10, 4, 3),
                 (true, _, false) => (2, 1, 19, 10, 3, 2),
                 (false, true, true) => (6, 1, 7, 2, 2, 1),
@@ -3694,7 +3698,7 @@ fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
         spawn.damage = scale_i32(spawn.damage, dmg_num, dmg_den);
         spawn.xp = scale_i32(spawn.xp, xp_num, xp_den);
         if !spawn.boss {
-            spawn.respawn_secs = if frontier {
+            spawn.respawn_secs = if frontier || reaches {
                 scale_u64(spawn.respawn_secs, 3, 4).max(60)
             } else {
                 scale_u64(spawn.respawn_secs, 4, 5).max(25)
@@ -3727,12 +3731,12 @@ pub fn is_frontier_room(id: RoomId) -> bool {
     (FRONTIER_BASE..FRONTIER_BASE + FRONTIER_ZONES as u32 * FRONTIER_W * FRONTIER_H).contains(&id)
 }
 
-// ---- City districts: flesh out the four capitals (rooms 400+) -------------
+// ---- City districts: flesh out the four capitals (rooms 3000+) ------------
 //
 // Each capital gains a short district of safe, flavourful rooms hung off its
 // square via a free direction, so the cities feel like places to linger rather
-// than waypoints. Rooms are authored from a per-city theme; ids start at 400 to
-// stay within the "original" sub-5000 band.
+// than waypoints. Rooms are authored from a per-city theme; ids start at 3000
+// (free, between the Frontier band and the living-world mazes).
 fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
     // (square, city name, district label, [4 (room-name, room-desc) pairs]).
     // Each description is at least two sentences and a paragraph long, to satisfy
@@ -3862,7 +3866,7 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
         .filter(|d| *d != back_to_square)
         .take(4)
         .collect();
-        let zone: &'static str = Box::leak(district.to_string().into_boxed_str());
+        let zone: &'static str = district;
         let spine = base;
         let mut spine_exits: Vec<(Dir, RoomId)> = vec![(back_to_square, square)];
         for (k, &dir) in fan.iter().enumerate() {
@@ -3962,7 +3966,7 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
         "Captain Sull the Unsunk",
     ),
     (
-        "The Weeping Cliffs",
+        "Weeping Cliffs",
         "rain-lashed",
         "slick black basalt",
         "a weather-worn lighthouse",
@@ -3993,7 +3997,7 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
         "Nauthis the Reefsinger",
     ),
     (
-        "The Sinking Isles",
+        "Sinking Isles",
         "fog-bound",
         "subsiding sand",
         "a town swallowed to its rooftops",
@@ -4019,7 +4023,7 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
         "Vexhal, Voice of the Storm",
     ),
     (
-        "The Brine Caverns",
+        "Brine Caverns",
         "lightless",
         "tide-cut limestone",
         "a cavern of dripping stalactites",
@@ -4041,7 +4045,7 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
         "Empress Calyx, Still Crowned",
     ),
     (
-        "The Pearl Abyss",
+        "Pearl Abyss",
         "black-fathomed",
         "abyssal silt",
         "a trench of bioluminal bloom",
@@ -4063,7 +4067,7 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
         "The Coral Tyrant",
     ),
     (
-        "The Glass Currents",
+        "Glass Currents",
         "glassy",
         "obsidian shard-sand",
         "a river of slow black glass",
@@ -4085,7 +4089,7 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
         "The Wake-Thing",
     ),
     (
-        "The Mourning Depths",
+        "Mourning Depths",
         "ash-grey",
         "drowned grave-silt",
         "a fathom-deep field of cairns",
@@ -4111,7 +4115,7 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
         "Aurex, the Spire's Wrath",
     ),
     (
-        "The Trench of Maws",
+        "Trench of Maws",
         "abyssal",
         "trench-dark muck",
         "a chasm lined with teeth",
@@ -4133,7 +4137,7 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
         "The Last Drowned God",
     ),
     (
-        "The Black Maelstrom",
+        "Black Maelstrom",
         "vortex-torn",
         "spinning wrack",
         "the eye of an endless whirlpool",
@@ -4159,7 +4163,7 @@ const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] 
         "The Fathom Lord",
     ),
     (
-        "The Sundering Deep",
+        "Sundering Deep",
         "world-ending dark",
         "the floor of all seas",
         "the wound where the world drinks",
@@ -4370,9 +4374,15 @@ fn extend_reaches(
                 home: id,
                 max_hp: hp,
                 damage: dmg,
-                xp: 160 + tier * 32 + if boss_mob { 540 } else { 0 } + depth * 5,
+                // XP hands off from the late Frontier and climbs past it: entry
+                // bosses trail the King a little, Yssgar clears him by half again.
+                xp: if boss_mob {
+                    720 + tier * 90
+                } else {
+                    200 + tier * 40 + depth * 5
+                },
                 respawn_secs: if boss_mob { 600 } else { 90 },
-                loot: super::items::frontier_loot(z),
+                loot: super::items::reaches_loot(z),
                 boss: boss_mob,
                 profile,
             });
@@ -7725,5 +7735,46 @@ mod tests {
                 .any(|c| matches!(*c, MapCell::TrailH | MapCell::TrailV)),
             "the route from previous room to current room should be highlighted"
         );
+    }
+
+    #[test]
+    fn reaches_zone_labels_are_not_doubled() {
+        let world = seed_world();
+        for room in world.rooms.values() {
+            assert!(
+                !room.zone.starts_with("The The "),
+                "room {} has a doubled zone label {:?}",
+                room.id,
+                room.zone
+            );
+        }
+        assert!(
+            world
+                .rooms
+                .values()
+                .any(|r| r.zone == "The Sundering Deep"),
+            "the deepest Reaches zone should carry its board-quest label"
+        );
+    }
+
+    #[test]
+    fn yssgar_out_toughens_and_out_earns_the_frontier_king() {
+        // The Reaches deliberately ride the Frontier's balance multipliers, so
+        // pin the intended outcome: the new continent's crowned boss stands
+        // above the King Who Was Promised Nothing in threat and in XP.
+        let world = seed_world();
+        let king = world
+            .spawns
+            .iter()
+            .find(|s| s.name == "the King Who Was Promised Nothing")
+            .expect("the Frontier king spawns");
+        let yssgar = world
+            .spawns
+            .iter()
+            .find(|s| s.name == "Yssgar, the Sundering Deep")
+            .expect("the Reaches' crowned boss spawns");
+        assert!(yssgar.max_hp > king.max_hp, "Yssgar should out-last the King");
+        assert!(yssgar.damage > king.damage, "Yssgar should out-hit the King");
+        assert!(yssgar.xp > king.xp, "Yssgar should out-reward the King");
     }
 }
