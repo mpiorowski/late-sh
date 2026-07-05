@@ -1005,8 +1005,7 @@ pub fn reaches_items() -> &'static [Item] {
 /// Tiers past the last clamp to the deepest table.
 pub fn frontier_loot(tier: usize) -> &'static [u32] {
     static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
-    let tables =
-        TABLES.get_or_init(|| generated_loot_tables(FRONTIER_ITEM_BASE, FRONTIER_TIERS));
+    let tables = TABLES.get_or_init(|| generated_loot_tables(FRONTIER_ITEM_BASE, FRONTIER_TIERS));
     tables[tier.min(FRONTIER_TIERS - 1)].as_slice()
 }
 
@@ -1088,7 +1087,9 @@ fn build_frontier_items() -> Vec<Item> {
         materials: &MATERIALS,
         rarities: &TIER_RARITY,
         gear_desc: |type_name| {
-            format!("Frontier-forged {type_name}, scarred by the deep wilds and all the keener for it.")
+            format!(
+                "Frontier-forged {type_name}, scarred by the deep wilds and all the keener for it."
+            )
         },
         draught_desc: "A restorative brew distilled from frontier herbs.",
         relic_desc: "A frontier curio with no combat use; merchants buy these for good gold.",
@@ -1130,7 +1131,9 @@ fn build_reaches_items() -> Vec<Item> {
         materials: &MATERIALS,
         rarities: &TIER_RARITY,
         gear_desc: |type_name| {
-            format!("Drowned-realm {type_name}, raised from the Sundered Reaches and cold with the weight of the deep.")
+            format!(
+                "Drowned-realm {type_name}, raised from the Sundered Reaches and cold with the weight of the deep."
+            )
         },
         draught_desc: "A briny restorative pressed from abyssal kelp and pearl-dust.",
         relic_desc: "A relic of the drowned realm with no combat use; merchants pay dearly for these.",
@@ -1170,9 +1173,8 @@ fn build_generated_items(realm: GeneratedRealm) -> Vec<Item> {
         for (i, (slot, type_name)) in SLOTS.iter().enumerate() {
             let id = realm.base_id + (tier as u32) * 10 + i as u32;
             let name: &'static str = Box::leak(format!("{mat} {type_name}").into_boxed_str());
-            let desc: &'static str = Box::leak(
-                (realm.gear_desc)(&type_name.to_ascii_lowercase()).into_boxed_str(),
-            );
+            let desc: &'static str =
+                Box::leak((realm.gear_desc)(&type_name.to_ascii_lowercase()).into_boxed_str());
             let (attack, max_hp, armor) = match slot {
                 Slot::Weapon => (30 + t * 3, 0, 0),
                 Slot::Head => (2 + t / 2, 32 + t * 5, 5 + t / 2),

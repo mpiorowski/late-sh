@@ -340,7 +340,10 @@ mod tests {
     fn lateania_boss_awards_have_profile_badge_codes() {
         assert_eq!(award_badge(LATEANIA_ARCHDEMON_AWARD_CATEGORY, 1), "LMG");
         assert_eq!(award_badge(LATEANIA_FRONTIER_KING_AWARD_CATEGORY, 1), "LKN");
-        assert_eq!(award_badge(LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, 1), "LYS");
+        assert_eq!(
+            award_badge(LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, 1),
+            "LYS"
+        );
         assert_eq!(
             award_category_label(LATEANIA_ARCHDEMON_AWARD_CATEGORY),
             "Lateania Archdemon"

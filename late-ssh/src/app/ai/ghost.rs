@@ -1515,7 +1515,10 @@ fn parse_bartender_order(raw: &str, spendable: i64, bot_username: &str) -> Barte
         Ok(order) => order,
         Err(_) => match recover_bartender_order(cleaned) {
             Some(order) => {
-                tracing::warn!(raw_len = raw.len(), "bartender order json repaired after parse failure");
+                tracing::warn!(
+                    raw_len = raw.len(),
+                    "bartender order json repaired after parse failure"
+                );
                 order
             }
             None => {
@@ -2034,7 +2037,8 @@ hey @bot what do you think",
         assert_eq!(
             parse_bartender_order(raw, 900, "bartender"),
             BartenderDecision::Say {
-                line: "The top shelf is closed for you tonight, friend. Here is ice water.".to_string()
+                line: "The top shelf is closed for you tonight, friend. Here is ice water."
+                    .to_string()
             }
         );
     }
@@ -2061,7 +2065,10 @@ hey @bot what do you think",
             extract_json_string_field(raw, "line").as_deref(),
             Some(r#"he said "hi" then left."#)
         );
-        assert_eq!(extract_json_string_field(r#"{"drink": null}"#, "drink"), None);
+        assert_eq!(
+            extract_json_string_field(r#"{"drink": null}"#, "drink"),
+            None
+        );
         assert_eq!(extract_json_string_field(r#"{"a": 1}"#, "line"), None);
     }
 

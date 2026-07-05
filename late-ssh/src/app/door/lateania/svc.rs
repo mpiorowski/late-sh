@@ -7000,7 +7000,10 @@ mod tests {
             .expect("last Frontier boss should grant an achievement");
         let king_payout = frontier_king.payout.expect("frontier king pays chips");
         assert_eq!(king_payout.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
-        assert_eq!(king_payout.ledger_reason, LATEANIA_FRONTIER_KING_LEDGER_REASON);
+        assert_eq!(
+            king_payout.ledger_reason,
+            LATEANIA_FRONTIER_KING_LEDGER_REASON
+        );
         assert_eq!(
             frontier_king.award_category,
             LATEANIA_FRONTIER_KING_AWARD_CATEGORY
@@ -7023,8 +7026,7 @@ mod tests {
     #[test]
     fn reach_and_escort_quest_zones_exist_in_the_world() {
         let w = seed_world();
-        let zones: std::collections::HashSet<&str> =
-            w.rooms.values().map(|r| r.zone).collect();
+        let zones: std::collections::HashSet<&str> = w.rooms.values().map(|r| r.zone).collect();
         for q in BOARD_QUESTS {
             match q.objective {
                 Objective::Reach { zone } => assert!(

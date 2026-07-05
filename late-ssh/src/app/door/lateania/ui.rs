@@ -1242,7 +1242,9 @@ fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
         lines.push(Line::from(vec![
             Span::styled(
                 marker.to_string(),
-                Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("{:>2} ", a.slot),

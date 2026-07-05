@@ -7749,10 +7749,7 @@ mod tests {
             );
         }
         assert!(
-            world
-                .rooms
-                .values()
-                .any(|r| r.zone == "The Sundering Deep"),
+            world.rooms.values().any(|r| r.zone == "The Sundering Deep"),
             "the deepest Reaches zone should carry its board-quest label"
         );
     }
@@ -7773,8 +7770,14 @@ mod tests {
             .iter()
             .find(|s| s.name == "Yssgar, the Sundering Deep")
             .expect("the Reaches' crowned boss spawns");
-        assert!(yssgar.max_hp > king.max_hp, "Yssgar should out-last the King");
-        assert!(yssgar.damage > king.damage, "Yssgar should out-hit the King");
+        assert!(
+            yssgar.max_hp > king.max_hp,
+            "Yssgar should out-last the King"
+        );
+        assert!(
+            yssgar.damage > king.damage,
+            "Yssgar should out-hit the King"
+        );
         assert!(yssgar.xp > king.xp, "Yssgar should out-reward the King");
     }
 }
