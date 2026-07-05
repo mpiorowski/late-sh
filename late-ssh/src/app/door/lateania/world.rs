@@ -4599,7 +4599,7 @@ const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20]
         "Caldera the Heartfire",
     ),
     (
-        "The Hollow Crown",
+        "Hollow Crown",
         "god-haunted",
         "starless black marble",
         "the broken throne of a dead god",

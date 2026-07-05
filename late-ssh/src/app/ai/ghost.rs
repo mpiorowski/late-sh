@@ -1448,11 +1448,8 @@ fn extract_json_string_field(raw: &str, field: &str) -> Option<String> {
     let key = format!("\"{field}\"");
     let after_key = &raw[raw.find(&key)? + key.len()..];
     let after_colon = after_key.trim_start().strip_prefix(':')?.trim_start();
-    let body = match after_colon.strip_prefix('"') {
-        Some(body) => body,
-        // `null` (or anything not a string) — treat as absent.
-        None => return None,
-    };
+    // `null` (or anything not a string) — treat as absent.
+    let body = after_colon.strip_prefix('"')?;
     let mut out = String::new();
     let mut chars = body.chars();
     while let Some(c) = chars.next() {

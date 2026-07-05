@@ -114,10 +114,10 @@ mod tests {
     #[test]
     fn every_field_has_options_and_composes() {
         assert_eq!(N_FIELDS, 5);
-        for i in 0..N_FIELDS {
+        for (i, field) in FIELDS.iter().enumerate() {
             assert!(option_count(i) >= 2, "{} has choices", field_label(i));
             // Out-of-range indices clamp rather than panic.
-            assert_eq!(option(i, 250), FIELDS[i].1[FIELDS[i].1.len() - 1]);
+            assert_eq!(option(i, 250), field.1[field.1.len() - 1]);
         }
         let bio = compose_bio(&[1, 2, 3, 4, 5]);
         assert!(bio.contains("broad-shouldered") && bio.contains("from far over the sea"));
