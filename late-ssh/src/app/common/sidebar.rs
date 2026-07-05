@@ -26,14 +26,15 @@ const TIME_HEIGHT: u16 = 1;
 const RULE_HEIGHT: u16 = 1;
 const VISUALIZER_HEIGHT: u16 = 6;
 // Full music stage: volume rows (2) + three dock entries (title +
-// now-playing, 6) + labeled rule (1) + detail area (5) + keybind footer
+// now-playing, 6) + labeled rule (1) + detail area (6) + keybind footer
 // (1). Constant for ALL active sources — chrome must not move between
 // states; `music_stage_chrome_rows_never_move` locks this in tests.
-const MUSIC_STAGE_HEIGHT: u16 = 15;
+const MUSIC_STAGE_HEIGHT: u16 = 16;
 // Detail area under the labeled rule: the active source's controls, padded
-// to exactly this many rows.
-const MUSIC_DETAIL_HEIGHT: u16 = 5;
-const MUSIC_QUEUE_HEIGHT: u16 = 2;
+// to exactly this many rows. Sized for radio (five station rows + the
+// Nightride attribution row).
+const MUSIC_DETAIL_HEIGHT: u16 = 6;
+const MUSIC_QUEUE_HEIGHT: u16 = 3;
 // Bonsai is kept fixed when shown.
 const BONSAI_MIN_HEIGHT: u16 = 16;
 // Cat: 3 art rows + 1 footer row.
@@ -78,7 +79,7 @@ pub(crate) struct SidebarProps<'a> {
     /// stream's now-playing track.
     pub selected_icecast_stream: IcecastStream,
     /// Per-user radio station selection (`users.settings.radio_station`,
-    /// v+1..4 while Radio is active).
+    /// v+1..5 while Radio is active).
     pub selected_radio_station: RadioStation,
     /// Live `Artist - Title` for the selected radio station from the
     /// Nightride metadata SSE; the dock row falls back to the station
@@ -761,7 +762,7 @@ fn icecast_detail_lines(
     lines
 }
 
-/// Radio detail rows (exactly 5): four station selector rows, then the
+/// Radio detail rows (exactly 6): five station selector rows, then the
 /// Nightride attribution row (the visible credit Nightride asked for).
 fn radio_detail_lines(width: u16, selected: RadioStation) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = [
@@ -769,6 +770,7 @@ fn radio_detail_lines(width: u16, selected: RadioStation) -> Vec<Line<'static>> 
         (RadioStation::Nightride, "v2"),
         (RadioStation::Datawave, "v3"),
         (RadioStation::Spacesynth, "v4"),
+        (RadioStation::Ambient, "v5"),
     ]
     .into_iter()
     .map(|(station, key)| {
@@ -1066,7 +1068,7 @@ mod tests {
             assert!(texts[6].starts_with("▌ icecast"), "{source:?}");
             assert!(texts[8].starts_with("── "), "{source:?}");
             assert!(texts[8].contains(source_label(source)), "{source:?}");
-            assert!(texts[14].contains("v+x source"), "{source:?}");
+            assert!(texts[15].contains("v+x source"), "{source:?}");
         }
     }
 
@@ -1100,7 +1102,7 @@ mod tests {
         .iter()
         .map(line_text)
         .collect();
-        // Detail rows 9..13: progress/blank, chill, classical, padding.
+        // Detail rows 9..14: progress/blank, chill, classical, padding.
         assert!(texts[10].starts_with("○ chill"));
         assert!(texts[10].trim_end().ends_with("v1"));
         assert!(texts[11].starts_with("● classical"));
@@ -1117,13 +1119,15 @@ mod tests {
         .iter()
         .map(line_text)
         .collect();
-        // Detail rows 9..13: four selectors then the attribution row.
+        // Detail rows 9..14: five selectors then the attribution row.
         assert!(texts[9].starts_with("○ chillsynth"));
         assert!(texts[10].starts_with("○ nightride"));
         assert!(texts[11].starts_with("● datawave"));
         assert!(texts[11].trim_end().ends_with("v3"));
         assert!(texts[12].starts_with("○ spacesynth"));
-        assert!(texts[13].contains("nightride.fm"));
+        assert!(texts[13].starts_with("○ ambient"));
+        assert!(texts[13].trim_end().ends_with("v5"));
+        assert!(texts[14].contains("nightride.fm"));
         // The selected station also names the radio dock row.
         assert_eq!(texts[5], "datawave");
     }
@@ -1200,7 +1204,7 @@ mod tests {
 
     #[test]
     fn visible_components_cuts_from_the_top() {
-        // Order: bonsai (16), visualizer (6), music (15). With room for
+        // Order: bonsai (16), visualizer (6), music (16). With room for
         // time + visualizer + music but not bonsai, the topmost panel (bonsai)
         // is cut while the panels below it are kept.
         let components = [

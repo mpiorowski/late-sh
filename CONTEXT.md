@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-03 (Bartender drinks: @bartender charges Late Chips for drinks (AI-priced 100-1000, out-of-range refused, floor-guarded debit), per-user drunkenness in `user_drinks` decays over hours and tints username labels in the clubhouse and chat author labels — see `late-ssh/src/app/clubhouse/CONTEXT.md`. Same day: Clubhouse goes multiplayer: one process-global lobby seats every active human, first move frees your seat, everyone sees everyone walk; the embedded #lounge chat panel is replaced by speech bubbles over avatars plus a pinned composer footer; emotes, door arrival/departure ambience, shared dog petting, and a persisted first-visit tutorial ending in a scripted @bartender greeting — see the new `late-ssh/src/app/clubhouse/CONTEXT.md`. Previously: World Cup HUD viewer-timezone kick-offs; World Cup HUD as top-level screen `7`, a demand-gated FotMob live poller; dopewars door: prod infra + dedicated CI/CD — `infra/service-ssh.tf`, `.github/workflows/dopewars.yml`)
+- Last updated: 2026-07-05 (New radio station: `Ambient` (`v5`) added to the direct-client Nightride set — `RadioStation::Ambient` streams `rekt.mp3`, display label `ambient` but settings/metadata key `rekt` to match the `/meta` feed. The sidebar music stage grew one row (`MUSIC_STAGE_HEIGHT` 15→16, `MUSIC_DETAIL_HEIGHT` 5→6) to fit the 5th selector; the YouTube detail uses the extra row to show one more queued item (`MUSIC_QUEUE_HEIGHT` 2→3). See `late-ssh/src/app/audio/CONTEXT.md`. Previously: Chat moderation slow mode: `/mod slow #room @user <interval> <duration|permanent>` adds room-scoped per-user send throttles backed by `chat_slow_modes`, with private target toasts and send-path rejection banners; see `late-ssh/src/app/chat/CONTEXT.md`. Previously: Bartender drinks: @bartender charges Late Chips for drinks (AI-priced 100-1000, out-of-range refused, floor-guarded debit), per-user drunkenness in `user_drinks` decays over hours and tints username labels in the clubhouse and chat author labels — see `late-ssh/src/app/clubhouse/CONTEXT.md`. Same day: Clubhouse goes multiplayer: one process-global lobby seats every active human, first move frees your seat, everyone sees everyone walk; the embedded #lounge chat panel is replaced by speech bubbles over avatars plus a pinned composer footer; emotes, door arrival/departure ambience, shared dog petting, and a persisted first-visit tutorial ending in a scripted @bartender greeting — see the new `late-ssh/src/app/clubhouse/CONTEXT.md`. Previously: World Cup HUD viewer-timezone kick-offs; World Cup HUD as top-level screen `7`, a demand-gated FotMob live poller; dopewars door: prod infra + dedicated CI/CD — `infra/service-ssh.tf`, `.github/workflows/dopewars.yml`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -387,7 +387,7 @@ Do not route voice media through the SSH render loop.
 
 The default audio stack is local-playlist-only. Liquidsoap reads curated local `.m3u` playlists backed by files in `/music`, then streams the result through Icecast. There are no third-party live radio upstreams in `radio.liq`.
 
-Approved direct-client exception: Nightride FM gave informal approval to include Nightride/Chillsynth-style stations as an optional source, with the main requirement that late.sh show attribution for the artists playing when possible. Do **not** proxy or restream Nightride audio through Icecast/Liquidsoap. `source=radio` currently selects one of the official Chillsynth, Nightride, Datawave, or Spacesynth stream URLs in paired clients, and live artist/title metadata is consumed from `https://nightride.fm/meta` when available.
+Approved direct-client exception: Nightride FM gave informal approval to include Nightride/Chillsynth-style stations as an optional source, with the main requirement that late.sh show attribution for the artists playing when possible. Do **not** proxy or restream Nightride audio through Icecast/Liquidsoap. `source=radio` currently selects one of the official Chillsynth, Nightride, Datawave, Spacesynth, or Ambient stream URLs in paired clients, and live artist/title metadata is consumed from `https://nightride.fm/meta` when available. (Ambient is Nightride's `rekt.mp3` stream: its display label is `ambient` but its settings/metadata key is `rekt`, matching the station name in the `/meta` feed.)
 
 #### Source priority
 
@@ -622,6 +622,7 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 | ChatRoom | `chat_rooms` | `kind` IN (lounge, language, dm, topic, game), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
 | ChatMessage | `chat_messages` | `body` 1-2000 chars, nullable `reply_to_message_id` self-FK for reply jumps |
+| ChatSlowMode | `chat_slow_modes` | Room-scoped per-user send throttle. `interval_secs` 1-86400, nullable `expires_at` (`NULL` = permanent), unique `(room_id,target_user_id)`. Enforced in `ChatService::send_message`; early sends get a private slow-mode banner, not a queued send. |
 | Article | `articles` | `url` UNIQUE, `user_id` FK |
 | ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
@@ -1044,7 +1045,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `x` | Bonsai modal prune mode | Cut branch under cursor; wrong cuts cost -10 growth, all daily cuts preserve current shape |
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
-| `v` then `1`-`4` | Home | Select within the active audio source: Icecast streams chill / classical (`1`/`2`), Radio stations Chillsynth / Nightride / Datawave / Spacesynth (`1`-`4`). |
+| `v` then `1`-`5` | Home | Select within the active audio source: Icecast streams chill / classical (`1`/`2`), Radio stations Chillsynth / Nightride / Datawave / Spacesynth / Ambient (`1`-`5`). |
 | `v` then `v` | Home | Open the Music Booth (submit + queue + history votes). |
 | `b` then `1` / `2` / `3` | Home | Enter one of the top hot multiplayer rooms shown in the right rail. |
 | Home chat keys | Home | See `late-ssh/src/app/chat/CONTEXT.md`. |

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-06-21
+- Last updated: 2026-07-05
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -63,7 +63,7 @@ Core models used by chat live in `late-core/src/models/`:
 `notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_feed_read.rs`, `showcase.rs`,
 `showcase_feed_read.rs`, `work_profile.rs`, `work_feed_read.rs`, and `chat_poll.rs`.
 Chat-owned moderation commands also use `room_ban.rs`,
-`server_ban.rs`, `artboard_ban.rs`, and `moderation_audit_log.rs`.
+`chat_slow_mode.rs`, `server_ban.rs`, `artboard_ban.rs`, and `moderation_audit_log.rs`.
 
 ---
 
@@ -142,6 +142,12 @@ Messages:
 - `reply_to_message_id` is nullable and uses `ON DELETE SET NULL`.
 - `reply_to_user_id` is nullable and uses `ON DELETE SET NULL`. It records the user a bot/automated reply is responding to, used to filter such replies for viewers who ignore that user. Set only by bot sends.
 - `pinned` is a global message-level flag with a partial pinned index.
+
+Slow modes:
+- `chat_slow_modes` is a room-scoped per-user throttle, not a ban. One row per `(room_id, target_user_id)` stores `interval_secs`, nullable `expires_at` (`NULL` = permanent), actor, and reason.
+- Enforcement happens in `ChatService::send_message` after membership/room-ban checks and before insert. Admin sends bypass the throttle; moderators are not inherently exempt unless they are admins.
+- A slowed user keeps room membership. Early sends are rejected privately with a `Slow mode in #room: wait ...` banner; messages are not queued.
+- `/mod slow #room @user <interval> <duration|permanent> [reason...]` applies it, `/mod unslow #room @user [reason...]` removes it, and `/mod view slows [#room] [page]` lists active slow modes. Applying/removing slow mode uses targeted session toasts and writes moderation audit actions `room_slow` / `room_unslow`.
 
 Reactions:
 - `chat_message_reactions` primary key is `(message_id, user_id)`.
@@ -287,13 +293,15 @@ Admin commands:
 Moderation modal commands:
 - `rename-room <#oldname> <#newname>`
 - `rename-user <@oldname> <@newname>`
-- `view <@user|#room|bans|audit|artboard|help> [pagenumber]`
+- `view <@user|#room|bans|slows|audit|artboard|help> [pagenumber]`
 - `artboard curate <live|YYYY-MM-DD> [reason...]`
 - `artboard restore [YYYY-MM-DD] [reason...]`
 - `room-voice <#room> <on|off>`
 - `kick <server|voice|#room> @name [reason...]`
 - `ban <server|#room|artboard|audio> @name [duration] [reason...]`
 - `unban <server|#room|artboard|audio|voice> @name [reason...]`
+- `slow #room @name <interval> <duration|permanent> [reason...]`
+- `unslow #room @name [reason...]`
 - `admin`
 - `admin grant mod @name`
 - `admin revoke mod @name`

@@ -790,7 +790,7 @@ fn overview_lines() -> Vec<String> {
         "  v then v          open the Music Booth (submit + queue + votes)",
         "  v then x          cycle audio source: Icecast → YouTube → Radio",
         "  v then s          skip-vote the current YouTube track",
-        "  v then 1..4       select stream/station in the active source",
+        "  v then 1..5       select stream/station in the active source",
         "",
         "Home",
         "  click top bar     jump screens",
@@ -1239,7 +1239,7 @@ late.sh has three music sources:
   YouTube    a shared queue everyone can submit links to.
   Radio      direct Nightride guest stations.
 
-Your paired client plays the selected source. Use v then 1..4 to select a stream or station inside the active source.
+Your paired client plays the selected source. Use v then 1..5 to select a stream or station inside the active source.
 
 Plain stream, no pairing:
   vlc https://late.sh/stream
@@ -1254,7 +1254,7 @@ Global keys (work anywhere)
 
 Select stream or station
   Icecast active: v then 1 / 2 selects chill / classical
-  Radio active:   v then 1..4 selects Chillsynth / Nightride / Datawave / Spacesynth
+  Radio active:   v then 1..5 selects Chillsynth / Nightride / Datawave / Spacesynth / Ambient
 
 Swap which source you hear
   v then x          cycle your paired client through Icecast → YouTube → Radio. Your choice is saved per-user, so a refresh keeps it.

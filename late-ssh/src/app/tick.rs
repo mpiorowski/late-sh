@@ -153,6 +153,13 @@ impl App {
                     self.chat.clear_pending_clipboard_image_upload();
                     self.banner = Some(crate::app::common::primitives::Banner::error(&message));
                 }
+                SessionMessage::Toast { message, error } => {
+                    self.banner = Some(if error {
+                        crate::app::common::primitives::Banner::error(&message)
+                    } else {
+                        crate::app::common::primitives::Banner::success(&message)
+                    });
+                }
                 SessionMessage::Terminate { reason } => {
                     tracing::info!(reason, "session terminated by control message");
                     self.running = false;

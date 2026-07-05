@@ -82,6 +82,25 @@ impl ModerationSessionEffects {
         notified
     }
 
+    pub(crate) async fn notify_toast(&self, user_id: Uuid, message: String) -> usize {
+        let mut notified = 0;
+        for token in self.session_tokens_for_user_id(user_id) {
+            if self
+                .send(
+                    &token,
+                    SessionMessage::Toast {
+                        message: message.clone(),
+                        error: true,
+                    },
+                )
+                .await
+            {
+                notified += 1;
+            }
+        }
+        notified
+    }
+
     pub(crate) async fn terminate_user_sessions(&self, user_id: Uuid, reason: &str) -> usize {
         let mut terminated = 0;
         if let Some(irc_registry) = &self.irc_registry {

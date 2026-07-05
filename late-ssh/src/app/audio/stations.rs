@@ -41,6 +41,7 @@ fn radio_station_url(station: RadioStation) -> &'static str {
         RadioStation::Nightride => "https://stream.nightride.fm/nightride.mp3",
         RadioStation::Datawave => "https://stream.nightride.fm/datawave.mp3",
         RadioStation::Spacesynth => "https://stream.nightride.fm/spacesynth.mp3",
+        RadioStation::Ambient => "https://stream.nightride.fm/rekt.mp3",
     }
 }
 
@@ -60,6 +61,7 @@ pub fn radio_station_display_name(station: RadioStation) -> &'static str {
         RadioStation::Nightride => "nightride",
         RadioStation::Datawave => "datawave",
         RadioStation::Spacesynth => "spacesynth",
+        RadioStation::Ambient => "ambient",
     }
 }
 
@@ -77,6 +79,7 @@ pub fn radio_station_by_index(index: u8) -> Option<RadioStation> {
         2 => Some(RadioStation::Nightride),
         3 => Some(RadioStation::Datawave),
         4 => Some(RadioStation::Spacesynth),
+        5 => Some(RadioStation::Ambient),
         _ => None,
     }
 }

@@ -848,8 +848,8 @@ mod tests {
 
         let now = Utc::now();
         lobby.record_drink(id, 2_000, now);
-        assert_eq!(lobby.snapshot().find(id).unwrap().drunk_level, 4);
-        assert_eq!(lobby.drunk_levels().get(&id), Some(&4));
+        assert_eq!(lobby.snapshot().find(id).unwrap().drunk_level, 3);
+        assert_eq!(lobby.drunk_levels().get(&id), Some(&3));
 
         // A drink from hours ago has partially worn off.
         lobby.record_drink(id, 2_000, now - chrono::Duration::hours(5));

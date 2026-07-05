@@ -22,6 +22,7 @@ use late_core::{
         chat_poll::{self, ActiveChatPoll, CreateChatPoll},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
+        chat_slow_mode::ChatSlowMode,
         moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         user::User,
@@ -149,6 +150,21 @@ fn send_error_message(error: &anyhow::Error) -> String {
         "You are banned from this room.".to_string()
     } else if error.contains("admin-only") {
         "Only admins can post in #announcements.".to_string()
+    } else if let Some(rest) = error.strip_prefix("slow-mode:") {
+        let mut parts = rest.splitn(2, ':');
+        let secs = parts
+            .next()
+            .and_then(|secs| secs.parse::<u64>().ok())
+            .unwrap_or(1);
+        let room = parts
+            .next()
+            .filter(|room| !room.is_empty())
+            .map(|room| format!("#{room}"))
+            .unwrap_or_else(|| "this room".to_string());
+        format!(
+            "Slow mode in {room}: wait {} before sending again.",
+            format_cooldown(secs)
+        )
     } else if let Some(secs) = error.strip_prefix("link-cooldown:") {
         let secs = secs.parse::<u64>().unwrap_or(0);
         format!(
@@ -169,6 +185,44 @@ fn format_cooldown(secs: u64) -> String {
         format!("{minutes}m {seconds:02}s")
     } else {
         format!("{seconds}s")
+    }
+}
+
+async fn slow_mode_remaining(
+    client: &tokio_postgres::Client,
+    room_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<Duration>> {
+    let Some(slow_mode) =
+        ChatSlowMode::find_active_for_room_and_user(client, room_id, user_id).await?
+    else {
+        return Ok(None);
+    };
+
+    let Some(row) = client
+        .query_opt(
+            "SELECT created
+             FROM chat_messages
+             WHERE room_id = $1 AND user_id = $2
+             ORDER BY created DESC, id DESC
+             LIMIT 1",
+            &[&room_id, &user_id],
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    let last_sent: DateTime<Utc> = row.get("created");
+    let elapsed = Utc::now()
+        .signed_duration_since(last_sent)
+        .num_seconds()
+        .max(0);
+    let remaining = i64::from(slow_mode.interval_secs) - elapsed;
+    if remaining > 0 {
+        Ok(Some(Duration::from_secs(remaining as u64)))
+    } else {
+        Ok(None)
     }
 }
 
@@ -1868,6 +1922,14 @@ impl ChatService {
         }
         if RoomBan::is_active_for_room_and_user(&client, room_id, user_id).await? {
             anyhow::bail!("user is banned from this room");
+        }
+        if !is_admin && let Some(remaining) = slow_mode_remaining(&client, room_id, user_id).await?
+        {
+            anyhow::bail!(
+                "slow-mode:{}:{}",
+                remaining.as_secs(),
+                room_slug.as_deref().unwrap_or("")
+            );
         }
 
         // Account-age link rate limit: younger accounts can only post a link

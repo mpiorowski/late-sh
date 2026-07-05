@@ -27,6 +27,10 @@ pub enum SessionMessage {
     ClipboardImageFailed {
         message: String,
     },
+    Toast {
+        message: String,
+        error: bool,
+    },
     Terminate {
         reason: String,
     },

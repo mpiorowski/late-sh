@@ -10,7 +10,7 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
     }
 
     match byte {
-        b'1' | b'2' | b'3' | b'4' => select_active_stream(app, byte - b'0'),
+        b'1' | b'2' | b'3' | b'4' | b'5' => select_active_stream(app, byte - b'0'),
         b'v' | b'V' => {
             let submit_enabled = app.audio.booth_submit_enabled();
             app.booth_modal_state.open(submit_enabled);
