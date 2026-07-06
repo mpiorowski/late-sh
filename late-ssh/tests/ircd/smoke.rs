@@ -385,6 +385,7 @@ async fn profile_username_change_projects_to_live_irc_session() {
             show_room_list_sidebar: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            land_on_home: false,
             show_flag_fallback: false,
             favorite_room_ids: Vec::new(),
             birthday: None,

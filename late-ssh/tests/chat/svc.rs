@@ -710,6 +710,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             show_room_list_sidebar: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            land_on_home: false,
             show_flag_fallback: false,
             favorite_room_ids: vec![favorite_room.id],
             birthday: None,

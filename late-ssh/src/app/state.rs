@@ -305,6 +305,10 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
+    /// Tweak: land on Home (Dashboard, page 1) instead of the Clubhouse
+    /// (page 0) when the session starts. Ignored for brand-new users so they
+    /// still get the clubhouse first-visit tutorial.
+    pub land_on_home: bool,
 
     /// Display config
     pub initial_theme_id: String,
@@ -990,12 +994,20 @@ impl App {
             config.user_id,
         );
         settings_modal_state.open_from_profile(&initial_profile);
+        // Everyone lands in the clubhouse by default: the tavern is the front
+        // door of late.sh (and the first-visit tutorial starts there). The
+        // "Land on Home page" tweak sends returning users straight to the
+        // dashboard instead; new users always start in the clubhouse so the
+        // tutorial runs.
+        let landing_screen = if config.land_on_home && !config.is_new_user {
+            Screen::Dashboard
+        } else {
+            Screen::Clubhouse
+        };
         let mut app = Self {
             running: true,
             size: (cols, rows),
-            // Everyone lands in the clubhouse: the tavern is the front door
-            // of late.sh (and the first-visit tutorial starts there).
-            screen: Screen::Clubhouse,
+            screen: landing_screen,
             banner: None,
             show_settings: false,
             show_splash: true,
@@ -1222,8 +1234,13 @@ impl App {
             app.enter_dartboard();
         }
         // The landing screen skips `set_screen`, so run its entry hook by
-        // hand: immediate crowd refresh plus the first-visit tutorial.
-        app.clubhouse.enter_screen();
+        // hand. Clubhouse: immediate crowd refresh plus the first-visit
+        // tutorial. Dashboard: refresh the room list (sync_selection runs just
+        // below for both).
+        match landing_screen {
+            Screen::Dashboard => app.chat.request_list(),
+            _ => app.clubhouse.enter_screen(),
+        }
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
         app.chat.sync_selection();

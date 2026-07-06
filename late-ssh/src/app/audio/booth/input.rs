@@ -8,8 +8,16 @@ use super::state::BoothFocus;
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let snapshot = app.audio.queue_snapshot();
     let queue_len = snapshot.queue.len();
-    let history_len = snapshot.history.len();
+    let history_len = app.booth_modal_state.filtered_history_len(&snapshot.history);
     app.booth_modal_state.clamp(queue_len, history_len);
+
+    // While the History `/` filter is capturing, it owns every key (including
+    // Esc and Tab, which cancel the filter rather than close the booth).
+    if app.booth_modal_state.history_filter_active() {
+        handle_history_filter_input(app, event);
+        reclamp(app);
+        return;
+    }
 
     match event {
         ParsedInput::Byte(0x1B) => {
@@ -30,9 +38,44 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         BoothFocus::History => handle_history_input(app, event, history_len),
     }
 
-    let queue_len = app.audio.queue_snapshot().queue.len();
-    let history_len = app.audio.queue_snapshot().history.len();
+    reclamp(app);
+}
+
+fn reclamp(app: &mut App) {
+    let snapshot = app.audio.queue_snapshot();
+    let queue_len = snapshot.queue.len();
+    let history_len = app.booth_modal_state.filtered_history_len(&snapshot.history);
     app.booth_modal_state.clamp(queue_len, history_len);
+}
+
+fn handle_history_filter_input(app: &mut App, event: ParsedInput) {
+    match event {
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {
+            app.booth_modal_state.apply_history_filter();
+        }
+        ParsedInput::Byte(0x1B) => {
+            app.booth_modal_state.cancel_history_filter();
+        }
+        ParsedInput::Byte(0x7F) | ParsedInput::Byte(0x08) => {
+            app.booth_modal_state.backspace_history_filter();
+        }
+        // Ctrl+W clears the whole query.
+        ParsedInput::Byte(0x17) => {
+            app.booth_modal_state.clear_history_filter_query();
+        }
+        ParsedInput::Paste(bytes) => {
+            let raw = String::from_utf8_lossy(&bytes);
+            let cleaned = sanitize_paste_markers(&raw);
+            for ch in cleaned.chars() {
+                app.booth_modal_state.push_history_filter(ch);
+            }
+        }
+        ParsedInput::Char(ch) => app.booth_modal_state.push_history_filter(ch),
+        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
+            app.booth_modal_state.push_history_filter(byte as char);
+        }
+        _ => {}
+    }
 }
 
 fn handle_submit_input(app: &mut App, event: ParsedInput) {
@@ -119,6 +162,9 @@ fn handle_history_input(app: &mut App, event: ParsedInput, history_len: usize) {
         ParsedInput::Char('0') => clear_selected_history_vote(app),
         ParsedInput::Byte(b'\r') => requeue_selected_history(app),
         ParsedInput::Char('d') | ParsedInput::Char('D') => delete_selected_history(app),
+        ParsedInput::Char('/') | ParsedInput::Char('?') => {
+            app.booth_modal_state.enter_history_filter();
+        }
         ParsedInput::Char(']') | ParsedInput::Char('[') => {
             app.booth_modal_state.set_focus(BoothFocus::Queue);
         }

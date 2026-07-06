@@ -683,6 +683,9 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Display subsection heading
         Constraint::Length(1),                // flag fallback row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Startup subsection heading
+        Constraint::Length(1),                // land on home row
         Constraint::Min(0),                   // flex spacer
         Constraint::Length(gem_strip_height), // gem
     ])
@@ -778,12 +781,24 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[14],
     );
 
+    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[16]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::LandOnHome,
+            width,
+            "Land on Home page",
+            toggle_span(state.draft().land_on_home),
+        )),
+        sections[17],
+    );
+
     if gem_strip_height > 0 {
         // Pad 2 cols off each side and lift the gem 1 row off the bottom
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[16];
+        let strip = sections[19];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(

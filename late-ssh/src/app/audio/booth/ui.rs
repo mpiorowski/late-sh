@@ -289,20 +289,53 @@ fn draw_history(
         return;
     }
 
+    let focused = state.focus() == BoothFocus::History;
+    // Show the filter bar while editing or whenever a query is set.
+    let show_filter_bar =
+        focused && (state.history_filter_active() || state.history_filter_engaged());
+
+    let list_area = if show_filter_bar && area.height > 1 {
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+        frame.render_widget(
+            Paragraph::new(history_filter_bar_line(
+                state.history_filter_query(),
+                state.history_filter_active(),
+            )),
+            rows[0],
+        );
+        rows[1]
+    } else {
+        area
+    };
+
+    let filtered = state.filtered_history(history);
+    if filtered.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("   "),
+                Span::styled(
+                    "no history matches your filter",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ])),
+            list_area,
+        );
+        return;
+    }
+
     let selected = state
         .selected_history()
-        .min(history.len().saturating_sub(1));
-    let focused = state.focus() == BoothFocus::History;
-    let height = area.height as usize;
+        .min(filtered.len().saturating_sub(1));
+    let height = list_area.height as usize;
     if height == 0 {
         return;
     }
-    let width = area.width as usize;
+    let width = list_area.width as usize;
     let start = selected
         .saturating_sub(height.saturating_sub(1))
-        .min(history.len().saturating_sub(height.min(history.len())));
+        .min(filtered.len().saturating_sub(height.min(filtered.len())));
 
-    let lines: Vec<Line<'static>> = history
+    let lines: Vec<Line<'static>> = filtered
         .iter()
         .enumerate()
         .skip(start)
@@ -314,7 +347,33 @@ fn draw_history(
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines), list_area);
+}
+
+/// The `/`-search input row shown above the History list. Mirrors the rooms
+/// filter bar: shows a caret while editing, otherwise the active query.
+fn history_filter_bar_line(query: &str, active: bool) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        " / ",
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )];
+    spans.push(Span::styled(
+        query.to_string(),
+        Style::default().fg(theme::TEXT_BRIGHT()),
+    ));
+    if active {
+        spans.push(Span::styled(
+            "█",
+            Style::default().fg(theme::AMBER_GLOW()),
+        ));
+        spans.push(Span::styled(
+            "  Enter apply · Esc clear",
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static> {
@@ -593,6 +652,11 @@ fn draw_footer(
         spans.push(Span::styled("↵", Style::default().fg(theme::AMBER_DIM())));
         spans.push(Span::styled(
             " queue  ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::styled("/", Style::default().fg(theme::AMBER_DIM())));
+        spans.push(Span::styled(
+            " filter  ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
         if is_staff {
