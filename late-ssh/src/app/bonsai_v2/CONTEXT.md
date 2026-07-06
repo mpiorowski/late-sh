@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/bonsai_v2`
-- Last updated: 2026-06-17
+- Last updated: 2026-07-06 (documented the `MAX_BRANCHES = 96` branch-graph cap in section 4: every branch-adding call site enforces it independently, growth silently stops at the cap rather than erroring, and the chat badge score is implicitly bounded by it too. Player-facing note added to the `?` help guide's "How a growth wave works" section as well.)
 - Purpose: local working context for the Dynamic Bonsai branch-graph system.
 - Status: Active prototype, unlocked and selected through the `dynamic_bonsai` shop item.
 - Parent context: `../../../../CONTEXT.md`
@@ -145,6 +145,8 @@ Statuses:
 Important concept: user actions should affect future geometry, not only the current frame. Wiring sets bend memory. Cutting removes the selected branch and descendants. Pinching marks the selected tip as compact growth; it must be pinched three times over separate growth moments to become a leaf pad, and pinched branches do not keep extending. Splitting marks the selected tip for the next growth wave; it forks only if both target cells are open.
 
 Branches are stored as one-cell growth segments. Growth adds a new child segment instead of extending the selected branch endpoint, so selecting/cutting a branch id targets that exact segment and descendants downstream from it.
+
+Branch cap: `MAX_BRANCHES = 96` (`state.rs`). Every branch-adding path checks it independently, defense-in-depth rather than one gate: `BonsaiGraph::add_branch` refuses once `branches.len() >= MAX_BRANCHES`; `grow_graph_once` and `grow_tip_once` re-check before spending a growth-wave slot; the side-shoot spawn in `grow_tip_once` checks again before adding its extra branch; `split_tip_once` checks `+2 > MAX_BRANCHES` since a split needs two new branches; the graph-normalize/migration path checks it while rebuilding a loaded graph. At the cap, growth silently stops producing new segments (no error, no death) — steering, pinching, cutting, and splitting existing branches still work. The chat badge score is presence-derived from the graph (branch length plus leaf-pad weight, see section 7), so it is implicitly bounded by this same cap rather than having a ceiling of its own.
 
 ---
 
