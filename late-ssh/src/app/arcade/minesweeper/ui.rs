@@ -7,7 +7,8 @@ use ratatui::{
 };
 
 use crate::app::arcade::ui::{
-    GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
+    GameBottomBar, OverlayAnchor, centered_rect, draw_game_frame, draw_game_overlay,
+    draw_game_overlay_anchored, keys_line, status_line,
     tip_line,
 };
 
@@ -98,12 +99,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 Mode::Daily => "Change diff via [ ]",
                 Mode::Personal => "n for new",
             };
-            draw_game_overlay(
+            draw_game_overlay_anchored(
                 frame,
                 board_area,
                 "FIELD CLEARED!",
                 subtext,
                 theme::SUCCESS(),
+                OverlayAnchor::Top,
             );
         } else {
             let subtext = match state.mode {

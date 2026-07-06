@@ -1585,8 +1585,10 @@ fn draw_image_modal(
         return;
     }
 
-    let max_popup_width = anchor.width.saturating_sub(4).clamp(12, 132);
-    let max_popup_height = anchor.height.saturating_sub(2).max(5);
+    // Maximize the preview: fill almost the whole chat pane (small margin for
+    // the border) instead of the old 132-col cap, which left big images tiny.
+    let max_popup_width = anchor.width.saturating_sub(2).max(12);
+    let max_popup_height = anchor.height.saturating_sub(1).max(5);
     let modal_bg = Style::default().bg(theme::BG_CANVAS());
 
     // Report the modal's image capacity so the next Sixel fetch encodes to a

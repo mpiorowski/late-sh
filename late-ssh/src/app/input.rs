@@ -685,6 +685,16 @@ fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
                 ));
             }
         }
+        // A left click dismisses the preview so you don't have to reach for a
+        // key. Only on the press (not release/drag) so the click that opened
+        // the modal doesn't immediately close it.
+        ParsedInput::Mouse(MouseEvent {
+            kind: MouseEventKind::Down,
+            button: Some(MouseButton::Left),
+            ..
+        }) => {
+            close_image_modal(app);
+        }
         _ => {}
     }
 }
@@ -3603,6 +3613,22 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !app.chat.room_jump_active =>
         {
             app.room_section_prefix_armed = true;
+            true
+        }
+        b'\\' if ctx.screen == Screen::Dashboard
+            && !ctx.chat_composing
+            && !ctx.feeds_processing
+            && !ctx.news_composing
+            && !ctx.showcase_composing
+            && !ctx.work_composing =>
+        {
+            let label = match app.profile_state.cycle_sidebars() {
+                (true, true) => "Sidebars: both shown",
+                (false, true) => "Sidebars: room list hidden",
+                (true, false) => "Sidebars: info panel hidden",
+                (false, false) => "Sidebars: both hidden",
+            };
+            app.banner = Some(crate::app::common::primitives::Banner::success(label));
             true
         }
         b'w' | b'W'

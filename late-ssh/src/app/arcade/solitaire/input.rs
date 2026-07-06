@@ -42,6 +42,12 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             }
             true
         }
+        b'g' | b'G' => {
+            if state.request_reset(ResetKind::Reroll) {
+                state.reroll();
+            }
+            true
+        }
         b'a' | b'A' => state.auto_move(),
         b'f' | b'F' => state.auto_foundation_all(),
         b'u' | b'U' => state.undo(),

@@ -319,6 +319,20 @@ impl State {
         }
     }
 
+    /// Take the nearest free seat within reach, standing back up on the next
+    /// step. Mirrors our own cell to the seat so the camera follows. Returns
+    /// true when we sat (no lobby, or no seat close by, is a no-op).
+    pub fn sit(&mut self) -> bool {
+        if let Some(lobby) = &self.lobby
+            && let Some((x, y)) = lobby.sit(self.user_id, &self.username)
+        {
+            self.player_x = x;
+            self.player_y = y;
+            return true;
+        }
+        false
+    }
+
     pub fn emote(&self, emote: Emote) {
         if let Some(lobby) = &self.lobby {
             lobby.emote(self.user_id, emote);

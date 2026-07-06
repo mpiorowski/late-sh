@@ -52,6 +52,10 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                 app.clubhouse.emote(Emote::Dance);
                 return true;
             }
+            b's' | b'S' => {
+                app.clubhouse.sit();
+                return true;
+            }
             b't' | b'T' if app.clubhouse.nearby() == Some(Interactive::Bartender) => {
                 if let Some(lounge_id) = app.chat.lounge_room_id() {
                     app.chat.insert_mention_in_room(lounge_id, "bartender");

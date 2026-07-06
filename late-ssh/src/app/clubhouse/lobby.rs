@@ -34,6 +34,8 @@ const DOG_STEP_MS: u128 = 600;
 const DOG_NAP_SECS: (u64, u64) = (6, 20);
 /// A walker this close (Chebyshev) makes the dog hold still to be petted.
 const DOG_FRIEND_RANGE: u16 = 2;
+/// How close (Chebyshev) a walker must be to a free seat to sit in it with `s`.
+const SIT_REACH: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Emote {
@@ -320,6 +322,34 @@ impl SharedLobby {
             },
         );
         (x, y)
+    }
+
+    /// Try to sit this walker in the nearest free seat within reach of their
+    /// current cell (the inverse of `walk`: they leave the walker set and
+    /// park on the seat, so it reads as taken and newcomers skip it). Returns
+    /// the seat cell on success, or `None` if they are not walking or no free
+    /// seat is close enough. A seat a walker is standing on counts (distance
+    /// 0), so `s` reads as "sit down right here".
+    pub fn sit(&self, user_id: Uuid, username: &str) -> Option<(u16, u16)> {
+        let mut inner = self.inner.lock_recover();
+        let (wx, wy) = inner.walkers.get(&user_id).map(|w| (w.x, w.y))?;
+        let (_, seat) = (0..map::SEATS.len())
+            .filter(|&i| !inner.spot_taken(Spot::Seat(i)))
+            .map(|i| {
+                let s = &map::SEATS[i];
+                (s.x.abs_diff(wx).max(s.y.abs_diff(wy)), i)
+            })
+            .filter(|&(dist, _)| dist <= SIT_REACH)
+            .min_by_key(|&(dist, i)| (dist, i))?;
+        inner.walkers.remove(&user_id);
+        inner.parked.insert(
+            user_id,
+            Parked {
+                username: username.to_string(),
+                spot: Spot::Seat(seat),
+            },
+        );
+        Some(Spot::Seat(seat).position())
     }
 
     /// Drop this user at an exact cell as a walker (tutorial door spawn).
@@ -692,6 +722,69 @@ mod tests {
         ));
         assert!(matches!(
             snap.find(id2).unwrap().placement,
+            Placement::Seated(_)
+        ));
+    }
+
+    #[test]
+    fn sit_claims_a_nearby_seat_and_reserves_it() {
+        let lobby = SharedLobby::with_seed(7);
+        let (id, name) = user(1);
+        // Stand right on a known bar stool, then sit.
+        let seat = map::SEATS[0];
+        lobby.place(id, &name, seat.x, seat.y);
+        let sat = lobby.sit(id, &name).expect("a seat was in reach");
+        assert_eq!(sat, (seat.x, seat.y));
+        assert!(matches!(
+            lobby.snapshot().find(id).unwrap().placement,
+            Placement::Seated(0)
+        ));
+
+        // A newcomer must not be auto-assigned the seat we just took.
+        let (id2, name2) = user(2);
+        lobby.sync(&[(id, name.clone()), (id2, name2)]);
+        let snap = lobby.snapshot();
+        let mine = snap.find(id).unwrap().placement.position();
+        let theirs = snap.find(id2).unwrap().placement.position();
+        assert_ne!(mine, theirs, "a newcomer landed on our reserved seat");
+    }
+
+    #[test]
+    fn sit_needs_a_walker_near_a_free_seat() {
+        let lobby = SharedLobby::with_seed(7);
+        let (id, name) = user(1);
+        // Not a walker at all: nothing to seat.
+        assert!(lobby.sit(id, &name).is_none());
+
+        // A walker out on the open floor, far from any stool.
+        lobby.place(id, &name, map::SPAWN.0, map::SPAWN.1);
+        assert!(
+            lobby.sit(id, &name).is_none(),
+            "sat despite no seat in reach"
+        );
+        assert!(matches!(
+            lobby.snapshot().find(id).unwrap().placement,
+            Placement::Walking(..)
+        ));
+    }
+
+    #[test]
+    fn a_step_stands_a_seated_user_back_up() {
+        let lobby = SharedLobby::with_seed(7);
+        let (id, name) = user(1);
+        let seat = map::SEATS[0];
+        lobby.place(id, &name, seat.x, seat.y);
+        lobby.sit(id, &name).unwrap();
+        lobby.walk(id, &name, 0, 1);
+        assert!(matches!(
+            lobby.snapshot().find(id).unwrap().placement,
+            Placement::Walking(..)
+        ));
+        // The vacated seat is free for a newcomer again.
+        let (id2, name2) = user(2);
+        lobby.sync(&[(id, name), (id2, name2)]);
+        assert!(matches!(
+            lobby.snapshot().find(id2).unwrap().placement,
             Placement::Seated(_)
         ));
     }

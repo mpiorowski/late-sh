@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::app::common::theme;
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
+use late_core::models::drinks::DRUNK_MAX_LEVEL;
 
 use super::lobby::{Emote, Placement};
 use super::map;
@@ -549,6 +550,24 @@ fn draw_figure(cells: &mut Cells, x: u16, y: u16, head: char, style: Style) {
     }
 }
 
+/// A patron knocked out cold on the floor: an X-eyed head sprawled between
+/// limp arms, with a little sleepy `z` drifting up. Drawn in place of the
+/// upright stick figure once someone hits the top drunk level.
+fn draw_passed_out(cells: &mut Cells, x: u16, y: u16, style: Style) {
+    set(cells, x.saturating_sub(1), y, '_', style);
+    set(cells, x, y, 'x', style);
+    set(cells, x + 1, y, '_', style);
+    if y >= 1 {
+        set(cells, x, y - 1, 'z', Style::default().fg(theme::TEXT_MUTED()));
+    }
+}
+
+/// True once a patron is at the top drunk bucket ("wasted") and should be
+/// shown slumped/passed out rather than upright.
+fn is_passed_out(drunk_level: u8) -> bool {
+    drunk_level >= DRUNK_MAX_LEVEL
+}
+
 /// Where an occupant's head goes for a seat: perched above a stool, sunk
 /// into an armchair.
 fn seat_head_y(seat: &map::Seat) -> u16 {
@@ -601,10 +620,22 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> BubbleAnchors {
         if let Some(bg) = theme::DRUNK_LABEL_BG(who.drunk_level) {
             label_style = label_style.bg(bg);
         }
-        let anchor = draw_presence(cells, who.placement, 'o', style, &who.username, label_style);
+        let passed_out = is_passed_out(who.drunk_level);
+        let anchor = draw_presence(
+            cells,
+            who.placement,
+            'o',
+            style,
+            &who.username,
+            label_style,
+            passed_out,
+        );
         anchors.insert(who.user_id, anchor);
-        if let Some(emote) = who.emote {
-            draw_emote(cells, who.placement, emote, state.anim_tick, style);
+        // A passed-out patron can't wave or dance.
+        if !passed_out {
+            if let Some(emote) = who.emote {
+                draw_emote(cells, who.placement, emote, state.anim_tick, style);
+            }
         }
     }
 
@@ -637,6 +668,10 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> BubbleAnchors {
         .find(own_id)
         .map(|p| p.placement)
         .unwrap_or(Placement::Walking(state.player_x, state.player_y));
+    let own_passed_out = state
+        .snapshot
+        .find(own_id)
+        .is_some_and(|p| is_passed_out(p.drunk_level));
     let anchor = draw_presence(
         cells,
         own_placement,
@@ -644,10 +679,13 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> BubbleAnchors {
         own_style,
         view.own_username,
         own_label_style,
+        own_passed_out,
     );
     anchors.insert(own_id, anchor);
-    if let Some(emote) = state.snapshot.find(own_id).and_then(|p| p.emote) {
-        draw_emote(cells, own_placement, emote, state.anim_tick, own_style);
+    if !own_passed_out {
+        if let Some(emote) = state.snapshot.find(own_id).and_then(|p| p.emote) {
+            draw_emote(cells, own_placement, emote, state.anim_tick, own_style);
+        }
     }
 
     anchors
@@ -662,12 +700,15 @@ fn draw_presence(
     style: Style,
     username: &str,
     label_style: Style,
+    passed_out: bool,
 ) -> (u16, u16) {
     match placement {
         Placement::Seated(i) => {
             let seat = &map::SEATS[i.min(map::SEATS.len() - 1)];
             let head_y = seat_head_y(seat);
-            set(cells, seat.x, head_y, head, style);
+            // Slumped in the seat: X-eyed head in place of the usual glyph.
+            let seat_head = if passed_out { 'x' } else { head };
+            set(cells, seat.x, head_y, seat_head, style);
             let label_y = if seat.label_below {
                 seat.y + 2
             } else {
@@ -688,7 +729,11 @@ fn draw_presence(
         }
         Placement::Standing(_) | Placement::Door(_) | Placement::Walking(..) => {
             let (x, y) = placement.position();
-            draw_figure(cells, x, y, head, style);
+            if passed_out {
+                draw_passed_out(cells, x, y, style);
+            } else {
+                draw_figure(cells, x, y, head, style);
+            }
             let label_y = y.saturating_sub(3).max(1);
             put_label(cells, x, label_y, &truncate_name(username), label_style);
             (x, label_y.saturating_sub(1))
