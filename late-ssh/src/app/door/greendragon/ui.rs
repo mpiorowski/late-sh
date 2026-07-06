@@ -374,6 +374,58 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // The warrior list and the Hall of Fame: a heading, a column header,
+    // the built rows, and any footer lines (fuzz note, your percentile).
+    if matches!(state.mode(), Mode::WarriorList | Mode::HallOfFame) {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        let page = match state.mode() {
+            Mode::WarriorList => state.warrior_page(),
+            _ => state.hall_of_fame_page(),
+        };
+        lines.push(Line::raw(""));
+        match page {
+            None => lines.push(Line::from(Span::styled(
+                "The herald thumbs through his ledger...",
+                dim,
+            ))),
+            Some(page) => {
+                lines.push(Line::from(Span::styled(
+                    page.heading.clone(),
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                )));
+                if let Some(header) = &page.header {
+                    lines.push(Line::from(Span::styled(header.clone(), dim)));
+                }
+                if page.rows.is_empty() {
+                    lines.push(Line::from(Span::styled("No one at all.", dim)));
+                }
+                for row in &page.rows {
+                    // Your own Hall of Fame row is marked with a star.
+                    let style = if row.starts_with('*') {
+                        Style::default().fg(theme::AMBER())
+                    } else {
+                        Style::default().fg(theme::TEXT())
+                    };
+                    lines.push(Line::from(Span::styled(row.clone(), style)));
+                }
+                for foot in &page.foot {
+                    lines.push(Line::from(Span::styled(foot.clone(), dim)));
+                }
+            }
+        }
+        if state.mode() == Mode::WarriorList
+            && let Some(input) = state.talk_line()
+        {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("whose name? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
     if state.mode() == Mode::ChooseStyle {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
@@ -429,7 +481,10 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
 
     lines.push(Line::raw(""));
     let hint = if state.is_typing() {
-        "type your line   Enter say it   Esc think better of it"
+        match state.mode() {
+            Mode::WarriorList => "type a name   Enter ask around   Esc never mind",
+            _ => "type your line   Enter say it   Esc think better of it",
+        }
     } else {
         controls_hint(state.mode())
     };
@@ -508,6 +563,8 @@ fn panel_title(mode: Mode) -> &'static str {
             CommentRoom::ShadeGypsy => "A Deep Trance",
             CommentRoom::ShadeGrave => "The Lost Souls",
         },
+        Mode::WarriorList => "The Warriors of the Realm",
+        Mode::HallOfFame => "The Hall of Fame",
     }
 }
 

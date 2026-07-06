@@ -198,6 +198,21 @@ pub struct Character {
     pub seen_master_today: bool,
     /// Lifetime dragon kills.
     pub dragon_kills: u32,
+    /// Days into the current run (upstream `age`, "days since level 1"): +1
+    /// at every new day — the paid resurrection's included — and reset to 0
+    /// by a dragon kill (`age` is absent from `dragon.php`'s preserve list).
+    pub age: u32,
+    /// How many days the *last completed* run took: a snapshot of [`age`]
+    /// stamped at each dragon kill (upstream `dragonage`, the Hall of Fame's
+    /// "Days" column). 0 until the first kill ("Unknown" upstream).
+    pub dragon_age: u32,
+    /// The fastest run to a kill so far: the minimum nonzero [`dragon_age`]
+    /// (upstream `bestdragonage`, the "Dragon Kill Speed" ranking).
+    pub best_dragon_age: u32,
+    /// Revivals since the last dragon kill: +1 whenever a dead character
+    /// greets a new day (dawn or paid), reset to 0 by a dragon kill —
+    /// upstream `resurrections` is outside `dragon.php`'s preserve list too.
+    pub resurrections: u32,
     /// Permanent max-HP bought with `hp` dragon points (+5 each).
     pub dragon_hp_bonus: u32,
     /// Permanent attack bought with `at` dragon points (+1 each).
@@ -291,6 +306,11 @@ pub struct Character {
     pub fivesix_plays_today: u32,
     /// UTC day-number of the last new-day reset, for turn/heal regeneration.
     pub last_day: i64,
+    /// Presence flag mirroring upstream's `loggedin`: stamped true when the
+    /// door opens (and by every in-play save), cleared by the leave save. A
+    /// crashed session leaves it stale — the roster ANDs it with a 15-minute
+    /// activity window, exactly as upstream pairs `loggedin` with `laston`.
+    pub online: bool,
 }
 
 /// A buff that persists on the character between fights (a drink's buzz, the
@@ -641,6 +661,10 @@ impl Default for Character {
             seen_dragon: false,
             seen_master_today: false,
             dragon_kills: 0,
+            age: 0,
+            dragon_age: 0,
+            best_dragon_age: 0,
+            resurrections: 0,
             dragon_hp_bonus: 0,
             dragon_attack_bonus: 0,
             dragon_defense_bonus: 0,
@@ -675,6 +699,7 @@ impl Default for Character {
             used_outhouse_today: false,
             fivesix_plays_today: 0,
             last_day: 0,
+            online: false,
         }
     }
 }
@@ -685,6 +710,10 @@ impl Character {
         Character {
             name: name.into(),
             last_day: today,
+            // Upstream rolls a fresh account's first new day at first login
+            // ("It is day number 1"); we skip that roll (`last_day` is
+            // today), so the run age is seeded directly.
+            age: 1,
             ..Character::default()
         }
     }
@@ -787,6 +816,11 @@ impl Character {
             return None;
         }
         self.favor -= RESURRECTION_FAVOR_COST;
+        // The paid resurrection is an extra new day: the run ages a day and
+        // the revival is counted, same as the passive dawn (`newday.php`
+        // increments both regardless of the `resurrection` flag).
+        self.age += 1;
+        self.resurrections += 1;
         self.apply_new_day_interest(interest_percent);
         // The race's `newday` hook fires on the resurrection day too
         // (`newday.php` runs `modulehook("newday")` regardless of the flag),
@@ -1231,6 +1265,15 @@ impl Character {
     /// specialty skill/uses restart at zero.
     pub fn slay_dragon(&mut self, flawless: bool) {
         self.dragon_kills = self.dragon_kills.saturating_add(1);
+        // The run's day count is stamped for the Hall of Fame (`dragon.php`:
+        // `dragonage = age`, `bestdragonage` keeps the fastest), then the
+        // counters outside the preserve list reset with the run.
+        self.dragon_age = self.age;
+        if self.dragon_age < self.best_dragon_age || self.best_dragon_age == 0 {
+            self.best_dragon_age = self.dragon_age;
+        }
+        self.age = 0;
+        self.resurrections = 0;
         self.dragon_points_unspent = self.dragon_points_unspent.saturating_add(1);
         self.charm = self.charm.saturating_add(CHARM_PER_DRAGON_KILL);
         let restart_gems = self.dragon_kills.saturating_sub(7).min(MAX_RESTART_GEMS);
@@ -1284,6 +1327,13 @@ impl Character {
             return None;
         }
         self.last_day = today;
+        // The run grows a day older, and a dead character greeting the dawn
+        // counts a revival (`newday.php`: `age++` unconditionally,
+        // `resurrections++` while not alive).
+        self.age += 1;
+        if !self.alive {
+            self.resurrections += 1;
+        }
         // Interest is settled before turns refill, so it can read how many of
         // yesterday's turns went unused (LoGD's "work for it" gate).
         self.apply_new_day_interest(interest_percent);
@@ -2346,5 +2396,62 @@ mod tests {
         assert_eq!(ForestHunt::Thrillseeking.creature_level(5), 6);
         assert_eq!(ForestHunt::Slumming.creature_level(1), 1); // clamps
         assert_eq!(ForestHunt::Thrillseeking.creature_level(15), 16); // clamps
+    }
+
+    #[test]
+    fn the_run_ages_a_day_at_every_dawn() {
+        // A fresh character starts on day 1 (upstream rolls the first new day
+        // at first login); each dawn adds one, an already-rolled day doesn't.
+        let mut c = Character::new("hero", 10);
+        assert_eq!(c.age, 1);
+        c.roll_new_day(11, 0, 0, &mut rand::thread_rng());
+        assert_eq!(c.age, 2);
+        c.roll_new_day(11, 0, 0, &mut rand::thread_rng());
+        assert_eq!(c.age, 2);
+    }
+
+    #[test]
+    fn a_dead_dawn_counts_a_resurrection() {
+        let mut c = Character::new("hero", 10);
+        c.alive = false;
+        c.roll_new_day(11, 0, 0, &mut rand::thread_rng());
+        assert!(c.alive);
+        assert_eq!(c.resurrections, 1);
+        // A living dawn doesn't.
+        c.roll_new_day(12, 0, 0, &mut rand::thread_rng());
+        assert_eq!(c.resurrections, 1);
+    }
+
+    #[test]
+    fn the_paid_resurrection_ages_the_run_and_counts_itself() {
+        let mut c = Character::new("hero", 10);
+        c.alive = false;
+        c.favor = RESURRECTION_FAVOR_COST;
+        assert!(c.resurrect(0, &mut rand::thread_rng()).is_some());
+        assert_eq!(c.age, 2);
+        assert_eq!(c.resurrections, 1);
+    }
+
+    #[test]
+    fn a_dragon_kill_stamps_the_run_age_and_resets_the_counters() {
+        let mut c = Character::new("hero", 0);
+        c.level = 15;
+        c.age = 9;
+        c.resurrections = 3;
+        c.slay_dragon(false);
+        assert_eq!(c.dragon_age, 9);
+        assert_eq!(c.best_dragon_age, 9);
+        assert_eq!(c.age, 0);
+        assert_eq!(c.resurrections, 0);
+
+        // A slower next run doesn't beat the record; a faster one does.
+        c.age = 14;
+        c.slay_dragon(false);
+        assert_eq!(c.dragon_age, 14);
+        assert_eq!(c.best_dragon_age, 9);
+        c.age = 4;
+        c.slay_dragon(false);
+        assert_eq!(c.dragon_age, 4);
+        assert_eq!(c.best_dragon_age, 4);
     }
 }

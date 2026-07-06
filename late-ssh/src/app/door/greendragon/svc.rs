@@ -80,6 +80,52 @@ pub enum FiveSixLoad {
 /// a single generous cap stands in for the pager.
 const NEWS_PAGE_LIMIT: i64 = 200;
 
+/// How recently a character must have been saved to count as online
+/// (upstream `LOGINTIMEOUT`, 900 seconds), ANDed with the blob's presence
+/// flag exactly as upstream pairs `laston` with `loggedin`.
+pub const ONLINE_WINDOW_SECS: i64 = 900;
+
+/// One character as the warrior roster / Hall of Fame reads it: the ranked
+/// stats decoded out of the saved blob, plus the presence signals. The
+/// session's own character appears too, as its last-saved snapshot.
+#[derive(Clone, Debug)]
+pub struct RosterEntry {
+    pub user_id: Uuid,
+    /// The titled display name (upstream `accounts.name` carries the DK
+    /// title); the name search runs over this, so titles match too.
+    pub name: String,
+    /// The bare character name (upstream `login`), the list's final sort key.
+    pub handle: String,
+    pub level: u8,
+    pub alive: bool,
+    pub race: &'static str,
+    pub dragon_kills: u32,
+    pub dragon_age: u32,
+    pub best_dragon_age: u32,
+    pub resurrections: u32,
+    pub gems: u64,
+    pub charm: u32,
+    pub max_hp: u32,
+    pub experience: u64,
+    /// Purse plus bank, signed (a live loan drags it down) — the richest
+    /// ranking's raw total, fuzzed ±5% at render time.
+    pub wealth: i64,
+    /// In the door right now: the blob's presence flag ANDed with the
+    /// 15-minute save-activity window.
+    pub online: bool,
+    /// Seconds since the last save (the warrior list's "last seen" column).
+    pub idle_secs: i64,
+}
+
+/// The async result of loading the full character roster.
+#[derive(Clone)]
+pub enum RosterLoad {
+    Loading,
+    /// Every saved character, unordered; the views sort. Empty also covers a
+    /// failed read (the list shrugs, like the news page).
+    Ready(Arc<Vec<RosterEntry>>),
+}
+
 #[derive(Clone)]
 pub struct GreenDragonService {
     inner: Arc<Inner>,
@@ -237,14 +283,19 @@ impl GreenDragonService {
                 let spirits = rng.gen_range(-1..=1) + rng.gen_range(-1..=1);
                 character.roll_new_day(day, interest, spirits, &mut rng)
             };
-            // Persist the rollover immediately: otherwise an instant disconnect
-            // drops the spent turns/interest, letting a player reconnect to
-            // re-roll a favorable interest rate or dodge the resurrection cost.
+            // Entering the door marks the character present (upstream's
+            // `loggedin`); every in-play save re-stamps it and the leave save
+            // clears it, so the roster's 15-minute window reads true presence.
+            character.online = true;
+            // Persist immediately: the presence stamp should land even if the
+            // player just looks around, and a rolled new day must not be lost
+            // to an instant disconnect (a reconnect could otherwise re-roll a
+            // favorable interest rate or dodge the resurrection cost).
+            let seq = inner.next_seq();
+            let gate = inner.gate(user_id);
+            let blob = persist::to_json(&character);
+            tokio::spawn(commit_save(inner.db.clone(), gate, seq, user_id, blob));
             if let Some(fx) = rolled {
-                let seq = inner.next_seq();
-                let gate = inner.gate(user_id);
-                let blob = persist::to_json(&character);
-                tokio::spawn(commit_save(inner.db.clone(), gate, seq, user_id, blob));
                 // A dawn divorce makes the paper (`lovers.php`'s addnews).
                 if fx.divorced {
                     let body = format!(
@@ -405,6 +456,61 @@ impl GreenDragonService {
                 lines: Arc::new(lines),
                 double_post,
             });
+        });
+        rx
+    }
+
+    /// Load every saved character for the warrior list and Hall of Fame
+    /// (`list.php` / `hof.php` read the whole accounts table; ours decodes
+    /// the blobs and lets the views sort). Corrupt/empty blobs are skipped.
+    pub fn load_roster(&self) -> watch::Receiver<RosterLoad> {
+        let (tx, rx) = watch::channel(RosterLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let rows = match inner.db.get().await {
+                Ok(client) => match GreenDragonCharacter::load_all(&client).await {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tracing::warn!("greendragon roster read failed: {e}");
+                        Vec::new()
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("greendragon db get failed on roster read: {e}");
+                    Vec::new()
+                }
+            };
+            let now = Utc::now();
+            let entries: Vec<RosterEntry> = rows
+                .into_iter()
+                .filter_map(|(user_id, blob, updated)| {
+                    let c = persist::from_json(&blob);
+                    if c.name.trim().is_empty() {
+                        return None; // corrupt blob: nothing worth listing
+                    }
+                    let idle_secs = (now - updated).num_seconds().max(0);
+                    Some(RosterEntry {
+                        user_id,
+                        name: c.titled_name(),
+                        handle: c.name.clone(),
+                        level: c.level,
+                        alive: c.alive,
+                        race: c.race.name(),
+                        dragon_kills: c.dragon_kills,
+                        dragon_age: c.dragon_age,
+                        best_dragon_age: c.best_dragon_age,
+                        resurrections: c.resurrections,
+                        gems: c.gems,
+                        charm: c.charm,
+                        max_hp: c.max_hitpoints(),
+                        experience: c.experience,
+                        wealth: c.gold as i64 + c.gold_in_bank,
+                        online: c.online && idle_secs < ONLINE_WINDOW_SECS,
+                        idle_secs,
+                    })
+                })
+                .collect();
+            let _ = tx.send(RosterLoad::Ready(Arc::new(entries)));
         });
         rx
     }

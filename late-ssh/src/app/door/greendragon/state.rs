@@ -18,7 +18,10 @@ use super::events::{self, ForestEvent};
 use super::inn;
 use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
-use super::svc::{CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService, NewsLoad};
+use super::svc::{
+    CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService, NewsLoad, RosterEntry,
+    RosterLoad,
+};
 use super::tavern;
 
 /// Which Green Dragon screen the session is looking at.
@@ -92,6 +95,77 @@ pub enum Mode {
     /// A commentary room (the shared chat primitive, `lib/commentary.php`):
     /// which room decides the section, verb, window, and the way back.
     Commentary(CommentRoom),
+    /// The warrior list (`list.php`): who's online, the full roll of the
+    /// realm, and the name search. The slice shown lives in [`RosterView`].
+    WarriorList,
+    /// The Hall of Fame (`hof.php`): seven stat rankings, each pageable and
+    /// flippable best/worst.
+    HallOfFame,
+}
+
+/// Which slice of the warrior list is showing (`list.php`'s three queries).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RosterView {
+    /// Warriors currently online (the default landing).
+    Online,
+    /// Every warrior of the realm, paged.
+    All,
+    /// Name-search results (the query lives in `State::roster_query`).
+    Search,
+}
+
+/// A Hall of Fame ranking (`hof.php`'s `op` values).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HofRanking {
+    Kills,
+    Wealth,
+    Gems,
+    Charm,
+    Toughness,
+    Resurrections,
+    /// Fastest dragon kill (ascending `bestdragonage`; "least" = slowest).
+    Speed,
+}
+
+/// Every ranking, in `hof.php`'s nav order.
+pub const HOF_RANKINGS: [HofRanking; 7] = [
+    HofRanking::Kills,
+    HofRanking::Wealth,
+    HofRanking::Gems,
+    HofRanking::Charm,
+    HofRanking::Toughness,
+    HofRanking::Resurrections,
+    HofRanking::Speed,
+];
+
+impl HofRanking {
+    /// The nav label (upstream's addnav names, lightly ours).
+    fn label(self) -> &'static str {
+        match self {
+            HofRanking::Kills => "Dragon kills",
+            HofRanking::Wealth => "Gold",
+            HofRanking::Gems => "Gems",
+            HofRanking::Charm => "Charm",
+            HofRanking::Toughness => "Toughness",
+            HofRanking::Resurrections => "Resurrections",
+            HofRanking::Speed => "Dragon kill speed",
+        }
+    }
+}
+
+/// A built page of the warrior list or a Hall of Fame ranking: the heading,
+/// the formatted rows, and any footer lines (the gold-fuzz note, your
+/// percentile). Built once per action — the richest ranking re-fuzzes each
+/// build, so it must not be recomputed per frame.
+#[derive(Clone, Debug, Default)]
+pub struct ListPage {
+    pub heading: String,
+    /// A column-header line, when the view has data columns.
+    pub header: Option<String>,
+    pub rows: Vec<String>,
+    pub foot: Vec<String>,
+    pub page: usize,
+    pub pages: usize,
 }
 
 /// Which corner of the Dark Horse the session is in (all under
@@ -216,9 +290,29 @@ pub struct State {
     commentary_rx: Option<tokio::sync::watch::Receiver<CommentaryLoad>>,
     /// The loaded commentary window for the open room, newest first.
     commentary_lines: Option<std::sync::Arc<Vec<CommentLine>>>,
-    /// The talk line being typed, while composing a commentary post. `Some`
-    /// routes all key bytes into the buffer instead of the menu.
+    /// The talk line being typed, while composing a commentary post (or a
+    /// warrior-list name search). `Some` routes all key bytes into the
+    /// buffer instead of the menu.
     talk_input: Option<String>,
+    /// The in-flight roster load (the warrior list / Hall of Fame source),
+    /// drained by [`State::tick`].
+    roster_rx: Option<tokio::sync::watch::Receiver<RosterLoad>>,
+    /// The loaded roster snapshot, shared by both views.
+    roster: Option<std::sync::Arc<Vec<RosterEntry>>>,
+    /// Which slice of the warrior list is showing.
+    roster_view: RosterView,
+    /// The warrior list's current page (0-based).
+    roster_page: usize,
+    /// The last submitted name search.
+    roster_query: String,
+    /// The built warrior-list page (`None` while the roster loads).
+    roster_page_view: Option<ListPage>,
+    /// The Hall of Fame's current ranking, order flip, and page.
+    hof_ranking: HofRanking,
+    hof_least: bool,
+    hof_page: usize,
+    /// The built Hall of Fame page (`None` while the roster loads).
+    hof_page_view: Option<ListPage>,
 }
 
 impl State {
@@ -247,6 +341,16 @@ impl State {
             commentary_rx: None,
             commentary_lines: None,
             talk_input: None,
+            roster_rx: None,
+            roster: None,
+            roster_view: RosterView::Online,
+            roster_page: 0,
+            roster_query: String::new(),
+            roster_page_view: None,
+            hof_ranking: HofRanking::Kills,
+            hof_least: false,
+            hof_page: 0,
+            hof_page_view: None,
         }
     }
 
@@ -256,6 +360,7 @@ impl State {
         self.tick_news();
         self.tick_tavern();
         self.tick_commentary();
+        self.tick_roster();
         if self.character.is_some() {
             return;
         }
@@ -369,6 +474,12 @@ impl State {
                 self.fivesix_rx.is_some(),
             ),
             Mode::Commentary(room) => commentary_menu(room, self.commentary_posts_left()),
+            Mode::WarriorList => warrior_list_menu(self.roster_page_view.as_ref()),
+            Mode::HallOfFame => hall_of_fame_menu(
+                self.hof_ranking,
+                self.hof_least,
+                self.hof_page_view.as_ref(),
+            ),
             Mode::Loading => Vec::new(),
         }
     }
@@ -424,6 +535,8 @@ impl State {
             Mode::OuthouseWash(paid) => self.select_outhouse_wash(paid),
             Mode::Tavern => self.select_tavern(),
             Mode::Commentary(room) => self.select_commentary(room),
+            Mode::WarriorList => self.select_warrior_list(),
+            Mode::HallOfFame => self.select_hall_of_fame(),
             Mode::Loading => Selection::Stay,
         }
     }
@@ -480,6 +593,12 @@ impl State {
                 } else {
                     self.leave_commentary(room);
                 }
+                Selection::Stay
+            }
+            // The lists let out into the village square, dropping the
+            // roster snapshot on the way.
+            Mode::WarriorList | Mode::HallOfFame => {
+                self.close_roster();
                 Selection::Stay
             }
             // A game in progress folds (the stake was never taken); the
@@ -564,6 +683,8 @@ impl State {
                 }
             }
             s if s.starts_with("The Daily News") => self.open_news(0),
+            s if s.starts_with("List Warriors") => self.open_warrior_list(),
+            s if s.starts_with("The Hall of Fame") => self.open_hall_of_fame(),
             s if s.starts_with("Leave") => return Selection::Leave,
             _ => {}
         }
@@ -987,13 +1108,16 @@ impl State {
     }
 
     /// Feed one printable character into the talk line, up to the venue's
-    /// budget (200 less the room verb's baked emote overhead, as upstream).
+    /// budget: a commentary post gets 200 less the room verb's baked emote
+    /// overhead (as upstream), a warrior-name search a name's worth.
     pub fn talk_push(&mut self, ch: char) {
-        let Mode::Commentary(room) = self.mode else {
-            return;
+        let budget = match self.mode {
+            Mode::Commentary(room) => commentary::max_post_len(room.verb()),
+            Mode::WarriorList => SEARCH_QUERY_BUDGET,
+            _ => return,
         };
         if let Some(buf) = self.talk_input.as_mut()
-            && buf.chars().count() < commentary::max_post_len(room.verb())
+            && buf.chars().count() < budget
         {
             buf.push(ch);
         }
@@ -1011,10 +1135,24 @@ impl State {
         self.talk_input = None;
     }
 
-    /// Submit the talk line: prepare it (trim, run breaks, verb baking, the
-    /// silence rejection) and send it off. The refreshed page comes back
-    /// through the same channel as a plain load.
+    /// Submit the talk line. In a commentary room: prepare the post (trim,
+    /// run breaks, verb baking, the silence rejection) and send it off; the
+    /// refreshed page comes back through the same channel as a plain load.
+    /// On the warrior list: run the name search.
     pub fn talk_submit(&mut self) {
+        if self.mode == Mode::WarriorList {
+            let query = self.talk_input.take().unwrap_or_default();
+            let query = query.trim().to_string();
+            if query.is_empty() {
+                self.push_log("You ask after no one in particular.".into());
+            } else {
+                self.roster_query = query;
+                self.roster_view = RosterView::Search;
+                self.roster_page = 0;
+                self.rebuild_roster_views();
+            }
+            return;
+        }
         let Mode::Commentary(room) = self.mode else {
             self.talk_input = None;
             return;
@@ -1039,6 +1177,160 @@ impl State {
             }
             None => self.push_log("You open your mouth, then think better of it.".into()),
         }
+    }
+
+    // --- the warrior list + Hall of Fame --------------------------------------
+
+    /// Open the warrior list on the online slice (`list.php`'s default view),
+    /// kicking off a fresh roster load.
+    fn open_warrior_list(&mut self) {
+        self.roster_view = RosterView::Online;
+        self.roster_page = 0;
+        self.kick_roster_load();
+        self.goto(Mode::WarriorList);
+    }
+
+    /// Open the Hall of Fame on dragon kills (`hof.php`'s default `op`).
+    fn open_hall_of_fame(&mut self) {
+        self.hof_ranking = HofRanking::Kills;
+        self.hof_least = false;
+        self.hof_page = 0;
+        self.kick_roster_load();
+        self.goto(Mode::HallOfFame);
+    }
+
+    /// Start (or restart) the roster load; [`State::tick`] lands it and
+    /// builds the open view's page.
+    fn kick_roster_load(&mut self) {
+        self.roster = None;
+        self.roster_page_view = None;
+        self.hof_page_view = None;
+        self.roster_rx = Some(self.svc.load_roster());
+    }
+
+    /// Drain a finished roster load and build the open view's page.
+    fn tick_roster(&mut self) {
+        let Some(rx) = self.roster_rx.as_mut() else {
+            return;
+        };
+        let ready = match &*rx.borrow_and_update() {
+            RosterLoad::Ready(entries) => Some(entries.clone()),
+            RosterLoad::Loading => None,
+        };
+        if let Some(entries) = ready {
+            self.roster = Some(entries);
+            self.roster_rx = None;
+            self.rebuild_roster_views();
+        }
+    }
+
+    /// Rebuild the open view's page off the roster snapshot. Called on every
+    /// view/page/ranking change — never per frame: the richest ranking rolls
+    /// a fresh ±5% fuzz per build (upstream re-fuzzes per page load).
+    fn rebuild_roster_views(&mut self) {
+        let Some(roster) = self.roster.as_ref() else {
+            return;
+        };
+        match self.mode {
+            Mode::WarriorList => {
+                self.roster_page_view = Some(build_warrior_page(
+                    roster,
+                    self.roster_view,
+                    &self.roster_query,
+                    self.roster_page,
+                ));
+            }
+            Mode::HallOfFame => {
+                if let Some(c) = self.character.as_ref() {
+                    self.hof_page_view = Some(build_hof_page(
+                        roster,
+                        c,
+                        self.user_id,
+                        self.hof_ranking,
+                        self.hof_least,
+                        self.hof_page,
+                        &mut rand::thread_rng(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The built warrior-list page (`None` while the roster loads).
+    pub fn warrior_page(&self) -> Option<&ListPage> {
+        self.roster_page_view.as_ref()
+    }
+
+    /// The built Hall of Fame page (`None` while the roster loads).
+    pub fn hall_of_fame_page(&self) -> Option<&ListPage> {
+        self.hof_page_view.as_ref()
+    }
+
+    /// Put the roster views away when stepping back to the village.
+    fn close_roster(&mut self) {
+        self.roster_rx = None;
+        self.roster = None;
+        self.roster_page_view = None;
+        self.hof_page_view = None;
+        self.talk_input = None;
+        self.goto(Mode::Village);
+    }
+
+    /// Handle the warrior list's rows: search, the two slices, the pager.
+    fn select_warrior_list(&mut self) -> Selection {
+        match self.cursor {
+            0 => self.talk_input = Some(String::new()),
+            // "Here right now" re-reads the roster: presence is the one
+            // column that goes stale while you stare at it.
+            1 => {
+                self.roster_view = RosterView::Online;
+                self.roster_page = 0;
+                self.kick_roster_load();
+            }
+            2 => {
+                self.roster_view = RosterView::All;
+                self.roster_page = 0;
+                self.rebuild_roster_views();
+            }
+            3 => {
+                self.roster_page += 1;
+                self.rebuild_roster_views();
+            }
+            4 => {
+                self.roster_page = self.roster_page.saturating_sub(1);
+                self.rebuild_roster_views();
+            }
+            _ => self.close_roster(),
+        }
+        Selection::Stay
+    }
+
+    /// Handle the Hall of Fame's rows: rankings, the best/worst flip, the
+    /// pager. A ranking switch resets the page and keeps the flip; the flip
+    /// keeps the page — upstream's links do the same.
+    fn select_hall_of_fame(&mut self) -> Selection {
+        match self.cursor {
+            i if i < HOF_RANKINGS.len() => {
+                self.hof_ranking = HOF_RANKINGS[i];
+                self.hof_page = 0;
+                self.rebuild_roster_views();
+            }
+            i if i == HOF_RANKINGS.len() => {
+                self.hof_least = !self.hof_least;
+                self.rebuild_roster_views();
+            }
+            i if i == HOF_RANKINGS.len() + 1 => {
+                self.hof_page += 1;
+                self.rebuild_roster_views();
+            }
+            i if i == HOF_RANKINGS.len() + 2 => {
+                self.hof_page = self.hof_page.saturating_sub(1);
+                self.rebuild_roster_views();
+            }
+            _ => self.close_roster(),
+        }
+        Selection::Stay
     }
 
     // --- style gate -----------------------------------------------------------
@@ -2641,7 +2933,11 @@ impl State {
     /// Persist on the way out of the game (called from `leave`).
     pub fn save_on_leave(&self) {
         if let Some(c) = self.character.as_ref() {
-            self.svc.save_character(self.user_id, c);
+            // The leave save drops the presence flag (upstream's logout
+            // clearing `loggedin`), so the roster stops listing you as here.
+            let mut c = c.clone();
+            c.online = false;
+            self.svc.save_character(self.user_id, &c);
         }
     }
 }
@@ -2701,8 +2997,336 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
         c.gold >= c.gypsy_cost(),
     ));
     rows.push(("The Daily News".into(), true));
+    rows.push(("List Warriors".into(), true));
+    rows.push(("The Hall of Fame".into(), true));
     rows.push(("Leave the realm".into(), true));
     rows
+}
+
+/// The warrior list's rows (`list.php`'s navs): the name search, the two
+/// slices, and the pager. Everything but the way back waits on the roster.
+fn warrior_list_menu(page: Option<&ListPage>) -> Vec<(String, bool)> {
+    let loaded = page.is_some();
+    let (cur, pages) = page.map(|p| (p.page, p.pages)).unwrap_or((0, 0));
+    vec![
+        ("Ask after a warrior by name".into(), loaded),
+        ("Warriors here right now".into(), true),
+        ("All the warriors of the realm".into(), loaded),
+        ("Next page".into(), loaded && cur + 1 < pages),
+        ("Previous page".into(), loaded && cur > 0),
+        ("Back to the village square".into(), true),
+    ]
+}
+
+/// The Hall of Fame's rows (`hof.php`'s navs): every ranking, the best/worst
+/// flip, and the pager. Each ranking keeps the flip; the flip keeps the page,
+/// exactly like upstream's links.
+fn hall_of_fame_menu(
+    ranking: HofRanking,
+    least: bool,
+    page: Option<&ListPage>,
+) -> Vec<(String, bool)> {
+    let loaded = page.is_some();
+    let (cur, pages) = page.map(|p| (p.page, p.pages)).unwrap_or((0, 0));
+    let mut rows: Vec<(String, bool)> = HOF_RANKINGS
+        .iter()
+        .map(|r| {
+            let label = if *r == ranking {
+                format!("{} (shown)", r.label())
+            } else {
+                r.label().to_string()
+            };
+            (label, loaded)
+        })
+        .collect();
+    rows.push((
+        if least {
+            "Show the best instead".into()
+        } else {
+            "Show the worst instead".into()
+        },
+        loaded,
+    ));
+    rows.push(("Next page".into(), loaded && cur + 1 < pages));
+    rows.push(("Previous page".into(), loaded && cur > 0));
+    rows.push(("Back to the village square".into(), true));
+    rows
+}
+
+// --- the warrior list + Hall of Fame page builders (pure) --------------------
+
+/// Rows per page in both lists. Upstream pages 50 at a time (and leaves the
+/// online/search views unpaged, capping search at `maxlistsize` 100); a TUI
+/// panel holds far fewer, so every view pages at this size instead.
+const ROSTER_PAGE_SIZE: usize = 15;
+
+/// Typing budget for the warrior name search: a name's worth.
+const SEARCH_QUERY_BUDGET: usize = 30;
+
+/// Upstream's name search interleaves `%` between every typed character
+/// (`list.php` builds `%j%o%e%`): a case-insensitive subsequence match.
+fn name_matches(name: &str, query: &str) -> bool {
+    let name = name.to_lowercase();
+    let mut name_chars = name.chars();
+    query
+        .to_lowercase()
+        .chars()
+        .all(|q| name_chars.any(|c| c == q))
+}
+
+/// The "last seen" column, off seconds since the character's last save.
+fn humanize_idle(secs: i64) -> String {
+    match secs {
+        s if s < 3600 => format!("{}m", (s / 60).max(1)),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
+/// Build one warrior-list page: filter the view's slice, order it by
+/// `list.php`'s total order (level desc, dragon kills desc, name asc — total
+/// so no one straddles a page break), and format the window's rows.
+fn build_warrior_page(
+    entries: &[RosterEntry],
+    view: RosterView,
+    query: &str,
+    page: usize,
+) -> ListPage {
+    let mut picked: Vec<&RosterEntry> = entries
+        .iter()
+        .filter(|e| match view {
+            RosterView::Online => e.online,
+            RosterView::All => true,
+            RosterView::Search => name_matches(&e.name, query),
+        })
+        .collect();
+    picked.sort_by(|a, b| {
+        b.level
+            .cmp(&a.level)
+            .then(b.dragon_kills.cmp(&a.dragon_kills))
+            .then_with(|| a.handle.to_lowercase().cmp(&b.handle.to_lowercase()))
+    });
+    let total = picked.len();
+    let pages = total.div_ceil(ROSTER_PAGE_SIZE).max(1);
+    let page = page.min(pages - 1);
+    let heading = match view {
+        RosterView::Online => format!("Warriors in the realm right now ({total})"),
+        RosterView::All => format!("The warriors of the realm ({total})"),
+        RosterView::Search => format!("Warriors answering to \"{query}\" ({total})"),
+    };
+    let heading = if pages > 1 {
+        format!("{heading} - page {} of {pages}", page + 1)
+    } else {
+        heading
+    };
+    let rows = picked
+        .iter()
+        .skip(page * ROSTER_PAGE_SIZE)
+        .take(ROSTER_PAGE_SIZE)
+        .map(|e| {
+            let seen = if e.online {
+                "here".to_string()
+            } else {
+                humanize_idle(e.idle_secs)
+            };
+            let whereabouts = if e.alive { "village" } else { "graveyard" };
+            format!(
+                "{:>2}  {:<24.24}  {:<10.10}  {:<9}  {:>5}",
+                e.level, e.name, e.race, whereabouts, seen
+            )
+        })
+        .collect();
+    ListPage {
+        heading,
+        header: Some(format!(
+            "{:>2}  {:<24}  {:<10}  {:<9}  {:>5}",
+            "Lv", "Name", "Race", "Where", "Seen"
+        )),
+        rows,
+        foot: Vec::new(),
+        page,
+        pages,
+    }
+}
+
+/// A ranking's sort/display key. The richest ranking's key is the **fuzzed**
+/// wealth — upstream orders by the rand()-perturbed column, so neighbors can
+/// swap between reloads and exact fortunes never leak.
+fn hof_key(e: &RosterEntry, ranking: HofRanking, rng: &mut impl Rng) -> i64 {
+    match ranking {
+        HofRanking::Kills => e.dragon_kills as i64,
+        HofRanking::Wealth => fuzz_wealth(e.wealth, rng),
+        HofRanking::Gems => e.gems.min(i64::MAX as u64) as i64,
+        HofRanking::Charm => e.charm as i64,
+        HofRanking::Toughness => e.max_hp as i64,
+        HofRanking::Resurrections => e.resurrections as i64,
+        HofRanking::Speed => e.best_dragon_age as i64,
+    }
+}
+
+/// `hof.php`'s wealth blur: `total + round(((rand()*10)-5)/100 * total)`,
+/// a fresh ±5% every render.
+fn fuzz_wealth(wealth: i64, rng: &mut impl Rng) -> i64 {
+    wealth + (rng.gen_range(-0.05..0.05) * wealth as f64).round() as i64
+}
+
+/// A run-day count for display: 0 renders as unknown (upstream's
+/// `IF(dragonage,dragonage,'Unknown')`).
+fn days_or_unknown(days: u32) -> String {
+    if days == 0 {
+        "?".to_string()
+    } else {
+        days.to_string()
+    }
+}
+
+/// Build one Hall of Fame page (`hof.php`): filter the ranking's pool, sort
+/// by its key with the level/experience/id tie-break *in the same direction*
+/// (upstream reuses `$order` for every column, so "worst" flips the
+/// tie-break too; the speed ranking's best is ascending), then format the
+/// window and the "your rank" percentile.
+fn build_hof_page(
+    entries: &[RosterEntry],
+    me: &Character,
+    my_id: Uuid,
+    ranking: HofRanking,
+    least: bool,
+    page: usize,
+    rng: &mut impl Rng,
+) -> ListPage {
+    // The kills ranking lists dragon-slayers only; the speed ranking also
+    // needs a recorded pace. Everything else ranks the whole realm.
+    let filtered = entries.iter().filter(|e| match ranking {
+        HofRanking::Kills => e.dragon_kills > 0,
+        HofRanking::Speed => e.dragon_kills > 0 && e.best_dragon_age > 0,
+        _ => true,
+    });
+    let mut keyed: Vec<(&RosterEntry, i64)> = filtered
+        .map(|e| {
+            let key = hof_key(e, ranking, rng);
+            (e, key)
+        })
+        .collect();
+    let asc = if ranking == HofRanking::Speed {
+        !least
+    } else {
+        least
+    };
+    keyed.sort_by(|(a, ka), (b, kb)| {
+        let ord = ka
+            .cmp(kb)
+            .then(a.level.cmp(&b.level))
+            .then(a.experience.cmp(&b.experience))
+            .then(a.user_id.cmp(&b.user_id));
+        if asc { ord } else { ord.reverse() }
+    });
+
+    let total = keyed.len();
+    let pages = total.div_ceil(ROSTER_PAGE_SIZE).max(1);
+    let page = page.min(pages - 1);
+    let heading = match (ranking, least) {
+        (HofRanking::Kills, false) => "Heroes with the most dragon kills",
+        (HofRanking::Kills, true) => "Heroes with the fewest dragon kills",
+        (HofRanking::Wealth, false) => "The richest warriors of the realm",
+        (HofRanking::Wealth, true) => "The poorest warriors of the realm",
+        (HofRanking::Gems, false) => "The warriors with the most gems",
+        (HofRanking::Gems, true) => "The warriors with the fewest gems",
+        (HofRanking::Charm, false) => "The most charming warriors of the realm",
+        (HofRanking::Charm, true) => "The least charming warriors of the realm",
+        (HofRanking::Toughness, false) => "The toughest warriors of the realm",
+        (HofRanking::Toughness, true) => "The frailest warriors of the realm",
+        (HofRanking::Resurrections, false) => "Warriors best acquainted with death",
+        (HofRanking::Resurrections, true) => "Warriors least acquainted with death",
+        (HofRanking::Speed, false) => "Heroes with the fastest dragon kills",
+        (HofRanking::Speed, true) => "Heroes with the slowest dragon kills",
+    }
+    .to_string();
+    let heading = if pages > 1 {
+        format!("{heading} - page {} of {pages}", page + 1)
+    } else {
+        heading
+    };
+
+    let name_head = format!("{:>4}  {:<24}", "", "Name");
+    let header = match ranking {
+        HofRanking::Kills => Some(format!(
+            "{name_head}  {:>5}  {:>3}  {:>4}  {:>4}",
+            "Kills", "Lv", "Days", "Best"
+        )),
+        HofRanking::Wealth => Some(format!("{name_head}  {:>14}", "Estimated gold")),
+        // Upstream's gems ranking shows rank and name only: exact counts
+        // stay private.
+        HofRanking::Gems => Some(name_head.clone()),
+        HofRanking::Charm => Some(format!("{name_head}  {:<10}", "Race")),
+        HofRanking::Toughness => Some(format!("{name_head}  {:<10}  {:>3}", "Race", "Lv")),
+        HofRanking::Resurrections => Some(format!("{name_head}  {:>3}", "Lv")),
+        HofRanking::Speed => Some(format!("{name_head}  {:>4}", "Days")),
+    };
+    let rows = keyed
+        .iter()
+        .enumerate()
+        .skip(page * ROSTER_PAGE_SIZE)
+        .take(ROSTER_PAGE_SIZE)
+        .map(|(i, (e, key))| {
+            // Your own row gets a marker (upstream hilights it).
+            let mark = if e.user_id == my_id { '*' } else { ' ' };
+            let head = format!("{mark}{:>2}. {:<24.24}", i + 1, e.name);
+            match ranking {
+                HofRanking::Kills => format!(
+                    "{head}  {:>5}  {:>3}  {:>4}  {:>4}",
+                    e.dragon_kills,
+                    e.level,
+                    days_or_unknown(e.dragon_age),
+                    days_or_unknown(e.best_dragon_age)
+                ),
+                HofRanking::Wealth => format!("{head}  {key:>9} gold"),
+                HofRanking::Gems => head,
+                HofRanking::Charm => format!("{head}  {:<10.10}", e.race),
+                HofRanking::Toughness => format!("{head}  {:<10.10}  {:>3}", e.race, e.level),
+                HofRanking::Resurrections => format!("{head}  {:>3}", e.level),
+                HofRanking::Speed => format!("{head}  {:>4}", e.best_dragon_age),
+            }
+        })
+        .collect();
+
+    let mut foot = Vec::new();
+    if ranking == HofRanking::Wealth {
+        foot.push("(gold amounts are estimated to within 5% or so)".into());
+    }
+    if total == 0 {
+        foot.push("No heroes stand in this list yet.".into());
+    }
+    // "Your rank": how many of the listed sort at-or-before your *exact*
+    // stat, as a percentile floored at 1 (upstream's `$me` count query).
+    // The kills ranking only shows it to dragon-slayers.
+    let show_me = ranking != HofRanking::Kills || me.dragon_kills > 0;
+    if show_me && total > 0 {
+        let mine: i64 = match ranking {
+            HofRanking::Kills => me.dragon_kills as i64,
+            HofRanking::Wealth => me.gold as i64 + me.gold_in_bank,
+            HofRanking::Gems => me.gems.min(i64::MAX as u64) as i64,
+            HofRanking::Charm => me.charm as i64,
+            HofRanking::Toughness => me.max_hitpoints() as i64,
+            HofRanking::Resurrections => me.resurrections as i64,
+            HofRanking::Speed => me.best_dragon_age as i64,
+        };
+        let count = keyed
+            .iter()
+            .filter(|(_, k)| if asc { *k <= mine } else { *k >= mine })
+            .count();
+        let pct = ((100.0 * count as f64 / total as f64).round() as u32).max(1);
+        foot.push(format!(
+            "You stand within about the top {pct}% of this list."
+        ));
+    }
+    ListPage {
+        heading,
+        header,
+        rows,
+        foot,
+        page,
+        pages,
+    }
 }
 
 /// A commentary room's rows: speak, listen afresh, leave. The speak row
@@ -3583,5 +4207,238 @@ mod tests {
                 .unwrap()
                 .1
         );
+    }
+
+    // --- the warrior list + Hall of Fame ---------------------------------
+
+    fn entry(handle: &str, level: u8) -> RosterEntry {
+        RosterEntry {
+            user_id: Uuid::from_u128(handle.bytes().fold(0u128, |a, b| a * 31 + b as u128)),
+            name: format!("Seedling {handle}"),
+            handle: handle.to_string(),
+            level,
+            alive: true,
+            race: "Plainsborn",
+            dragon_kills: 0,
+            dragon_age: 0,
+            best_dragon_age: 0,
+            resurrections: 0,
+            gems: 0,
+            charm: 0,
+            max_hp: level as u32 * 10,
+            experience: 0,
+            wealth: 0,
+            online: false,
+            idle_secs: 0,
+        }
+    }
+
+    #[test]
+    fn warrior_list_orders_by_level_kills_then_name() {
+        // list.php: level DESC, dragonkills DESC, login ASC — a total order.
+        let mut a = entry("zed", 5);
+        let mut b = entry("abe", 5);
+        b.dragon_kills = 2;
+        let c = entry("moe", 9);
+        let page = build_warrior_page(&[a.clone(), b.clone(), c.clone()], RosterView::All, "", 0);
+        assert!(page.rows[0].contains("moe"));
+        assert!(page.rows[1].contains("abe")); // kills break the level tie
+        assert!(page.rows[2].contains("zed"));
+        // Same level and kills: the bare name decides.
+        a.dragon_kills = 2;
+        b.name = "Zzz abe".into(); // the *display* name must not re-order
+        let page = build_warrior_page(&[a, b, c], RosterView::All, "", 0);
+        assert!(page.rows[1].contains("abe"));
+    }
+
+    #[test]
+    fn warrior_search_is_a_subsequence_match() {
+        // Upstream interleaves % between typed characters: `%j%o%e%`.
+        assert!(name_matches("Farmboy Joe", "joe"));
+        assert!(name_matches("Journeyman Orc Expert", "joe")); // subsequence
+        assert!(!name_matches("Joe", "joex"));
+        assert!(name_matches("Anything", ""));
+    }
+
+    #[test]
+    fn warrior_online_view_filters_and_pages_clamp() {
+        let mut on = entry("here", 3);
+        on.online = true;
+        let off = entry("gone", 7);
+        let entries = [on, off];
+        let page = build_warrior_page(&entries, RosterView::Online, "", 0);
+        assert_eq!(page.rows.len(), 1);
+        assert!(page.rows[0].contains("here"));
+        // A page past the end clamps to the last page instead of blanking.
+        let page = build_warrior_page(&entries, RosterView::All, "", 99);
+        assert_eq!(page.page, 0);
+        assert_eq!(page.rows.len(), 2);
+    }
+
+    #[test]
+    fn hof_kills_lists_slayers_only_and_gates_your_rank() {
+        let mut vet = entry("vet", 10);
+        vet.dragon_kills = 3;
+        vet.dragon_age = 9;
+        vet.best_dragon_age = 7;
+        let fresh = entry("fresh", 2);
+        let me = lvl(5); // no kills
+        let page = build_hof_page(
+            &[vet, fresh],
+            &me,
+            Uuid::nil(),
+            HofRanking::Kills,
+            false,
+            0,
+            &mut rand::thread_rng(),
+        );
+        assert_eq!(page.rows.len(), 1);
+        assert!(page.rows[0].contains("vet"));
+        // No kills: no "your rank" line (upstream only sets $me when
+        // dragonkills > 0 on this ranking).
+        assert!(!page.foot.iter().any(|f| f.contains("top")));
+    }
+
+    #[test]
+    fn hof_gems_ranking_shows_names_only() {
+        let mut rich = entry("rich", 5);
+        rich.gems = 40;
+        let page = build_hof_page(
+            &[rich],
+            &lvl(1),
+            Uuid::nil(),
+            HofRanking::Gems,
+            false,
+            0,
+            &mut rand::thread_rng(),
+        );
+        // Exact gem counts never render (upstream lists rank + name only).
+        assert!(!page.rows[0].contains("40"));
+    }
+
+    #[test]
+    fn hof_wealth_is_fuzzed_within_five_percent() {
+        let mut rich = entry("rich", 5);
+        rich.wealth = 10_000;
+        let mut rng = rand::thread_rng();
+        for _ in 0..200 {
+            let key = hof_key(&rich, HofRanking::Wealth, &mut rng);
+            assert!((9_500..=10_500).contains(&key), "fuzz out of range: {key}");
+        }
+        // Debt fuzzes too (the total is signed).
+        rich.wealth = -1_000;
+        let key = hof_key(&rich, HofRanking::Wealth, &mut rng);
+        assert!((-1_050..=-950).contains(&key));
+    }
+
+    #[test]
+    fn hof_speed_ranks_ascending_and_least_flips_it() {
+        let mut quick = entry("quick", 5);
+        quick.dragon_kills = 1;
+        quick.best_dragon_age = 3;
+        let mut slow = entry("slow", 5);
+        slow.dragon_kills = 1;
+        slow.best_dragon_age = 20;
+        let mut unranked = entry("never", 15); // no kill: filtered out
+        unranked.best_dragon_age = 0;
+        let entries = [quick, slow, unranked];
+        let page = build_hof_page(
+            &entries,
+            &lvl(1),
+            Uuid::nil(),
+            HofRanking::Speed,
+            false,
+            0,
+            &mut rand::thread_rng(),
+        );
+        assert_eq!(page.rows.len(), 2);
+        assert!(page.rows[0].contains("quick")); // fastest first
+        let page = build_hof_page(
+            &entries,
+            &lvl(1),
+            Uuid::nil(),
+            HofRanking::Speed,
+            true,
+            0,
+            &mut rand::thread_rng(),
+        );
+        assert!(page.rows[0].contains("slow")); // "worst" = slowest first
+    }
+
+    #[test]
+    fn hof_percentile_counts_at_or_better_and_floors_at_one() {
+        let mut me = lvl(5);
+        me.charm = 10;
+        let mut best = entry("best", 5);
+        best.charm = 50;
+        let mut mid = entry("mid", 5);
+        mid.charm = 10;
+        let mut worst = entry("worst", 5);
+        worst.charm = 1;
+        let page = build_hof_page(
+            &[best, mid, worst],
+            &me,
+            Uuid::nil(),
+            HofRanking::Charm,
+            false,
+            0,
+            &mut rand::thread_rng(),
+        );
+        // Two of three have charm >= mine: round(200/3) = 67.
+        assert!(page.foot.iter().any(|f| f.contains("top 67%")), "{:?}", page.foot);
+    }
+
+    #[test]
+    fn hof_marks_your_own_row() {
+        let mut mine = entry("me", 5);
+        mine.charm = 9;
+        let my_id = mine.user_id;
+        let page = build_hof_page(
+            &[mine, entry("other", 5)],
+            &lvl(5),
+            my_id,
+            HofRanking::Charm,
+            false,
+            0,
+            &mut rand::thread_rng(),
+        );
+        assert!(page.rows[0].starts_with('*'));
+        assert!(!page.rows[1].starts_with('*'));
+    }
+
+    #[test]
+    fn warrior_list_menu_gates_the_pager() {
+        // Loading: only the presence row and the way back are live.
+        let rows = warrior_list_menu(None);
+        assert!(!rows[0].1);
+        assert!(rows[1].1);
+        assert!(!rows[3].1);
+        assert!(rows[5].1);
+        // One page of results: no pager either way.
+        let page = ListPage {
+            pages: 3,
+            page: 1,
+            ..ListPage::default()
+        };
+        let rows = warrior_list_menu(Some(&page));
+        assert!(rows[3].1); // next
+        assert!(rows[4].1); // previous
+    }
+
+    #[test]
+    fn hall_of_fame_menu_marks_the_shown_ranking() {
+        let page = ListPage::default();
+        let rows = hall_of_fame_menu(HofRanking::Wealth, false, Some(&page));
+        assert!(rows[1].0.contains("(shown)"));
+        assert!(rows[7].0.contains("worst"));
+        let rows = hall_of_fame_menu(HofRanking::Wealth, true, Some(&page));
+        assert!(rows[7].0.contains("best"));
+    }
+
+    #[test]
+    fn village_menu_lists_the_rosters() {
+        let rows = village_menu(&lvl(1));
+        assert!(rows.iter().any(|(l, _)| l == "List Warriors"));
+        assert!(rows.iter().any(|(l, _)| l == "The Hall of Fame"));
     }
 }

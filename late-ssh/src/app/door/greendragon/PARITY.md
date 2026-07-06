@@ -493,7 +493,7 @@ online-roster path; the session stays authoritative for its own character
 (see CONTEXT.md "toward multiplayer" notes).
 
 ### Build order
-commentary ✓ → roster/HoF → gypsy ✓ (folded into the commentary slice — it
+commentary ✓ → roster/HoF ✓ → gypsy ✓ (folded into the commentary slice — it
 is just a paid door onto the shade section) → PvP → bounties + haunt →
 clans → mail(?) → gardens ✓ / veterans' rock ✓. Commentary first: five
 other features are just sections of it.
@@ -562,24 +562,92 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 - Drunken comment slurring (the drinks module's `commentary` hook) stays
   deferred with the drinks note in phase 3.
 
-### Online roster + Hall of Fame
-- **Online** = a live SSH session in the door OR activity within 15 min
-  (upstream `laston > now − 900s && loggedin`). Add `last_played_at` to the
-  save row (or a svc-held session registry — one process today, but prod
-  may go multi-replica: prefer the DB column).
-- **Warrior list**: all characters, 50/page, name search; columns: alive /
-  level / name / location-ish / online marker.
-- **Hall of Fame** rankings (each with most/least toggle where noted, all
-  tie-broken level → experience → id):
-  dragon kills (columns: kills, days-into-run `dragon_age`, best
-  `best_dragon_age`) · richest (gold + bank, **fuzzed ±5%** with a fresh
-  random each render so exact wealth never leaks) · gems · charm
-  (most/least) · max HP (most/least) · resurrections · fastest kill
-  (ascending `best_dragon_age`, only kills > 0).
-  Needs new fields: `dragon_age` (days since run start — increment on
-  newday, reset on dragon kill), `best_dragon_age` (min at kill time),
-  `resurrections` (count, increment on any revive).
-- "Your rank": `count(stat >= yours) / total` as a percentile line.
+### Online roster + Hall of Fame — DONE
+
+Sources: `list.php`, `hof.php`. Implemented 2026-07, re-verified line-by-line
+against the local `upstream-lotgd/` clone before porting. **Source-audit
+corrections** to what this section originally claimed (the specs below are
+already fixed to match):
+
+1. **`dragonage` is a snapshot, not a counter.** The live counter is `age`
+   ("days since level 1" — effectively days since the last dragon kill): +1
+   at every new day, the paid resurrection's included, and reset to 0 by a
+   kill (`age` is absent from `dragon.php`'s `$nochange` preserve list).
+   Each kill stamps `dragonage = age` (the Hall of Fame's "Days" column) and
+   `bestdragonage` keeps the minimum — both *are* preserved through the kill
+   reset. Upstream's quirk that a same-day second kill would stamp 0 (and
+   clobber the best) is kept 1=1.
+2. **`resurrections` also resets on a dragon kill** (not in the preserve
+   list): it counts revivals *since the last kill* — +1 whenever a dead
+   character greets a new day, dawn or paid (`newday.php` increments while
+   `alive != true`, regardless of the resurrection flag).
+3. **Every ranking has the most/least toggle** (not just charm/HP), and the
+   tie-break (level → experience → acctid) **follows the toggle's
+   direction** — upstream reuses `$order` for every ORDER BY column. The
+   speed ranking is inverted: its "best" sorts ascending.
+4. **The wealth fuzz is the sort key too**: `hof.php` orders by the
+   rand()-perturbed `gold + goldinbank` (a fresh ±5% per render; debt counts
+   via the signed cast), so neighbors can swap between reloads. The "your
+   rank" count compares others' fuzzed totals against your exact one.
+5. **The gems ranking shows rank + name only** — exact counts never render.
+   Kills shows kills/level/days/best-days, charm shows gender+race, tough
+   sorts `maxhitpoints` and shows race+level, resurrects shows level, days
+   shows best-days (`IF(x,x,'Unknown')` when 0).
+6. **The percentile line** is `count(stat >=|<= yours)` — inclusive of
+   yourself, the operator flipping with the toggle (and inverted for days) —
+   over the *filtered* total, rounded and floored at 1: "top N%". The kills
+   ranking only renders it for dragon-slayers; kills filters
+   `dragonkills > 0`, days additionally `bestdragonage > 0`, and the
+   filtered count is also the pagination denominator.
+7. **`list.php`'s default landing is "Warriors Currently Online"**
+   (`loggedin` AND `laston` within `LOGINTIMEOUT` 900s); the all-warriors
+   roll is the paged view; the name search interleaves `%` between typed
+   characters (a subsequence match) capped at `maxlistsize` 100. All three
+   share the total order level DESC → dragonkills DESC → login ASC ("so
+   that the ordering is total"), and the columns run alive / level / name /
+   location (+ online marker) / race / sex / last-on.
+
+- [x] **`Character` fields** (serde-defaulted): `age` (seeded 1 at creation
+  — upstream rolls a fresh account's first new day at first login),
+  `dragon_age`, `best_dragon_age`, `resurrections`, wired per corrections
+  1–2; and `online`, a presence flag mirroring `loggedin` (stamped true by
+  the entry save and every in-play save, cleared by the leave save; a
+  crashed session leaves it stale and the 15-minute window absorbs it,
+  exactly like upstream's `loggedin`+`laston` pairing).
+- [x] **Online detection** reads `greendragon_characters.updated` (nearly
+  every action saves, so it tracks activity like `laston`) ANDed with the
+  blob's `online` flag, window 900s. Entering the door now always saves
+  immediately — the presence stamp — not only on a day rollover. No new
+  column or migration needed.
+- [x] **`svc.load_roster()`**: one read of all rows
+  (`GreenDragonCharacter::load_all`), each blob decoded into a `RosterEntry`
+  (titled name for display/search, bare handle for the sort, level / alive /
+  race, the ranked stats, signed wealth, online, idle seconds).
+- [x] **Warrior list** (`Mode::WarriorList`): the online slice (default; its
+  menu row re-reads the roster), the full roll, and the subsequence name
+  search typed on the talk line — ordering and columns per correction 7
+  (location renders village/graveyard; "Seen" is the humanized last save).
+- [x] **Hall of Fame** (`Mode::HallOfFame`): the seven rankings per
+  corrections 3–6; a ranking switch resets the page while the most/least
+  flip keeps it (upstream's links do the same); your row starred; the
+  wealth-fuzz footnote; the percentile line.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **Pages hold 15 rows, not 50** (a TUI panel vs a web page), and every
+  warrior-list view pages (upstream leaves the online/search views unpaged,
+  capping search hits at 100).
+- **No sex/gender column**: our analog (address style) is a title-column
+  pick, not an identity — the list drops the column and the charm ranking
+  shows race only.
+- The alive column is two-state (village/graveyard); upstream's
+  "Unconscious" tri-state only arises from PvP knockouts, which wait for
+  the PvP slice.
+- No clan sub-list (lands with clans), no write-mail/bio links (no in-door
+  mail), and both screens are village-nav only (upstream also links the
+  list from logged-out pages and bios).
+- The percentile line renders even when the days ranking's filter excludes
+  you ("top 1%" — upstream's floor-at-1 quirk), kept 1=1.
 
 ### Gypsy tent (village) — DONE
 - Pay `level · 20` gold per visit → read/post the **shade** commentary
