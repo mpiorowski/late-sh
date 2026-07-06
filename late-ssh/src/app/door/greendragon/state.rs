@@ -14,9 +14,11 @@ use uuid::Uuid;
 use super::combat::{Buff, Combatant, resolve_extra_foe_strike, resolve_round_buffed};
 use super::data;
 use super::events::{self, ForestEvent};
+use super::inn;
 use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
-use super::svc::{CharacterLoad, GreenDragonService, NewsLoad};
+use super::svc::{CharacterLoad, FiveSixLoad, GreenDragonService, NewsLoad};
+use super::tavern;
 
 /// Which Green Dragon screen the session is looking at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +62,49 @@ pub enum Mode {
     SpendDragonPoints,
     /// The village's daily news, paged one day at a time (`news.php`).
     News,
+    /// The stables: buy, trade in, or sell a mount (`stables.php`).
+    Stables,
+    /// The mercenary camp: hire a companion or patch up the wounded ones
+    /// (`mercenarycamp.php`).
+    MercCamp,
+    /// The Sleeping Stag's common room: the inn hub (`inn.php`).
+    Inn,
+    /// Taking a room for the night: the purse or the bank (`inn_room.php`).
+    InnRoom,
+    /// The barkeep's counter: bribes for a quiet word (`inn_bartender.php`).
+    Barkeep,
+    /// The prize of a successful bribe: switching the specialty path.
+    SwitchSpecialty,
+    /// The barkeep's back shelf of potions (`cedrikspotions.php`).
+    Potions,
+    /// The taps (`modules/drinks.php`).
+    Drinks,
+    /// The corner table with the romance partner (`modules/lovers.php`).
+    Romance,
+    /// The forest outhouse's two stalls (`modules/outhouse.php`).
+    Outhouse,
+    /// After the stall: wash up or slip out. `true` = the paid private stall.
+    OuthouseWash(bool),
+    /// The Dark Horse Tavern, stumbled on in the forest (`darkhorse.php`);
+    /// its sub-views (the games) live in [`TavernView`].
+    Tavern,
+}
+
+/// Which corner of the Dark Horse the session is in (all under
+/// [`Mode::Tavern`]): the taproom, or one of the gambler's games mid-hand.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TavernView {
+    Hub,
+    /// Staking the dice game.
+    DiceBet,
+    /// A dice hand in progress.
+    Dice(tavern::DiceGame),
+    /// Calling like or unlike pairs for stones.
+    StonesSide,
+    /// Staking the stones game.
+    StonesBet { like_pair: bool },
+    /// A stones game in progress.
+    Stones(tavern::StonesGame),
 }
 
 /// What kind of foe the current encounter is, deciding the victory handler.
@@ -144,6 +189,15 @@ pub struct State {
     news_rx: Option<tokio::sync::watch::Receiver<NewsLoad>>,
     /// The loaded news page for `news_offset`, newest first.
     news_lines: Option<std::sync::Arc<Vec<String>>>,
+    /// Which corner of the Dark Horse is open while in [`Mode::Tavern`].
+    tavern_view: TavernView,
+    /// The Five Sixes pot as last read (for the signboard), if known.
+    fivesix_pot: Option<u64>,
+    /// The in-flight pot read kicked off on entering the tavern.
+    fivesix_pot_rx: Option<tokio::sync::watch::Receiver<Option<u64>>>,
+    /// An in-flight Five Sixes settlement: the sixes rolled, and the pot
+    /// round-trip. Drained by [`State::tick`].
+    fivesix_rx: Option<(u32, tokio::sync::watch::Receiver<FiveSixLoad>)>,
 }
 
 impl State {
@@ -165,6 +219,10 @@ impl State {
             news_offset: 0,
             news_rx: None,
             news_lines: None,
+            tavern_view: TavernView::Hub,
+            fivesix_pot: None,
+            fivesix_pot_rx: None,
+            fivesix_rx: None,
         }
     }
 
@@ -172,6 +230,7 @@ impl State {
     /// every app tick.
     pub fn tick(&mut self) {
         self.tick_news();
+        self.tick_tavern();
         if self.character.is_some() {
             return;
         }
@@ -267,6 +326,18 @@ impl State {
             Mode::Graveyard => graveyard_menu(c),
             Mode::SpendDragonPoints => dragon_point_menu(),
             Mode::News => news_menu(self.news_offset),
+            Mode::Stables => stables_menu(c),
+            Mode::MercCamp => merc_camp_menu(c),
+            Mode::Inn => inn_menu(c),
+            Mode::InnRoom => inn_room_menu(c),
+            Mode::Barkeep => barkeep_menu(c),
+            Mode::SwitchSpecialty => switch_specialty_menu(c),
+            Mode::Potions => potions_menu(c),
+            Mode::Drinks => drinks_menu(c),
+            Mode::Romance => romance_menu(c),
+            Mode::Outhouse => outhouse_menu(c),
+            Mode::OuthouseWash(_) => outhouse_wash_menu(),
+            Mode::Tavern => tavern_menu(c, self.tavern_view, self.fivesix_pot, self.fivesix_rx.is_some()),
             Mode::Loading => Vec::new(),
         }
     }
@@ -309,6 +380,18 @@ impl State {
             Mode::Graveyard => self.select_graveyard(),
             Mode::SpendDragonPoints => self.select_dragon_point(),
             Mode::News => self.select_news(),
+            Mode::Stables => self.select_stables(),
+            Mode::MercCamp => self.select_merc_camp(),
+            Mode::Inn => self.select_inn(),
+            Mode::InnRoom => self.select_inn_room(),
+            Mode::Barkeep => self.select_barkeep(),
+            Mode::SwitchSpecialty => self.select_switch_specialty(),
+            Mode::Potions => self.select_potions(),
+            Mode::Drinks => self.select_drinks(),
+            Mode::Romance => self.select_romance(),
+            Mode::Outhouse => self.select_outhouse(),
+            Mode::OuthouseWash(paid) => self.select_outhouse_wash(paid),
+            Mode::Tavern => self.select_tavern(),
             Mode::Loading => Selection::Stay,
         }
     }
@@ -336,6 +419,38 @@ impl State {
             // The dead realm is the hub while dead: Esc leaves the game, the
             // village stays out of reach until a revival.
             Mode::Graveyard => Selection::Leave,
+            // The inn's side rooms back out to the common room first.
+            Mode::InnRoom
+            | Mode::Barkeep
+            | Mode::SwitchSpecialty
+            | Mode::Potions
+            | Mode::Drinks
+            | Mode::Romance => {
+                self.goto(Mode::Inn);
+                Selection::Stay
+            }
+            // The forest amenities back out to the forest. Slipping out of
+            // the stall unwashed is a real (and newsworthy) choice, so Esc
+            // takes the explicit no-wash exit.
+            Mode::Outhouse => {
+                self.goto(Mode::Forest);
+                Selection::Stay
+            }
+            Mode::OuthouseWash(paid) => {
+                self.cursor = 1;
+                self.select_outhouse_wash(paid)
+            }
+            // A game in progress folds (the stake was never taken); the
+            // taproom itself lets out into the forest.
+            Mode::Tavern => {
+                if self.tavern_view == TavernView::Hub {
+                    self.goto(Mode::Forest);
+                } else {
+                    self.tavern_view = TavernView::Hub;
+                    self.cursor = 0;
+                }
+                Selection::Stay
+            }
             _ => {
                 self.goto(Mode::Village);
                 Selection::Stay
@@ -372,6 +487,9 @@ impl State {
                 self.goto(Mode::Healer)
             }
             s if s.starts_with("The Coinvault") => self.goto(Mode::Bank),
+            s if s.starts_with("The Stables") => self.goto(Mode::Stables),
+            s if s.starts_with("The Mercenary Camp") => self.goto(Mode::MercCamp),
+            s if s.starts_with(data::INN_NAME) => self.goto(Mode::Inn),
             s if s.starts_with("The Daily News") => self.open_news(0),
             s if s.starts_with("Leave") => return Selection::Leave,
             _ => {}
@@ -386,6 +504,10 @@ impl State {
             0 => ForestHunt::Slumming,
             1 => ForestHunt::Hunt,
             2 => ForestHunt::Thrillseeking,
+            3 => {
+                self.goto(Mode::Outhouse);
+                return Selection::Stay;
+            }
             _ => return Selection::Stay,
         };
         self.start_forest_fight(hunt);
@@ -622,6 +744,12 @@ impl State {
             return Selection::Stay;
         };
         let accepted = self.cursor == 0;
+        // Stepping into the Dark Horse opens the real room (the games, the
+        // pot) rather than an instant effect.
+        if event == ForestEvent::Tavern && accepted {
+            self.enter_tavern();
+            return Selection::Stay;
+        }
         let mut rng = rand::thread_rng();
         let lines = event.resolve(accepted, self.character.as_mut().unwrap(), &mut rng);
         for line in lines {
@@ -1517,6 +1645,636 @@ impl State {
         Selection::Stay
     }
 
+    // --- the stables ------------------------------------------------------------
+
+    /// Buy (or trade in for) the highlighted mount, or sell the current one
+    /// (`stables.php`: purchases count the ⅔ trade-in refund; the new mount
+    /// joins today's fights at once).
+    fn select_stables(&mut self) -> Selection {
+        let mounts = data::MOUNTS.len();
+        if self.cursor < mounts {
+            let traded_in = self.character.as_ref().unwrap().mount_data().map(|m| m.name);
+            let c = self.character.as_mut().unwrap();
+            if c.buy_mount(self.cursor as u8 + 1) {
+                let mount = c.mount_data().unwrap().name;
+                match traded_in {
+                    Some(old) => self.push_log(format!(
+                        "{} takes the {old} in part-exchange and saddles the {mount} for you.",
+                        data::OSTLER
+                    )),
+                    None => self.push_log(format!(
+                        "{} saddles the {mount} for you. It is eager for today's hunts.",
+                        data::OSTLER
+                    )),
+                }
+                self.save();
+            } else {
+                self.push_log("You can't afford that mount.".into());
+            }
+        } else if self.character.as_ref().unwrap().mount != 0 {
+            let name = self.character.as_ref().unwrap().mount_data().unwrap().name;
+            let c = self.character.as_mut().unwrap();
+            if let Some(refund) = c.sell_mount() {
+                self.push_log(format!(
+                    "{} leads the {name} away and counts {refund} gems into your palm.",
+                    data::OSTLER
+                ));
+                self.save();
+            }
+        }
+        Selection::Stay
+    }
+
+    // --- the mercenary camp -------------------------------------------------
+
+    /// Hire the highlighted mercenary, or pay the camp sawbones to mend a
+    /// wounded companion (`mercenarycamp.php`).
+    fn select_merc_camp(&mut self) -> Selection {
+        let listings = merc_listings(self.character.as_ref().unwrap());
+        if self.cursor < listings.len() {
+            let merc = listings[self.cursor];
+            let c = self.character.as_mut().unwrap();
+            if c.hire_mercenary(merc) {
+                self.push_log(format!(
+                    "{} shoulders their kit and falls in at your side.",
+                    merc.name
+                ));
+                self.save();
+            } else {
+                self.push_log("The camp won't take your terms.".into());
+            }
+        } else {
+            let wounded = wounded_companions(self.character.as_ref().unwrap());
+            let Some(&idx) = wounded.get(self.cursor - listings.len()) else {
+                return Selection::Stay;
+            };
+            let c = self.character.as_mut().unwrap();
+            if let Some(cost) = c.heal_companion(idx) {
+                let name = c.companions[idx].name.clone();
+                self.push_log(format!(
+                    "The camp's sawbones patches {name} back to full for {cost} gold."
+                ));
+                self.save();
+            } else {
+                self.push_log("You can't afford the sawbones' fee.".into());
+            }
+        }
+        Selection::Stay
+    }
+
+    // --- the inn --------------------------------------------------------------
+
+    /// The common room: pick a destination inside the Sleeping Stag.
+    fn select_inn(&mut self) -> Selection {
+        match self.cursor {
+            0 => self.goto(Mode::InnRoom),
+            1 => self.goto(Mode::Barkeep),
+            2 => {
+                // One song a day (`sethsong.php`); the row gates the flag.
+                let mut rng = rand::thread_rng();
+                let lines = inn::bard_song(self.character.as_mut().unwrap(), &mut rng);
+                for line in lines {
+                    self.push_log(line);
+                }
+                self.save();
+            }
+            3 => self.goto(Mode::Drinks),
+            4 => self.goto(Mode::Romance),
+            _ => {}
+        }
+        Selection::Stay
+    }
+
+    /// Pay for the night's room (`inn_room.php`): the purse at cost, the bank
+    /// at cost plus its 5% fee.
+    fn select_inn_room(&mut self) -> Selection {
+        let from_bank = match self.cursor {
+            0 => false,
+            1 => true,
+            _ => {
+                self.goto(Mode::Inn);
+                return Selection::Stay;
+            }
+        };
+        let c = self.character.as_mut().unwrap();
+        match c.lodge(from_bank) {
+            Some(cost) => {
+                let source = if from_bank { "the bank's ledger" } else { "your purse" };
+                self.push_log(format!(
+                    "{cost} gold from {source}, and {} slides a heavy iron key across the bar. A warm bed is yours tonight.",
+                    data::BARKEEP
+                ));
+                self.save();
+                self.goto(Mode::Inn);
+            }
+            None => self.push_log("You can't cover the room.".into()),
+        }
+        Selection::Stay
+    }
+
+    /// Bribe the barkeep (`inn_bartender.php`): gems at 30/60/90%, gold at
+    /// 25/~47/75% — paid up front, gone either way. Success opens the quiet
+    /// word (the specialty switch).
+    fn select_barkeep(&mut self) -> Selection {
+        let mut rng = rand::thread_rng();
+        let success = match self.cursor {
+            0..=2 => {
+                let gems = self.cursor as u32 + 1;
+                let c = self.character.as_mut().unwrap();
+                c.gems -= gems as u64;
+                (rng.gen_range(0..=100)) < model::gem_bribe_chance(gems)
+            }
+            3..=5 => {
+                let c = self.character.as_mut().unwrap();
+                let amount = c.bribe_gold_amounts()[self.cursor - 3];
+                let chance = model::gold_bribe_chance(amount, c.level);
+                c.gold -= amount;
+                (rng.gen_range(0..=100) as f64) < chance
+            }
+            _ => {
+                self.goto(Mode::Potions);
+                return Selection::Stay;
+            }
+        };
+        self.save();
+        if success {
+            self.push_log(format!(
+                "{} makes the bribe disappear and leans in for a quiet word.",
+                data::BARKEEP
+            ));
+            self.goto(Mode::SwitchSpecialty);
+        } else {
+            self.push_log(format!(
+                "{} makes the bribe disappear and suddenly remembers other customers.",
+                data::BARKEEP
+            ));
+        }
+        Selection::Stay
+    }
+
+    /// The bribed barkeep's prize: switch the specialty path. Each path's
+    /// skill and uses are benched and resumed separately (upstream keeps them
+    /// in per-module prefs).
+    fn select_switch_specialty(&mut self) -> Selection {
+        let options = switchable_specialties(self.character.as_ref().unwrap());
+        let Some(&target) = options.get(self.cursor) else {
+            self.goto(Mode::Inn);
+            return Selection::Stay;
+        };
+        let c = self.character.as_mut().unwrap();
+        let old = c.specialty;
+        if c.switch_specialty(target) {
+            let skill = c.specialty_skill;
+            if old == Specialty::None {
+                self.push_log(format!("You take up the {}.", target.name()));
+            } else {
+                self.push_log(format!(
+                    "You set aside the {} and take up the {} (skill {skill}).",
+                    old.name(),
+                    target.name()
+                ));
+            }
+            self.save();
+        }
+        self.goto(Mode::Inn);
+        Selection::Stay
+    }
+
+    /// Buy a dose off the back shelf (`cedrikspotions.php`).
+    fn select_potions(&mut self) -> Selection {
+        let Some(&kind) = model::POTIONS.get(self.cursor) else {
+            return Selection::Stay;
+        };
+        let c = self.character.as_mut().unwrap();
+        if !c.buy_potion(kind) {
+            self.push_log("You can't buy that dose.".into());
+            return Selection::Stay;
+        }
+        let line = match kind {
+            model::PotionKind::Charm => {
+                "The tonic tastes of roses. You feel more charming already (+1 charm).".to_string()
+            }
+            model::PotionKind::Vitality => {
+                "Oakblood settles deep in your bones: +1 max hitpoint, for good.".to_string()
+            }
+            model::PotionKind::Mending => {
+                let hp = c.hitpoints;
+                format!("Every ache vanishes at once, and then some ({hp} HP).")
+            }
+            model::PotionKind::Forgetting => {
+                "Your craft slips away like a dream on waking. (A new path can be chosen in the village.)"
+                    .to_string()
+            }
+            model::PotionKind::Transmutation => {
+                "Your blood forgets itself, and your stomach objects violently. Your ancestry will be chosen anew, once the sickness passes."
+                    .to_string()
+            }
+        };
+        self.push_log(line);
+        self.save();
+        Selection::Stay
+    }
+
+    /// Order a drink off the taps (`modules/drinks.php`).
+    fn select_drinks(&mut self) -> Selection {
+        let Some(d) = data::DRINKS.get(self.cursor) else {
+            return Selection::Stay;
+        };
+        let mut rng = rand::thread_rng();
+        let lines = self.character.as_mut().unwrap().drink(d, &mut rng);
+        for line in lines {
+            self.push_log(line);
+        }
+        self.save();
+        Selection::Stay
+    }
+
+    /// The corner table: flirt up the ladder (or the married visit), or just
+    /// talk (`modules/lovers.php`).
+    fn select_romance(&mut self) -> Selection {
+        let married = self.character.as_ref().unwrap().married;
+        let mut rng = rand::thread_rng();
+        let chat_row = if married { 1 } else { data::FLIRT_RUNGS.len() };
+        if self.cursor == chat_row {
+            let line = inn::chat(self.character.as_ref().unwrap(), &mut rng);
+            self.push_log(line);
+            return Selection::Stay;
+        }
+        if married {
+            let lines = inn::married_visit(self.character.as_mut().unwrap(), &mut rng);
+            for line in lines {
+                self.push_log(line);
+            }
+        } else {
+            let out = inn::flirt(self.character.as_mut().unwrap(), self.cursor, &mut rng);
+            for line in out.lines {
+                self.push_log(line);
+            }
+            if let Some(item) = out.news {
+                self.news(item);
+            }
+        }
+        self.save();
+        Selection::Stay
+    }
+
+    // --- the outhouse ---------------------------------------------------------
+
+    /// Pick a stall (`modules/outhouse.php`): the 5-gold private one or the
+    /// free trench. Either spends the day's visit.
+    fn select_outhouse(&mut self) -> Selection {
+        match self.cursor {
+            0 => {
+                let c = self.character.as_mut().unwrap();
+                c.gold -= model::OUTHOUSE_COST;
+                c.used_outhouse_today = true;
+                self.push_log(format!(
+                    "You pay {} gold for the private stall. It is, remarkably, almost clean.",
+                    model::OUTHOUSE_COST
+                ));
+                self.save();
+                self.goto(Mode::OuthouseWash(true));
+            }
+            1 => {
+                self.character.as_mut().unwrap().used_outhouse_today = true;
+                self.push_log("You brave the public trench. It is exactly as bad as feared.".into());
+                self.save();
+                self.goto(Mode::OuthouseWash(false));
+            }
+            _ => self.goto(Mode::Forest),
+        }
+        Selection::Stay
+    }
+
+    /// Wash up (the lucky-find rolls + sobering) or slip out unwashed (a coin
+    /// in the muck and, likely, the morning paper).
+    fn select_outhouse_wash(&mut self, paid: bool) -> Selection {
+        let mut rng = rand::thread_rng();
+        let mut lines = Vec::new();
+        let mut news = None;
+        if self.cursor == 0 {
+            // The wash: 60% finds the private stall's dropped coins (then an
+            // independent 25% gem); the trench needs a further 1-in-3.
+            let c = self.character.as_mut().unwrap();
+            let mut found = false;
+            if rng.gen_range(1..=100) <= 60 {
+                if paid {
+                    c.gold += model::OUTHOUSE_GIVEBACK;
+                    found = true;
+                    lines.push(format!(
+                        "Scrubbing up at the rain barrel, you find {} gold someone dropped in the mud.",
+                        model::OUTHOUSE_GIVEBACK
+                    ));
+                    if rng.gen_range(1..=100) <= 25 {
+                        c.gems += 1;
+                        lines.push("Something else glitters down there: a GEM!".into());
+                    }
+                } else if rng.gen_range(1..=3) == 1 {
+                    c.gold += model::OUTHOUSE_GIVEBACK;
+                    found = true;
+                    lines.push(format!(
+                        "Scrubbing up at the rain barrel, you spot {} gold trodden into the mud.",
+                        model::OUTHOUSE_GIVEBACK
+                    ));
+                }
+            }
+            if !found {
+                lines.push("You scrub up at the rain barrel. Cleanliness is its own reward.".into());
+            }
+            // The wash sobers (`soberup` at 0.9), paid or free.
+            if c.drunkenness > 0 {
+                c.sober_up();
+                lines.push("Leaving the outhouse, you feel a little more sober.".into());
+            }
+        } else {
+            // Slipping out unwashed: a coin lost in the hurry, and the whole
+            // village hears about the trailing paper either way.
+            if rng.gen_range(1..=100) >= 50 {
+                let c = self.character.as_mut().unwrap();
+                if c.gold >= 1 {
+                    c.gold -= 1;
+                    lines.push("In your hurry you fumble a gold coin into the muck. It stays there.".into());
+                }
+                lines.push("You stride off. Somewhere behind you, someone starts laughing.".into());
+                let who = self.character.as_ref().unwrap().titled_name();
+                news = Some(format!(
+                    "Ever graceful, {who} strode out of the forest privy trailing a banner of paper from one boot."
+                ));
+            } else {
+                lines.push("You slip out. Nobody saw a thing.".into());
+            }
+        }
+        for line in lines {
+            self.push_log(line);
+        }
+        if let Some(item) = news {
+            self.news(item);
+        }
+        self.save();
+        self.goto(Mode::Forest);
+        Selection::Stay
+    }
+
+    // --- the Dark Horse Tavern --------------------------------------------------
+
+    /// Step into the Dark Horse (the accepted forest event): open the taproom
+    /// and start the pot signboard loading.
+    fn enter_tavern(&mut self) {
+        self.tavern_view = TavernView::Hub;
+        self.fivesix_pot_rx = Some(self.svc.load_fivesix_pot());
+        self.push_log(
+            "You push into the Dark Horse. Dice rattle somewhere back in the smoke.".into(),
+        );
+        self.goto(Mode::Tavern);
+    }
+
+    /// Drive whichever of the gambler's games is open.
+    fn select_tavern(&mut self) -> Selection {
+        let mut rng = rand::thread_rng();
+        match self.tavern_view {
+            TavernView::Hub => match self.cursor {
+                0 => {
+                    self.tavern_view = TavernView::DiceBet;
+                    self.cursor = 0;
+                }
+                1 => self.play_fivesix(),
+                2 => {
+                    self.tavern_view = TavernView::StonesSide;
+                    self.cursor = 0;
+                }
+                _ => self.goto(Mode::Forest),
+            },
+            TavernView::DiceBet => {
+                let gold = self.character.as_ref().unwrap().gold;
+                match bet_amount(self.cursor, gold) {
+                    Some(bet) => {
+                        let game = tavern::DiceGame::open(bet, &mut rng);
+                        self.push_log(format!(
+                            "You stake {bet} gold. The cup rattles, and you shake out a {}.",
+                            game.roll
+                        ));
+                        self.tavern_view = TavernView::Dice(game);
+                        self.cursor = 0;
+                    }
+                    None => {
+                        self.tavern_view = TavernView::Hub;
+                        self.cursor = 0;
+                    }
+                }
+            }
+            TavernView::Dice(mut game) => {
+                if self.cursor == 1 && game.can_reroll() {
+                    game.reroll(&mut rng);
+                    self.push_log(format!(
+                        "You shake again: a {} (roll {} of {}).",
+                        game.roll, game.tries, tavern::DICE_MAX_ROLLS
+                    ));
+                    self.tavern_view = TavernView::Dice(game);
+                    self.cursor = 0;
+                } else {
+                    // Standing: the old man rolls with his house rules.
+                    let his = tavern::old_man_roll(game.roll, &mut rng);
+                    let c = self.character.as_mut().unwrap();
+                    let line = match his.cmp(&game.roll) {
+                        std::cmp::Ordering::Greater => {
+                            c.gold = c.gold.saturating_sub(game.bet);
+                            format!(
+                                "{} shows a {his} to your {}. He rakes in your {} gold.",
+                                data::GAMBLER, game.roll, game.bet
+                            )
+                        }
+                        std::cmp::Ordering::Less => {
+                            c.gold += game.bet;
+                            format!(
+                                "{} shows a {his} to your {}. He pays out {} gold, scowling.",
+                                data::GAMBLER, game.roll, game.bet
+                            )
+                        }
+                        std::cmp::Ordering::Equal => format!(
+                            "{} shows a {his} to your {}. A push; the stakes go home.",
+                            data::GAMBLER, game.roll
+                        ),
+                    };
+                    self.push_log(line);
+                    self.save();
+                    self.tavern_view = TavernView::Hub;
+                    self.cursor = 0;
+                }
+            }
+            TavernView::StonesSide => match self.cursor {
+                0 | 1 => {
+                    self.tavern_view = TavernView::StonesBet {
+                        like_pair: self.cursor == 0,
+                    };
+                    self.cursor = 0;
+                }
+                _ => {
+                    self.tavern_view = TavernView::Hub;
+                    self.cursor = 0;
+                }
+            },
+            TavernView::StonesBet { like_pair } => {
+                let gold = self.character.as_ref().unwrap().gold;
+                match bet_amount(self.cursor, gold) {
+                    Some(bet) => {
+                        self.push_log(format!(
+                            "You stake {bet} gold on {} pairs. Six red stones and ten blue rattle into the bag.",
+                            if like_pair { "like" } else { "unlike" }
+                        ));
+                        self.tavern_view =
+                            TavernView::Stones(tavern::StonesGame::open(like_pair, bet));
+                        self.cursor = 0;
+                    }
+                    None => {
+                        self.tavern_view = TavernView::Hub;
+                        self.cursor = 0;
+                    }
+                }
+            }
+            TavernView::Stones(mut game) => {
+                let draw = game.draw(&mut rng);
+                let color = |red: bool| if red { "red" } else { "blue" };
+                self.push_log(format!(
+                    "He draws {} and {}: the pair is {}.",
+                    color(draw.first_red),
+                    color(draw.second_red),
+                    if draw.yours { "yours (+2 your pile)" } else { "his (+2 his pile)" }
+                ));
+                if game.finished() {
+                    let payout = game.payout();
+                    let c = self.character.as_mut().unwrap();
+                    let line = match payout.cmp(&0) {
+                        std::cmp::Ordering::Greater => {
+                            c.gold += payout as u64;
+                            format!(
+                                "The bag runs dry at {} stones to {}. Your pile wins: +{} gold.",
+                                game.player_pile, game.oldman_pile, game.bet
+                            )
+                        }
+                        std::cmp::Ordering::Less => {
+                            c.gold = c.gold.saturating_sub(game.bet);
+                            format!(
+                                "The bag runs dry at {} stones to {}. His pile wins: -{} gold.",
+                                game.player_pile, game.oldman_pile, game.bet
+                            )
+                        }
+                        std::cmp::Ordering::Equal => format!(
+                            "Dead even at {} stones apiece. The stakes go home.",
+                            game.player_pile
+                        ),
+                    };
+                    self.push_log(line);
+                    self.save();
+                    self.tavern_view = TavernView::Hub;
+                    self.cursor = 0;
+                } else {
+                    self.tavern_view = TavernView::Stones(game);
+                }
+            }
+        }
+        Selection::Stay
+    }
+
+    /// Throw the five dice (`game_fivesix.php`): the stake is paid at once and
+    /// the shared pot settles asynchronously; [`State::tick`] lands the payout.
+    fn play_fivesix(&mut self) {
+        if self.fivesix_rx.is_some() {
+            self.push_log("The gambler is still counting the pot.".into());
+            return;
+        }
+        let c = self.character.as_mut().unwrap();
+        if c.gold < model::FIVESIX_COST || c.fivesix_plays_today >= model::FIVESIX_PLAYS_PER_DAY {
+            return;
+        }
+        c.gold -= model::FIVESIX_COST;
+        c.fivesix_plays_today += 1;
+        let mut rng = rand::thread_rng();
+        let (dice, sixes) = tavern::fivesix_roll(&mut rng);
+        let faces = dice
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.push_log(format!(
+            "You pay {} gold and throw: {faces} - {sixes} six{}.",
+            model::FIVESIX_COST,
+            if sixes == 1 { "" } else { "es" }
+        ));
+        self.fivesix_rx = Some((
+            sixes,
+            self.svc
+                .settle_fivesix(model::FIVESIX_COST, model::FIVESIX_MAX_POT, sixes),
+        ));
+        self.save();
+    }
+
+    /// Drain the tavern's async plumbing: the pot signboard read, and a
+    /// pending Five Sixes settlement (paying the win, or refunding a failed
+    /// round-trip).
+    fn tick_tavern(&mut self) {
+        if let Some(rx) = self.fivesix_pot_rx.as_mut() {
+            let pot = *rx.borrow_and_update();
+            if pot.is_some() {
+                self.fivesix_pot = pot;
+                self.fivesix_pot_rx = None;
+            }
+        }
+        let Some((sixes, rx)) = self.fivesix_rx.as_mut() else {
+            return;
+        };
+        let sixes = *sixes;
+        let settled = match &*rx.borrow_and_update() {
+            FiveSixLoad::Loading => return,
+            FiveSixLoad::Ready { pot, left_over } => Some((*pot, *left_over)),
+            FiveSixLoad::Failed => None,
+        };
+        self.fivesix_rx = None;
+        let Some((pot, left_over)) = settled else {
+            // The DB round-trip failed: the play never counted, so the stake
+            // comes back.
+            self.character.as_mut().unwrap().gold += model::FIVESIX_COST;
+            self.push_log(
+                "The gambler knocks the pot over mid-count and calls the throw off. Your stake is returned.".into(),
+            );
+            self.save();
+            return;
+        };
+        self.fivesix_pot = Some(left_over);
+        let win = if sixes >= 5 {
+            pot
+        } else if sixes == 4 || sixes == 3 {
+            pot - left_over
+        } else {
+            0
+        };
+        if win == 0 {
+            self.push_log("No luck. Your stake feeds the pot.".into());
+            return;
+        }
+        let who = {
+            let c = self.character.as_mut().unwrap();
+            c.gold += win;
+            c.titled_name()
+        };
+        if sixes >= 5 {
+            self.push_log(format!("FIVE SIXES! The whole pot of {win} gold is yours!"));
+            self.news(format!(
+                "{who} rolled five sixes at the Dark Horse Tavern and swept the pot of {win} gold."
+            ));
+        } else if sixes == 4 {
+            self.push_log(format!("Four sixes! A tenth of the pot: +{win} gold."));
+            self.news(format!(
+                "{who} rolled four sixes at the Dark Horse Tavern and won {win} gold."
+            ));
+        } else {
+            self.push_log(format!("Three sixes pay a sliver of the pot: +{win} gold."));
+            self.news(format!(
+                "{who} rolled three sixes at the Dark Horse Tavern and won {win} gold."
+            ));
+        }
+        self.save();
+    }
+
     // --- dragon points --------------------------------------------------------
 
     /// Spend one dragon point on the highlighted upgrade; the gate lifts once
@@ -1621,6 +2379,9 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
         c.hitpoints != c.max_hitpoints(),
     ));
     rows.push(("The Coinvault (bank)".into(), true));
+    rows.push(("The Stables (mounts)".into(), true));
+    rows.push(("The Mercenary Camp (allies)".into(), true));
+    rows.push((format!("{} (the inn)", data::INN_NAME), true));
     rows.push(("The Daily News".into(), true));
     rows.push(("Leave the realm".into(), true));
     rows
@@ -1641,6 +2402,11 @@ fn forest_menu(c: &Character) -> Vec<(String, bool)> {
         ("Go Slumming (weaker prey)".into(), has_turns),
         ("Look for Something to Kill".into(), has_turns),
         ("Go Thrillseeking (deadlier prey)".into(), has_turns),
+        // The outhouse (`modules/outhouse.php`): a forest amenity, once a day.
+        (
+            "The Outhouse (a smell among the trees)".into(),
+            !c.used_outhouse_today,
+        ),
     ]
 }
 
@@ -1792,6 +2558,347 @@ fn dragon_point_menu() -> Vec<(String, bool)> {
     .into_iter()
     .map(|k| (k.label().to_string(), true))
     .collect()
+}
+
+/// The Sleeping Stag's common room (`inn.php`): the room, the barkeep, the
+/// bard, the taps, and the corner table.
+fn inn_menu(c: &Character) -> Vec<(String, bool)> {
+    let room = c.inn_room_cost();
+    let room_row = if c.lodged_today {
+        ("Your room is paid (a warm bed waits upstairs)".into(), false)
+    } else {
+        (
+            format!("A room for the night ({room} gold)"),
+            c.gold >= room || c.gold_in_bank >= c.inn_room_bank_cost() as i64,
+        )
+    };
+    vec![
+        room_row,
+        (format!("Speak with {} the barkeep", data::BARKEEP), true),
+        (
+            format!("Hear {} the bard sing (once a day)", data::BARD),
+            !c.heard_bard_today,
+        ),
+        ("Order a drink".into(), true),
+        (format!("Sit with {}", data::partner(c.style)), true),
+    ]
+}
+
+/// The room's two purses (`inn_room.php`): gold at cost, the bank at +5%.
+fn inn_room_menu(c: &Character) -> Vec<(String, bool)> {
+    let open = !c.lodged_today;
+    vec![
+        (
+            format!("Pay {} gold from your purse", c.inn_room_cost()),
+            open && c.gold >= c.inn_room_cost(),
+        ),
+        (
+            format!("Charge the bank {} gold (5% fee)", c.inn_room_bank_cost()),
+            open && c.gold_in_bank >= c.inn_room_bank_cost() as i64,
+        ),
+        ("Think better of it".into(), true),
+    ]
+}
+
+/// The barkeep's counter (`inn_bartender.php`): the six bribes (paid win or
+/// lose), and the back shelf.
+fn barkeep_menu(c: &Character) -> Vec<(String, bool)> {
+    let mut rows: Vec<(String, bool)> = (1..=3u32)
+        .map(|g| {
+            (
+                format!(
+                    "Slip him {g} gem{} ({}% odds of a quiet word)",
+                    if g == 1 { "" } else { "s" },
+                    model::gem_bribe_chance(g)
+                ),
+                c.gems >= g as u64,
+            )
+        })
+        .collect();
+    for amount in c.bribe_gold_amounts() {
+        let pct = model::gold_bribe_chance(amount, c.level);
+        rows.push((
+            format!("Slide him {amount} gold ({pct:.0}% odds of a quiet word)"),
+            c.gold >= amount,
+        ));
+    }
+    rows.push((
+        format!(
+            "Browse the back shelf ({} gems a dose)",
+            model::POTION_COST_GEMS
+        ),
+        true,
+    ));
+    rows
+}
+
+/// The specialty paths the barkeep can switch you onto (everything but the
+/// current one).
+fn switchable_specialties(c: &Character) -> Vec<Specialty> {
+    [Specialty::Mystical, Specialty::DarkArts, Specialty::Thief]
+        .into_iter()
+        .filter(|&s| s != c.specialty)
+        .collect()
+}
+
+/// The bribed switch menu: each other path (benched progress shown), or keep.
+fn switch_specialty_menu(c: &Character) -> Vec<(String, bool)> {
+    let mut rows: Vec<(String, bool)> = switchable_specialties(c)
+        .into_iter()
+        .map(|s| {
+            let benched = model::specialty_index(s)
+                .map(|i| c.benched_specialties[i].0)
+                .unwrap_or(0);
+            let label = if benched > 0 {
+                format!("Take up {} again (skill {benched} waiting)", s.name())
+            } else {
+                format!("Take up {} afresh", s.name())
+            };
+            (label, true)
+        })
+        .collect();
+    rows.push(("Keep to your current path".into(), true));
+    rows
+}
+
+/// The back shelf (`cedrikspotions.php`): five potions at a flat gem price.
+fn potions_menu(c: &Character) -> Vec<(String, bool)> {
+    model::POTIONS
+        .iter()
+        .map(|&p| {
+            (
+                format!(
+                    "{} - {} ({} gems)",
+                    p.name(),
+                    p.blurb(),
+                    model::POTION_COST_GEMS
+                ),
+                c.can_buy_potion(p),
+            )
+        })
+        .collect()
+}
+
+/// The taps (`modules/drinks.php`): the three drinks, or a cut-off drunk.
+fn drinks_menu(c: &Character) -> Vec<(String, bool)> {
+    if c.drunkenness > model::MAX_DRUNKENNESS_SERVED {
+        return vec![(
+            format!(
+                "{} eyes your sway and refuses to pour another drop today",
+                data::BARKEEP
+            ),
+            false,
+        )];
+    }
+    data::DRINKS
+        .iter()
+        .map(|d| {
+            let cost = c.level as u64 * d.cost_per_level;
+            let tag = if d.hard { ", hard liquor" } else { "" };
+            (
+                format!("{} ({cost} gold{tag})", d.name),
+                c.can_be_served(d) && c.gold >= cost,
+            )
+        })
+        .collect()
+}
+
+/// The corner table (`modules/lovers.php`): the flirt ladder (or the married
+/// visit), and free talk.
+fn romance_menu(c: &Character) -> Vec<(String, bool)> {
+    let partner = data::partner(c.style);
+    let mut rows = Vec::new();
+    if c.married {
+        rows.push((
+            format!("Steal an hour with {partner}"),
+            !c.flirted_today,
+        ));
+    } else {
+        for (i, label) in data::FLIRT_RUNGS.iter().enumerate() {
+            let hint = if i < model::FLIRT_LADDER.len() {
+                format!("{label} (sure at {} charm)", model::FLIRT_LADDER[i].0)
+            } else {
+                format!("{label} (needs {} charm)", model::MARRY_CHARM_REQUIRED)
+            };
+            rows.push((hint, !c.flirted_today));
+        }
+    }
+    rows.push(("Just talk a while".into(), true));
+    rows
+}
+
+/// The outhouse's stalls (`modules/outhouse.php`).
+fn outhouse_menu(c: &Character) -> Vec<(String, bool)> {
+    vec![
+        (
+            format!("The private stall ({} gold)", model::OUTHOUSE_COST),
+            c.gold >= model::OUTHOUSE_COST,
+        ),
+        ("The public trench (free)".into(), true),
+        ("Hold your nose and move on".into(), true),
+    ]
+}
+
+/// After the stall: the wash (and its lucky finds) or the shortcut.
+fn outhouse_wash_menu() -> Vec<(String, bool)> {
+    vec![
+        ("Wash up at the rain barrel".into(), true),
+        ("Slip out without washing".into(), true),
+    ]
+}
+
+/// A stake for the gambler's even-money games (our menu stands in for
+/// upstream's free-text bet box): a short ladder, or everything.
+fn bet_menu(gold: u64) -> Vec<(String, bool)> {
+    let mut rows: Vec<(String, bool)> = [10u64, 50, 100]
+        .iter()
+        .map(|&b| (format!("Stake {b} gold"), gold >= b))
+        .collect();
+    rows.push((format!("Stake everything ({gold} gold)"), gold > 0));
+    rows.push(("Never mind".into(), true));
+    rows
+}
+
+/// The stake the bet-menu row at `cursor` puts down.
+fn bet_amount(cursor: usize, gold: u64) -> Option<u64> {
+    match cursor {
+        0 => Some(10),
+        1 => Some(50),
+        2 => Some(100),
+        3 => Some(gold),
+        _ => None,
+    }
+}
+
+/// The Dark Horse (`darkhorse.php` + the three game modules), by view.
+fn tavern_menu(
+    c: &Character,
+    view: TavernView,
+    pot: Option<u64>,
+    settling: bool,
+) -> Vec<(String, bool)> {
+    match view {
+        TavernView::Hub => {
+            let fivesix = match pot {
+                Some(p) => format!(
+                    "Five Sixes ({} gold a throw; {p} gold in the pot)",
+                    model::FIVESIX_COST
+                ),
+                None => format!("Five Sixes ({} gold a throw)", model::FIVESIX_COST),
+            };
+            vec![
+                (
+                    "Dice with the one-eyed gambler (high die wins)".into(),
+                    c.gold > 0,
+                ),
+                (
+                    fivesix,
+                    c.gold >= model::FIVESIX_COST
+                        && c.fivesix_plays_today < model::FIVESIX_PLAYS_PER_DAY
+                        && !settling,
+                ),
+                ("Stones (call the pairs)".into(), c.gold > 0),
+                ("Back out into the forest".into(), true),
+            ]
+        }
+        TavernView::DiceBet | TavernView::StonesBet { .. } => bet_menu(c.gold),
+        TavernView::Dice(g) => {
+            let mut rows = vec![(format!("Stand on your {}", g.roll), true)];
+            if g.can_reroll() {
+                rows.push((
+                    format!("Shake again ({} left)", tavern::DICE_MAX_ROLLS - g.tries),
+                    true,
+                ));
+            }
+            rows
+        }
+        TavernView::StonesSide => vec![
+            ("Call like pairs (matched colors pay you)".into(), true),
+            ("Call unlike pairs (mixed colors pay you)".into(), true),
+            ("Never mind".into(), true),
+        ],
+        TavernView::Stones(g) => vec![(
+            format!(
+                "Draw two stones (your pile {}, his {}, {} left in the bag)",
+                g.player_pile,
+                g.oldman_pile,
+                g.red + g.blue
+            ),
+            true,
+        )],
+    }
+}
+
+/// The stable's stalls (`stables.php`): the three stock mounts (buying counts
+/// the ⅔ trade-in refund toward the price), plus a sell row while mounted.
+fn stables_menu(c: &Character) -> Vec<(String, bool)> {
+    let refund = c.mount_refund();
+    let mut rows: Vec<(String, bool)> = data::MOUNTS
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            if c.mount == i as u8 + 1 {
+                (format!("{} (yours, saddled and ready)", m.name), false)
+            } else {
+                (
+                    format!(
+                        "Buy the {} ({} gems; +{} fights/day, {} mounted rounds)",
+                        m.name, m.cost_gems, m.forest_fights, m.buff_rounds
+                    ),
+                    c.gems + refund >= m.cost_gems,
+                )
+            }
+        })
+        .collect();
+    if let Some(m) = c.mount_data() {
+        rows.push((
+            format!("Sell the {} back ({refund} gem refund)", m.name),
+            true,
+        ));
+    }
+    rows
+}
+
+/// The camp's hire list: the two stock mercenaries, plus the Deepfolk-only
+/// crag bear (`racedwarf.php`'s exclusive listing).
+fn merc_listings(c: &Character) -> Vec<&'static data::Mercenary> {
+    let mut list: Vec<&'static data::Mercenary> = data::MERCENARIES.iter().collect();
+    if c.race == Race::Deepfolk {
+        list.push(&data::DEEPFOLK_BEAR);
+    }
+    list
+}
+
+/// Indices of companions the camp sawbones can mend (wounded ones).
+fn wounded_companions(c: &Character) -> Vec<usize> {
+    (0..c.companions.len())
+        .filter(|&i| c.companion_heal_cost(i).is_some())
+        .collect()
+}
+
+/// The mercenary camp (`mercenarycamp.php`): hires (gated by the one-hire cap
+/// and both currencies), then a mend row per wounded companion.
+fn merc_camp_menu(c: &Character) -> Vec<(String, bool)> {
+    let mut rows: Vec<(String, bool)> = merc_listings(c)
+        .into_iter()
+        .map(|merc| {
+            (
+                format!(
+                    "Hire {} ({} gold + {} gems)",
+                    merc.name, merc.cost_gold, merc.cost_gems
+                ),
+                c.can_hire(merc),
+            )
+        })
+        .collect();
+    for i in wounded_companions(c) {
+        let cost = c.companion_heal_cost(i).unwrap();
+        rows.push((
+            format!("Mend {} ({cost} gold)", c.companions[i].name),
+            c.gold >= cost,
+        ));
+    }
+    rows
 }
 
 fn training_menu(c: &Character) -> Vec<(String, bool)> {
@@ -1988,6 +3095,47 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, "Attack");
         assert_eq!(rows[1].0, "Flee");
+    }
+
+    #[test]
+    fn stables_menu_counts_the_trade_in() {
+        let mut c = lvl(5);
+        c.gems = 6;
+        let rows = stables_menu(&c);
+        assert_eq!(rows.len(), 3);
+        assert!(rows[0].1); // pony affordable at 6 gems
+        assert!(!rows[1].1); // courser (10 gems) not
+
+        // Owning the pony adds its 4-gem refund to buying power and a sell row.
+        c.mount = 1;
+        let rows = stables_menu(&c);
+        assert_eq!(rows.len(), 4);
+        assert!(!rows[0].1); // your own stall is not for sale
+        assert!(rows[1].1); // 6 gems + 4 refund covers the courser
+        assert!(rows[3].0.contains("4 gem refund"));
+    }
+
+    #[test]
+    fn merc_camp_lists_hires_and_mending() {
+        let mut c = lvl(5);
+        c.gold = 10_000;
+        c.gems = 10;
+        assert_eq!(merc_camp_menu(&c).len(), 2);
+
+        // The crag bear is a Deepfolk-only listing.
+        c.race = Race::Deepfolk;
+        let rows = merc_camp_menu(&c);
+        assert_eq!(rows.len(), 3);
+        assert!(rows[2].0.contains("Crag Bear"));
+
+        // One hire fills the cap: every hire row disables. Wounding the hire
+        // adds a mend row priced by the sawbones formula.
+        assert!(c.hire_mercenary(&data::MERCENARIES[0]));
+        assert!(merc_camp_menu(&c).iter().all(|(_, enabled)| !enabled));
+        c.companions[0].hitpoints = 1;
+        let rows = merc_camp_menu(&c);
+        assert!(rows.last().unwrap().0.starts_with("Mend Skarn"));
+        assert!(rows.last().unwrap().1);
     }
 
     #[test]

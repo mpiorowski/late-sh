@@ -496,6 +496,143 @@ pub fn partner(style: super::model::AddressStyle) -> &'static str {
     }
 }
 
+/// One of the inn's drinks (`modules/drinks.php` + its installer seed). A
+/// field-for-field transcription of the stock drink rows: when both branch
+/// weights are set, one `e_rand(1, hp+turn)` roll picks the HP or the turn
+/// effect; the `always_*` flags fire both unconditionally. `hp_percent`
+/// nonzero means the HP delta is `round(maxhp * pct/100)`, else it rolls
+/// `e_rand(hp_min, hp_max)`. HP results floor at 1 (and ride over max as an
+/// overheal, exactly upstream); turn results floor at 0. Names original.
+#[derive(Clone, Copy, Debug)]
+pub struct Drink {
+    pub name: &'static str,
+    /// Price is `level * cost_per_level`.
+    pub cost_per_level: u64,
+    /// Drunkenness added per glass.
+    pub drunkenness: u32,
+    /// Hard liquor: capped per day (`hardlimit` 3).
+    pub hard: bool,
+    /// Branch weights: `e_rand(1, hp+turn) <= hp` takes the HP branch.
+    pub hp_chance: u32,
+    pub turn_chance: u32,
+    /// Fire the HP/turn effects unconditionally instead of branching.
+    pub always_both: bool,
+    /// Percent-of-max HP delta when nonzero (`round(maxhp*pct/100)`).
+    pub hp_percent: u32,
+    /// Otherwise the HP delta rolls this inclusive range (signed).
+    pub hp_range: (i32, i32),
+    /// The turn delta's inclusive range (signed).
+    pub turn_range: (i32, i32),
+    pub buff_name: &'static str,
+    pub buff_rounds: u32,
+    pub atk_mod: f32,
+    pub def_mod: f32,
+    pub dmg_mod: f32,
+    pub damage_shield: f32,
+    pub wearoff: &'static str,
+}
+
+/// The three stock drinks (the installer's ale / habanero martini / mule
+/// analogs): costs 10/15/25 per level, +33/+50/+50 drunkenness, and the exact
+/// stock effect rolls and buffs. Names and prose original.
+pub const DRINKS: [Drink; 3] = [
+    Drink {
+        name: "House Brew",
+        cost_per_level: 10,
+        drunkenness: 33,
+        hard: false,
+        hp_chance: 2,
+        turn_chance: 1,
+        always_both: false,
+        hp_percent: 10,
+        hp_range: (0, 0),
+        turn_range: (1, 1),
+        buff_name: "A Warm Buzz",
+        buff_rounds: 10,
+        atk_mod: 1.25,
+        def_mod: 1.0,
+        dmg_mod: 1.0,
+        damage_shield: 0.0,
+        wearoff: "The warm buzz fades from your arms.",
+    },
+    Drink {
+        name: "Fire Shot",
+        cost_per_level: 15,
+        drunkenness: 50,
+        hard: true,
+        hp_chance: 0,
+        turn_chance: 0,
+        always_both: true,
+        hp_percent: 0,
+        hp_range: (-5, 15),
+        turn_range: (-1, 1),
+        buff_name: "Firehands",
+        buff_rounds: 12,
+        atk_mod: 1.1,
+        def_mod: 0.9,
+        dmg_mod: 1.5,
+        damage_shield: 0.0,
+        wearoff: "The fire in your hands gutters out.",
+    },
+    Drink {
+        name: "Black Cask",
+        cost_per_level: 25,
+        drunkenness: 50,
+        hard: true,
+        hp_chance: 2,
+        turn_chance: 3,
+        always_both: false,
+        hp_percent: 0,
+        hp_range: (-10, -1),
+        turn_range: (1, 3),
+        buff_name: "Caskskin",
+        buff_rounds: 15,
+        atk_mod: 1.0,
+        def_mod: 1.0,
+        dmg_mod: 1.3,
+        damage_shield: 1.3,
+        wearoff: "Your cask-hardened skin softens again.",
+    },
+];
+
+/// The flirt ladder's seven rungs, in order (labels original; thresholds live
+/// in `model::FLIRT_LADDER`).
+pub const FLIRT_RUNGS: [&str; 7] = [
+    "Catch their eye across the room",
+    "Pay a shy compliment",
+    "Share a whispered joke",
+    "A kiss on the cheek",
+    "A long, lingering kiss",
+    "An evening upstairs",
+    "Ask for their hand",
+];
+
+/// Idle-chat flavor from the barmaid, bucketed by `charm + e_rand(-1,1)`
+/// (the upstream chat switch: <=0, 1-3, 4-6, 7-9, 10-12, 13-15, 16-18, 19+).
+/// All lines original.
+pub const CHAT_BARMAID: [&str; 8] = [
+    "Wren wipes the bar and somehow never quite reaches your end of it.",
+    "Wren nods along politely, eyes drifting to the door behind you.",
+    "Wren laughs once at your story, mostly out of professional courtesy.",
+    "Wren leans on the bar and asks how the forest is treating you.",
+    "Wren pours you the good measure without being asked.",
+    "Wren's laugh at your joke turns every head at the bar.",
+    "Wren ignores three waving customers to keep talking with you.",
+    "Wren blushes when you catch her already looking at you.",
+];
+
+/// Idle-chat flavor from the bard, same buckets. All lines original.
+pub const CHAT_BARD: [&str; 8] = [
+    "Alder tunes his lute with great focus the moment you sit down.",
+    "Alder hums politely at your story without missing a chord.",
+    "Alder grants your joke one raised eyebrow and half a smile.",
+    "Alder sets the lute aside and asks what you've seen out there.",
+    "Alder works your name into the chorus, just quietly.",
+    "Alder plays the next song to your corner of the room.",
+    "Alder loses his place in the verse when you smile.",
+    "Alder writes a new verse on the spot; it is unmistakably about you.",
+];
+
 /// A stable mount (`stables.php` + the mounts seed). Numbers are upstream's
 /// stock three exactly (gems 6/10/16, +1/+2/+3 daily fights, 20/40/60 buffed
 /// rounds, attack x1.2); names original.

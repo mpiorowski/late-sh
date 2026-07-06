@@ -9,6 +9,8 @@
 //! - `model`     — the persistent `Character` and the rules acting on it
 //! - `specialty` — the twelve specialty combat skills (buff factories)
 //! - `events`    — forest special events (the non-combat vignettes)
+//! - `inn`       — the inn's bard song and romance ladder resolvers
+//! - `tavern`    — the Dark Horse Tavern's gambling game logic
 //! - `persist`   — JSON save/load envelope with a schema version
 //! - `svc`       — DB-backed load/save service (cheap to clone)
 //! - `state`     — per-session game state: mode machine, encounter, message log
@@ -17,10 +19,12 @@
 pub mod combat;
 pub mod data;
 pub mod events;
+pub mod inn;
 pub mod model;
 pub mod persist;
 pub mod screen;
 pub mod specialty;
 pub mod state;
 pub mod svc;
+pub mod tavern;
 pub mod ui;

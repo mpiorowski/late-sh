@@ -436,6 +436,18 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Graveyard => "The Graveyard",
         Mode::SpendDragonPoints => "Dragon Points",
         Mode::News => "The Daily News",
+        Mode::Stables => "The Stables",
+        Mode::MercCamp => "The Mercenary Camp",
+        Mode::Inn => data::INN_NAME,
+        Mode::InnRoom => "A Room for the Night",
+        Mode::Barkeep => "The Barkeep's Counter",
+        Mode::SwitchSpecialty => "A Quiet Word",
+        Mode::Potions => "The Back Shelf",
+        Mode::Drinks => "The Taps",
+        Mode::Romance => "The Corner Table",
+        Mode::Outhouse => "The Outhouse",
+        Mode::OuthouseWash(_) => "The Rain Barrel",
+        Mode::Tavern => "The Dark Horse Tavern",
     }
 }
 
@@ -445,6 +457,14 @@ fn controls_hint(mode: Mode) -> &'static str {
         Mode::Village | Mode::Graveyard => "up/down move   Enter choose   Esc leave the game",
         Mode::SpendDragonPoints => "up/down move   Enter spend   Esc leave the game",
         Mode::ChooseStyle | Mode::ChooseRace => "up/down move   Enter choose   Esc leave the game",
+        Mode::InnRoom
+        | Mode::Barkeep
+        | Mode::SwitchSpecialty
+        | Mode::Potions
+        | Mode::Drinks
+        | Mode::Romance => "up/down move   Enter choose   Esc back to the inn",
+        Mode::Outhouse | Mode::Tavern => "up/down move   Enter choose   Esc back to the forest",
+        Mode::OuthouseWash(_) => "up/down move   Enter choose   Esc slips out unwashed",
         _ => "up/down move   Enter choose   Esc back to village",
     }
 }

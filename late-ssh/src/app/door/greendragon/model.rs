@@ -79,6 +79,33 @@ pub const HARD_DRINKS_PER_DAY: u32 = 3;
 pub const MAX_DRUNKENNESS_SERVED: u32 = 66;
 /// Five Sixes plays allowed per day (`game_fivesix` `dailyuses`).
 pub const FIVESIX_PLAYS_PER_DAY: u32 = 10;
+
+/// Gems per potion dose on the barkeep's back shelf (`cedrikspotions`: every
+/// stock potion's cost setting defaults to 2).
+pub const POTION_COST_GEMS: u64 = 2;
+
+/// The private outhouse stall's price (`outhouse` `cost` default 5).
+pub const OUTHOUSE_COST: u64 = 5;
+
+/// The wash-up's lucky find (`outhouse` `giveback` default 3) — note it's
+/// smaller than the stall price, so even a "refund" runs a 2-gold loss.
+pub const OUTHOUSE_GIVEBACK: u64 = 3;
+
+/// The mending draught's overheal above max, per dose (`tempgain` 20).
+pub const MENDING_OVERHEAL: u32 = 20;
+
+/// Transmutation sickness: rounds of atk/def x0.75 that survive the new day
+/// (`transmuteturns` 10, `atkmod`/`defmod` 0.75, `survive` 1).
+pub const TRANSMUTE_ROUNDS: u32 = 10;
+
+/// The lover's ward: defense x1.2 for 60 combat rounds (`lovers_getbuff`).
+pub const LOVER_BUFF_ROUNDS: u32 = 60;
+
+/// The flirt ladder's first six rungs as `(success threshold, charm cap)`
+/// (`lovers_violet/seth.php`): the test is `e_rand(charm, T) >= T` (certain at
+/// charm >= T) and a success grants +1 charm only while under the cap. Rung 7
+/// is the marriage proposal, gated on [`MARRY_CHARM_REQUIRED`].
+pub const FLIRT_LADDER: [(u32, u32); 6] = [(2, 4), (4, 7), (7, 11), (11, 14), (14, 18), (18, 25)];
 /// Gold staked per Five Sixes play; each play also grows the shared pot by
 /// this much (`game_fivesix` `cost`).
 pub const FIVESIX_COST: u64 = 5;
@@ -319,6 +346,100 @@ pub struct NewDayFx {
     pub divorced: bool,
     /// Woke up hungover (-1 turn).
     pub hangover: bool,
+}
+
+/// The five potions on the barkeep's back shelf
+/// (`modules/cedrikspotions.php`), each [`POTION_COST_GEMS`] a dose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PotionKind {
+    /// +1 charm per dose (`charmgain` 1).
+    Charm,
+    /// Permanent +1 max HP and +1 current per dose (`vitalgain` 1); survives
+    /// dragon kills (`carrydk` default 1).
+    Vitality,
+    /// Heal to full, then +[`MENDING_OVERHEAL`] over max (`tempgain` 20).
+    Mending,
+    /// Drop the specialty; the village chooser re-arms. Single dose.
+    Forgetting,
+    /// Drop the race (the gate re-arms at next load) and take transmutation
+    /// sickness. Single dose; a repeat dose stacks the sickness rounds.
+    Transmutation,
+}
+
+/// The back shelf in display order.
+pub const POTIONS: [PotionKind; 5] = [
+    PotionKind::Charm,
+    PotionKind::Vitality,
+    PotionKind::Mending,
+    PotionKind::Forgetting,
+    PotionKind::Transmutation,
+];
+
+impl PotionKind {
+    /// Display name (ours; the upstream shelf's names are theirs).
+    pub fn name(self) -> &'static str {
+        match self {
+            PotionKind::Charm => "Rosewater Tonic",
+            PotionKind::Vitality => "Oakblood Tonic",
+            PotionKind::Mending => "Mending Draught",
+            PotionKind::Forgetting => "Draught of Forgetting",
+            PotionKind::Transmutation => "Transmutation Draught",
+        }
+    }
+
+    /// One-line shelf description for the menu row.
+    pub fn blurb(self) -> &'static str {
+        match self {
+            PotionKind::Charm => "+1 charm",
+            PotionKind::Vitality => "+1 max hitpoint, forever",
+            PotionKind::Mending => "heal to full, and then some",
+            PotionKind::Forgetting => "unlearn your specialty",
+            PotionKind::Transmutation => "shed your ancestry (you will be ill)",
+        }
+    }
+}
+
+/// The transmutation draught's lingering sickness: atk/def x0.75 for
+/// [`TRANSMUTE_ROUNDS`] combat rounds, surviving the new day (the one stock
+/// debuff with `survivenewday`). Re-dosing stacks rounds via
+/// [`Character::apply_persistent_buff`]'s "transmute" slot rule.
+pub fn transmute_sickness() -> PersistedBuff {
+    PersistedBuff {
+        slot: "transmute".into(),
+        name: "Transmutation Sickness".into(),
+        rounds_left: TRANSMUTE_ROUNDS,
+        player_atk_mod: 0.75,
+        player_def_mod: 0.75,
+        survives_new_day: true,
+        wearoff: "The transmutation sickness finally passes.".into(),
+        ..PersistedBuff::default()
+    }
+}
+
+/// The lover's ward (`lovers_getbuff`): defense x1.2 for 60 rounds, granted
+/// by a successful married visit and on the wedding itself.
+pub fn lover_buff(partner: &str) -> PersistedBuff {
+    PersistedBuff {
+        slot: "lover".into(),
+        name: "Lover's Ward".into(),
+        rounds_left: LOVER_BUFF_ROUNDS,
+        player_def_mod: 1.2,
+        wearoff: format!("You find yourself missing {partner}."),
+        ..PersistedBuff::default()
+    }
+}
+
+/// Success chance (percent) of bribing the barkeep with `gems` gems (1-3):
+/// `gems * 30` (`inn_bartender.php`).
+pub fn gem_bribe_chance(gems: u32) -> u32 {
+    gems * 30
+}
+
+/// Success chance (percent) of a gold bribe of `amount` at `level`:
+/// `(amount/level - 10) * (50/90) + 25` — 25% / ~47% / 75% at the three
+/// stock amounts (`level*10/50/100`).
+pub fn gold_bribe_chance(amount: u64, level: u8) -> f64 {
+    (amount as f64 / level.max(1) as f64 - 10.0) * (50.0 / 90.0) + 25.0
 }
 
 /// Index of a chooseable specialty into [`Character::benched_specialties`].
@@ -1321,6 +1442,158 @@ impl Character {
     pub fn inn_room_bank_cost(&self) -> u64 {
         let cost = self.inn_room_cost();
         cost + (cost as f64 * 5.0 / 100.0).round() as u64
+    }
+
+    /// Take the inn's room for the night (`inn_room.php`): gold at the base
+    /// price, or the bank at the price plus its 5% fee. Once per day. Returns
+    /// the price paid.
+    pub fn lodge(&mut self, from_bank: bool) -> Option<u64> {
+        if self.lodged_today {
+            return None;
+        }
+        let cost = if from_bank {
+            let cost = self.inn_room_bank_cost();
+            if self.gold_in_bank < cost as i64 {
+                return None;
+            }
+            self.gold_in_bank -= cost as i64;
+            cost
+        } else {
+            let cost = self.inn_room_cost();
+            if self.gold < cost {
+                return None;
+            }
+            self.gold -= cost;
+            cost
+        };
+        self.lodged_today = true;
+        Some(cost)
+    }
+
+    /// The barkeep's three gold bribe amounts (`inn_bartender.php`):
+    /// `level*10`, `level*50`, `level*100`.
+    pub fn bribe_gold_amounts(&self) -> [u64; 3] {
+        let l = self.level as u64;
+        [l * 10, l * 50, l * 100]
+    }
+
+    /// Whether a potion is buyable right now: the gems cover a dose, and the
+    /// reset potions have something to reset.
+    pub fn can_buy_potion(&self, kind: PotionKind) -> bool {
+        if self.gems < POTION_COST_GEMS {
+            return false;
+        }
+        match kind {
+            PotionKind::Forgetting => self.specialty != Specialty::None,
+            PotionKind::Transmutation => self.race != Race::None,
+            _ => true,
+        }
+    }
+
+    /// Buy and drink one dose off the back shelf (`cedrikspotions.php`).
+    /// Returns false (spending nothing) if [`Character::can_buy_potion`]
+    /// says no.
+    pub fn buy_potion(&mut self, kind: PotionKind) -> bool {
+        if !self.can_buy_potion(kind) {
+            return false;
+        }
+        self.gems -= POTION_COST_GEMS;
+        match kind {
+            PotionKind::Charm => self.charm += 1,
+            PotionKind::Vitality => {
+                self.vitality_hp += 1;
+                self.hitpoints += 1;
+            }
+            // Heal to full first, then the overheal on top (the upstream
+            // order: an existing overheal is kept, not clipped).
+            PotionKind::Mending => {
+                self.hitpoints = self.hitpoints.max(self.max_hitpoints()) + MENDING_OVERHEAL;
+            }
+            PotionKind::Forgetting => self.forget_specialty(),
+            PotionKind::Transmutation => {
+                self.race = Race::None;
+                self.apply_persistent_buff(transmute_sickness());
+            }
+        }
+        true
+    }
+
+    /// Whether the barkeep will pour this drink: service stops entirely above
+    /// [`MAX_DRUNKENNESS_SERVED`], and hard liquor is capped per day.
+    pub fn can_be_served(&self, d: &data::Drink) -> bool {
+        self.drunkenness <= MAX_DRUNKENNESS_SERVED
+            && (!d.hard || self.hard_drinks_today < HARD_DRINKS_PER_DAY)
+    }
+
+    /// Down one of the inn's drinks (`modules/drinks.php`): pay, take the
+    /// drunkenness, roll the HP/turn effects (HP floors at 1 and can ride
+    /// over max; turns floor at 0), and apply the drink's buzz — slot
+    /// "buzz", so a new drink replaces the old one's leftovers. The caller
+    /// checks [`Character::can_be_served`] and affordability. Returns the
+    /// lines to log.
+    pub fn drink(&mut self, d: &data::Drink, rng: &mut impl Rng) -> Vec<String> {
+        let cost = self.level as u64 * d.cost_per_level;
+        self.gold -= cost;
+        self.drunkenness = (self.drunkenness + d.drunkenness).min(100);
+        if d.hard {
+            self.hard_drinks_today += 1;
+        }
+        let mut lines = vec![format!("You pay {cost} gold and down a {}.", d.name)];
+        let (mut do_hp, mut do_turn) = (d.always_both, d.always_both);
+        if !d.always_both && d.hp_chance + d.turn_chance > 0 {
+            if rng.gen_range(1..=d.hp_chance + d.turn_chance) <= d.hp_chance {
+                do_hp = true;
+            } else {
+                do_turn = true;
+            }
+        }
+        if do_hp {
+            let delta = if d.hp_percent > 0 {
+                (self.max_hitpoints() as f64 * d.hp_percent as f64 / 100.0).round() as i32
+            } else {
+                rng.gen_range(d.hp_range.0..=d.hp_range.1)
+            };
+            self.hitpoints = (self.hitpoints as i64 + delta as i64).max(1) as u32;
+            match delta.cmp(&0) {
+                std::cmp::Ordering::Greater => {
+                    lines.push(format!("It goes down warm: +{delta} hitpoints."))
+                }
+                std::cmp::Ordering::Less => lines.push(format!(
+                    "It goes down like a lit coal: {delta} hitpoints."
+                )),
+                std::cmp::Ordering::Equal => {}
+            }
+        }
+        if do_turn {
+            let delta = rng.gen_range(d.turn_range.0..=d.turn_range.1);
+            self.turns = (self.turns as i64 + delta as i64).max(0) as u32;
+            match delta.cmp(&0) {
+                std::cmp::Ordering::Greater => lines.push(format!(
+                    "Your blood is up: +{delta} forest fight{}.",
+                    if delta == 1 { "" } else { "s" }
+                )),
+                std::cmp::Ordering::Less => {
+                    lines.push("The room swims; you lose a forest fight.".to_string())
+                }
+                std::cmp::Ordering::Equal => {}
+            }
+        }
+        self.apply_persistent_buff(PersistedBuff {
+            slot: "buzz".into(),
+            name: d.buff_name.into(),
+            rounds_left: d.buff_rounds,
+            player_atk_mod: d.atk_mod,
+            player_def_mod: d.def_mod,
+            player_dmg_mod: d.dmg_mod,
+            damage_shield: d.damage_shield,
+            wearoff: d.wearoff.into(),
+            survives_new_day: false,
+        });
+        lines.push(format!(
+            "{} settles into your limbs ({} rounds).",
+            d.buff_name, d.buff_rounds
+        ));
+        lines
     }
 
     /// The stabled mount's data row, if any.

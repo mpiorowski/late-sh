@@ -6,13 +6,11 @@
 //! **Licensing.** The effect mechanics (gold/gem ranges, roll tables, heal/turn
 //! deltas) are transcribed 1=1 from those modules — pure numbers, uncopyrightable
 //! — exactly like the creature stat blocks in [`super::data`]. All prose here is
-//! **original to late.sh**; no module text is copied. Two events are adapted
-//! rather than ported verbatim because we lack the systems they depend on:
-//!   - `glowingstream` rolls 1..=10; cases 8..=10 fall through to a plain full
-//!     heal (the module's `default:`), kept as-is.
-//!   - `darkhorse` is mostly PvP enemy-intel, a dice gambling minigame, and a
-//!     shared comment board — none of which exist single-player. It's reduced to
-//!     a roadside rest (a drink that restores health). The trim is deliberate.
+//! **original to late.sh**; no module text is copied. One adaptation:
+//! `glowingstream` rolls 1..=10 and cases 8..=10 fall through to a plain full
+//! heal (the module's `default:`), kept as-is. `darkhorse` opens the real
+//! tavern room (the gambler's three games, `state`'s `Mode::Tavern`); its
+//! PvP enemy-intel and comment board wait for the multiplayer phase.
 
 use rand::Rng;
 
@@ -35,7 +33,8 @@ pub enum ForestEvent {
     PettingZoo,
     /// Foilwench, who trades a gem for specialty training (`foilwench`).
     Foilwench,
-    /// The Dark Horse Tavern: a place to rest (`darkhorse`, reduced).
+    /// The Dark Horse Tavern (`darkhorse`): accepting opens the real room —
+    /// the gambler's games — via the state machine, not this resolver.
     Tavern,
 }
 
@@ -174,9 +173,9 @@ impl ForestEvent {
                 title: self.title(),
                 intro: vec![
                     "A mist rolls in, and when it clears a log tavern stands before you, smoke curling from its chimney.",
-                    "It's quiet inside, a good place to sit a while and let your wounds close.",
+                    "Through the shutters you catch lamplight, laughter, and the unmistakable rattle of dice.",
                 ],
-                choice: Some(("Stop in for a drink", "Move on")),
+                choice: Some(("Step inside", "Move on")),
             },
         }
     }
@@ -415,14 +414,13 @@ impl ForestEvent {
         }
     }
 
-    fn resolve_tavern(self, accepted: bool, ch: &mut Character) -> Vec<String> {
+    fn resolve_tavern(self, accepted: bool, _ch: &mut Character) -> Vec<String> {
+        // Accepting never reaches this resolver: the state machine intercepts
+        // it and opens the tavern room (`Mode::Tavern`) instead.
         if !accepted {
-            return vec!["You leave the strange tavern to its quiet and walk on.".into()];
+            return vec!["You leave the strange tavern to its noise and walk on.".into()];
         }
-        // Reduced from darkhorse: just the rest. A drink and a sit-down close your
-        // wounds. (No PvP intel / dice / comment board single-player.)
-        ch.hitpoints = ch.max_hitpoints();
-        vec!["The toothless barkeep pours you something strong. You drink, you rest, and your wounds close over. Back to full health.".into()]
+        Vec::new()
     }
 }
 
