@@ -222,7 +222,9 @@ this section originally claimed:
   - **Goldmine cave-in** (`raceminedeath`): on the 19–20 roll,
     `e_rand(1,100) < chance` (90 default / 5 Deepfolk) kills; otherwise the
     lucky escape zeroes the day's turns (corrections 1–2).
-  - Elf/troll `pvpadjust` (same bonus defending in PvP) — phase 4, note only.
+  - Elf/troll `pvpadjust` (same bonus defending in PvP) — landed free with
+    phase 4's PvP: the defender's stats come from `attack()`/`defense()`,
+    which already fold the race add in.
   - The dwarf-analog's exclusive mercenary (bear companion: atk 1 +2/lvl,
     def 5 +2/lvl, hp 25 +25/lvl, ability defend, 4 gems + 600 gold) joins
     the phase-3 mercenary camp as a race-gated listing.
@@ -467,10 +469,10 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 
 - **Bets are a fixed stake ladder** (10/50/100/everything) standing in for
   upstream's free-text bet box; still capped by gold on hand.
-- **The inn room** sets the daily flag + flavor only — upstream's "room" is
-  the site's log-out-for-the-night; the flag becomes PvP-relevant in
-  phase 4. Bank payment keeps the +5% fee and requires a positive balance
-  covering it.
+- **The inn room** sets the daily flag + flavor — upstream's "room" is
+  the site's log-out-for-the-night; since phase 4's PvP the flag also
+  routes you to the inn's target list (the barkeep's keys). Bank payment
+  keeps the +5% fee and requires a positive balance covering it.
 - **The Dark Horse** restores the gambler's three games; the comment board
   and the bartender's paid enemy-intel are phase-4 features (commentary /
   roster) and stay deferred. Abandoning a game mid-hand forfeits nothing,
@@ -494,7 +496,7 @@ online-roster path; the session stays authoritative for its own character
 
 ### Build order
 commentary ✓ → roster/HoF ✓ → gypsy ✓ (folded into the commentary slice — it
-is just a paid door onto the shade section) → PvP → bounties + haunt →
+is just a paid door onto the shade section) → PvP ✓ → bounties + haunt →
 clans → mail(?) → gardens ✓ / veterans' rock ✓. Commentary first: five
 other features are just sections of it.
 
@@ -640,9 +642,9 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 - **No sex/gender column**: our analog (address style) is a title-column
   pick, not an identity — the list drops the column and the charm ranking
   shows race only.
-- The alive column is two-state (village/graveyard); upstream's
-  "Unconscious" tri-state only arises from PvP knockouts, which wait for
-  the PvP slice.
+- The alive column is two-state (village/graveyard); a PvP death lands the
+  victim in the graveyard like any other, so upstream's "Unconscious"
+  tri-state never arises here.
 - No clan sub-list (lands with clans), no write-mail/bio links (no in-door
   mail), and both screens are village-nav only (upstream also links the
   list from logged-out pages and bios).
@@ -654,35 +656,142 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
   section (the dead post there free from the graveyard). That's the whole
   building; menu: pay / leave. Landed with the commentary slice above.
 
-### PvP ("slay other warriors", village + inn)
-- **Target list**: level in `[mine−1, mine+2]`, alive, not currently
-  in-session (online-blocked), not attacked in the last 10 min
-  (`pvpflag`/`pvptimeout` 600s), not immune. **Immunity**: character age
-  ≤ 5 days AND 0 dragon kills AND never PK'd AND experience < 1500.
-  Attacking anyone while you yourself are immune permanently clears your
-  immunity (`pk = 1`).
-- **3 attacks/day** (`player_fights`, reset at newday; not reset on
-  resurrection days).
-- Combat: the existing engine vs the target's stored stats (level, gear,
-  boons, race bonus per phase 2); target is passive (their buffs
-  suspended); companions flagged `allowinpvp` only (stock hires: no).
-- **You win**: gold `round(10 · targetLevel · ln(max(1, targetGold)))`
-  where targetGold = min(gold at engage, gold now); exp gain
-  `round(0.10 · targetExp)` adjusted `±10%` per level difference
-  (`round(exp·(1 + 0.1·(tLvl−mLvl)) − exp)` bonus). **A level-15 attacker
-  gets zero gold and exp** ("no prowess" rule). Victim: −5% experience,
-  loses the taken gold (bank absorbs any shortfall), `alive = false`
-  (graveyard next login), gets a system mail/notification with details;
-  news item (field-kill or inn-break-in variant).
-- **You lose** (their sleeping body bests you): you die — gold 0,
-  **−15% experience**, graveyard; the defender gains `round(0.10 · yourExp)`
-  and the same gold formula on you (zeroed if the defender is level 15);
-  mail + news both ways.
-- **Inn attacks**: `lodged_today` characters are listed at the inn
-  (unlocked via the barkeep bribe) and attackable there even if otherwise
-  location-filtered.
-- Snapshot `pvpflag` timestamp on engage so a target can't be dogpiled
-  within the 10-min window.
+### PvP ("slay other warriors", village + inn) — DONE
+
+Sources: `pvp.php`, `lib/pvplist.php`, `lib/pvpsupport.php`,
+`lib/pvpwarning.php`, `lib/inn/inn_bartender.php`, `battle.php` (the pvp
+branches: `suspend_buffs`/`suspend_companions`/`apply_bodyguard`/surprise),
+`newday.php` (`playerfights`). Implemented 2026-07, re-verified line-by-line
+against the local `upstream-lotgd/` clone before porting. **Source-audit
+corrections** to what this section originally claimed (the specs below are
+already fixed to match):
+
+1. **The immunity experience bar is `<= 1500`**, not `< 1500`
+   (`pvpwarning`'s test; `pvplist`'s filter is the same set negated:
+   `age>5 OR dragonkills>0 OR pk>0 OR experience>1500`).
+2. **The level-15 defender still collects the gold.** `pvpdefeat` assigns
+   the zero to a typo'd `$wonamount` while paying `$winamount`, so only the
+   experience is zeroed against a level-15 sleeper. Ported 1=1, bug and all
+   (the attacker-side level-15 zeroing in `pvpvictory` is real and zeroes
+   both).
+3. **Engage re-checks `abs(level diff) <= 2`** (`setup_target`) — one level
+   wider *below* than the list's `[mine−1, mine+2]` band. Both kept: the
+   list filters `[−1,+2]`, the engage transaction re-checks `±2`.
+4. **The sleeper defends at full health** (`maxhitpoints AS
+   creaturehealth`), whatever wounds they saved with — and their stored
+   attack/defense carry gear, boons, and the race bonus (our
+   `attack()`/`defense()` fold the race add in, which *is* upstream's
+   elf/troll `pvpadjust` re-add).
+5. **Nothing stock sets `allowinpvp`**, so the buff/companion nuance
+   collapses: every buff and companion sits PvP out on both sides (drinks,
+   the lover's ward, mounts, mercenaries, Bonecall — all shelved). The one
+   buff in any PvP fight is the inn **bodyguard** (`apply_bodyguard(1)`:
+   defender attack ×1.05, attacker defense ×0.95, whole fight) — every inn
+   target has `bodyguardlevel = boughtroomtoday = 1`.
+6. **The sleeper can strike first**: `battle.php` rolls surprise 50/50 for
+   single-foe fights, PvP included ("%s's skill allows them to get the
+   first round").
+7. **No flee, no skills, enforced by conversion**: `op=run` becomes a
+   *fought round* ("your pride prevents you from running"), a skill pick is
+   stripped ("your honor prevents..."). Ours: the fight menu is one Attack
+   row and Esc resolves a round.
+8. **`playerfights` decrements at engage** (`pvp.php`), not at resolution —
+   abandoning a fight still spent the attack; a *refused* engage spends
+   nothing. The `pvpflag` dogpile stamp lands on the target at engage too.
+9. **Upstream's inn room is the site log-out** (`inn_room.php`: `location =
+   inn`, `loggedin = 0`, session cleared): "who's upstairs" can hold
+   players from days ago, since `boughtroomtoday` only clears at *their*
+   next new day. Ours mirrors that with the `lodged_today` blob flag, which
+   lingers the same way.
+10. **The victim's losses read two clocks**: experience −5% of the
+    *engage-time* snapshot; gold = `min(gold at engage, gold at
+    settlement)` re-read fresh, the bank absorbing any shortfall
+    (`pvpvictory`'s IF guard).
+11. **The defender's reward has a leveled-down guard**: `pvpdefeat`
+    re-reads their level and skips the payout if it dropped since engage
+    (a mid-fight dragon kill would make the reward "way too rich").
+12. The list's `slaydragon=0` filter is a web-flow artifact (set by
+    `dragon.php`, cleared on the next village pageview) — no equivalent
+    exists here; omitted.
+
+- [x] **`Character` fields** (serde-defaulted, no migration):
+  `player_fights` (3/day via `PVP_FIGHTS_PER_DAY`, refilled by
+  `roll_new_day` only — the paid resurrection skips it, exactly like grave
+  fights), `pk` (permanent immunity forfeit), `pvp_engaged_at` (the
+  `pvpflag` timestamp, stamped through the DB by attackers), and
+  `pvp_reports` (see the mail adaptation below).
+- [x] **Target lists** (`Mode::PvpList(Fields|Inn)`): built off the roster
+  snapshot — someone else, alive, offline (the presence window), past
+  immunity, level in `[mine−1, mine+2]`, venue split on `lodged` — ordered
+  level/experience/kills descending; dogpiled rows show disabled ("hunted
+  too recently"); the other venue's count renders as a rumor line. The
+  fields list hangs off the village ("Slay Other Warriors", fights-left in
+  the row); the inn list is the barkeep bribe's second prize
+  (`Mode::BarkeepEar`: who's upstairs / the specialty switch).
+- [x] **Immunity warning + forfeit** (`pvpwarning`): the still-immune see
+  the warning entering either list; a successful engage while immune sets
+  `pk = 1` forever.
+- [x] **Engage** (`setup_target` as a row-locked transaction in `svc`):
+  re-checks against the target's *fresh* blob (found → level ±2 → pvpflag
+  10 min → awake → alive, upstream's order and precedence), stamps
+  `pvp_engaged_at`, and snapshots the fight stats + gold/exp. Refusals log
+  and re-read the list.
+- [x] **The fight**: `FoeKind::Pvp` through the existing resolver — no
+  persistent-buff injection, companions benched, the inn bodyguard as the
+  lone buff, the 50/50 first-strike roll, victory-at-0-HP staunched to 1
+  (`pvp.php`'s "bit of cloth").
+- [x] **You win**: exp `round(10% · engageExp)` ± the level-difference
+  bonus, applied locally; gold waits on the victory settlement (the fresh
+  purse re-read) — both zeroed at level 15. The victim loses the taken
+  gold and 5% engage-time exp, dies (our standard death hygiene), and gets
+  a report; news in the field/inn variant.
+- [x] **You lose**: `pvp_die()` (gold 0, −15% exp, graveyard); the sleeper
+  collects `round(10 · myLevel · ln(max(1, myGold)))` + `round(10% ·
+  myExp)` (exp zeroed if they're 15; gold paid regardless, correction 2)
+  through the defeat settlement with the leveled-down guard; taunted news.
+
+**Cross-player writes (the architectural piece).** Settlements are the
+door's first writes to *another* player's blob. Three mechanisms keep them
+from clobbering (or being clobbered by) a live session:
+
+1. **Row-locked delta transactions**: engage and both settlements `SELECT
+   ... FOR UPDATE`, decode the *fresh* blob, apply deltas (never a stale
+   whole-blob overwrite), and write back with `update_data_keep_updated` —
+   which deliberately does not touch `updated`, since being attacked isn't
+   presence. Concurrent attackers serialize on the row lock and the second
+   sees the first's `pvp_engaged_at`.
+2. **The in-process write gate**: each transaction holds the victim's
+   per-user save gate, ordering it against any in-flight fire-and-forget
+   saves from a session in this process.
+3. **The presence heartbeat**: a live session re-saves after 4 idle
+   minutes (`HEARTBEAT_SECS`), so it can never drift out of the 15-minute
+   online window and get targeted mid-play (upstream's `laston` refreshes
+   every page load; ours only refreshed on action before this).
+
+The residual race — the victim entering the door *during* the fight, then
+saving over the settlement — is upstream's own (`pvpvictory` UPDATEs while
+the victim may be mid-request) and is bounded by fight length against a
+target that was offline 15+ minutes; accepted and documented.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **Mail → in-blob reports**: the plan said "map systemmail onto the
+  existing notification/DM systems", but the site's notifications are
+  mention-shaped (actor/message/room) and a DM would put words in the
+  attacker's mouth — so settlement reports ride the victim's own blob
+  (`pvp_reports`, written atomically with the settlement) and drain into
+  the game log at their next entry, which is exactly when upstream's mail
+  got read anyway. Revisit only if an out-of-door ping proves wanted.
+- **Venue is the `lodged` flag**, not upstream's location string (we have
+  no location column; the village/inn split is the only one that exists).
+- All engage/settle/news/report prose is original.
+- The victim's death applies our standard hygiene (companions, buffs,
+  drunkenness cleared) — upstream's victim UPDATE leaves them; ours keeps
+  the "companions don't follow past the grave" invariant every other death
+  path has.
+- Abandoning mid-fight is only possible by leaving the door (Esc fights a
+  round instead); the attack stays spent and the target stays flagged,
+  matching upstream's walk-away.
 
 ### Bounty board (upstream Dag; our NPC name original; sits in the inn)
 - Table `greendragon_bounties`: id, target user_id, setter user_id

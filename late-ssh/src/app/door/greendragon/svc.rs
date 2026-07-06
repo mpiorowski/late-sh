@@ -273,28 +273,28 @@ async fn pvp_engage_tx(db: &Db, attacker_level: u8, target_id: Uuid) -> anyhow::
     let tx = client.transaction().await?;
     let Some((blob, updated)) = GreenDragonCharacter::load_for_update(&tx, target_id).await? else {
         return Ok(PvpEngage::Refused(
-            "they seem to have quit the realm entirely.".into(),
+            "They seem to have quit the realm entirely.".into(),
         ));
     };
     let mut c = persist::from_json(&blob);
     let now = Utc::now();
     if (attacker_level as i16 - c.level as i16).abs() > 2 {
         return Ok(PvpEngage::Refused(
-            "they are beyond your reach in prowess now.".into(),
+            "They are beyond your reach in prowess now.".into(),
         ));
     }
     if now.timestamp() - c.pvp_engaged_at < model::PVP_TIMEOUT_SECS {
         return Ok(PvpEngage::Refused(
-            "someone else is already stalking them; wait your turn.".into(),
+            "Someone else is already stalking them; wait your turn.".into(),
         ));
     }
     if c.online && (now - updated).num_seconds() < ONLINE_WINDOW_SECS {
         return Ok(PvpEngage::Refused(
-            "they are awake and about, and cannot be caught sleeping.".into(),
+            "They are awake and about, and cannot be caught sleeping.".into(),
         ));
     }
     if !c.alive {
-        return Ok(PvpEngage::Refused("the dead cannot be slain twice.".into()));
+        return Ok(PvpEngage::Refused("The dead cannot be slain twice.".into()));
     }
     let target = PvpTarget {
         user_id: target_id,
@@ -332,8 +332,8 @@ async fn pvp_settle_victory_tx(
     // If they banked (or spent) gold since engage, take the lesser — the
     // point is to move only what was on the table (`pvpvictory`'s re-read).
     let taken_gold = engage.gold.min(c.gold);
-    let lost_exp = (model::PVP_DEFENDER_LOSE_PCT as f64 * engage.experience as f64 / 100.0).round()
-        as u64;
+    let lost_exp =
+        (model::PVP_DEFENDER_LOSE_PCT as f64 * engage.experience as f64 / 100.0).round() as u64;
     c.pvp_slain(taken_gold, lost_exp);
     let where_slept = if engage.lodged {
         "in your room at the inn"
@@ -725,7 +725,7 @@ impl GreenDragonService {
                 Ok(engage) => engage,
                 Err(e) => {
                     tracing::warn!("greendragon pvp engage failed: {e}");
-                    PvpEngage::Refused("the night swallows your approach; try again.".into())
+                    PvpEngage::Refused("The dark swallows your approach; try again.".into())
                 }
             };
             let _ = tx.send(msg);
@@ -751,15 +751,14 @@ impl GreenDragonService {
         tokio::spawn(async move {
             let gate = inner.gate(victim_id);
             let _held = gate.lock().await;
-            let msg = match pvp_settle_victory_tx(&inner.db, victim_id, &engage, &attacker_name)
-                .await
-            {
-                Ok(settle) => settle,
-                Err(e) => {
-                    tracing::warn!("greendragon pvp victory settle failed: {e}");
-                    PvpSettle::Failed
-                }
-            };
+            let msg =
+                match pvp_settle_victory_tx(&inner.db, victim_id, &engage, &attacker_name).await {
+                    Ok(settle) => settle,
+                    Err(e) => {
+                        tracing::warn!("greendragon pvp victory settle failed: {e}");
+                        PvpSettle::Failed
+                    }
+                };
             let _ = tx.send(msg);
         });
         rx

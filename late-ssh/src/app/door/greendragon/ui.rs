@@ -16,7 +16,7 @@ use crate::app::door::landing;
 use super::commentary::{self, CommentRoom};
 use super::data;
 use super::model::{self, Character, Specialty};
-use super::state::{FoeKind, Mode, State};
+use super::state::{FoeKind, Mode, PvpVenue, State};
 
 /// Draw the live Green Dragon game (called when a character is loaded).
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
@@ -426,6 +426,44 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // The PvP target lists: how many attacks remain, and a rumor of the
+    // sleepers you can't reach from here (upstream's location counts).
+    if let Mode::PvpList(venue) = state.mode() {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            match venue {
+                PvpVenue::Fields => "Out in the dark fields, unwitting warriors sleep off the day.",
+                PvpVenue::Inn => "The keys clink onto the counter, one for each room upstairs.",
+            },
+            dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "You have {} PvP attack{} left today.",
+                c.player_fights,
+                if c.player_fights == 1 { "" } else { "s" }
+            ),
+            dim,
+        )));
+        let elsewhere = state.pvp_elsewhere();
+        if elsewhere > 0 {
+            lines.push(Line::from(Span::styled(
+                match venue {
+                    PvpVenue::Fields => format!(
+                        "Talk around town says {elsewhere} more sleep{} behind the inn's locked doors.",
+                        if elsewhere == 1 { "s" } else { "" }
+                    ),
+                    PvpVenue::Inn => format!(
+                        "{elsewhere} more sleep{} rough out in the fields.",
+                        if elsewhere == 1 { "s" } else { "" }
+                    ),
+                },
+                dim,
+            )));
+        }
+    }
+
     if state.mode() == Mode::ChooseStyle {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
@@ -565,12 +603,18 @@ fn panel_title(mode: Mode) -> &'static str {
         },
         Mode::WarriorList => "The Warriors of the Realm",
         Mode::HallOfFame => "The Hall of Fame",
+        Mode::BarkeepEar => "A Quiet Word",
+        Mode::PvpList(PvpVenue::Fields) => "The Sleeping Fields",
+        Mode::PvpList(PvpVenue::Inn) => "The Rooms Upstairs",
     }
 }
 
 fn controls_hint(mode: Mode) -> &'static str {
     match mode {
         Mode::Fight => "up/down select   Enter act   Esc try to flee",
+        Mode::BarkeepEar => "up/down move   Enter choose   Esc back to the inn",
+        Mode::PvpList(PvpVenue::Inn) => "up/down move   Enter attack   Esc back to the barkeep",
+        Mode::PvpList(PvpVenue::Fields) => "up/down move   Enter attack   Esc back to village",
         Mode::Village | Mode::Graveyard => "up/down move   Enter choose   Esc leave the game",
         Mode::SpendDragonPoints => "up/down move   Enter spend   Esc leave the game",
         Mode::ChooseStyle | Mode::ChooseRace => "up/down move   Enter choose   Esc leave the game",

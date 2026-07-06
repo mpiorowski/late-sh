@@ -19,8 +19,8 @@ use super::inn;
 use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
 use super::svc::{
-    CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService, NewsLoad, PvpEngage,
-    PvpSettle, PvpTarget, RosterEntry, RosterLoad,
+    CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService, NewsLoad, PvpEngage, PvpSettle,
+    PvpTarget, RosterEntry, RosterLoad,
 };
 use super::tavern;
 
@@ -517,7 +517,13 @@ impl State {
             Mode::Healer => healer_menu(c),
             Mode::Bank => bank_menu(c),
             Mode::Training => training_menu(c),
-            Mode::Fight => fight_menu(c),
+            Mode::Fight => fight_menu(
+                c,
+                self.encounter
+                    .as_ref()
+                    .map(|e| e.kind)
+                    .unwrap_or(FoeKind::Creature),
+            ),
             Mode::Event => event_menu(c, self.pending_event),
             Mode::ChooseStyle => style_menu(),
             Mode::ChooseRace => race_menu(),
@@ -624,7 +630,11 @@ impl State {
             // running from a warrior you chose to attack (`pvp.php` turns
             // `run` into a fought round: "your pride prevents you").
             Mode::Fight => {
-                if self.encounter.as_ref().is_some_and(|e| e.kind == FoeKind::Pvp) {
+                if self
+                    .encounter
+                    .as_ref()
+                    .is_some_and(|e| e.kind == FoeKind::Pvp)
+                {
                     self.push_log("Your pride will not let you run from this.".into());
                     self.attack_round();
                 } else {
@@ -778,6 +788,17 @@ impl State {
             s if s.starts_with("The Daily News") => self.open_news(0),
             s if s.starts_with("List Warriors") => self.open_warrior_list(),
             s if s.starts_with("The Hall of Fame") => self.open_hall_of_fame(),
+            s if s.starts_with("Slay Other Warriors") => {
+                // The immunity warning greets the still-protected at the door
+                // (`pvpwarning()` without the kill).
+                if self.character.as_ref().unwrap().pvp_immune() {
+                    self.push_log(
+                        "You are yet under the realm's protection from other warriors - attack one and it ends forever."
+                            .into(),
+                    );
+                }
+                self.open_pvp_list(PvpVenue::Fields);
+            }
             s if s.starts_with("Leave") => return Selection::Leave,
             _ => {}
         }
@@ -954,7 +975,10 @@ impl State {
         let Some(enc) = self.encounter.as_mut() else {
             return;
         };
-        if enc.kind == FoeKind::Torment {
+        // Buffs can't follow beyond the grave (Torment) or into PvP —
+        // nothing stock sets `allowinpvp`, so `suspend_buffs` shelves them
+        // all; the mount stays stabled too.
+        if matches!(enc.kind, FoeKind::Torment | FoeKind::Pvp) {
             return;
         }
         let c = self.character.as_ref().unwrap();
@@ -974,7 +998,9 @@ impl State {
     /// Bank the leftover rounds of persistent buffs (and the mount) when a
     /// fight ends. A buff missing from the encounter expired mid-fight.
     fn writeback_buffs(&mut self, enc: &Encounter) {
-        if enc.kind == FoeKind::Torment {
+        // Torment and PvP fights never injected them (see above): writing
+        // back would wrongly expire every shelved buff.
+        if matches!(enc.kind, FoeKind::Torment | FoeKind::Pvp) {
             return;
         }
         let c = self.character.as_mut().unwrap();
@@ -1362,11 +1388,8 @@ impl State {
         self.goto(Mode::PvpList(venue));
     }
 
-    /// Build the open venue's target rows off the roster snapshot, the
-    /// `pvplist.php` filter made local: alive, asleep (offline), past
-    /// newbie immunity, within `[mine-1, mine+2]` levels, and at this venue
-    /// (lodged = the inn's rooms; everyone else sleeps in the fields).
-    /// Rows inside the 10-minute dogpile window show but can't be picked.
+    /// Build the open venue's target rows off the roster snapshot (see
+    /// [`build_pvp_rows`]).
     fn rebuild_pvp_rows(&mut self, venue: PvpVenue) {
         let Some(roster) = self.roster.as_ref() else {
             return;
@@ -1374,40 +1397,15 @@ impl State {
         let Some(c) = self.character.as_ref() else {
             return;
         };
-        let (lo, hi) = (c.level as i16 - 1, c.level as i16 + 2);
-        let now = chrono::Utc::now().timestamp();
-        let mut eligible: Vec<&RosterEntry> = roster
-            .iter()
-            .filter(|e| {
-                e.user_id != self.user_id
-                    && e.alive
-                    && !e.online
-                    && !e.pvp_immune
-                    && (lo..=hi).contains(&(e.level as i16))
-            })
-            .collect();
-        // Upstream's total order within a location: level, then experience,
-        // then dragon kills, all descending.
-        eligible.sort_by(|a, b| {
-            (b.level, b.experience, b.dragon_kills).cmp(&(a.level, a.experience, a.dragon_kills))
-        });
-        self.pvp_elsewhere = eligible
-            .iter()
-            .filter(|e| e.lodged != (venue == PvpVenue::Inn))
-            .count();
-        self.pvp_rows = eligible
-            .iter()
-            .filter(|e| e.lodged == (venue == PvpVenue::Inn))
-            .map(|e| {
-                let hunted = now - e.pvp_engaged_at < model::PVP_TIMEOUT_SECS;
-                let label = if hunted {
-                    format!("{} (level {}) - hunted too recently", e.name, e.level)
-                } else {
-                    format!("{} (level {})", e.name, e.level)
-                };
-                (e.user_id, label, !hunted)
-            })
-            .collect();
+        let (rows, elsewhere) = build_pvp_rows(
+            roster,
+            self.user_id,
+            c.level,
+            venue,
+            chrono::Utc::now().timestamp(),
+        );
+        self.pvp_rows = rows;
+        self.pvp_elsewhere = elsewhere;
     }
 
     /// Sleepers at the other venue, for the list panel's rumor line.
@@ -1491,7 +1489,13 @@ impl State {
                 }
                 Some(Ok(target)) => {
                     self.pvp_engage_rx = None;
-                    self.start_pvp_fight(venue, *target);
+                    // Only draw steel if the player is still at the list: if
+                    // they wandered off mid-engage, the fight never starts
+                    // (the target keeps the 10-minute flag; no attack is
+                    // spent — like closing the browser on upstream's setup).
+                    if matches!(self.mode, Mode::PvpList(_)) && self.encounter.is_none() {
+                        self.start_pvp_fight(venue, *target);
+                    }
                 }
             }
         }
@@ -1955,6 +1959,16 @@ impl State {
     }
 
     fn select_fight(&mut self) -> Selection {
+        // Against a sleeping warrior the menu is one row: Attack (no skills,
+        // no flee — `pvp.php` strips both).
+        if self
+            .encounter
+            .as_ref()
+            .is_some_and(|e| e.kind == FoeKind::Pvp)
+        {
+            self.attack_round();
+            return Selection::Stay;
+        }
         let c = self.character.as_ref().unwrap();
         // The dead fight with bare essence: no specialty skills in the menu
         // (upstream's graveyard passes `fightnav(false, ...)`).
@@ -2146,13 +2160,20 @@ impl State {
         };
         let mut rng = rand::thread_rng();
         let (player, player_max) = self.player_fight_stats(enc.kind);
-        // Field-medics bandage before the blades cross (upstream activates
-        // `heal` first each round): the player first, then the most wounded
-        // companion, then themselves. They still swing in the resolver below.
-        self.companion_heals(player_max);
+        // Companions sit PvP out entirely (`suspend_companions`: nothing
+        // stock is `allowinpvp`) — no bandaging, no swings, no getting hit.
+        let pvp = enc.kind == FoeKind::Pvp;
+        if !pvp {
+            // Field-medics bandage before the blades cross (upstream
+            // activates `heal` first each round): the player first, then the
+            // most wounded companion, then themselves. They still swing in
+            // the resolver below.
+            self.companion_heals(player_max);
+        }
         // Companions live on the character and fight each round; the resolver
         // mutates their HP and removes any that fall. The player and their
         // companions all strike the current target.
+        let mut benched = Vec::new();
         let outcome = {
             let c = self.character.as_mut().unwrap();
             resolve_round_buffed(
@@ -2160,7 +2181,7 @@ impl State {
                 player,
                 enc.foes[target].combatant,
                 &mut enc.buffs,
-                &mut c.companions,
+                if pvp { &mut benched } else { &mut c.companions },
             )
         };
 
@@ -2356,6 +2377,73 @@ impl State {
                 self.encounter = None;
                 self.goto(Mode::Graveyard);
             }
+            FoeKind::Pvp => {
+                let Some((venue, target)) = self.pvp_ctx.take() else {
+                    self.encounter = None;
+                    self.goto(Mode::Village);
+                    self.save();
+                    return;
+                };
+                // Winning on your last breath: staunch the wounds at 1 HP
+                // (`pvp.php`'s "bit of cloth", the mushroom save's cousin).
+                if self.character.as_ref().unwrap().hitpoints == 0 {
+                    self.character.as_mut().unwrap().hitpoints = 1;
+                    self.push_log(
+                        "You tear a strip from their bedding and staunch your own wounds just in time."
+                            .into(),
+                    );
+                }
+                let my_level = self.character.as_ref().unwrap().level;
+                self.push_log(format!("You have slain {}!", target.name));
+                // The experience settles locally off the engage snapshot; the
+                // gold waits on the victim's purse re-read (`tick_pvp`). A
+                // level-15 attacker takes nothing ("no prowess" rule).
+                if my_level >= data::MAX_LEVEL {
+                    self.push_log(
+                        "At your prowess, the victory itself is the only prize worth having."
+                            .into(),
+                    );
+                } else {
+                    let (exp, bonus) =
+                        model::pvp_attacker_exp(target.experience, target.level, my_level);
+                    let c = self.character.as_mut().unwrap();
+                    c.experience = c.experience.saturating_add(exp);
+                    if bonus > 0 {
+                        self.push_log(format!(
+                            "A hard-won fight earns you {bonus} extra experience."
+                        ));
+                    } else if bonus < 0 {
+                        self.push_log(format!(
+                            "So easy a mark costs you {} experience in respect.",
+                            -bonus
+                        ));
+                    }
+                    self.push_log(format!("+{exp} experience."));
+                }
+                let who = self.character.as_ref().unwrap().titled_name();
+                self.pvp_settle_rx = Some(self.svc.pvp_settle_victory(
+                    target.user_id,
+                    target.clone(),
+                    who.clone(),
+                ));
+                // Both outcomes make the paper (`pvp.php`'s two variants).
+                if venue == PvpVenue::Inn {
+                    self.news(format!(
+                        "{who} crept into {}'s room at the inn and bested them in their sleep.",
+                        target.name
+                    ));
+                } else {
+                    self.news(format!(
+                        "{who} bested {} in single combat in the fields.",
+                        target.name
+                    ));
+                }
+                self.encounter = None;
+                self.goto(match venue {
+                    PvpVenue::Inn => Mode::Inn,
+                    PvpVenue::Fields => Mode::Village,
+                });
+            }
             FoeKind::Dragon => {
                 let flawless = !enc.took_damage;
                 let c = self.character.as_mut().unwrap();
@@ -2424,6 +2512,55 @@ impl State {
                 ));
                 self.encounter = None;
                 self.goto(Mode::Village);
+            }
+            FoeKind::Pvp => {
+                // The sleeper wins (`pvpdefeat`): their spoils come off your
+                // corpse — gold by the log formula read *before* the wipe,
+                // experience at 10% (zeroed against a level-15 defender;
+                // upstream's `$wonamount` typo leaves the gold flowing even
+                // then, kept 1=1) — and you go to the graveyard poorer by
+                // every coin and 15% of your experience.
+                let Some((venue, target)) = self.pvp_ctx.take() else {
+                    self.encounter = None;
+                    self.goto(Mode::Graveyard);
+                    self.save();
+                    return;
+                };
+                let win_gold = model::pvp_win_gold(c.level, c.gold);
+                let won_exp = if target.level >= data::MAX_LEVEL {
+                    0
+                } else {
+                    (model::PVP_DEFENDER_GAIN_PCT as f64 * c.experience as f64 / 100.0).round()
+                        as u64
+                };
+                c.pvp_die();
+                self.svc.pvp_settle_defeat(
+                    target.user_id,
+                    target.level,
+                    win_gold,
+                    won_exp,
+                    who.clone(),
+                );
+                self.push_log(format!(
+                    "{} wakes at the last instant and cuts you down!",
+                    target.name
+                ));
+                self.push_log(
+                    "Every coin you carried is gone, and 15% of your experience with it.".into(),
+                );
+                if venue == PvpVenue::Inn {
+                    self.news(format!(
+                        "{who} was slain breaking into {}'s room at the inn. {taunt}",
+                        target.name
+                    ));
+                } else {
+                    self.news(format!(
+                        "{who} was slain attacking {} as they slept in the fields. {taunt}",
+                        target.name
+                    ));
+                }
+                self.encounter = None;
+                self.goto(Mode::Graveyard);
             }
             FoeKind::Torment => {
                 // A graveyard defeat only drains the pool and ends today's
@@ -2724,12 +2861,31 @@ impl State {
                 "{} makes the bribe disappear and leans in for a quiet word.",
                 data::BARKEEP
             ));
-            self.goto(Mode::SwitchSpecialty);
+            self.goto(Mode::BarkeepEar);
         } else {
             self.push_log(format!(
                 "{} makes the bribe disappear and suddenly remembers other customers.",
                 data::BARKEEP
             ));
+        }
+        Selection::Stay
+    }
+
+    /// The bribed barkeep's quiet word (`inn_bartender.php`'s unlocked navs):
+    /// the keys to the rooms upstairs, or the specialty switch.
+    fn select_barkeep_ear(&mut self) -> Selection {
+        match self.cursor {
+            0 => {
+                if self.character.as_ref().unwrap().pvp_immune() {
+                    self.push_log(
+                        "You are yet under the realm's protection from other warriors - attack one and it ends forever."
+                            .into(),
+                    );
+                }
+                self.open_pvp_list(PvpVenue::Inn);
+            }
+            1 => self.goto(Mode::SwitchSpecialty),
+            _ => self.goto(Mode::Inn),
         }
         Selection::Stay
     }
@@ -3339,6 +3495,10 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
     rows.push(("The Daily News".into(), true));
     rows.push(("List Warriors".into(), true));
     rows.push(("The Hall of Fame".into(), true));
+    rows.push((
+        format!("Slay Other Warriors ({} left today)", c.player_fights),
+        true,
+    ));
     rows.push(("Leave the realm".into(), true));
     rows
 }
@@ -3729,7 +3889,13 @@ fn forest_menu(c: &Character) -> Vec<(String, bool)> {
 /// The fight menu: Attack, then any unlocked specialty skills (shown with their
 /// use-cost and disabled when the pool can't pay), then Flee. The skill rows sit
 /// between Attack and Flee so those two keep stable positions.
-fn fight_menu(c: &Character) -> Vec<(String, bool)> {
+fn fight_menu(c: &Character, kind: FoeKind) -> Vec<(String, bool)> {
+    // A fight you picked with a sleeping warrior offers no skills ("your
+    // honor prevents it") and no way out ("your pride prevents it") —
+    // `pvp.php` strips both.
+    if kind == FoeKind::Pvp {
+        return vec![("Attack".into(), true)];
+    }
     let mut rows = vec![("Attack".into(), true)];
     // The dead fight with bare essence: no specialty skills beyond the grave
     // (upstream's graveyard calls `fightnav(false, ...)`).
@@ -3963,6 +4129,63 @@ fn switchable_specialties(c: &Character) -> Vec<Specialty> {
 }
 
 /// The bribed switch menu: each other path (benched progress shown), or keep.
+/// The PvP target rows for one venue, plus the count of sleepers at the
+/// other (`pvplist.php`'s filter and location split made local): a target is
+/// listed when they're someone else, alive, asleep (offline by the presence
+/// window), past newbie immunity, within `[mine-1, mine+2]` levels, and at
+/// this venue — the inn's rooms hold the lodged, the fields everyone else.
+/// Rows engaged within the 10-minute dogpile window show but can't be
+/// picked. Ordered level, then experience, then dragon kills, descending
+/// (upstream's within-location order).
+fn build_pvp_rows(
+    roster: &[RosterEntry],
+    me: Uuid,
+    my_level: u8,
+    venue: PvpVenue,
+    now: i64,
+) -> (Vec<(Uuid, String, bool)>, usize) {
+    let (lo, hi) = (my_level as i16 - 1, my_level as i16 + 2);
+    let mut eligible: Vec<&RosterEntry> = roster
+        .iter()
+        .filter(|e| {
+            e.user_id != me
+                && e.alive
+                && !e.online
+                && !e.pvp_immune
+                && (lo..=hi).contains(&(e.level as i16))
+        })
+        .collect();
+    eligible.sort_by(|a, b| {
+        (b.level, b.experience, b.dragon_kills).cmp(&(a.level, a.experience, a.dragon_kills))
+    });
+    let here = |e: &RosterEntry| e.lodged == (venue == PvpVenue::Inn);
+    let elsewhere = eligible.iter().filter(|e| !here(e)).count();
+    let rows = eligible
+        .iter()
+        .filter(|e| here(e))
+        .map(|e| {
+            let hunted = now - e.pvp_engaged_at < model::PVP_TIMEOUT_SECS;
+            let label = if hunted {
+                format!("{} (level {}) - hunted too recently", e.name, e.level)
+            } else {
+                format!("{} (level {})", e.name, e.level)
+            };
+            (e.user_id, label, !hunted)
+        })
+        .collect();
+    (rows, elsewhere)
+}
+
+/// The quiet word a successful bribe buys (`inn_bartender.php`'s unlocked
+/// navs): the rooms upstairs and the specialty switch.
+fn barkeep_ear_menu() -> Vec<(String, bool)> {
+    vec![
+        ("Ask who's sleeping upstairs".into(), true),
+        ("Ask about switching your path".into(), true),
+        ("Slide back down the bar".into(), true),
+    ]
+}
+
 fn switch_specialty_menu(c: &Character) -> Vec<(String, bool)> {
     let mut rows: Vec<(String, bool)> = switchable_specialties(c)
         .into_iter()
@@ -4412,10 +4635,14 @@ mod tests {
         let mut c = lvl(5);
         c.choose_specialty(Specialty::Thief);
         // Alive: Attack + 4 skills + Flee.
-        assert_eq!(fight_menu(&c).len(), 6);
+        assert_eq!(fight_menu(&c, FoeKind::Creature).len(), 6);
+        // PvP strips skills AND the way out ("honor" and "pride").
+        let rows = fight_menu(&c, FoeKind::Pvp);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "Attack");
         // Dead (a torment fight): bare essence only.
         c.die();
-        let rows = fight_menu(&c);
+        let rows = fight_menu(&c, FoeKind::Torment);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, "Attack");
         assert_eq!(rows[1].0, "Flee");
@@ -4570,7 +4797,91 @@ mod tests {
             wealth: 0,
             online: false,
             idle_secs: 0,
+            lodged: false,
+            pvp_immune: false,
+            pvp_engaged_at: 0,
         }
+    }
+
+    // --- PvP target lists (pvp.php + lib/pvplist.php) ---------------------
+
+    #[test]
+    fn pvp_rows_filter_the_ineligible() {
+        let me = Uuid::from_u128(999);
+        let mut sleeper = entry("prey", 5);
+        let awake = {
+            let mut e = entry("awake", 5);
+            e.online = true;
+            e
+        };
+        let shielded = {
+            let mut e = entry("green", 5);
+            e.pvp_immune = true;
+            e
+        };
+        let dead = {
+            let mut e = entry("ghost", 5);
+            e.alive = false;
+            e
+        };
+        let low = entry("low", 3); // below my-1
+        let high = entry("high", 8); // above my+2
+        let roster = vec![sleeper.clone(), awake, shielded, dead, low, high];
+        // My level 5: the band is [4, 7]; only the plain sleeper qualifies.
+        let (rows, elsewhere) = build_pvp_rows(&roster, me, 5, PvpVenue::Fields, 100_000);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].1.contains("prey"));
+        assert!(rows[0].2); // attackable
+        assert_eq!(elsewhere, 0);
+
+        // A fresh engage flags them off for ten minutes, but they still show.
+        sleeper.pvp_engaged_at = 100_000 - 60;
+        let (rows, _) = build_pvp_rows(&[sleeper.clone()], me, 5, PvpVenue::Fields, 100_000);
+        assert!(!rows[0].2);
+        assert!(rows[0].1.contains("hunted too recently"));
+        sleeper.pvp_engaged_at = 100_000 - model::PVP_TIMEOUT_SECS;
+        let (rows, _) = build_pvp_rows(&[sleeper.clone()], me, 5, PvpVenue::Fields, 100_000);
+        assert!(rows[0].2);
+    }
+
+    #[test]
+    fn pvp_venues_split_on_the_inn_room() {
+        let me = Uuid::from_u128(999);
+        let fields = entry("fields", 5);
+        let mut lodged = entry("lodged", 5);
+        lodged.lodged = true;
+        let roster = vec![fields, lodged];
+        // The fields list holds the unlodged and rumors the other.
+        let (rows, elsewhere) = build_pvp_rows(&roster, me, 5, PvpVenue::Fields, 0);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].1.contains("fields"));
+        assert_eq!(elsewhere, 1);
+        // The inn's keys open only the lodged rooms.
+        let (rows, elsewhere) = build_pvp_rows(&roster, me, 5, PvpVenue::Inn, 0);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].1.contains("lodged"));
+        assert_eq!(elsewhere, 1);
+    }
+
+    #[test]
+    fn pvp_rows_never_list_yourself() {
+        let me = Uuid::from_u128(999);
+        let mut myself = entry("me", 5);
+        myself.user_id = me;
+        let (rows, elsewhere) = build_pvp_rows(&[myself], me, 5, PvpVenue::Fields, 0);
+        assert!(rows.is_empty());
+        assert_eq!(elsewhere, 0);
+    }
+
+    #[test]
+    fn village_menu_offers_the_hunt() {
+        let c = lvl(3);
+        let row = village_menu(&c)
+            .into_iter()
+            .find(|(l, _)| l.starts_with("Slay Other Warriors"))
+            .unwrap();
+        assert!(row.0.contains("3 left today"));
+        assert!(row.1);
     }
 
     #[test]
@@ -4725,7 +5036,11 @@ mod tests {
             &mut rand::thread_rng(),
         );
         // Two of three have charm >= mine: round(200/3) = 67.
-        assert!(page.foot.iter().any(|f| f.contains("top 67%")), "{:?}", page.foot);
+        assert!(
+            page.foot.iter().any(|f| f.contains("top 67%")),
+            "{:?}",
+            page.foot
+        );
     }
 
     #[test]

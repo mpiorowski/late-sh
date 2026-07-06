@@ -1293,8 +1293,8 @@ impl Character {
     /// documented adaptation).
     pub fn pvp_die(&mut self) {
         self.gold = 0;
-        self.experience = (self.experience as f64 * (100 - PVP_ATTACKER_LOSE_PCT) as f64 / 100.0)
-            .round() as u64;
+        self.experience =
+            (self.experience as f64 * (100 - PVP_ATTACKER_LOSE_PCT) as f64 / 100.0).round() as u64;
         self.alive = false;
         self.hitpoints = 0;
         self.companions.clear();
@@ -2000,6 +2000,105 @@ mod tests {
         c.specialty_uses = 0; // spent down during the day
         c.roll_new_day(1, 0, 0, &mut rand::thread_rng());
         assert_eq!(c.specialty_uses, 4);
+    }
+
+    // --- PvP (pvp.php + lib/pvpsupport.php + lib/pvpwarning.php) ---------
+
+    #[test]
+    fn pvp_immunity_needs_every_condition() {
+        // Immune while young, dragonless, unforfeited, and under the exp bar
+        // (`pvpwarning`: age <= 5 AND dk == 0 AND pk == 0 AND exp <= 1500).
+        let mut c = Character::new("hero", 0);
+        c.age = 5;
+        c.experience = 1500;
+        assert!(c.pvp_immune());
+        // Each condition alone breaks it.
+        assert!(!{
+            let mut c = c.clone();
+            c.age = 6;
+            c.pvp_immune()
+        });
+        assert!(!{
+            let mut c = c.clone();
+            c.experience = 1501;
+            c.pvp_immune()
+        });
+        assert!(!{
+            let mut c = c.clone();
+            c.dragon_kills = 1;
+            c.pvp_immune()
+        });
+        c.pk = true; // attacked while immune once: forfeited forever
+        assert!(!c.pvp_immune());
+    }
+
+    #[test]
+    fn pvp_win_gold_follows_the_log_formula() {
+        // round(10 * level * ln(max(1, gold))): ln(1000) = 6.9078 -> 345.
+        assert_eq!(pvp_win_gold(5, 1000), 345);
+        // A pauper's ln(1) = 0: nothing to take.
+        assert_eq!(pvp_win_gold(5, 0), 0);
+        assert_eq!(pvp_win_gold(5, 1), 0);
+    }
+
+    #[test]
+    fn pvp_attacker_exp_pays_the_level_difference() {
+        // Base round(10% of 1000) = 100; +2 levels: bonus +20; -1: -10.
+        assert_eq!(pvp_attacker_exp(1000, 7, 5), (120, 20));
+        assert_eq!(pvp_attacker_exp(1000, 4, 5), (90, -10));
+        assert_eq!(pvp_attacker_exp(1000, 5, 5), (100, 0));
+    }
+
+    #[test]
+    fn pvp_death_costs_the_purse_and_fifteen_percent() {
+        let mut c = Character::new("hero", 0);
+        c.gold = 500;
+        c.experience = 1000;
+        c.companions.push(Companion {
+            name: "Shadow".into(),
+            hitpoints: 5,
+            max_hitpoints: 5,
+            attack: 1,
+            defense: 1,
+            dying_text: String::new(),
+            ability: Default::default(),
+            ignore_limit: true,
+        });
+        c.pvp_die();
+        assert_eq!(c.gold, 0);
+        assert_eq!(c.experience, 850); // 15% lost (pvpattlose)
+        assert!(!c.alive);
+        assert!(c.companions.is_empty());
+    }
+
+    #[test]
+    fn pvp_slain_takes_from_the_bank_on_a_shortfall() {
+        // The victim spent gold between engage and settlement: the bank
+        // absorbs the difference (pvpvictory's IF guard).
+        let mut c = Character::new("hero", 0);
+        c.gold = 50;
+        c.gold_in_bank = 100;
+        c.experience = 1000;
+        c.pvp_slain(80, 50);
+        assert_eq!(c.gold, 0);
+        assert_eq!(c.gold_in_bank, 70);
+        assert_eq!(c.experience, 950); // the engage-time 5% passed in
+        assert!(!c.alive);
+    }
+
+    #[test]
+    fn pvp_fights_refill_at_dawn_but_not_on_resurrection() {
+        let mut c = Character::new("hero", 0);
+        c.player_fights = 0;
+        c.favor = 200;
+        c.alive = false;
+        // The paid resurrection skips the PvP pool (newday.php's
+        // `resurrection != true` guard), like soulpoints and grave fights.
+        assert!(c.resurrect(0, &mut rand::thread_rng()).is_some());
+        assert_eq!(c.player_fights, 0);
+        // A real dawn refills it.
+        c.roll_new_day(1, 0, 0, &mut rand::thread_rng());
+        assert_eq!(c.player_fights, PVP_FIGHTS_PER_DAY);
     }
 
     #[test]
