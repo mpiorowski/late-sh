@@ -533,7 +533,10 @@ mod tests {
         }
         assert!(cave_ins > 20, "expected many cave-ins, got {cave_ins}");
         // 90% vs 5% death chance (upstream raceminedeath defaults).
-        assert!(default_deaths * 2 > cave_ins, "default races should mostly die");
+        assert!(
+            default_deaths * 2 > cave_ins,
+            "default races should mostly die"
+        );
         assert!(
             deepfolk_deaths * 4 < cave_ins,
             "deepfolk should rarely die: {deepfolk_deaths}/{cave_ins}"

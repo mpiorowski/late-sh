@@ -120,10 +120,7 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
             "Boons",
             format!(
                 "{}a {}d {}hp {}ff",
-                c.dragon_attack_bonus,
-                c.dragon_defense_bonus,
-                c.dragon_hp_bonus,
-                c.dragon_ff_bonus
+                c.dragon_attack_bonus, c.dragon_defense_bonus, c.dragon_hp_bonus, c.dragon_ff_bonus
             ),
             dim,
         ),
@@ -218,7 +215,11 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
                     } else {
                         format!("{}/{} HP", foe.hp, foe.max_hp)
                     },
-                    Style::default().fg(if dead { theme::TEXT_FAINT() } else { theme::ERROR() }),
+                    Style::default().fg(if dead {
+                        theme::TEXT_FAINT()
+                    } else {
+                        theme::ERROR()
+                    }),
                 ),
             ];
             if target == Some(i) && enc.foes.len() > 1 {

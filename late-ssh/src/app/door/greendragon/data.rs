@@ -468,6 +468,62 @@ pub fn taunt(rng: &mut impl rand::Rng) -> &'static str {
     TAUNTS[rng.gen_range(0..TAUNTS.len())]
 }
 
+/// Creature names with larcenous habits: while one of these stands in a
+/// fight and the player carries a heavy purse, it tries — once per fight —
+/// to cut it (see `state`'s purse-cut roll). **An original late.sh
+/// mechanic**: stock LoGD 1.1.2 ships no mid-fight steal (verified against
+/// the source: no creature-ai script implements one), so the numbers here
+/// are ours, not a port.
+pub const BANDIT_CREATURES: [&str; 5] = [
+    "Bandit Scout",
+    "Deserter Sergeant",
+    "Poacher-King",
+    "The Pale Auctioneer",
+    "The Toll Reaper",
+];
+
+/// Battle-end flavor for a slain forest creature (the upstream `creatures`
+/// table carries per-creature win/lose lines; ours is an original shared
+/// pool, drawn at random when the last foe falls).
+pub const FOE_DYING_LINES: [&str; 10] = [
+    "It ends with a surprised little sound, and then silence.",
+    "Whatever drove it snaps like a dry twig.",
+    "It sinks down as if it had only ever wanted to rest.",
+    "The forest exhales; one terror fewer under its boughs.",
+    "Its weapon outlives it, quivering in the dirt.",
+    "It backs away two steps, both of them too late.",
+    "You wipe your blade on the moss. The moss objects less.",
+    "Something small watches from the ferns, and starts to sing.",
+    "It curses you in a tongue you're glad not to know.",
+    "The quiet afterward is its own kind of loot.",
+];
+
+/// Battle-end flavor for a forest creature that wins (drawn at random when
+/// the player falls to one). Original pool, same rationale as
+/// [`FOE_DYING_LINES`].
+pub const FOE_GLOATING_LINES: [&str; 10] = [
+    "The last thing you hear is it going through your pockets.",
+    "It doesn't even stay to watch you finish falling.",
+    "Your weapon lands somewhere in the leaves, unhurried.",
+    "It steps over you like a root in the path.",
+    "Above you, the crows change their plans for the evening.",
+    "It takes a souvenir. You'd rather not know which.",
+    "The ferns close over the spot as if you'd never stood there.",
+    "It hums something tuneless as it ambles away.",
+    "Your last thought is that the healer warned you. Twice.",
+    "It salutes you, almost respectfully. Almost.",
+];
+
+/// One random dying line for a slain creature.
+pub fn foe_dying_line(rng: &mut impl rand::Rng) -> &'static str {
+    FOE_DYING_LINES[rng.gen_range(0..FOE_DYING_LINES.len())]
+}
+
+/// One random gloat for a creature that has just slain the player.
+pub fn foe_gloating_line(rng: &mut impl rand::Rng) -> &'static str {
+    FOE_GLOATING_LINES[rng.gen_range(0..FOE_GLOATING_LINES.len())]
+}
+
 // --- phase-3 building NPCs (all names original to late.sh) -------------------
 
 /// The inn (upstream's setting defaults name it; ours is our own).
@@ -753,7 +809,10 @@ pub fn dk_title_pair(dragon_kills: u32, rng: &mut impl rand::Rng) -> (&'static s
         .map(|(dk, _, _)| *dk)
         .max()
         .unwrap_or(0);
-    let rows: Vec<_> = TITLES.iter().filter(|(dk, _, _)| *dk == threshold).collect();
+    let rows: Vec<_> = TITLES
+        .iter()
+        .filter(|(dk, _, _)| *dk == threshold)
+        .collect();
     let (_, a, b) = rows[rng.gen_range(0..rows.len())];
     (a, b)
 }

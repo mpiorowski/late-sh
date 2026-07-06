@@ -553,7 +553,12 @@ pub fn resolve_round_buffed(
 /// its round (and the failed-flee free round). Mirrors the incoming-damage
 /// half of `rolldamage` with the active buff multipliers folded in: signed,
 /// negative = the blow glanced (heals the player).
-pub fn resolve_extra_foe_strike(rng: &mut impl Rng, player: Combatant, foe: Combatant, buffs: &[Buff]) -> i32 {
+pub fn resolve_extra_foe_strike(
+    rng: &mut impl Rng,
+    player: Combatant,
+    foe: Combatant,
+    buffs: &[Buff],
+) -> i32 {
     let mut m = Mods::default();
     for b in buffs.iter() {
         m.defmod *= b.player_def_mod as f64;

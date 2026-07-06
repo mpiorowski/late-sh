@@ -53,7 +53,10 @@ pub enum FiveSixLoad {
     Loading,
     /// `(pot the roll was played against, gold left in the pot afterwards)`.
     /// The win is the difference — or the whole pot on five sixes.
-    Ready { pot: u64, left_over: u64 },
+    Ready {
+        pot: u64,
+        left_over: u64,
+    },
     /// The DB failed; the caller refunds the stake and shrugs it off.
     Failed,
 }
@@ -304,7 +307,12 @@ impl GreenDragonService {
     /// Settle a Five Sixes play (`cost` staked, `sixes` rolled) against the
     /// one shared jackpot, atomically. The caller has already taken the stake
     /// off the character; the receiver reports what the pot paid.
-    pub fn settle_fivesix(&self, cost: u64, max_pot: u64, sixes: u32) -> watch::Receiver<FiveSixLoad> {
+    pub fn settle_fivesix(
+        &self,
+        cost: u64,
+        max_pot: u64,
+        sixes: u32,
+    ) -> watch::Receiver<FiveSixLoad> {
         let (tx, rx) = watch::channel(FiveSixLoad::Loading);
         let inner = self.inner.clone();
         tokio::spawn(async move {

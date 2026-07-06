@@ -21,9 +21,8 @@ pub fn bard_song(c: &mut Character, rng: &mut impl Rng) -> Vec<String> {
     match rng.gen_range(0..=18u32) {
         0 => {
             c.turns += 2;
-            lines.push(
-                "A marching song that won't leave your feet: +2 forest fights today!".into(),
-            );
+            lines
+                .push("A marching song that won't leave your feet: +2 forest fights today!".into());
         }
         1 | 2 | 6 | 13 | 14 => {
             c.turns += 1;
@@ -48,9 +47,7 @@ pub fn bard_song(c: &mut Character, rng: &mut impl Rng) -> Vec<String> {
         }
         5 | 11 => {
             c.turns = c.turns.saturating_sub(1);
-            lines.push(
-                "A dirge so heavy your shoulders sag under it: -1 forest fight.".into(),
-            );
+            lines.push("A dirge so heavy your shoulders sag under it: -1 forest fight.".into());
         }
         7 => {
             let loss = (c.max_hitpoints() as f64 * 0.10).round() as u32;
@@ -66,16 +63,12 @@ pub fn bard_song(c: &mut Character, rng: &mut impl Rng) -> Vec<String> {
                     "He passes the hat and somehow it stops in front of you: -5 gold.".into(),
                 );
             } else {
-                lines.push(
-                    "He passes the hat; your purse is too empty to be embarrassed.".into(),
-                );
+                lines.push("He passes the hat; your purse is too empty to be embarrassed.".into());
             }
         }
         9 => {
             c.gems += 1;
-            lines.push(
-                "Mid-verse he flicks something glittering your way. A gem!".into(),
-            );
+            lines.push("Mid-verse he flicks something glittering your way. A gem!".into());
         }
         10 | 12 => {
             if c.hitpoints < c.max_hitpoints() {
@@ -168,9 +161,7 @@ pub fn flirt(c: &mut Character, rung: usize, rng: &mut impl Rng) -> FlirtOutcome
         let mut lines = Vec::new();
         if c.charm < cap {
             c.charm += 1;
-            lines.push(format!(
-                "{partner} warms to you. You gain a charm point!"
-            ));
+            lines.push(format!("{partner} warms to you. You gain a charm point!"));
         } else {
             lines.push(format!("{partner} warms to you, as ever."));
         }
@@ -197,9 +188,7 @@ pub fn flirt(c: &mut Character, rung: usize, rng: &mut impl Rng) -> FlirtOutcome
             5 => c.charm > 0,
             _ => false,
         };
-        let mut lines = vec![format!(
-            "{partner} pretends, kindly, not to have noticed."
-        )];
+        let mut lines = vec![format!("{partner} pretends, kindly, not to have noticed.")];
         if stings {
             c.charm -= 1;
             lines.push("The sting shows on your face. You lose a charm point.".into());

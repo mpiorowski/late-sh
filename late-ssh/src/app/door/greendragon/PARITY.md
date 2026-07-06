@@ -170,8 +170,8 @@ originally shipped with:
   the real next dawn still rolls a full day.
 - [x] **Death overlord NPC**: original name (`data::DEATH_OVERLORD`,
   "Morvane"); upstream's "Ramius" is theirs. All graveyard prose original.
-- [ ] **Death news hook**: graveyard defeats and resurrections write daily
-  news upstream — no-op until phase 3's news lands, then wire them.
+- [x] **Death news hook**: graveyard defeats and resurrections write daily
+  news (landed with phase 3's news system).
 
 ### Phase 1 deliberate deviations
 
@@ -237,23 +237,25 @@ this section originally claimed:
   default `First`) picks the title column where upstream reads `sex`. The
   actual one-time chooser is phase 3's (with the romance/bard hooks); until
   then everyone renders first-style titles.
-- [ ] **Title news hook**: upstream `dragon.php` writes "has earned the
-  title X" to the daily news — no-op until phase 3's news lands.
+- [x] **Title news hook**: "has earned the title X" writes to the daily news
+  on every re-title (landed with phase 3's news system).
 
-## Phase 3 — single-player buildings
+## Phase 3 — single-player buildings — DONE
 
 Sources: `stables.php`, `mercenarycamp.php` + the `companions` installer
 seed, `inn.php` + `lib/inn/*`, `modules/cedrikspotions.php`,
 `modules/sethsong.php`, `modules/drinks.php` + its installer seed,
 `modules/lovers.php` + `modules/lovers/*`, `modules/outhouse.php`,
 `modules/darkhorse.php`, `modules/game_{dice,fivesix,stones}.php`,
-`news.php` + `lib/addnews.php`. Each block below is standalone.
+`news.php` + `lib/addnews.php`.
 
-Suggested slice order: **daily news first** (half the buildings write to
-it, and phase 1's death/resurrection hooks are waiting), then stables +
-mercenary camp (small, self-contained), then the inn stack (room → bribes →
-potions → bard → drinks → romance), then outhouse, then the Dark Horse
-games.
+Implemented 2026-07, each system re-verified line-by-line against the local
+`upstream-lotgd/` clone before porting (see the corrections subsection at
+the end of this phase). New modules: `inn.rs` (bard + romance resolvers),
+`tavern.rs` (the three games' logic); the buildings' menus live in
+`state.rs`, the drink/potion/mount/mercenary economies in `model.rs` +
+`data.rs`, the news + shared Five Sixes pot in `svc.rs` over migrations
+096/097.
 
 **Cross-cutting: the address-style choice.** Upstream keys titles, the
 romance partner, and one bard outcome off a binary `sex` field. Adapt: a
@@ -282,10 +284,10 @@ romance NPCs is "your partner", and bard outcome 15. Field
 ### Mercenary camp
 - 2 stock hires (original names; the dwarf-analog bear from phase 2 is a
   third, race-gated):
-  1. fighter — **573 gold**; atk `5 + 2·level`, def `1 + 2·level`,
+  1. fighter — **573 gold + 4 gems**; atk `5 + 2·level`, def `1 + 2·level`,
      maxhp `20 + 20·level` (level = buyer's level at purchase); ability
      **fight**.
-  2. field-medic — **1000 gold**; atk `1 + 1·level`, def `5 + 5·level`,
+  2. field-medic — **1000 gold + 3 gems**; atk `1 + 1·level`, def `5 + 5·level`,
      maxhp `15 + 10·level`; ability **heal 2** (restores up to 2 HP to the
      most-wounded ally each round: player first, then other companions,
      then itself — and still makes its fight roll).
@@ -372,10 +374,14 @@ romance NPCs is "your partner", and bard outcome 15. Field
   threes (≤0, 1–3, …, 16–18, 19+) — write 8 original lines per partner.
 
 ### The outhouse (forest nav, once/day)
-- Private stall: pay **5 gold** (needs the gold) → wash-up: 60% refund **3
-  gold**, then independent 25% **+1 gem**; also sober-up ×0.9.
+- Private stall: pay **5 gold** (needs the gold) → wash-up: 60% finds **3
+  gold** (`giveback` — note: less than the 5 paid), then independent 25%
+  **+1 gem** (`giveturnchance` defaults 0 ⇒ no turn roll).
 - Free public stall → wash-up: 60% then 1/3 → find 3 gold.
-- Skipping the wash: 50% → lose 1 gold (if any) + an embarrassing news item.
+- **Either** wash fires sober-up ×0.9 (not just the paid stall).
+- Skipping the wash: `e_rand(1,100) >= 50` (**51%**) → lose 1 gold (only if
+  ≥1 on hand) + the embarrassing news item — the news fires even when there
+  was no gold to lose.
 
 ### Dark Horse Tavern (restore `events::Tavern` into a full room)
 Menu: the old gambler (3 games), the tavern board + enemy intel (phase 4),
@@ -391,10 +397,13 @@ leave. Games:
   (deducted, news); ≤2 ⇒ nothing. **The pot is one shared global** — needs
   a tiny shared store (a one-row table or kv; LISTEN/NOTIFY not needed, read
   fresh per play inside a transaction).
-- **Stones**: a bag of **6 red + 10 blue**. Bet on "matched pair" or "mixed
-  pair". Draw two random stones at a time: same color ⇒ +2 stones to the
-  matched pile, different ⇒ +2 to the mixed pile. Stop when the bag empties
-  or either pile exceeds 8. Bigger pile wins the bet; tie is a push.
+- **Stones**: a bag of **6 red + 10 blue**. Bet on "like pairs" or "unlike
+  pairs". Draw two random stones at a time; **the piles belong to the two
+  players** (source-verified — not a matched-pile/mixed-pile split): the
+  pair lands +2 on *your* pile when it comes up the way you called (like ⇒
+  same color, unlike ⇒ different), on the old man's otherwise. Stop when
+  the bag empties or either pile exceeds 8. Bigger pile wins the even-money
+  bet; tie is a push.
 
 ### Daily news
 - New table `greendragon_news` (migration + `late-core` model, patterned on
@@ -411,10 +420,66 @@ leave. Games:
   news — upstream has a `taunts` table; strings must be ours.
 
 ### Creature flavor leftovers
-- Optional per-creature win/lose one-liners (ours) shown on kill/death.
-- One bandit-type creature AI: if the player carries > 200 gold, 1/8 chance
-  (once per fight) it steals 20% of carried gold, announced in the round
-  log. Data-driven flag on the creature name entry.
+- Battle-end one-liners (ours): a shared original pool of dying lines /
+  gloats drawn when a forest fight ends (upstream stores per-creature
+  win/lose strings; a shared pool keeps our prose budget sane).
+- Bandit purse-cut: five larcenous creature names (`data::BANDIT_CREATURES`)
+  roll 1-in-8 per round, once per fight, while the player carries > 200
+  gold; the cut is 20% of carried gold. Killing every foe recovers the cut
+  in full off the corpse; fleeing forfeits it. **Original to late.sh** —
+  source-verified that stock 1.1.2 ships *no* mid-fight steal mechanic
+  (`creatureaiscript` exists but no stock script uses it), so these numbers
+  are ours, not a port.
+
+### Phase 3 audit corrections + deliberate adaptations
+
+Source-audit corrections to what this section originally claimed (the specs
+above are already fixed to match):
+
+1. **Both mercenaries cost gems too** (4 and 3 on top of the gold).
+2. **Stones piles are player-owned vs old-man-owned**; the like/unlike call
+   only routes each drawn pair to one of the two people.
+3. **Outhouse**: the no-wash penalty roll is `>= 50` on a d100 (51%); the
+   news item isn't gated on actually losing the coin; the wash "refund" is
+   the 3-gold `giveback` (a net −2 on the paid stall); sober-up fires on
+   both stalls' washes.
+4. **Lovers**: rungs 1–3 have no failure penalty; rung 6's failure costs a
+   charm point whenever charm > 0 (no upper bound); the wedding applies the
+   lover's buff immediately and costs nothing; a rejected proposal only
+   zeroes turns (no charm loss). The rung-6 news fires on success only.
+5. **Bard**: case 13 is +1 turn for everyone (only its flavor is
+   sex-keyed); case 15 is the mechanical fork (charm vs turn) — ours keys it
+   on address style (Second ⇒ +1 charm, matching the partner mapping);
+   case 4 is `round(max(maxhp, hp) · 1.2)` (an overheal).
+6. **Bribes** are paid win or lose (`e_rand(0,100) < chance`); the potion
+   shelf is *not* bribe-gated (it hangs off the bartender screen freely);
+   the specialty switch itself is free once the bribe lands.
+7. **Drinks**: the newday hangover threshold is a hardcoded 66 (not the
+   `maxdrunk` setting); drink HP deltas add to current HP uncapped (an
+   overheal), floored at 1.
+8. **Potions**: upstream sells `floor(gems/2)` doses per purchase with the
+   remainder refunded — ours sells one dose per menu pick, which is
+   arithmetically identical; a repeat transmutation dose *adds* 10 sickness
+   rounds rather than reapplying.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **Bets are a fixed stake ladder** (10/50/100/everything) standing in for
+  upstream's free-text bet box; still capped by gold on hand.
+- **The inn room** sets the daily flag + flavor only — upstream's "room" is
+  the site's log-out-for-the-night; the flag becomes PvP-relevant in
+  phase 4. Bank payment keeps the +5% fee and requires a positive balance
+  covering it.
+- **The Dark Horse** restores the gambler's three games; the comment board
+  and the bartender's paid enemy-intel are phase-4 features (commentary /
+  roster) and stay deferred. Abandoning a game mid-hand forfeits nothing,
+  exactly like navigating away upstream (the stake settles only at the end).
+- **Five Sixes settles against the shared pot atomically** in the DB
+  (migration 097); the stake is paid up front and refunded if the
+  round-trip fails.
+- **Charm floors at 0** (our field is unsigned); upstream lets the bard's
+  mockery drive it negative. Nothing downstream distinguishes negative from
+  zero charm in the stock systems we ship.
 
 ## Phase 4 — multiplayer
 

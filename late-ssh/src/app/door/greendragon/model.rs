@@ -84,6 +84,10 @@ pub const FIVESIX_PLAYS_PER_DAY: u32 = 10;
 /// stock potion's cost setting defaults to 2).
 pub const POTION_COST_GEMS: u64 = 2;
 
+/// A bandit-type creature only bothers cutting purses this heavy (an
+/// original late.sh mechanic — see `data::BANDIT_CREATURES`).
+pub const BANDIT_GOLD_THRESHOLD: u64 = 200;
+
 /// The private outhouse stall's price (`outhouse` `cost` default 5).
 pub const OUTHOUSE_COST: u64 = 5;
 
@@ -1108,8 +1112,7 @@ impl Character {
         for foe in foes {
             gold_sum += rng.gen_range(0..=foe.gold) as u64;
             exp_sum += foe.exp as u64;
-            let scaled =
-                foe.exp as f64 * (1.0 + 0.25 * (foe.level as f64 - self.level as f64));
+            let scaled = foe.exp as f64 * (1.0 + 0.25 * (foe.level as f64 - self.level as f64));
             exp_bonus += (scaled - foe.exp as f64).round() as i64;
             max_foe_level = max_foe_level.max(foe.level);
         }
@@ -1222,8 +1225,7 @@ impl Character {
         let restart_gems = self.dragon_kills.saturating_sub(7).min(MAX_RESTART_GEMS);
         self.gems = self.gems.saturating_add(restart_gems as u64);
         // The reset wipes on-hand gold: you restart with 50 + 50/kill, capped.
-        self.gold =
-            (START_GOLD + START_GOLD * self.dragon_kills as u64).min(DRAGON_RUN_GOLD_CAP);
+        self.gold = (START_GOLD + START_GOLD * self.dragon_kills as u64).min(DRAGON_RUN_GOLD_CAP);
         if flawless {
             // The flawless bonus lands on top of the cap.
             self.gold = self.gold.saturating_add(FLAWLESS_GOLD_BONUS);
@@ -1558,9 +1560,9 @@ impl Character {
                 std::cmp::Ordering::Greater => {
                     lines.push(format!("It goes down warm: +{delta} hitpoints."))
                 }
-                std::cmp::Ordering::Less => lines.push(format!(
-                    "It goes down like a lit coal: {delta} hitpoints."
-                )),
+                std::cmp::Ordering::Less => {
+                    lines.push(format!("It goes down like a lit coal: {delta} hitpoints."))
+                }
                 std::cmp::Ordering::Equal => {}
             }
         }
@@ -1694,9 +1696,7 @@ impl Character {
         if missing == 0 {
             return None;
         }
-        Some(
-            (((self.level as f64) + 1.0).ln() * (missing as f64 + 10.0) * 1.33).round() as u64,
-        )
+        Some((((self.level as f64) + 1.0).ln() * (missing as f64 + 10.0) * 1.33).round() as u64)
     }
 
     /// Pay to heal companion `idx` to full. Returns the gold spent, or `None`

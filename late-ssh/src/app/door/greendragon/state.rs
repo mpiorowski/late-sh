@@ -102,7 +102,9 @@ pub enum TavernView {
     /// Calling like or unlike pairs for stones.
     StonesSide,
     /// Staking the stones game.
-    StonesBet { like_pair: bool },
+    StonesBet {
+        like_pair: bool,
+    },
     /// A stones game in progress.
     Stones(tavern::StonesGame),
 }
@@ -130,6 +132,9 @@ pub struct Foe {
     pub reward_gold: u32,
     pub reward_exp: u32,
     pub level: u8,
+    /// A larcenous type (`data::BANDIT_CREATURES`): may cut a heavy purse
+    /// once per fight while it stands.
+    pub bandit: bool,
 }
 
 /// A live combat encounter: the player strikes the first living foe each
@@ -145,6 +150,10 @@ pub struct Encounter {
     pub took_damage: bool,
     /// Foes already slain this fight, banked for the victory settlement.
     pub slain: Vec<SlainFoe>,
+    /// Gold a bandit foe cut from the purse this fight: recovered in full on
+    /// victory (its corpse still holds it), gone on a flee. Also flags the
+    /// once-per-fight cut as spent.
+    pub stolen_gold: Option<u64>,
 }
 
 impl Encounter {
@@ -156,6 +165,7 @@ impl Encounter {
             buffs: Vec::new(),
             took_damage: false,
             slain: Vec::new(),
+            stolen_gold: None,
         }
     }
 
@@ -337,7 +347,12 @@ impl State {
             Mode::Romance => romance_menu(c),
             Mode::Outhouse => outhouse_menu(c),
             Mode::OuthouseWash(_) => outhouse_wash_menu(),
-            Mode::Tavern => tavern_menu(c, self.tavern_view, self.fivesix_pot, self.fivesix_rx.is_some()),
+            Mode::Tavern => tavern_menu(
+                c,
+                self.tavern_view,
+                self.fivesix_pot,
+                self.fivesix_rx.is_some(),
+            ),
             Mode::Loading => Vec::new(),
         }
     }
@@ -630,6 +645,7 @@ impl State {
                 reward_gold: tier.gold,
                 reward_exp: tier.exp,
                 level,
+                bandit: data::BANDIT_CREATURES.contains(&name),
             });
         }
         if foes.len() > 1 {
@@ -648,6 +664,7 @@ impl State {
             buffs: Vec::new(),
             took_damage: false,
             slain: Vec::new(),
+            stolen_gold: None,
         });
         self.inject_persistent_buffs();
         self.goto(Mode::Fight);
@@ -689,15 +706,14 @@ impl State {
             return;
         }
         let c = self.character.as_mut().unwrap();
-        c.persistent_buffs.retain_mut(|pb| {
-            match enc.buffs.iter().find(|b| b.name == pb.name) {
+        c.persistent_buffs
+            .retain_mut(|pb| match enc.buffs.iter().find(|b| b.name == pb.name) {
                 Some(b) if b.rounds_left > 0 => {
                     pb.rounds_left = b.rounds_left;
                     true
                 }
                 _ => false,
-            }
-        });
+            });
         if c.mount_rounds_left > 0
             && let Some(mount) = c.mount_data()
         {
@@ -871,7 +887,11 @@ impl State {
             race.name()
         ));
         self.save();
-        self.goto(if alive { Mode::Village } else { Mode::Graveyard });
+        self.goto(if alive {
+            Mode::Village
+        } else {
+            Mode::Graveyard
+        });
         Selection::Stay
     }
 
@@ -998,6 +1018,7 @@ impl State {
                 // stuffs it into `creatureexp`.
                 reward_exp: favor,
                 level,
+                bandit: false,
             },
             FoeKind::Torment,
         ));
@@ -1029,6 +1050,7 @@ impl State {
                 reward_gold: 0,
                 reward_exp: 0,
                 level: c.level,
+                bandit: false,
             },
             FoeKind::Master,
         ));
@@ -1059,6 +1081,7 @@ impl State {
                 reward_gold: 0,
                 reward_exp: 0,
                 level,
+                bandit: false,
             },
             FoeKind::Dragon,
         ));
@@ -1155,6 +1178,7 @@ impl State {
             self.defeat(&enc);
             return;
         }
+        self.bandit_purse_cut(&mut enc);
         self.encounter = Some(enc);
         self.save();
     }
@@ -1202,6 +1226,41 @@ impl State {
         for line in logs {
             self.push_log(line);
         }
+    }
+
+    /// A living bandit-type foe tries to cut a heavy purse: once per fight,
+    /// only above the gold threshold, a 1-in-8 roll each round. The cut
+    /// (20% of carried gold) rides the encounter — killing every foe wins it
+    /// back off the corpse; fleeing forfeits it. An original late.sh
+    /// mechanic (stock LoGD has no mid-fight steal); a death would zero the
+    /// purse anyway.
+    fn bandit_purse_cut(&mut self, enc: &mut Encounter) {
+        if enc.stolen_gold.is_some() {
+            return;
+        }
+        let Some(bandit) = enc
+            .foes
+            .iter()
+            .find(|f| f.bandit && f.hp > 0)
+            .map(|f| f.name.clone())
+        else {
+            return;
+        };
+        let c = self.character.as_ref().unwrap();
+        if c.gold <= model::BANDIT_GOLD_THRESHOLD {
+            return;
+        }
+        let mut rng = rand::thread_rng();
+        if rng.gen_range(0..8) != 0 {
+            return;
+        }
+        let cut = (self.character.as_ref().unwrap().gold as f64 * 0.20).round() as u64;
+        let c = self.character.as_mut().unwrap();
+        c.gold -= cut;
+        enc.stolen_gold = Some(cut);
+        self.push_log(format!(
+            "{bandit} cuts your purse in the scuffle: {cut} gold gone! Kill it to take it back."
+        ));
     }
 
     /// Every living foe (except `skip`, which already struck through the main
@@ -1344,6 +1403,7 @@ impl State {
             self.defeat(&enc);
             return;
         }
+        self.bandit_purse_cut(&mut enc);
         self.encounter = Some(enc);
         self.save();
     }
@@ -1392,10 +1452,15 @@ impl State {
                 let mut rng = rand::thread_rng();
                 let c = self.character.as_mut().unwrap();
                 let v = c.forest_victory(&enc.slain, flawless, &mut rng);
-                self.push_log(format!(
-                    "Victory! +{} gold, +{} experience.",
-                    v.gold, v.exp
-                ));
+                self.push_log(data::foe_dying_line(&mut rng).into());
+                self.push_log(format!("Victory! +{} gold, +{} experience.", v.gold, v.exp));
+                // A cut purse comes back off the bandit's corpse, whole.
+                if let Some(cut) = enc.stolen_gold {
+                    self.character.as_mut().unwrap().gold += cut;
+                    self.push_log(format!(
+                        "You pry your stolen {cut} gold back out of the bandit's coat."
+                    ));
+                }
                 if v.gem {
                     self.push_log("Something glitters in the remains: A GEM!".into());
                 }
@@ -1536,6 +1601,9 @@ impl State {
                 self.push_log(format!(
                     "{killer} has slain you! Your gold is lost and you are dragged to the graveyard."
                 ));
+                if enc.kind == FoeKind::Creature {
+                    self.push_log(data::foe_gloating_line(&mut rand::thread_rng()).into());
+                }
                 if enc.kind == FoeKind::Dragon {
                     self.news(format!(
                         "{who} (level {level}) was burned to ash beneath the Green Dragon's flame. {taunt}"
@@ -1653,7 +1721,12 @@ impl State {
     fn select_stables(&mut self) -> Selection {
         let mounts = data::MOUNTS.len();
         if self.cursor < mounts {
-            let traded_in = self.character.as_ref().unwrap().mount_data().map(|m| m.name);
+            let traded_in = self
+                .character
+                .as_ref()
+                .unwrap()
+                .mount_data()
+                .map(|m| m.name);
             let c = self.character.as_mut().unwrap();
             if c.buy_mount(self.cursor as u8 + 1) {
                 let mount = c.mount_data().unwrap().name;
@@ -1759,7 +1832,11 @@ impl State {
         let c = self.character.as_mut().unwrap();
         match c.lodge(from_bank) {
             Some(cost) => {
-                let source = if from_bank { "the bank's ledger" } else { "your purse" };
+                let source = if from_bank {
+                    "the bank's ledger"
+                } else {
+                    "your purse"
+                };
                 self.push_log(format!(
                     "{cost} gold from {source}, and {} slides a heavy iron key across the bar. A warm bed is yours tonight.",
                     data::BARKEEP
@@ -1937,7 +2014,9 @@ impl State {
             }
             1 => {
                 self.character.as_mut().unwrap().used_outhouse_today = true;
-                self.push_log("You brave the public trench. It is exactly as bad as feared.".into());
+                self.push_log(
+                    "You brave the public trench. It is exactly as bad as feared.".into(),
+                );
                 self.save();
                 self.goto(Mode::OuthouseWash(false));
             }
@@ -1979,7 +2058,8 @@ impl State {
                 }
             }
             if !found {
-                lines.push("You scrub up at the rain barrel. Cleanliness is its own reward.".into());
+                lines
+                    .push("You scrub up at the rain barrel. Cleanliness is its own reward.".into());
             }
             // The wash sobers (`soberup` at 0.9), paid or free.
             if c.drunkenness > 0 {
@@ -1993,7 +2073,10 @@ impl State {
                 let c = self.character.as_mut().unwrap();
                 if c.gold >= 1 {
                     c.gold -= 1;
-                    lines.push("In your hurry you fumble a gold coin into the muck. It stays there.".into());
+                    lines.push(
+                        "In your hurry you fumble a gold coin into the muck. It stays there."
+                            .into(),
+                    );
                 }
                 lines.push("You stride off. Somewhere behind you, someone starts laughing.".into());
                 let who = self.character.as_ref().unwrap().titled_name();
@@ -2067,7 +2150,9 @@ impl State {
                     game.reroll(&mut rng);
                     self.push_log(format!(
                         "You shake again: a {} (roll {} of {}).",
-                        game.roll, game.tries, tavern::DICE_MAX_ROLLS
+                        game.roll,
+                        game.tries,
+                        tavern::DICE_MAX_ROLLS
                     ));
                     self.tavern_view = TavernView::Dice(game);
                     self.cursor = 0;
@@ -2080,19 +2165,24 @@ impl State {
                             c.gold = c.gold.saturating_sub(game.bet);
                             format!(
                                 "{} shows a {his} to your {}. He rakes in your {} gold.",
-                                data::GAMBLER, game.roll, game.bet
+                                data::GAMBLER,
+                                game.roll,
+                                game.bet
                             )
                         }
                         std::cmp::Ordering::Less => {
                             c.gold += game.bet;
                             format!(
                                 "{} shows a {his} to your {}. He pays out {} gold, scowling.",
-                                data::GAMBLER, game.roll, game.bet
+                                data::GAMBLER,
+                                game.roll,
+                                game.bet
                             )
                         }
                         std::cmp::Ordering::Equal => format!(
                             "{} shows a {his} to your {}. A push; the stakes go home.",
-                            data::GAMBLER, game.roll
+                            data::GAMBLER,
+                            game.roll
                         ),
                     };
                     self.push_log(line);
@@ -2138,7 +2228,11 @@ impl State {
                     "He draws {} and {}: the pair is {}.",
                     color(draw.first_red),
                     color(draw.second_red),
-                    if draw.yours { "yours (+2 your pile)" } else { "his (+2 his pile)" }
+                    if draw.yours {
+                        "yours (+2 your pile)"
+                    } else {
+                        "his (+2 his pile)"
+                    }
                 ));
                 if game.finished() {
                     let payout = game.payout();
@@ -2565,7 +2659,10 @@ fn dragon_point_menu() -> Vec<(String, bool)> {
 fn inn_menu(c: &Character) -> Vec<(String, bool)> {
     let room = c.inn_room_cost();
     let room_row = if c.lodged_today {
-        ("Your room is paid (a warm bed waits upstairs)".into(), false)
+        (
+            "Your room is paid (a warm bed waits upstairs)".into(),
+            false,
+        )
     } else {
         (
             format!("A room for the night ({room} gold)"),
@@ -2709,10 +2806,7 @@ fn romance_menu(c: &Character) -> Vec<(String, bool)> {
     let partner = data::partner(c.style);
     let mut rows = Vec::new();
     if c.married {
-        rows.push((
-            format!("Steal an hour with {partner}"),
-            !c.flirted_today,
-        ));
+        rows.push((format!("Steal an hour with {partner}"), !c.flirted_today));
     } else {
         for (i, label) in data::FLIRT_RUNGS.iter().enumerate() {
             let hint = if i < model::FLIRT_LADDER.len() {
