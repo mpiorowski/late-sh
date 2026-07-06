@@ -6,6 +6,7 @@
 //! the latest lobby snapshot, door arrival/departure ambience, and the
 //! first-visit tutorial state machine.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use late_core::models::chat_message::ChatMessage;
@@ -38,6 +39,26 @@ const BANNER_QUEUE_MAX: usize = 8;
 pub struct Occupant {
     pub user_id: Uuid,
     pub username: String,
+}
+
+/// A clickable person from the last render, in absolute terminal cells.
+/// Published by the renderer (which only holds `&State`) so a mouse click
+/// can be resolved back to a user and open their profile, the same view as
+/// `/profile <name>`.
+#[derive(Debug, Clone)]
+pub struct ClubhouseHit {
+    pub user_id: Uuid,
+    pub username: String,
+    pub x0: u16,
+    pub y0: u16,
+    pub x1: u16,
+    pub y1: u16,
+}
+
+impl ClubhouseHit {
+    fn contains(&self, x: u16, y: u16) -> bool {
+        x >= self.x0 && x <= self.x1 && y >= self.y0 && y <= self.y1
+    }
 }
 
 /// `* name slipped in` / `* name headed out`, shown near the door.
@@ -102,6 +123,10 @@ pub struct State {
     banner_current: Option<BannerEntry>,
     banner_queue: VecDeque<Uuid>,
     banner_watermark: Option<chrono::DateTime<chrono::Utc>>,
+    /// Clickable avatar/label boxes from the last render, for opening
+    /// profiles on click. Interior-mutable so `ui::draw` can publish it
+    /// while holding only a shared borrow of this state.
+    hit_layout: RefCell<Vec<ClubhouseHit>>,
 }
 
 impl State {
@@ -129,6 +154,7 @@ impl State {
             banner_current: None,
             banner_queue: VecDeque::new(),
             banner_watermark: None,
+            hit_layout: RefCell::new(Vec::new()),
             tutorial: if tutorial_pending {
                 Tutorial::Pending
             } else {
@@ -360,6 +386,22 @@ impl State {
 
     pub fn own_user_id(&self) -> Uuid {
         self.user_id
+    }
+
+    /// Publish the clickable people from a render pass (absolute terminal
+    /// cells). Called once per frame from `ui::draw`.
+    pub fn set_hit_layout(&self, hits: Vec<ClubhouseHit>) {
+        *self.hit_layout.borrow_mut() = hits;
+    }
+
+    /// The user under a terminal cell, if a click there landed on someone's
+    /// avatar or name label in the last frame.
+    pub fn hit_test(&self, x: u16, y: u16) -> Option<(Uuid, String)> {
+        self.hit_layout
+            .borrow()
+            .iter()
+            .find(|h| h.contains(x, y))
+            .map(|h| (h.user_id, h.username.clone()))
     }
 
     /// Clone the shared lobby handle, if this session is wired to one. Lets an

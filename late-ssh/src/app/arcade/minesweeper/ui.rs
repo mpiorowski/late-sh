@@ -8,8 +8,7 @@ use ratatui::{
 
 use crate::app::arcade::ui::{
     GameBottomBar, OverlayAnchor, centered_rect, draw_game_frame, draw_game_overlay,
-    draw_game_overlay_anchored, keys_line, status_line,
-    tip_line,
+    draw_game_overlay_anchored, keys_line, status_line, tip_line,
 };
 
 use crate::app::common::theme;

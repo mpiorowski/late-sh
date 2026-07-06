@@ -3621,12 +3621,13 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.room_section_prefix_armed = true;
             true
         }
-        b'\\' if ctx.screen == Screen::Dashboard
-            && !ctx.chat_composing
-            && !ctx.feeds_processing
-            && !ctx.news_composing
-            && !ctx.showcase_composing
-            && !ctx.work_composing =>
+        b'\\'
+            if ctx.screen == Screen::Dashboard
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && !ctx.showcase_composing
+                && !ctx.work_composing =>
         {
             let label = match app.profile_state.cycle_sidebars() {
                 (true, true) => "Sidebars: both shown",

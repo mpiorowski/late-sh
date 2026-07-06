@@ -364,10 +364,7 @@ fn history_filter_bar_line(query: &str, active: bool) -> Line<'static> {
         Style::default().fg(theme::TEXT_BRIGHT()),
     ));
     if active {
-        spans.push(Span::styled(
-            "█",
-            Style::default().fg(theme::AMBER_GLOW()),
-        ));
+        spans.push(Span::styled("█", Style::default().fg(theme::AMBER_GLOW())));
         spans.push(Span::styled(
             "  Enter apply · Esc clear",
             Style::default().fg(theme::TEXT_FAINT()),

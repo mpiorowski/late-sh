@@ -42,6 +42,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         (TAB_WIDTH, TAB_HEIGHT)
     };
     let popup = centered_rect(width, height, area);
+    state.set_popup_area(popup);
 
     // Two stacked boxes with a blank row between them: the profile box (the
     // dashboard, or the tabbed fallback) on top, and the always-visible

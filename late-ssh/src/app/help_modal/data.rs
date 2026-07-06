@@ -691,6 +691,7 @@ fn tables_help_lines() -> Vec<String> {
         "  Arrows            game gets first chance; otherwise embedded chat handles them",
         "",
         "Home shortcuts",
+        "  \\                 cycle room list and info panel visibility",
         "  3                 open Tables",
         "  b then 1-4         enter one of the recent table shortcuts in lounge",
         "",

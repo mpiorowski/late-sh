@@ -8,7 +8,9 @@ use super::state::BoothFocus;
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let snapshot = app.audio.queue_snapshot();
     let queue_len = snapshot.queue.len();
-    let history_len = app.booth_modal_state.filtered_history_len(&snapshot.history);
+    let history_len = app
+        .booth_modal_state
+        .filtered_history_len(&snapshot.history);
     app.booth_modal_state.clamp(queue_len, history_len);
 
     // While the History `/` filter is capturing, it owns every key (including
@@ -44,7 +46,9 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 fn reclamp(app: &mut App) {
     let snapshot = app.audio.queue_snapshot();
     let queue_len = snapshot.queue.len();
-    let history_len = app.booth_modal_state.filtered_history_len(&snapshot.history);
+    let history_len = app
+        .booth_modal_state
+        .filtered_history_len(&snapshot.history);
     app.booth_modal_state.clamp(queue_len, history_len);
 }
 

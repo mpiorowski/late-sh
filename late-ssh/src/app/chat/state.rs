@@ -2082,12 +2082,8 @@ impl ChatState {
                     amount,
                     message,
                 } => {
-                    self.service.gift_chips_task(
-                        self.user_id,
-                        username.clone(),
-                        amount,
-                        message,
-                    );
+                    self.service
+                        .gift_chips_task(self.user_id, username.clone(), amount, message);
                     return Some(Banner::success(&format!(
                         "Sending {amount} chips to @{username}..."
                     )));

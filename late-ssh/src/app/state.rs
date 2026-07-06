@@ -1892,6 +1892,16 @@ impl App {
             .set_clubhouse_tutorial_done(self.user_id);
     }
 
+    /// Open the profile modal for a user, closing the sheet modal that shares
+    /// its slot. The single entry point for every profile-open trigger (chat
+    /// author click, `/profile`, clubhouse avatar click).
+    pub(crate) fn open_profile_modal(&mut self, user_id: Uuid, fallback_name: impl Into<String>) {
+        self.show_sheet_modal = false;
+        self.sheet_modal_state.close();
+        self.profile_modal_state.open(user_id, fallback_name);
+        self.show_profile_modal = true;
+    }
+
     /// The tutorial's @bartender welcome: a real #lounge message, so the
     /// newcomer's first bartender line demonstrates the room being live.
     /// AI-generated in his voice when the AI service is up, with a scripted
