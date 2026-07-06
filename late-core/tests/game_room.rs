@@ -31,9 +31,13 @@ async fn inactive_open_rooms_are_hard_deleted_with_game_chat() {
         .await
         .expect("age game room");
 
-    let deleted = GameRoom::delete_inactive_open(&client, Duration::from_secs(60 * 60))
-        .await
-        .expect("delete inactive open rooms");
+    let deleted = GameRoom::delete_inactive_open(
+        &client,
+        Duration::from_secs(60 * 60),
+        Duration::from_secs(6 * 60 * 60),
+    )
+    .await
+    .expect("delete inactive open rooms");
 
     assert_eq!(deleted, 1);
     assert_game_room_count(&client, room.id, 0).await;
@@ -66,9 +70,13 @@ async fn inactive_in_round_rooms_are_not_deleted() {
         .await
         .expect("mark active and stale");
 
-    let deleted = GameRoom::delete_inactive_open(&client, Duration::from_secs(60 * 60))
-        .await
-        .expect("delete inactive open rooms");
+    let deleted = GameRoom::delete_inactive_open(
+        &client,
+        Duration::from_secs(60 * 60),
+        Duration::from_secs(6 * 60 * 60),
+    )
+    .await
+    .expect("delete inactive open rooms");
 
     assert_eq!(deleted, 0);
     assert_game_room_count(&client, room.id, 1).await;

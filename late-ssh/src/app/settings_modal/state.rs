@@ -101,14 +101,15 @@ pub enum TweakRow {
     RightSidebar,
     RoomListSidebar,
     LoungeInfo,
-    // Compose / Music / Display / Other groups.
+    // Compose / Music / Display / Startup groups.
     ComposerKeepFocused,
     StartWithMusicMuted,
     FlagFallback,
+    LandOnHome,
 }
 
 impl TweakRow {
-    pub const ALL: [TweakRow; 8] = [
+    pub const ALL: [TweakRow; 9] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -117,6 +118,7 @@ impl TweakRow {
         TweakRow::ComposerKeepFocused,
         TweakRow::StartWithMusicMuted,
         TweakRow::FlagFallback,
+        TweakRow::LandOnHome,
     ];
 }
 
@@ -757,6 +759,9 @@ impl SettingsModalState {
             }
             TweakRow::FlagFallback => {
                 self.draft.show_flag_fallback ^= true;
+            }
+            TweakRow::LandOnHome => {
+                self.draft.land_on_home ^= true;
             }
         }
         self.save();
@@ -1883,6 +1888,7 @@ impl SettingsModalState {
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 keep_composer_focused: self.draft.keep_composer_focused,
                 start_with_music_muted: self.draft.start_with_music_muted,
+                land_on_home: self.draft.land_on_home,
                 show_flag_fallback: self.draft.show_flag_fallback,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),

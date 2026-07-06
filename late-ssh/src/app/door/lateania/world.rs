@@ -3852,26 +3852,16 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
         .find(|d| rooms.get(&square).is_some_and(|r| !r.exits.contains_key(d)))
         .unwrap_or(Dir::Up);
         let back_to_square = portal.opposite();
-        // Fan the four district rooms onto distinct directions, never reusing the
-        // direction that leads back out to the square.
-        let fan: Vec<Dir> = [
-            Dir::North,
-            Dir::East,
-            Dir::South,
-            Dir::West,
-            Dir::Up,
-            Dir::Down,
-        ]
-        .into_iter()
-        .filter(|d| *d != back_to_square)
-        .take(4)
-        .collect();
+        // The district is a walkable street: the spine faces the square, and the
+        // several haunts run off it along one axis (chained to each other), so you
+        // can stroll through them rather than dead-ending back at the spine from
+        // each. Prefer an east-west run; never reuse the way back to the square.
+        let street = [Dir::East, Dir::West, Dir::South, Dir::North]
+            .into_iter()
+            .find(|d| *d != back_to_square)
+            .unwrap_or(Dir::East);
         let zone: &'static str = district;
         let spine = base;
-        let mut spine_exits: Vec<(Dir, RoomId)> = vec![(back_to_square, square)];
-        for (k, &dir) in fan.iter().enumerate() {
-            spine_exits.push((dir, base + 1 + k as RoomId));
-        }
         rooms.insert(
             spine,
             Room {
@@ -3881,19 +3871,28 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
                 safe: true,
                 desc: Box::leak(
                     format!(
-                        "{district} opens off the {city} square, the livelier heart of the city where folk gather to trade, to drink, to worship, and to waste an idle hour. Lanes run off in every direction to its several haunts, and the ordinary noise of living fills the air from dawn until well past dark."
+                        "{district} opens off the {city} square, the livelier heart of the city where folk gather to trade, to drink, to worship, and to waste an idle hour. Its several haunts line the street that runs on from here, and the ordinary noise of living fills the air from dawn until well past dark."
                     )
                     .into_boxed_str(),
                 ),
-                exits: spine_exits.into_iter().collect(),
+                exits: [(back_to_square, square), (street, base + 1)]
+                    .into_iter()
+                    .collect(),
             },
         );
         if let Some(sq) = rooms.get_mut(&square) {
             sq.exits.insert(portal, spine);
         }
+        // Chain the haunts in a line: each links back down the street (to the spine
+        // or the previous haunt) and, unless it is the last, on to the next.
+        let n = district_rooms.len();
         for (k, (rname, rdesc)) in district_rooms.iter().enumerate() {
             let id = base + 1 + k as RoomId;
-            let back = fan[k].opposite();
+            let prev = if k == 0 { spine } else { base + k as RoomId };
+            let mut exits: Vec<(Dir, RoomId)> = vec![(street.opposite(), prev)];
+            if k + 1 < n {
+                exits.push((street, base + 2 + k as RoomId));
+            }
             rooms.insert(
                 id,
                 Room {
@@ -3902,7 +3901,7 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
                     zone,
                     safe: true,
                     desc: rdesc,
-                    exits: [(back, spine)].into_iter().collect(),
+                    exits: exits.into_iter().collect(),
                 },
             );
         }
@@ -7043,6 +7042,31 @@ mod tests {
                     "housing room {id} is trapped - no way back out without recall"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn city_districts_are_a_walkable_street_not_dead_end_rooms() {
+        let world = seed_world();
+        // Each capital's district lives at 3000 + c*10: a spine plus four haunts.
+        for c in 0..4 {
+            let base = 3000 + c * 10;
+            let haunts: Vec<RoomId> = (base + 1..base + 5).collect();
+            // Every haunt exists and can be walked into a sibling haunt (a street),
+            // not merely dead-end back at the spine.
+            let connects_to_sibling = haunts.iter().any(|&id| {
+                world
+                    .room(id)
+                    .is_some_and(|r| r.exits.values().any(|to| haunts.contains(to)))
+            });
+            assert!(
+                world.room(base).is_some(),
+                "district spine {base} should exist"
+            );
+            assert!(
+                connects_to_sibling,
+                "city district at {base} is dead-end rooms off a hub, not a walkable street"
+            );
         }
     }
 

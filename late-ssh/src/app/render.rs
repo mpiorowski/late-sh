@@ -1165,7 +1165,7 @@ impl App {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
                 let (rail_area, center_area) =
-                    if ctx.show_room_list_sidebar && content_area.width > HOME_RAIL_WIDTH + 20 {
+                    if ctx.show_room_list_sidebar {
                         let split = Layout::horizontal([
                             Constraint::Length(HOME_RAIL_WIDTH),
                             Constraint::Fill(1),
@@ -1705,7 +1705,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
             format!(
-                "· {} inside · arrows/hjkl walk · Enter interact · i say · w wave · x dance ",
+                "· {} inside · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
                 ctx.clubhouse_state.headcount()
             ),
             Style::default().fg(theme::TEXT_DIM()),

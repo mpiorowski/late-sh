@@ -25,6 +25,7 @@ pub use late_core::models::game_room::GameKind;
 
 const MAX_TABLES_PER_USER: i64 = 10;
 const INACTIVE_TABLE_TTL: Duration = Duration::from_secs(60 * 60);
+const CHESS_INACTIVE_TABLE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const INACTIVE_TABLE_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
@@ -162,7 +163,10 @@ impl RoomsService {
         let svc = self.clone();
         tokio::spawn(async move {
             loop {
-                if let Err(e) = svc.delete_inactive_tables(INACTIVE_TABLE_TTL).await {
+                if let Err(e) = svc
+                    .delete_inactive_tables(INACTIVE_TABLE_TTL, CHESS_INACTIVE_TABLE_TTL)
+                    .await
+                {
                     tracing::error!(error = ?e, "failed to delete inactive game rooms");
                 }
                 tokio::time::sleep(INACTIVE_TABLE_CLEANUP_INTERVAL).await;
@@ -210,9 +214,13 @@ impl RoomsService {
         Ok(())
     }
 
-    async fn delete_inactive_tables(&self, ttl: Duration) -> anyhow::Result<u64> {
+    async fn delete_inactive_tables(
+        &self,
+        ttl: Duration,
+        chess_ttl: Duration,
+    ) -> anyhow::Result<u64> {
         let client = self.db.get().await?;
-        let deleted = delete_inactive_rooms(&client, ttl).await?;
+        let deleted = delete_inactive_rooms(&client, ttl, chess_ttl).await?;
         if deleted > 0 {
             tracing::info!(deleted, "deleted inactive game rooms");
             self.publish_rooms(&client).await?;
@@ -534,8 +542,9 @@ async fn count_open_rooms_created_by(
 async fn delete_inactive_rooms(
     client: &tokio_postgres::Client,
     ttl: Duration,
+    chess_ttl: Duration,
 ) -> anyhow::Result<u64> {
-    GameRoom::delete_inactive_open(client, ttl).await
+    GameRoom::delete_inactive_open(client, ttl, chess_ttl).await
 }
 
 async fn touch_room_activity(client: &tokio_postgres::Client, room_id: Uuid) -> anyhow::Result<()> {

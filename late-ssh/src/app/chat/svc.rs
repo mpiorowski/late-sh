@@ -706,16 +706,30 @@ pub enum ChatEvent {
         message: String,
     },
     GiftSucceeded {
+        /// The sender's id.
         user_id: Uuid,
+        sender_username: String,
+        recipient_id: Uuid,
         recipient_username: String,
         amount: i64,
         sender_balance: i64,
         recipient_balance: i64,
+        /// Optional note the sender attached to the gift.
+        message: Option<String>,
     },
     GiftFailed {
         user_id: Uuid,
         message: String,
     },
+}
+
+/// Result of a successful chip gift, returned by `gift_chips`.
+struct GiftOutcome {
+    sender_username: String,
+    recipient_id: Uuid,
+    recipient_username: String,
+    sender_balance: i64,
+    recipient_balance: i64,
 }
 
 impl ChatService {
@@ -2542,7 +2556,13 @@ impl ChatService {
         Ok((title, members))
     }
 
-    pub fn gift_chips_task(&self, user_id: Uuid, target_username: String, amount: i64) {
+    pub fn gift_chips_task(
+        &self,
+        user_id: Uuid,
+        target_username: String,
+        amount: i64,
+        message: Option<String>,
+    ) {
         let service = self.clone();
         let span = info_span!(
             "chat.gift_chips_task",
@@ -2553,15 +2573,16 @@ impl ChatService {
         tokio::spawn(
             async move {
                 let event = match service.gift_chips(user_id, &target_username, amount).await {
-                    Ok((recipient_username, sender_balance, recipient_balance)) => {
-                        ChatEvent::GiftSucceeded {
-                            user_id,
-                            recipient_username,
-                            amount,
-                            sender_balance,
-                            recipient_balance,
-                        }
-                    }
+                    Ok(gift) => ChatEvent::GiftSucceeded {
+                        user_id,
+                        sender_username: gift.sender_username,
+                        recipient_id: gift.recipient_id,
+                        recipient_username: gift.recipient_username,
+                        amount,
+                        sender_balance: gift.sender_balance,
+                        recipient_balance: gift.recipient_balance,
+                        message,
+                    },
                     Err(error) => ChatEvent::GiftFailed {
                         user_id,
                         message: service_sentence_case(&error.to_string()),
@@ -2578,7 +2599,7 @@ impl ChatService {
         user_id: Uuid,
         target_username: &str,
         amount: i64,
-    ) -> Result<(String, i64, i64)> {
+    ) -> Result<GiftOutcome> {
         if amount <= 0 {
             anyhow::bail!("gift amount must be positive");
         }
@@ -2590,12 +2611,17 @@ impl ChatService {
         };
 
         let client = self.db.get().await?;
+        let sender = User::get(&client, user_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("sender not found"))?;
+        let sender_username = sender.username.clone();
         let recipient = User::find_by_username(&client, target_username)
             .await?
             .ok_or_else(|| anyhow::anyhow!("recipient not found"))?;
         if recipient.id == user_id {
             anyhow::bail!("cannot gift yourself");
         }
+        let recipient_id = recipient.id;
         let recipient_username = recipient.username.clone();
         drop(client);
 
@@ -2614,9 +2640,13 @@ impl ChatService {
             .transfer_chips(user_id, recipient.id, amount)
             .await
         {
-            Ok((sender_balance, recipient_balance)) => {
-                Ok((recipient_username, sender_balance, recipient_balance))
-            }
+            Ok((sender_balance, recipient_balance)) => Ok(GiftOutcome {
+                sender_username,
+                recipient_id,
+                recipient_username,
+                sender_balance,
+                recipient_balance,
+            }),
             Err(error) => {
                 self.gift_cooldowns.lock_recover().remove(&user_id);
                 Err(error)

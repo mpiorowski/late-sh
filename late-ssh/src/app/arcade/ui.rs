@@ -104,6 +104,16 @@ pub fn tip_line(text: impl Into<String>) -> Line<'static> {
     ))
 }
 
+/// Where a game-over/solved overlay sits within the board area.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverlayAnchor {
+    /// Dead center of the board (default for most games).
+    Center,
+    /// Pinned near the top, so the finished board below stays visible (used by
+    /// puzzles where seeing the solved grid is the payoff).
+    Top,
+}
+
 pub fn draw_game_overlay(
     frame: &mut Frame,
     area: Rect,
@@ -111,7 +121,27 @@ pub fn draw_game_overlay(
     subtitle: &str,
     color: Color,
 ) {
-    let overlay_area = centered_rect(area, 28.min(area.width), 4.min(area.height));
+    draw_game_overlay_anchored(frame, area, heading, subtitle, color, OverlayAnchor::Center);
+}
+
+pub fn draw_game_overlay_anchored(
+    frame: &mut Frame,
+    area: Rect,
+    heading: &str,
+    subtitle: &str,
+    color: Color,
+    anchor: OverlayAnchor,
+) {
+    let overlay_w = 28.min(area.width);
+    let overlay_h = 4.min(area.height);
+    let overlay_area = match anchor {
+        OverlayAnchor::Center => centered_rect(area, overlay_w, overlay_h),
+        OverlayAnchor::Top => {
+            let x = area.x + area.width.saturating_sub(overlay_w) / 2;
+            let y = area.y + 1.min(area.height.saturating_sub(overlay_h));
+            Rect::new(x, y, overlay_w, overlay_h)
+        }
+    };
     let overlay = Paragraph::new(vec![
         Line::from(Span::styled(
             format!(" {heading} "),

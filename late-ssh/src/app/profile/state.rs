@@ -1,4 +1,5 @@
 use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::user::RightSidebarMode;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -87,6 +88,31 @@ impl ProfileState {
         self.profile.favorite_room_ids.swap(index, target as usize);
         self.save_profile();
         true
+    }
+
+    /// Advance both sidebars through the 4-state layout cycle (the Home `\`
+    /// key): both on -> left off -> right off -> both off -> both on. `left`
+    /// is the room-list sidebar, `right` the info sidebar (its mode is kept in
+    /// step with the visibility flag). Persists and returns the new
+    /// `(left, right)` visibility.
+    pub fn cycle_sidebars(&mut self) -> (bool, bool) {
+        const CYCLE: [(bool, bool); 4] =
+            [(true, true), (false, true), (true, false), (false, false)];
+        let current = (
+            self.profile.show_room_list_sidebar,
+            self.profile.show_right_sidebar,
+        );
+        let idx = CYCLE.iter().position(|&s| s == current).unwrap_or(0);
+        let (left, right) = CYCLE[(idx + 1) % CYCLE.len()];
+        self.profile.show_room_list_sidebar = left;
+        self.profile.show_right_sidebar = right;
+        self.profile.right_sidebar_mode = if right {
+            RightSidebarMode::On
+        } else {
+            RightSidebarMode::Off
+        };
+        self.save_profile();
+        (left, right)
     }
 
     fn save_profile(&self) {
@@ -180,6 +206,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         show_room_list_sidebar: profile.show_room_list_sidebar,
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
+        land_on_home: profile.land_on_home,
         show_flag_fallback: profile.show_flag_fallback,
         favorite_room_ids: profile.favorite_room_ids.clone(),
         birthday: profile.birthday.clone(),

@@ -8,7 +8,7 @@ use super::chips::INITIAL_CHIP_BALANCE;
 use super::user::{
     RightSidebarComponentSetting, RightSidebarMode, User, extract_bio, extract_birthday,
     extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
-    extract_keep_composer_focused, extract_langs, extract_notify_bell,
+    extract_keep_composer_focused, extract_land_on_home, extract_langs, extract_notify_bell,
     extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
     extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_dashboard_header,
     extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
@@ -50,6 +50,9 @@ pub struct Profile {
     /// Tweak: silently mute the first paired audio client on each new SSH
     /// session so music does not auto-play.
     pub start_with_music_muted: bool,
+    /// Tweak: land on Home (page 1) instead of the Clubhouse (page 0) when a
+    /// session starts.
+    pub land_on_home: bool,
     /// Tweak: show text labels instead of flag emoji in the shop Flags tab.
     pub show_flag_fallback: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
@@ -90,6 +93,7 @@ impl Default for Profile {
             show_room_list_sidebar: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            land_on_home: false,
             show_flag_fallback: false,
             favorite_room_ids: Vec::new(),
             birthday: None,
@@ -121,6 +125,7 @@ pub struct ProfileParams {
     pub show_room_list_sidebar: bool,
     pub keep_composer_focused: bool,
     pub start_with_music_muted: bool,
+    pub land_on_home: bool,
     pub show_flag_fallback: bool,
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
@@ -277,10 +282,11 @@ impl Profile {
                          'birthday', $22::text,
                          'keep_composer_focused', $23::bool,
                          'start_with_music_muted', $24::bool,
-                         'show_flag_fallback', $25::bool
+                         'show_flag_fallback', $25::bool,
+                         'land_on_home', $26::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $26
+                 WHERE id = $27
                  RETURNING *",
                 &[
                     &params.username,
@@ -308,6 +314,7 @@ impl Profile {
                     &params.keep_composer_focused,
                     &params.start_with_music_muted,
                     &params.show_flag_fallback,
+                    &params.land_on_home,
                     &user_id,
                 ],
             )
@@ -341,6 +348,7 @@ impl Profile {
             show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
             keep_composer_focused: extract_keep_composer_focused(&user.settings),
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
+            land_on_home: extract_land_on_home(&user.settings),
             show_flag_fallback: extract_show_flag_fallback(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
             birthday: extract_birthday(&user.settings),

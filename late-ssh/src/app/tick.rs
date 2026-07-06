@@ -73,10 +73,7 @@ impl App {
             self.set_screen(Screen::Dashboard);
         }
         if let Some((user_id, username)) = self.chat.take_requested_open_profile() {
-            self.show_sheet_modal = false;
-            self.sheet_modal_state.close();
-            self.profile_modal_state.open(user_id, username);
-            self.show_profile_modal = true;
+            self.open_profile_modal(user_id, username);
         }
         if let Some(request) = self.chat.take_requested_open_sheet() {
             self.show_profile_modal = false;
@@ -97,11 +94,7 @@ impl App {
             .pending_chat_profile_open
             .take_if(|p| p.time.elapsed() >= crate::app::input::PROFILE_CLICK_DEBOUNCE)
         {
-            self.show_sheet_modal = false;
-            self.sheet_modal_state.close();
-            self.profile_modal_state
-                .open(pending.user_id, pending.username);
-            self.show_profile_modal = true;
+            self.open_profile_modal(pending.user_id, pending.username);
         }
         if let Some(b) = self.audio.tick() {
             self.banner = Some(b);

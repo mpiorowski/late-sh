@@ -17,6 +17,7 @@ pub const DIFFICULTIES: [&str; 2] = ["draw-1", "draw-3"];
 pub enum ResetKind {
     NewBoard,
     Reset,
+    Reroll,
 }
 
 impl ResetKind {
@@ -24,6 +25,7 @@ impl ResetKind {
         match self {
             ResetKind::NewBoard => "Press again for a new board",
             ResetKind::Reset => "Press again to reset",
+            ResetKind::Reroll => "Press again to reroll the deck",
         }
     }
 }
@@ -263,6 +265,19 @@ impl State {
         }
         self.clear_reset_pending();
         let snapshot = snapshot_from_seed(self.seed);
+        self.apply_snapshot(snapshot.clone());
+        self.replace_mode_snapshot_for_selected_difficulty(snapshot);
+        self.save_async();
+    }
+
+    /// Deal a brand-new random deck for the current mode and difficulty.
+    /// Solvability checking is too expensive, so this is the escape hatch for
+    /// an unsolvable daily; it works for both draw-1 and draw-3. Unlike
+    /// `reset_board` it picks a fresh seed, and it is allowed even after a
+    /// game is over.
+    pub fn reroll(&mut self) {
+        self.clear_reset_pending();
+        let snapshot = snapshot_from_seed(random_seed());
         self.apply_snapshot(snapshot.clone());
         self.replace_mode_snapshot_for_selected_difficulty(snapshot);
         self.save_async();

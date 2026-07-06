@@ -10,8 +10,8 @@ use super::state::{
     DAILY_WIN_REWARD_CHIPS, NetTile, State, Sticker, face_for_view, net_view, oriented_face,
 };
 use crate::app::arcade::ui::{
-    GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
-    tip_line,
+    GameBottomBar, OverlayAnchor, centered_rect, draw_game_frame, draw_game_overlay_anchored,
+    keys_line, status_line, tip_line,
 };
 use crate::app::common::theme;
 
@@ -69,12 +69,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     draw_cube(frame, columns[1], state);
 
     if state.is_solved() && state.has_started() {
-        draw_game_overlay(
+        draw_game_overlay_anchored(
             frame,
             board_area,
             "SOLVED",
             &format!("{DAILY_WIN_REWARD_CHIPS} chips"),
             theme::SUCCESS(),
+            OverlayAnchor::Top,
         );
     }
 }

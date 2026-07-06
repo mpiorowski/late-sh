@@ -203,18 +203,29 @@ impl GameRoom {
         Ok(updated)
     }
 
-    pub async fn delete_inactive_open(client: &Client, ttl: Duration) -> Result<u64> {
+    pub async fn delete_inactive_open(
+        client: &Client,
+        ttl: Duration,
+        chess_ttl: Duration,
+    ) -> Result<u64> {
         let ttl_seconds = ttl.as_secs() as i64;
+        let chess_ttl_seconds = chess_ttl.as_secs() as i64;
         let chess = GameKind::Chess.as_str();
         let row = client
             .query_one(
                 "WITH deleted_rooms AS (
                      DELETE FROM game_rooms
                      WHERE status = $1
-                       AND updated < current_timestamp - ($2::bigint * interval '1 second')
                        AND (
-                         game_kind <> $3
-                         OR runtime_state->>'phase' IS DISTINCT FROM 'Active'
+                         (
+                           game_kind <> $3
+                           AND updated < current_timestamp - ($2::bigint * interval '1 second')
+                         )
+                         OR (
+                           game_kind = $3
+                           AND runtime_state->>'phase' IS DISTINCT FROM 'Active'
+                           AND updated < current_timestamp - ($4::bigint * interval '1 second')
+                         )
                        )
                      RETURNING id, chat_room_id
                  ),
@@ -232,7 +243,7 @@ impl GameRoom {
                      RETURNING c.id
                  )
                  SELECT COUNT(*)::bigint AS count FROM deleted_chats",
-                &[&Self::STATUS_OPEN, &ttl_seconds, &chess],
+                &[&Self::STATUS_OPEN, &ttl_seconds, &chess, &chess_ttl_seconds],
             )
             .await?;
         let count: i64 = row.get("count");

@@ -11,7 +11,7 @@
 //! outright while composing so the shared composer pipeline gets the bytes.
 
 use crate::app::common::primitives::Screen;
-use crate::app::input::ParsedInput;
+use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
 use super::lobby::Emote;
@@ -25,6 +25,13 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     // Chat overlays opened elsewhere are handled by the shared overlay path.
     if app.chat.has_overlay() {
         return false;
+    }
+
+    // A left click on a patron opens their profile, the same view as
+    // `/profile <name>`. Other mouse events (scroll) fall through to the
+    // global handlers.
+    if let ParsedInput::Mouse(mouse) = event {
+        return handle_click(app, mouse);
     }
 
     if let Some(byte) = event_byte(event) {
@@ -50,6 +57,10 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             }
             b'x' | b'X' => {
                 app.clubhouse.emote(Emote::Dance);
+                return true;
+            }
+            b's' | b'S' => {
+                app.clubhouse.sit();
                 return true;
             }
             b't' | b'T' if app.clubhouse.nearby() == Some(Interactive::Bartender) => {
@@ -111,6 +122,25 @@ fn handle_walk(app: &mut App, event: &ParsedInput) -> bool {
     if app.clubhouse.tutorial_reached_bar() {
         app.send_clubhouse_bartender_greeting();
     }
+    true
+}
+
+/// A left-button press over a patron's avatar or name label opens their
+/// profile modal. Returns `false` for anything else (misses, scroll, drags,
+/// button-ups) so the global mouse handlers keep working.
+fn handle_click(app: &mut App, mouse: &MouseEvent) -> bool {
+    if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
+        return false;
+    }
+    // SGR mouse cells are 1-indexed; the hit layout is in 0-indexed frame
+    // cells (same convention as `handle_mouse_click`).
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    let Some((user_id, username)) = app.clubhouse.hit_test(x, y) else {
+        return false;
+    };
+    app.open_profile_modal(user_id, username);
     true
 }
 

@@ -1,5 +1,5 @@
 use crate::app::{
-    input::{MouseEventKind, ParsedInput},
+    input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput},
     state::App,
 };
 
@@ -35,6 +35,9 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Mouse(mouse) => match mouse.kind {
             MouseEventKind::ScrollUp => app.profile_modal_state.scroll_by(-3),
             MouseEventKind::ScrollDown => app.profile_modal_state.scroll_by(3),
+            // A left click outside the modal dismisses it, like clicking off a
+            // popup elsewhere; clicks on the modal itself are left alone.
+            MouseEventKind::Down if clicked_outside(app, &mouse) => close(app),
             _ => {}
         },
         ParsedInput::PageDown => {
@@ -51,6 +54,27 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
 
 pub fn handle_escape(app: &mut App) {
     close(app);
+}
+
+/// True for a left-button press that lands outside the modal's popup rect
+/// (from the last render). SGR mouse cells are 1-indexed; the popup rect is
+/// in 0-indexed frame cells, so shift the click by one before testing.
+fn clicked_outside(app: &App, mouse: &MouseEvent) -> bool {
+    if mouse.button != Some(MouseButton::Left) {
+        return false;
+    }
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    let popup = app.profile_modal_state.popup_area();
+    // A zero-size rect means nothing was drawn yet: don't dismiss on it.
+    if popup.width == 0 || popup.height == 0 {
+        return false;
+    }
+    !(x >= popup.x
+        && x < popup.x.saturating_add(popup.width)
+        && y >= popup.y
+        && y < popup.y.saturating_add(popup.height))
 }
 
 fn is_close_event(event: &ParsedInput) -> bool {

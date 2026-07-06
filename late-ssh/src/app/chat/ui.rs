@@ -1309,10 +1309,16 @@ fn ensure_chat_rows_cache(
         let is_own = msg.user_id == ctx.current_user_id;
         let is_continuation = prev_user_id == Some(msg.user_id)
             && prev_created.is_some_and(|prev| (msg.created - prev).num_seconds().abs() < 120);
-        let stamp = format!(
+        let mut stamp = format!(
             "[{}]",
             crate::app::common::primitives::format_relative_time(msg.created)
         );
+        // A bumped `updated` marks a message that's been edited (an admin pin
+        // also bumps it; we treat that as close enough rather than tracking a
+        // dedicated edited flag).
+        if msg.updated > msg.created {
+            stamp.push_str(" (edited)");
+        }
         let raw_author = ctx
             .usernames
             .get(&msg.user_id)
@@ -1585,8 +1591,10 @@ fn draw_image_modal(
         return;
     }
 
-    let max_popup_width = anchor.width.saturating_sub(4).clamp(12, 132);
-    let max_popup_height = anchor.height.saturating_sub(2).max(5);
+    // Maximize the preview: fill almost the whole chat pane (small margin for
+    // the border) instead of the old 132-col cap, which left big images tiny.
+    let max_popup_width = anchor.width.saturating_sub(2).max(12);
+    let max_popup_height = anchor.height.saturating_sub(1).max(5);
     let modal_bg = Style::default().bg(theme::BG_CANVAS());
 
     // Report the modal's image capacity so the next Sixel fetch encodes to a

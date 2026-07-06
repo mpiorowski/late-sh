@@ -22,10 +22,11 @@ use uuid::Uuid;
 use crate::app::common::theme;
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
+use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
 
 use super::lobby::{Emote, Placement};
 use super::map;
-use super::state::{State, Tutorial};
+use super::state::{ClubhouseHit, State, Tutorial};
 
 const LABEL_MAX: usize = 10;
 const FIRE_CHARS: [char; 6] = ['(', ')', '~', '^', '*', '\''];
@@ -88,7 +89,7 @@ fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
 
     let mut cells = styled_base_grid();
     animate(&mut cells, view);
-    let anchors = place_people(&mut cells, view);
+    let (anchors, map_hits) = place_people(&mut cells, view);
     draw_door_events(&mut cells, view);
     draw_bubbles(&mut cells, view, &anchors);
 
@@ -102,6 +103,15 @@ fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
     let cam_y = camera_origin(usize::from(state.player_y), vh, map_h);
     let pad_x = vw.saturating_sub(map_w) / 2;
     let pad_y = vh.saturating_sub(map_h) / 2;
+
+    // Re-express the map-space clickable boxes in absolute terminal cells,
+    // under the same camera transform the grid is drawn with, so a click can
+    // be resolved back to a user (`State::hit_test`).
+    let hits = map_hits
+        .into_iter()
+        .filter_map(|h| project_hit(h, inner, cam_x, cam_y, pad_x, pad_y))
+        .collect();
+    state.set_hit_layout(hits);
 
     let mut lines: Vec<Line> = Vec::with_capacity(vh);
     for _ in 0..pad_y {
@@ -127,6 +137,37 @@ fn camera_origin(player: usize, viewport: usize, map_len: usize) -> usize {
         return 0;
     }
     player.saturating_sub(viewport / 2).min(map_len - viewport)
+}
+
+/// Project a map-space clickable box into absolute terminal cells using the
+/// same camera pan/pad as the grid render. Boxes fully off the viewport drop
+/// out; partly-visible ones are clamped to the visible edge.
+fn project_hit(
+    hit: ClubhouseHit,
+    inner: Rect,
+    cam_x: usize,
+    cam_y: usize,
+    pad_x: usize,
+    pad_y: usize,
+) -> Option<ClubhouseHit> {
+    let vw = i64::from(inner.width);
+    let vh = i64::from(inner.height);
+    let col = |mx: u16| pad_x as i64 + i64::from(mx) - cam_x as i64;
+    let row = |my: u16| pad_y as i64 + i64::from(my) - cam_y as i64;
+    let (c0, c1, r0, r1) = (col(hit.x0), col(hit.x1), row(hit.y0), row(hit.y1));
+    if c1 < 0 || c0 > vw - 1 || r1 < 0 || r0 > vh - 1 {
+        return None;
+    }
+    let clamp_col = |c: i64| c.clamp(0, vw - 1) as u16;
+    let clamp_row = |r: i64| r.clamp(0, vh - 1) as u16;
+    Some(ClubhouseHit {
+        user_id: hit.user_id,
+        username: hit.username,
+        x0: inner.x.saturating_add(clamp_col(c0)),
+        y0: inner.y.saturating_add(clamp_row(r0)),
+        x1: inner.x.saturating_add(clamp_col(c1)),
+        y1: inner.y.saturating_add(clamp_row(r1)),
+    })
 }
 
 type Cells = Vec<Vec<(char, Style)>>;
@@ -549,6 +590,52 @@ fn draw_figure(cells: &mut Cells, x: u16, y: u16, head: char, style: Style) {
     }
 }
 
+/// A tipsy stick figure: the same 3-row build as [`draw_figure`], nudged to
+/// read as unsteady the drunker the patron is. Buzzed (level 2) throws both
+/// arms up in a loose "woo"; sloshed (level 3) slumps off-balance, one knee
+/// buckling (`v` legs) and the head lolling onto a shoulder. Level 4 is
+/// handled by [`draw_passed_out`], not here.
+fn draw_drunk_figure(cells: &mut Cells, x: u16, y: u16, head: char, style: Style, level: u8) {
+    let legs = if level >= 3 { 'v' } else { 'Λ' };
+    set(cells, x, y, legs, style);
+    if y >= 2 {
+        // Buzzed throws both arms up; sloshed sags to a neutral, wobbly stance.
+        let (left, right) = if level >= 3 { ('/', '\\') } else { ('\\', '/') };
+        set(cells, x.saturating_sub(1), y - 1, left, style);
+        set(cells, x, y - 1, '|', style);
+        set(cells, x + 1, y - 1, right, style);
+    }
+    if y >= 3 {
+        // Sloshed lolls the head onto a shoulder; buzzed keeps it upright.
+        let head_x = if level >= 3 { x.saturating_sub(1) } else { x };
+        set(cells, head_x, y - 2, head, style);
+    }
+}
+
+/// A patron knocked out cold on the floor: an X-eyed head sprawled between
+/// limp arms, with a little sleepy `z` drifting up. Drawn in place of the
+/// upright stick figure once someone hits the top drunk level.
+fn draw_passed_out(cells: &mut Cells, x: u16, y: u16, style: Style) {
+    set(cells, x.saturating_sub(1), y, '_', style);
+    set(cells, x, y, 'x', style);
+    set(cells, x + 1, y, '_', style);
+    if y >= 1 {
+        set(
+            cells,
+            x,
+            y - 1,
+            'z',
+            Style::default().fg(theme::TEXT_MUTED()),
+        );
+    }
+}
+
+/// True once a patron is at the top drunk bucket ("wasted") and should be
+/// shown slumped/passed out rather than upright.
+fn is_passed_out(drunk_level: u8) -> bool {
+    drunk_level >= DRUNK_MAX_LEVEL
+}
+
 /// Where an occupant's head goes for a seat: perched above a stool, sunk
 /// into an armchair.
 fn seat_head_y(seat: &map::Seat) -> u16 {
@@ -562,9 +649,12 @@ fn seat_head_y(seat: &map::Seat) -> u16 {
 /// their name label, keyed by user id.
 type BubbleAnchors = HashMap<Uuid, (u16, u16)>;
 
-fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> BubbleAnchors {
+fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, Vec<ClubhouseHit>) {
     let state = view.state;
     let mut anchors: BubbleAnchors = HashMap::new();
+    // Map-space clickable boxes, one per drawn person; the caller reprojects
+    // them into terminal cells once the camera is known.
+    let mut hits: Vec<ClubhouseHit> = Vec::new();
 
     // Staff first, so patrons' labels can never erase the bartender.
     let bartender_style = if state.bartender_online {
@@ -587,10 +677,21 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> BubbleAnchors {
     if state.graybeard_online {
         let seat = map::GRAYBEARD_SEAT;
         let style = Style::default().fg(theme::TEXT_MUTED());
-        set(cells, seat.x, seat_head_y(&seat), 'o', style);
-        put_label(cells, seat.x, seat.y + 2, "graybeard", style);
+        let head_y = seat_head_y(&seat);
+        set(cells, seat.x, head_y, 'o', style);
+        let label_y = seat.y + 2;
+        put_label(cells, seat.x, label_y, "graybeard", style);
         if let Some(id) = view.graybeard_user_id {
-            anchors.insert(id, (seat.x, seat_head_y(&seat).saturating_sub(1)));
+            anchors.insert(id, (seat.x, head_y.saturating_sub(1)));
+            let half = "graybeard".len() as u16 / 2;
+            hits.push(ClubhouseHit {
+                user_id: id,
+                username: "graybeard".to_string(),
+                x0: seat.x.saturating_sub(half),
+                y0: head_y,
+                x1: seat.x + half,
+                y1: label_y,
+            });
         }
     }
 
@@ -601,9 +702,28 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> BubbleAnchors {
         if let Some(bg) = theme::DRUNK_LABEL_BG(who.drunk_level) {
             label_style = label_style.bg(bg);
         }
-        let anchor = draw_presence(cells, who.placement, 'o', style, &who.username, label_style);
+        let (anchor, (x0, y0, x1, y1)) = draw_presence(
+            cells,
+            who.placement,
+            'o',
+            style,
+            &who.username,
+            label_style,
+            who.drunk_level,
+        );
         anchors.insert(who.user_id, anchor);
-        if let Some(emote) = who.emote {
+        hits.push(ClubhouseHit {
+            user_id: who.user_id,
+            username: who.username.clone(),
+            x0,
+            y0,
+            x1,
+            y1,
+        });
+        // A passed-out patron can't wave or dance.
+        if !is_passed_out(who.drunk_level)
+            && let Some(emote) = who.emote
+        {
             draw_emote(cells, who.placement, emote, state.anim_tick, style);
         }
     }
@@ -637,24 +757,41 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> BubbleAnchors {
         .find(own_id)
         .map(|p| p.placement)
         .unwrap_or(Placement::Walking(state.player_x, state.player_y));
-    let anchor = draw_presence(
+    let own_drunk_level = state
+        .snapshot
+        .find(own_id)
+        .map(|p| p.drunk_level)
+        .unwrap_or(0);
+    let (anchor, (x0, y0, x1, y1)) = draw_presence(
         cells,
         own_placement,
         '@',
         own_style,
         view.own_username,
         own_label_style,
+        own_drunk_level,
     );
     anchors.insert(own_id, anchor);
-    if let Some(emote) = state.snapshot.find(own_id).and_then(|p| p.emote) {
+    hits.push(ClubhouseHit {
+        user_id: own_id,
+        username: view.own_username.to_string(),
+        x0,
+        y0,
+        x1,
+        y1,
+    });
+    if !is_passed_out(own_drunk_level)
+        && let Some(emote) = state.snapshot.find(own_id).and_then(|p| p.emote)
+    {
         draw_emote(cells, own_placement, emote, state.anim_tick, own_style);
     }
 
-    anchors
+    (anchors, hits)
 }
 
 /// Draw one person at their placement and return their bubble anchor (the
-/// row above their name label).
+/// row above their name label) plus a map-space clickable box `(x0, y0, x1,
+/// y1)` spanning their figure and name label, for profile-on-click.
 fn draw_presence(
     cells: &mut Cells,
     placement: Placement,
@@ -662,12 +799,25 @@ fn draw_presence(
     style: Style,
     username: &str,
     label_style: Style,
-) -> (u16, u16) {
+    drunk_level: u8,
+) -> ((u16, u16), (u16, u16, u16, u16)) {
+    let passed_out = is_passed_out(drunk_level);
+    // The name label spans this many cells, centered on the avatar (matches
+    // `put_label`), so the clickable box tracks the drawn name width.
+    let label_w = truncate_name(username).chars().count() as u16;
+    let label_span = |center: u16| {
+        let x0 = center.saturating_sub(label_w / 2);
+        (x0, x0 + label_w.saturating_sub(1))
+    };
     match placement {
         Placement::Seated(i) => {
             let seat = &map::SEATS[i.min(map::SEATS.len() - 1)];
             let head_y = seat_head_y(seat);
-            set(cells, seat.x, head_y, head, style);
+            // Slumped in the seat: X-eyed head in place of the usual glyph.
+            // (Buzzed/sloshed patrons keep their head but wear the drunk name
+            // badge; a seat has no body to throw a pose with.)
+            let seat_head = if passed_out { 'x' } else { head };
+            set(cells, seat.x, head_y, seat_head, style);
             let label_y = if seat.label_below {
                 seat.y + 2
             } else {
@@ -680,18 +830,35 @@ fn draw_presence(
                 &truncate_name(username),
                 label_style,
             );
-            if seat.label_below {
+            let (lx0, lx1) = label_span(seat.x);
+            let hit = (
+                lx0.min(seat.x),
+                head_y.min(label_y),
+                lx1.max(seat.x),
+                head_y.max(label_y),
+            );
+            let anchor = if seat.label_below {
                 (seat.x, head_y.saturating_sub(1))
             } else {
                 (seat.x, label_y.saturating_sub(1))
-            }
+            };
+            (anchor, hit)
         }
         Placement::Standing(_) | Placement::Door(_) | Placement::Walking(..) => {
             let (x, y) = placement.position();
-            draw_figure(cells, x, y, head, style);
+            if passed_out {
+                draw_passed_out(cells, x, y, style);
+            } else if drunk_level >= DRUNK_LABEL_MIN_LEVEL {
+                draw_drunk_figure(cells, x, y, head, style, drunk_level);
+            } else {
+                draw_figure(cells, x, y, head, style);
+            }
             let label_y = y.saturating_sub(3).max(1);
             put_label(cells, x, label_y, &truncate_name(username), label_style);
-            (x, label_y.saturating_sub(1))
+            let (lx0, lx1) = label_span(x);
+            // Figure body is `x-1..=x+1`; the box unions it with the label.
+            let hit = (lx0.min(x.saturating_sub(1)), label_y, lx1.max(x + 1), y);
+            ((x, label_y.saturating_sub(1)), hit)
         }
     }
 }

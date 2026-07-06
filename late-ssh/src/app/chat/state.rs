@@ -60,8 +60,8 @@ const INLINE_IMAGE_MAX_WIDTH: u32 = 96;
 const INLINE_IMAGE_MAX_ROWS: u32 = 12;
 const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
 const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
-const TERMINAL_IMAGE_MAX_COLS: u32 = 120;
-const TERMINAL_IMAGE_MAX_ROWS: u32 = 32;
+const TERMINAL_IMAGE_MAX_COLS: u32 = 200;
+const TERMINAL_IMAGE_MAX_ROWS: u32 = 60;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_CURSOR_FLUSH_DELAY: Duration = Duration::from_secs(2);
 
@@ -2077,9 +2077,13 @@ impl ChatState {
                 GiftParse::Invalid => {
                     return Some(Banner::error("Usage: /gift @user <amount>"));
                 }
-                GiftParse::Gift { username, amount } => {
+                GiftParse::Gift {
+                    username,
+                    amount,
+                    message,
+                } => {
                     self.service
-                        .gift_chips_task(self.user_id, username.clone(), amount);
+                        .gift_chips_task(self.user_id, username.clone(), amount, message);
                     return Some(Banner::success(&format!(
                         "Sending {amount} chips to @{username}..."
                     )));
@@ -3601,9 +3605,31 @@ impl ChatState {
                     amount,
                     sender_balance,
                     recipient_balance,
+                    message,
+                    ..
                 } if self.user_id == user_id => {
+                    let note = message
+                        .as_deref()
+                        .map(|m| format!(": \"{m}\""))
+                        .unwrap_or_default();
                     banner = Some(Banner::success(&format!(
-                        "Gifted {amount} chips to @{recipient_username} ({sender_balance} left, recipient {recipient_balance})"
+                        "Gifted {amount} chips to @{recipient_username} ({sender_balance} left, recipient {recipient_balance}){note}"
+                    )));
+                }
+                ChatEvent::GiftSucceeded {
+                    recipient_id,
+                    sender_username,
+                    amount,
+                    recipient_balance,
+                    message,
+                    ..
+                } if self.user_id == recipient_id => {
+                    let note = message
+                        .as_deref()
+                        .map(|m| format!(": \"{m}\""))
+                        .unwrap_or_default();
+                    banner = Some(Banner::success(&format!(
+                        "@{sender_username} gifted you {amount} chips (balance {recipient_balance}){note}"
                     )));
                 }
                 ChatEvent::GiftFailed { user_id, message } if self.user_id == user_id => {
@@ -4272,10 +4298,18 @@ fn parse_dm_command(input: &str) -> Option<&str> {
     Some(username)
 }
 
+/// Max length of the optional note attached to a `/gift`.
+const GIFT_MESSAGE_MAX_CHARS: usize = 120;
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum GiftParse {
     Invalid,
-    Gift { username: String, amount: i64 },
+    Gift {
+        username: String,
+        amount: i64,
+        /// Optional note: `/gift @user 100 happy birthday`.
+        message: Option<String>,
+    },
 }
 
 pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
@@ -4290,9 +4324,20 @@ pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
     let Some(amount) = parts.next() else {
         return Some(GiftParse::Invalid);
     };
-    if parts.next().is_some() {
-        return Some(GiftParse::Invalid);
-    }
+    // Everything after the amount is an optional single-line note. Rejoining
+    // with single spaces drops any newlines/tabs; then strip control chars and
+    // cap the length.
+    let message: String = parts
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(GIFT_MESSAGE_MAX_CHARS)
+        .collect();
+    let message = {
+        let trimmed = message.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    };
     let username = username.strip_prefix('@').unwrap_or(username).trim();
     let Ok(amount) = amount.parse::<i64>() else {
         return Some(GiftParse::Invalid);
@@ -4303,6 +4348,7 @@ pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
     Some(GiftParse::Gift {
         username: username.to_string(),
         amount,
+        message,
     })
 }
 
@@ -5066,6 +5112,7 @@ mod tests {
             Some(GiftParse::Gift {
                 username: "alice".to_string(),
                 amount: 500,
+                message: None,
             })
         );
         assert_eq!(
@@ -5073,6 +5120,19 @@ mod tests {
             Some(GiftParse::Gift {
                 username: "alice".to_string(),
                 amount: 500,
+                message: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_gift_command_captures_optional_message() {
+        assert_eq!(
+            parse_gift_command("/gift @alice 500 happy birthday"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+                message: Some("happy birthday".to_string()),
             })
         );
     }
@@ -5087,10 +5147,6 @@ mod tests {
             Some(GiftParse::Invalid)
         );
         assert_eq!(parse_gift_command("/gift @a wat"), Some(GiftParse::Invalid));
-        assert_eq!(
-            parse_gift_command("/gift @a 5 extra"),
-            Some(GiftParse::Invalid)
-        );
         assert_eq!(parse_gift_command("/gifted @a 5"), None);
     }
 
