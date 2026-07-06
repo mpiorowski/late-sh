@@ -119,6 +119,29 @@ pub const FIVESIX_MAX_POT: u64 = 5000;
 /// Charm required to propose marriage (rung 7 checks `charm >= 22` directly).
 pub const MARRY_CHARM_REQUIRED: u32 = 22;
 
+/// PvP attacks granted per day (`pvpday`), refilled at a normal dawn only —
+/// the paid resurrection skips them like it skips grave fights.
+pub const PVP_FIGHTS_PER_DAY: u32 = 3;
+/// Seconds a freshly-attacked warrior stays off the target lists
+/// (`pvptimeout`), stamped onto the *victim* at engage (the dogpile guard).
+pub const PVP_TIMEOUT_SECS: i64 = 600;
+/// Newbie-immunity thresholds (`pvpimmunity` 5 days, `pvpminexp` 1500): a
+/// warrior is immune while ALL hold — run age <= 5 days, no dragon kills,
+/// never forfeited by attacking (`pk`), and experience <= 1500 (upstream's
+/// warning test is `<=`; the list filter is the same set negated).
+pub const PVP_IMMUNITY_DAYS: u32 = 5;
+pub const PVP_IMMUNITY_MAX_EXP: u64 = 1500;
+/// Percent of the victim's engage-time experience the winning attacker gains
+/// (`pvpattgain`).
+pub const PVP_ATTACKER_GAIN_PCT: u32 = 10;
+/// Percent of their engage-time experience a slain victim loses (`pvpdeflose`).
+pub const PVP_DEFENDER_LOSE_PCT: u32 = 5;
+/// Percent of the attacker's experience a victorious sleeping defender gains
+/// (`pvpdefgain`).
+pub const PVP_DEFENDER_GAIN_PCT: u32 = 10;
+/// Percent of experience a defeated attacker loses (`pvpattlose`).
+pub const PVP_ATTACKER_LOSE_PCT: u32 = 15;
+
 /// The forest hunting intensities. LoGD offers easier/harder pickings that
 /// shift the creature level relative to the player's own level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -304,6 +327,22 @@ pub struct Character {
     pub used_outhouse_today: bool,
     /// Five Sixes plays today (max [`FIVESIX_PLAYS_PER_DAY`]).
     pub fivesix_plays_today: u32,
+    /// PvP attacks left today (upstream `playerfights`): spent at engage,
+    /// refilled to [`PVP_FIGHTS_PER_DAY`] by a normal dawn only (the paid
+    /// resurrection skips them, exactly like grave fights).
+    pub player_fights: u32,
+    /// Forfeited newbie immunity by attacking while immune (upstream `pk`).
+    /// Permanent — it never resets, not even across dragon kills.
+    pub pk: bool,
+    /// Epoch seconds when an attacker last engaged this character (upstream
+    /// `pvpflag`): for [`PVP_TIMEOUT_SECS`] after, the target lists hold
+    /// everyone else off. 0 = never engaged. Stamped by *other* sessions'
+    /// engage transactions, through the DB.
+    pub pvp_engaged_at: i64,
+    /// Unread reports of what happened while this character slept (upstream's
+    /// system mail): PvP settlements append here through the DB; the next
+    /// door entry drains them into the log.
+    pub pvp_reports: Vec<String>,
     /// UTC day-number of the last new-day reset, for turn/heal regeneration.
     pub last_day: i64,
     /// Presence flag mirroring upstream's `loggedin`: stamped true when the
@@ -469,6 +508,27 @@ pub fn gem_bribe_chance(gems: u32) -> u32 {
 /// stock amounts (`level*10/50/100`).
 pub fn gold_bribe_chance(amount: u64, level: u8) -> f64 {
     (amount as f64 / level.max(1) as f64 - 10.0) * (50.0 / 90.0) + 25.0
+}
+
+/// Gold a PvP winner takes: `round(10 * loserLevel * ln(max(1, loserGold)))`
+/// (`lib/pvpsupport.php`, both directions — the log keeps huge purses from
+/// changing hands). The loser's actual loss is separate: the whole purse for
+/// a slain attacker, the winner's cut for a slain sleeper.
+pub fn pvp_win_gold(loser_level: u8, loser_gold: u64) -> u64 {
+    (10.0 * loser_level as f64 * (loser_gold.max(1) as f64).ln()).round() as u64
+}
+
+/// Experience a winning attacker gains off a slain sleeper (`pvpvictory`):
+/// the base [`PVP_ATTACKER_GAIN_PCT`]% of the victim's engage-time
+/// experience is rounded first, then the level-difference bonus
+/// `round(base * (1 + 0.1*(victimLvl - mineLvl)) - base)` — which can be
+/// negative ("the simplistic nature of this fight") — is added. Returns
+/// `(total, bonus)`; the bonus gets its own log line.
+pub fn pvp_attacker_exp(victim_exp: u64, victim_level: u8, my_level: u8) -> (u64, i64) {
+    let base = (PVP_ATTACKER_GAIN_PCT as f64 * victim_exp as f64 / 100.0).round();
+    let bonus =
+        (base * (1.0 + 0.1 * (victim_level as f64 - my_level as f64)) - base).round() as i64;
+    (((base as i64 + bonus).max(0)) as u64, bonus)
 }
 
 /// Index of a chooseable specialty into [`Character::benched_specialties`].
@@ -698,6 +758,12 @@ impl Default for Character {
             heard_bard_today: false,
             used_outhouse_today: false,
             fivesix_plays_today: 0,
+            // Seeded like grave fights: the skipped first-login new day would
+            // have filled the day's PvP pool.
+            player_fights: PVP_FIGHTS_PER_DAY,
+            pk: false,
+            pvp_engaged_at: 0,
+            pvp_reports: Vec::new(),
             last_day: 0,
             online: false,
         }
@@ -1209,6 +1275,53 @@ impl Character {
         }
     }
 
+    /// Still under newbie PvP immunity (`lib/pvpwarning.php` and the
+    /// `pvplist.php` filter, which is this set negated): immune while the run
+    /// is young, dragonless, unforfeited, and under the experience bar.
+    pub fn pvp_immune(&self) -> bool {
+        self.age <= PVP_IMMUNITY_DAYS
+            && self.dragon_kills == 0
+            && !self.pk
+            && self.experience <= PVP_IMMUNITY_MAX_EXP
+    }
+
+    /// Resolve losing a PvP fight you started (`lib/pvpsupport.php`
+    /// `pvpdefeat`): all on-hand gold lost, [`PVP_ATTACKER_LOSE_PCT`]% of
+    /// experience lost, dead to the graveyard. Same death hygiene as
+    /// [`Character::die`] — companions and buffs don't follow past the grave
+    /// (ours die with every death; upstream's PvP path leaves them, a
+    /// documented adaptation).
+    pub fn pvp_die(&mut self) {
+        self.gold = 0;
+        self.experience = (self.experience as f64 * (100 - PVP_ATTACKER_LOSE_PCT) as f64 / 100.0)
+            .round() as u64;
+        self.alive = false;
+        self.hitpoints = 0;
+        self.companions.clear();
+        self.persistent_buffs.clear();
+        self.drunkenness = 0;
+    }
+
+    /// Settle being slain in your sleep (`pvpvictory`'s victim UPDATE):
+    /// `taken_gold` comes off the purse with the bank absorbing any shortfall
+    /// (upstream's race guard — the caller reads the purse fresh, so normally
+    /// none), `lost_exp` (5% of the engage-time snapshot) comes off the
+    /// experience, and death applies with the usual hygiene.
+    pub fn pvp_slain(&mut self, taken_gold: u64, lost_exp: u64) {
+        if self.gold < taken_gold {
+            self.gold_in_bank -= (taken_gold - self.gold) as i64;
+            self.gold = 0;
+        } else {
+            self.gold -= taken_gold;
+        }
+        self.experience = self.experience.saturating_sub(lost_exp);
+        self.alive = false;
+        self.hitpoints = 0;
+        self.companions.clear();
+        self.persistent_buffs.clear();
+        self.drunkenness = 0;
+    }
+
     /// Resolve a forest/PvE death: all on-hand gold lost, 10% experience lost,
     /// sent to the graveyard (revived on the next new day).
     pub fn die(&mut self) {
@@ -1350,6 +1463,9 @@ impl Character {
         self.seen_dragon = false;
         self.soulpoints = self.max_soulpoints();
         self.grave_fights = GRAVE_FIGHTS_PER_DAY;
+        // The day's PvP pool refills with the grave fights — and like them,
+        // only here: `newday.php` skips `playerfights` when `resurrection`.
+        self.player_fights = PVP_FIGHTS_PER_DAY;
         self.hitpoints = self.max_hitpoints();
         Some(fx)
     }

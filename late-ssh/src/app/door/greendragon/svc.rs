@@ -115,6 +115,67 @@ pub struct RosterEntry {
     pub online: bool,
     /// Seconds since the last save (the warrior list's "last seen" column).
     pub idle_secs: i64,
+    /// Sleeping upstairs at the inn (`boughtroomtoday`): the flag routes them
+    /// to the inn's target list instead of the fields (upstream sets their
+    /// `location` to the inn and lists by location).
+    pub lodged: bool,
+    /// Under newbie PvP immunity ([`Character::pvp_immune`]) — off every
+    /// target list.
+    pub pvp_immune: bool,
+    /// Epoch seconds an attacker last engaged them (`pvpflag`); within
+    /// [`model::PVP_TIMEOUT_SECS`] the row shows but can't be attacked.
+    pub pvp_engaged_at: i64,
+}
+
+/// The sleeping defender as the engage transaction snapshotted them
+/// (`lib/pvpsupport.php` `setup_target`'s SELECT): the fight stats, plus the
+/// gold/experience the settlement formulas read.
+#[derive(Clone, Debug)]
+pub struct PvpTarget {
+    pub user_id: Uuid,
+    /// Titled display name (upstream's `creaturename` carries the title).
+    pub name: String,
+    pub level: u8,
+    /// On-hand gold at engage; the victory settlement re-reads and takes the
+    /// lesser (upstream's banked-since guard).
+    pub gold: u64,
+    /// Experience at engage (already rounded upstream; ours is integral).
+    pub experience: u64,
+    pub attack: u32,
+    pub defense: u32,
+    /// The sleeper defends at *full* health regardless of their saved wounds
+    /// (`maxhitpoints AS creaturehealth`).
+    pub max_hp: u32,
+    pub weapon: &'static str,
+    /// Asleep upstairs at the inn: the fight adds their bodyguard
+    /// (`bodyguardlevel = boughtroomtoday`).
+    pub lodged: bool,
+}
+
+/// The async result of a PvP engage (`setup_target`): the locked-in target,
+/// or the reason the attack fell through.
+#[derive(Clone)]
+pub enum PvpEngage {
+    Loading,
+    Ready(Box<PvpTarget>),
+    /// The engage-time re-check failed (gone, out of range, dogpiled, awake,
+    /// dead) or the DB did; the line is shown to the player.
+    Refused(String),
+}
+
+/// The async result of settling a won PvP fight onto the victim's blob.
+#[derive(Clone)]
+pub enum PvpSettle {
+    Loading,
+    Ready {
+        /// Gold the attacker won: `round(10 * lvl * ln(max(1, taken)))`.
+        win_gold: u64,
+        /// What the victim actually lost off purse+bank (the lesser-of rule).
+        taken_gold: u64,
+    },
+    /// The DB failed; the attacker gets no spoils (and the victim keeps
+    /// their skin — the fight still made the news).
+    Failed,
 }
 
 /// The async result of loading the full character roster.
@@ -201,6 +262,132 @@ async fn commit_delete(db: Db, gate: Arc<TokioMutex<u64>>, seq: u64, user_id: Uu
 /// UTC day-number, used to drive once-per-day forest-turn/heal regeneration.
 fn today() -> i64 {
     Utc::now().timestamp().div_euclid(86_400)
+}
+
+/// The engage transaction (see [`GreenDragonService::pvp_engage`]): lock the
+/// target's row, re-check the attack against their fresh blob, stamp the
+/// dogpile flag, and snapshot the fight stats. Check order is upstream's
+/// (`setup_target`): found, level range, pvp flag, awake, alive.
+async fn pvp_engage_tx(db: &Db, attacker_level: u8, target_id: Uuid) -> anyhow::Result<PvpEngage> {
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    let Some((blob, updated)) = GreenDragonCharacter::load_for_update(&tx, target_id).await? else {
+        return Ok(PvpEngage::Refused(
+            "they seem to have quit the realm entirely.".into(),
+        ));
+    };
+    let mut c = persist::from_json(&blob);
+    let now = Utc::now();
+    if (attacker_level as i16 - c.level as i16).abs() > 2 {
+        return Ok(PvpEngage::Refused(
+            "they are beyond your reach in prowess now.".into(),
+        ));
+    }
+    if now.timestamp() - c.pvp_engaged_at < model::PVP_TIMEOUT_SECS {
+        return Ok(PvpEngage::Refused(
+            "someone else is already stalking them; wait your turn.".into(),
+        ));
+    }
+    if c.online && (now - updated).num_seconds() < ONLINE_WINDOW_SECS {
+        return Ok(PvpEngage::Refused(
+            "they are awake and about, and cannot be caught sleeping.".into(),
+        ));
+    }
+    if !c.alive {
+        return Ok(PvpEngage::Refused("the dead cannot be slain twice.".into()));
+    }
+    let target = PvpTarget {
+        user_id: target_id,
+        name: c.titled_name(),
+        level: c.level,
+        gold: c.gold,
+        experience: c.experience,
+        attack: c.attack(),
+        defense: c.defense(),
+        max_hp: c.max_hitpoints(),
+        weapon: super::data::weapon_name(c.weapon_tier),
+        lodged: c.lodged_today,
+    };
+    c.pvp_engaged_at = now.timestamp();
+    GreenDragonCharacter::update_data_keep_updated(&tx, target_id, persist::to_json(&c)).await?;
+    tx.commit().await?;
+    Ok(PvpEngage::Ready(Box::new(target)))
+}
+
+/// The victory settlement transaction (see
+/// [`GreenDragonService::pvp_settle_victory`]).
+async fn pvp_settle_victory_tx(
+    db: &Db,
+    victim_id: Uuid,
+    engage: &PvpTarget,
+    attacker_name: &str,
+) -> anyhow::Result<PvpSettle> {
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    let Some((blob, _)) = GreenDragonCharacter::load_for_update(&tx, victim_id).await? else {
+        // The victim deleted their character mid-fight; nothing to settle.
+        return Ok(PvpSettle::Failed);
+    };
+    let mut c = persist::from_json(&blob);
+    // If they banked (or spent) gold since engage, take the lesser — the
+    // point is to move only what was on the table (`pvpvictory`'s re-read).
+    let taken_gold = engage.gold.min(c.gold);
+    let lost_exp = (model::PVP_DEFENDER_LOSE_PCT as f64 * engage.experience as f64 / 100.0).round()
+        as u64;
+    c.pvp_slain(taken_gold, lost_exp);
+    let where_slept = if engage.lodged {
+        "in your room at the inn"
+    } else {
+        "in the fields"
+    };
+    c.pvp_reports.push(format!(
+        "While you slept {where_slept}, {attacker_name} attacked and bested you: \
+         {taken_gold} gold and {lost_exp} experience lost. The graveyard has your bones \
+         now; perhaps revenge will warm them.",
+    ));
+    GreenDragonCharacter::update_data_keep_updated(&tx, victim_id, persist::to_json(&c)).await?;
+    tx.commit().await?;
+    Ok(PvpSettle::Ready {
+        win_gold: model::pvp_win_gold(engage.level, taken_gold),
+        taken_gold,
+    })
+}
+
+/// The defeat settlement transaction (see
+/// [`GreenDragonService::pvp_settle_defeat`]): the sleeping winner collects,
+/// unless they leveled down since engage (upstream's guard — the reward
+/// would be "way too rich" for a fresh run).
+async fn pvp_settle_defeat_tx(
+    db: &Db,
+    victim_id: Uuid,
+    engage_level: u8,
+    win_gold: u64,
+    won_exp: u64,
+    attacker_name: &str,
+) -> anyhow::Result<()> {
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    let Some((blob, _)) = GreenDragonCharacter::load_for_update(&tx, victim_id).await? else {
+        return Ok(());
+    };
+    let mut c = persist::from_json(&blob);
+    if c.level < engage_level {
+        c.pvp_reports.push(format!(
+            "{attacker_name} crept up on you in your sleep and lost the fight — but the \
+             {win_gold} gold and {won_exp} experience you'd have claimed went up in \
+             dragonfire with the rest of your old life.",
+        ));
+    } else {
+        c.gold = c.gold.saturating_add(win_gold);
+        c.experience = c.experience.saturating_add(won_exp);
+        c.pvp_reports.push(format!(
+            "{attacker_name} crept up on you in your sleep, but your sleeping arm bested \
+             them: {win_gold} gold and {won_exp} experience claimed off their corpse.",
+        ));
+    }
+    GreenDragonCharacter::update_data_keep_updated(&tx, victim_id, persist::to_json(&c)).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Fetch a section's newest `limit` rows, stamping each with whether it was
@@ -507,12 +694,107 @@ impl GreenDragonService {
                         wealth: c.gold as i64 + c.gold_in_bank,
                         online: c.online && idle_secs < ONLINE_WINDOW_SECS,
                         idle_secs,
+                        lodged: c.lodged_today,
+                        pvp_immune: c.pvp_immune(),
+                        pvp_engaged_at: c.pvp_engaged_at,
                     })
                 })
                 .collect();
             let _ = tx.send(RosterLoad::Ready(Arc::new(entries)));
         });
         rx
+    }
+
+    /// Engage a sleeping warrior (`lib/pvpsupport.php` `setup_target`): a
+    /// row-locked transaction re-checks everything against the target's
+    /// *fresh* blob — still there, within two levels either way (wider than
+    /// the list's `[-1, +2]` band, exactly upstream), not engaged by someone
+    /// else inside the 10-minute window, not awake in the door, still alive —
+    /// then stamps `pvp_engaged_at` (the dogpile guard) and snapshots the
+    /// fight stats. The victim's `updated` is deliberately preserved: being
+    /// attacked isn't presence. The per-user write gate is held across the
+    /// transaction so in-process saves can't interleave.
+    pub fn pvp_engage(&self, attacker_level: u8, target_id: Uuid) -> watch::Receiver<PvpEngage> {
+        let (tx, rx) = watch::channel(PvpEngage::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let gate = inner.gate(target_id);
+            let _held = gate.lock().await;
+            let result = pvp_engage_tx(&inner.db, attacker_level, target_id).await;
+            let msg = match result {
+                Ok(engage) => engage,
+                Err(e) => {
+                    tracing::warn!("greendragon pvp engage failed: {e}");
+                    PvpEngage::Refused("the night swallows your approach; try again.".into())
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// Settle a won PvP fight onto the sleeping victim (`pvpvictory`'s victim
+    /// half): re-read their purse under the row lock, take the lesser of the
+    /// engage-time and current gold (the bank absorbs any shortfall), dock
+    /// [`model::PVP_DEFENDER_LOSE_PCT`]% of their engage-time experience,
+    /// kill them, and leave a report for their next visit. Returns what the
+    /// attacker won; the level-15 "no prowess" zeroing of the *attacker's*
+    /// spoils is the caller's (the victim's losses stand either way).
+    pub fn pvp_settle_victory(
+        &self,
+        victim_id: Uuid,
+        engage: PvpTarget,
+        attacker_name: String,
+    ) -> watch::Receiver<PvpSettle> {
+        let (tx, rx) = watch::channel(PvpSettle::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let gate = inner.gate(victim_id);
+            let _held = gate.lock().await;
+            let msg = match pvp_settle_victory_tx(&inner.db, victim_id, &engage, &attacker_name)
+                .await
+            {
+                Ok(settle) => settle,
+                Err(e) => {
+                    tracing::warn!("greendragon pvp victory settle failed: {e}");
+                    PvpSettle::Failed
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// Settle a *lost* PvP fight onto the sleeping winner (`pvpdefeat`'s
+    /// victim half), fire-and-forget — the attacker's own ruin is applied
+    /// in-session. The sleeper gains the gold and experience the attacker
+    /// computed off their own corpse, unless they somehow leveled down since
+    /// engage (upstream's mid-fight dragon-kill guard), and gets a report.
+    pub fn pvp_settle_defeat(
+        &self,
+        victim_id: Uuid,
+        engage_level: u8,
+        win_gold: u64,
+        won_exp: u64,
+        attacker_name: String,
+    ) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let gate = inner.gate(victim_id);
+            let _held = gate.lock().await;
+            if let Err(e) = pvp_settle_defeat_tx(
+                &inner.db,
+                victim_id,
+                engage_level,
+                win_gold,
+                won_exp,
+                &attacker_name,
+            )
+            .await
+            {
+                tracing::warn!("greendragon pvp defeat settle failed: {e}");
+            }
+        });
     }
 
     /// Read the current Five Sixes jackpot (for the tavern's signboard).

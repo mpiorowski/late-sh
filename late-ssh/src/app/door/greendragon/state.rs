@@ -19,8 +19,8 @@ use super::inn;
 use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
 use super::svc::{
-    CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService, NewsLoad, RosterEntry,
-    RosterLoad,
+    CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService, NewsLoad, PvpEngage,
+    PvpSettle, PvpTarget, RosterEntry, RosterLoad,
 };
 use super::tavern;
 
@@ -101,6 +101,20 @@ pub enum Mode {
     /// The Hall of Fame (`hof.php`): seven stat rankings, each pageable and
     /// flippable best/worst.
     HallOfFame,
+    /// The prize of a successful barkeep bribe (`inn_bartender.php`'s
+    /// unlocked navs): the who's-upstairs list and the specialty switch.
+    BarkeepEar,
+    /// The PvP target list (`pvp.php` / the barkeep's keys): sleeping
+    /// warriors at one of the two venues, each row an attack.
+    PvpList(PvpVenue),
+}
+
+/// Where sleeping warriors are hunted (`pvplist`'s location split): the
+/// fields off the village square, or the inn's rooms through the barkeep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PvpVenue {
+    Fields,
+    Inn,
 }
 
 /// Which slice of the warrior list is showing (`list.php`'s three queries).
@@ -196,6 +210,11 @@ pub enum FoeKind {
     /// A graveyard torment fight, fought dead on the soulpoint pool; its
     /// "reward" is favor with the death overlord.
     Torment,
+    /// Another player's sleeping character (`pvp.php`): no fleeing, no
+    /// specialty skills, no buffs or companions on either side (nothing
+    /// stock sets `allowinpvp`) — only the inn's bodyguard. Settlement runs
+    /// through `svc` against the victim's stored blob.
+    Pvp,
 }
 
 /// One foe in a live encounter. Master and dragon fights hold exactly one;
@@ -260,6 +279,11 @@ impl Encounter {
 
 const LOG_CAP: usize = 7;
 
+/// Idle seconds between presence-heartbeat saves: comfortably under the
+/// roster's 15-minute online window (`svc::ONLINE_WINDOW_SECS`), so a live
+/// but idle session never drifts into looking asleep and PvP-attackable.
+const HEARTBEAT_SECS: u64 = 240;
+
 pub struct State {
     user_id: Uuid,
     svc: GreenDragonService,
@@ -307,6 +331,26 @@ pub struct State {
     roster_query: String,
     /// The built warrior-list page (`None` while the roster loads).
     roster_page_view: Option<ListPage>,
+    /// The PvP target rows built off the roster snapshot for the open
+    /// [`Mode::PvpList`] venue: `(target, label, attackable)`.
+    pvp_rows: Vec<(Uuid, String, bool)>,
+    /// Sleepers at the *other* venue (the fields list hears "N sleeping at
+    /// the inn", and vice versa — upstream's location counts).
+    pvp_elsewhere: usize,
+    /// An engage round-trip in flight (`setup_target`), drained by
+    /// [`State::tick`]; the venue decides the fight's bodyguard and exits.
+    pvp_engage_rx: Option<(PvpVenue, tokio::sync::watch::Receiver<PvpEngage>)>,
+    /// The engaged sleeping defender while a PvP fight runs (and its venue):
+    /// the settlement formulas read these engage-time snapshots.
+    pvp_ctx: Option<(PvpVenue, PvpTarget)>,
+    /// A won fight's settlement round-trip (the victim's gold re-read),
+    /// drained by [`State::tick`] into the attacker's purse.
+    pvp_settle_rx: Option<tokio::sync::watch::Receiver<PvpSettle>>,
+    /// Last persisted moment, for the idle presence heartbeat: a live
+    /// session must never fall out of the roster's 15-minute online window,
+    /// or it would look attackable (upstream's `laston` refreshes every
+    /// page load; ours refreshes on action, so idling needs the heartbeat).
+    last_save: std::time::Instant,
     /// The Hall of Fame's current ranking, order flip, and page.
     hof_ranking: HofRanking,
     hof_least: bool,
@@ -347,6 +391,12 @@ impl State {
             roster_page: 0,
             roster_query: String::new(),
             roster_page_view: None,
+            pvp_rows: Vec::new(),
+            pvp_elsewhere: 0,
+            pvp_engage_rx: None,
+            pvp_ctx: None,
+            pvp_settle_rx: None,
+            last_save: std::time::Instant::now(),
             hof_ranking: HofRanking::Kills,
             hof_least: false,
             hof_page: 0,
@@ -361,7 +411,15 @@ impl State {
         self.tick_tavern();
         self.tick_commentary();
         self.tick_roster();
+        self.tick_pvp();
         if self.character.is_some() {
+            // The presence heartbeat: an idle session re-stamps its save
+            // well inside the roster's 15-minute online window, so a live
+            // player can never be mistaken for a sleeping PvP target
+            // (upstream's `laston` refreshes with every page load).
+            if self.last_save.elapsed().as_secs() > HEARTBEAT_SECS {
+                self.save();
+            }
             return;
         }
         // Clone the loaded character out and drop the watch borrow before
@@ -393,8 +451,19 @@ impl State {
                 "Welcome to Duskmere, {}. The Green Dragon awaits the brave.",
                 character.name
             ));
+            // What happened while you slept (upstream's system mail):
+            // settlement reports left by other players' fights, drained into
+            // the log once and cleared.
+            let reports = std::mem::take(&mut character.pvp_reports);
             self.character = Some(character);
             self.cursor = 0;
+            if !reports.is_empty() {
+                for report in reports {
+                    self.push_log(report);
+                }
+                // Persist the drain so the reports don't replay next entry.
+                self.save();
+            }
         }
     }
 
@@ -480,6 +549,8 @@ impl State {
                 self.hof_least,
                 self.hof_page_view.as_ref(),
             ),
+            Mode::BarkeepEar => barkeep_ear_menu(),
+            Mode::PvpList(_) => self.pvp_list_menu(c),
             Mode::Loading => Vec::new(),
         }
     }
@@ -537,6 +608,8 @@ impl State {
             Mode::Commentary(room) => self.select_commentary(room),
             Mode::WarriorList => self.select_warrior_list(),
             Mode::HallOfFame => self.select_hall_of_fame(),
+            Mode::BarkeepEar => self.select_barkeep_ear(),
+            Mode::PvpList(venue) => self.select_pvp_list(venue),
             Mode::Loading => Selection::Stay,
         }
     }
@@ -547,9 +620,16 @@ impl State {
         match self.mode {
             Mode::Village | Mode::Loading => Selection::Leave,
             // Esc during a fight attempts to flee (a 1-in-3 roll, like the
-            // Flee row). Leaving mid-fight is never free.
+            // Flee row). Leaving mid-fight is never free — and there is no
+            // running from a warrior you chose to attack (`pvp.php` turns
+            // `run` into a fought round: "your pride prevents you").
             Mode::Fight => {
-                self.attempt_flee();
+                if self.encounter.as_ref().is_some_and(|e| e.kind == FoeKind::Pvp) {
+                    self.push_log("Your pride will not let you run from this.".into());
+                    self.attack_round();
+                } else {
+                    self.attempt_flee();
+                }
                 Selection::Stay
             }
             Mode::Event => {
@@ -599,6 +679,19 @@ impl State {
             // roster snapshot on the way.
             Mode::WarriorList | Mode::HallOfFame => {
                 self.close_roster();
+                Selection::Stay
+            }
+            // The barkeep's quiet word lets out into the common room; the
+            // target lists let out where they were opened.
+            Mode::BarkeepEar => {
+                self.goto(Mode::Inn);
+                Selection::Stay
+            }
+            Mode::PvpList(venue) => {
+                self.goto(match venue {
+                    PvpVenue::Fields => Mode::Village,
+                    PvpVenue::Inn => Mode::BarkeepEar,
+                });
                 Selection::Stay
             }
             // A game in progress folds (the stake was never taken); the
@@ -1253,7 +1346,253 @@ impl State {
                     ));
                 }
             }
+            Mode::PvpList(venue) => self.rebuild_pvp_rows(venue),
             _ => {}
+        }
+    }
+
+    // --- PvP ("slay other warriors", pvp.php + lib/pvplist.php) -------------
+
+    /// Open a target list: kick a fresh roster read (the presence and
+    /// dogpile columns go stale fast) and show the venue's sleepers.
+    fn open_pvp_list(&mut self, venue: PvpVenue) {
+        self.pvp_rows.clear();
+        self.pvp_elsewhere = 0;
+        self.kick_roster_load();
+        self.goto(Mode::PvpList(venue));
+    }
+
+    /// Build the open venue's target rows off the roster snapshot, the
+    /// `pvplist.php` filter made local: alive, asleep (offline), past
+    /// newbie immunity, within `[mine-1, mine+2]` levels, and at this venue
+    /// (lodged = the inn's rooms; everyone else sleeps in the fields).
+    /// Rows inside the 10-minute dogpile window show but can't be picked.
+    fn rebuild_pvp_rows(&mut self, venue: PvpVenue) {
+        let Some(roster) = self.roster.as_ref() else {
+            return;
+        };
+        let Some(c) = self.character.as_ref() else {
+            return;
+        };
+        let (lo, hi) = (c.level as i16 - 1, c.level as i16 + 2);
+        let now = chrono::Utc::now().timestamp();
+        let mut eligible: Vec<&RosterEntry> = roster
+            .iter()
+            .filter(|e| {
+                e.user_id != self.user_id
+                    && e.alive
+                    && !e.online
+                    && !e.pvp_immune
+                    && (lo..=hi).contains(&(e.level as i16))
+            })
+            .collect();
+        // Upstream's total order within a location: level, then experience,
+        // then dragon kills, all descending.
+        eligible.sort_by(|a, b| {
+            (b.level, b.experience, b.dragon_kills).cmp(&(a.level, a.experience, a.dragon_kills))
+        });
+        self.pvp_elsewhere = eligible
+            .iter()
+            .filter(|e| e.lodged != (venue == PvpVenue::Inn))
+            .count();
+        self.pvp_rows = eligible
+            .iter()
+            .filter(|e| e.lodged == (venue == PvpVenue::Inn))
+            .map(|e| {
+                let hunted = now - e.pvp_engaged_at < model::PVP_TIMEOUT_SECS;
+                let label = if hunted {
+                    format!("{} (level {}) - hunted too recently", e.name, e.level)
+                } else {
+                    format!("{} (level {})", e.name, e.level)
+                };
+                (e.user_id, label, !hunted)
+            })
+            .collect();
+    }
+
+    /// Sleepers at the other venue, for the list panel's rumor line.
+    pub fn pvp_elsewhere(&self) -> usize {
+        self.pvp_elsewhere
+    }
+
+    /// The target list's rows: one per sleeper (disabled while the roster
+    /// loads, an engage is in flight, or the day's attacks are spent), then
+    /// the refresh and the way out.
+    fn pvp_list_menu(&self, c: &Character) -> Vec<(String, bool)> {
+        let can_attack = c.player_fights > 0 && self.pvp_engage_rx.is_none();
+        let mut rows: Vec<(String, bool)> = self
+            .pvp_rows
+            .iter()
+            .map(|(_, label, attackable)| (format!("Attack {label}"), *attackable && can_attack))
+            .collect();
+        if rows.is_empty() {
+            let note = if self.roster.is_none() {
+                "You listen for snoring..."
+            } else {
+                "No one worth attacking sleeps here tonight."
+            };
+            rows.push((note.into(), false));
+        }
+        rows.push(("Listen again for sleepers".into(), self.roster.is_some()));
+        rows.push(("Think better of it".into(), true));
+        rows
+    }
+
+    /// Handle a target-list row: an attack engages through `svc` (the fresh
+    /// re-check + dogpile stamp); the tail rows refresh and leave.
+    fn select_pvp_list(&mut self, venue: PvpVenue) -> Selection {
+        let targets = self.pvp_rows.len().max(1);
+        if self.cursor >= targets {
+            match self.cursor - targets {
+                0 => {
+                    self.pvp_rows.clear();
+                    self.kick_roster_load();
+                }
+                _ => {
+                    return self.back();
+                }
+            }
+            return Selection::Stay;
+        }
+        let Some(&(target_id, _, _)) = self.pvp_rows.get(self.cursor) else {
+            return Selection::Stay;
+        };
+        let c = self.character.as_ref().unwrap();
+        if c.player_fights == 0 {
+            self.push_log("You are too weary to stalk anyone else today.".into());
+            return Selection::Stay;
+        }
+        let rx = self.svc.pvp_engage(c.level, target_id);
+        self.pvp_engage_rx = Some((venue, rx));
+        self.push_log("You creep closer through the dark...".into());
+        Selection::Stay
+    }
+
+    /// Drain the PvP round-trips: a finished engage starts the fight; a
+    /// finished victory settlement pays the spoils.
+    fn tick_pvp(&mut self) {
+        if let Some((venue, rx)) = self.pvp_engage_rx.as_mut() {
+            let venue = *venue;
+            let engaged = match &*rx.borrow_and_update() {
+                PvpEngage::Loading => None,
+                PvpEngage::Ready(target) => Some(Ok((*target).clone())),
+                PvpEngage::Refused(msg) => Some(Err(msg.clone())),
+            };
+            match engaged {
+                None => {}
+                Some(Err(msg)) => {
+                    self.pvp_engage_rx = None;
+                    self.push_log(msg);
+                    // The list is stale (someone moved); re-read it.
+                    if matches!(self.mode, Mode::PvpList(_)) {
+                        self.pvp_rows.clear();
+                        self.kick_roster_load();
+                    }
+                }
+                Some(Ok(target)) => {
+                    self.pvp_engage_rx = None;
+                    self.start_pvp_fight(venue, *target);
+                }
+            }
+        }
+        if let Some(rx) = self.pvp_settle_rx.as_mut() {
+            let settled = match &*rx.borrow_and_update() {
+                PvpSettle::Loading => None,
+                PvpSettle::Ready {
+                    win_gold,
+                    taken_gold,
+                } => Some(Some((*win_gold, *taken_gold))),
+                PvpSettle::Failed => Some(None),
+            };
+            match settled {
+                None => {}
+                Some(None) => {
+                    self.pvp_settle_rx = None;
+                    self.push_log("Their purse slips through your fingers in the dark.".into());
+                }
+                Some(Some((win_gold, _taken))) => {
+                    self.pvp_settle_rx = None;
+                    let c = self.character.as_mut().unwrap();
+                    // The level-15 "no prowess" rule zeroes the attacker's
+                    // spoils (the victim's losses stand regardless).
+                    if c.level as u32 >= data::MAX_LEVEL as u32 {
+                        self.push_log(
+                            "At your prowess, the victory itself is the only prize worth having."
+                                .into(),
+                        );
+                    } else {
+                        c.gold = c.gold.saturating_add(win_gold);
+                        self.push_log(format!("You rifle their purse: +{win_gold} gold."));
+                        self.save();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Begin the fight against an engaged sleeper: spend the day's attack,
+    /// forfeit newbie immunity if this is the betrayal that ends it
+    /// (`pvpwarning(true)`), then face their stored stats at full health.
+    /// No buffs or companions follow either side; an inn target's bodyguard
+    /// (they always bought the room) tilts the odds their way; a coin flip
+    /// can hand the waking sleeper the first blow (`battle.php`'s surprise).
+    fn start_pvp_fight(&mut self, venue: PvpVenue, target: PvpTarget) {
+        let c = self.character.as_mut().unwrap();
+        if c.player_fights == 0 {
+            return;
+        }
+        c.player_fights -= 1;
+        if c.pvp_immune() {
+            c.pk = true;
+            self.push_log(
+                "You were still under the realm's protection - attacking ends it forever.".into(),
+            );
+        }
+        let foe = Foe {
+            name: target.name.clone(),
+            weapon: target.weapon.to_string(),
+            combatant: Combatant {
+                attack: target.attack,
+                defense: target.defense,
+            },
+            hp: target.max_hp,
+            max_hp: target.max_hp,
+            reward_gold: 0,
+            reward_exp: 0,
+            level: target.level,
+            bandit: false,
+        };
+        let mut enc = Encounter::single(foe, FoeKind::Pvp);
+        if venue == PvpVenue::Inn {
+            // The room they bought comes with a light sleeper in the hall
+            // (`apply_bodyguard(1)`): their arm swings harder, yours guards
+            // worse, for the whole fight.
+            let mut buff = Buff::new("Bodyguard", u32::MAX);
+            buff.enemy_atk_mod = 1.05;
+            buff.player_def_mod = 0.95;
+            enc.buffs.push(buff);
+        }
+        let name = target.name.clone();
+        self.pvp_ctx = Some((venue, target));
+        self.push_log(format!(
+            "You find {name} asleep and draw your blade over them."
+        ));
+        self.encounter = Some(enc);
+        self.goto(Mode::Fight);
+        self.save();
+        // The sleeper may wake swinging: a coin flip for the first round
+        // (`battle.php` rolls surprise 50/50 for single-foe fights).
+        if rand::thread_rng().gen_range(0..2) == 0 {
+            self.push_log(format!("{name}'s eyes snap open - they strike first!"));
+            let Some(mut enc) = self.encounter.take() else {
+                return;
+            };
+            self.foes_strike(&mut enc, None);
+            if self.character.as_ref().unwrap().hitpoints == 0 {
+                self.defeat(&enc);
+                return;
+            }
+            self.encounter = Some(enc);
         }
     }
 
@@ -2927,6 +3266,7 @@ impl State {
     fn save(&mut self) {
         if let Some(c) = self.character.as_ref() {
             self.svc.save_character(self.user_id, c);
+            self.last_save = std::time::Instant::now();
         }
     }
 

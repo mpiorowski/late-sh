@@ -49,6 +49,42 @@ impl GreenDragonCharacter {
             .collect())
     }
 
+    /// Load a character blob with a row lock, for a cross-player settlement
+    /// transaction (a PvP engage or its aftermath). Returns the blob and its
+    /// last save time; the lock holds until the caller's transaction ends,
+    /// serializing concurrent attackers on the same victim.
+    pub async fn load_for_update(
+        client: &impl deadpool_postgres::GenericClient,
+        user_id: Uuid,
+    ) -> Result<Option<(Value, DateTime<Utc>)>> {
+        let row = client
+            .query_opt(
+                "SELECT data, updated FROM greendragon_characters
+                 WHERE user_id = $1 FOR UPDATE",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.map(|r| (r.get("data"), r.get("updated"))))
+    }
+
+    /// Rewrite a character blob **without** touching `updated`. Cross-player
+    /// writes (PvP flags, settlements, sleep reports) must not refresh the
+    /// victim's save timestamp — it feeds the roster's presence window, and
+    /// the victim didn't act.
+    pub async fn update_data_keep_updated(
+        client: &impl deadpool_postgres::GenericClient,
+        user_id: Uuid,
+        data: Value,
+    ) -> Result<()> {
+        client
+            .execute(
+                "UPDATE greendragon_characters SET data = $2 WHERE user_id = $1",
+                &[&user_id, &data],
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Insert or overwrite a user's character blob.
     pub async fn save(client: &Client, user_id: Uuid, data: Value) -> Result<()> {
         client
