@@ -52,10 +52,7 @@ impl GreenDragonNews {
     pub async fn prune(client: &Client, today: i64) -> Result<u64> {
         let cutoff = today - NEWS_RETENTION_DAYS;
         Ok(client
-            .execute(
-                "DELETE FROM greendragon_news WHERE day < $1",
-                &[&cutoff],
-            )
+            .execute("DELETE FROM greendragon_news WHERE day < $1", &[&cutoff])
             .await?)
     }
 }

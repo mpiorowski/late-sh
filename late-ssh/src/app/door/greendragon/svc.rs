@@ -15,8 +15,8 @@ use chrono::Utc;
 use late_core::{
     db::Db,
     models::{
-        greendragon_character::GreenDragonCharacter, greendragon_news::GreenDragonNews,
-        greendragon_setting::GreenDragonSetting,
+        greendragon_character::GreenDragonCharacter, greendragon_commentary::GreenDragonCommentary,
+        greendragon_news::GreenDragonNews, greendragon_setting::GreenDragonSetting,
     },
 };
 use rand::Rng;
@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 use crate::app::{activity::publisher::ActivityPublisher, games::chips::svc::ChipService};
 
+use super::commentary::CommentLine;
 use super::model::{self, Character};
 use super::persist;
 
@@ -45,6 +46,20 @@ pub enum NewsLoad {
     /// The day's lines, newest first. Empty means a quiet day (or a failed
     /// read — the village paper doesn't distinguish).
     Ready(Arc<Vec<String>>),
+}
+
+/// The async result of loading (or posting into) a commentary room's page.
+#[derive(Clone)]
+pub enum CommentaryLoad {
+    Loading,
+    Ready {
+        /// The room's newest lines, newest first. Empty means a quiet room
+        /// (or a failed read — the table doesn't distinguish).
+        lines: Arc<Vec<CommentLine>>,
+        /// A post was dropped as an exact repeat of the section's newest
+        /// line by the same speaker (upstream's double-post check).
+        double_post: bool,
+    },
 }
 
 /// The async result of settling a Five Sixes play against the shared pot.
@@ -140,6 +155,31 @@ async fn commit_delete(db: Db, gate: Arc<TokioMutex<u64>>, seq: u64, user_id: Uu
 /// UTC day-number, used to drive once-per-day forest-turn/heal regeneration.
 fn today() -> i64 {
     Utc::now().timestamp().div_euclid(86_400)
+}
+
+/// Fetch a section's newest `limit` rows, stamping each with whether it was
+/// posted on the current UTC day (which feeds the daily post allowance).
+async fn read_commentary(
+    client: &tokio_postgres::Client,
+    section: &str,
+    limit: usize,
+) -> Vec<CommentLine> {
+    let today = today();
+    match GreenDragonCommentary::latest(client, section, limit as i64).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|r| CommentLine {
+                user_id: r.user_id,
+                name: r.name,
+                body: r.body,
+                today: r.day == today,
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!("greendragon commentary read failed: {e}");
+            Vec::new()
+        }
+    }
 }
 
 impl GreenDragonService {
@@ -286,6 +326,85 @@ impl GreenDragonService {
                 }
             };
             let _ = tx.send(NewsLoad::Ready(Arc::new(lines)));
+        });
+        rx
+    }
+
+    /// Load a commentary room's display window: the newest `limit` lines,
+    /// newest first (upstream `viewcommentary`).
+    pub fn load_commentary(
+        &self,
+        section: &'static str,
+        limit: usize,
+    ) -> watch::Receiver<CommentaryLoad> {
+        let (tx, rx) = watch::channel(CommentaryLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let lines = match inner.db.get().await {
+                Ok(client) => read_commentary(&client, section, limit).await,
+                Err(e) => {
+                    tracing::warn!("greendragon db get failed on commentary read: {e}");
+                    Vec::new()
+                }
+            };
+            let _ = tx.send(CommentaryLoad::Ready {
+                lines: Arc::new(lines),
+                double_post: false,
+            });
+        });
+        rx
+    }
+
+    /// Post a prepared line into a room and return its refreshed window. The
+    /// double-post check runs here against the section's actual newest row
+    /// (upstream `injectcommentary`), not the possibly stale page the player
+    /// was reading. Old comments are pruned opportunistically on write.
+    pub fn post_commentary(
+        &self,
+        section: &'static str,
+        limit: usize,
+        user_id: Uuid,
+        name: String,
+        body: String,
+    ) -> watch::Receiver<CommentaryLoad> {
+        let (tx, rx) = watch::channel(CommentaryLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let (lines, double_post) = match inner.db.get().await {
+                Ok(client) => {
+                    let newest = GreenDragonCommentary::latest(&client, section, 1)
+                        .await
+                        .unwrap_or_default();
+                    let double_post = newest
+                        .first()
+                        .is_some_and(|r| r.user_id == Some(user_id) && r.body == body);
+                    if !double_post {
+                        if let Err(e) = GreenDragonCommentary::add(
+                            &client,
+                            section,
+                            Some(user_id),
+                            &name,
+                            &body,
+                        )
+                        .await
+                        {
+                            tracing::warn!("greendragon commentary write failed: {e}");
+                        }
+                        if let Err(e) = GreenDragonCommentary::prune(&client).await {
+                            tracing::warn!("greendragon commentary prune failed: {e}");
+                        }
+                    }
+                    (read_commentary(&client, section, limit).await, double_post)
+                }
+                Err(e) => {
+                    tracing::warn!("greendragon db get failed on commentary write: {e}");
+                    (Vec::new(), false)
+                }
+            };
+            let _ = tx.send(CommentaryLoad::Ready {
+                lines: Arc::new(lines),
+                double_post,
+            });
         });
         rx
     }

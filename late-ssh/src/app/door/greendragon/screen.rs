@@ -88,6 +88,18 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
     // released (leaving the game re-borrows `app` mutably).
     let selection = {
         let state = app.greendragon_state.as_mut().unwrap();
+        // A talk line under composition captures every byte: printable text
+        // grows it, Enter posts it, Esc drops it.
+        if state.is_typing() {
+            match byte {
+                0x1B => state.talk_cancel(),
+                b'\r' | b'\n' => state.talk_submit(),
+                0x08 | 0x7F => state.talk_backspace(),
+                b if (0x20..=0x7E).contains(&b) => state.talk_push(b as char),
+                _ => {}
+            }
+            return true;
+        }
         match byte {
             0x1B => Some(state.back()),
             b'k' | b'K' | b'w' | b'W' => {
@@ -113,6 +125,9 @@ fn handle_arrow(app: &mut App, key: u8) -> bool {
     let Some(state) = app.greendragon_state.as_mut() else {
         return false;
     };
+    if state.is_typing() {
+        return true;
+    }
     match key {
         b'A' => state.move_cursor(-1),
         b'B' => state.move_cursor(1),

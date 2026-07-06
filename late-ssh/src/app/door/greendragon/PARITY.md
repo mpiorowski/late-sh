@@ -101,10 +101,11 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
 - [x] **`seendragon` is a daily flag** (`newday.php` clears it every dawn):
   fleeing or dying to the dragon no longer locks the seek out for the rest of
   the run. Found and fixed during the phase-1 source audit.
-- [ ] **`seenmaster` daily gate** (`train.php`): upstream allows one master
-  challenge per day (`seenmaster` set on challenge, cleared on a win and at
-  newday); our Proving Yard allows immediate rechallenges after a loss.
-  Found during the phase-1 source audit — not yet ported.
+- [x] **`seenmaster` daily gate** (`train.php`): one master challenge per day
+  — `seen_master_today` set when the challenge starts (persisted immediately),
+  cleared on a win (`multimaster` default 1) and at every dawn (`newday.php`
+  clears it unconditionally, paid resurrections included). Ported 2026-07
+  with phase 4's first slice.
 
 ### Known deliberate deviations (single-player shape, documented)
 
@@ -492,29 +493,74 @@ online-roster path; the session stays authoritative for its own character
 (see CONTEXT.md "toward multiplayer" notes).
 
 ### Build order
-commentary → roster/HoF → gypsy → PvP → bounties + haunt → clans → mail(?)
-→ gardens/veterans' rock. Commentary first: five other features are just
-sections of it.
+commentary ✓ → roster/HoF → gypsy ✓ (folded into the commentary slice — it
+is just a paid door onto the shade section) → PvP → bounties + haunt →
+clans → mail(?) → gardens ✓ / veterans' rock ✓. Commentary first: five
+other features are just sections of it.
 
-### `commentary` — the one chat primitive
-- Table `greendragon_commentary`: id, `section` (varchar ~24), `user_id`
-  (nullable; null = system line), `body` (≤200 chars), created_at. Index on
-  (section, id desc).
-- **Post limit**: a user may post while their posts-today-in-section <
-  `round(display_limit / 2)` — display limit is per room: village square 10
-  (⇒5/day), inn 20 (⇒10), shade + clan hall 25 (⇒12), others 10. Show
-  "N left" when under 3 remain.
-- **Emotes**: leading `:`, `::`, or `/me` renders as third-person action
-  (name + rest) instead of quoted speech. Strip newlines; insert a space
-  into any 45+-char unbroken run; cap color/format codes if applicable.
-- **Rejections**: empty (or bare `:`/`::`/`/me`) posts; exact double-post
-  (same author + identical body as the section's newest row).
-- **Display**: newest-first, paginated by the room's display limit;
-  per-room talk verb (square "says", shade "projects", clan hall custom).
-- Rooms landing with it: village square, the inn, the Dark Horse board, the
-  shade channel (gypsy/graveyard), the veterans' rock (dragon-killers only,
-  `dragon_kills > 0` gate), gardens, clan halls + one shared clan waiting
-  room.
+### `commentary` — the one chat primitive — DONE
+
+Implemented 2026-07 (migration 098, `greendragon_commentary` model,
+`commentary.rs` for the pure rules, svc load/post round-trips,
+`Mode::Commentary` + a typing line in `state`/`screen`/`ui`). Re-verified
+line-by-line against `lib/commentary.php` and every stock caller before
+porting. **Source-audit corrections** to what this section originally
+claimed (specs below already fixed):
+
+1. **Display limits**: village square **25** (not 10), inn 20, Dark Horse
+   board 10 (the `commentdisplay` default), shade 25, gardens **30**,
+   veterans' rock **30**, clan halls 25. Allowance = `round(limit/2)` ⇒
+   13 / 10 / 5 / 13 / 15 / 15 / 13.
+2. **The allowance is windowed, not a flat daily counter**: a player may
+   post while their posts-from-today **among the section's newest `limit`
+   rows** number fewer than the allowance — once older posts scroll out of
+   the display window, they stop counting ("once some of your existing
+   posts have moved out of the comment area, you'll be allowed to post
+   again").
+3. **The venue verb is baked at post time**: a non-emote post in a
+   non-"says" room is converted on insert to `:verb, "..."` — so a lament
+   posted in the graveyard still "despairs" when read through the gypsy's
+   trance. Verbs: gardens "whispers", rock "boasts", shade "projects"
+   (gypsy) / "despairs" (graveyard), everything else "says".
+4. **Retention**: comments expire on the same `expirecontent` default as
+   news — 180 days (`newday_runonce.php`) — pruned on write.
+
+- [x] Table `greendragon_commentary` (098): id, section, `user_id`
+  (nullable; null = system line), `name` (speaker snapshot at post time),
+  body, created. Index (section, created desc, id desc).
+- [x] **Post limit**: windowed allowance per correction 2; the speak row
+  shows "N left today" when under 3 remain (upstream's talkform hint).
+- [x] **Emotes**: leading `:`, `::`, or `/me` renders as name + rest;
+  system lines (no author) render bare. Newlines can't occur (single-line
+  input); a space is inserted after any 45-char unbroken run (upstream's
+  `([^\s]{45})([^\s])`, applied left to right); the typing budget is 200
+  chars, less `verb.len() + 11` in baked-verb venues (upstream's
+  `maxlength`).
+- [x] **Rejections**: empty or bare-marker posts (our "silence" line);
+  double post = identical body + same author as the section's **newest**
+  row, checked at insert time against the live table.
+- [x] **Rooms landed**: village square, the inn's long table, the Dark
+  Horse etchings, the gardens, the veterans' rock (`rock.php`: a plain
+  weathered stone to anyone without a dragon kill), and the shade channel
+  from both sides — free while dead, or through the gypsy's paid trance.
+  Clan halls + the waiting room land with clans.
+- [x] **The gypsy tent** (`gypsy.php`): pay `level * 20` gold per visit to
+  project into the shade section. That's the whole building.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- One display window per room, refreshed on demand; no `comscroll`
+  pagination, "first unseen" links, or new-post markers (upstream's
+  `recentcomments`).
+- Speaker names are the bare character name snapshotted at post time — no
+  DK-title prefix (upstream's `accounts.name` carries the title) and no
+  clan tag until clans land.
+- All three emote markers compose identically (name + a space + the rest);
+  upstream's `::` variant differs only in marker length.
+- No GM `/game` inserts or moderation tools; system lines are reserved for
+  future writers (haunts, bounties).
+- Drunken comment slurring (the drinks module's `commentary` hook) stays
+  deferred with the drinks note in phase 3.
 
 ### Online roster + Hall of Fame
 - **Online** = a live SSH session in the door OR activity within 15 min
@@ -535,10 +581,10 @@ sections of it.
   `resurrections` (count, increment on any revive).
 - "Your rank": `count(stat >= yours) / total` as a percentile line.
 
-### Gypsy tent (village)
+### Gypsy tent (village) — DONE
 - Pay `level · 20` gold per visit → read/post the **shade** commentary
   section (the dead post there free from the graveyard). That's the whole
-  building; menu: pay / leave.
+  building; menu: pay / leave. Landed with the commentary slice above.
 
 ### PvP ("slay other warriors", village + inn)
 - **Target list**: level in `[mine−1, mine+2]`, alive, not currently
@@ -612,11 +658,11 @@ sections of it.
   applications, haunts) onto the existing notification/DM systems instead of
   building an in-door mailbox. Revisit only if in-door mail proves wanted.
 
-### Gardens + the veterans' rock
+### Gardens + the veterans' rock — DONE
 - Gardens: a commentary room with a 0% random-event chance (stock default)
-  — pure social corner, plus the nav.
+  — pure social corner, plus the nav. Landed with the commentary slice.
 - Veterans' rock: commentary room gated on `dragon_kills > 0`; non-veterans
-  see only a flavor dead-end.
+  see only a flavor dead-end. Landed with the commentary slice.
 
 ### Rewards wiring (the long-standing TODO)
 - `svc` already holds `ActivityPublisher` + `ChipService`: on dragon kill,

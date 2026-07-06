@@ -13,6 +13,7 @@ use ratatui::{
 use crate::app::common::theme;
 use crate::app::door::landing;
 
+use super::commentary::{self, CommentRoom};
 use super::data;
 use super::model::{self, Character, Specialty};
 use super::state::{FoeKind, Mode, State};
@@ -329,6 +330,50 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // A commentary room: the venue framing, then the window's lines oldest
+    // to newest (they arrive newest first), then the talk line being typed.
+    if let Mode::Commentary(room) = state.mode() {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        let intro = match room {
+            CommentRoom::Village => "Villagers trade the day's gossip around you.",
+            CommentRoom::Inn => "You lean in at the long table and follow the talk.",
+            CommentRoom::DarkHorse => "Names and boasts are scratched deep into the tabletop.",
+            CommentRoom::Gardens => "Voices drift low between the hedges.",
+            CommentRoom::Veterans => "Beyond the stone door, old scars trade stories.",
+            CommentRoom::ShadeGypsy => "Through the trance, the dead press close to be heard.",
+            CommentRoom::ShadeGrave => "Nearby, the lost souls give voice to their grief.",
+        };
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(intro, dim)));
+        match state.commentary_page() {
+            None => lines.push(Line::from(Span::styled("You lean in to listen...", dim))),
+            Some([]) => lines.push(Line::from(Span::styled(
+                "It is quiet. No one has spoken here in an age.",
+                dim,
+            ))),
+            Some(items) => {
+                for item in items.iter().rev() {
+                    let style = if item.name.is_empty() {
+                        dim
+                    } else {
+                        Style::default().fg(theme::TEXT())
+                    };
+                    lines.push(Line::from(Span::styled(
+                        commentary::compose_line(&item.name, &item.body),
+                        style,
+                    )));
+                }
+            }
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("say> {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
     if state.mode() == Mode::ChooseStyle {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
@@ -383,8 +428,13 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     }
 
     lines.push(Line::raw(""));
+    let hint = if state.is_typing() {
+        "type your line   Enter say it   Esc think better of it"
+    } else {
+        controls_hint(state.mode())
+    };
     lines.push(Line::from(Span::styled(
-        controls_hint(state.mode()),
+        hint,
         Style::default().fg(theme::TEXT_FAINT()),
     )));
 
@@ -449,6 +499,15 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Outhouse => "The Outhouse",
         Mode::OuthouseWash(_) => "The Rain Barrel",
         Mode::Tavern => "The Dark Horse Tavern",
+        Mode::Commentary(room) => match room {
+            CommentRoom::Village => "The Town Square",
+            CommentRoom::Inn => "The Long Table",
+            CommentRoom::DarkHorse => "The Table Etchings",
+            CommentRoom::Gardens => "The Gardens",
+            CommentRoom::Veterans => "The Veterans' Rock",
+            CommentRoom::ShadeGypsy => "A Deep Trance",
+            CommentRoom::ShadeGrave => "The Lost Souls",
+        },
     }
 }
 
@@ -466,6 +525,7 @@ fn controls_hint(mode: Mode) -> &'static str {
         | Mode::Romance => "up/down move   Enter choose   Esc back to the inn",
         Mode::Outhouse | Mode::Tavern => "up/down move   Enter choose   Esc back to the forest",
         Mode::OuthouseWash(_) => "up/down move   Enter choose   Esc slips out unwashed",
+        Mode::Commentary(_) => "up/down move   Enter choose   Esc step away",
         _ => "up/down move   Enter choose   Esc back to village",
     }
 }

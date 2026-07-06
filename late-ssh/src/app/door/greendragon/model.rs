@@ -191,6 +191,11 @@ pub struct Character {
     pub alive: bool,
     /// Whether the player has sought the dragon this run (resets per run).
     pub seen_dragon: bool,
+    /// Whether the master has been challenged today (LoGD `seenmaster`,
+    /// `train.php`): set when a challenge starts, cleared by a win
+    /// (`multimaster` default 1) and at every dawn — the paid resurrection
+    /// included. A loss locks the Proving Yard until tomorrow.
+    pub seen_master_today: bool,
     /// Lifetime dragon kills.
     pub dragon_kills: u32,
     /// Permanent max-HP bought with `hp` dragon points (+5 each).
@@ -634,6 +639,7 @@ impl Default for Character {
             turns: TURNS_PER_DAY,
             alive: true,
             seen_dragon: false,
+            seen_master_today: false,
             dragon_kills: 0,
             dragon_hp_bonus: 0,
             dragon_attack_bonus: 0,
@@ -819,7 +825,9 @@ impl Character {
     /// Whether the player has banked enough experience to challenge their
     /// master. (Beating the master is what actually advances the level.)
     pub fn can_challenge_master(&self) -> bool {
-        self.level < data::MAX_LEVEL && self.experience >= self.exp_for_next_level()
+        self.level < data::MAX_LEVEL
+            && self.experience >= self.exp_for_next_level()
+            && !self.seen_master_today
     }
 
     /// Whether the Seek-the-Dragon option is available: level 15, not yet
@@ -835,6 +843,9 @@ impl Character {
             self.level += 1;
             self.soulpoints = self.soulpoints.saturating_add(SOULPOINTS_PER_MASTER);
             self.hitpoints = self.max_hitpoints();
+            // A win unlocks the next master immediately (`train.php` clears
+            // `seenmaster` on victory, `multimaster` default 1).
+            self.seen_master_today = false;
         }
     }
 
@@ -1315,7 +1326,9 @@ impl Character {
         }
         self.drunkenness = 0;
         self.hard_drinks_today = 0;
-        // The once-a-day flags re-arm.
+        // The once-a-day flags re-arm (`seenmaster` clears unconditionally in
+        // `newday.php`, resurrection days included).
+        self.seen_master_today = false;
         self.lodged_today = false;
         self.flirted_today = false;
         self.heard_bard_today = false;
@@ -1437,6 +1450,12 @@ impl Character {
     /// (`inn_room.php`).
     pub fn inn_room_cost(&self) -> u64 {
         (self.level as f64 * (10.0 + (self.level as f64).ln())).round() as u64
+    }
+
+    /// The gypsy seer's fee for a seance with the dead (`gypsy.php`):
+    /// `level * 20` gold, paid per visit.
+    pub fn gypsy_cost(&self) -> u64 {
+        self.level as u64 * 20
     }
 
     /// The room price when charged to the bank: the base plus the inn's 5%
@@ -1894,6 +1913,7 @@ mod tests {
         c.level = 3;
         c.grave_fights = 0;
         c.seen_dragon = true;
+        c.seen_master_today = true;
         c.die();
         // The free path: wait for the dawn and rise with a *full* day — the
         // -6 dock belongs to the paid resurrection only (newday.php applies
@@ -1907,6 +1927,8 @@ mod tests {
         assert_eq!(c.soulpoints, 50 + 5 * 3);
         assert_eq!(c.grave_fights, GRAVE_FIGHTS_PER_DAY);
         assert!(!c.seen_dragon);
+        // The master will see you again (`seenmaster` clears every dawn).
+        assert!(!c.seen_master_today);
         // Same day again: no reset.
         c.turns = 3;
         assert!(c.roll_new_day(11, 0, 0, &mut rand::thread_rng()).is_none());

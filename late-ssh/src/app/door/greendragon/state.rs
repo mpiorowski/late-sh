@@ -12,12 +12,13 @@ use rand::Rng;
 use uuid::Uuid;
 
 use super::combat::{Buff, Combatant, resolve_extra_foe_strike, resolve_round_buffed};
+use super::commentary::{self, CommentLine, CommentRoom};
 use super::data;
 use super::events::{self, ForestEvent};
 use super::inn;
 use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
-use super::svc::{CharacterLoad, FiveSixLoad, GreenDragonService, NewsLoad};
+use super::svc::{CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService, NewsLoad};
 use super::tavern;
 
 /// Which Green Dragon screen the session is looking at.
@@ -88,6 +89,9 @@ pub enum Mode {
     /// The Dark Horse Tavern, stumbled on in the forest (`darkhorse.php`);
     /// its sub-views (the games) live in [`TavernView`].
     Tavern,
+    /// A commentary room (the shared chat primitive, `lib/commentary.php`):
+    /// which room decides the section, verb, window, and the way back.
+    Commentary(CommentRoom),
 }
 
 /// Which corner of the Dark Horse the session is in (all under
@@ -208,6 +212,13 @@ pub struct State {
     /// An in-flight Five Sixes settlement: the sixes rolled, and the pot
     /// round-trip. Drained by [`State::tick`].
     fivesix_rx: Option<(u32, tokio::sync::watch::Receiver<FiveSixLoad>)>,
+    /// The in-flight commentary page load or post, drained by [`State::tick`].
+    commentary_rx: Option<tokio::sync::watch::Receiver<CommentaryLoad>>,
+    /// The loaded commentary window for the open room, newest first.
+    commentary_lines: Option<std::sync::Arc<Vec<CommentLine>>>,
+    /// The talk line being typed, while composing a commentary post. `Some`
+    /// routes all key bytes into the buffer instead of the menu.
+    talk_input: Option<String>,
 }
 
 impl State {
@@ -233,6 +244,9 @@ impl State {
             fivesix_pot: None,
             fivesix_pot_rx: None,
             fivesix_rx: None,
+            commentary_rx: None,
+            commentary_lines: None,
+            talk_input: None,
         }
     }
 
@@ -241,6 +255,7 @@ impl State {
     pub fn tick(&mut self) {
         self.tick_news();
         self.tick_tavern();
+        self.tick_commentary();
         if self.character.is_some() {
             return;
         }
@@ -353,6 +368,7 @@ impl State {
                 self.fivesix_pot,
                 self.fivesix_rx.is_some(),
             ),
+            Mode::Commentary(room) => commentary_menu(room, self.commentary_posts_left()),
             Mode::Loading => Vec::new(),
         }
     }
@@ -407,6 +423,7 @@ impl State {
             Mode::Outhouse => self.select_outhouse(),
             Mode::OuthouseWash(paid) => self.select_outhouse_wash(paid),
             Mode::Tavern => self.select_tavern(),
+            Mode::Commentary(room) => self.select_commentary(room),
             Mode::Loading => Selection::Stay,
         }
     }
@@ -454,6 +471,16 @@ impl State {
             Mode::OuthouseWash(paid) => {
                 self.cursor = 1;
                 self.select_outhouse_wash(paid)
+            }
+            // Esc while composing a talk line drops the line; otherwise the
+            // room lets out wherever it was entered from.
+            Mode::Commentary(room) => {
+                if self.talk_input.is_some() {
+                    self.talk_input = None;
+                } else {
+                    self.leave_commentary(room);
+                }
+                Selection::Stay
             }
             // A game in progress folds (the stake was never taken); the
             // taproom itself lets out into the forest.
@@ -505,6 +532,37 @@ impl State {
             s if s.starts_with("The Stables") => self.goto(Mode::Stables),
             s if s.starts_with("The Mercenary Camp") => self.goto(Mode::MercCamp),
             s if s.starts_with(data::INN_NAME) => self.goto(Mode::Inn),
+            s if s.starts_with("The Town Square") => self.open_commentary(CommentRoom::Village),
+            s if s.starts_with("The Gardens") => self.open_commentary(CommentRoom::Gardens),
+            s if s.starts_with("A weathered standing stone") => {
+                // The veterans' rock (`rock.php`): dragon-killers see the
+                // door; everyone else sees a rock and gets bored of it.
+                if self.character.as_ref().unwrap().dragon_kills > 0 {
+                    self.open_commentary(CommentRoom::Veterans);
+                } else {
+                    self.push_log(
+                        "You circle the old stone. It stays a stone. Bored, you walk on.".into(),
+                    );
+                }
+            }
+            s if s.starts_with("The Gypsy's Tent") => {
+                // The seance is pay-per-visit (`gypsy.php`, `level * 20`).
+                let c = self.character.as_mut().unwrap();
+                let cost = c.gypsy_cost();
+                if c.gold >= cost {
+                    c.gold -= cost;
+                    self.save();
+                    self.push_log(format!(
+                        "The seer pockets your {cost} gold and the crystal clouds over."
+                    ));
+                    self.open_commentary(CommentRoom::ShadeGypsy);
+                } else {
+                    self.push_log(
+                        "The seer counts your coin and sniffs. The dead don't rise for so little."
+                            .into(),
+                    );
+                }
+            }
             s if s.starts_with("The Daily News") => self.open_news(0),
             s if s.starts_with("Leave") => return Selection::Leave,
             _ => {}
@@ -842,6 +900,147 @@ impl State {
         self.svc.publish_news(Some(self.user_id), body);
     }
 
+    // --- commentary (the shared chat rooms) ----------------------------------
+
+    /// Open a commentary room and kick off its page load.
+    fn open_commentary(&mut self, room: CommentRoom) {
+        self.commentary_lines = None;
+        self.talk_input = None;
+        self.commentary_rx = Some(
+            self.svc
+                .load_commentary(room.section(), room.display_limit()),
+        );
+        self.goto(Mode::Commentary(room));
+    }
+
+    /// Drain a finished commentary load (or post round-trip) into the view.
+    fn tick_commentary(&mut self) {
+        let Some(rx) = self.commentary_rx.as_mut() else {
+            return;
+        };
+        let ready = match &*rx.borrow_and_update() {
+            CommentaryLoad::Ready { lines, double_post } => Some((lines.clone(), *double_post)),
+            CommentaryLoad::Loading => None,
+        };
+        if let Some((lines, double_post)) = ready {
+            self.commentary_lines = Some(lines);
+            self.commentary_rx = None;
+            if double_post {
+                self.push_log("You have already said exactly that. The room lets it pass.".into());
+            }
+        }
+    }
+
+    /// Put the room away and step back to wherever it was entered from.
+    fn leave_commentary(&mut self, room: CommentRoom) {
+        self.commentary_rx = None;
+        self.commentary_lines = None;
+        self.talk_input = None;
+        match room {
+            CommentRoom::Inn => self.goto(Mode::Inn),
+            CommentRoom::DarkHorse => {
+                self.tavern_view = TavernView::Hub;
+                self.goto(Mode::Tavern);
+            }
+            CommentRoom::ShadeGrave => self.goto(Mode::Graveyard),
+            _ => self.goto(Mode::Village),
+        }
+    }
+
+    /// Posts the player may still make in the open room; `None` while the
+    /// page (which the count is read off) is still loading.
+    fn commentary_posts_left(&self) -> Option<usize> {
+        let Mode::Commentary(room) = self.mode else {
+            return None;
+        };
+        let lines = self.commentary_lines.as_ref()?;
+        Some(commentary::posts_left(lines, self.user_id, room))
+    }
+
+    /// Handle an open room's rows: speak, listen afresh, leave.
+    fn select_commentary(&mut self, room: CommentRoom) -> Selection {
+        match self.cursor {
+            0 => {
+                if self.commentary_posts_left().unwrap_or(0) > 0 {
+                    self.talk_input = Some(String::new());
+                }
+            }
+            1 => self.open_commentary(room),
+            _ => self.leave_commentary(room),
+        }
+        Selection::Stay
+    }
+
+    /// The loaded commentary window, newest first (`None` while loading).
+    pub fn commentary_page(&self) -> Option<&[CommentLine]> {
+        self.commentary_lines.as_deref().map(Vec::as_slice)
+    }
+
+    /// Whether a talk line is being composed: all key bytes go to the buffer.
+    pub fn is_typing(&self) -> bool {
+        self.talk_input.is_some()
+    }
+
+    /// The talk line as typed so far, while composing.
+    pub fn talk_line(&self) -> Option<&str> {
+        self.talk_input.as_deref()
+    }
+
+    /// Feed one printable character into the talk line, up to the venue's
+    /// budget (200 less the room verb's baked emote overhead, as upstream).
+    pub fn talk_push(&mut self, ch: char) {
+        let Mode::Commentary(room) = self.mode else {
+            return;
+        };
+        if let Some(buf) = self.talk_input.as_mut()
+            && buf.chars().count() < commentary::max_post_len(room.verb())
+        {
+            buf.push(ch);
+        }
+    }
+
+    /// Erase the last typed character.
+    pub fn talk_backspace(&mut self) {
+        if let Some(buf) = self.talk_input.as_mut() {
+            buf.pop();
+        }
+    }
+
+    /// Drop the talk line without posting.
+    pub fn talk_cancel(&mut self) {
+        self.talk_input = None;
+    }
+
+    /// Submit the talk line: prepare it (trim, run breaks, verb baking, the
+    /// silence rejection) and send it off. The refreshed page comes back
+    /// through the same channel as a plain load.
+    pub fn talk_submit(&mut self) {
+        let Mode::Commentary(room) = self.mode else {
+            self.talk_input = None;
+            return;
+        };
+        let Some(raw) = self.talk_input.take() else {
+            return;
+        };
+        match commentary::prepare_post(&raw, room.verb()) {
+            Some(body) => {
+                let name = self
+                    .character
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default();
+                self.commentary_rx = Some(self.svc.post_commentary(
+                    room.section(),
+                    room.display_limit(),
+                    self.user_id,
+                    name,
+                    body,
+                ));
+            }
+            None => self.push_log("You open your mouth, then think better of it.".into()),
+        }
+    }
+
     // --- style gate -----------------------------------------------------------
 
     /// Apply the one-time address-style choice, re-stamp the title off the
@@ -981,7 +1180,8 @@ impl State {
                     ));
                 }
             }
-            3 => return Selection::Leave,
+            3 => self.open_commentary(CommentRoom::ShadeGrave),
+            4 => return Selection::Leave,
             _ => {}
         }
         Selection::Stay
@@ -1033,6 +1233,14 @@ impl State {
 
     fn select_training(&mut self) -> Selection {
         let c = self.character.as_ref().unwrap();
+        if c.seen_master_today {
+            // One challenge per day (`train.php`'s `seenmaster` gate); only a
+            // win reopens the yard before dawn.
+            self.push_log(
+                "You have tested your master's patience once today. Come back tomorrow.".into(),
+            );
+            return Selection::Stay;
+        }
         if !c.can_challenge_master() {
             self.push_log("Your master shakes their head. Gain more experience first.".into());
             return Selection::Stay;
@@ -1040,6 +1248,11 @@ impl State {
         let Some((master, foe, hp)) = c.scaled_master(&mut rand::thread_rng()) else {
             return Selection::Stay;
         };
+        // The challenge itself spends the day's audience, win or lose —
+        // persisted now so a disconnect mid-fight can't refund it.
+        self.character.as_mut().unwrap().seen_master_today = true;
+        self.save();
+        let c = self.character.as_ref().unwrap();
         self.encounter = Some(Encounter::single(
             Foe {
                 name: master.name.to_string(),
@@ -1813,6 +2026,7 @@ impl State {
             }
             3 => self.goto(Mode::Drinks),
             4 => self.goto(Mode::Romance),
+            5 => self.open_commentary(CommentRoom::Inn),
             _ => {}
         }
         Selection::Stay
@@ -2125,6 +2339,7 @@ impl State {
                     self.tavern_view = TavernView::StonesSide;
                     self.cursor = 0;
                 }
+                3 => self.open_commentary(CommentRoom::DarkHorse),
                 _ => self.goto(Mode::Forest),
             },
             TavernView::DiceBet => {
@@ -2457,7 +2672,9 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
         (format!("The Forest ({} turns left)", c.turns), c.turns > 0),
         (
             "The Proving Yard (warrior training)".into(),
-            c.can_challenge_master(),
+            // Enter on banked experience alone; the yard itself delivers the
+            // "seen enough of you today" refusal, like upstream's nav.
+            c.level < data::MAX_LEVEL && c.experience >= c.exp_for_next_level(),
         ),
     ];
     if c.specialty == Specialty::None {
@@ -2476,9 +2693,50 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
     rows.push(("The Stables (mounts)".into(), true));
     rows.push(("The Mercenary Camp (allies)".into(), true));
     rows.push((format!("{} (the inn)", data::INN_NAME), true));
+    rows.push(("The Town Square (gossip)".into(), true));
+    rows.push(("The Gardens (a quiet walk)".into(), true));
+    rows.push(("A weathered standing stone".into(), true));
+    rows.push((
+        format!("The Gypsy's Tent ({} gold)", c.gypsy_cost()),
+        c.gold >= c.gypsy_cost(),
+    ));
     rows.push(("The Daily News".into(), true));
     rows.push(("Leave the realm".into(), true));
     rows
+}
+
+/// A commentary room's rows: speak, listen afresh, leave. The speak row
+/// carries the venue flavor and, when close to the limit, the posts left
+/// (upstream surfaces the count under 3); it disables while the page (which
+/// the allowance is counted off) is still loading.
+fn commentary_menu(room: CommentRoom, posts_left: Option<usize>) -> Vec<(String, bool)> {
+    let prompt = match room {
+        CommentRoom::Village => "Speak up",
+        CommentRoom::Inn => "Join the table talk",
+        CommentRoom::DarkHorse => "Scratch an etching of your own",
+        CommentRoom::Gardens => "Whisper something",
+        CommentRoom::Veterans => "Boast of your deeds",
+        CommentRoom::ShadeGypsy => "Project your voice to the dead",
+        CommentRoom::ShadeGrave => "Add your lament",
+    };
+    let speak = match posts_left {
+        Some(0) => ("You have said enough here today".to_string(), false),
+        Some(n) if n < 3 => (format!("{prompt} ({n} left today)"), true),
+        Some(_) => (prompt.to_string(), true),
+        None => (prompt.to_string(), false),
+    };
+    let back = match room {
+        CommentRoom::Inn => "Back to the common room",
+        CommentRoom::DarkHorse => "Back to the taproom",
+        CommentRoom::ShadeGrave => "Back among the graves",
+        CommentRoom::ShadeGypsy => "Snap out of the trance",
+        _ => "Back to the village square",
+    };
+    vec![
+        speak,
+        ("Listen for new voices".into(), true),
+        (back.into(), true),
+    ]
 }
 
 /// The daily news pager: one day per page, like upstream's `news.php`.
@@ -2548,6 +2806,7 @@ fn graveyard_menu(c: &Character) -> Vec<(String, bool)> {
             ),
             c.favor >= model::RESURRECTION_FAVOR_COST,
         ),
+        ("Lament with the lost souls".into(), true),
         ("Wait for a new day (leave the realm)".into(), true),
     ]
 }
@@ -2678,6 +2937,7 @@ fn inn_menu(c: &Character) -> Vec<(String, bool)> {
         ),
         ("Order a drink".into(), true),
         (format!("Sit with {}", data::partner(c.style)), true),
+        ("Listen in at the long table".into(), true),
     ]
 }
 
@@ -2892,6 +3152,7 @@ fn tavern_menu(
                         && !settling,
                 ),
                 ("Stones (call the pairs)".into(), c.gold > 0),
+                ("Read the etchings in the table".into(), true),
                 ("Back out into the forest".into(), true),
             ]
         }
@@ -2997,6 +3258,10 @@ fn merc_camp_menu(c: &Character) -> Vec<(String, bool)> {
 
 fn training_menu(c: &Character) -> Vec<(String, bool)> {
     match c.current_master() {
+        Some((master, _, _)) if c.seen_master_today => vec![(
+            format!("{} has seen enough of you today", master.name),
+            false,
+        )],
         Some((master, _, _)) => vec![(
             format!("Challenge {}", master.name),
             c.can_challenge_master(),
@@ -3163,7 +3428,8 @@ mod tests {
         assert!(rows[1].0.contains("(3 favor)"));
         assert!(!rows[1].1); // can't afford restoration
         assert!(!rows[2].1); // resurrection needs 100 favor
-        assert!(rows[3].1); // waiting always works
+        assert!(rows[3].1); // the lost souls always listen
+        assert!(rows[4].1); // waiting always works
 
         c.grave_fights = 4;
         c.favor = 100;
@@ -3248,5 +3514,74 @@ mod tests {
         assert!(rows.iter().all(|(_, enabled)| *enabled));
         assert!(rows[0].0.contains("max hitpoints"));
         assert!(rows[1].0.contains("forest fight"));
+    }
+
+    #[test]
+    fn training_gate_blocks_a_second_daily_challenge() {
+        let mut c = lvl(1);
+        c.experience = c.exp_for_next_level();
+        assert!(c.can_challenge_master());
+        assert!(training_menu(&c)[0].0.starts_with("Challenge"));
+
+        // The challenge spends the day's audience; only a win reopens it.
+        c.seen_master_today = true;
+        assert!(!c.can_challenge_master());
+        let rows = training_menu(&c);
+        assert!(rows[0].0.contains("seen enough of you"));
+        assert!(!rows[0].1);
+        c.advance_level();
+        assert!(!c.seen_master_today);
+    }
+
+    #[test]
+    fn commentary_menu_gates_the_speak_row_on_the_allowance() {
+        // Loading: nothing to count against, so speaking waits.
+        let rows = commentary_menu(CommentRoom::Village, None);
+        assert_eq!(rows.len(), 3);
+        assert!(!rows[0].1);
+        assert!(rows[1].1); // refresh
+        assert!(rows[2].1); // leave
+
+        // Plenty left: a plain prompt.
+        let rows = commentary_menu(CommentRoom::Village, Some(13));
+        assert!(rows[0].1);
+        assert!(!rows[0].0.contains("left today"));
+
+        // Running low surfaces the count (upstream shows it under 3).
+        let rows = commentary_menu(CommentRoom::Village, Some(2));
+        assert!(rows[0].0.contains("2 left today"));
+        assert!(rows[0].1);
+
+        // Exhausted: the row closes.
+        let rows = commentary_menu(CommentRoom::DarkHorse, Some(0));
+        assert!(!rows[0].1);
+    }
+
+    #[test]
+    fn village_menu_lists_the_talk_rooms() {
+        let mut c = lvl(3);
+        c.gold = 0;
+        let rows = village_menu(&c);
+        assert!(rows.iter().any(|(l, _)| l.starts_with("The Town Square")));
+        assert!(rows.iter().any(|(l, _)| l.starts_with("The Gardens")));
+        assert!(
+            rows.iter()
+                .any(|(l, _)| l.starts_with("A weathered standing stone"))
+        );
+        // The seance is pay-per-visit: level 3 wants 60 gold.
+        let gypsy = rows
+            .iter()
+            .find(|(l, _)| l.starts_with("The Gypsy's Tent"))
+            .unwrap();
+        assert!(gypsy.0.contains("60 gold"));
+        assert!(!gypsy.1);
+        c.gold = 60;
+        let rows = village_menu(&c);
+        assert!(
+            rows.iter()
+                .find(|(l, _)| l.starts_with("The Gypsy's Tent"))
+                .unwrap()
+                .1
+        );
     }
 }

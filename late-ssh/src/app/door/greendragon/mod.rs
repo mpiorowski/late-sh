@@ -6,6 +6,8 @@
 //! - `data`    — canonical LoGD balance tables (weapons, creatures, masters, ...)
 //! - `combat`    — the pure round resolver (`bell_rand`, crits, glancing hits)
 //!   and the specialty buff engine
+//! - `commentary` — the shared chat primitive's pure rules (rooms, post prep,
+//!   allowances, line composition)
 //! - `model`     — the persistent `Character` and the rules acting on it
 //! - `specialty` — the twelve specialty combat skills (buff factories)
 //! - `events`    — forest special events (the non-combat vignettes)
@@ -17,6 +19,7 @@
 //! - `ui`        — rendering for the live page and the Games-hub landing card
 //! - `screen`    — the `DoorGame` impl, launcher/active input, and `leave`
 pub mod combat;
+pub mod commentary;
 pub mod data;
 pub mod events;
 pub mod inn;
