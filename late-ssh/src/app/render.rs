@@ -1165,7 +1165,7 @@ impl App {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
                 let (rail_area, center_area) =
-                    if ctx.show_room_list_sidebar && content_area.width > HOME_RAIL_WIDTH + 20 {
+                    if ctx.show_room_list_sidebar {
                         let split = Layout::horizontal([
                             Constraint::Length(HOME_RAIL_WIDTH),
                             Constraint::Fill(1),
