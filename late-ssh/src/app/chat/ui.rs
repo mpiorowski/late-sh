@@ -1309,10 +1309,16 @@ fn ensure_chat_rows_cache(
         let is_own = msg.user_id == ctx.current_user_id;
         let is_continuation = prev_user_id == Some(msg.user_id)
             && prev_created.is_some_and(|prev| (msg.created - prev).num_seconds().abs() < 120);
-        let stamp = format!(
+        let mut stamp = format!(
             "[{}]",
             crate::app::common::primitives::format_relative_time(msg.created)
         );
+        // A bumped `updated` marks a message that's been edited (an admin pin
+        // also bumps it; we treat that as close enough rather than tracking a
+        // dedicated edited flag).
+        if msg.updated > msg.created {
+            stamp.push_str(" (edited)");
+        }
         let raw_author = ctx
             .usernames
             .get(&msg.user_id)

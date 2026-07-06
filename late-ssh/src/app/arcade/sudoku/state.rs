@@ -13,6 +13,11 @@ use late_core::models::sudoku::{Game, GameParams};
 
 pub type Grid = [[u8; 9]; 9];
 pub type Mask = [[bool; 9]; 9];
+/// Pencil marks: one bitmask per cell, bit `n-1` set means candidate `n` is
+/// noted. Player solving aid, kept alongside the board but not (yet) persisted
+/// to the DB, so notes survive mode/difficulty switches within a session but
+/// reset on reconnect.
+pub type Notes = [[u16; 9]; 9];
 
 pub const DIFFICULTIES: [&str; 3] = ["easy", "medium", "hard"];
 
@@ -62,6 +67,7 @@ struct BoardSnapshot {
     seed: u64,
     grid: Grid,
     fixed_mask: Mask,
+    notes: Notes,
     is_game_over: bool,
 }
 
@@ -77,6 +83,9 @@ pub struct State {
     pub seed: u64,
     pub grid: Grid,
     pub fixed_mask: Mask,
+    pub notes: Notes,
+    /// When on, digit keys jot pencil marks instead of placing a value.
+    pub pencil_mode: bool,
     pub cursor: (usize, usize),
     pub is_game_over: bool,
     pub reset_pending: Option<ResetKind>,
@@ -126,6 +135,8 @@ impl State {
             seed: 0,
             grid: [[0; 9]; 9],
             fixed_mask: [[false; 9]; 9],
+            notes: [[0; 9]; 9],
+            pencil_mode: false,
             cursor: (0, 0),
             is_game_over: false,
             reset_pending: None,
@@ -249,11 +260,47 @@ impl State {
                 if !self.fixed_mask[r][c] {
                     self.grid[r][c] = 0;
                 }
+                self.notes[r][c] = 0;
             }
         }
         self.cursor = (0, 0);
         self.store_active_snapshot();
         self.save_async();
+    }
+
+    /// Flip pencil mode: while on, `1-9` toggle candidate marks in the current
+    /// cell instead of placing a value.
+    pub fn toggle_pencil_mode(&mut self) {
+        self.clear_reset_pending();
+        self.pencil_mode = !self.pencil_mode;
+    }
+
+    /// Toggle candidate `val` (1-9) in the cursor cell. No-op on given clues or
+    /// cells that already hold a value (a pencil mark only helps on empties).
+    pub fn toggle_note(&mut self, val: u8) {
+        if self.is_game_over || self.is_loading() || !(1..=9).contains(&val) {
+            return;
+        }
+        self.clear_reset_pending();
+        let (r, c) = self.cursor;
+        if self.fixed_mask[r][c] || self.grid[r][c] != 0 {
+            return;
+        }
+        self.notes[r][c] ^= 1 << (val - 1);
+        self.store_active_snapshot();
+    }
+
+    /// Wipe every pencil mark from the cursor cell.
+    pub fn clear_cell_notes(&mut self) {
+        if self.is_game_over || self.is_loading() {
+            return;
+        }
+        self.clear_reset_pending();
+        let (r, c) = self.cursor;
+        if self.notes[r][c] != 0 {
+            self.notes[r][c] = 0;
+            self.store_active_snapshot();
+        }
     }
 
     pub fn move_cursor(&mut self, dr: isize, dc: isize) {
@@ -279,6 +326,8 @@ impl State {
         self.grid[r][c] = val;
 
         if val != 0 {
+            // A placed value settles the cell, so its pencil marks are done.
+            self.notes[r][c] = 0;
             self.check_win();
         }
         self.store_active_snapshot();
@@ -329,6 +378,7 @@ impl State {
         self.seed = snapshot.seed;
         self.grid = snapshot.grid;
         self.fixed_mask = snapshot.fixed_mask;
+        self.notes = snapshot.notes;
         self.is_game_over = snapshot.is_game_over;
         self.cursor = (0, 0);
     }
@@ -337,6 +387,7 @@ impl State {
         self.seed = 0;
         self.grid = [[0; 9]; 9];
         self.fixed_mask = [[false; 9]; 9];
+        self.notes = [[0; 9]; 9];
         self.is_game_over = false;
         self.cursor = (0, 0);
     }
@@ -350,6 +401,7 @@ impl State {
             seed: self.seed,
             grid: self.grid,
             fixed_mask: self.fixed_mask,
+            notes: self.notes,
             is_game_over: self.is_game_over,
         };
         let dk = self.difficulty_key().to_string();
@@ -457,6 +509,7 @@ fn generate_snapshot(mode: Mode, difficulty_key: &str, svc: &SudokuService) -> B
         seed,
         grid,
         fixed_mask,
+        notes: [[0; 9]; 9],
         is_game_over: false,
     }
 }
@@ -502,6 +555,7 @@ fn snapshot_from_puzzle(seed: u64, puzzle: &str) -> BoardSnapshot {
         seed,
         grid,
         fixed_mask,
+        notes: [[0; 9]; 9],
         is_game_over: false,
     }
 }
@@ -558,6 +612,7 @@ fn snapshot_from_game(game: &Game) -> BoardSnapshot {
         seed: game.puzzle_seed as u64,
         grid,
         fixed_mask,
+        notes: [[0; 9]; 9],
         is_game_over: game.is_game_over,
     }
 }

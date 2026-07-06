@@ -2246,6 +2246,12 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if app.booth_modal_state.is_open() {
+        // While the History `/` filter is capturing, Esc cancels the filter
+        // rather than closing the whole booth.
+        if app.booth_modal_state.history_filter_active() {
+            app.booth_modal_state.cancel_history_filter();
+            return;
+        }
         app.booth_modal_state.close();
         return;
     }
