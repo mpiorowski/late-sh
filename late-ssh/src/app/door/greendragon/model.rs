@@ -2355,6 +2355,99 @@ mod tests {
     }
 
     #[test]
+    fn clan_rank_ladder_pops_the_founder_rung() {
+        // clan_nextrank/clan_previousrank drop the founder before walking:
+        // nothing promotes to 31, and a stepped-down founder is a leader.
+        assert_eq!(clan_next_rank(CLAN_APPLICANT), CLAN_MEMBER);
+        assert_eq!(clan_next_rank(CLAN_MEMBER), CLAN_OFFICER);
+        assert_eq!(clan_next_rank(CLAN_OFFICER), CLAN_LEADER);
+        assert_eq!(clan_next_rank(CLAN_LEADER), CLAN_LEADER);
+        assert_eq!(clan_prev_rank(CLAN_FOUNDER), CLAN_LEADER);
+        assert_eq!(clan_prev_rank(CLAN_LEADER), CLAN_OFFICER);
+        assert_eq!(clan_prev_rank(CLAN_MEMBER), CLAN_APPLICANT);
+        assert_eq!(clan_prev_rank(CLAN_APPLICANT), CLAN_APPLICANT);
+    }
+
+    #[test]
+    fn clan_promote_clamps_at_the_actors_own_rank() {
+        // GREATEST(0, LEAST(yours, next)): an officer lifts a member no
+        // higher than officer; a leader lifts an officer to leader.
+        assert_eq!(clan_promote_rank(CLAN_OFFICER, CLAN_APPLICANT), CLAN_MEMBER);
+        assert_eq!(clan_promote_rank(CLAN_OFFICER, CLAN_MEMBER), CLAN_OFFICER);
+        assert_eq!(clan_promote_rank(CLAN_LEADER, CLAN_OFFICER), CLAN_LEADER);
+        assert_eq!(clan_promote_rank(CLAN_FOUNDER, CLAN_OFFICER), CLAN_LEADER);
+    }
+
+    #[test]
+    fn clan_management_gates_follow_the_membership_page() {
+        // Only officers+ see the ops at all.
+        assert!(!clan_can_promote(CLAN_MEMBER, CLAN_APPLICANT));
+        // Promote: strictly below you, never onto the founder rung.
+        assert!(clan_can_promote(CLAN_OFFICER, CLAN_MEMBER));
+        assert!(!clan_can_promote(CLAN_OFFICER, CLAN_OFFICER));
+        assert!(!clan_can_promote(CLAN_FOUNDER, CLAN_FOUNDER));
+        // Demote: equals-or-below, never yourself, and hidden when the rung
+        // below is applicant — a member can only be removed.
+        assert!(clan_can_demote(CLAN_LEADER, CLAN_OFFICER, false));
+        assert!(clan_can_demote(CLAN_OFFICER, CLAN_OFFICER, false));
+        assert!(!clan_can_demote(CLAN_OFFICER, CLAN_MEMBER, false));
+        assert!(!clan_can_demote(CLAN_LEADER, CLAN_LEADER, true));
+        // The founder's one self-demotion is the step-down.
+        assert!(clan_can_step_down(CLAN_FOUNDER, CLAN_FOUNDER, true));
+        assert!(!clan_can_step_down(CLAN_LEADER, CLAN_LEADER, true));
+        // Remove: at-or-below, never yourself (that's the withdraw).
+        assert!(clan_can_remove(CLAN_OFFICER, CLAN_OFFICER, false));
+        assert!(clan_can_remove(CLAN_OFFICER, CLAN_APPLICANT, false));
+        assert!(!clan_can_remove(CLAN_OFFICER, CLAN_LEADER, false));
+        assert!(!clan_can_remove(CLAN_OFFICER, CLAN_OFFICER, true));
+    }
+
+    #[test]
+    fn clan_name_and_tag_validation_follow_the_registrar() {
+        // applicant_new.php: 5–50 chars of letters/spaces/apostrophes/dashes;
+        // the tag 2–5 letters only.
+        assert!(clan_name_valid("The Dragon's-Bane"));
+        assert!(!clan_name_valid("Four"));
+        assert!(!clan_name_valid(&"a".repeat(51)));
+        assert!(!clan_name_valid("Bad Name 7"));
+        assert!(clan_tag_valid("DB"));
+        assert!(clan_tag_valid("BANES"));
+        assert!(!clan_tag_valid("A"));
+        assert!(!clan_tag_valid("TOOBIG"));
+        assert!(!clan_tag_valid("D7"));
+    }
+
+    #[test]
+    fn commentary_name_tags_real_members_only() {
+        // The <TAG> prefix renders for rank > 0 only — applicants stay bare
+        // (upstream's `if ($row['clanrank'])`).
+        let mut c = Character::new("hero", 0);
+        assert_eq!(c.commentary_name(), "hero");
+        c.join_clan(uuid::Uuid::from_u128(7), "DB", CLAN_APPLICANT, 100);
+        assert_eq!(c.commentary_name(), "hero");
+        c.clan_rank = CLAN_MEMBER;
+        assert_eq!(c.commentary_name(), "<DB> hero");
+        c.leave_clan();
+        assert_eq!(c.commentary_name(), "hero");
+        assert_eq!(c.clan_id, None);
+        assert_eq!(c.clan_joined_at, 0);
+    }
+
+    #[test]
+    fn clan_membership_survives_a_dragon_kill() {
+        // dragon.php's preserve list carries clanid/clanrank/clanjoindate
+        // through the reset.
+        let mut c = Character::new("hero", 0);
+        c.join_clan(uuid::Uuid::from_u128(7), "DB", CLAN_FOUNDER, 100);
+        c.level = 12;
+        c.slay_dragon(false);
+        assert_eq!(c.clan_id, Some(uuid::Uuid::from_u128(7)));
+        assert_eq!(c.clan_rank, CLAN_FOUNDER);
+        assert_eq!(c.clan_joined_at, 100);
+        assert_eq!(c.clan_tag, "DB");
+    }
+
+    #[test]
     fn new_day_collects_a_haunt_once_and_resets_the_bounty_count() {
         let mut c = Character::new("hero", 0);
         c.bounties_set_today = 4;

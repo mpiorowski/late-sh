@@ -19,8 +19,9 @@ use super::inn;
 use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
 use super::svc::{
-    BountyBoardLoad, BountyPlace, CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService,
-    HauntLoad, IntelLoad, NewsLoad, PvpEngage, PvpSettle, PvpTarget, RosterEntry, RosterLoad,
+    BountyBoardLoad, BountyPlace, CharacterLoad, ClanFound, ClanListEntry, ClanListLoad, ClanLoad,
+    ClanMemberRow, ClanOp, ClanRow, CommentaryLoad, FiveSixLoad, GreenDragonService, HauntLoad,
+    IntelLoad, NewsLoad, PvpEngage, PvpSettle, PvpTarget, RosterEntry, RosterLoad,
 };
 use super::tavern;
 
@@ -129,6 +130,63 @@ pub enum Mode {
     /// The haunt (`case_haunt*.php`), reached from the graveyard at 25
     /// favor: a name typed on the talk line, then the matches as rows.
     Haunt,
+    /// The clan lobby (`clan.php`'s routing + `lib/clan/applicant.php`):
+    /// the registrar's marble hall, for the clanless and pending applicants
+    /// (real members walk straight into their hall).
+    ClanLobby,
+    /// The public clan listing (`lib/clan/list.php`), member counts and all.
+    ClanList,
+    /// One clan's public membership roll (`lib/clan/detail.php`).
+    ClanDetail,
+    /// Picking a clan to apply to (`applicant_apply.php`'s form).
+    ClanApply,
+    /// Filing a new clan (`applicant_new.php`): the name, the banner
+    /// letters, and the registrar's fee.
+    ClanFoundForm,
+    /// Your clan's hall (`clan_start.php` + `clan_default.php`).
+    ClanHall,
+    /// The membership page (`clan_membership.php`) — the management ops
+    /// hang off each row for officers+.
+    ClanMembership,
+    /// One member picked for an operation (promote / demote / remove).
+    ClanMemberOps,
+    /// The MOTD / charter / talk-verb editor (`clan_motd.php`, officer+).
+    ClanEdit,
+    /// The withdraw confirmation (`clan_start.php`'s withdrawconfirm).
+    ClanWithdraw,
+}
+
+/// A landed clan read: the row plus its decoded membership (the lobby's
+/// pending application, the hall, and the public detail all share it).
+struct ClanView {
+    clan: Box<ClanRow>,
+    members: std::sync::Arc<Vec<ClanMemberRow>>,
+}
+
+/// What a landed clan operation should do when it comes back.
+#[derive(Clone)]
+enum ClanOpKind {
+    /// Enroll as the clan's applicant once the officer notices are filed.
+    Apply {
+        clan_id: Uuid,
+        tag: String,
+        name: String,
+        /// The clan has a charter (description): the registrar's reminder
+        /// (upstream mails the applicant the description).
+        has_charter: bool,
+    },
+    /// A withdrawal's aftermath: log the succession line, if any.
+    Withdraw,
+    /// A rank change or removal: log the outcome and re-read the hall.
+    Manage,
+}
+
+/// Which field the clan editor is typing into.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClanEditField {
+    Motd,
+    Charter,
+    Verb,
 }
 
 /// A landed bounty-board read: the matured price on the player's own head
@@ -147,7 +205,7 @@ pub enum PvpVenue {
     Inn,
 }
 
-/// Which slice of the warrior list is showing (`list.php`'s three queries).
+/// Which slice of the warrior list is showing (`list.php`'s queries).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RosterView {
     /// Warriors currently online (the default landing).
@@ -156,6 +214,9 @@ pub enum RosterView {
     All,
     /// Name-search results (the query lives in `State::roster_query`).
     Search,
+    /// Online clan members (`list.php?op=clan`), for anyone enrolled with a
+    /// clan — applicants included, exactly upstream's `clanid > 0` nav.
+    Clan,
 }
 
 /// A Hall of Fame ranking (`hof.php`'s `op` values).
@@ -410,6 +471,36 @@ pub struct State {
     /// The barman's last rundown (or his mock sheet for the penniless),
     /// rendered on [`Mode::IntelSheet`].
     intel_sheet: Option<Vec<String>>,
+    /// The in-flight clan hall/lobby/detail read: which clan it's for, and
+    /// the round-trip, drained by [`State::tick`].
+    clan_rx: Option<(Uuid, tokio::sync::watch::Receiver<ClanLoad>)>,
+    /// The loaded clan (the hall's, the lobby's pending application, or the
+    /// public detail page's).
+    clan_view: Option<ClanView>,
+    /// The clan's full membership sorted for the open page (the membership
+    /// order, or the detail order), sliced by [`State::clan_page`].
+    clan_member_rows: Vec<ClanMemberRow>,
+    /// The membership/detail page (0-based).
+    clan_page: usize,
+    /// The built detail-roll page for [`Mode::ClanDetail`].
+    clan_page_view: Option<ListPage>,
+    /// The in-flight clan list read, drained by [`State::tick`].
+    clan_list_rx: Option<tokio::sync::watch::Receiver<ClanListLoad>>,
+    /// The loaded clan list (member counts included, empty clans swept).
+    clan_list: Option<std::sync::Arc<Vec<ClanListEntry>>>,
+    /// The founding draft: the clan name once accepted (the tag is typed
+    /// second), and the tag once submitted.
+    clan_found_name: Option<String>,
+    clan_found_tag: Option<String>,
+    /// An in-flight founding: the fee is already off the purse, refunded on
+    /// any refusal. Drained by [`State::tick`].
+    clan_found_rx: Option<tokio::sync::watch::Receiver<ClanFound>>,
+    /// An in-flight clan operation and what to do when it lands.
+    clan_op_rx: Option<(ClanOpKind, tokio::sync::watch::Receiver<ClanOp>)>,
+    /// The member picked on the membership page for [`Mode::ClanMemberOps`].
+    clan_member_sel: Option<Uuid>,
+    /// Which field the clan editor is composing, while typing.
+    clan_edit_field: Option<ClanEditField>,
     /// Last persisted moment, for the idle presence heartbeat: a live
     /// session must never fall out of the roster's 15-minute online window,
     /// or it would look attackable (upstream's `laston` refreshes every
@@ -473,6 +564,19 @@ impl State {
             bounty_place_rx: None,
             haunt_matches: Vec::new(),
             haunt_rx: None,
+            clan_rx: None,
+            clan_view: None,
+            clan_member_rows: Vec::new(),
+            clan_page: 0,
+            clan_page_view: None,
+            clan_list_rx: None,
+            clan_list: None,
+            clan_found_name: None,
+            clan_found_tag: None,
+            clan_found_rx: None,
+            clan_op_rx: None,
+            clan_member_sel: None,
+            clan_edit_field: None,
             last_save: std::time::Instant::now(),
             hof_ranking: HofRanking::Kills,
             hof_least: false,
@@ -492,6 +596,7 @@ impl State {
         self.tick_bounty();
         self.tick_haunt();
         self.tick_intel();
+        self.tick_clan();
         if self.character.is_some() {
             // The presence heartbeat: an idle session re-stamps its save
             // well inside the roster's 15-minute online window, so a live
@@ -632,7 +737,9 @@ impl State {
             Mode::IntelTarget => self.intel_target_menu(),
             Mode::IntelSheet => self.intel_sheet_menu(),
             Mode::Commentary(room) => commentary_menu(room, self.commentary_posts_left()),
-            Mode::WarriorList => warrior_list_menu(self.roster_page_view.as_ref()),
+            Mode::WarriorList => {
+                warrior_list_menu(self.roster_page_view.as_ref(), c.clan_id.is_some())
+            }
             Mode::HallOfFame => hall_of_fame_menu(
                 self.hof_ranking,
                 self.hof_least,
@@ -645,6 +752,16 @@ impl State {
             Mode::BountyTarget => self.bounty_target_menu(),
             Mode::BountyAmount => self.bounty_amount_menu(),
             Mode::Haunt => self.haunt_menu(c),
+            Mode::ClanLobby => self.clan_lobby_menu(c),
+            Mode::ClanList => self.clan_list_menu(),
+            Mode::ClanDetail => self.clan_detail_menu(),
+            Mode::ClanApply => self.clan_apply_menu(),
+            Mode::ClanFoundForm => self.clan_found_menu(),
+            Mode::ClanHall => self.clan_hall_menu(c),
+            Mode::ClanMembership => self.clan_membership_menu(c),
+            Mode::ClanMemberOps => self.clan_member_ops_menu(c),
+            Mode::ClanEdit => self.clan_edit_menu(c),
+            Mode::ClanWithdraw => clan_withdraw_menu(self.clan_op_rx.is_none()),
             Mode::Loading => Vec::new(),
         }
     }
@@ -712,6 +829,16 @@ impl State {
             Mode::BountyTarget => self.select_bounty_target(),
             Mode::BountyAmount => self.select_bounty_amount(),
             Mode::Haunt => self.select_haunt(),
+            Mode::ClanLobby => self.select_clan_lobby(),
+            Mode::ClanList => self.select_clan_list(),
+            Mode::ClanDetail => self.select_clan_detail(),
+            Mode::ClanApply => self.select_clan_apply(),
+            Mode::ClanFoundForm => self.select_clan_found(),
+            Mode::ClanHall => self.select_clan_hall(),
+            Mode::ClanMembership => self.select_clan_membership(),
+            Mode::ClanMemberOps => self.select_clan_member_ops(),
+            Mode::ClanEdit => self.select_clan_edit(),
+            Mode::ClanWithdraw => self.select_clan_withdraw(),
             Mode::Loading => Selection::Stay,
         }
     }
@@ -816,6 +943,33 @@ impl State {
                 self.goto(Mode::Graveyard);
                 Selection::Stay
             }
+            // The clan buildings: the lobby and the hall let out onto the
+            // square; the desk's side rooms back out to the lobby, the
+            // hall's to the hall.
+            Mode::ClanLobby | Mode::ClanHall => {
+                self.close_clan_views();
+                self.goto(Mode::Village);
+                Selection::Stay
+            }
+            Mode::ClanList | Mode::ClanApply | Mode::ClanFoundForm => {
+                // Re-open rather than goto: a detail view may have swapped
+                // the loaded clan out from under a pending application.
+                self.open_clan_lobby();
+                Selection::Stay
+            }
+            Mode::ClanDetail => {
+                self.clan_page_view = None;
+                self.goto(Mode::ClanList);
+                Selection::Stay
+            }
+            Mode::ClanMembership | Mode::ClanEdit | Mode::ClanWithdraw => {
+                self.goto(Mode::ClanHall);
+                Selection::Stay
+            }
+            Mode::ClanMemberOps => {
+                self.goto(Mode::ClanMembership);
+                Selection::Stay
+            }
             // A game in progress folds (the stake was never taken); the
             // taproom itself lets out into the forest.
             Mode::Tavern => {
@@ -910,6 +1064,7 @@ impl State {
             s if s.starts_with("The Daily News") => self.open_news(0),
             s if s.starts_with("List Warriors") => self.open_warrior_list(),
             s if s.starts_with("The Hall of Fame") => self.open_hall_of_fame(),
+            s if s.starts_with("The Clan Halls") => self.open_clan_halls(),
             s if s.starts_with("Slay Other Warriors") => {
                 // The immunity warning greets the still-protected at the door
                 // (`pvpwarning()` without the kill).
@@ -1305,8 +1460,35 @@ impl State {
                 self.goto(Mode::Tavern);
             }
             CommentRoom::ShadeGrave => self.goto(Mode::Graveyard),
+            // The hall's hearth lets out into the hall; the waiting area
+            // lets out where it was entered — the hall for real members,
+            // the registrar's desk for hopefuls.
+            CommentRoom::ClanHall(_) => self.reenter_clan_hall(),
+            CommentRoom::Waiting => {
+                let member = self
+                    .character
+                    .as_ref()
+                    .is_some_and(|c| c.clan_id.is_some() && c.clan_rank >= model::CLAN_MEMBER);
+                if member {
+                    self.reenter_clan_hall();
+                } else {
+                    self.open_clan_lobby();
+                }
+            }
             _ => self.goto(Mode::Village),
         }
+    }
+
+    /// The venue's talk verb with a clan hall's custom say line folded in
+    /// (`commentdisplay` passes `customsay > '' ? customsay : "says"`).
+    fn room_verb(&self, room: CommentRoom) -> String {
+        if let CommentRoom::ClanHall(_) = room
+            && let Some(view) = self.clan_view.as_ref()
+            && !view.clan.custom_verb.trim().is_empty()
+        {
+            return view.clan.custom_verb.trim().to_string();
+        }
+        room.verb().to_string()
     }
 
     /// Posts the player may still make in the open room; `None` while the
@@ -1353,7 +1535,7 @@ impl State {
     /// overhead (as upstream), a warrior-name search a name's worth.
     pub fn talk_push(&mut self, ch: char) {
         let budget = match self.mode {
-            Mode::Commentary(room) => commentary::max_post_len(room.verb()),
+            Mode::Commentary(room) => commentary::max_post_len(&self.room_verb(room)),
             Mode::WarriorList | Mode::BountyTarget | Mode::Haunt | Mode::IntelTarget => {
                 SEARCH_QUERY_BUDGET
             }
@@ -1364,6 +1546,21 @@ impl State {
                 }
                 AMOUNT_QUERY_BUDGET
             }
+            // The founding form: the name, then the tag.
+            Mode::ClanFoundForm => {
+                if self.clan_found_name.is_none() {
+                    model::CLAN_NAME_MAX
+                } else {
+                    model::CLAN_TAG_MAX
+                }
+            }
+            // The clan editor: the verb is short, the rest ride the talk
+            // line's own budget.
+            Mode::ClanEdit => match self.clan_edit_field {
+                Some(ClanEditField::Verb) => model::CLAN_VERB_MAX,
+                Some(_) => CLAN_TEXT_BUDGET,
+                None => return,
+            },
             _ => return,
         };
         if let Some(buf) = self.talk_input.as_mut()
@@ -1419,6 +1616,14 @@ impl State {
             self.submit_intel_search();
             return;
         }
+        if self.mode == Mode::ClanFoundForm {
+            self.submit_clan_found();
+            return;
+        }
+        if self.mode == Mode::ClanEdit {
+            self.submit_clan_edit();
+            return;
+        }
         let Mode::Commentary(room) = self.mode else {
             self.talk_input = None;
             return;
@@ -1426,12 +1631,15 @@ impl State {
         let Some(raw) = self.talk_input.take() else {
             return;
         };
-        match commentary::prepare_post(&raw, room.verb()) {
+        match commentary::prepare_post(&raw, &self.room_verb(room)) {
             Some(body) => {
+                // The speaker as every comment area shows them: the clan tag
+                // before the bare name for real members (upstream's live
+                // join; ours snapshots it at post time, like the name).
                 let name = self
                     .character
                     .as_ref()
-                    .map(|c| c.name.clone())
+                    .map(|c| c.commentary_name())
                     .unwrap_or_default();
                 self.commentary_rx = Some(self.svc.post_commentary(
                     room.section(),
@@ -1499,10 +1707,12 @@ impl State {
         };
         match self.mode {
             Mode::WarriorList => {
+                let my_clan = self.character.as_ref().and_then(|c| c.clan_id);
                 self.roster_page_view = Some(build_warrior_page(
                     roster,
                     self.roster_view,
                     &self.roster_query,
+                    my_clan,
                     self.roster_page,
                 ));
             }
@@ -1889,8 +2099,7 @@ impl State {
     /// (Re)build the wanted list once both the board aggregates and the
     /// roster snapshot are in; also called on sort/page changes.
     fn rebuild_bounty_page(&mut self) {
-        let (Some(board), Some(roster)) = (self.bounty_board.as_ref(), self.roster.as_ref())
-        else {
+        let (Some(board), Some(roster)) = (self.bounty_board.as_ref(), self.roster.as_ref()) else {
             return;
         };
         let page = build_bounty_page(&board.wanted, roster, self.bounty_by_gold, self.bounty_page);
@@ -2331,8 +2540,12 @@ impl State {
         self.goto(Mode::Village);
     }
 
-    /// Handle the warrior list's rows: search, the two slices, the pager.
+    /// Handle the warrior list's rows: search, the slices, the pager. The
+    /// clan slice's row only exists for the enrolled, shifting the pager.
     fn select_warrior_list(&mut self) -> Selection {
+        let in_clan = self.character.as_ref().is_some_and(|c| c.clan_id.is_some());
+        let clan_row = if in_clan { 3 } else { usize::MAX };
+        let shift = if in_clan { 1 } else { 0 };
         match self.cursor {
             0 => self.talk_input = Some(String::new()),
             // "Here right now" re-reads the roster: presence is the one
@@ -2347,11 +2560,17 @@ impl State {
                 self.roster_page = 0;
                 self.rebuild_roster_views();
             }
-            3 => {
+            // The clan slice re-reads too: it is presence-filtered.
+            i if i == clan_row => {
+                self.roster_view = RosterView::Clan;
+                self.roster_page = 0;
+                self.kick_roster_load();
+            }
+            i if i == 3 + shift => {
                 self.roster_page += 1;
                 self.rebuild_roster_views();
             }
-            4 => {
+            i if i == 4 + shift => {
                 self.roster_page = self.roster_page.saturating_sub(1);
                 self.rebuild_roster_views();
             }
@@ -4307,6 +4526,894 @@ impl State {
         }
     }
 
+    // --- clans (clan.php + lib/clan/*) ----------------------------------------
+
+    /// The village's "Clan Halls" door: real members walk straight into
+    /// their hall; everyone else lands at the registrar's desk.
+    fn open_clan_halls(&mut self) {
+        let c = self.character.as_ref().unwrap();
+        if c.clan_id.is_some() && c.clan_rank >= model::CLAN_MEMBER {
+            self.open_clan_hall();
+        } else {
+            self.open_clan_lobby();
+        }
+    }
+
+    /// The registrar's desk. A pending applicant's clan is read afresh —
+    /// which also heals a membership whose clan dissolved (`common.php`'s
+    /// reset at page load).
+    fn open_clan_lobby(&mut self) {
+        self.clan_view = None;
+        self.clan_member_rows.clear();
+        self.clan_rx = self
+            .character
+            .as_ref()
+            .and_then(|c| c.clan_id)
+            .map(|id| (id, self.svc.load_clan(id, false)));
+        self.goto(Mode::ClanLobby);
+    }
+
+    /// Your clan's hall, read afresh (`clan_default.php` — the leaderless
+    /// auto-promote runs inside this load).
+    fn open_clan_hall(&mut self) {
+        let Some(clan_id) = self.character.as_ref().and_then(|c| c.clan_id) else {
+            self.open_clan_lobby();
+            return;
+        };
+        self.clan_view = None;
+        self.clan_member_rows.clear();
+        self.clan_page = 0;
+        self.clan_rx = Some((clan_id, self.svc.load_clan(clan_id, true)));
+        self.goto(Mode::ClanHall);
+    }
+
+    /// Back into the hall without a fresh read when the view is still warm
+    /// (stepping out of the hearth or the waiting area).
+    fn reenter_clan_hall(&mut self) {
+        if self.clan_view.is_some() {
+            self.goto(Mode::ClanHall);
+        } else {
+            self.open_clan_hall();
+        }
+    }
+
+    /// Drop every clan view on the way out to the square.
+    fn close_clan_views(&mut self) {
+        self.clan_rx = None;
+        self.clan_view = None;
+        self.clan_member_rows.clear();
+        self.clan_page_view = None;
+        self.clan_list_rx = None;
+        self.clan_list = None;
+        self.clan_found_name = None;
+        self.clan_found_tag = None;
+        self.clan_member_sel = None;
+        self.clan_edit_field = None;
+        self.talk_input = None;
+    }
+
+    /// The loaded clan for the panels: `(row, members)`.
+    pub fn clan_view(&self) -> Option<(&ClanRow, &[ClanMemberRow])> {
+        self.clan_view
+            .as_ref()
+            .map(|v| (v.clan.as_ref(), v.members.as_slice()))
+    }
+
+    /// The loaded clan list for the lobby's two pickers.
+    pub fn clan_list_entries(&self) -> Option<&[ClanListEntry]> {
+        self.clan_list.as_deref().map(Vec::as_slice)
+    }
+
+    /// The built public detail roll for [`Mode::ClanDetail`].
+    pub fn clan_detail_page(&self) -> Option<&ListPage> {
+        self.clan_page_view.as_ref()
+    }
+
+    /// The member picked for [`Mode::ClanMemberOps`].
+    pub fn clan_member_target(&self) -> Option<&ClanMemberRow> {
+        let sel = self.clan_member_sel?;
+        self.clan_view
+            .as_ref()?
+            .members
+            .iter()
+            .find(|m| m.user_id == sel)
+    }
+
+    /// The founding form's accepted name so far, for the panel.
+    pub fn clan_found_name(&self) -> Option<&str> {
+        self.clan_found_name.as_deref()
+    }
+
+    /// Drain the clan round-trips: the hall/lobby/detail read, the list,
+    /// a founding, and the operations.
+    fn tick_clan(&mut self) {
+        // The hall/lobby/detail read.
+        if let Some((for_clan, rx)) = self.clan_rx.as_mut() {
+            let for_clan = *for_clan;
+            let ready = match &*rx.borrow_and_update() {
+                ClanLoad::Loading => None,
+                other => Some(other.clone()),
+            };
+            if let Some(load) = ready {
+                self.clan_rx = None;
+                match load {
+                    ClanLoad::Ready {
+                        clan,
+                        members,
+                        promoted,
+                    } => {
+                        if let Some((who, name)) = promoted {
+                            if who == self.user_id {
+                                // The vacancy fell to us: mirror the DB write
+                                // on the live character (upstream updates the
+                                // session in place for the same reason).
+                                let c = self.character.as_mut().unwrap();
+                                c.clan_rank = model::CLAN_LEADER;
+                                self.push_log(
+                                    "With no leader left, the hall recognizes you as its new one."
+                                        .into(),
+                                );
+                                self.save();
+                            } else {
+                                self.push_log(format!(
+                                    "With no leader left, {name} now leads the clan."
+                                ));
+                            }
+                        }
+                        self.clan_member_rows = sort_clan_members(&members);
+                        self.clan_view = Some(ClanView { clan, members });
+                        if self.mode == Mode::ClanDetail {
+                            self.rebuild_clan_detail_page();
+                        }
+                    }
+                    ClanLoad::Gone => {
+                        // Heal a dangling membership only when the vanished
+                        // clan was *ours* — a foreign detail view just closes.
+                        let mine = self
+                            .character
+                            .as_ref()
+                            .is_some_and(|c| c.clan_id == Some(for_clan));
+                        if mine {
+                            self.character.as_mut().unwrap().leave_clan();
+                            self.push_log(
+                                "The registrar checks her rolls: that clan is no more. \
+                                 Your papers come back to you."
+                                    .into(),
+                            );
+                            self.save();
+                        }
+                        self.clan_view = None;
+                        self.clan_member_rows.clear();
+                        match self.mode {
+                            Mode::ClanDetail => self.goto(Mode::ClanList),
+                            Mode::ClanHall
+                            | Mode::ClanMembership
+                            | Mode::ClanMemberOps
+                            | Mode::ClanEdit
+                            | Mode::ClanWithdraw => self.open_clan_lobby(),
+                            _ => {}
+                        }
+                    }
+                    ClanLoad::Failed => {
+                        self.push_log("The hall's locks refuse to turn just now.".into());
+                        if matches!(
+                            self.mode,
+                            Mode::ClanHall
+                                | Mode::ClanMembership
+                                | Mode::ClanMemberOps
+                                | Mode::ClanEdit
+                                | Mode::ClanWithdraw
+                                | Mode::ClanDetail
+                        ) {
+                            self.goto(Mode::Village);
+                        }
+                    }
+                    ClanLoad::Loading => {}
+                }
+            }
+        }
+        // The list read.
+        if let Some(rx) = self.clan_list_rx.as_mut() {
+            let ready = match &*rx.borrow_and_update() {
+                ClanListLoad::Loading => None,
+                ClanListLoad::Ready(list) => Some(list.clone()),
+            };
+            if let Some(list) = ready {
+                self.clan_list = Some(list);
+                self.clan_list_rx = None;
+            }
+        }
+        // A founding's approval or refusal (the fee is already paid and
+        // comes back on any refusal, the bounty-placement pattern).
+        if let Some(rx) = self.clan_found_rx.as_mut() {
+            let ready = match &*rx.borrow_and_update() {
+                ClanFound::Loading => None,
+                other => Some(other.clone()),
+            };
+            if let Some(found) = ready {
+                self.clan_found_rx = None;
+                match found {
+                    ClanFound::Founded { clan_id } => {
+                        let name = self.clan_found_name.take().unwrap_or_default();
+                        let tag = self.clan_found_tag.take().unwrap_or_default();
+                        let c = self.character.as_mut().unwrap();
+                        c.join_clan(clan_id, &tag, model::CLAN_FOUNDER, now_secs());
+                        self.push_log(format!(
+                            "{} stamps the form APPROVED and files it in a drawer. \
+                             The clan {name} <{tag}> is yours.",
+                            data::CLAN_REGISTRAR
+                        ));
+                        self.save();
+                        self.open_clan_hall();
+                    }
+                    refused => {
+                        let c = self.character.as_mut().unwrap();
+                        c.gold = c.gold.saturating_add(model::CLAN_START_GOLD);
+                        c.gems = c.gems.saturating_add(model::CLAN_START_GEMS);
+                        self.save();
+                        self.clan_found_tag = None;
+                        self.push_log(match refused {
+                            ClanFound::NameTaken => format!(
+                                "{} slides the fees back: \"That name is already \
+                                 spoken for.\"",
+                                data::CLAN_REGISTRAR
+                            ),
+                            ClanFound::TagTaken => format!(
+                                "{} slides the fees back: \"Those banner letters are \
+                                 already spoken for.\"",
+                                data::CLAN_REGISTRAR
+                            ),
+                            _ => format!(
+                                "{} slides the fees back: \"The filing drawer is \
+                                 jammed. Another time.\"",
+                                data::CLAN_REGISTRAR
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        // A landed operation.
+        if let Some((kind, rx)) = self.clan_op_rx.as_mut() {
+            let kind = kind.clone();
+            let ready = match &*rx.borrow_and_update() {
+                ClanOp::Loading => None,
+                other => Some(other.clone()),
+            };
+            if let Some(op) = ready {
+                self.clan_op_rx = None;
+                match (kind, op) {
+                    (
+                        ClanOpKind::Apply {
+                            clan_id,
+                            tag,
+                            name,
+                            has_charter,
+                        },
+                        ClanOp::Done(_),
+                    ) => {
+                        let c = self.character.as_mut().unwrap();
+                        c.join_clan(clan_id, &tag, model::CLAN_APPLICANT, now_secs());
+                        self.push_log(format!(
+                            "{} accepts your application to {name} and files it in \
+                             her out box. Perhaps the waiting area, she suggests.",
+                            data::CLAN_REGISTRAR
+                        ));
+                        if has_charter {
+                            self.push_log(
+                                "\"Do read their charter while you wait,\" she adds - \
+                                 \"some clans expect things of their members.\""
+                                    .into(),
+                            );
+                        }
+                        self.save();
+                        if self.mode == Mode::ClanApply {
+                            self.open_clan_lobby();
+                        }
+                    }
+                    (ClanOpKind::Apply { .. }, ClanOp::Refused(msg)) => {
+                        self.push_log(msg);
+                        if self.mode == Mode::ClanApply {
+                            self.open_clan_lobby();
+                        }
+                    }
+                    (ClanOpKind::Withdraw, ClanOp::Done(msg)) => {
+                        if !msg.is_empty() {
+                            self.push_log(msg);
+                        }
+                    }
+                    (ClanOpKind::Withdraw, ClanOp::Refused(msg)) => self.push_log(msg),
+                    (ClanOpKind::Manage, ClanOp::Done(msg) | ClanOp::Refused(msg)) => {
+                        self.push_log(msg);
+                        // Ranks moved: re-read the hall so the pages agree.
+                        if let Some(clan_id) = self.character.as_ref().and_then(|c| c.clan_id) {
+                            self.clan_rx = Some((clan_id, self.svc.load_clan(clan_id, true)));
+                        }
+                        if self.mode == Mode::ClanMemberOps {
+                            self.goto(Mode::ClanMembership);
+                        }
+                    }
+                    // `ready` filtered Loading out above.
+                    (_, ClanOp::Loading) => {}
+                }
+            }
+        }
+    }
+
+    fn clan_lobby_menu(&self, c: &Character) -> Vec<(String, bool)> {
+        let busy = self.clan_op_rx.is_some();
+        if c.clan_id.is_some() {
+            // A pending applicant at the desk (`applicant.php`).
+            vec![
+                ("Take a seat in the waiting area".into(), true),
+                ("Withdraw your application".into(), !busy),
+                ("The clan listings".into(), true),
+                ("Back to the village square".into(), true),
+            ]
+        } else {
+            vec![
+                ("Apply to join a clan".into(), !busy),
+                (
+                    format!(
+                        "File for a new clan ({} gold, {} gems)",
+                        model::CLAN_START_GOLD,
+                        model::CLAN_START_GEMS
+                    ),
+                    c.gold >= model::CLAN_START_GOLD && c.gems >= model::CLAN_START_GEMS,
+                ),
+                ("The clan listings".into(), true),
+                ("Back to the village square".into(), true),
+            ]
+        }
+    }
+
+    fn select_clan_lobby(&mut self) -> Selection {
+        let applied = self.character.as_ref().unwrap().clan_id.is_some();
+        if applied {
+            match self.cursor {
+                0 => self.open_commentary(CommentRoom::Waiting),
+                1 => {
+                    // An applicant's withdrawal is purely local (upstream
+                    // only clears the fields and deletes the stale mail).
+                    self.character.as_mut().unwrap().leave_clan();
+                    self.push_log(format!(
+                        "{} withdraws your application and tears it up. \"You \
+                         wouldn't have been happy there anyhow, I don't think.\"",
+                        data::CLAN_REGISTRAR
+                    ));
+                    self.save();
+                    self.clan_rx = None;
+                    self.clan_view = None;
+                }
+                2 => self.open_clan_list(),
+                _ => {
+                    self.close_clan_views();
+                    self.goto(Mode::Village);
+                }
+            }
+        } else {
+            match self.cursor {
+                0 => {
+                    self.kick_clan_list();
+                    self.goto(Mode::ClanApply);
+                }
+                1 => {
+                    self.clan_found_name = None;
+                    self.clan_found_tag = None;
+                    self.goto(Mode::ClanFoundForm);
+                }
+                2 => self.open_clan_list(),
+                _ => {
+                    self.close_clan_views();
+                    self.goto(Mode::Village);
+                }
+            }
+        }
+        Selection::Stay
+    }
+
+    fn kick_clan_list(&mut self) {
+        self.clan_list = None;
+        self.clan_list_rx = Some(self.svc.load_clan_list());
+    }
+
+    fn open_clan_list(&mut self) {
+        self.kick_clan_list();
+        self.goto(Mode::ClanList);
+    }
+
+    /// The clans as picker rows, shared by the listing and the application
+    /// form (both order by member count).
+    fn clan_roster_rows(&self) -> Vec<(String, bool)> {
+        match self.clan_list_entries() {
+            None => vec![("The registrar thumbs through the rolls...".into(), false)],
+            Some([]) => vec![(
+                "\"No one has had the gumption to start a clan yet. Maybe that \
+                 should be you, eh?\""
+                    .into(),
+                false,
+            )],
+            Some(entries) => entries
+                .iter()
+                .map(|e| {
+                    (
+                        format!(
+                            "<{}> {} ({} member{})",
+                            e.clan.tag,
+                            e.clan.name,
+                            e.members,
+                            if e.members == 1 { "" } else { "s" }
+                        ),
+                        true,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn clan_list_menu(&self) -> Vec<(String, bool)> {
+        let mut rows = self.clan_roster_rows();
+        rows.push(("Back to the lobby".into(), true));
+        rows
+    }
+
+    fn select_clan_list(&mut self) -> Selection {
+        let count = self.clan_list_entries().map(<[_]>::len).unwrap_or(0);
+        if self.cursor >= count.max(1) {
+            self.open_clan_lobby();
+            return Selection::Stay;
+        }
+        let Some(entry) = self.clan_list_entries().and_then(|e| e.get(self.cursor)) else {
+            return Selection::Stay;
+        };
+        // The public roll (`detail.php`): a fresh read, no healing side
+        // effects on someone else's hall.
+        let clan_id = entry.clan.id;
+        self.clan_view = None;
+        self.clan_page = 0;
+        self.clan_page_view = None;
+        self.clan_rx = Some((clan_id, self.svc.load_clan(clan_id, false)));
+        self.goto(Mode::ClanDetail);
+        Selection::Stay
+    }
+
+    fn clan_detail_menu(&self) -> Vec<(String, bool)> {
+        let pages = self.clan_page_view.as_ref().map(|p| p.pages).unwrap_or(1);
+        vec![
+            ("Turn the page".into(), pages > 1),
+            ("Back to the listings".into(), true),
+        ]
+    }
+
+    fn select_clan_detail(&mut self) -> Selection {
+        match self.cursor {
+            0 => {
+                if let Some(p) = self.clan_page_view.as_ref() {
+                    self.clan_page = (p.page + 1) % p.pages;
+                    self.rebuild_clan_detail_page();
+                }
+            }
+            _ => {
+                self.clan_page_view = None;
+                self.goto(Mode::ClanList);
+            }
+        }
+        Selection::Stay
+    }
+
+    fn rebuild_clan_detail_page(&mut self) {
+        let Some(view) = self.clan_view.as_ref() else {
+            self.clan_page_view = None;
+            return;
+        };
+        let page = build_clan_detail_page(&view.clan, &view.members, self.clan_page);
+        self.clan_page = page.page;
+        self.clan_page_view = Some(page);
+    }
+
+    fn clan_apply_menu(&self) -> Vec<(String, bool)> {
+        let busy = self.clan_op_rx.is_some();
+        let mut rows: Vec<(String, bool)> = self
+            .clan_roster_rows()
+            .into_iter()
+            .map(|(label, ok)| (label, ok && !busy))
+            .collect();
+        rows.push(("Back to the desk".into(), true));
+        rows
+    }
+
+    fn select_clan_apply(&mut self) -> Selection {
+        let count = self.clan_list_entries().map(<[_]>::len).unwrap_or(0);
+        if self.cursor >= count.max(1) {
+            self.open_clan_lobby();
+            return Selection::Stay;
+        }
+        let Some(entry) = self
+            .clan_list_entries()
+            .and_then(|e| e.get(self.cursor))
+            .cloned()
+        else {
+            return Selection::Stay;
+        };
+        let me = self.character.as_ref().unwrap().titled_name();
+        self.clan_op_rx = Some((
+            ClanOpKind::Apply {
+                clan_id: entry.clan.id,
+                tag: entry.clan.tag.clone(),
+                name: entry.clan.name.clone(),
+                has_charter: !entry.clan.description.trim().is_empty(),
+            },
+            self.svc.apply_to_clan(entry.clan.id, me),
+        ));
+        self.push_log(format!(
+            "{} takes your form and writes your name on the first line...",
+            data::CLAN_REGISTRAR
+        ));
+        Selection::Stay
+    }
+
+    fn clan_found_menu(&self) -> Vec<(String, bool)> {
+        let busy = self.clan_found_rx.is_some();
+        match self.clan_found_name.as_deref() {
+            None => vec![
+                ("Write the clan's full name".into(), !busy),
+                ("Back to the desk".into(), true),
+            ],
+            Some(_) => vec![
+                ("Letter the banner (the short tag)".into(), !busy),
+                ("Start the form over".into(), !busy),
+                ("Back to the desk".into(), true),
+            ],
+        }
+    }
+
+    fn select_clan_found(&mut self) -> Selection {
+        let named = self.clan_found_name.is_some();
+        match (named, self.cursor) {
+            (_, 0) => self.talk_input = Some(String::new()),
+            (true, 1) => {
+                self.clan_found_name = None;
+                self.clan_found_tag = None;
+            }
+            _ => self.open_clan_lobby(),
+        }
+        Selection::Stay
+    }
+
+    /// The founding form's two lines (`applicant_new.php`'s checks, in its
+    /// order): the name's shape, then the tag's, then the fee — taken up
+    /// front and refunded on the registrar's refusal.
+    fn submit_clan_found(&mut self) {
+        let raw = self.talk_input.take().unwrap_or_default();
+        let text = raw.trim().to_string();
+        if self.clan_found_name.is_none() {
+            if !model::clan_name_valid(&text) {
+                self.push_log(format!(
+                    "{} hands the form back: \"Five to fifty characters - \
+                     letters, spaces, apostrophes and dashes only.\"",
+                    data::CLAN_REGISTRAR
+                ));
+                return;
+            }
+            self.clan_found_name = Some(text);
+            return;
+        }
+        if !model::clan_tag_valid(&text) {
+            self.push_log(format!(
+                "{} shakes her head: \"Two to five letters for the banner, \
+                 nothing else.\"",
+                data::CLAN_REGISTRAR
+            ));
+            return;
+        }
+        let name = self.clan_found_name.clone().unwrap_or_default();
+        let c = self.character.as_mut().unwrap();
+        if c.gold < model::CLAN_START_GOLD || c.gems < model::CLAN_START_GEMS {
+            self.push_log(format!(
+                "{} asks for the fees, but you seem unable to produce them. \
+                 She stamps the form DENIED.",
+                data::CLAN_REGISTRAR
+            ));
+            return;
+        }
+        c.gold -= model::CLAN_START_GOLD;
+        c.gems -= model::CLAN_START_GEMS;
+        self.save();
+        self.clan_found_tag = Some(text.clone());
+        self.clan_found_rx = Some(self.svc.found_clan(name, text));
+        self.push_log(format!(
+            "{} counts the fees and carries your form to the files...",
+            data::CLAN_REGISTRAR
+        ));
+    }
+
+    fn clan_hall_menu(&self, c: &Character) -> Vec<(String, bool)> {
+        let loaded = self.clan_view.is_some();
+        vec![
+            ("Chat by the clan hearth".into(), loaded),
+            ("View the membership".into(), loaded),
+            ("Online clan members".into(), true),
+            (
+                "Update the MOTD / charter".into(),
+                loaded && c.clan_rank > model::CLAN_MEMBER,
+            ),
+            ("The waiting area".into(), true),
+            ("Withdraw from the clan".into(), true),
+            ("Back to the village square".into(), true),
+        ]
+    }
+
+    fn select_clan_hall(&mut self) -> Selection {
+        let Some(clan_id) = self.character.as_ref().and_then(|c| c.clan_id) else {
+            self.open_clan_lobby();
+            return Selection::Stay;
+        };
+        match self.cursor {
+            0 => self.open_commentary(CommentRoom::ClanHall(clan_id)),
+            1 => {
+                self.clan_page = 0;
+                self.goto(Mode::ClanMembership);
+            }
+            2 => {
+                // The clan slice of the warrior list (`list.php?op=clan`).
+                self.roster_view = RosterView::Clan;
+                self.roster_page = 0;
+                self.kick_roster_load();
+                self.goto(Mode::WarriorList);
+            }
+            3 => self.goto(Mode::ClanEdit),
+            4 => self.open_commentary(CommentRoom::Waiting),
+            5 => self.goto(Mode::ClanWithdraw),
+            _ => {
+                self.close_clan_views();
+                self.goto(Mode::Village);
+            }
+        }
+        Selection::Stay
+    }
+
+    /// The membership rows for the open page.
+    fn clan_membership_slice(&self) -> &[ClanMemberRow] {
+        let start = (self.clan_page * ROSTER_PAGE_SIZE).min(self.clan_member_rows.len());
+        let end = (start + ROSTER_PAGE_SIZE).min(self.clan_member_rows.len());
+        &self.clan_member_rows[start..end]
+    }
+
+    fn clan_membership_pages(&self) -> usize {
+        self.clan_member_rows
+            .len()
+            .div_ceil(ROSTER_PAGE_SIZE)
+            .max(1)
+    }
+
+    fn clan_membership_menu(&self, c: &Character) -> Vec<(String, bool)> {
+        let mut rows: Vec<(String, bool)> = Vec::new();
+        if self.clan_view.is_none() {
+            rows.push(("The ledger is still open on the desk...".into(), false));
+        } else {
+            let slice = self.clan_membership_slice();
+            if slice.is_empty() {
+                rows.push(("No one is enrolled.".into(), false));
+            }
+            let busy = self.clan_op_rx.is_some();
+            for m in slice {
+                let is_self = m.user_id == self.user_id;
+                let manageable = !busy
+                    && (model::clan_can_promote(c.clan_rank, m.rank)
+                        || model::clan_can_demote(c.clan_rank, m.rank, is_self)
+                        || model::clan_can_step_down(c.clan_rank, m.rank, is_self)
+                        || model::clan_can_remove(c.clan_rank, m.rank, is_self));
+                rows.push((
+                    format!(
+                        "{:<9} {} (level {}, {} kill{})",
+                        model::clan_rank_name(m.rank),
+                        m.name,
+                        m.level,
+                        m.dragon_kills,
+                        if m.dragon_kills == 1 { "" } else { "s" }
+                    ),
+                    manageable,
+                ));
+            }
+        }
+        rows.push(("Turn the page".into(), self.clan_membership_pages() > 1));
+        rows.push(("Back to the hall".into(), true));
+        rows
+    }
+
+    fn select_clan_membership(&mut self) -> Selection {
+        let listed = if self.clan_view.is_none() {
+            1
+        } else {
+            self.clan_membership_slice().len().max(1)
+        };
+        if self.cursor >= listed {
+            match self.cursor - listed {
+                0 => {
+                    self.clan_page = (self.clan_page + 1) % self.clan_membership_pages();
+                }
+                _ => self.goto(Mode::ClanHall),
+            }
+            return Selection::Stay;
+        }
+        let Some(member) = self.clan_membership_slice().get(self.cursor) else {
+            return Selection::Stay;
+        };
+        self.clan_member_sel = Some(member.user_id);
+        self.goto(Mode::ClanMemberOps);
+        Selection::Stay
+    }
+
+    fn clan_member_ops_menu(&self, c: &Character) -> Vec<(String, bool)> {
+        let Some(m) = self.clan_member_target() else {
+            return vec![("Back to the ledger".into(), true)];
+        };
+        let is_self = m.user_id == self.user_id;
+        let busy = self.clan_op_rx.is_some();
+        let mut rows = vec![(
+            format!(
+                "Promote to {}",
+                model::clan_rank_name(model::clan_promote_rank(c.clan_rank, m.rank))
+            ),
+            !busy && model::clan_can_promote(c.clan_rank, m.rank),
+        )];
+        if model::clan_can_step_down(c.clan_rank, m.rank, is_self) {
+            rows.push(("Step down as founder".into(), !busy));
+        } else {
+            rows.push((
+                format!(
+                    "Demote to {}",
+                    model::clan_rank_name(model::clan_prev_rank(m.rank))
+                ),
+                !busy && model::clan_can_demote(c.clan_rank, m.rank, is_self),
+            ));
+        }
+        rows.push((
+            "Remove from the clan".into(),
+            !busy && model::clan_can_remove(c.clan_rank, m.rank, is_self),
+        ));
+        rows.push(("Back to the ledger".into(), true));
+        rows
+    }
+
+    fn select_clan_member_ops(&mut self) -> Selection {
+        let c = self.character.as_ref().unwrap();
+        let my_rank = c.clan_rank;
+        let Some(clan_id) = c.clan_id else {
+            self.goto(Mode::ClanMembership);
+            return Selection::Stay;
+        };
+        let Some(m) = self.clan_member_target().cloned() else {
+            self.goto(Mode::ClanMembership);
+            return Selection::Stay;
+        };
+        let is_self = m.user_id == self.user_id;
+        match self.cursor {
+            0 => {
+                let to = model::clan_promote_rank(my_rank, m.rank);
+                self.clan_op_rx = Some((
+                    ClanOpKind::Manage,
+                    self.svc.set_clan_rank(clan_id, my_rank, m.user_id, to),
+                ));
+            }
+            1 if is_self => {
+                // The founder's step-down is a self-write: the session owns
+                // its own character, so no cross-player transaction.
+                let c = self.character.as_mut().unwrap();
+                c.clan_rank = model::CLAN_LEADER;
+                self.push_log("You set the founder's ring on the mantel and step down.".into());
+                self.save();
+                self.open_clan_hall();
+            }
+            1 => {
+                let to = model::clan_prev_rank(m.rank);
+                self.clan_op_rx = Some((
+                    ClanOpKind::Manage,
+                    self.svc.set_clan_rank(clan_id, my_rank, m.user_id, to),
+                ));
+            }
+            2 => {
+                self.clan_op_rx = Some((
+                    ClanOpKind::Manage,
+                    self.svc.remove_from_clan(clan_id, my_rank, m.user_id),
+                ));
+            }
+            _ => self.goto(Mode::ClanMembership),
+        }
+        Selection::Stay
+    }
+
+    fn clan_edit_menu(&self, c: &Character) -> Vec<(String, bool)> {
+        let officer = c.clan_rank >= model::CLAN_OFFICER;
+        let leader = c.clan_rank >= model::CLAN_LEADER;
+        vec![
+            ("Rewrite the MOTD".into(), officer),
+            ("Rewrite the charter".into(), officer),
+            ("Set the talk verb (blank means \"says\")".into(), leader),
+            ("Back to the hall".into(), true),
+        ]
+    }
+
+    fn select_clan_edit(&mut self) -> Selection {
+        let field = match self.cursor {
+            0 => ClanEditField::Motd,
+            1 => ClanEditField::Charter,
+            2 => ClanEditField::Verb,
+            _ => {
+                self.goto(Mode::ClanHall);
+                return Selection::Stay;
+            }
+        };
+        self.clan_edit_field = Some(field);
+        self.talk_input = Some(String::new());
+        Selection::Stay
+    }
+
+    /// Land an editor line: update the hall's copy, stamp the author, and
+    /// send the write off (`clan_motd.php`'s three fields).
+    fn submit_clan_edit(&mut self) {
+        let raw = self.talk_input.take().unwrap_or_default();
+        let Some(field) = self.clan_edit_field.take() else {
+            return;
+        };
+        let author = self.character.as_ref().unwrap().name.clone();
+        let Some(view) = self.clan_view.as_mut() else {
+            return;
+        };
+        let clan_id = view.clan.id;
+        let text = raw.trim().to_string();
+        match field {
+            ClanEditField::Motd => {
+                view.clan.motd = text.clone();
+                view.clan.motd_author = author.clone();
+                self.svc.set_clan_motd(clan_id, text, author);
+                self.push_log("The MOTD board is rewritten.".into());
+            }
+            ClanEditField::Charter => {
+                view.clan.description = text.clone();
+                view.clan.desc_author = author.clone();
+                self.svc.set_clan_description(clan_id, text, author);
+                self.push_log("The charter is rewritten.".into());
+            }
+            ClanEditField::Verb => {
+                view.clan.custom_verb = text.clone();
+                self.svc.set_clan_verb(clan_id, text.clone());
+                self.push_log(if text.is_empty() {
+                    "Your clan speaks plainly again.".into()
+                } else {
+                    format!("Your clan now \"{text}\" by the hearth.")
+                });
+            }
+        }
+    }
+
+    fn select_clan_withdraw(&mut self) -> Selection {
+        if self.cursor == 0 {
+            self.goto(Mode::ClanHall);
+            return Selection::Stay;
+        }
+        let c = self.character.as_ref().unwrap();
+        let Some(clan_id) = c.clan_id else {
+            self.open_clan_lobby();
+            return Selection::Stay;
+        };
+        // The svc call handles succession, deletion, and the officers'
+        // notice; the membership fields are ours to clear right away
+        // (upstream clears the session in place too).
+        self.clan_op_rx = Some((
+            ClanOpKind::Withdraw,
+            self.svc
+                .withdraw_from_clan(self.user_id, c.titled_name(), c.clan_rank, clan_id),
+        ));
+        self.character.as_mut().unwrap().leave_clan();
+        self.push_log("You surrender your place in the clan.".into());
+        self.save();
+        self.clan_view = None;
+        self.clan_member_rows.clear();
+        self.open_clan_lobby();
+        Selection::Stay
+    }
+
     // --- dragon points --------------------------------------------------------
 
     /// Spend one dragon point on the highlighted upgrade; the gate lifts once
@@ -4431,6 +5538,7 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
     rows.push(("The Daily News".into(), true));
     rows.push(("List Warriors".into(), true));
     rows.push(("The Hall of Fame".into(), true));
+    rows.push(("The Clan Halls".into(), true));
     rows.push((
         format!("Slay Other Warriors ({} left today)", c.player_fights),
         true,
@@ -4439,19 +5547,24 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
     rows
 }
 
-/// The warrior list's rows (`list.php`'s navs): the name search, the two
-/// slices, and the pager. Everything but the way back waits on the roster.
-fn warrior_list_menu(page: Option<&ListPage>) -> Vec<(String, bool)> {
+/// The warrior list's rows (`list.php`'s navs): the name search, the
+/// slices — the clan one only for the enrolled, like upstream's
+/// `clanid > 0` nav — and the pager. Most rows wait on the roster.
+fn warrior_list_menu(page: Option<&ListPage>, in_clan: bool) -> Vec<(String, bool)> {
     let loaded = page.is_some();
     let (cur, pages) = page.map(|p| (p.page, p.pages)).unwrap_or((0, 0));
-    vec![
+    let mut rows = vec![
         ("Ask after a warrior by name".into(), loaded),
         ("Warriors here right now".into(), true),
         ("All the warriors of the realm".into(), loaded),
-        ("Next page".into(), loaded && cur + 1 < pages),
-        ("Previous page".into(), loaded && cur > 0),
-        ("Back to the village square".into(), true),
-    ]
+    ];
+    if in_clan {
+        rows.push(("Your clan, here right now".into(), true));
+    }
+    rows.push(("Next page".into(), loaded && cur + 1 < pages));
+    rows.push(("Previous page".into(), loaded && cur > 0));
+    rows.push(("Back to the village square".into(), true));
+    rows
 }
 
 /// The Hall of Fame's rows (`hof.php`'s navs): every ranking, the best/worst
@@ -4505,6 +5618,87 @@ const AMOUNT_QUERY_BUDGET: usize = 9;
 /// Search-hit ceiling shared by the haunt and contract pickers (upstream's
 /// "narrow it down" check at 100, `maxlistsize`).
 const MAX_SEARCH_MATCHES: usize = 100;
+
+/// Typing budget for the clan MOTD and charter. Upstream's textareas take
+/// 4096 chars; our single talk line takes a paragraph (a TUI adaptation).
+const CLAN_TEXT_BUDGET: usize = 200;
+
+/// Epoch seconds, for the `clanjoindate` stamp.
+fn now_secs() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// The membership page's order (`clan_membership.php`): rank DESC, dragon
+/// kills DESC, level DESC, join date ASC.
+fn sort_clan_members(members: &[ClanMemberRow]) -> Vec<ClanMemberRow> {
+    let mut rows = members.to_vec();
+    rows.sort_by(|a, b| {
+        b.rank
+            .cmp(&a.rank)
+            .then(b.dragon_kills.cmp(&a.dragon_kills))
+            .then(b.level.cmp(&a.level))
+            .then(a.joined_at.cmp(&b.joined_at))
+    });
+    rows
+}
+
+/// The public detail roll (`lib/clan/detail.php`): rank DESC, join date ASC,
+/// with the total-dragon-kills footer both pages share.
+fn build_clan_detail_page(clan: &ClanRow, members: &[ClanMemberRow], page: usize) -> ListPage {
+    let mut picked: Vec<&ClanMemberRow> = members.iter().collect();
+    picked.sort_by(|a, b| b.rank.cmp(&a.rank).then(a.joined_at.cmp(&b.joined_at)));
+    let total = picked.len();
+    let pages = total.div_ceil(ROSTER_PAGE_SIZE).max(1);
+    let page = page.min(pages - 1);
+    let heading = if pages > 1 {
+        format!(
+            "{} <{}> - {} enrolled - page {} of {pages}",
+            clan.name,
+            clan.tag,
+            total,
+            page + 1
+        )
+    } else {
+        format!("{} <{}> - {} enrolled", clan.name, clan.tag, total)
+    };
+    let rows = picked
+        .iter()
+        .skip(page * ROSTER_PAGE_SIZE)
+        .take(ROSTER_PAGE_SIZE)
+        .map(|m| {
+            format!(
+                "{:<9}  {:<24.24}  {:>2}  {:>4}",
+                model::clan_rank_name(m.rank),
+                m.name,
+                m.level,
+                m.dragon_kills
+            )
+        })
+        .collect();
+    let total_dks: u64 = members.iter().map(|m| m.dragon_kills as u64).sum();
+    ListPage {
+        heading,
+        header: Some(format!(
+            "{:<9}  {:<24}  {:>2}  {:>4}",
+            "Rank", "Name", "Lv", "DKs"
+        )),
+        rows,
+        foot: vec![format!(
+            "This clan counts {total_dks} dragon kill{} all told.",
+            if total_dks == 1 { "" } else { "s" }
+        )],
+        page,
+        pages,
+    }
+}
+
+/// The withdraw confirmation (`clan_start.php`'s withdrawconfirm).
+fn clan_withdraw_menu(ready: bool) -> Vec<(String, bool)> {
+    vec![
+        ("No - stay with the clan".into(), true),
+        ("Yes - withdraw for good".into(), ready),
+    ]
+}
 
 /// Upstream's name search interleaves `%` between every typed character
 /// (`list.php` builds `%j%o%e%`): a case-insensitive subsequence match.
@@ -4587,6 +5781,7 @@ fn build_warrior_page(
     entries: &[RosterEntry],
     view: RosterView,
     query: &str,
+    my_clan: Option<Uuid>,
     page: usize,
 ) -> ListPage {
     let mut picked: Vec<&RosterEntry> = entries
@@ -4595,6 +5790,9 @@ fn build_warrior_page(
             RosterView::Online => e.online,
             RosterView::All => true,
             RosterView::Search => name_matches(&e.name, query),
+            // Online clan members (`list.php?op=clan`): the standard online
+            // filter ANDed with the viewer's clan.
+            RosterView::Clan => e.online && my_clan.is_some() && e.clan_id == my_clan,
         })
         .collect();
     picked.sort_by(|a, b| {
@@ -4610,6 +5808,7 @@ fn build_warrior_page(
         RosterView::Online => format!("Warriors in the realm right now ({total})"),
         RosterView::All => format!("The warriors of the realm ({total})"),
         RosterView::Search => format!("Warriors answering to \"{query}\" ({total})"),
+        RosterView::Clan => format!("Clan members in the realm right now ({total})"),
     };
     let heading = if pages > 1 {
         format!("{heading} - page {} of {pages}", page + 1)
@@ -4905,6 +6104,8 @@ fn commentary_menu(room: CommentRoom, posts_left: Option<usize>) -> Vec<(String,
         CommentRoom::Veterans => "Boast of your deeds",
         CommentRoom::ShadeGypsy => "Project your voice to the dead",
         CommentRoom::ShadeGrave => "Add your lament",
+        CommentRoom::Waiting => "Chat with the others waiting",
+        CommentRoom::ClanHall(_) => "Speak by the hearth",
     };
     let speak = match posts_left {
         Some(0) => ("You have said enough here today".to_string(), false),
@@ -4917,6 +6118,8 @@ fn commentary_menu(room: CommentRoom, posts_left: Option<usize>) -> Vec<(String,
         CommentRoom::DarkHorse => "Back to the taproom",
         CommentRoom::ShadeGrave => "Back among the graves",
         CommentRoom::ShadeGypsy => "Snap out of the trance",
+        CommentRoom::Waiting => "Leave the waiting area",
+        CommentRoom::ClanHall(_) => "Back to the hall",
         _ => "Back to the village square",
     };
     vec![
@@ -5411,10 +6614,7 @@ fn tavern_menu(
                 ),
                 ("Stones (call the pairs)".into(), c.gold > 0),
                 (
-                    format!(
-                        "A word with the barman ({} gold a name)",
-                        model::INTEL_COST
-                    ),
+                    format!("A word with the barman ({} gold a name)", model::INTEL_COST),
                     true,
                 ),
                 ("Read the etchings in the table".into(), true),
@@ -5881,6 +7081,7 @@ mod tests {
             pvp_immune: false,
             bounty_immune: false,
             pvp_engaged_at: 0,
+            clan_id: None,
         }
     }
 
@@ -6009,14 +7210,20 @@ mod tests {
         let mut b = entry("abe", 5);
         b.dragon_kills = 2;
         let c = entry("moe", 9);
-        let page = build_warrior_page(&[a.clone(), b.clone(), c.clone()], RosterView::All, "", 0);
+        let page = build_warrior_page(
+            &[a.clone(), b.clone(), c.clone()],
+            RosterView::All,
+            "",
+            None,
+            0,
+        );
         assert!(page.rows[0].contains("moe"));
         assert!(page.rows[1].contains("abe")); // kills break the level tie
         assert!(page.rows[2].contains("zed"));
         // Same level and kills: the bare name decides.
         a.dragon_kills = 2;
         b.name = "Zzz abe".into(); // the *display* name must not re-order
-        let page = build_warrior_page(&[a, b, c], RosterView::All, "", 0);
+        let page = build_warrior_page(&[a, b, c], RosterView::All, "", None, 0);
         assert!(page.rows[1].contains("abe"));
     }
 
@@ -6035,11 +7242,11 @@ mod tests {
         on.online = true;
         let off = entry("gone", 7);
         let entries = [on, off];
-        let page = build_warrior_page(&entries, RosterView::Online, "", 0);
+        let page = build_warrior_page(&entries, RosterView::Online, "", None, 0);
         assert_eq!(page.rows.len(), 1);
         assert!(page.rows[0].contains("here"));
         // A page past the end clamps to the last page instead of blanking.
-        let page = build_warrior_page(&entries, RosterView::All, "", 99);
+        let page = build_warrior_page(&entries, RosterView::All, "", None, 99);
         assert_eq!(page.page, 0);
         assert_eq!(page.rows.len(), 2);
     }
@@ -6182,7 +7389,7 @@ mod tests {
     #[test]
     fn warrior_list_menu_gates_the_pager() {
         // Loading: only the presence row and the way back are live.
-        let rows = warrior_list_menu(None);
+        let rows = warrior_list_menu(None, false);
         assert!(!rows[0].1);
         assert!(rows[1].1);
         assert!(!rows[3].1);
@@ -6193,9 +7400,13 @@ mod tests {
             page: 1,
             ..ListPage::default()
         };
-        let rows = warrior_list_menu(Some(&page));
+        let rows = warrior_list_menu(Some(&page), false);
         assert!(rows[3].1); // next
         assert!(rows[4].1); // previous
+        // Enrolled with a clan: the clan slice slots in before the pager.
+        let rows = warrior_list_menu(Some(&page), true);
+        assert!(rows[3].0.contains("clan"));
+        assert!(rows[4].1); // next, shifted
     }
 
     #[test]
@@ -6206,6 +7417,95 @@ mod tests {
         assert!(rows[7].0.contains("worst"));
         let rows = hall_of_fame_menu(HofRanking::Wealth, true, Some(&page));
         assert!(rows[7].0.contains("best"));
+    }
+
+    // --- clans (clan.php + lib/clan/*) --------------------------------------
+
+    fn member(name: &str, rank: u8, dks: u32, level: u8, joined: i64) -> ClanMemberRow {
+        ClanMemberRow {
+            user_id: Uuid::from_u128(name.bytes().fold(0u128, |a, b| a * 31 + b as u128)),
+            name: name.to_string(),
+            level,
+            dragon_kills: dks,
+            rank,
+            joined_at: joined,
+            alive: true,
+            online: false,
+            idle_secs: 0,
+        }
+    }
+
+    fn clan_row() -> ClanRow {
+        ClanRow {
+            id: Uuid::from_u128(99),
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            name: "Dragon's Bane".into(),
+            tag: "DB".into(),
+            motd: String::new(),
+            motd_author: String::new(),
+            description: String::new(),
+            desc_author: String::new(),
+            custom_verb: String::new(),
+        }
+    }
+
+    #[test]
+    fn clan_membership_sorts_rank_kills_level_then_join_date() {
+        // clan_membership.php: rank DESC, dragonkills DESC, level DESC,
+        // clanjoindate ASC.
+        let rows = sort_clan_members(&[
+            member("old-member", model::CLAN_MEMBER, 5, 9, 10),
+            member("founder", model::CLAN_FOUNDER, 0, 1, 50),
+            member("new-officer", model::CLAN_OFFICER, 0, 3, 90),
+            member("young-member", model::CLAN_MEMBER, 5, 9, 40),
+            member("applicant", model::CLAN_APPLICANT, 9, 15, 1),
+        ]);
+        let names: Vec<&str> = rows.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "founder",
+                "new-officer",
+                "old-member", // the join date breaks the full tie
+                "young-member",
+                "applicant"
+            ]
+        );
+    }
+
+    #[test]
+    fn clan_detail_page_orders_by_rank_then_join_date_and_totals_kills() {
+        // detail.php: rank DESC, clanjoindate ASC — kills don't reorder the
+        // public roll, they only sum in the footer.
+        let clan = clan_row();
+        let members = [
+            member("late-officer", model::CLAN_OFFICER, 9, 9, 80),
+            member("early-officer", model::CLAN_OFFICER, 0, 2, 20),
+            member("founder", model::CLAN_FOUNDER, 3, 12, 5),
+        ];
+        let page = build_clan_detail_page(&clan, &members, 0);
+        assert!(page.heading.contains("Dragon's Bane <DB>"));
+        assert!(page.rows[0].contains("founder"));
+        assert!(page.rows[1].contains("early-officer"));
+        assert!(page.rows[2].contains("late-officer"));
+        assert!(page.foot[0].contains("12 dragon kills"));
+    }
+
+    #[test]
+    fn warrior_clan_slice_filters_by_presence_and_clan() {
+        let my_clan = Some(Uuid::from_u128(9));
+        let mut mate = entry("mate", 5);
+        mate.online = true;
+        mate.clan_id = my_clan;
+        let mut offline_mate = entry("sleeper", 5);
+        offline_mate.clan_id = my_clan;
+        let mut stranger = entry("stranger", 5);
+        stranger.online = true;
+        let entries = [mate, offline_mate, stranger];
+        let page = build_warrior_page(&entries, RosterView::Clan, "", my_clan, 0);
+        assert_eq!(page.rows.len(), 1);
+        assert!(page.rows[0].contains("mate"));
     }
 
     #[test]

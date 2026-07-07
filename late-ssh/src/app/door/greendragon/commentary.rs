@@ -296,4 +296,28 @@ mod tests {
         assert_eq!(max_post_len("says"), 200);
         assert_eq!(max_post_len("despairs"), 181);
     }
+
+    #[test]
+    fn clan_halls_are_exempt_from_the_allowance() {
+        // talkform skips the posts-today count for clan-* sections entirely;
+        // the shared waiting area is NOT exempt (window 25, allowance 13).
+        let me = Uuid::from_u128(1);
+        let hall = CommentRoom::ClanHall(Uuid::from_u128(9));
+        let flood: Vec<CommentLine> = (0..25).map(|_| line(me, true)).collect();
+        assert_eq!(posts_left(&flood, me, hall), usize::MAX);
+        assert_eq!(posts_left(&flood, me, CommentRoom::Waiting), 0);
+        assert_eq!(posts_left(&[], me, CommentRoom::Waiting), posts_allowed(25));
+    }
+
+    #[test]
+    fn clan_rooms_have_their_own_sections() {
+        let id = Uuid::from_u128(9);
+        assert_eq!(CommentRoom::ClanHall(id).section(), format!("clan-{id}"));
+        assert_eq!(CommentRoom::Waiting.section(), "waiting");
+        // The hall's verb is only the fallback; the custom say line
+        // overrides it at the call sites.
+        assert_eq!(CommentRoom::ClanHall(id).verb(), "says");
+        assert_eq!(CommentRoom::ClanHall(id).display_limit(), 25);
+        assert_eq!(CommentRoom::Waiting.display_limit(), 25);
+    }
 }

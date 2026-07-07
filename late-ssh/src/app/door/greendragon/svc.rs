@@ -15,9 +15,11 @@ use chrono::Utc;
 use late_core::{
     db::Db,
     models::{
-        greendragon_bounty::GreenDragonBounty, greendragon_character::GreenDragonCharacter,
+        greendragon_bounty::GreenDragonBounty,
+        greendragon_character::GreenDragonCharacter,
         greendragon_clan::{ClanNameClash, GreenDragonClan},
-        greendragon_commentary::GreenDragonCommentary, greendragon_news::GreenDragonNews,
+        greendragon_commentary::GreenDragonCommentary,
+        greendragon_news::GreenDragonNews,
         greendragon_setting::GreenDragonSetting,
         profile_award::{
             GREENDRAGON_DRAGON_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
@@ -38,6 +40,10 @@ use crate::app::{
 use super::commentary::CommentLine;
 use super::model::{self, Character};
 use super::persist;
+
+/// Re-exported for the session's clan views (the hall panel renders the row
+/// directly).
+pub use late_core::models::greendragon_clan::GreenDragonClan as ClanRow;
 
 /// The async result of loading a session's character.
 #[derive(Clone)]
@@ -240,11 +246,17 @@ pub enum BountyPlace {
 pub enum HauntLoad {
     Loading,
     /// The roll won: the mark is on them and a report awaits their return.
-    Success { target: String },
+    Success {
+        target: String,
+    },
     /// The roll lost (publicly — the failure makes the news too).
-    Fumble { target: String },
+    Fumble {
+        target: String,
+    },
     /// Another shade already rides their dreams; no charge.
-    AlreadyHaunted { target: String },
+    AlreadyHaunted {
+        target: String,
+    },
     /// The target vanished between the search and the attempt; no charge.
     Gone,
 }
@@ -332,7 +344,9 @@ pub enum ClanFound {
     Loading,
     /// Approved and inserted; the caller enrolls itself as founder and the
     /// fee (already taken) stays paid.
-    Founded { clan_id: Uuid },
+    Founded {
+        clan_id: Uuid,
+    },
     /// The registrar's two "already taken" refusals; the fee comes back.
     NameTaken,
     TagTaken,
@@ -500,7 +514,9 @@ async fn pvp_settle_victory_tx(
     // matured contracts on this head close to the attacker — except any the
     // attacker set themselves, which the broker "keeps" and quietly leaves
     // open for the next hunter, exactly as upstream never closes them.
-    let bounty_gold = GreenDragonBounty::collect(&tx, victim_id, attacker_id).await?.max(0) as u64;
+    let bounty_gold = GreenDragonBounty::collect(&tx, victim_id, attacker_id)
+        .await?
+        .max(0) as u64;
     let forfeited = GreenDragonBounty::forfeited_total(&tx, victim_id, attacker_id)
         .await?
         .max(0) as u64;
@@ -1155,7 +1171,9 @@ impl GreenDragonService {
             let placed = async {
                 let mut client = inner.db.get().await?;
                 let db_tx = client.transaction().await?;
-                let current = GreenDragonBounty::open_total_on(&db_tx, target).await?.max(0) as u64;
+                let current = GreenDragonBounty::open_total_on(&db_tx, target)
+                    .await?
+                    .max(0) as u64;
                 if amount + current > cap {
                     return anyhow::Ok(BountyPlace::OverCap(current));
                 }
@@ -1408,4 +1426,496 @@ impl GreenDragonService {
         });
         rx
     }
+
+    // --- clans (clan.php + lib/clan/*) ---------------------------------------
+
+    /// Load one clan's hall/detail view: the clan row plus every enrolled
+    /// character decoded off the blobs. With `own_hall`, a leaderless clan
+    /// auto-promotes its highest-ranked, oldest-joined member on the way —
+    /// `clan_default.php`'s no-leader block runs at *hall* render only, so
+    /// the public detail page passes false.
+    pub fn load_clan(&self, clan_id: Uuid, own_hall: bool) -> watch::Receiver<ClanLoad> {
+        let (tx, rx) = watch::channel(ClanLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let msg = match load_clan_inner(&inner, clan_id, own_hall).await {
+                Ok(msg) => msg,
+                Err(e) => {
+                    tracing::warn!("greendragon clan load failed: {e}");
+                    ClanLoad::Failed
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// The clan list, ordered by real-member count descending (both upstream
+    /// lists' `ORDER BY c DESC`), sweeping empty clans on the way (their
+    /// lazy DELETE) — with a founding grace, since our member writes are
+    /// fire-and-forget where upstream's were synchronous.
+    pub fn load_clan_list(&self) -> watch::Receiver<ClanListLoad> {
+        let (tx, rx) = watch::channel(ClanListLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let list = match load_clan_list_inner(&inner).await {
+                Ok(list) => list,
+                Err(e) => {
+                    tracing::warn!("greendragon clan list failed: {e}");
+                    Vec::new()
+                }
+            };
+            let _ = tx.send(ClanListLoad::Ready(Arc::new(list)));
+        });
+        rx
+    }
+
+    /// File a new clan (`applicant_new.php`'s approval): the uniqueness
+    /// checks and insert. The caller validates the shape, takes the fee up
+    /// front, and refunds it on any refusal.
+    pub fn found_clan(&self, name: String, tag: String) -> watch::Receiver<ClanFound> {
+        let (tx, rx) = watch::channel(ClanFound::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let msg = match inner.db.get().await {
+                Ok(client) => match GreenDragonClan::found(&client, &name, &tag).await {
+                    Ok(Ok(clan_id)) => ClanFound::Founded { clan_id },
+                    Ok(Err(ClanNameClash::Name)) => ClanFound::NameTaken,
+                    Ok(Err(ClanNameClash::Tag)) => ClanFound::TagTaken,
+                    Err(e) => {
+                        // A photo-finish loser of two identical filings
+                        // lands here too (the unique index rejects it).
+                        tracing::warn!("greendragon clan founding failed: {e}");
+                        ClanFound::Failed
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("greendragon db get failed on clan founding: {e}");
+                    ClanFound::Failed
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// An application's paperwork (`applicant_apply.php`): confirm the clan
+    /// still stands and notify its officers+ (upstream's system mail, ours
+    /// through the report drain). The applicant's own membership fields are
+    /// the session's to set once this lands `Done`.
+    pub fn apply_to_clan(&self, clan_id: Uuid, applicant: String) -> watch::Receiver<ClanOp> {
+        let (tx, rx) = watch::channel(ClanOp::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let msg = match apply_to_clan_inner(&inner, clan_id, &applicant).await {
+                Ok(msg) => msg,
+                Err(e) => {
+                    tracing::warn!("greendragon clan application failed: {e}");
+                    ClanOp::Refused("The registrar misplaces your paperwork; try again.".into())
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// A real member's withdrawal (`clan_withdraw.php`): succession when the
+    /// last leader walks (or the clan's deletion when the last member does),
+    /// plus the officers' notice. The caller clears its own membership
+    /// fields; an applicant's withdrawal is purely local and never comes
+    /// here.
+    pub fn withdraw_from_clan(
+        &self,
+        me: Uuid,
+        my_name: String,
+        my_rank: u8,
+        clan_id: Uuid,
+    ) -> watch::Receiver<ClanOp> {
+        let (tx, rx) = watch::channel(ClanOp::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let msg = match withdraw_inner(&inner, me, &my_name, my_rank, clan_id).await {
+                Ok(msg) => msg,
+                Err(e) => {
+                    tracing::warn!("greendragon clan withdraw failed: {e}");
+                    ClanOp::Done(String::new())
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// A promote/demote/step-down (`clan_membership.php`'s setrank): one
+    /// row-locked write on the target's fresh blob, the rank clamped at the
+    /// actor's own (upstream's `GREATEST(0, LEAST(yours, setrank))`).
+    pub fn set_clan_rank(
+        &self,
+        clan_id: Uuid,
+        actor_rank: u8,
+        target_id: Uuid,
+        new_rank: u8,
+    ) -> watch::Receiver<ClanOp> {
+        let (tx, rx) = watch::channel(ClanOp::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let gate = inner.gate(target_id);
+            let _held = gate.lock().await;
+            let msg = match set_rank_tx(&inner.db, clan_id, actor_rank, target_id, new_rank).await {
+                Ok(msg) => msg,
+                Err(e) => {
+                    tracing::warn!("greendragon clan rank change failed: {e}");
+                    ClanOp::Refused("The ledger won't take the ink; try again.".into())
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// A removal (`clan_membership.php`'s remove; on an applicant it is the
+    /// application's rejection): clear the target's membership if they still
+    /// rank at-or-below the actor (upstream's WHERE guard).
+    pub fn remove_from_clan(
+        &self,
+        clan_id: Uuid,
+        actor_rank: u8,
+        target_id: Uuid,
+    ) -> watch::Receiver<ClanOp> {
+        let (tx, rx) = watch::channel(ClanOp::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let gate = inner.gate(target_id);
+            let _held = gate.lock().await;
+            let msg = match remove_member_tx(&inner.db, clan_id, actor_rank, target_id).await {
+                Ok(msg) => msg,
+                Err(e) => {
+                    tracing::warn!("greendragon clan removal failed: {e}");
+                    ClanOp::Refused("The ledger won't take the ink; try again.".into())
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// Update the clan MOTD, fire-and-forget (`clan_motd.php`, officer+;
+    /// the author's name is stamped alongside).
+    pub fn set_clan_motd(&self, clan_id: Uuid, motd: String, author: String) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(e) =
+                        GreenDragonClan::set_motd(&client, clan_id, &motd, &author).await
+                    {
+                        tracing::warn!("greendragon clan motd write failed: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("greendragon db get failed on clan motd: {e}"),
+            }
+        });
+    }
+
+    /// Update the clan description, fire-and-forget (officer+).
+    pub fn set_clan_description(&self, clan_id: Uuid, description: String, author: String) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(e) =
+                        GreenDragonClan::set_description(&client, clan_id, &description, &author)
+                            .await
+                    {
+                        tracing::warn!("greendragon clan description write failed: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("greendragon db get failed on clan description: {e}"),
+            }
+        });
+    }
+
+    /// Update the clan's custom talk verb, fire-and-forget (leader+; blank
+    /// means "says").
+    pub fn set_clan_verb(&self, clan_id: Uuid, verb: String) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(e) = GreenDragonClan::set_custom_verb(&client, clan_id, &verb).await
+                    {
+                        tracing::warn!("greendragon clan verb write failed: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("greendragon db get failed on clan verb: {e}"),
+            }
+        });
+    }
+}
+
+/// The hall/detail load (see [`GreenDragonService::load_clan`]).
+async fn load_clan_inner(
+    inner: &Arc<Inner>,
+    clan_id: Uuid,
+    own_hall: bool,
+) -> anyhow::Result<ClanLoad> {
+    let client = inner.db.get().await?;
+    let Some(clan) = GreenDragonClan::load(&client, clan_id).await? else {
+        return Ok(ClanLoad::Gone);
+    };
+    let mut members = decode_clan_members(&client, clan_id).await?;
+    // The no-leader block (`clan_default.php`): nobody above officer means
+    // the leadership fell vacant (a leader's character was deleted) — the
+    // succession pick inherits it right at render time.
+    let mut promoted = None;
+    if own_hall
+        && !members
+            .iter()
+            .any(|(_, c, _)| c.clan_rank > model::CLAN_OFFICER)
+        && let Some(target) = succession_candidate(&members)
+    {
+        let gate = inner.gate(target);
+        let _held = gate.lock().await;
+        if let Some(name) = promote_to_leader_tx(&inner.db, clan_id, target).await? {
+            if let Some(m) = members.iter_mut().find(|(id, _, _)| *id == target) {
+                m.1.clan_rank = model::CLAN_LEADER;
+            }
+            promoted = Some((target, name));
+        }
+    }
+    let now = Utc::now();
+    let rows: Vec<ClanMemberRow> = members
+        .iter()
+        .map(|(id, c, updated)| clan_member_row(*id, c, *updated, now))
+        .collect();
+    Ok(ClanLoad::Ready {
+        clan: Box::new(clan),
+        members: Arc::new(rows),
+        promoted,
+    })
+}
+
+/// The list + lazy sweep (see [`GreenDragonService::load_clan_list`]).
+async fn load_clan_list_inner(inner: &Arc<Inner>) -> anyhow::Result<Vec<ClanListEntry>> {
+    let client = inner.db.get().await?;
+    let clans = GreenDragonClan::all(&client).await?;
+    let chars = GreenDragonCharacter::load_all(&client).await?;
+    let mut counts: HashMap<Uuid, usize> = HashMap::new();
+    for (_, blob, _) in &chars {
+        let c = persist::from_json(blob);
+        if let Some(id) = c.clan_id
+            && c.clan_rank > model::CLAN_APPLICANT
+        {
+            *counts.entry(id).or_default() += 1;
+        }
+    }
+    let now = Utc::now();
+    let mut list = Vec::new();
+    for clan in clans {
+        let members = counts.get(&clan.id).copied().unwrap_or(0);
+        if members == 0 {
+            // Applicants alone don't keep a clan alive: both upstream lists
+            // DELETE rows counting zero real members. The founding grace
+            // covers a brand-new clan whose founder's save is still landing.
+            if (now - clan.created).num_seconds() > CLAN_SWEEP_GRACE_SECS
+                && let Err(e) = GreenDragonClan::remove(&client, clan.id).await
+            {
+                tracing::warn!("greendragon empty-clan sweep failed: {e}");
+            }
+            continue;
+        }
+        list.push(ClanListEntry { clan, members });
+    }
+    // Member count descending (`ORDER BY c DESC`); name breaks ties for a
+    // stable page (upstream leaves them to MySQL).
+    list.sort_by(|a, b| {
+        b.members
+            .cmp(&a.members)
+            .then_with(|| a.clan.name.to_lowercase().cmp(&b.clan.name.to_lowercase()))
+    });
+    Ok(list)
+}
+
+/// The application's officer notices (see
+/// [`GreenDragonService::apply_to_clan`]).
+async fn apply_to_clan_inner(
+    inner: &Arc<Inner>,
+    clan_id: Uuid,
+    applicant: &str,
+) -> anyhow::Result<ClanOp> {
+    let client = inner.db.get().await?;
+    let Some(clan) = GreenDragonClan::load(&client, clan_id).await? else {
+        return Ok(ClanOp::Refused(
+            "The clan dissolved before the ink dried.".into(),
+        ));
+    };
+    let members = decode_clan_members(&client, clan_id).await?;
+    drop(client);
+    for (officer, _, _) in members
+        .iter()
+        .filter(|(_, c, _)| c.clan_rank >= model::CLAN_OFFICER)
+    {
+        let gate = inner.gate(*officer);
+        let _held = gate.lock().await;
+        if let Err(e) = append_report_tx(
+            &inner.db,
+            *officer,
+            &format!(
+                "{applicant} has filed an application to join {}; you'll find them in the waiting area.",
+                clan.name
+            ),
+        )
+        .await
+        {
+            tracing::warn!("greendragon clan application notice failed: {e}");
+        }
+    }
+    Ok(ClanOp::Done(String::new()))
+}
+
+/// The withdrawal's succession / deletion / notices (see
+/// [`GreenDragonService::withdraw_from_clan`]).
+async fn withdraw_inner(
+    inner: &Arc<Inner>,
+    me: Uuid,
+    my_name: &str,
+    my_rank: u8,
+    clan_id: Uuid,
+) -> anyhow::Result<ClanOp> {
+    let client = inner.db.get().await?;
+    let Some(clan) = GreenDragonClan::load(&client, clan_id).await? else {
+        // Already gone; the session clears its own fields regardless.
+        return Ok(ClanOp::Done(String::new()));
+    };
+    let members: Vec<_> = decode_clan_members(&client, clan_id)
+        .await?
+        .into_iter()
+        .filter(|(id, _, _)| *id != me)
+        .collect();
+    let mut lines: Vec<String> = Vec::new();
+    if my_rank >= model::CLAN_LEADER
+        && !members
+            .iter()
+            .any(|(_, c, _)| c.clan_rank >= model::CLAN_LEADER)
+    {
+        // The solitary leader walks: the succession pick inherits, or —
+        // with no real member left — the clan dissolves, clearing any
+        // straggler applicants.
+        if let Some(target) = succession_candidate(&members) {
+            let gate = inner.gate(target);
+            let _held = gate.lock().await;
+            if let Some(name) = promote_to_leader_tx(&inner.db, clan_id, target).await? {
+                lines.push(format!("{name} inherits the leadership of {}.", clan.name));
+            }
+        } else {
+            for (straggler, _, _) in &members {
+                let gate = inner.gate(*straggler);
+                let _held = gate.lock().await;
+                if let Err(e) = clear_membership_tx(&inner.db, clan_id, *straggler).await {
+                    tracing::warn!("greendragon clan straggler clear failed: {e}");
+                }
+            }
+            GreenDragonClan::remove(&client, clan_id).await?;
+            lines.push(format!(
+                "As its last member, you watch the registrar strike {} from the rolls.",
+                clan.name
+            ));
+        }
+    }
+    // The officers' notice (`clan_withdraw.php`'s system mail) — sent for
+    // any real member's departure, the leader's included.
+    for (officer, _, _) in members
+        .iter()
+        .filter(|(_, c, _)| c.clan_rank >= model::CLAN_OFFICER)
+    {
+        let gate = inner.gate(*officer);
+        let _held = gate.lock().await;
+        if let Err(e) = append_report_tx(
+            &inner.db,
+            *officer,
+            &format!("{my_name} has surrendered their place in {}.", clan.name),
+        )
+        .await
+        {
+            tracing::warn!("greendragon clan withdraw notice failed: {e}");
+        }
+    }
+    Ok(ClanOp::Done(lines.join(" ")))
+}
+
+/// Row-locked clear of a straggler's membership when their clan dissolves
+/// (upstream's cleanup UPDATE on the deleted clan's id).
+async fn clear_membership_tx(db: &Db, clan_id: Uuid, user_id: Uuid) -> anyhow::Result<()> {
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    let Some((blob, _)) = GreenDragonCharacter::load_for_update(&tx, user_id).await? else {
+        return Ok(());
+    };
+    let mut c = persist::from_json(&blob);
+    if c.clan_id != Some(clan_id) {
+        return Ok(());
+    }
+    c.leave_clan();
+    c.pvp_reports.push(
+        "The clan you had applied to has dissolved; the registrar returns your papers.".into(),
+    );
+    GreenDragonCharacter::update_data_keep_updated(&tx, user_id, persist::to_json(&c)).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The rank-change transaction (see [`GreenDragonService::set_clan_rank`]).
+async fn set_rank_tx(
+    db: &Db,
+    clan_id: Uuid,
+    actor_rank: u8,
+    target_id: Uuid,
+    new_rank: u8,
+) -> anyhow::Result<ClanOp> {
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    let Some((blob, _)) = GreenDragonCharacter::load_for_update(&tx, target_id).await? else {
+        return Ok(ClanOp::Refused("They are gone from the realm.".into()));
+    };
+    let mut c = persist::from_json(&blob);
+    if c.clan_id != Some(clan_id) {
+        return Ok(ClanOp::Refused("They are no longer of your clan.".into()));
+    }
+    // Upstream's `GREATEST(0, LEAST(yours, setrank))`; u8 gives the 0 floor.
+    let clamped = new_rank.min(actor_rank);
+    c.clan_rank = clamped;
+    let name = c.titled_name();
+    GreenDragonCharacter::update_data_keep_updated(&tx, target_id, persist::to_json(&c)).await?;
+    tx.commit().await?;
+    Ok(ClanOp::Done(format!(
+        "{name} now stands as {}.",
+        model::clan_rank_name(clamped)
+    )))
+}
+
+/// The removal transaction (see [`GreenDragonService::remove_from_clan`]).
+async fn remove_member_tx(
+    db: &Db,
+    clan_id: Uuid,
+    actor_rank: u8,
+    target_id: Uuid,
+) -> anyhow::Result<ClanOp> {
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    let Some((blob, _)) = GreenDragonCharacter::load_for_update(&tx, target_id).await? else {
+        return Ok(ClanOp::Refused("They are gone from the realm.".into()));
+    };
+    let mut c = persist::from_json(&blob);
+    if c.clan_id != Some(clan_id) {
+        return Ok(ClanOp::Refused("They are no longer of your clan.".into()));
+    }
+    if c.clan_rank > actor_rank {
+        // Upstream's `clanrank <= yours` WHERE guard, against fresh state.
+        return Ok(ClanOp::Refused("They outrank you now.".into()));
+    }
+    let name = c.titled_name();
+    c.leave_clan();
+    GreenDragonCharacter::update_data_keep_updated(&tx, target_id, persist::to_json(&c)).await?;
+    tx.commit().await?;
+    Ok(ClanOp::Done(format!("{name} is no longer of the clan.")))
 }

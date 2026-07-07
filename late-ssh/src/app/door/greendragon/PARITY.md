@@ -498,8 +498,9 @@ online-roster path; the session stays authoritative for its own character
 commentary ✓ → roster/HoF ✓ → gypsy ✓ (folded into the commentary slice — it
 is just a paid door onto the shade section) → PvP ✓ → bounties + haunt ✓ →
 barman's enemy intel ✓ + rewards wiring ✓ (the two small leftovers, 2026-07)
-→ clans → mail(?) → gardens ✓ / veterans' rock ✓. Commentary first: five
-other features are just sections of it.
+→ clans ✓ (2026-07) → mail(?) → gardens ✓ / veterans' rock ✓. Commentary
+first: five other features are just sections of it. Only the mail
+integration decision remains.
 
 ### `commentary` — the one chat primitive — DONE
 
@@ -546,7 +547,8 @@ claimed (specs below already fixed):
   Horse etchings, the gardens, the veterans' rock (`rock.php`: a plain
   weathered stone to anyone without a dragon kill), and the shade channel
   from both sides — free while dead, or through the gypsy's paid trance.
-  Clan halls + the waiting room land with clans.
+  Clan halls + the waiting room landed with clans (2026-07): the halls are
+  the one allowance-exempt venue, speaking in each clan's custom verb.
 - [x] **The gypsy tent** (`gypsy.php`): pay `level * 20` gold per visit to
   project into the shade section. That's the whole building.
 
@@ -556,8 +558,8 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
   pagination, "first unseen" links, or new-post markers (upstream's
   `recentcomments`).
 - Speaker names are the bare character name snapshotted at post time — no
-  DK-title prefix (upstream's `accounts.name` carries the title) and no
-  clan tag until clans land.
+  DK-title prefix (upstream's `accounts.name` carries the title). The clan
+  `<TAG>` prefix landed with clans, snapshotted into the name the same way.
 - All three emote markers compose identically (name + a space + the rest);
   upstream's `::` variant differs only in marker length.
 - No GM `/game` inserts or moderation tools; system lines are reserved for
@@ -646,7 +648,7 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 - The alive column is two-state (village/graveyard); a PvP death lands the
   victim in the graveyard like any other, so upstream's "Unconscious"
   tri-state never arises here.
-- No clan sub-list (lands with clans), no write-mail/bio links (no in-door
+- No write-mail/bio links (no in-door
   mail), and both screens are village-nav only (upstream also links the
   list from logged-out pages and bios).
 - The percentile line renders even when the days ranking's filter excludes
@@ -991,7 +993,7 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
   are their prose). The paid sheet adds a Race row to the mock sheet's
   shape only where upstream's real sheet shows race too.
 
-### Clans
+### Clans — DONE
 
 Sources: `clan.php`, `lib/clan/*.php` (start/default/membership/motd/
 withdraw/applicant*/detail/list/waiting/func), `lib/constants.php` (the rank
@@ -999,9 +1001,12 @@ values), `lib/commentary.php` (the clan-tag render + the clan-section
 allowance skip), `lib/all_tables.php` (the `clans` schema), `common.php`
 (the dangling-membership self-heal), `village.php:211` (the nav),
 `list.php:77` (online clan members), `dragon.php` (the preserve list).
-Spec audited line-by-line 2026-07 against the local clone. **Source-audit
-corrections** to what this section originally claimed (the specs below are
-already fixed to match):
+Spec audited line-by-line 2026-07 against the local clone; **implemented
+2026-07** (migration 101 + the `greendragon_clan` model, membership fields
+on the character blob, svc round-trips over the PvP cross-player patterns,
+ten `Mode::Clan*` screens off the village's "Clan Halls" row, and the two
+new commentary rooms). **Source-audit corrections** to what this section
+originally claimed (the specs below are already fixed to match):
 
 1. **Clan halls have no posting allowance**: `talkform` skips the
    posts-today count entirely for `clan-*` sections — members chat without
@@ -1053,24 +1058,75 @@ already fixed to match):
    withdraw mails the officers; an applicant's withdraw only deletes the
    stale application mail. Nothing mails on promote/demote/remove.
 
-- Table `greendragon_clans` (migration 101): id, name (unique), tag
-  (unique), motd + author, description + author, custom talk verb.
-  Membership on `Character`: `clan_id`, `clan_rank`
-  (0 applicant / 10 member / 20 officer / 30 leader / 31 founder),
-  `clan_joined_at`, and the denormalized `clan_tag` (see adaptations). All
-  survive dragon kills (`dragon.php`'s preserve list) and death.
-- **The lobby** (village "Clan Halls", rank < 10): the registrar's desk —
-  apply (clan pick off the member-count-ordered list), file a new clan
-  (name + tag + the fee), the public list (→ per-clan detail roll), and,
-  once applied, the waiting area + withdraw-application rows.
-- **The hall** (rank ≥ 10): MOTD/desc + per-rank counts + total clan DKs;
-  the clan commentary section `clan-{id}` (window 25, custom verb, no
-  allowance); membership management per correction 2; the motd/desc/verb
-  editor; online clan members (the warrior list's clan slice); the shared
-  waiting room; withdraw (confirm step, succession per correction 4).
-- Officer notifications (apply, member withdraw) ride the `pvp_reports`
-  drain — the established mail adaptation.
+- [x] Table `greendragon_clans` (migration 101): id, name (unique), tag
+  (unique, both case-insensitively — upstream's MySQL collation), motd +
+  author, description + author, custom talk verb. Membership on
+  `Character`: `clan_id`, `clan_rank` (0 applicant / 10 member / 20
+  officer / 30 leader / 31 founder), `clan_joined_at`, and the denormalized
+  `clan_tag` (see adaptations). All survive dragon kills (`dragon.php`'s
+  preserve list) and death.
+- [x] **The lobby** (village "Clan Halls", rank < 10): the registrar's
+  desk — apply (clan pick off the member-count-ordered list; the officers+
+  get the notice, and a chartered clan earns the registrar's read-the-
+  charter reminder, upstream's two mails), file a new clan (name, tag, the
+  fee — checks in upstream's order), the public list (→ per-clan detail
+  roll, `detail.php`'s ordering + total-DK footer), and, once applied, the
+  waiting area + withdraw-application rows (an applicant's withdraw is
+  purely local, as upstream only deletes the stale mail).
+- [x] **The hall** (rank ≥ 10, the village row walks straight in): MOTD +
+  charter with author names, per-rank counts, total clan DKs; the hearth —
+  commentary section `clan-{id}` (window 25, the custom verb, no
+  allowance); the membership ledger with promote/demote/step-down/remove
+  per correction 2 (rank writes are row-locked cross-player transactions,
+  clamped `LEAST(yours, next)` against the fresh blob); the motd/charter/
+  verb editor (officer+/leader+); online clan members (the warrior list's
+  clan slice, presence-filtered); the shared waiting room; withdraw with
+  the confirm step, succession, and empty-clan deletion per correction 4.
+- [x] **The leaderless auto-promote** runs inside the own-hall load only
+  (`clan_default.php`; the public detail view doesn't heal foreign clans);
+  a vacancy falling to the *viewing* session also updates the live
+  character in place, exactly as upstream patches `$session`.
+- [x] Officer notifications (application, member withdraw) and the
+  dissolved-clan notice ride the `pvp_reports` drain — the established
+  mail adaptation.
+- [x] The commentary tag: `<TAG>` before the name for rank > 0 posters, in
+  every room.
 - No stat buffs — clans are social only in stock 1.1.2.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **The tag and speaker name are snapshotted at post time** (our
+  commentary rows already snapshot the name; upstream re-joins accounts →
+  clans live at render, so its tags update retroactively when someone
+  leaves). Same trade the name column already made; rank colors dropped
+  with the rest of the color-code system.
+- **`clan_tag` is denormalized onto the character blob** (set at
+  apply/found, cleared on leave/removal/dissolution): tags are immutable
+  here — upstream's rename is superuser tooling, out of scope — so the
+  copy can't go stale.
+- **MOTD and charter are single talk lines capped at 200 chars** standing
+  in for upstream's 4096-char textareas; the editor starts blank instead
+  of prefilled, and an empty submit clears the board (as upstream's empty
+  POST does).
+- **The empty-clan sweep gets a founding grace (1 hour)**: our member
+  writes are fire-and-forget where upstream's were synchronous, so a
+  brand-new clan must not be reaped before its founder's save lands.
+- **Author names are stored as snapshots** on the clan row (upstream joins
+  `acctid` and already breaks on renames — its own mail-cleanup comment
+  admits as much).
+- **Rank changes against a live session can be clobbered by that session's
+  next save** (the blob is session-authoritative) — upstream's
+  end-of-request session save has the same race; the hall re-reads on
+  every entry, so it self-corrects at their next visit.
+- The founding fee is taken up front and refunded on a refusal (the
+  Five Sixes/bounty pattern); upstream checks then charges — net effect
+  identical.
+- The membership ledger and detail roll page at 15 rows (the TUI panel);
+  the two clan pickers don't page (clans are few).
+- The withdraw confirm keeps upstream's yes/no step; Esc anywhere backs
+  out without withdrawing.
+- All prose is original: the registrar ("Maren", ours), the lobby, the
+  hall, every notice and refusal line.
 
 ### Mail — integration decision, not a build
 - Upstream: 50-unread inbox cap, 1024-char bodies, 14-day retention,

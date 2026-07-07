@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-06 (Dynamic Bonsai: documented the `MAX_BRANCHES = 96` branch-graph cap — every branch-adding call site enforces it independently, growth silently stops at the cap rather than erroring, and the chat badge score is implicitly bounded by it too; see `late-ssh/src/app/bonsai_v2/CONTEXT.md`. Same day: bartender/drinks facts (pricing, the sober/tipsy/buzzed/sloshed/wasted ladder, passive sobering, username-label drunk-glow tinting) added to the shared bot app context in `late-ssh/src/app/help_modal/data.rs::bot_app_context`, so `@bot`/`@graybeard`/`@dealer` and the bartender's own prompt can all answer questions about it correctly. Same day: Green Dragon 1=1 parity push, phase 0: forest payouts/gem drops/flawless refunds now use the real `forestvictory` math, `buffbadguy` creature scaling, multi-fights + packs at 10+ dragon kills, 1-in-3 flee, chooseable dragon points behind a forced spend gate (schema v2 save migration grandfathers old auto-boons), dragon-kill gold reset without retention, healer percent shelf, bank loans/debt with compounding interest, 4 creature names per level. The full parity roadmap vs stock LoGD 1.1.2 lives in `late-ssh/src/app/door/greendragon/PARITY.md`. Previously: New radio station: `Ambient` (`v5`) added to the direct-client Nightride set — `RadioStation::Ambient` streams `rektify.mp3`, display label `ambient` but settings/metadata key `rektify` to match the `/meta` feed. The sidebar music stage grew one row (`MUSIC_STAGE_HEIGHT` 15→16, `MUSIC_DETAIL_HEIGHT` 5→6) to fit the 5th selector; the YouTube detail uses the extra row to show one more queued item (`MUSIC_QUEUE_HEIGHT` 2→3). See `late-ssh/src/app/audio/CONTEXT.md`. Previously: Chat moderation slow mode: `/mod slow <server|#room> @user <interval> <duration|permanent>` adds per-user send throttles backed by `chat_slow_modes`, with private target toasts and send-path rejection banners; server-slow applies to non-DM rooms only. See `late-ssh/src/app/chat/CONTEXT.md`. Previously: Bartender drinks: @bartender charges Late Chips for drinks (AI-priced 100-1000, out-of-range refused, floor-guarded debit), per-user drunkenness in `user_drinks` decays over hours and tints username labels in the clubhouse and chat author labels — see `late-ssh/src/app/clubhouse/CONTEXT.md`. Same day: Clubhouse goes multiplayer: one process-global lobby seats every active human, first move frees your seat, everyone sees everyone walk; the embedded #lounge chat panel is replaced by speech bubbles over avatars plus a pinned composer footer; emotes, door arrival/departure ambience, shared dog petting, and a persisted first-visit tutorial ending in a scripted @bartender greeting — see the new `late-ssh/src/app/clubhouse/CONTEXT.md`. Previously: World Cup HUD viewer-timezone kick-offs; World Cup HUD as top-level screen `7`, a demand-gated FotMob live poller; dopewars door: prod infra + dedicated CI/CD — `infra/service-ssh.tf`, `.github/workflows/dopewars.yml`)
+- Last updated: 2026-07-07 (Production incident note: Lateania `mud_characters.data.house_furniture` duplicate-on-load amplification caused `service-ssh`/Postgres OOMs; all saved furniture was cleared in prod, and future checks should inspect this field first if memory spikes recur. Previously: Dynamic Bonsai documented the `MAX_BRANCHES = 96` branch-graph cap — every branch-adding call site enforces it independently, growth silently stops at the cap rather than erroring, and the chat badge score is implicitly bounded by it too; see `late-ssh/src/app/bonsai_v2/CONTEXT.md`. Same day: bartender/drinks facts (pricing, the sober/tipsy/buzzed/sloshed/wasted ladder, passive sobering, username-label drunk-glow tinting) added to the shared bot app context in `late-ssh/src/app/help_modal/data.rs::bot_app_context`, so `@bot`/`@graybeard`/`@dealer` and the bartender's own prompt can all answer questions about it correctly. Same day: Green Dragon 1=1 parity push, phase 0: forest payouts/gem drops/flawless refunds now use the real `forestvictory` math, `buffbadguy` creature scaling, multi-fights + packs at 10+ dragon kills, 1-in-3 flee, chooseable dragon points behind a forced spend gate (schema v2 save migration grandfathers old auto-boons), dragon-kill gold reset without retention, healer percent shelf, bank loans/debt with compounding interest, 4 creature names per level. The full parity roadmap vs stock LoGD 1.1.2 lives in `late-ssh/src/app/door/greendragon/PARITY.md`. Previously: New radio station: `Ambient` (`v5`) added to the direct-client Nightride set — `RadioStation::Ambient` streams `rektify.mp3`, display label `ambient` but settings/metadata key `rektify` to match the `/meta` feed. The sidebar music stage grew one row (`MUSIC_STAGE_HEIGHT` 15→16, `MUSIC_DETAIL_HEIGHT` 5→6) to fit the 5th selector; the YouTube detail uses the extra row to show one more queued item (`MUSIC_QUEUE_HEIGHT` 2→3). See `late-ssh/src/app/audio/CONTEXT.md`. Previously: Chat moderation slow mode: `/mod slow <server|#room> @user <interval> <duration|permanent>` adds per-user send throttles backed by `chat_slow_modes`, with private target toasts and send-path rejection banners; server-slow applies to non-DM rooms only. See `late-ssh/src/app/chat/CONTEXT.md`. Previously: Bartender drinks: @bartender charges Late Chips for drinks (AI-priced 100-1000, out-of-range refused, floor-guarded debit), per-user drunkenness in `user_drinks` decays over hours and tints username labels in the clubhouse and chat author labels — see `late-ssh/src/app/clubhouse/CONTEXT.md`. Same day: Clubhouse goes multiplayer: one process-global lobby seats every active human, first move frees your seat, everyone sees everyone walk; the embedded #lounge chat panel is replaced by speech bubbles over avatars plus a pinned composer footer; emotes, door arrival/departure ambience, shared dog petting, and a persisted first-visit tutorial ending in a scripted @bartender greeting — see the new `late-ssh/src/app/clubhouse/CONTEXT.md`. Previously: World Cup HUD viewer-timezone kick-offs; World Cup HUD as top-level screen `7`, a demand-gated FotMob live poller; dopewars door: prod infra + dedicated CI/CD — `infra/service-ssh.tf`, `.github/workflows/dopewars.yml`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -707,6 +707,7 @@ Known gaps/risks:
 - **SSH pod drain window:** `infra/service-ssh.tf` sets `termination_grace_period_seconds = 21600` (6h) so rolling updates can stop new connections while allowing existing SSH sessions to drain for a long window before Kubernetes sends SIGKILL.
 - **SSH ingress reload risk:** `ssh late.sh` currently reaches `late-ssh` through RKE2 ingress-nginx TCP passthrough (`infra/ssh-tcp.tf`, port `22 -> service-ssh-sv:2222::PROXY`). Long-lived SSH sessions can be dropped after any ingress-nginx config reload because old workers are terminated after `worker_shutdown_timeout` (observed 2026-04-29 after cert-manager renewed `service-web-tls`: reload at `19:56:37Z`, mass SSH/WS disconnect at `20:00:38Z`, matching the 240s timeout). Future infra improvement: stop routing SSH through ingress-nginx; use a dedicated TCP LoadBalancer/NodePort/host proxy for SSH so HTTP/TLS reloads cannot kill SSH sessions. Short-term mitigation: increase ingress-nginx `worker-shutdown-timeout`, but that only delays the disconnect.
 - **Postgres primary CPU saturation from discover-room fanout:** Observed 2026-05-14 in Kubernetes: CNPG primary `postgres-1` was healthy but pinned near its `1` CPU limit, while the node still had spare CPU. `pg_stat_activity` showed `service-ssh` (`10.42.0.47`) running 8 concurrent `app` sessions on the same public topic-room discover query. The old query joined `chat_rooms -> chat_room_members -> chat_messages` and then used `COUNT(DISTINCT ...)`, producing an estimated ~4.48M joined rows before aggregation. Preferred fix is query shape first: aggregate member/message counts separately (current `ChatRoom::list_discover_public_topic_rooms` uses `LATERAL` aggregates), then raise the CNPG CPU limit from `1` to `2` only for headroom. Secondary log noise during the same check: repeated `idx_users_username_lower` duplicate-key errors from profile updates; do not mistake those for the main CPU source unless active queries point there.
+- **Lateania furniture OOM incident:** Observed 2026-07-07 in Kubernetes: `service-ssh` and both CNPG pods OOMed while active SSH sessions were only ~20 and paired clients ~10. The confirmed root cause was Lateania housing furniture duplicate-on-load amplification in `mud_characters.data->house_furniture`; affected rows reached millions of entries (`cws` 4,718,592, `mars` 2,097,152, `c0ld` 131,072). Postgres logs showed `ERROR: total size of jsonb array elements exceeds the maximum of 268435455 bytes` on `INSERT INTO mud_characters ... data`. Emergency mitigation applied in prod: set all saved `house_furniture` arrays to `[]` (7 rows, 6,946,858 entries removed). Code-side fix in `late-ssh/src/app/door/lateania/svc.rs`: restore furniture by replacing per-plot side state instead of appending, dedupe on load/save, and cap saved furniture (`SAVED_HOUSE_FURNITURE_LIMIT = 512`). If memory spikes recur, check this JSONB field before blaming user count.
 - **IPv6 ingress status:** RKE2/CNI `hostPort` exposes the current ingress-nginx path for IPv4 only; do not switch the main ingress controller to `hostNetwork` without a rollout plan. Public IPv6 is handled by the separate `kube-system/ipv6-proxy` HAProxy DaemonSet in `infra/ipv6-proxy.tf`, binding `2a01:4f9:c013:2ae1::1` on `80`, `443`, and `22`; HTTP(S) forwards to localhost ingress hostPorts, while SSH forwards to `service-ssh-sv:2222` with PROXY protocol. Verified working externally on 2026-05-03; `Network is unreachable` during `ssh -6 late.sh` means the client lacks IPv6 egress.
 - **Stateful VT parsing in `late-ssh/src/app/input.rs`:** SSH input now runs through a persistent `vte::Parser`, so CSI/SS3 sequences and bracketed paste survive split russh reads instead of assuming the whole escape sequence lands in one chunk. That removes the old split-paste failure where `[200~` / `[201~` residue or embedded newlines could leak through as live keystrokes. The app still keeps two pragmatic layers on top: `is_likely_paste` heuristically treats large printable unmarked chunks as paste for terminals without bracketed paste, and `sanitize_paste_markers`/`strip_paste_markers` still scrub stored residue defensively when copying URLs from older polluted state. Standalone `Esc` is resolved on a short tick delay so split escape sequences are not mistaken for cancel keys.
 
@@ -947,6 +948,74 @@ Notes:
 - For ad hoc prod inspection, prefer read-only `SELECT` queries.
 - The script intentionally never prints the database password or passes it in the `pgcli` command line.
 
+### 10.2.2 Production incident triage
+
+When prod looks down or slow, start with Kubernetes state, then metrics shape, then DB evidence. Do not assume "too many users" unless the active-session metrics support it.
+
+Useful first pass:
+
+```bash
+kubectl get pods -n default -o wide
+kubectl top pods -n default
+kubectl get events -n default --sort-by=.lastTimestamp
+kubectl get cluster -n default postgres -o jsonpath='{.status.currentPrimary} {.status.targetPrimary} {.status.phase}{"\n"}'
+kubectl get pod -n default <pod> -o jsonpath='{.status.containerStatuses[0].restartCount} {.status.containerStatuses[0].lastState.terminated.reason} {.status.containerStatuses[0].lastState.terminated.finishedAt} {.status.containerStatuses[0].state.running.startedAt}{"\n"}'
+```
+
+For a live Rust service memory check inside a pod:
+
+```bash
+kubectl exec -n default deploy/service-ssh -- /bin/sh -c 'cat /proc/1/status | egrep "VmRSS|VmSize|VmHWM|Threads"'
+```
+
+VictoriaMetrics is usually available in-cluster as `monitoring/victoriametrics` on `127.0.0.1:8428` from inside its pod. Query it from there when local ClusterIP access hangs:
+
+```bash
+kubectl exec -n monitoring deploy/victoriametrics -- wget -qO- 'http://127.0.0.1:8428/api/v1/query?query=max_over_time(container_memory_working_set_bytes{namespace="default",pod="<pod>",container="<container>"}[12h])'
+```
+
+Postgres has `pg_stat_statements` preloaded in prod. Use it to find heavy time, row-volume, and temp-spill fingerprints:
+
+```sql
+SELECT extname, extversion FROM pg_extension WHERE extname = 'pg_stat_statements';
+SHOW shared_preload_libraries;
+
+SELECT calls,
+       round(total_exec_time::numeric, 1) AS total_ms,
+       round(mean_exec_time::numeric, 2) AS mean_ms,
+       rows,
+       temp_blks_read,
+       temp_blks_written,
+       left(regexp_replace(query, '\s+', ' ', 'g'), 180) AS query
+FROM pg_stat_statements
+ORDER BY total_exec_time DESC
+LIMIT 12;
+
+SELECT calls,
+       rows,
+       round(rows::numeric / nullif(calls, 0), 1) AS rows_per_call,
+       round(mean_exec_time::numeric, 2) AS mean_ms,
+       left(regexp_replace(query, '\s+', ' ', 'g'), 180) AS query
+FROM pg_stat_statements
+WHERE calls > 0
+ORDER BY rows DESC
+LIMIT 12;
+
+SELECT calls, temp_blks_read, temp_blks_written, round(total_exec_time::numeric, 1) AS total_ms,
+       left(regexp_replace(query, '\s+', ' ', 'g'), 180) AS query
+FROM pg_stat_statements
+WHERE temp_blks_read > 0 OR temp_blks_written > 0
+ORDER BY temp_blks_written + temp_blks_read DESC
+LIMIT 12;
+```
+
+Read Postgres logs around an OOM/failover from the affected pod and prior container:
+
+```bash
+kubectl logs -n default <postgres-pod> -c postgres --previous --tail=300
+kubectl logs -n default <postgres-pod> -c postgres --tail=300
+```
+
 ### 10.3 Testing
 
 ```bash
@@ -967,6 +1036,28 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 7. Liquidsoap debugging → `docker run --rm savonet/liquidsoap:v2.4.0 liquidsoap -h <topic>`
 8. Music missing from PVC → Re-run infra deploy to trigger `sync_music` job (syncs from R2). For manual recovery: `aws s3 sync s3://$MUSIC_BUCKET/ ./music/ --endpoint-url $S3_ENDPOINT` then `kubectl cp` each genre dir individually into the pod.
 9. Repeated Postgres `role "root" does not exist` lines in GitHub Actions are often service-log noise, not the failure. They’re misleading because Actions prints service container logs after a job fails. Generally check for other errors before stopping to try and fix this probable red-herring.
+10. `service-ssh`/Postgres OOM with low user count → First check Lateania saved furniture amplification. Run:
+
+```sql
+SELECT u.username,
+       pg_size_pretty(pg_column_size(m.data)::bigint) AS size,
+       jsonb_array_length(coalesce(m.data->'house_furniture', '[]'::jsonb)) AS house_furniture
+FROM mud_characters m
+JOIN users u ON u.id = m.user_id
+ORDER BY jsonb_array_length(coalesce(m.data->'house_furniture', '[]'::jsonb)) DESC
+LIMIT 10;
+```
+
+Emergency cleanup, if the field is inflated and cosmetic furniture loss is acceptable:
+
+```sql
+UPDATE mud_characters
+SET data = jsonb_set(data, '{house_furniture}', '[]'::jsonb, true),
+    updated = current_timestamp
+WHERE jsonb_array_length(coalesce(data->'house_furniture', '[]'::jsonb)) > 0;
+```
+
+Then deploy the `late-ssh/src/app/door/lateania/svc.rs` fix that replaces/dedupes/caps furniture on hydrate/save; otherwise users can re-amplify the field.
 
 ## 11. TUI Screens Reference [STABLE]
 

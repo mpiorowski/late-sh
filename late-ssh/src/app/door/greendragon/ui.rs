@@ -342,6 +342,12 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
             CommentRoom::Veterans => "Beyond the stone door, old scars trade stories.",
             CommentRoom::ShadeGypsy => "Through the trance, the dead press close to be heard.",
             CommentRoom::ShadeGrave => "Nearby, the lost souls give voice to their grief.",
+            CommentRoom::Waiting => {
+                "Plush leather chairs, potted bushes, and tinny muzak from a fake rock."
+            }
+            CommentRoom::ClanHall(_) => {
+                "The secret levers give, the lock disengages, and your clan mates look up."
+            }
         };
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(intro, dim)));
@@ -378,12 +384,13 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     // the built rows, and any footer lines (fuzz note, your percentile).
     if matches!(
         state.mode(),
-        Mode::WarriorList | Mode::HallOfFame | Mode::BountyList
+        Mode::WarriorList | Mode::HallOfFame | Mode::BountyList | Mode::ClanDetail
     ) {
         let dim = Style::default().fg(theme::TEXT_DIM());
         let page = match state.mode() {
             Mode::WarriorList => state.warrior_page(),
             Mode::BountyList => state.bounty_page_view(),
+            Mode::ClanDetail => state.clan_detail_page(),
             _ => state.hall_of_fame_page(),
         };
         lines.push(Line::raw(""));
@@ -627,6 +634,229 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // The clan lobby: the registrar's marble hall, and any pending
+    // application's status (applicant.php).
+    if state.mode() == Mode::ClanLobby {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "A marble lobby ringed with intricately locked doors, one per clan \
+                 hall. Behind a polished desk sits {}, the clan registrar.",
+                data::CLAN_REGISTRAR
+            ),
+            dim,
+        )));
+        if c.clan_id.is_some() {
+            lines.push(Line::from(Span::styled(
+                match state.clan_view() {
+                    Some((clan, _)) => format!(
+                        "\"Your application to {} hasn't been accepted yet,\" she says. \
+                         \"Perhaps the waiting area?\"",
+                        clan.name
+                    ),
+                    None => "She checks her files for word on your application...".to_string(),
+                },
+                dim,
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "You are not a member of any clan.",
+                dim,
+            )));
+        }
+    }
+
+    // The two clan pickers share their flavor line.
+    if matches!(state.mode(), Mode::ClanList | Mode::ClanApply) {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            match state.mode() {
+                Mode::ClanApply => format!(
+                    "{} pulls out a form with two lines: your name, and the clan's.",
+                    data::CLAN_REGISTRAR
+                ),
+                _ => format!(
+                    "{} points you to a marquee board near the entrance.",
+                    data::CLAN_REGISTRAR
+                ),
+            },
+            dim,
+        )));
+    }
+
+    // The founding form: the fees and the lines already inked.
+    if state.mode() == Mode::ClanFoundForm {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "\"Three things,\" says {}: \"a full name, a short banner, and the \
+                 fees - {} gold and {} gems - to tailor your door's locks.\"",
+                data::CLAN_REGISTRAR,
+                model::CLAN_START_GOLD,
+                model::CLAN_START_GEMS
+            ),
+            dim,
+        )));
+        if let Some(name) = state.clan_found_name() {
+            lines.push(Line::from(Span::styled(
+                format!("The name line reads: {name}"),
+                dim,
+            )));
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                if state.clan_found_name().is_none() {
+                    format!("clan name? {input}_")
+                } else {
+                    format!("banner letters? {input}_")
+                },
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The hall: the boards, the counts, and the clan's tally
+    // (clan_default.php's page body).
+    if matches!(state.mode(), Mode::ClanHall | Mode::ClanMembership) {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        match state.clan_view() {
+            None => lines.push(Line::from(Span::styled(
+                "You work the secret levers and knobs of your hall's lock...",
+                dim,
+            ))),
+            Some((clan, members)) => {
+                lines.push(Line::from(Span::styled(
+                    format!("The hall of {} <{}>.", clan.name, clan.tag),
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                )));
+                if !clan.motd.trim().is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("MOTD (by {}): {}", clan.motd_author, clan.motd),
+                        Style::default().fg(theme::TEXT()),
+                    )));
+                }
+                if !clan.description.trim().is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("Charter (by {}): {}", clan.desc_author, clan.description),
+                        dim,
+                    )));
+                }
+                // Membership counts per rank, highest first (the hall's
+                // "Membership Details" block).
+                let mut counts: Vec<(u8, usize)> = Vec::new();
+                for m in members {
+                    match counts.iter_mut().find(|(r, _)| *r == m.rank) {
+                        Some((_, n)) => *n += 1,
+                        None => counts.push((m.rank, 1)),
+                    }
+                }
+                counts.sort_by(|a, b| b.0.cmp(&a.0));
+                let detail = counts
+                    .iter()
+                    .map(|(r, n)| format!("{}: {n}", model::clan_rank_name(*r)))
+                    .collect::<Vec<_>>()
+                    .join("   ");
+                lines.push(Line::from(Span::styled(detail, dim)));
+                let total_dks: u64 = members.iter().map(|m| m.dragon_kills as u64).sum();
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "This clan counts {total_dks} dragon kill{} all told.",
+                        if total_dks == 1 { "" } else { "s" }
+                    ),
+                    dim,
+                )));
+            }
+        }
+    }
+
+    // One member on the desk (the ledger's operations page).
+    if state.mode() == Mode::ClanMemberOps {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        match state.clan_member_target() {
+            None => lines.push(Line::from(Span::styled("The page is blank.", dim))),
+            Some(m) => {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "{} - {} - level {}, {} dragon kill{}.",
+                        m.name,
+                        model::clan_rank_name(m.rank),
+                        m.level,
+                        m.dragon_kills,
+                        if m.dragon_kills == 1 { "" } else { "s" }
+                    ),
+                    Style::default().fg(theme::TEXT()),
+                )));
+            }
+        }
+    }
+
+    // The boards editor: what stands on them now, and the line being typed.
+    if state.mode() == Mode::ClanEdit {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        if let Some((clan, _)) = state.clan_view() {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "MOTD: {}",
+                    if clan.motd.trim().is_empty() {
+                        "(blank)"
+                    } else {
+                        &clan.motd
+                    }
+                ),
+                dim,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Charter: {}",
+                    if clan.description.trim().is_empty() {
+                        "(blank)"
+                    } else {
+                        &clan.description
+                    }
+                ),
+                dim,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Talk verb: {}",
+                    if clan.custom_verb.trim().is_empty() {
+                        "says"
+                    } else {
+                        &clan.custom_verb
+                    }
+                ),
+                dim,
+            )));
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("new wording? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The withdraw confirmation (clan_start.php's withdrawconfirm).
+    if state.mode() == Mode::ClanWithdraw {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "Are you sure you want to withdraw from your clan? A solitary \
+             leader's mantle passes on - or, with no one left, the clan is \
+             struck from the rolls.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+
     if state.mode() == Mode::ChooseStyle {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
@@ -770,6 +1000,8 @@ fn panel_title(mode: Mode) -> &'static str {
             CommentRoom::Veterans => "The Veterans' Rock",
             CommentRoom::ShadeGypsy => "A Deep Trance",
             CommentRoom::ShadeGrave => "The Lost Souls",
+            CommentRoom::Waiting => "The Waiting Area",
+            CommentRoom::ClanHall(_) => "The Clan Hearth",
         },
         Mode::WarriorList => "The Warriors of the Realm",
         Mode::HallOfFame => "The Hall of Fame",
@@ -781,6 +1013,16 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::BountyTarget => "Naming a Head",
         Mode::BountyAmount => "Naming a Price",
         Mode::Haunt => "Across the Veil",
+        Mode::ClanLobby => "The Clan Halls",
+        Mode::ClanList => "The Marquee Board",
+        Mode::ClanDetail => "A Clan's Roll",
+        Mode::ClanApply => "A Membership Form",
+        Mode::ClanFoundForm => "A New Clan's Filing",
+        Mode::ClanHall => "Your Clan Hall",
+        Mode::ClanMembership => "The Clan Ledger",
+        Mode::ClanMemberOps => "A Word About a Member",
+        Mode::ClanEdit => "The Hall's Boards",
+        Mode::ClanWithdraw => "Leaving the Clan",
     }
 }
 
@@ -811,6 +1053,13 @@ fn controls_hint(mode: Mode) -> &'static str {
             "up/down move   Enter choose   Esc back to the booth"
         }
         Mode::Haunt => "up/down move   Enter choose   Esc back to the graves",
+        Mode::ClanList | Mode::ClanApply | Mode::ClanFoundForm => {
+            "up/down move   Enter choose   Esc back to the lobby"
+        }
+        Mode::ClanMembership | Mode::ClanEdit | Mode::ClanWithdraw => {
+            "up/down move   Enter choose   Esc back to the hall"
+        }
+        Mode::ClanMemberOps => "up/down move   Enter choose   Esc back to the ledger",
         _ => "up/down move   Enter choose   Esc back to village",
     }
 }
