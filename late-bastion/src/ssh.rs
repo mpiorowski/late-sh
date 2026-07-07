@@ -622,6 +622,10 @@ pub async fn run(
     let russh_config = Arc::new(russh::server::Config {
         inactivity_timeout: Some(Duration::from_secs(config.ssh_idle_timeout)),
         auth_rejection_time: Duration::from_secs(3),
+        // Don't penalize the client's initial `none`-auth probe; only delay
+        // repeated failures. Without this, every connection waits 3s before
+        // the real publickey auth is even attempted.
+        auth_rejection_time_initial: Some(Duration::ZERO),
         keys: vec![host_key],
         window_size: 8 * 1024 * 1024,
         event_buffer_size: 128,

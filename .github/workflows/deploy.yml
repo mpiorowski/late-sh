@@ -56,7 +56,7 @@ jobs:
 
   build_bastion:
     name: build_late_bastion_image
-    if: "!endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')"
+    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack') && !endsWith(inputs.release_tag, '-dopewars')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack') && !endsWith(github.ref, '-dopewars')) }}
     needs: ci
     uses: ./.github/workflows/build.yml
     permissions:
@@ -66,11 +66,12 @@ jobs:
     with:
       registry: ghcr.io
       image_name: late-bastion
-      image_tag: ${{ github.event.release.tag_name }}
+      image_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
       context: .
       dockerfile: ./Dockerfile
       docker_target: runtime-bastion
-      environment: ${{ github.event.release.prerelease && 'staging' || 'production' }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
   get_web_image:
     name: get_current_web_image_tag
@@ -155,8 +156,8 @@ jobs:
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
-  wait_for_ssh_rollout:
-    name: wait_for_ssh_rollout
+  wait_for_rollouts:
+    name: wait_for_rollouts
     if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack') && !endsWith(inputs.release_tag, '-dopewars')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack') && !endsWith(github.ref, '-dopewars')) }}
     needs: terraform
     runs-on: ubuntu-latest
@@ -170,5 +171,9 @@ jobs:
         with:
           kubeconfig: ${{ secrets.KUBE_CONFIG }}
 
-      - name: wait_for_rollout
+      - name: wait_for_ssh_rollout
         run: kubectl rollout status deployment service-ssh -n default --timeout=180s
+
+      - name: wait_for_bastion_rollout
+        if: ${{ vars.BASTION_ENABLED == '1' }}
+        run: kubectl rollout status deployment service-bastion -n default --timeout=180s
