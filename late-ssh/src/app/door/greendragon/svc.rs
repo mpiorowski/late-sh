@@ -261,6 +261,24 @@ pub enum HauntLoad {
     Gone,
 }
 
+/// The async result of a bank transfer settling onto the recipient
+/// (`bank.php` transfer3's recipient half). The caller has already drawn the
+/// gold; every variant but `Done` means a refund.
+#[derive(Clone)]
+pub enum TransferLoad {
+    Loading,
+    /// The gold is in their bank and the clerk's note in their reports.
+    Done { target: String },
+    /// They've taken the day's [`model::TRANSFERS_RECEIVED_PER_DAY`]
+    /// transfers already (`transferreceive`).
+    TooManyToday { target: String },
+    /// The sum beats their per-transfer cap (`transferperlevel`), re-checked
+    /// against the fresh blob's level.
+    OverCap { target: String, cap: u64 },
+    /// The account vanished between the search and the settlement.
+    Gone,
+}
+
 /// The async result of loading the full character roster.
 #[derive(Clone)]
 pub enum RosterLoad {
@@ -1377,6 +1395,67 @@ impl GreenDragonService {
                 tracing::warn!("greendragon pvp defeat settle failed: {e}");
             }
         });
+    }
+
+    /// Settle a bank transfer onto the recipient (`bank.php` op=transfer3,
+    /// their half): a row-locked delta write in the PvP shape. The
+    /// recipient-side checks re-run against the fresh blob — upstream SELECTs
+    /// the accounts row at finalize, so its per-transfer cap and daily
+    /// receive count are finalize-time reads too — and the deposit, the
+    /// counter bump, and the clerk's note land in one transaction that never
+    /// touches their presence. The caller has already drawn the gold and
+    /// refunds it on any refusal.
+    pub fn transfer_gold(
+        &self,
+        target_id: Uuid,
+        amount: u64,
+        sender: String,
+    ) -> watch::Receiver<TransferLoad> {
+        let (tx, rx) = watch::channel(TransferLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let gate = inner.gate(target_id);
+            let _held = gate.lock().await;
+            let outcome = async {
+                let mut client = inner.db.get().await?;
+                let db_tx = client.transaction().await?;
+                let Some((blob, _)) =
+                    GreenDragonCharacter::load_for_update(&db_tx, target_id).await?
+                else {
+                    return anyhow::Ok(TransferLoad::Gone);
+                };
+                let mut c = persist::from_json(&blob);
+                let target = c.titled_name();
+                let cap = c.level as u64 * model::TRANSFER_PER_LEVEL;
+                if amount > cap {
+                    return Ok(TransferLoad::OverCap { target, cap });
+                }
+                if c.transfers_received_today >= model::TRANSFERS_RECEIVED_PER_DAY {
+                    return Ok(TransferLoad::TooManyToday { target });
+                }
+                c.gold_in_bank = c.gold_in_bank.saturating_add(amount as i64);
+                c.transfers_received_today += 1;
+                c.pvp_reports.push(format!(
+                    "{sender} sent {amount} gold to your account at the Coinvault; \
+                     the clerks have already entered it in your ledger."
+                ));
+                GreenDragonCharacter::update_data_keep_updated(
+                    &db_tx,
+                    target_id,
+                    persist::to_json(&c),
+                )
+                .await?;
+                db_tx.commit().await?;
+                Ok(TransferLoad::Done { target })
+            }
+            .await;
+            let msg = outcome.unwrap_or_else(|e| {
+                tracing::warn!("greendragon transfer failed: {e}");
+                TransferLoad::Gone
+            });
+            let _ = tx.send(msg);
+        });
+        rx
     }
 
     /// Read the current Five Sixes jackpot (for the tavern's signboard).

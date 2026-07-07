@@ -40,6 +40,17 @@ pub const HP_PER_DRAGON_POINT: u32 = 5;
 /// Gold the bank will lend per character level (LoGD `borrowperlevel`). Debt is
 /// a negative balance and accrues interest daily.
 pub const BORROW_PER_LEVEL: i64 = 20;
+/// Bank transfers (`bank.php` op=transfer, stock-on via `allowgoldtransfer`):
+/// the window opens at this level, or at any dragon kill (`mintransferlev`).
+pub const MIN_TRANSFER_LEVEL: u8 = 3;
+/// A recipient may take `level * this` gold in one transfer
+/// (`transferperlevel`; upstream's refusal says "per day" but the check is
+/// per transfer, kept 1=1).
+pub const TRANSFER_PER_LEVEL: u64 = 25;
+/// A sender may move `level * this` gold out per day (`maxtransferout`).
+pub const MAX_TRANSFER_OUT_PER_LEVEL: u64 = 25;
+/// Transfers one account may receive per day (`transferreceive`).
+pub const TRANSFERS_RECEIVED_PER_DAY: u32 = 3;
 /// One-in-this chance of a gem on a forest victory under level 15 (LoGD
 /// `forestgemchance`).
 pub const FOREST_GEM_CHANCE: u32 = 25;
@@ -462,6 +473,13 @@ pub struct Character {
     /// Bounty contracts placed today (max [`BOUNTIES_PER_DAY`]; upstream
     /// keeps this as a dag module pref, reset by its newday hook).
     pub bounties_set_today: u32,
+    /// Gold sent away through the bank today (`amountouttoday`), capped at
+    /// `level * MAX_TRANSFER_OUT_PER_LEVEL`.
+    pub amount_out_today: u64,
+    /// Bank transfers received today (`transferredtoday`, max
+    /// [`TRANSFERS_RECEIVED_PER_DAY`]): checked and bumped by the *sender's*
+    /// settlement against this fresh blob, like the PvP writes.
+    pub transfers_received_today: u32,
     /// PvP attacks left today (upstream `playerfights`): spent at engage,
     /// refilled to [`PVP_FIGHTS_PER_DAY`] by a normal dawn only (the paid
     /// resurrection skips them, exactly like grave fights).
@@ -921,6 +939,8 @@ impl Default for Character {
             used_outhouse_today: false,
             fivesix_plays_today: 0,
             bounties_set_today: 0,
+            amount_out_today: 0,
+            transfers_received_today: 0,
             // Seeded like grave fights: the skipped first-login new day would
             // have filled the day's PvP pool.
             player_fights: PVP_FIGHTS_PER_DAY,
@@ -1364,6 +1384,27 @@ impl Character {
         amount
     }
 
+    /// Whether the bank's transfer window opens at all (`bank.php`'s nav
+    /// gate: `mintransferlev` or any dragon kill). Debt is refused at the
+    /// window, not here, so the teller gets her line.
+    pub fn can_transfer(&self) -> bool {
+        self.level >= MIN_TRANSFER_LEVEL || self.dragon_kills > 0
+    }
+
+    /// Draw `amount` gold for a bank transfer, hand first and the shortfall
+    /// from the bank (`bank.php`'s settle: `gold -= amt`, negative overflow
+    /// taken out of `goldinbank`). Returns the bank's share, so a refused
+    /// settlement can refund each part where it came from. The caller has
+    /// checked `gold + gold_in_bank >= amount` and that the balance isn't
+    /// negative.
+    pub fn draw_for_transfer(&mut self, amount: u64) -> u64 {
+        let from_hand = amount.min(self.gold);
+        let from_bank = amount - from_hand;
+        self.gold -= from_hand;
+        self.gold_in_bank -= from_bank as i64;
+        from_bank
+    }
+
     /// Perturb a creature's stat block by the player's banked investment —
     /// LoGD's `buffbadguy` (`lib/forestoutcomes.php`), applied to every forest
     /// creature at spawn:
@@ -1713,6 +1754,10 @@ impl Character {
         self.used_outhouse_today = false;
         self.fivesix_plays_today = 0;
         self.bounties_set_today = 0;
+        // The bank's transfer counters (`newday.php` zeroes both
+        // unconditionally, resurrection days included).
+        self.amount_out_today = 0;
+        self.transfers_received_today = 0;
         // A haunt collects (`newday.php`'s `hauntedby` block, unconditional —
         // it fires on the paid resurrection too): one turn lost to the
         // night's fright, and the mark clears. Upstream's `turns--` has no
@@ -2445,6 +2490,32 @@ mod tests {
         assert_eq!(c.clan_rank, CLAN_FOUNDER);
         assert_eq!(c.clan_joined_at, 100);
         assert_eq!(c.clan_tag, "DB");
+    }
+
+    #[test]
+    fn transfer_draw_taps_the_hand_first_and_the_bank_for_the_rest() {
+        let mut c = Character::new("hero", 0);
+        c.gold = 30;
+        c.gold_in_bank = 100;
+        // Fully covered by the purse: the bank untouched.
+        assert_eq!(c.draw_for_transfer(20), 0);
+        assert_eq!((c.gold, c.gold_in_bank), (10, 100));
+        // The shortfall comes out of the bank (`bank.php`'s negative-gold
+        // overflow), and the split comes back for a refund.
+        assert_eq!(c.draw_for_transfer(50), 40);
+        assert_eq!((c.gold, c.gold_in_bank), (0, 60));
+    }
+
+    #[test]
+    fn new_day_resets_the_transfer_counters() {
+        // newday.php zeroes `amountouttoday`/`transferredtoday`
+        // unconditionally, resurrection days included.
+        let mut c = Character::new("hero", 0);
+        c.amount_out_today = 75;
+        c.transfers_received_today = 3;
+        c.roll_new_day(1, 0, 0, &mut rand::thread_rng()).unwrap();
+        assert_eq!(c.amount_out_today, 0);
+        assert_eq!(c.transfers_received_today, 0);
     }
 
     #[test]

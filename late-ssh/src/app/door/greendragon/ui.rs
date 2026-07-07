@@ -550,6 +550,54 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // The vault's transfer window: the terms of the house, and the name line.
+    if state.mode() == Mode::BankTransferTarget {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "The banker slides the transfer ledger across the counter. \
+                 \"You may send {} more gold today, and no account takes more \
+                 than {} per its holder's level in one note.\"",
+                state.transfer_out_left(),
+                model::TRANSFER_PER_LEVEL
+            ),
+            dim,
+        )));
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("to whom? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // Writing the sum: the recipient's cap, the day's allowance, the minimum.
+    if state.mode() == Mode::BankTransferAmount {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        if let Some((name, level)) = state.transfer_target_info() {
+            let cap = model::TRANSFER_PER_LEVEL * level as u64;
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "\"{name}, then. Their account takes up to {cap} gold in one \
+                     note; you may still send {} today, and nothing smaller \
+                     than your level.\"",
+                    state.transfer_out_left()
+                ),
+                dim,
+            )));
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("how much gold? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
     // The barman's counter: his greeting and the price of a word.
     if state.mode() == Mode::TavernBartender {
         let dim = Style::default().fg(theme::TEXT_DIM());
@@ -917,6 +965,8 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
             Mode::BountyTarget => "type a name   Enter check his book   Esc never mind",
             Mode::IntelTarget => "type a name   Enter ask him   Esc never mind",
             Mode::BountyAmount => "type an amount   Enter slide the coins over   Esc never mind",
+            Mode::BankTransferTarget => "type a name   Enter check the ledger   Esc never mind",
+            Mode::BankTransferAmount => "type an amount   Enter send the note   Esc never mind",
             Mode::Haunt => "type a name   Enter whisper it   Esc never mind",
             _ => "type your line   Enter say it   Esc think better of it",
         }
@@ -969,6 +1019,8 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::ArmorShop => "Duskmail Armoury",
         Mode::Healer => "The Mendery",
         Mode::Bank => "The Coinvault",
+        Mode::BankTransferTarget => "The Transfer Ledger",
+        Mode::BankTransferAmount => "Writing the Note",
         Mode::Training => "The Proving Yard",
         Mode::Event => "A Forest Happening",
         Mode::ChooseStyle => "A Manner of Address",
@@ -1051,6 +1103,9 @@ fn controls_hint(mode: Mode) -> &'static str {
         Mode::DagTable => "up/down move   Enter choose   Esc back to the inn",
         Mode::BountyList | Mode::BountyTarget | Mode::BountyAmount => {
             "up/down move   Enter choose   Esc back to the booth"
+        }
+        Mode::BankTransferTarget | Mode::BankTransferAmount => {
+            "up/down move   Enter choose   Esc back to the counter"
         }
         Mode::Haunt => "up/down move   Enter choose   Esc back to the graves",
         Mode::ClanList | Mode::ClanApply | Mode::ClanFoundForm => {
