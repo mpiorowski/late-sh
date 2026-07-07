@@ -167,6 +167,113 @@ pub fn bounty_cost(amount: u64) -> u64 {
     (amount as f64 * (100 + BOUNTY_FEE_PCT) as f64 / 100.0).round() as u64
 }
 
+/// Founding a clan costs gold and gems (`goldtostartclan`/`gemstostartclan`).
+pub const CLAN_START_GOLD: u64 = 10_000;
+pub const CLAN_START_GEMS: u64 = 15;
+/// The clan rank rungs (`lib/constants.php`). The founder is literally
+/// "leader + 1" (`applicant_new.php` sets `CLAN_LEADER+1`).
+pub const CLAN_APPLICANT: u8 = 0;
+pub const CLAN_MEMBER: u8 = 10;
+pub const CLAN_OFFICER: u8 = 20;
+pub const CLAN_LEADER: u8 = 30;
+pub const CLAN_FOUNDER: u8 = 31;
+/// Clan name shape (`applicant_new.php`): 5–50 chars of letters, spaces,
+/// apostrophes, and dashes.
+pub const CLAN_NAME_MIN: usize = 5;
+pub const CLAN_NAME_MAX: usize = 50;
+/// Clan tag ("short name") shape: 2–5 letters.
+pub const CLAN_TAG_MIN: usize = 2;
+pub const CLAN_TAG_MAX: usize = 5;
+/// The custom talk verb's cap (`clan_motd.php`'s maxlength).
+pub const CLAN_VERB_MAX: usize = 15;
+
+/// The rank a promotion lands on (`lib/clan/func.php` `clan_nextrank`): one
+/// rung up the ladder with the founder rung popped off — so nothing promotes
+/// to founder, and a leader "promotes" to leader (the UPDATE also clamps at
+/// the actor's own rank; see [`clan_promote_rank`]).
+pub fn clan_next_rank(current: u8) -> u8 {
+    [CLAN_MEMBER, CLAN_OFFICER, CLAN_LEADER]
+        .into_iter()
+        .find(|r| *r > current)
+        .unwrap_or(CLAN_LEADER)
+}
+
+/// The rank a demotion lands on (`clan_previousrank`): one rung down, founder
+/// rung popped (a stepped-down founder is a leader), floor applicant.
+pub fn clan_prev_rank(current: u8) -> u8 {
+    [CLAN_LEADER, CLAN_OFFICER, CLAN_MEMBER]
+        .into_iter()
+        .find(|r| *r < current)
+        .unwrap_or(CLAN_APPLICANT)
+}
+
+/// What a promote by `actor_rank` actually writes (`clan_membership.php`'s
+/// `GREATEST(0, LEAST(yours, next))`): the next rung, clamped at the actor's
+/// own rank — an officer lifts an applicant to member, a member to officer,
+/// and can go no higher.
+pub fn clan_promote_rank(actor_rank: u8, target_rank: u8) -> u8 {
+    clan_next_rank(target_rank).min(actor_rank)
+}
+
+/// Whether `actor` sees the promote row for `target`
+/// (`clan_membership.php`): officers+ only, target strictly below them,
+/// never onto the founder rung.
+pub fn clan_can_promote(actor_rank: u8, target_rank: u8) -> bool {
+    actor_rank > CLAN_MEMBER && target_rank < actor_rank && target_rank < CLAN_FOUNDER
+}
+
+/// Whether `actor` sees the demote row for `target`: officers+ may demote
+/// their equals-or-below (never themselves) one rung — but only while the
+/// rung below isn't applicant, so a member can't be demoted (only removed).
+/// The founder demoting *themselves* is the special "step down" row instead
+/// (see [`clan_can_step_down`]).
+pub fn clan_can_demote(actor_rank: u8, target_rank: u8, is_self: bool) -> bool {
+    actor_rank > CLAN_MEMBER
+        && !is_self
+        && target_rank <= actor_rank
+        && target_rank > CLAN_APPLICANT
+        && clan_prev_rank(target_rank) > CLAN_APPLICANT
+}
+
+/// The founder's one self-demotion: "step down as founder" (31 → 30).
+pub fn clan_can_step_down(actor_rank: u8, target_rank: u8, is_self: bool) -> bool {
+    is_self && actor_rank == CLAN_FOUNDER && target_rank == CLAN_FOUNDER
+}
+
+/// Whether `actor` sees the remove row for `target`: officers+ may remove
+/// anyone at-or-below their own rank, except themselves (that's the
+/// withdraw). Removing an applicant is the application's rejection.
+pub fn clan_can_remove(actor_rank: u8, target_rank: u8, is_self: bool) -> bool {
+    actor_rank > CLAN_MEMBER && !is_self && target_rank <= actor_rank
+}
+
+/// The registrar's name-shape test (`applicant_new.php`'s regex): letters,
+/// spaces, apostrophes, and dashes, 5–50 of them.
+pub fn clan_name_valid(name: &str) -> bool {
+    let n = name.chars().count();
+    (CLAN_NAME_MIN..=CLAN_NAME_MAX).contains(&n)
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphabetic() || c == ' ' || c == '\'' || c == '-')
+}
+
+/// The tag's shape test: 2–5 letters, nothing else.
+pub fn clan_tag_valid(tag: &str) -> bool {
+    let n = tag.chars().count();
+    (CLAN_TAG_MIN..=CLAN_TAG_MAX).contains(&n) && tag.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// The rank's display name (upstream's `$ranks` array, ours uncolored).
+pub fn clan_rank_name(rank: u8) -> &'static str {
+    match rank {
+        r if r >= CLAN_FOUNDER => "Founder",
+        r if r >= CLAN_LEADER => "Leader",
+        r if r >= CLAN_OFFICER => "Officer",
+        r if r >= CLAN_MEMBER => "Member",
+        _ => "Applicant",
+    }
+}
+
 /// The forest hunting intensities. LoGD offers easier/harder pickings that
 /// shift the creature level relative to the player's own level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -376,6 +483,24 @@ pub struct Character {
     /// the DB. Non-empty means the next new day — dawn or paid — docks a
     /// turn and clears it. Empty = unhaunted.
     pub haunted_by: String,
+    /// Clan membership (upstream `accounts.clanid`): `None` = clanless. Set
+    /// by applying or founding; cleared by withdrawing, being removed (a
+    /// cross-player write), or the clan's deletion. Survives dragon kills
+    /// (`dragon.php`'s preserve list) and death.
+    pub clan_id: Option<uuid::Uuid>,
+    /// Clan rank rung (`clanrank`): [`CLAN_APPLICANT`] 0 / [`CLAN_MEMBER`]
+    /// 10 / [`CLAN_OFFICER`] 20 / [`CLAN_LEADER`] 30 / [`CLAN_FOUNDER`] 31.
+    /// Changed by officers+ through cross-player writes.
+    pub clan_rank: u8,
+    /// Epoch seconds of joining or applying (`clanjoindate`): the
+    /// succession tie-break (highest rank, then oldest join, inherits a
+    /// leaderless clan).
+    pub clan_joined_at: i64,
+    /// The clan's tag, denormalized off the clan row at apply/found time
+    /// (tags are immutable here — upstream's rename is superuser tooling).
+    /// Rendered `<TAG>` before the name in every comment area while
+    /// `clan_rank > 0`, upstream's live-join render.
+    pub clan_tag: String,
     /// UTC day-number of the last new-day reset, for turn/heal regeneration.
     pub last_day: i64,
     /// Presence flag mirroring upstream's `loggedin`: stamped true when the
@@ -803,6 +928,10 @@ impl Default for Character {
             pvp_engaged_at: 0,
             pvp_reports: Vec::new(),
             haunted_by: String::new(),
+            clan_id: None,
+            clan_rank: CLAN_APPLICANT,
+            clan_joined_at: 0,
+            clan_tag: String::new(),
             last_day: 0,
             online: false,
         }
@@ -831,6 +960,36 @@ impl Character {
         } else {
             format!("{} {}", self.title, self.name)
         }
+    }
+
+    /// The name as a comment area shows it: `<TAG>` before the bare name for
+    /// real clan members (upstream tags every comment area, rank > 0 only —
+    /// applicants stay bare-named).
+    pub fn commentary_name(&self) -> String {
+        if self.clan_rank > CLAN_APPLICANT && !self.clan_tag.is_empty() {
+            format!("<{}> {}", self.clan_tag, self.name)
+        } else {
+            self.name.clone()
+        }
+    }
+
+    /// Enroll with a clan: as its rank-0 applicant (`applicant_apply.php`)
+    /// or its rank-31 founder (`applicant_new.php`).
+    pub fn join_clan(&mut self, clan_id: uuid::Uuid, tag: &str, rank: u8, now_secs: i64) {
+        self.clan_id = Some(clan_id);
+        self.clan_rank = rank;
+        self.clan_joined_at = now_secs;
+        self.clan_tag = tag.to_string();
+    }
+
+    /// Clear membership (withdraw, removal, or the clan's deletion) — the
+    /// same reset every upstream path writes: `clanid=0`, rank applicant,
+    /// join date zeroed.
+    pub fn leave_clan(&mut self) {
+        self.clan_id = None;
+        self.clan_rank = CLAN_APPLICANT;
+        self.clan_joined_at = 0;
+        self.clan_tag = String::new();
     }
 
     /// Maximum hitpoints: `10 * level` plus any retained dragon-kill bonus and

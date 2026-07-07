@@ -16,6 +16,7 @@ use late_core::{
     db::Db,
     models::{
         greendragon_bounty::GreenDragonBounty, greendragon_character::GreenDragonCharacter,
+        greendragon_clan::{ClanNameClash, GreenDragonClan},
         greendragon_commentary::GreenDragonCommentary, greendragon_news::GreenDragonNews,
         greendragon_setting::GreenDragonSetting,
         profile_award::{
@@ -139,6 +140,9 @@ pub struct RosterEntry {
     /// Epoch seconds an attacker last engaged them (`pvpflag`); within
     /// [`model::PVP_TIMEOUT_SECS`] the row shows but can't be attacked.
     pub pvp_engaged_at: i64,
+    /// Clan membership, for the warrior list's online-clan-members slice
+    /// (`list.php?op=clan`).
+    pub clan_id: Option<Uuid>,
 }
 
 /// The sleeping defender as the engage transaction snapshotted them
@@ -263,6 +267,88 @@ pub enum RosterLoad {
 pub enum IntelLoad {
     Loading,
     Ready(Option<Box<Character>>),
+}
+
+/// One clan member as the hall's membership views read them, decoded off the
+/// character blobs (`clan_membership.php` / `detail.php` read `accounts`).
+#[derive(Clone, Debug)]
+pub struct ClanMemberRow {
+    pub user_id: Uuid,
+    /// Titled display name (upstream's `name` column carries the DK title).
+    pub name: String,
+    pub level: u8,
+    pub dragon_kills: u32,
+    pub rank: u8,
+    /// Epoch seconds of joining/applying (`clanjoindate`).
+    pub joined_at: i64,
+    pub alive: bool,
+    /// In the door right now (the roster's presence test), for the hall's
+    /// online-members slice.
+    pub online: bool,
+    /// Seconds since their last save (the "last on" column).
+    pub idle_secs: i64,
+}
+
+/// The async result of loading one clan's hall (or public detail) view.
+#[derive(Clone)]
+pub enum ClanLoad {
+    Loading,
+    Ready {
+        clan: Box<GreenDragonClan>,
+        /// Every character enrolled with the clan, applicants included,
+        /// unordered (the views sort per upstream's two orderings).
+        members: Arc<Vec<ClanMemberRow>>,
+        /// A leaderless hall auto-promoted this member to leader during the
+        /// load (`clan_default.php`'s no-leader block): `(user, name)`. If
+        /// it's the viewing session, the caller applies the rank locally.
+        promoted: Option<(Uuid, String)>,
+    },
+    /// The clan row is gone; the caller heals its own dangling membership
+    /// (`common.php` resets clanid/clanrank at page load).
+    Gone,
+    /// The DB failed — distinct from [`ClanLoad::Gone`] so a transient error
+    /// never wipes a real membership.
+    Failed,
+}
+
+/// One clan on the public list / application list: the row plus its count
+/// of real members (rank > applicant, upstream's `clanrank > 0` counts).
+#[derive(Clone, Debug)]
+pub struct ClanListEntry {
+    pub clan: GreenDragonClan,
+    pub members: usize,
+}
+
+/// The async result of the clan list (both lists order by member count).
+#[derive(Clone)]
+pub enum ClanListLoad {
+    Loading,
+    Ready(Arc<Vec<ClanListEntry>>),
+}
+
+/// The async result of filing a new clan (`applicant_new.php`'s approval).
+#[derive(Clone)]
+pub enum ClanFound {
+    Loading,
+    /// Approved and inserted; the caller enrolls itself as founder and the
+    /// fee (already taken) stays paid.
+    Founded { clan_id: Uuid },
+    /// The registrar's two "already taken" refusals; the fee comes back.
+    NameTaken,
+    TagTaken,
+    /// The DB failed; nothing was filed, the fee comes back.
+    Failed,
+}
+
+/// The async result of a clan operation that runs through the DB (an
+/// application's officer notice, a rank change, a removal, a withdrawal).
+#[derive(Clone)]
+pub enum ClanOp {
+    Loading,
+    /// Done; the line (possibly empty) is for the log.
+    Done(String),
+    /// Refused against fresh state; the line explains.
+    Refused(String),
 }
 
 #[derive(Clone)]
@@ -482,6 +568,103 @@ async fn pvp_settle_defeat_tx(
     Ok(())
 }
 
+/// Grace before the lazy empty-clan sweep may reap a clan (upstream deletes
+/// synchronously at list render, but its member writes are synchronous too —
+/// ours are fire-and-forget, so a brand-new clan gets an hour for its
+/// founder's save to land before it can look empty).
+const CLAN_SWEEP_GRACE_SECS: i64 = 3600;
+
+/// Append a sleep report to a character's blob, row-locked, without touching
+/// their presence (`updated`). The clan flows use this for the officer
+/// notices upstream sends as system mail. The caller holds the write gate.
+async fn append_report_tx(db: &Db, user_id: Uuid, line: &str) -> anyhow::Result<()> {
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    let Some((blob, _)) = GreenDragonCharacter::load_for_update(&tx, user_id).await? else {
+        return Ok(());
+    };
+    let mut c = persist::from_json(&blob);
+    c.pvp_reports.push(line.to_string());
+    GreenDragonCharacter::update_data_keep_updated(&tx, user_id, persist::to_json(&c)).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Decode every character enrolled with `clan_id` (applicants included):
+/// `(user, character, last save)`. Corrupt blobs are skipped.
+async fn decode_clan_members(
+    client: &tokio_postgres::Client,
+    clan_id: Uuid,
+) -> anyhow::Result<Vec<(Uuid, Character, chrono::DateTime<Utc>)>> {
+    let rows = GreenDragonCharacter::load_all(client).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(user_id, blob, updated)| {
+            let c = persist::from_json(&blob);
+            (c.clan_id == Some(clan_id) && !c.name.trim().is_empty())
+                .then_some((user_id, c, updated))
+        })
+        .collect())
+}
+
+/// A decoded member as the views read them.
+fn clan_member_row(
+    user_id: Uuid,
+    c: &Character,
+    updated: chrono::DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
+) -> ClanMemberRow {
+    let idle_secs = (now - updated).num_seconds().max(0);
+    ClanMemberRow {
+        user_id,
+        name: c.titled_name(),
+        level: c.level,
+        dragon_kills: c.dragon_kills,
+        rank: c.clan_rank,
+        joined_at: c.clan_joined_at,
+        alive: c.alive,
+        online: c.online && idle_secs < ONLINE_WINDOW_SECS,
+        idle_secs,
+    }
+}
+
+/// The succession pick (`clan_default.php` / `clan_withdraw.php`, identical
+/// queries): the highest-ranked, oldest-joined real member (rank > 0).
+fn succession_candidate(members: &[(Uuid, Character, chrono::DateTime<Utc>)]) -> Option<Uuid> {
+    members
+        .iter()
+        .filter(|(_, c, _)| c.clan_rank > model::CLAN_APPLICANT)
+        .max_by(|a, b| {
+            a.1.clan_rank
+                .cmp(&b.1.clan_rank)
+                .then(b.1.clan_joined_at.cmp(&a.1.clan_joined_at))
+        })
+        .map(|(id, _, _)| *id)
+}
+
+/// Row-locked promotion of `target` straight to leader (both leaderless
+/// paths), re-verified against their fresh blob. Returns the display name
+/// on success. The caller holds the write gate.
+async fn promote_to_leader_tx(
+    db: &Db,
+    clan_id: Uuid,
+    target: Uuid,
+) -> anyhow::Result<Option<String>> {
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    let Some((blob, _)) = GreenDragonCharacter::load_for_update(&tx, target).await? else {
+        return Ok(None);
+    };
+    let mut c = persist::from_json(&blob);
+    if c.clan_id != Some(clan_id) || c.clan_rank <= model::CLAN_APPLICANT {
+        return Ok(None);
+    }
+    c.clan_rank = model::CLAN_LEADER;
+    GreenDragonCharacter::update_data_keep_updated(&tx, target, persist::to_json(&c)).await?;
+    tx.commit().await?;
+    Ok(Some(c.titled_name()))
+}
+
 /// Fetch a section's newest `limit` rows, stamping each with whether it was
 /// posted on the current UTC day (which feeds the daily post allowance).
 async fn read_commentary(
@@ -675,14 +858,14 @@ impl GreenDragonService {
     /// newest first (upstream `viewcommentary`).
     pub fn load_commentary(
         &self,
-        section: &'static str,
+        section: String,
         limit: usize,
     ) -> watch::Receiver<CommentaryLoad> {
         let (tx, rx) = watch::channel(CommentaryLoad::Loading);
         let inner = self.inner.clone();
         tokio::spawn(async move {
             let lines = match inner.db.get().await {
-                Ok(client) => read_commentary(&client, section, limit).await,
+                Ok(client) => read_commentary(&client, &section, limit).await,
                 Err(e) => {
                     tracing::warn!("greendragon db get failed on commentary read: {e}");
                     Vec::new()
@@ -702,7 +885,7 @@ impl GreenDragonService {
     /// was reading. Old comments are pruned opportunistically on write.
     pub fn post_commentary(
         &self,
-        section: &'static str,
+        section: String,
         limit: usize,
         user_id: Uuid,
         name: String,
@@ -713,7 +896,7 @@ impl GreenDragonService {
         tokio::spawn(async move {
             let (lines, double_post) = match inner.db.get().await {
                 Ok(client) => {
-                    let newest = GreenDragonCommentary::latest(&client, section, 1)
+                    let newest = GreenDragonCommentary::latest(&client, &section, 1)
                         .await
                         .unwrap_or_default();
                     let double_post = newest
@@ -722,7 +905,7 @@ impl GreenDragonService {
                     if !double_post {
                         if let Err(e) = GreenDragonCommentary::add(
                             &client,
-                            section,
+                            &section,
                             Some(user_id),
                             &name,
                             &body,
@@ -735,7 +918,7 @@ impl GreenDragonService {
                             tracing::warn!("greendragon commentary prune failed: {e}");
                         }
                     }
-                    (read_commentary(&client, section, limit).await, double_post)
+                    (read_commentary(&client, &section, limit).await, double_post)
                 }
                 Err(e) => {
                     tracing::warn!("greendragon db get failed on commentary write: {e}");
@@ -801,6 +984,7 @@ impl GreenDragonService {
                         pvp_immune: c.pvp_immune(),
                         bounty_immune: c.bounty_immune(),
                         pvp_engaged_at: c.pvp_engaged_at,
+                        clan_id: c.clan_id,
                     })
                 })
                 .collect();

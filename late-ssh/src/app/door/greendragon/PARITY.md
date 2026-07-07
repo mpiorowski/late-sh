@@ -992,20 +992,85 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
   shape only where upstream's real sheet shows race too.
 
 ### Clans
-- Table `greendragon_clans`: id, name (5–50 chars, unique), tag (2–5
-  letters, unique), motd/desc (authored), custom talk verb (≤15 chars).
+
+Sources: `clan.php`, `lib/clan/*.php` (start/default/membership/motd/
+withdraw/applicant*/detail/list/waiting/func), `lib/constants.php` (the rank
+values), `lib/commentary.php` (the clan-tag render + the clan-section
+allowance skip), `lib/all_tables.php` (the `clans` schema), `common.php`
+(the dangling-membership self-heal), `village.php:211` (the nav),
+`list.php:77` (online clan members), `dragon.php` (the preserve list).
+Spec audited line-by-line 2026-07 against the local clone. **Source-audit
+corrections** to what this section originally claimed (the specs below are
+already fixed to match):
+
+1. **Clan halls have no posting allowance**: `talkform` skips the
+   posts-today count entirely for `clan-*` sections — members chat without
+   limit. The shared `waiting` section is *not* exempt (window 25,
+   allowance 13, verb "says").
+2. **Promote/demote walk a step ladder, clamped at your own rank**
+   (`clan_nextrank`/`clan_previousrank` pop the founder rung off first):
+   promote = one rung up (0→10→20→30, never to founder 31), target strictly
+   below you, the write clamped `LEAST(yours, next)`; demote = one rung
+   down, allowed on your equals but never yourself, and **hidden when the
+   rung below is applicant** — a member (10) cannot be demoted, only
+   removed. The founder's one self-demotion is the "step down as founder"
+   row (31→30). Remove needs `target ≤ yours` and never yourself. Only
+   officers+ (rank > 10) see the ops column at all. Applicant acceptance IS
+   the promote row (0→10) on the membership page — there is no separate
+   accept flow (and no acceptance mail; only `modulehook`s).
+3. **A clan with no real members is lazily deleted at list render**: both
+   the public list and the application list count `clanrank > 0` and DELETE
+   rows counting zero — applicants alone don't keep a clan alive. A
+   dangling membership (clan row gone) self-heals at page load
+   (`common.php`: clanid/clanrank reset to 0).
+4. **Leaderless auto-promote runs on hall view AND on a leader's
+   withdraw**: no member above officer ⇒ the highest-ranked, oldest-joined
+   member (rank > 0, `ORDER BY clanrank DESC, clanjoindate`) is promoted
+   straight to leader (30, never founder). A withdrawing solitary leader
+   with no other members left deletes the clan (clearing any stragglers).
+5. **Founding validation**: name 5–50 chars of letters, spaces, apostrophes
+   and dashes only; tag ("short name") 2–5 chars, letters only; both
+   unique; fee `goldtostartclan` 10,000 gold + `gemstostartclan` 15 gems,
+   checked and charged at approval; the founder's rank is literally
+   `CLAN_LEADER+1` (31).
+6. **The commentary tag renders for rank > 0 only** — applicants stay
+   bare-named — as `<TAG>` before the name, rank-colored upstream, in
+   *every* comment area, from a live join against the poster's current
+   membership.
+7. **MOTD and description** (≤4096 chars upstream) are officer+ edits, each
+   stamping its author (shown by name); the **custom talk verb** (≤15
+   chars, blank = "says") is leader+ only and is baked into non-emote posts
+   exactly like any venue verb. The desc-block (`descauthor=INT_MAX`) is
+   moderation tooling — out of scope.
+8. **Membership page ordering** is rank DESC, dragon kills DESC, level
+   DESC, join date ASC (columns rank/name/level/DKs/joined/last-on + the
+   total-DK footer); the public detail page orders rank DESC, join date ASC
+   (rank/name/DKs/joined, same footer). Both lists order clans by member
+   count DESC. `list.php?op=clan` is the online-members slice (the standard
+   online filter + `clanid`), total-ordered like the online list.
+9. **Notifications**: applying system-mails every officer+ (and mails the
+   *applicant* a description reminder when the clan has one); a member's
+   withdraw mails the officers; an applicant's withdraw only deletes the
+   stale application mail. Nothing mails on promote/demote/remove.
+
+- Table `greendragon_clans` (migration 101): id, name (unique), tag
+  (unique), motd + author, description + author, custom talk verb.
   Membership on `Character`: `clan_id`, `clan_rank`
   (0 applicant / 10 member / 20 officer / 30 leader / 31 founder),
-  `clan_joined_at`. All three survive dragon kills.
-- **Founding**: 10,000 gold + 15 gems.
-- Applying sets rank 0 + notifies officers+ (rank ≥ 20); withdraw clears.
-  Officers+ manage: promote/demote/remove only at-or-below their own rank.
-  A leaderless clan auto-promotes its highest-ranked/oldest member on hall
-  view.
-- Hall = commentary section `clan-{id}` (limit 25, custom verb) + the
-  shared `waiting` section; show member counts per rank + total clan dragon
-  kills. Tag prepended to the member's name in commentary. No stat buffs —
-  clans are social only in stock.
+  `clan_joined_at`, and the denormalized `clan_tag` (see adaptations). All
+  survive dragon kills (`dragon.php`'s preserve list) and death.
+- **The lobby** (village "Clan Halls", rank < 10): the registrar's desk —
+  apply (clan pick off the member-count-ordered list), file a new clan
+  (name + tag + the fee), the public list (→ per-clan detail roll), and,
+  once applied, the waiting area + withdraw-application rows.
+- **The hall** (rank ≥ 10): MOTD/desc + per-rank counts + total clan DKs;
+  the clan commentary section `clan-{id}` (window 25, custom verb, no
+  allowance); membership management per correction 2; the motd/desc/verb
+  editor; online clan members (the warrior list's clan slice); the shared
+  waiting room; withdraw (confirm step, succession per correction 4).
+- Officer notifications (apply, member withdraw) ride the `pvp_reports`
+  drain — the established mail adaptation.
+- No stat buffs — clans are social only in stock 1.1.2.
 
 ### Mail — integration decision, not a build
 - Upstream: 50-unread inbox cap, 1024-char bodies, 14-day retention,

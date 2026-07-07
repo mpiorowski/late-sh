@@ -50,24 +50,34 @@ pub enum CommentRoom {
     /// The shade channel from the other side, free while dead (`shades.php`,
     /// same section).
     ShadeGrave,
+    /// The clan lobby's waiting area (`lib/clan/waiting.php`, the one
+    /// "waiting" section shared by every clan's hopefuls and members).
+    Waiting,
+    /// A clan's own hall (`clan_default.php`, section `clan-{id}`): speaks
+    /// in the clan's custom verb and is the one venue exempt from the daily
+    /// allowance (`talkform` skips the count for `clan-*` sections).
+    ClanHall(Uuid),
 }
 
 impl CommentRoom {
     /// The shared-table section this room reads and writes.
-    pub fn section(self) -> &'static str {
+    pub fn section(self) -> String {
         match self {
-            CommentRoom::Village => "village",
-            CommentRoom::Inn => "inn",
-            CommentRoom::DarkHorse => "darkhorse",
-            CommentRoom::Gardens => "gardens",
-            CommentRoom::Veterans => "veterans",
-            CommentRoom::ShadeGypsy | CommentRoom::ShadeGrave => "shade",
+            CommentRoom::Village => "village".into(),
+            CommentRoom::Inn => "inn".into(),
+            CommentRoom::DarkHorse => "darkhorse".into(),
+            CommentRoom::Gardens => "gardens".into(),
+            CommentRoom::Veterans => "veterans".into(),
+            CommentRoom::ShadeGypsy | CommentRoom::ShadeGrave => "shade".into(),
+            CommentRoom::Waiting => "waiting".into(),
+            CommentRoom::ClanHall(id) => format!("clan-{id}"),
         }
     }
 
     /// The room's display window (upstream's per-call `$limit`), also the
     /// base of the daily post allowance: village 25, inn 20, Dark Horse 10
-    /// (the default), shade 25, gardens and the rock 30.
+    /// (the default), shade 25, gardens and the rock 30, the waiting area
+    /// and clan halls 25.
     pub fn display_limit(self) -> usize {
         match self {
             CommentRoom::Village => 25,
@@ -75,11 +85,14 @@ impl CommentRoom {
             CommentRoom::DarkHorse => 10,
             CommentRoom::Gardens | CommentRoom::Veterans => 30,
             CommentRoom::ShadeGypsy | CommentRoom::ShadeGrave => 25,
+            CommentRoom::Waiting | CommentRoom::ClanHall(_) => 25,
         }
     }
 
     /// The venue's talk verb. Anything but "says" is baked into non-emote
-    /// posts at post time (upstream converts them to `:verb, "..."`).
+    /// posts at post time (upstream converts them to `:verb, "..."`). A
+    /// clan hall's is only the fallback — the clan's custom verb, when set,
+    /// overrides it at the call sites (the session holds the clan row).
     pub fn verb(self) -> &'static str {
         match self {
             CommentRoom::Village | CommentRoom::Inn | CommentRoom::DarkHorse => "says",
@@ -87,7 +100,15 @@ impl CommentRoom {
             CommentRoom::Veterans => "boasts",
             CommentRoom::ShadeGypsy => "projects",
             CommentRoom::ShadeGrave => "despairs",
+            CommentRoom::Waiting | CommentRoom::ClanHall(_) => "says",
         }
+    }
+
+    /// Whether the daily allowance is skipped here: upstream's `talkform`
+    /// never counts posts for `clan-*` sections — clan mates chat without
+    /// limit (the waiting area is *not* exempt).
+    pub fn allowance_exempt(self) -> bool {
+        matches!(self, CommentRoom::ClanHall(_))
     }
 }
 
@@ -101,8 +122,12 @@ pub fn posts_allowed(display_limit: usize) -> usize {
 /// today **within the loaded window**. Once older posts scroll out of the
 /// window they stop counting, exactly as upstream ("once some of your
 /// existing posts have moved out of the comment area, you'll be allowed to
-/// post again").
+/// post again"). Allowance-exempt venues (clan halls) report a bottomless
+/// count.
 pub fn posts_left(lines: &[CommentLine], me: Uuid, room: CommentRoom) -> usize {
+    if room.allowance_exempt() {
+        return usize::MAX;
+    }
     let used = lines
         .iter()
         .filter(|l| l.today && l.user_id == Some(me))

@@ -544,6 +544,9 @@ pub const GAMBLER: &str = "the one-eyed gambler";
 /// The bounty broker sulking in the inn's darkest booth (the Dag
 /// Durnick-analog; upstream's name is theirs, this one is ours).
 pub const BOUNTY_BROKER: &str = "Varn";
+/// The clan registrar behind the lobby's polished desk (the
+/// Karissa-analog; upstream's name is theirs, this one is ours).
+pub const CLAN_REGISTRAR: &str = "Maren";
 
 /// The six ways a haunt goes wrong (`case_haunt3.php` rolls one of six
 /// failure vignettes; the news carries the botch either way). **All lines
