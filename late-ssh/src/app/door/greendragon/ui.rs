@@ -342,6 +342,12 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
             CommentRoom::Veterans => "Beyond the stone door, old scars trade stories.",
             CommentRoom::ShadeGypsy => "Through the trance, the dead press close to be heard.",
             CommentRoom::ShadeGrave => "Nearby, the lost souls give voice to their grief.",
+            CommentRoom::Waiting => {
+                "Plush leather chairs, potted bushes, and tinny muzak from a fake rock."
+            }
+            CommentRoom::ClanHall(_) => {
+                "The secret levers give, the lock disengages, and your clan mates look up."
+            }
         };
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(intro, dim)));
@@ -376,10 +382,15 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
 
     // The warrior list and the Hall of Fame: a heading, a column header,
     // the built rows, and any footer lines (fuzz note, your percentile).
-    if matches!(state.mode(), Mode::WarriorList | Mode::HallOfFame) {
+    if matches!(
+        state.mode(),
+        Mode::WarriorList | Mode::HallOfFame | Mode::BountyList | Mode::ClanDetail
+    ) {
         let dim = Style::default().fg(theme::TEXT_DIM());
         let page = match state.mode() {
             Mode::WarriorList => state.warrior_page(),
+            Mode::BountyList => state.bounty_page_view(),
+            Mode::ClanDetail => state.clan_detail_page(),
             _ => state.hall_of_fame_page(),
         };
         lines.push(Line::raw(""));
@@ -464,6 +475,388 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // The bounty broker's booth: his greeting and the price on your head.
+    if state.mode() == Mode::DagTable {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{} sulks in the inn's darkest booth, a pipe clamped in his teeth. \
+                 He deals in one commodity: other people's deaths.",
+                data::BOUNTY_BROKER
+            ),
+            dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            match state.bounty_on_my_head() {
+                None => "He looks you over slowly, saying nothing yet.".to_string(),
+                Some(0) => {
+                    "\"No price on your head just now. I'd be keeping it that way.\"".to_string()
+                }
+                Some(gold) => format!(
+                    "\"There's {gold} gold riding on your head. I'd be watching \
+                     my back, were I you.\""
+                ),
+            },
+            dim,
+        )));
+    }
+
+    // Picking a contract's target: the broker's terms, and the name line.
+    if state.mode() == Mode::BountyTarget {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "\"Who's it to be? They must be level {} at the least, past the \
+                 realm's protection, and not carrying too much contract already. \
+                 My listing fee is {}%, paid when the ink dries.\"",
+                model::BOUNTY_MIN_TARGET_LEVEL,
+                model::BOUNTY_FEE_PCT
+            ),
+            dim,
+        )));
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("whose head? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // Naming the price: the floor, the ceiling, and the fee.
+    if state.mode() == Mode::BountyAmount {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        if let Some((name, level)) = state.bounty_target_info() {
+            let min = model::BOUNTY_MIN_PER_LEVEL * level as u64;
+            let cap = model::BOUNTY_MAX_PER_LEVEL * level as u64;
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "\"{name}, then. I'll take no less than {min} gold, and the \
+                     total on that head stops at {cap}. My {}% comes off the top.\"",
+                    model::BOUNTY_FEE_PCT
+                ),
+                dim,
+            )));
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("how much gold? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The barman's counter: his greeting and the price of a word.
+    if state.mode() == Mode::TavernBartender {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "The barman is a dried stick of a man, all knuckles and squint. \
+             He knows every warrior who ever drank here, and plenty who never did.",
+            dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "\"A hundred gold buys everything I know about a name. You carry {}.\"",
+                c.gold
+            ),
+            dim,
+        )));
+    }
+
+    // Picking whose name to buy: the terms, and the name line.
+    if state.mode() == Mode::IntelTarget {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "\"Who do you want to know about? {} gold a name, friend or foe — \
+                 I don't ask which.\"",
+                model::INTEL_COST
+            ),
+            dim,
+        )));
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("about whom? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The barman's rundown (or his mock sheet), line by line.
+    if state.mode() == Mode::IntelSheet {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        match state.intel_sheet_lines() {
+            Some(sheet) => {
+                for line in sheet {
+                    lines.push(Line::from(Span::styled(line.clone(), dim)));
+                }
+            }
+            None => {
+                lines.push(Line::from(Span::styled(
+                    "The barman pours slowly, gathering what he knows...",
+                    dim,
+                )));
+            }
+        }
+    }
+
+    // The haunt: the warden's leave, your favor, and the name line.
+    if state.mode() == Mode::Haunt {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{} parts the veil a finger's width: the mortal world, asleep and \
+                 unguarded. One haunting costs {} favor, roll the dice as it may.",
+                data::DEATH_OVERLORD,
+                model::HAUNT_FAVOR_THRESHOLD
+            ),
+            dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("You hold {} favor.", c.favor),
+            dim,
+        )));
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("whose dreams? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The clan lobby: the registrar's marble hall, and any pending
+    // application's status (applicant.php).
+    if state.mode() == Mode::ClanLobby {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "A marble lobby ringed with intricately locked doors, one per clan \
+                 hall. Behind a polished desk sits {}, the clan registrar.",
+                data::CLAN_REGISTRAR
+            ),
+            dim,
+        )));
+        if c.clan_id.is_some() {
+            lines.push(Line::from(Span::styled(
+                match state.clan_view() {
+                    Some((clan, _)) => format!(
+                        "\"Your application to {} hasn't been accepted yet,\" she says. \
+                         \"Perhaps the waiting area?\"",
+                        clan.name
+                    ),
+                    None => "She checks her files for word on your application...".to_string(),
+                },
+                dim,
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "You are not a member of any clan.",
+                dim,
+            )));
+        }
+    }
+
+    // The two clan pickers share their flavor line.
+    if matches!(state.mode(), Mode::ClanList | Mode::ClanApply) {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            match state.mode() {
+                Mode::ClanApply => format!(
+                    "{} pulls out a form with two lines: your name, and the clan's.",
+                    data::CLAN_REGISTRAR
+                ),
+                _ => format!(
+                    "{} points you to a marquee board near the entrance.",
+                    data::CLAN_REGISTRAR
+                ),
+            },
+            dim,
+        )));
+    }
+
+    // The founding form: the fees and the lines already inked.
+    if state.mode() == Mode::ClanFoundForm {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "\"Three things,\" says {}: \"a full name, a short banner, and the \
+                 fees - {} gold and {} gems - to tailor your door's locks.\"",
+                data::CLAN_REGISTRAR,
+                model::CLAN_START_GOLD,
+                model::CLAN_START_GEMS
+            ),
+            dim,
+        )));
+        if let Some(name) = state.clan_found_name() {
+            lines.push(Line::from(Span::styled(
+                format!("The name line reads: {name}"),
+                dim,
+            )));
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                if state.clan_found_name().is_none() {
+                    format!("clan name? {input}_")
+                } else {
+                    format!("banner letters? {input}_")
+                },
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The hall: the boards, the counts, and the clan's tally
+    // (clan_default.php's page body).
+    if matches!(state.mode(), Mode::ClanHall | Mode::ClanMembership) {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        match state.clan_view() {
+            None => lines.push(Line::from(Span::styled(
+                "You work the secret levers and knobs of your hall's lock...",
+                dim,
+            ))),
+            Some((clan, members)) => {
+                lines.push(Line::from(Span::styled(
+                    format!("The hall of {} <{}>.", clan.name, clan.tag),
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                )));
+                if !clan.motd.trim().is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("MOTD (by {}): {}", clan.motd_author, clan.motd),
+                        Style::default().fg(theme::TEXT()),
+                    )));
+                }
+                if !clan.description.trim().is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("Charter (by {}): {}", clan.desc_author, clan.description),
+                        dim,
+                    )));
+                }
+                // Membership counts per rank, highest first (the hall's
+                // "Membership Details" block).
+                let mut counts: Vec<(u8, usize)> = Vec::new();
+                for m in members {
+                    match counts.iter_mut().find(|(r, _)| *r == m.rank) {
+                        Some((_, n)) => *n += 1,
+                        None => counts.push((m.rank, 1)),
+                    }
+                }
+                counts.sort_by(|a, b| b.0.cmp(&a.0));
+                let detail = counts
+                    .iter()
+                    .map(|(r, n)| format!("{}: {n}", model::clan_rank_name(*r)))
+                    .collect::<Vec<_>>()
+                    .join("   ");
+                lines.push(Line::from(Span::styled(detail, dim)));
+                let total_dks: u64 = members.iter().map(|m| m.dragon_kills as u64).sum();
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "This clan counts {total_dks} dragon kill{} all told.",
+                        if total_dks == 1 { "" } else { "s" }
+                    ),
+                    dim,
+                )));
+            }
+        }
+    }
+
+    // One member on the desk (the ledger's operations page).
+    if state.mode() == Mode::ClanMemberOps {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        match state.clan_member_target() {
+            None => lines.push(Line::from(Span::styled("The page is blank.", dim))),
+            Some(m) => {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "{} - {} - level {}, {} dragon kill{}.",
+                        m.name,
+                        model::clan_rank_name(m.rank),
+                        m.level,
+                        m.dragon_kills,
+                        if m.dragon_kills == 1 { "" } else { "s" }
+                    ),
+                    Style::default().fg(theme::TEXT()),
+                )));
+            }
+        }
+    }
+
+    // The boards editor: what stands on them now, and the line being typed.
+    if state.mode() == Mode::ClanEdit {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        if let Some((clan, _)) = state.clan_view() {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "MOTD: {}",
+                    if clan.motd.trim().is_empty() {
+                        "(blank)"
+                    } else {
+                        &clan.motd
+                    }
+                ),
+                dim,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Charter: {}",
+                    if clan.description.trim().is_empty() {
+                        "(blank)"
+                    } else {
+                        &clan.description
+                    }
+                ),
+                dim,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Talk verb: {}",
+                    if clan.custom_verb.trim().is_empty() {
+                        "says"
+                    } else {
+                        &clan.custom_verb
+                    }
+                ),
+                dim,
+            )));
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("new wording? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The withdraw confirmation (clan_start.php's withdrawconfirm).
+    if state.mode() == Mode::ClanWithdraw {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "Are you sure you want to withdraw from your clan? A solitary \
+             leader's mantle passes on - or, with no one left, the clan is \
+             struck from the rolls.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+
     if state.mode() == Mode::ChooseStyle {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
@@ -521,6 +914,10 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     let hint = if state.is_typing() {
         match state.mode() {
             Mode::WarriorList => "type a name   Enter ask around   Esc never mind",
+            Mode::BountyTarget => "type a name   Enter check his book   Esc never mind",
+            Mode::IntelTarget => "type a name   Enter ask him   Esc never mind",
+            Mode::BountyAmount => "type an amount   Enter slide the coins over   Esc never mind",
+            Mode::Haunt => "type a name   Enter whisper it   Esc never mind",
             _ => "type your line   Enter say it   Esc think better of it",
         }
     } else {
@@ -592,6 +989,9 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Outhouse => "The Outhouse",
         Mode::OuthouseWash(_) => "The Rain Barrel",
         Mode::Tavern => "The Dark Horse Tavern",
+        Mode::TavernBartender => "The Barman's Counter",
+        Mode::IntelTarget => "Naming an Enemy",
+        Mode::IntelSheet => "The Barman's Word",
         Mode::Commentary(room) => match room {
             CommentRoom::Village => "The Town Square",
             CommentRoom::Inn => "The Long Table",
@@ -600,12 +1000,29 @@ fn panel_title(mode: Mode) -> &'static str {
             CommentRoom::Veterans => "The Veterans' Rock",
             CommentRoom::ShadeGypsy => "A Deep Trance",
             CommentRoom::ShadeGrave => "The Lost Souls",
+            CommentRoom::Waiting => "The Waiting Area",
+            CommentRoom::ClanHall(_) => "The Clan Hearth",
         },
         Mode::WarriorList => "The Warriors of the Realm",
         Mode::HallOfFame => "The Hall of Fame",
         Mode::BarkeepEar => "A Quiet Word",
         Mode::PvpList(PvpVenue::Fields) => "The Sleeping Fields",
         Mode::PvpList(PvpVenue::Inn) => "The Rooms Upstairs",
+        Mode::DagTable => "The Shadowed Booth",
+        Mode::BountyList => "The Wanted List",
+        Mode::BountyTarget => "Naming a Head",
+        Mode::BountyAmount => "Naming a Price",
+        Mode::Haunt => "Across the Veil",
+        Mode::ClanLobby => "The Clan Halls",
+        Mode::ClanList => "The Marquee Board",
+        Mode::ClanDetail => "A Clan's Roll",
+        Mode::ClanApply => "A Membership Form",
+        Mode::ClanFoundForm => "A New Clan's Filing",
+        Mode::ClanHall => "Your Clan Hall",
+        Mode::ClanMembership => "The Clan Ledger",
+        Mode::ClanMemberOps => "A Word About a Member",
+        Mode::ClanEdit => "The Hall's Boards",
+        Mode::ClanWithdraw => "Leaving the Clan",
     }
 }
 
@@ -625,8 +1042,24 @@ fn controls_hint(mode: Mode) -> &'static str {
         | Mode::Drinks
         | Mode::Romance => "up/down move   Enter choose   Esc back to the inn",
         Mode::Outhouse | Mode::Tavern => "up/down move   Enter choose   Esc back to the forest",
+        Mode::TavernBartender => "up/down move   Enter choose   Esc back to the taproom",
+        Mode::IntelTarget | Mode::IntelSheet => {
+            "up/down move   Enter choose   Esc back to the counter"
+        }
         Mode::OuthouseWash(_) => "up/down move   Enter choose   Esc slips out unwashed",
         Mode::Commentary(_) => "up/down move   Enter choose   Esc step away",
+        Mode::DagTable => "up/down move   Enter choose   Esc back to the inn",
+        Mode::BountyList | Mode::BountyTarget | Mode::BountyAmount => {
+            "up/down move   Enter choose   Esc back to the booth"
+        }
+        Mode::Haunt => "up/down move   Enter choose   Esc back to the graves",
+        Mode::ClanList | Mode::ClanApply | Mode::ClanFoundForm => {
+            "up/down move   Enter choose   Esc back to the lobby"
+        }
+        Mode::ClanMembership | Mode::ClanEdit | Mode::ClanWithdraw => {
+            "up/down move   Enter choose   Esc back to the hall"
+        }
+        Mode::ClanMemberOps => "up/down move   Enter choose   Esc back to the ledger",
         _ => "up/down move   Enter choose   Esc back to village",
     }
 }

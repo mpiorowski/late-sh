@@ -161,8 +161,8 @@ originally shipped with:
   `round(10 · (max − soulpoints) / max)` favor (0..10 with depletion);
   enabled only when below max and affordable.
 - [x] **Favor tiers** (`case_question.php`): tier messaging at <25 / ≥25 /
-  ≥100 favor renders in the graveyard panel. The 25-favor haunt itself is
-  PvP-only and stays deferred to phase 4 (`HAUNT_FAVOR_THRESHOLD` is ready).
+  ≥100 favor renders in the graveyard panel. The 25-favor haunt itself
+  landed with phase 4's bounties+haunt slice (see that section).
 - [x] **Paid resurrection** (`case_resurrection.php` + `newday.php`
   `resurrection=true`): 100 favor (deducted at the moment of resurrection),
   an immediate extra new day — bank interest settles, specialty uses refresh,
@@ -387,8 +387,8 @@ romance NPCs is "your partner", and bard outcome 15. Field
   was no gold to lose.
 
 ### Dark Horse Tavern (restore `events::Tavern` into a full room)
-Menu: the old gambler (3 games), the tavern board + enemy intel (phase 4),
-leave. Games:
+Menu: the old gambler (3 games), the tavern board (phase 4's commentary),
+the barman's enemy intel (phase 4, see its section), leave. Games:
 - **Dice**: bet any amount ≤ gold. Player rolls d6, may keep or reroll
   (max 3 rolls). Old man then rolls with this AI: roll 1 — keep if
   `r > player || r == 6`; roll 2 — keep if `r >= player`; roll 3 — forced.
@@ -474,8 +474,8 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
   routes you to the inn's target list (the barkeep's keys). Bank payment
   keeps the +5% fee and requires a positive balance covering it.
 - **The Dark Horse** restores the gambler's three games; the comment board
-  and the bartender's paid enemy-intel are phase-4 features (commentary /
-  roster) and stay deferred. Abandoning a game mid-hand forfeits nothing,
+  and the barman's paid enemy-intel were phase-4 features and have since
+  landed (see phase 4). Abandoning a game mid-hand forfeits nothing,
   exactly like navigating away upstream (the stake settles only at the end).
 - **Five Sixes settles against the shared pot atomically** in the DB
   (migration 097); the stake is paid up front and refunded if the
@@ -496,9 +496,11 @@ online-roster path; the session stays authoritative for its own character
 
 ### Build order
 commentary ✓ → roster/HoF ✓ → gypsy ✓ (folded into the commentary slice — it
-is just a paid door onto the shade section) → PvP ✓ → bounties + haunt →
-clans → mail(?) → gardens ✓ / veterans' rock ✓. Commentary first: five
-other features are just sections of it.
+is just a paid door onto the shade section) → PvP ✓ → bounties + haunt ✓ →
+barman's enemy intel ✓ + rewards wiring ✓ (the two small leftovers, 2026-07)
+→ clans ✓ (2026-07) → mail(?) → gardens ✓ / veterans' rock ✓. Commentary
+first: five other features are just sections of it. Only the mail
+integration decision remains.
 
 ### `commentary` — the one chat primitive — DONE
 
@@ -545,7 +547,8 @@ claimed (specs below already fixed):
   Horse etchings, the gardens, the veterans' rock (`rock.php`: a plain
   weathered stone to anyone without a dragon kill), and the shade channel
   from both sides — free while dead, or through the gypsy's paid trance.
-  Clan halls + the waiting room land with clans.
+  Clan halls + the waiting room landed with clans (2026-07): the halls are
+  the one allowance-exempt venue, speaking in each clan's custom verb.
 - [x] **The gypsy tent** (`gypsy.php`): pay `level * 20` gold per visit to
   project into the shade section. That's the whole building.
 
@@ -555,8 +558,8 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
   pagination, "first unseen" links, or new-post markers (upstream's
   `recentcomments`).
 - Speaker names are the bare character name snapshotted at post time — no
-  DK-title prefix (upstream's `accounts.name` carries the title) and no
-  clan tag until clans land.
+  DK-title prefix (upstream's `accounts.name` carries the title). The clan
+  `<TAG>` prefix landed with clans, snapshotted into the name the same way.
 - All three emote markers compose identically (name + a space + the rest);
   upstream's `::` variant differs only in marker length.
 - No GM `/game` inserts or moderation tools; system lines are reserved for
@@ -645,7 +648,7 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 - The alive column is two-state (village/graveyard); a PvP death lands the
   victim in the graveyard like any other, so upstream's "Unconscious"
   tri-state never arises here.
-- No clan sub-list (lands with clans), no write-mail/bio links (no in-door
+- No write-mail/bio links (no in-door
   mail), and both screens are village-nav only (upstream also links the
   list from logged-out pages and bios).
 - The percentile line renders even when the days ranking's filter excludes
@@ -794,39 +797,336 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
   matching upstream's walk-away.
 
 ### Bounty board (upstream Dag; our NPC name original; sits in the inn)
-- Table `greendragon_bounties`: id, target user_id, setter user_id
-  (nullable = system), amount, set_at (**activation delay**: becomes
-  visible/collectable `e_rand(0, 14400)` seconds after placement), status
-  (open/closed), winner, closed_at.
-- **Placing** (≤5/day): target must be level ≥ 3 and not PvP-immune; min
-  `50 · targetLevel`, max total open on that target `200 · targetLevel`;
-  cost = `round(amount · 1.10)` (10% fee). Refuse self-bounties.
-- **Collecting**: on a PvP win, all open matured bounties on the victim pay
-  out to the winner — **except ones the winner set** (forfeit); news item.
-- Cleared (no payout) when the target slays the dragon or is deleted.
-- Wanted list: aggregated open+matured per target, sortable by amount/level.
+
+Sources: `modules/dag.php` + `modules/dag/{install,dohook,run,
+misc_functions}.php`, `lib/pvpsupport.php` (the `pvpwin` hook fires inside
+`pvpvictory` only — the attacker's win; a sleeper's win pays nothing).
+Spec audited line-by-line 2026-07 against the local clone; **implemented
+2026-07** (migration 099 + the `greendragon_bounty` model, svc round-trips,
+`Mode::DagTable`/`BountyList`/`BountyTarget`/`BountyAmount` off the inn).
+Source-audit corrections to what this section originally claimed (the specs
+below are already fixed to match):
+
+1. **Bounty immunity is Dag's own, one-notch-lenient test**, not the PvP
+   list's: a target is refused when `level < 3` OR (`age < 5` AND
+   `dragonkills == 0` AND `pk == 0` AND `exp < 1500`) — strict `<` on age
+   and exp where `pvpwarning`/`pvplist` use `> 5` / `> 1500`, so a warrior
+   at exactly age 5 or exactly 1500 exp is still PvP-immune yet already
+   bountyable. Ported 1=1.
+2. **Self-set bounties forfeit but stay open**: on a PvP win, rows the
+   winner set are skipped (Dag "keeps" them) and are NOT closed — the next
+   hunter can still collect them.
+3. **Maturity gates visibility, collection, and the target's own total**
+   (each filters `set_at <= now`), but the `200·level` open-total cap
+   counts immature rows too (`status = open`, no date filter).
+4. **No news on placement** — placing is anonymous; a target only learns
+   their matured total by asking Dag ("price on yer head").
+5. **Bounty gold is exempt from the level-15 zeroing**: the `pvpwin` hook
+   pays after `pvpvictory`'s (possibly zeroed) payout, straight onto gold,
+   with its own news line and an extra line in the victim's mail.
+6. **Closure on the target's dragon kill or deletion** sets status closed
+   with **winner = none ("the Green Dragon" collects)**, `closed_at`
+   stamped; deleted targets also close lazily on list render. Closed rows
+   expire after `expirecontent/10` = **18 days** (an admin-page sweep
+   upstream; ours prunes on write, like commentary/news).
+
+- [x] Table `greendragon_bounties` (migration 099 + a `late-core` model):
+  id, target user_id, setter user_id (nullable = system), amount, `set_at`
+  (**activation delay**: insert stamps `now + e_rand(0, 14400)` seconds; a
+  bounty is *matured* once `set_at <= now`), status open/closed, winner
+  (nullable = the house), closed_at.
+- [x] **Dag's table** (inn menu row, our NPC name original): the greeting
+  shows *your* open matured total; nav to the wanted list + set-a-bounty.
+- [x] **Placing** (≤5/day via a daily blob counter reset in `roll_new_day`;
+  at the cap the form is refused outright): pick a target (talk-line
+  subsequence search over the roster, >100 matches = "narrow it down",
+  multiple = disambiguation pick), amount typed on the talk line
+  (`abs(int)`). Check order 1=1: no match → self-bounty refused → level +
+  immunity (correction 1) → `amount < 50·targetLevel` → `gold <
+  round(amount·1.10)` (the 10% fee) → `amount + sum(ALL open on target) >
+  200·targetLevel` (correction 3, `>` strict — exactly reaching the cap is
+  allowed) → insert + charge. No placement news. Any qualifying target
+  works: no level band vs the setter; online, offline, or dead alike.
+- [x] **Wanted list**: open + matured rows aggregated per target; default
+  sort level desc (ties amount desc), toggleable to amount desc; columns
+  amount / level / name / location-or-Online / alive / last-seen off the
+  roster snapshot (no sex column, matching the warrior list).
+- [x] **Collecting**: inside `pvp_settle_victory`'s transaction, sweep the
+  victim's open matured bounties: rows set by others close (winner = the
+  attacker) and their sum lands on the attacker's gold **on top of** the
+  normal PvP payout (correction 5 — not level-15-zeroed); rows the attacker
+  set stay open (correction 2) with a "Dag keeps that share" log line.
+  News item + a bounty line appended to the victim's report.
+- [x] **Closure hooks**: the target's dragon kill (a svc call from the kill
+  path) and character deletion close all open rows to the house
+  (correction 6); prune closed rows older than 18 days on write.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **The broker's refusals surface as disabled rows at pick time** (yourself,
+  the level floor, the immunity test) instead of upstream's rejection after
+  finalize — the check set is identical, the timing one screen earlier. The
+  cap check keeps its upstream position (last, inside the placement).
+- **The cost is taken up front and refunded on a refusal** (the Five Sixes
+  pattern); upstream "leaves the coins on the table" — net effect identical.
+- The placement runs the cap check and insert in one transaction, so
+  concurrent setters can't jointly pass the cap (upstream has no guard;
+  strictly safer, same rules).
+- The wanted list drops the sex column (as the warrior list), pages at 15
+  rows, and breaks the gold sort's ties by level (upstream leaves them
+  unspecified); aggregation keys on the target id in SQL, not the display
+  name (upstream merges rows by name).
+- The daily counter is a blob field (`bounties_set_today`) reset in the
+  shared new-day effects — upstream's module pref, same reset timing (the
+  hook fires on paid resurrections too).
+- Amounts are typed on the talk line, digits only (upstream's free-text box
+  through `abs(int)`).
+- All broker prose is original; the NPC is ours ("Varn").
 
 ### Haunt (graveyard, needs the phase-1 favor economy)
-- At ≥25 favor: pick a living target (name search) with no active haunt on
-  them; pay **25 favor**; success roll `e_rand(0, yourLevel) >
-  e_rand(0, targetLevel)`. Success: mark `haunted_by` on the target — at
-  their next newday they lose **1 turn** and the mark clears; notify + news.
 
-### Clans
-- Table `greendragon_clans`: id, name (5–50 chars, unique), tag (2–5
-  letters, unique), motd/desc (authored), custom talk verb (≤15 chars).
-  Membership on `Character`: `clan_id`, `clan_rank`
-  (0 applicant / 10 member / 20 officer / 30 leader / 31 founder),
-  `clan_joined_at`. All three survive dragon kills.
-- **Founding**: 10,000 gold + 15 gems.
-- Applying sets rank 0 + notifies officers+ (rank ≥ 20); withdraw clears.
-  Officers+ manage: promote/demote/remove only at-or-below their own rank.
-  A leaderless clan auto-promotes its highest-ranked/oldest member on hall
-  view.
-- Hall = commentary section `clan-{id}` (limit 25, custom verb) + the
-  shared `waiting` section; show member counts per rank + total clan dragon
-  kills. Tag prepended to the member's name in commentary. No stat buffs —
-  clans are social only in stock.
+Sources: `lib/graveyard/case_haunt{,2,3}.php`, `case_question.php` (the
+nav gating), `newday.php:281` (the dock). Spec audited line-by-line
+2026-07; **implemented 2026-07** (`Mode::Haunt` off the graveyard menu, the
+`haunt` svc transaction, the dock in the shared new-day effects).
+Source-audit corrections to what this section originally claimed (the specs
+below are already fixed to match):
+
+1. **There is no target filter beyond "not already haunted"**: any account
+   matches the search — dead, brand-new, PvP-immune, online, any level,
+   even **yourself** (upstream never checks self; kept 1=1 as a quirk: 25
+   favor to maybe dock your own turn).
+2. **The 25 favor is charged when the roll happens** — success or failure
+   alike — but a refused target (already haunted, or vanished between
+   search and attempt) costs nothing.
+3. **Failure is public too**: news "X unsuccessfully haunted Y!" plus one
+   of **six** failure flavor lines (ours original). Success: news + the
+   target's report (upstream systemmails "You have been haunted by X").
+4. **The dock fires on ANY next new day** — dawn or the paid resurrection
+   (the `hauntedby` block in `newday.php` is unconditional): −1 turn, a
+   message naming the haunter, mark cleared. Upstream doesn't floor the
+   decrement; ours saturates at 0 (unsigned field, documented deviation).
+
+- [x] `Character.haunted_by: String` (serde default empty; stores the
+  haunter's **name**, exactly as upstream's varchar).
+- [x] **The favor menu** (the existing tier panel in the graveyard):
+  "Haunt a foe (25 favor)" appears at ≥25 favor, alongside the
+  resurrection row at ≥100 (`case_question.php`'s two tiers).
+- [x] **Target pick**: talk-line subsequence search over the roster (cap
+  100, "narrow it down"); rows show name + level, sorted level then name
+  (upstream `ORDER BY level,login`).
+- [x] **The attempt** (a row-locked cross-player transaction, the PvP
+  pattern — the "no active haunt" check must read the fresh blob):
+  `haunted_by` non-empty ⇒ refuse, no charge; else deduct 25 favor (yours,
+  locally), roll `e_rand(0, yourLevel) > e_rand(0, targetLevel)` (strict —
+  ties fail); success writes `haunted_by = your name` + a report entry in
+  the same transaction. News both ways (correction 3).
+- [x] **The dock**: in the shared new-day effects (dawn AND the paid
+  resurrection, correction 4): `haunted_by` non-empty ⇒ turns saturating
+  −1, a log line naming the haunter, mark cleared.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **The dawn dock's message rides the report drain**: the load-path new day
+  rolls in `svc`, so the "X haunted your dreams" line is appended to
+  `pvp_reports` before the entry save and surfaces with the other sleep
+  reports; the paid resurrection (in-session) logs it directly off
+  `NewDayFx`. The success notification to the victim is a report too (the
+  PvP mail adaptation).
+- **The self-haunt quirk lands with upstream's own effect**: the mark is
+  written to your stored blob, and your live session's next save clobbers
+  it — exactly what upstream's end-of-request session save does. You're out
+  25 favor and the news item either way.
+- The turn dock saturates at 0 (upstream's `turns--` has no floor; our
+  field is unsigned).
+- All prose is original: the six fumble vignettes (`data::HAUNT_FUMBLES`),
+  the news lines, the warden's framing.
+
+### The barman's enemy intel (the Dark Horse bartender) — DONE
+
+Source: `modules/darkhorse.php` (`darkhorse_bartender`, lines 100–214).
+Implemented 2026-07, audited line-by-line against the local clone first.
+**Source-audit corrections** to what the docs previously claimed (both had
+called this "a bribe-priced read of the online roster" — wrong twice):
+
+1. **A flat 100 gold per name** — no bribe gate (the barman talks to
+   anyone), no level scaling. The bribe economy belongs to the *inn's*
+   barkeep; the Dark Horse barman just charges per question.
+2. **The search runs over ALL characters** (`accounts WHERE locked=0`), not
+   the online roster: offline, dead, PvP-immune, brand-new, and **yourself**
+   included (no self filter — 100 gold to hear about yourself, kept 1=1).
+3. **The charge lands only after the row is found**: gold `>= 100` is
+   checked before the read; a vanished target refuses without charging; a
+   purse under 100 gets the mock "cheapskate" stat block, also free.
+4. **Over 100 hits truncates to the top hundred** (ordered level DESC) with
+   a "too many names" line — a truncation, *not* the broker's "narrow it
+   down" refusal; the two searches genuinely differ upstream.
+
+- [x] **The counter** (`Mode::TavernBartender` off the taproom hub):
+  entering kicks a roster read (the search's index); the intro shows the
+  price and your purse.
+- [x] **The search** (`Mode::IntelTarget`): talk-line subsequence match
+  (the shared `name_matches`), ordered level DESC (upstream's ORDER BY),
+  truncated per correction 4. Every match is pickable — no refusal rows
+  (correction 2).
+- [x] **The paid sheet** (`Mode::IntelSheet`, `svc.load_enemy_intel`): a
+  fresh single-row read at pay time (upstream SELECTs the accounts row
+  then charges), decoded and laid out row for row — titled name, race,
+  level, max hitpoints, **gold on hand** (fresh, not the roster snapshot),
+  weapon, armor, attack, defense. Our `attack()`/`defense()` fold the race
+  bonus in, which is exactly upstream's `adjuststats` hook (the elf/troll
+  display adds). Capped by the **charm comparison** in its exact bands:
+  equality first, then strict `mine−10 > theirs` / `mine > theirs` /
+  `mine+10 < theirs` / else — ten-apart exactly lands in the narrow bands.
+- [x] **The mock sheet**: same rows, no answers, no charge (correction 3).
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- The **"Learn about colors" menu is omitted**: it teaches the web UI's
+  backtick color codes with a live practice form — meaningless in the TUI.
+- Level ties in the search sort break by name (upstream leaves them to
+  MySQL); the level-DESC ordering itself is upstream's.
+- Walking off mid-read costs nothing (the sheet never poured); upstream's
+  page renders synchronously so the case can't arise there.
+- All prose original: the barman's voice, the sheet framing, and the mock
+  sheet's non-answers (upstream's lisping bartender and his insult block
+  are their prose). The paid sheet adds a Race row to the mock sheet's
+  shape only where upstream's real sheet shows race too.
+
+### Clans — DONE
+
+Sources: `clan.php`, `lib/clan/*.php` (start/default/membership/motd/
+withdraw/applicant*/detail/list/waiting/func), `lib/constants.php` (the rank
+values), `lib/commentary.php` (the clan-tag render + the clan-section
+allowance skip), `lib/all_tables.php` (the `clans` schema), `common.php`
+(the dangling-membership self-heal), `village.php:211` (the nav),
+`list.php:77` (online clan members), `dragon.php` (the preserve list).
+Spec audited line-by-line 2026-07 against the local clone; **implemented
+2026-07** (migration 101 + the `greendragon_clan` model, membership fields
+on the character blob, svc round-trips over the PvP cross-player patterns,
+ten `Mode::Clan*` screens off the village's "Clan Halls" row, and the two
+new commentary rooms). **Source-audit corrections** to what this section
+originally claimed (the specs below are already fixed to match):
+
+1. **Clan halls have no posting allowance**: `talkform` skips the
+   posts-today count entirely for `clan-*` sections — members chat without
+   limit. The shared `waiting` section is *not* exempt (window 25,
+   allowance 13, verb "says").
+2. **Promote/demote walk a step ladder, clamped at your own rank**
+   (`clan_nextrank`/`clan_previousrank` pop the founder rung off first):
+   promote = one rung up (0→10→20→30, never to founder 31), target strictly
+   below you, the write clamped `LEAST(yours, next)`; demote = one rung
+   down, allowed on your equals but never yourself, and **hidden when the
+   rung below is applicant** — a member (10) cannot be demoted, only
+   removed. The founder's one self-demotion is the "step down as founder"
+   row (31→30). Remove needs `target ≤ yours` and never yourself. Only
+   officers+ (rank > 10) see the ops column at all. Applicant acceptance IS
+   the promote row (0→10) on the membership page — there is no separate
+   accept flow (and no acceptance mail; only `modulehook`s).
+3. **A clan with no real members is lazily deleted at list render**: both
+   the public list and the application list count `clanrank > 0` and DELETE
+   rows counting zero — applicants alone don't keep a clan alive. A
+   dangling membership (clan row gone) self-heals at page load
+   (`common.php`: clanid/clanrank reset to 0).
+4. **Leaderless auto-promote runs on hall view AND on a leader's
+   withdraw**: no member above officer ⇒ the highest-ranked, oldest-joined
+   member (rank > 0, `ORDER BY clanrank DESC, clanjoindate`) is promoted
+   straight to leader (30, never founder). A withdrawing solitary leader
+   with no other members left deletes the clan (clearing any stragglers).
+5. **Founding validation**: name 5–50 chars of letters, spaces, apostrophes
+   and dashes only; tag ("short name") 2–5 chars, letters only; both
+   unique; fee `goldtostartclan` 10,000 gold + `gemstostartclan` 15 gems,
+   checked and charged at approval; the founder's rank is literally
+   `CLAN_LEADER+1` (31).
+6. **The commentary tag renders for rank > 0 only** — applicants stay
+   bare-named — as `<TAG>` before the name, rank-colored upstream, in
+   *every* comment area, from a live join against the poster's current
+   membership.
+7. **MOTD and description** (≤4096 chars upstream) are officer+ edits, each
+   stamping its author (shown by name); the **custom talk verb** (≤15
+   chars, blank = "says") is leader+ only and is baked into non-emote posts
+   exactly like any venue verb. The desc-block (`descauthor=INT_MAX`) is
+   moderation tooling — out of scope.
+8. **Membership page ordering** is rank DESC, dragon kills DESC, level
+   DESC, join date ASC (columns rank/name/level/DKs/joined/last-on + the
+   total-DK footer); the public detail page orders rank DESC, join date ASC
+   (rank/name/DKs/joined, same footer). Both lists order clans by member
+   count DESC. `list.php?op=clan` is the online-members slice (the standard
+   online filter + `clanid`), total-ordered like the online list.
+9. **Notifications**: applying system-mails every officer+ (and mails the
+   *applicant* a description reminder when the clan has one); a member's
+   withdraw mails the officers; an applicant's withdraw only deletes the
+   stale application mail. Nothing mails on promote/demote/remove.
+
+- [x] Table `greendragon_clans` (migration 101): id, name (unique), tag
+  (unique, both case-insensitively — upstream's MySQL collation), motd +
+  author, description + author, custom talk verb. Membership on
+  `Character`: `clan_id`, `clan_rank` (0 applicant / 10 member / 20
+  officer / 30 leader / 31 founder), `clan_joined_at`, and the denormalized
+  `clan_tag` (see adaptations). All survive dragon kills (`dragon.php`'s
+  preserve list) and death.
+- [x] **The lobby** (village "Clan Halls", rank < 10): the registrar's
+  desk — apply (clan pick off the member-count-ordered list; the officers+
+  get the notice, and a chartered clan earns the registrar's read-the-
+  charter reminder, upstream's two mails), file a new clan (name, tag, the
+  fee — checks in upstream's order), the public list (→ per-clan detail
+  roll, `detail.php`'s ordering + total-DK footer), and, once applied, the
+  waiting area + withdraw-application rows (an applicant's withdraw is
+  purely local, as upstream only deletes the stale mail).
+- [x] **The hall** (rank ≥ 10, the village row walks straight in): MOTD +
+  charter with author names, per-rank counts, total clan DKs; the hearth —
+  commentary section `clan-{id}` (window 25, the custom verb, no
+  allowance); the membership ledger with promote/demote/step-down/remove
+  per correction 2 (rank writes are row-locked cross-player transactions,
+  clamped `LEAST(yours, next)` against the fresh blob); the motd/charter/
+  verb editor (officer+/leader+); online clan members (the warrior list's
+  clan slice, presence-filtered); the shared waiting room; withdraw with
+  the confirm step, succession, and empty-clan deletion per correction 4.
+- [x] **The leaderless auto-promote** runs inside the own-hall load only
+  (`clan_default.php`; the public detail view doesn't heal foreign clans);
+  a vacancy falling to the *viewing* session also updates the live
+  character in place, exactly as upstream patches `$session`.
+- [x] Officer notifications (application, member withdraw) and the
+  dissolved-clan notice ride the `pvp_reports` drain — the established
+  mail adaptation.
+- [x] The commentary tag: `<TAG>` before the name for rank > 0 posters, in
+  every room.
+- No stat buffs — clans are social only in stock 1.1.2.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **The tag and speaker name are snapshotted at post time** (our
+  commentary rows already snapshot the name; upstream re-joins accounts →
+  clans live at render, so its tags update retroactively when someone
+  leaves). Same trade the name column already made; rank colors dropped
+  with the rest of the color-code system.
+- **`clan_tag` is denormalized onto the character blob** (set at
+  apply/found, cleared on leave/removal/dissolution): tags are immutable
+  here — upstream's rename is superuser tooling, out of scope — so the
+  copy can't go stale.
+- **MOTD and charter are single talk lines capped at 200 chars** standing
+  in for upstream's 4096-char textareas; the editor starts blank instead
+  of prefilled, and an empty submit clears the board (as upstream's empty
+  POST does).
+- **The empty-clan sweep gets a founding grace (1 hour)**: our member
+  writes are fire-and-forget where upstream's were synchronous, so a
+  brand-new clan must not be reaped before its founder's save lands.
+- **Author names are stored as snapshots** on the clan row (upstream joins
+  `acctid` and already breaks on renames — its own mail-cleanup comment
+  admits as much).
+- **Rank changes against a live session can be clobbered by that session's
+  next save** (the blob is session-authoritative) — upstream's
+  end-of-request session save has the same race; the hall re-reads on
+  every entry, so it self-corrects at their next visit.
+- The founding fee is taken up front and refunded on a refusal (the
+  Five Sixes/bounty pattern); upstream checks then charges — net effect
+  identical.
+- The membership ledger and detail roll page at 15 rows (the TUI panel);
+  the two clan pickers don't page (clans are few).
+- The withdraw confirm keeps upstream's yes/no step; Esc anywhere backs
+  out without withdrawing.
+- All prose is original: the registrar ("Maren", ours), the lobby, the
+  hall, every notice and refusal line.
 
 ### Mail — integration decision, not a build
 - Upstream: 50-unread inbox cap, 1024-char bodies, 14-day retention,
@@ -841,12 +1141,27 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 - Veterans' rock: commentary room gated on `dragon_kills > 0`; non-veterans
   see only a flavor dead-end. Landed with the commentary slice.
 
-### Rewards wiring (the long-standing TODO)
-- `svc` already holds `ActivityPublisher` + `ChipService`: on dragon kill,
-  publish a dashboard activity item and pay a chip reward via a
-  `reward_templates` seed migration (mirror Lateania's `086` pattern);
-  consider a one-time `profile_awards` badge for the first kill, like
-  NetHack's `NHA`/`NHY` pair.
+### Rewards wiring (the long-standing TODO) — DONE
+
+Implemented 2026-07, mirroring the NetHack milestone shape
+(`door/nethack/award.rs`), fired from the dragon-kill arm in `state.rs`
+next to the bounty-closure hook:
+
+- [x] **Migration 100** seeds the `greendragon_dragon_slain` reward
+  template: 10,000 chips (the NetHack-Amulet / Lateania-Archdemon tier),
+  `per_event` claim policy, paid once per account through
+  `credit_lifetime_reward_template`.
+- [x] **Profile badge**: the rankless `GDS` ("Green Dragon Slayer") award,
+  granted with the chips on the first kill only (double-deduped: the
+  lifetime template and the `NOT EXISTS` award insert).
+- [x] **Activity feed**: `ActivityGame::GreenDragon` (key `greendragon`);
+  every kill publishes "prevailed in the Green Dragon (dragon kill #N)" —
+  the feed line is per kill, the chips/badge first-kill-only, exactly the
+  Lateania split. `activity_game()` on the door now returns the variant
+  instead of `None`.
+- This is a late.sh integration, not a LoGD port — no upstream file to
+  audit; the in-door counterparts (news, titles, dragon points) are the
+  ported parts and unchanged.
 
 ## Out of scope (not stock / not portable)
 

@@ -1497,7 +1497,8 @@ mod tests {
         assert!(arcade.contains("Economy"));
         assert!(tables.contains("Economy tab"));
         assert!(lateania.contains("Lateania"));
-        assert!(!arcade.contains("Lateris"));
+        // The badge glossary names games to explain each badge code; game
+        // details still live in the hub, not here.
         assert!(!tables.contains("Sudoku"));
         assert!(!lateania.contains("Clock presets"));
     }

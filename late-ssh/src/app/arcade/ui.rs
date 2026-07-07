@@ -554,7 +554,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Guess the daily five-letter word in six tries.",
             true,
             DailyGame::LeWord,
-            &[("daily", 100)],
+            &[("daily", 250)],
         ),
         (
             GAME_SELECTION_SUDOKU,

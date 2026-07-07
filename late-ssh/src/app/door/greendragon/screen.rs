@@ -6,6 +6,7 @@
 use ratatui::{Frame, layout::Rect};
 
 use crate::app::{
+    activity::event::ActivityGame,
     common::primitives::Screen,
     door::game::{DoorGame, DoorGameId},
     files::terminal_image::TerminalImageFrame,
@@ -31,6 +32,10 @@ impl DoorGame for GreenDragonDoorGame {
 
     fn description(&self) -> &'static str {
         "An open-source remake of LORD: hunt the forest, beat the masters, gear up, and slay the Green Dragon. Your character persists."
+    }
+
+    fn activity_game(&self) -> Option<ActivityGame> {
+        Some(ActivityGame::GreenDragon)
     }
 
     fn draw(

@@ -57,7 +57,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 format!("{}/{}", state.guesses.len().min(MAX_GUESSES), MAX_GUESSES),
                 theme::SUCCESS(),
             ),
-            ("reward", "100".to_string(), theme::TEXT_BRIGHT()),
+            ("reward", "250".to_string(), theme::TEXT_BRIGHT()),
         ]),
         keys: keys_line(vec![
             ("a-z", "type"),
