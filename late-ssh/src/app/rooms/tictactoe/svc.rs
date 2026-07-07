@@ -1,10 +1,15 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
+
+use crate::app::{
+    activity::{event::ActivityGame, publisher::ActivityPublisher},
+    rooms::{backend::RoomGameEvent, svc::RoomsService},
+};
 
 use super::state::{Mark, Winner, winning_mark};
 
@@ -13,8 +18,12 @@ const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
 #[derive(Clone)]
 pub struct TicTacToeService {
     room_id: Uuid,
+    activity: ActivityPublisher,
+    room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TicTacToeSnapshot>,
     snapshot_rx: watch::Receiver<TicTacToeSnapshot>,
+    rooms_service: RoomsService,
+    room_in_round: Arc<AtomicBool>,
     state: Arc<Mutex<SharedState>>,
 }
 
@@ -29,14 +38,28 @@ pub struct TicTacToeSnapshot {
 }
 
 impl TicTacToeService {
-    pub fn new(room_id: Uuid) -> Self {
+    pub fn new(room_id: Uuid, activity: ActivityPublisher, rooms_service: RoomsService) -> Self {
+        let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
+        Self::new_with_events(room_id, activity, room_event_tx, rooms_service)
+    }
+
+    pub fn new_with_events(
+        room_id: Uuid,
+        activity: ActivityPublisher,
+        room_event_tx: broadcast::Sender<RoomGameEvent>,
+        rooms_service: RoomsService,
+    ) -> Self {
         let state = SharedState::new(room_id);
         let initial_snapshot = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
         Self {
             room_id,
+            activity,
+            room_event_tx,
             snapshot_tx,
             snapshot_rx,
+            rooms_service,
+            room_in_round: Arc::new(AtomicBool::new(false)),
             state: Arc::new(Mutex::new(state)),
         }
     }
@@ -56,15 +79,21 @@ impl TicTacToeService {
     pub fn sit_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let activity_generation = {
+            let (activity_generation, seat_joined) = {
                 let mut state = svc.state.lock().await;
-                state.sit(user_id);
+                let seat_joined = state.sit(user_id);
                 let activity_generation = state.record_activity(user_id);
                 svc.publish(&state);
-                activity_generation
+                (activity_generation, seat_joined)
             };
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
+            }
+            if seat_joined.is_some() {
+                let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
+                    room_id: svc.room_id,
+                    user_id,
+                });
             }
         });
     }
@@ -81,13 +110,21 @@ impl TicTacToeService {
     pub fn place_task(&self, user_id: Uuid, index: usize) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let activity_generation = {
+            let (activity_generation, winner) = {
                 let mut state = svc.state.lock().await;
-                state.place(user_id, index);
+                let winner = state.place(user_id, index);
                 let activity_generation = state.record_activity(user_id);
                 svc.publish(&state);
-                activity_generation
+                (activity_generation, winner)
             };
+            if let Some((winner_user_id, mark)) = winner {
+                svc.activity.game_won_task(
+                    winner_user_id,
+                    ActivityGame::TicTacToe,
+                    Some(mark.label().to_string()),
+                    None,
+                );
+            }
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
             }
@@ -137,6 +174,15 @@ impl TicTacToeService {
 
     fn publish(&self, state: &SharedState) {
         let _ = self.snapshot_tx.send(state.snapshot());
+        self.sync_room_status(state.round_active());
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        self.rooms_service.sync_room_status_task(
+            self.room_id,
+            self.room_in_round.clone(),
+            in_round,
+        );
     }
 }
 
@@ -147,6 +193,7 @@ struct SharedState {
     activity_generation: [u64; 2],
     board: [Option<Mark>; 9],
     turn: Mark,
+    next_starter: Mark,
     winner: Option<Winner>,
     status_message: String,
 }
@@ -161,6 +208,7 @@ impl SharedState {
             activity_generation: [0; 2],
             board: [None; 9],
             turn: Mark::X,
+            next_starter: Mark::O,
             winner: None,
             status_message: "Take a seat to play.".to_string(),
         }
@@ -177,20 +225,21 @@ impl SharedState {
         }
     }
 
-    fn sit(&mut self, user_id: Uuid) {
+    fn sit(&mut self, user_id: Uuid) -> Option<usize> {
         if self.seats.contains(&Some(user_id)) {
-            return;
+            return None;
         }
         let Some(index) = self.seats.iter().position(Option::is_none) else {
             self.status_message = "Table is full.".to_string();
-            return;
+            return None;
         };
         self.seats[index] = Some(user_id);
         self.status_message = if self.seats.iter().all(Option::is_some) {
-            "Game on. X moves first.".to_string()
+            format!("Game on. {} moves first.", self.turn.label())
         } else {
             "Waiting for a second player.".to_string()
         };
+        Some(index)
     }
 
     fn leave(&mut self, user_id: Uuid) {
@@ -200,49 +249,52 @@ impl SharedState {
         self.seats[index] = None;
         self.board = [None; 9];
         self.turn = Mark::X;
+        self.next_starter = Mark::O;
         self.winner = None;
         self.status_message = "Player left. Board reset.".to_string();
     }
 
-    fn place(&mut self, user_id: Uuid, index: usize) {
+    fn place(&mut self, user_id: Uuid, index: usize) -> Option<(Uuid, Mark)> {
         if index >= self.board.len() {
-            return;
+            return None;
         }
         if self.winner.is_some() {
             self.status_message = "Round is over. Press n to reset.".to_string();
-            return;
+            return None;
         }
         if self.seats.iter().any(Option::is_none) {
             self.status_message = "Need two players before moves count.".to_string();
-            return;
+            return None;
         }
         let Some(seat_index) = self.seats.iter().position(|seat| *seat == Some(user_id)) else {
             self.status_message = "Sit before playing.".to_string();
-            return;
+            return None;
         };
         let mark = if seat_index == 0 { Mark::X } else { Mark::O };
         if mark != self.turn {
             self.status_message = format!("{} to move.", self.turn.label());
-            return;
+            return None;
         }
         if self.board[index].is_some() {
             self.status_message = "That square is taken.".to_string();
-            return;
+            return None;
         }
 
         self.board[index] = Some(mark);
         if let Some(winner) = winning_mark(&self.board) {
             self.winner = Some(Winner::Mark(winner));
             self.status_message = format!("{} wins. Press n for a new round.", winner.label());
-            return;
+            let winner_index = if winner == Mark::X { 0 } else { 1 };
+            return self.seats[winner_index].map(|user_id| (user_id, winner));
         }
         if self.board.iter().all(Option::is_some) {
             self.winner = Some(Winner::Draw);
             self.status_message = "Draw. Press n for a new round.".to_string();
-            return;
+            return None;
         }
         self.turn = self.turn.other();
         self.status_message = format!("{} to move.", self.turn.label());
+        None
     }
 
     fn reset(&mut self, user_id: Uuid) {
@@ -251,9 +303,10 @@ impl SharedState {
             return;
         }
         self.board = [None; 9];
-        self.turn = Mark::X;
+        self.turn = self.next_starter;
+        self.next_starter = self.next_starter.other();
         self.winner = None;
-        self.status_message = "New round. X moves first.".to_string();
+        self.status_message = format!("New round. {} moves first.", self.turn.label());
     }
 
     fn record_activity(&mut self, user_id: Uuid) -> Option<u64> {
@@ -261,6 +314,10 @@ impl SharedState {
         self.last_activity[seat_index] = Instant::now();
         self.activity_generation[seat_index] = self.activity_generation[seat_index].wrapping_add(1);
         Some(self.activity_generation[seat_index])
+    }
+
+    fn round_active(&self) -> bool {
+        self.winner.is_none() && self.board.iter().any(Option::is_some)
     }
 
     fn kick_inactive_user(&mut self, user_id: Uuid, activity_generation: u64) -> bool {
@@ -277,6 +334,7 @@ impl SharedState {
         self.seats[seat_index] = None;
         self.board = [None; 9];
         self.turn = Mark::X;
+        self.next_starter = Mark::O;
         self.winner = None;
         self.status_message = format!("Seat {} idle for 5m and left. Board reset.", seat_index + 1);
         true

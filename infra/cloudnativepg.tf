@@ -81,7 +81,7 @@ resource "kubernetes_manifest" "postgres_object_store" {
           }
           limits = {
             cpu    = "500m"
-            memory = "384Mi"
+            memory = "512Mi"
           }
         }
       }
@@ -115,15 +115,18 @@ resource "kubernetes_manifest" "postgres_cluster" {
           cpu    = "200m"
         }
         limits = {
-          memory = "2Gi"
+          memory = "4Gi"
           cpu    = "1"
         }
       }
 
       postgresql = {
         parameters = {
-          shared_buffers  = "256MB"
-          max_connections = "100"
+          shared_buffers             = "256MB"
+          max_connections            = "100"
+          "pg_stat_statements.max"   = "10000"
+          "pg_stat_statements.track" = "all"
+          track_io_timing            = "on"
         }
       }
 

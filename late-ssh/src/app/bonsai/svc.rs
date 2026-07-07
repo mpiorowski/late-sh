@@ -1,14 +1,19 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use late_core::db::Db;
-use late_core::models::bonsai::{DailyCare, Grave, Tree};
+use late_core::models::{
+    bonsai::{BonsaiV2Tree, BonsaiV2TreeParams},
+    bonsai::{DailyCare, Grave, Tree},
+    chips::UserChips,
+};
 use rand_core::{OsRng, RngCore};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::state::ActivityEvent;
+use crate::app::activity::event::ActivityEvent;
 
 const MISSED_PRUNE_GROWTH_LOSS: i32 = 10;
+pub(crate) const WATER_CHIP_BONUS: i64 = 200;
 
 #[derive(Clone)]
 pub struct BonsaiService {
@@ -49,11 +54,9 @@ impl BonsaiService {
 
                     let username =
                         late_core::models::profile::fetch_username(&client, user_id).await;
-                    let _ = self.activity_feed.send(ActivityEvent {
-                        username,
-                        action: format!("lost their bonsai ({survived}d)"),
-                        at: std::time::Instant::now(),
-                    });
+                    let _ = self
+                        .activity_feed
+                        .send(ActivityEvent::bonsai_lost(user_id, username, survived));
                 }
             }
             tree
@@ -82,42 +85,68 @@ impl BonsaiService {
         Ok((tree, care))
     }
 
-    /// Water the tree. Non-admin users are limited to once per day.
-    pub fn water_task(&self, user_id: Uuid, unlimited: bool) {
+    pub async fn ensure_v2_tree(
+        &self,
+        user_id: Uuid,
+        legacy_tree: Option<&Tree>,
+    ) -> Result<BonsaiV2Tree> {
+        let client = self.db.get().await?;
+        let today = chrono::Utc::now().date_naive();
+        let seed = legacy_tree
+            .map(|tree| tree.seed)
+            .unwrap_or_else(|| user_id.as_u128() as i64);
+        let growth_points = legacy_tree.map(|tree| tree.growth_points).unwrap_or(0);
+        let is_alive = legacy_tree.map(|tree| tree.is_alive).unwrap_or(true);
+        let graph = crate::app::bonsai_v2::state::seeded_graph_value(seed, growth_points);
+        let badge = crate::app::bonsai_v2::state::seeded_badge_glyph(seed, growth_points, is_alive);
+
+        BonsaiV2Tree::ensure(&client, user_id, seed, today, graph, &badge).await
+    }
+
+    /// Water the tree once per UTC day.
+    pub fn water_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.water(user_id, unlimited).await {
+            if let Err(e) = svc.water(user_id).await {
                 tracing::error!(error = ?e, "failed to water bonsai");
             }
         });
     }
 
-    async fn water(&self, user_id: Uuid, unlimited: bool) -> Result<bool> {
+    async fn water(&self, user_id: Uuid) -> Result<bool> {
         let client = self.db.get().await?;
         let today = chrono::Utc::now().date_naive();
 
-        if !Tree::water_and_add_growth_if_available(&client, user_id, today, unlimited).await? {
+        if !Tree::water_and_add_growth_if_available(&client, user_id, today).await? {
             return Ok(false);
         }
-        DailyCare::mark_watered(&client, user_id, today).await?;
-
-        // Grant chips for watering
-        late_core::models::chips::UserChips::add_bonus(
-            &client,
-            user_id,
-            late_core::models::chips::BONSAI_WATER_BONUS,
-        )
-        .await?;
+        let first_daily_water = DailyCare::mark_watered(&client, user_id, today).await?;
+        if first_daily_water {
+            self.add_water_chip_bonus(user_id).await?;
+        }
 
         // Broadcast
         let username = late_core::models::profile::fetch_username(&client, user_id).await;
-        let _ = self.activity_feed.send(ActivityEvent {
-            username,
-            action: "watered their bonsai".to_string(),
-            at: std::time::Instant::now(),
-        });
+        let _ = self
+            .activity_feed
+            .send(ActivityEvent::bonsai_watered(user_id, username));
 
         Ok(true)
+    }
+
+    pub fn water_chip_bonus_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.add_water_chip_bonus(user_id).await {
+                tracing::error!(error = ?e, "failed to credit bonsai water chips");
+            }
+        });
+    }
+
+    async fn add_water_chip_bonus(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        UserChips::add_bonus(&client, user_id, WATER_CHIP_BONUS).await?;
+        Ok(())
     }
 
     /// Respawn a dead tree
@@ -231,6 +260,20 @@ impl BonsaiService {
     async fn lose_growth(&self, user_id: Uuid, points: i32) -> Result<()> {
         let client = self.db.get().await?;
         Tree::lose_growth(&client, user_id, points).await
+    }
+
+    pub fn save_v2_task(&self, params: BonsaiV2TreeParams) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.save_v2(params).await {
+                tracing::error!(error = ?e, "failed to save bonsai v2");
+            }
+        });
+    }
+
+    async fn save_v2(&self, params: BonsaiV2TreeParams) -> Result<()> {
+        let client = self.db.get().await?;
+        BonsaiV2Tree::save(&client, params).await
     }
 
     pub fn today() -> NaiveDate {

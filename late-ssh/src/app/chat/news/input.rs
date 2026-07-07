@@ -1,4 +1,4 @@
-use crate::app::state::App;
+use crate::app::{common::primitives::Banner, state::App};
 
 pub fn handle_composer_input(app: &mut App, byte: u8) {
     match byte {
@@ -49,9 +49,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             if let Some(url) = app.chat.news.selected_url() {
                 let cleaned = crate::app::input::sanitize_paste_markers(url);
                 app.pending_clipboard = Some(cleaned.trim().to_owned());
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Link copied!",
-                ));
+                app.banner = Some(Banner::success("Link copied!"));
             }
             true
         }
@@ -65,6 +63,16 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         }
         b'd' | b'D' => {
             app.chat.news.delete_selected();
+            true
+        }
+        b'/' => {
+            app.chat.news.toggle_mine_only();
+            let banner = if app.chat.news.mine_only() {
+                crate::app::common::primitives::Banner::success("Showing only your news.")
+            } else {
+                crate::app::common::primitives::Banner::success("Showing all news.")
+            };
+            app.banner = Some(banner);
             true
         }
         _ => false,

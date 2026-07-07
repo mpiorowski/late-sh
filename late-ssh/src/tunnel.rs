@@ -41,13 +41,14 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit, mpsc};
 use uuid::Uuid;
 
+use crate::app::activity::event::ActivityEvent;
 use crate::metrics;
 use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
 use crate::session_io::WsFrameSink;
 use crate::ssh::{
     AdmissionReject, INPUT_QUEUE_CAP, RenderSignal, check_ssh_admission, ensure_user, run_session,
 };
-use crate::state::{ActiveSession, ActiveUser, ActivityEvent, State, TunnelSessionPermit};
+use crate::state::{ActiveSession, ActiveUser, State, TunnelSessionPermit};
 
 /// Bound on the writer-task mpsc that feeds `WsFrameSink`. Backpressure
 /// past this is surfaced to the render loop as `Ok(false)` (drop +
@@ -229,6 +230,7 @@ impl Drop for TunnelSessionGuard {
         {
             metrics::add_ssh_session(-1);
             let mut active_users = self.state.active_users.lock_recover();
+            let mut user_still_afk = false;
             if let Some(active) = active_users.get_mut(&user_id) {
                 if let Some(token) = self.active_session_token.as_ref() {
                     active.sessions.retain(|session| session.token != *token);
@@ -237,8 +239,11 @@ impl Drop for TunnelSessionGuard {
                     active_users.remove(&user_id);
                 } else {
                     active.connection_count -= 1;
+                    user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
             }
+            drop(active_users);
+            crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
         }
 
         if self.per_ip_incremented {
@@ -418,6 +423,7 @@ async fn tunnel_handler(
             active.username = user.username.clone();
             active.fingerprint = Some(handshake.fingerprint.clone());
             active.peer_ip = Some(handshake.peer_ip);
+            active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
             active.last_login_at = Instant::now();
             if !active
                 .sessions
@@ -428,6 +434,7 @@ async fn tunnel_handler(
                     token: session_token.clone(),
                     fingerprint: Some(handshake.fingerprint.clone()),
                     peer_ip: Some(handshake.peer_ip),
+                    afk: None,
                 });
             }
         } else {
@@ -437,10 +444,12 @@ async fn tunnel_handler(
                     username: user.username.clone(),
                     fingerprint: Some(handshake.fingerprint.clone()),
                     peer_ip: Some(handshake.peer_ip),
+                    audio_source: late_core::models::user::extract_audio_source(&user.settings),
                     sessions: vec![ActiveSession {
                         token: session_token.clone(),
                         fingerprint: Some(handshake.fingerprint.clone()),
                         peer_ip: Some(handshake.peer_ip),
+                        afk: None,
                     }],
                     connection_count: 1,
                     last_login_at: Instant::now(),
@@ -455,11 +464,9 @@ async fn tunnel_handler(
 
     // Broadcast the join. Subscribers attach in their own time; a send
     // failure here just means no one was listening.
-    let _ = state.activity_feed.send(ActivityEvent {
-        username: user.username.clone(),
-        action: "joined".to_string(),
-        at: Instant::now(),
-    });
+    let _ = state
+        .activity_feed
+        .send(ActivityEvent::joined(user.id, user.username.clone()));
 
     tracing::info!(
         peer_ip = %peer_addr.ip(),
@@ -526,11 +533,13 @@ async fn start_tunnel_shell(
         SessionBootstrapInputs {
             user,
             is_new_user,
+            term: pty.term.clone(),
             cols: pty.cols,
             rows: pty.rows,
             session_token,
             session_rx: Some(session_rx),
             activity_feed_rx: Some(state.activity_feed.subscribe()),
+            room_join_rx: Some(state.room_join_feed.subscribe()),
             supports_reconnect_on_drain: true,
             reconnect_reason,
         },
@@ -648,7 +657,7 @@ async fn handle_session(
     let (session_tx, session_rx) = mpsc::channel(64);
     state
         .session_registry
-        .register(session_token.clone(), session_tx)
+        .register(session_token.clone(), session_tx, user.id)
         .await;
     let mut session_rx = Some(session_rx);
 

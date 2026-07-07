@@ -289,6 +289,68 @@ async fn remove_ignored_user_id_reports_missing_entry() {
 }
 
 #[tokio::test]
+async fn add_friend_user_id_preserves_other_settings() {
+    let (client, _test_db) = setup_db().await;
+
+    let user = User::create(
+        &client,
+        UserParams {
+            fingerprint: "fp-friend-add".to_string(),
+            username: "friend_add_user".to_string(),
+            settings: json!({"theme": "late"}),
+        },
+    )
+    .await
+    .expect("failed to create user");
+
+    let target = Uuid::now_v7();
+    let (changed, ids) = User::add_friend_user_id(&client, user.id, target)
+        .await
+        .expect("add friend user id");
+    assert!(changed);
+    assert_eq!(ids, vec![target]);
+
+    let refreshed = User::get(&client, user.id)
+        .await
+        .expect("get user")
+        .expect("user");
+    assert_eq!(refreshed.settings["theme"], json!("late"));
+    assert_eq!(
+        refreshed.settings["friend_user_ids"],
+        json!([target.to_string()])
+    );
+}
+
+#[tokio::test]
+async fn friend_user_ids_are_private_and_removable() {
+    let (client, _test_db) = setup_db().await;
+
+    let alice = Uuid::now_v7();
+    let bob = Uuid::now_v7();
+    let user = User::create(
+        &client,
+        UserParams {
+            fingerprint: "fp-friend-remove".to_string(),
+            username: "friend_remove_user".to_string(),
+            settings: json!({"friend_user_ids": [alice.to_string(), bob.to_string()]}),
+        },
+    )
+    .await
+    .expect("failed to create user");
+
+    let (changed, ids) = User::remove_friend_user_id(&client, user.id, bob)
+        .await
+        .expect("remove friend user id");
+    assert!(changed);
+    assert_eq!(ids, vec![alice]);
+
+    let friends = User::friend_user_ids(&client, user.id)
+        .await
+        .expect("read friend user ids");
+    assert_eq!(friends, vec![alice]);
+}
+
+#[tokio::test]
 async fn ignored_user_ids_require_existing_user() {
     let (client, _test_db) = setup_db().await;
     let missing_user_id = Uuid::now_v7();

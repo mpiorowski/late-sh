@@ -1,0 +1,15 @@
+{"path":"ash","level":1,"name":"Ash Palm","uses_per_day":1,"effect":"small_attack_boost","news_key":"skill_public_minor","tags":["combat"]}
+{"path":"ash","level":2,"name":"Coal Breath","uses_per_day":1,"effect":"fire_damage","news_key":"skill_public_minor","tags":["combat","fire"]}
+{"path":"ash","level":3,"name":"Cinder Oath","uses_per_day":2,"effect":"damage_and_self_risk","news_key":"skill_public_risky","tags":["combat","risk"]}
+{"path":"ash","level":4,"name":"Black Furnace","uses_per_day":2,"effect":"large_attack_boost","news_key":"skill_public_major","tags":["combat","fire"]}
+{"path":"ash","level":5,"name":"Crown of Smoke","uses_per_day":3,"effect":"dragon_ready_attack","news_key":"skill_public_major","tags":["combat","legacy"]}
+{"path":"veil","level":1,"name":"Soft Step","uses_per_day":1,"effect":"avoid_damage","news_key":"skill_public_minor","tags":["defense","stealth"]}
+{"path":"veil","level":2,"name":"Borrowed Face","uses_per_day":1,"effect":"social_check_boost","news_key":"skill_public_minor","tags":["social"]}
+{"path":"veil","level":3,"name":"Mirror Lie","uses_per_day":2,"effect":"event_reroll","news_key":"skill_public_risky","tags":["social","risk"]}
+{"path":"veil","level":4,"name":"Vanishing Debt","uses_per_day":2,"effect":"protect_gold_hand","news_key":"skill_public_major","tags":["economy","stealth"]}
+{"path":"veil","level":5,"name":"Door Without Hinges","uses_per_day":3,"effect":"hidden_location_unlock","news_key":"skill_public_major","tags":["hidden","legacy"]}
+{"path":"knife","level":1,"name":"Pocket Cut","uses_per_day":1,"effect":"minor_gold_steal","news_key":"skill_public_minor","tags":["pvp","economy"]}
+{"path":"knife","level":2,"name":"Sleeve Lesson","uses_per_day":1,"effect":"pvp_accuracy_boost","news_key":"skill_public_minor","tags":["pvp"]}
+{"path":"knife","level":3,"name":"False Receipt","uses_per_day":2,"effect":"shop_discount_roll","news_key":"skill_public_risky","tags":["economy","risk"]}
+{"path":"knife","level":4,"name":"Back Alley Crown","uses_per_day":2,"effect":"major_pvp_opening","news_key":"skill_public_major","tags":["pvp","social"]}
+{"path":"knife","level":5,"name":"Midnight Signature","uses_per_day":3,"effect":"public_news_manipulation","news_key":"skill_public_major","tags":["news","legacy"]}

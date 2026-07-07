@@ -83,6 +83,14 @@ impl ArtboardBan {
         client: &Client,
         limit: i64,
     ) -> Result<Vec<ArtboardBanListItem>> {
+        Self::active_with_usernames_page(client, limit, 0).await
+    }
+
+    pub async fn active_with_usernames_page(
+        client: &Client,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ArtboardBanListItem>> {
         let rows = client
             .query(
                 "SELECT ab.*, target.username AS target_username, actor.username AS actor_username
@@ -91,8 +99,8 @@ impl ArtboardBan {
                  LEFT JOIN users actor ON actor.id = ab.actor_user_id
                  WHERE ab.expires_at IS NULL OR ab.expires_at > current_timestamp
                  ORDER BY ab.created DESC
-                 LIMIT $1",
-                &[&limit],
+                 LIMIT $1 OFFSET $2",
+                &[&limit, &offset],
             )
             .await?;
         Ok(rows

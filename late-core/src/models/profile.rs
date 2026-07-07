@@ -1,15 +1,20 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::chips::INITIAL_CHIP_BALANCE;
 use super::user::{
-    User, extract_bio, extract_country, extract_enable_background_color, extract_favorite_room_ids,
-    extract_ide, extract_langs, extract_notify_bell, extract_notify_cooldown_mins,
-    extract_notify_format, extract_notify_kinds, extract_os, extract_show_dashboard_header,
-    extract_show_games_sidebar, extract_show_right_sidebar, extract_show_settings_on_connect,
-    extract_terminal, extract_theme_id, extract_timezone,
+    RightSidebarComponentSetting, RightSidebarMode, User, extract_bio, extract_birthday,
+    extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
+    extract_keep_composer_focused, extract_land_on_home, extract_langs, extract_notify_bell,
+    extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
+    extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_dashboard_header,
+    extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
+    extract_theme_id, extract_timezone, normalize_right_sidebar_components,
+    normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -30,13 +35,36 @@ pub struct Profile {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
+    pub text_brightness_adjustment: i32,
+    /// Controls the lounge top info boxes.
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
-    pub show_games_sidebar: bool,
-    /// When false, the settings modal is not auto-opened on connect.
-    pub show_settings_on_connect: bool,
+    pub right_sidebar_mode: RightSidebarMode,
+    /// Ordered list of sidebar panels with their on/off state. List order is
+    /// the render order (top to bottom); the clock is pinned above it.
+    pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
+    pub show_room_list_sidebar: bool,
+    /// Tweak: pressing Enter in the chat composer sends without closing it.
+    /// While on, the Alt+S shortcut becomes a no-op.
+    pub keep_composer_focused: bool,
+    /// Tweak: silently mute the first paired audio client on each new SSH
+    /// session so music does not auto-play.
+    pub start_with_music_muted: bool,
+    /// Tweak: land on Home (page 1) instead of the Clubhouse (page 0) when a
+    /// session starts.
+    pub land_on_home: bool,
+    /// Tweak: show text labels instead of flag emoji in the shop Flags tab.
+    pub show_flag_fallback: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
+    /// Year-less `MM-DD` birthday, or `None` if unset.
+    pub birthday: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProfileWithChipBalance {
+    pub profile: Profile,
+    pub chip_balance: i64,
 }
 
 impl Default for Profile {
@@ -57,11 +85,18 @@ impl Default for Profile {
             notify_format: None,
             theme_id: None,
             enable_background_color: true,
+            text_brightness_adjustment: 0,
             show_dashboard_header: true,
             show_right_sidebar: true,
-            show_games_sidebar: true,
-            show_settings_on_connect: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_components: super::user::default_right_sidebar_components(),
+            show_room_list_sidebar: true,
+            keep_composer_focused: false,
+            start_with_music_muted: false,
+            land_on_home: false,
+            show_flag_fallback: false,
             favorite_room_ids: Vec::new(),
+            birthday: None,
         }
     }
 }
@@ -82,11 +117,19 @@ pub struct ProfileParams {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
+    pub text_brightness_adjustment: i32,
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
-    pub show_games_sidebar: bool,
-    pub show_settings_on_connect: bool,
+    pub right_sidebar_mode: RightSidebarMode,
+    pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
+    pub show_room_list_sidebar: bool,
+    pub keep_composer_focused: bool,
+    pub start_with_music_muted: bool,
+    pub land_on_home: bool,
+    pub show_flag_fallback: bool,
     pub favorite_room_ids: Vec<Uuid>,
+    /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
+    pub birthday: Option<String>,
 }
 
 impl Profile {
@@ -97,12 +140,57 @@ impl Profile {
         Ok(Self::from_user(&user))
     }
 
+    pub async fn list_by_user_ids(
+        client: &Client,
+        user_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Self>> {
+        if user_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query("SELECT * FROM users WHERE id = ANY($1)", &[&user_ids])
+            .await?;
+        let mut profiles = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let user = User::from(row);
+            profiles.insert(user.id, Self::from_user(&user));
+        }
+        Ok(profiles)
+    }
+
+    pub async fn load_with_chip_balance(
+        client: &Client,
+        user_id: Uuid,
+    ) -> Result<ProfileWithChipBalance> {
+        let row = client
+            .query_opt(
+                "SELECT u.*,
+                        COALESCE(c.balance, $2) AS chip_balance
+                 FROM users u
+                 LEFT JOIN user_chips c ON c.user_id = u.id
+                 WHERE u.id = $1",
+                &[&user_id, &INITIAL_CHIP_BALANCE],
+            )
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+        let chip_balance = row.get("chip_balance");
+        let user = User::from(row);
+        Ok(ProfileWithChipBalance {
+            profile: Self::from_user(&user),
+            chip_balance,
+        })
+    }
+
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
-    /// enable_background_color/show_dashboard_header/show_right_sidebar/
-    /// show_games_sidebar/show_settings_on_connect into settings via
-    /// `settings || jsonb_build_object(...)`, so concurrent writes to unrelated keys
-    /// (ignored_user_ids) are preserved.
+    /// enable_background_color/text_brightness_adjustment/
+    /// show_dashboard_header/show_right_sidebar/
+    /// right_sidebar_mode/right_sidebar_components/
+    /// show_room_list_sidebar/keep_composer_focused/
+    /// start_with_music_muted/show_flag_fallback into settings via
+    /// `settings || jsonb_build_object(...)`, so concurrent writes to
+    /// unrelated keys (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
         let kinds_json = serde_json::to_value(&params.notify_kinds)?;
         let favorite_room_ids_json = serde_json::to_value(
@@ -110,6 +198,17 @@ impl Profile {
                 .favorite_room_ids
                 .iter()
                 .map(Uuid::to_string)
+                .collect::<Vec<_>>(),
+        )?;
+        let right_sidebar_components_json = serde_json::to_value(
+            normalize_right_sidebar_components(&params.right_sidebar_components)
+                .into_iter()
+                .map(|setting| {
+                    serde_json::json!({
+                        "key": setting.component.as_str(),
+                        "enabled": setting.enabled,
+                    })
+                })
                 .collect::<Vec<_>>(),
         )?;
         let cooldown = params.notify_cooldown_mins.max(0);
@@ -131,6 +230,10 @@ impl Profile {
         let os = normalize_profile_text(params.os.as_deref());
         let langs = normalize_profile_tags(params.langs.iter().map(String::as_str));
         let langs_json = serde_json::to_value(&langs)?;
+        let birthday = params
+            .birthday
+            .as_deref()
+            .and_then(crate::models::birthday::normalize_birthday);
         let current_user = User::get(client, user_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
@@ -164,19 +267,26 @@ impl Profile {
                          'notify_cooldown_mins', $7::int,
                          'theme_id', $8::text,
                          'enable_background_color', $9::bool,
-                         'notify_format', $10::text,
-                         'show_dashboard_header', $11::bool,
-                         'show_right_sidebar', $12::bool,
-                         'show_games_sidebar', $13::bool,
-                         'show_settings_on_connect', $14::bool,
-                         'favorite_room_ids', $15::jsonb,
-                         'ide', $16::text,
-                         'terminal', $17::text,
-                         'os', $18::text,
-                         'langs', $19::jsonb
+                         'text_brightness_adjustment', $10::int,
+                         'notify_format', $11::text,
+                         'show_dashboard_header', $12::bool,
+                         'show_right_sidebar', $13::bool,
+                         'right_sidebar_mode', $14::text,
+                         'right_sidebar_components', $15::jsonb,
+                         'show_room_list_sidebar', $16::bool,
+                         'favorite_room_ids', $17::jsonb,
+                         'ide', $18::text,
+                         'terminal', $19::text,
+                         'os', $20::text,
+                         'langs', $21::jsonb,
+                         'birthday', $22::text,
+                         'keep_composer_focused', $23::bool,
+                         'start_with_music_muted', $24::bool,
+                         'show_flag_fallback', $25::bool,
+                         'land_on_home', $26::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $20
+                 WHERE id = $27
                  RETURNING *",
                 &[
                     &params.username,
@@ -188,16 +298,23 @@ impl Profile {
                     &cooldown,
                     &theme_id,
                     &params.enable_background_color,
+                    &normalize_text_brightness_adjustment(params.text_brightness_adjustment),
                     &notify_format,
                     &params.show_dashboard_header,
                     &params.show_right_sidebar,
-                    &params.show_games_sidebar,
-                    &params.show_settings_on_connect,
+                    &params.right_sidebar_mode.as_str(),
+                    &right_sidebar_components_json,
+                    &params.show_room_list_sidebar,
                     &favorite_room_ids_json,
                     &ide,
                     &terminal,
                     &os,
                     &langs_json,
+                    &birthday,
+                    &params.keep_composer_focused,
+                    &params.start_with_music_muted,
+                    &params.show_flag_fallback,
+                    &params.land_on_home,
                     &user_id,
                 ],
             )
@@ -223,11 +340,18 @@ impl Profile {
             notify_format: extract_notify_format(&user.settings),
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
+            text_brightness_adjustment: extract_text_brightness_adjustment(&user.settings),
             show_dashboard_header: extract_show_dashboard_header(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),
-            show_games_sidebar: extract_show_games_sidebar(&user.settings),
-            show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
+            right_sidebar_mode: extract_right_sidebar_mode(&user.settings),
+            right_sidebar_components: extract_right_sidebar_components(&user.settings),
+            show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
+            keep_composer_focused: extract_keep_composer_focused(&user.settings),
+            start_with_music_muted: extract_start_with_music_muted(&user.settings),
+            land_on_home: extract_land_on_home(&user.settings),
+            show_flag_fallback: extract_show_flag_fallback(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
+            birthday: extract_birthday(&user.settings),
         }
     }
 }

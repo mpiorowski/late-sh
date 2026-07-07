@@ -19,4 +19,4 @@ if [[ ! -f "$key_path" ]]; then
   ssh-keygen -t ed25519 -f "$key_path" -N "" -C "late-local-${name}" >/dev/null
 fi
 
-exec ssh -i "$key_path" -p 2222 "${name}@localhost"
+exec ssh -i "$key_path" -o IdentitiesOnly=yes -p 2222 "${name}@localhost"

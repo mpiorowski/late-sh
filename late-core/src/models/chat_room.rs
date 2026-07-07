@@ -23,12 +23,12 @@ crate::model! {
 }
 
 impl ChatRoom {
-    pub async fn ensure_general(client: &Client) -> Result<Self> {
+    pub async fn ensure_lounge(client: &Client) -> Result<Self> {
         let row = client
             .query_one(
                 "INSERT INTO chat_rooms (kind, visibility, auto_join, permanent, slug)
-                 VALUES ('general', 'public', true, true, 'general')
-                 ON CONFLICT (slug) WHERE kind = 'general'
+                 VALUES ('lounge', 'public', true, true, 'lounge')
+                 ON CONFLICT (slug) WHERE kind = 'lounge'
                  DO UPDATE
                     SET visibility = 'public',
                         auto_join = true,
@@ -41,10 +41,10 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    pub async fn find_general(client: &Client) -> Result<Option<Self>> {
+    pub async fn find_lounge(client: &Client) -> Result<Option<Self>> {
         let row = client
             .query_opt(
-                "SELECT * FROM chat_rooms WHERE kind = 'general' AND slug = 'general'",
+                "SELECT * FROM chat_rooms WHERE kind = 'lounge' AND slug = 'lounge'",
                 &[],
             )
             .await?;
@@ -56,6 +56,35 @@ impl ChatRoom {
             .query_opt(
                 "SELECT * FROM chat_rooms WHERE slug = $1 AND kind <> 'dm' LIMIT 1",
                 &[&slug],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
+    pub async fn find_irc_channel_by_slug_for_user(
+        client: &Client,
+        slug: &str,
+        user_id: Uuid,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT r.*
+                 FROM chat_rooms r
+                 WHERE r.slug = $1
+                   AND (r.kind IN ('lounge', 'language')
+                        OR (r.kind = 'topic' AND r.visibility = 'public')
+                        OR (r.kind = 'topic' AND r.visibility = 'private' AND EXISTS (
+                              SELECT 1 FROM chat_room_members m
+                              WHERE m.room_id = r.id AND m.user_id = $2)))
+                 ORDER BY CASE
+                    WHEN r.kind = 'lounge' THEN 0
+                    WHEN r.kind = 'language' THEN 1
+                    WHEN r.kind = 'topic' AND r.visibility = 'public' THEN 2
+                    WHEN r.kind = 'topic' AND r.visibility = 'private' THEN 3
+                    ELSE 4
+                 END
+                 LIMIT 1",
+                &[&slug, &user_id],
             )
             .await?;
         Ok(row.map(Self::from))
@@ -190,7 +219,7 @@ impl ChatRoom {
                  WHERE m.user_id = $1
                  ORDER BY
                      CASE
-                         WHEN r.kind = 'general' AND r.slug = 'general' THEN 0
+                         WHEN r.kind = 'lounge' AND r.slug = 'lounge' THEN 0
                          WHEN r.permanent THEN 1
                          WHEN r.visibility = 'public' THEN 2
                          WHEN r.kind = 'dm' THEN 4
@@ -234,6 +263,89 @@ impl ChatRoom {
             .unwrap_or(false))
     }
 
+    /// Rooms visible to the user as IRC channels: the lounge, language rooms,
+    /// public topic rooms, plus private topic rooms the user is a member of.
+    /// See devdocs/FRD-IRCD.md §6.
+    pub async fn list_irc_channels(client: &Client, user_id: Uuid) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "WITH visible AS (
+                    SELECT r.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY r.slug
+                               ORDER BY CASE
+                                   WHEN r.kind = 'lounge' THEN 0
+                                   WHEN r.kind = 'language' THEN 1
+                                   WHEN r.kind = 'topic' AND r.visibility = 'public' THEN 2
+                                   WHEN r.kind = 'topic' AND r.visibility = 'private' THEN 3
+                                   ELSE 4
+                               END
+                           ) AS irc_rank
+                    FROM chat_rooms r
+                    WHERE r.slug IS NOT NULL
+                      AND (r.kind IN ('lounge', 'language')
+                           OR (r.kind = 'topic' AND r.visibility = 'public')
+                           OR (r.kind = 'topic' AND r.visibility = 'private' AND EXISTS (
+                                 SELECT 1 FROM chat_room_members m
+                                 WHERE m.room_id = r.id AND m.user_id = $1)))
+                 )
+                 SELECT *
+                 FROM visible
+                 WHERE irc_rank = 1
+                 ORDER BY (kind = 'lounge') DESC, slug",
+                &[&user_id],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    pub async fn list_irc_channel_summaries(
+        client: &Client,
+        user_id: Uuid,
+    ) -> Result<Vec<(Self, i64)>> {
+        let rows = client
+            .query(
+                "WITH visible AS (
+                    SELECT r.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY r.slug
+                               ORDER BY CASE
+                                   WHEN r.kind = 'lounge' THEN 0
+                                   WHEN r.kind = 'language' THEN 1
+                                   WHEN r.kind = 'topic' AND r.visibility = 'public' THEN 2
+                                   WHEN r.kind = 'topic' AND r.visibility = 'private' THEN 3
+                                   ELSE 4
+                               END
+                           ) AS irc_rank
+                    FROM chat_rooms r
+                    WHERE r.slug IS NOT NULL
+                      AND (r.kind IN ('lounge', 'language')
+                           OR (r.kind = 'topic' AND r.visibility = 'public')
+                           OR (r.kind = 'topic' AND r.visibility = 'private' AND EXISTS (
+                                 SELECT 1 FROM chat_room_members m
+                                 WHERE m.room_id = r.id AND m.user_id = $1)))
+                 )
+                 SELECT r.*, COALESCE(m.member_count, 0)::bigint AS member_count
+                 FROM visible r
+                 LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::bigint AS member_count
+                    FROM chat_room_members m
+                    WHERE m.room_id = r.id
+                 ) m ON true
+                 WHERE r.irc_rank = 1
+                 ORDER BY (r.kind = 'lounge') DESC, r.slug",
+                &[&user_id],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let member_count = row.get("member_count");
+                (Self::from(row), member_count)
+            })
+            .collect())
+    }
+
     pub async fn list_discover_public_topic_rooms(
         client: &Client,
     ) -> Result<Vec<DiscoverPublicTopicRoom>> {
@@ -241,18 +353,26 @@ impl ChatRoom {
             .query(
                 "SELECT r.id,
                         r.slug,
-                        COUNT(DISTINCT m.user_id)::bigint AS member_count,
-                        COUNT(DISTINCT msg.id)::bigint AS message_count,
-                        MAX(msg.created) AS last_message_at
+                        COALESCE(m.member_count, 0)::bigint AS member_count,
+                        COALESCE(msg.message_count, 0)::bigint AS message_count,
+                        msg.last_message_at
                  FROM chat_rooms r
-                 LEFT JOIN chat_room_members m ON m.room_id = r.id
-                 LEFT JOIN chat_messages msg ON msg.room_id = r.id
+                 LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::bigint AS member_count
+                    FROM chat_room_members m
+                    WHERE m.room_id = r.id
+                 ) m ON true
+                 LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::bigint AS message_count,
+                           MAX(created) AS last_message_at
+                    FROM chat_messages msg
+                    WHERE msg.room_id = r.id
+                 ) msg ON true
                  WHERE r.kind = 'topic'
                    AND r.visibility = 'public'
                    AND r.permanent = false
-                 GROUP BY r.id, r.slug
                  ORDER BY
-                    COALESCE(MAX(msg.created), r.created) DESC,
+                    COALESCE(msg.last_message_at, r.created) DESC,
                     message_count DESC,
                     member_count DESC,
                     r.slug ASC",
@@ -376,19 +496,38 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    /// Delete a permanent room by slug. Refuses to delete #general.
+    /// Delete a permanent room by slug. Refuses to delete #lounge.
     pub async fn delete_permanent(client: &Client, slug: &str) -> Result<u64> {
         let slug = normalize_room_slug(slug)?;
-        if slug == "general" {
-            bail!("cannot delete #general");
+        if slug == "lounge" {
+            bail!("cannot delete #lounge");
         }
-        let count = client
-            .execute(
-                "DELETE FROM chat_rooms WHERE slug = $1 AND permanent = true",
+        let row = client
+            .query_one(
+                "WITH target AS (
+                     SELECT id
+                     FROM chat_rooms
+                     WHERE slug = $1 AND permanent = true
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING target t
+                     WHERE v.target_kind = 'chat_room'
+                       AND v.target_id = t.id
+                     RETURNING v.id
+                 ),
+                 deleted AS (
+                     DELETE FROM chat_rooms c
+                     USING target t
+                     WHERE c.id = t.id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted",
                 &[&slug],
             )
             .await?;
-        Ok(count)
+        let count: i64 = row.get("count");
+        Ok(count as u64)
     }
 
     /// Bulk-add all existing users to a room (idempotent).
@@ -481,8 +620,8 @@ pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
 
 fn normalize_topic_slug(slug: &str) -> Result<String> {
     let slug = normalize_room_slug(slug)?;
-    if slug == "general" {
-        bail!("cannot create room with reserved name 'general'");
+    if slug == "lounge" {
+        bail!("cannot create room with reserved name 'lounge'");
     }
     Ok(slug)
 }
@@ -516,8 +655,8 @@ fn normalize_room_slug(slug: &str) -> Result<String> {
 
 fn normalize_game_slug(slug: &str) -> Result<String> {
     let slug = normalize_room_slug(slug)?;
-    if slug == "general" {
-        bail!("cannot create game room with reserved name 'general'");
+    if slug == "lounge" {
+        bail!("cannot create game room with reserved name 'lounge'");
     }
     Ok(slug)
 }
@@ -557,11 +696,11 @@ mod tests {
     fn normalize_topic_slug_rejects_empty_or_reserved_names() {
         assert!(normalize_topic_slug("   ").is_err());
         assert!(normalize_topic_slug("!!!").is_err());
-        assert!(normalize_topic_slug("general").is_err());
+        assert!(normalize_topic_slug("lounge").is_err());
     }
 
     #[test]
-    fn normalize_room_slug_allows_general_for_non_creation_paths() {
-        assert_eq!(normalize_room_slug(" General ").unwrap(), "general");
+    fn normalize_room_slug_allows_lounge_for_non_creation_paths() {
+        assert_eq!(normalize_room_slug(" Lounge ").unwrap(), "lounge");
     }
 }

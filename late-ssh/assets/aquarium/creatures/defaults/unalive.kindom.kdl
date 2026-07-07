@@ -1,0 +1,29 @@
+kindom unalive
+sauce author=mevanlc date=20260502 license=CCBYSA4.0
+
+constraints { }
+
+spawn { }
+
+preferences {
+    demersal 0.6
+    depth 0.7
+    reefer 0.3
+    nektonic 0.0
+    planktonic 0.25
+    territorial 0.0
+
+    territory-geometry {
+        rectangle {
+            width distribution=uniform min=1 max=4
+            height distribution=uniform min=1 max=2
+        }
+    }
+
+    sociality 0.0
+    schooler 0.0
+    kinophile 0.0
+    kinophobe 0.0
+    sedentary 0.95
+    flighty 0.0
+}

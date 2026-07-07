@@ -15,7 +15,7 @@ resource "kubernetes_secret_v1" "regcred" {
 }
 
 # =============================================================================
-# S3 Credentials (for CloudNativePG backups)
+# S3 Credentials (for CloudNativePG backups and public file uploads)
 # =============================================================================
 
 resource "kubernetes_secret_v1" "s3_credentials" {
@@ -97,6 +97,22 @@ resource "kubernetes_secret_v1" "ai_credentials" {
 }
 
 # =============================================================================
+# YouTube Data API
+# =============================================================================
+
+resource "kubernetes_secret_v1" "youtube_credentials" {
+  metadata {
+    name = "youtube-credentials"
+  }
+
+  data = {
+    api_key = var.YOUTUBE_API_KEY
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Web Terminal Tunnel Token
 # =============================================================================
 
@@ -112,6 +128,75 @@ resource "kubernetes_secret_v1" "web_tunnel_token" {
 
   data = {
     token = random_password.web_tunnel_token.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
+# Rebels in the Sky Identity Seed
+# =============================================================================
+
+resource "random_password" "rebels_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "rebels_identity_secret" {
+  metadata {
+    name = "rebels-identity-secret"
+  }
+
+  data = {
+    secret = random_password.rebels_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
+# NetHack Door Identity Seed
+# =============================================================================
+# Shared secret authorizing late-ssh -> late-nethack. The same value is injected
+# into BOTH the service-ssh client (LATE_NETHACK_SECRET) and the late-nethack
+# host pod, which each derive the same ed25519 key from it (see late-nethack).
+
+resource "random_password" "nethack_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "nethack_identity_secret" {
+  metadata {
+    name = "nethack-identity-secret"
+  }
+
+  data = {
+    secret = random_password.nethack_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
+# dopewars Door Identity Seed
+# =============================================================================
+# Shared secret authorizing late-ssh -> late-dopewars. The same value is injected
+# into BOTH the service-ssh client (LATE_DOPEWARS_SECRET) and the late-dopewars
+# host pod, which each derive the same ed25519 key from it (see late-dopewars).
+
+resource "random_password" "dopewars_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "dopewars_identity_secret" {
+  metadata {
+    name = "dopewars-identity-secret"
+  }
+
+  data = {
+    secret = random_password.dopewars_identity_secret.result
   }
 
   type = "Opaque"

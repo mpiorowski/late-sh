@@ -335,6 +335,19 @@
                     </a>
                     {% endfor %}
                 </section>
+
+                <section>
+                    <h2>Curated</h2>
+                    {% if show_curated_empty %}
+                    <div class="snap-empty">none yet</div>
+                    {% endif %}
+                    {% for item in curated_items %}
+                    <a class="snap-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
+                        {{ item.label }}
+                        <span class="snap-meta">{{ item.meta }}</span>
+                    </a>
+                    {% endfor %}
+                </section>
             </div>
         </aside>
 
@@ -547,7 +560,12 @@
                 const rect = this.stageRect();
                 const sx = e.clientX - rect.left;
                 const sy = e.clientY - rect.top;
-                const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+                const unit =
+                    e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 :
+                    e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? rect.height :
+                    1;
+                const delta = Math.max(-120, Math.min(120, e.deltaY * unit));
+                const factor = Math.exp(-delta * 0.0012);
                 this.zoomAt(factor, sx, sy);
             },
 

@@ -2,6 +2,7 @@ target/
 tmp/
 node_modules
 .env
+.envrc
 .env.local
 .claude
 .codex
@@ -18,3 +19,19 @@ bastion_host_key.pub
 *.bkp
 *.dtmp
 *.drawio
+
+late-ssh/cache/
+
+__pycache__/
+*.pyc
+
+# Local-only LORD/BBS scratch material. Do not commit original LORD archives,
+# extracted files, generated player data, or activation material.
+late-bbs/
+
+# Raw extraction outputs for Dragon reference work stay local; committed
+# reference files should be curated summaries/inventories.
+assets/dragon/raw/
+
+# Local dumps of user chat content (scripts/dump_chat_room.sh); keep off git.
+chat_dumps/

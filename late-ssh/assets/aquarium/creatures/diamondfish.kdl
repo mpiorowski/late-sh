@@ -1,0 +1,16 @@
+name "diamondfish"
+title "medium sized fish"
+description "stripey, perhaps a bit tropical"
+sauce author=mevanlc date=20260509 license=CCBYSA4.0
+
+right ###"""
+  .\
+d))))'>
+  `/
+"""###
+
+left ###"""
+   /.
+<'((((b
+   \'
+"""###

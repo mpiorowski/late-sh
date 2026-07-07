@@ -24,6 +24,13 @@ struct PlaybackOutputState {
     source_channels: usize,
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
+    /// When false, the user has selected a source the native audio thread
+    /// cannot decode directly (today: YouTube). Driven by
+    /// `SetPlaybackSource` over the pair WS.
+    source_is_icecast: Arc<AtomicBool>,
+    stream_generation: Arc<AtomicU64>,
+    stream_flushed_generation: Arc<AtomicU64>,
+    last_flushed_generation: u64,
     source_frame: Vec<f32>,
 }
 
@@ -32,6 +39,7 @@ pub(super) struct BuiltOutputStream {
     pub(super) sample_rate: u32,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_output_stream(
     spec: AudioSpec,
     queue: PlaybackQueueReader,
@@ -39,12 +47,15 @@ pub(super) fn build_output_stream(
     played_samples: Arc<AtomicU64>,
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
+    icecast_output_available: Arc<AtomicBool>,
+    source_is_icecast: Arc<AtomicBool>,
+    stream_generation: Arc<AtomicU64>,
+    stream_flushed_generation: Arc<AtomicU64>,
+    audio_output_device: Option<&str>,
     profile: AudioBackendProfile,
 ) -> Result<BuiltOutputStream> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .context("no default audio output device found")?;
+    let device = output_device(&host, audio_output_device)?;
     let supported: Vec<_> = device
         .supported_output_configs()
         .context("failed to inspect supported output configurations")?
@@ -60,7 +71,11 @@ pub(super) fn build_output_stream(
     let sample_rate = config.sample_rate().0;
     let mut stream_config = config.config();
     apply_profile_buffer_size(&mut stream_config, config.buffer_size(), profile);
-    let err_fn = |err| eprintln!("audio output stream error: {err}");
+    let output_available_for_errors = Arc::clone(&icecast_output_available);
+    let err_fn = move |err| {
+        output_available_for_errors.store(false, Ordering::Relaxed);
+        eprintln!("audio output stream error: {err}");
+    };
     let mut output_state = PlaybackOutputState {
         queue,
         played_ring,
@@ -68,6 +83,10 @@ pub(super) fn build_output_stream(
         source_channels: spec.channels,
         muted,
         volume_percent,
+        source_is_icecast,
+        stream_generation,
+        stream_flushed_generation,
+        last_flushed_generation: 0,
         source_frame: vec![0.0; spec.channels],
     };
 
@@ -141,11 +160,12 @@ pub(super) fn build_output_stream(
     })
 }
 
-pub(super) fn output_sample_rate_for(spec: AudioSpec) -> Result<u32> {
+pub(super) fn output_sample_rate_for(
+    spec: AudioSpec,
+    audio_output_device: Option<&str>,
+) -> Result<u32> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .context("no default audio output device found")?;
+    let device = output_device(&host, audio_output_device)?;
     let supported: Vec<_> = device
         .supported_output_configs()
         .context("failed to inspect supported output configurations")?
@@ -159,11 +179,62 @@ pub(super) fn output_sample_rate_for(spec: AudioSpec) -> Result<u32> {
     Ok(config.sample_rate().0)
 }
 
+fn output_device(host: &cpal::Host, audio_output_device: Option<&str>) -> Result<cpal::Device> {
+    let Some(name) = audio_output_device else {
+        return host
+            .default_output_device()
+            .context("no default audio output device found");
+    };
+
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("audio output device name cannot be blank");
+    }
+
+    let mut available = Vec::new();
+    for device in host
+        .output_devices()
+        .context("failed to enumerate audio output devices")?
+    {
+        match device.name() {
+            Ok(device_name) if device_name == name => return Ok(device),
+            Ok(device_name) => available.push(device_name),
+            Err(err) => available.push(format!("<unavailable name: {err}>")),
+        }
+    }
+
+    available.sort();
+    available.dedup();
+    if available.is_empty() {
+        anyhow::bail!("audio output device '{name}' not found; no output devices are available");
+    }
+
+    anyhow::bail!(
+        "audio output device '{name}' not found; available output devices: {}",
+        available.join(", ")
+    );
+}
+
 fn write_output_data<T>(output: &mut [T], channels: usize, state: &mut PlaybackOutputState)
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
-    let muted = state.muted.load(Ordering::Relaxed);
+    let target_generation = state.stream_generation.load(Ordering::SeqCst);
+    if target_generation != state.last_flushed_generation {
+        while state.queue.try_pop().is_some() {}
+        state.last_flushed_generation = target_generation;
+        state
+            .stream_flushed_generation
+            .store(target_generation, Ordering::SeqCst);
+        fill_silence(output);
+        return;
+    }
+
+    // `muted` is the user's intent (`m` keybind). `source_is_icecast` is the
+    // structural gate: a YouTube preference means the CLI has nothing direct
+    // to decode, so we emit silence even if the user toggled unmuted.
+    let muted =
+        state.muted.load(Ordering::Relaxed) || !state.source_is_icecast.load(Ordering::Relaxed);
     let linear = state.volume_percent.load(Ordering::Relaxed) as f32 / 100.0;
     let volume = linear * linear;
     let source_channels = state.source_channels;
@@ -194,6 +265,15 @@ where
             let _ = state.played_ring.try_push(analyzer_sample);
             state.played_samples.fetch_add(1, Ordering::Relaxed);
         }
+    }
+}
+
+fn fill_silence<T>(output: &mut [T])
+where
+    T: cpal::SizedSample + cpal::FromSample<f32>,
+{
+    for sample in output {
+        *sample = T::from_sample(0.0);
     }
 }
 

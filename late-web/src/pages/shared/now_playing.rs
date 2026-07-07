@@ -4,23 +4,16 @@ use serde::Deserialize;
 
 use crate::{AppState, metrics};
 
+// late-web only surfaces the listener count; per-source track display lives
+// on the connect page, fed over the pair WS.
 #[derive(Clone, Debug, Default)]
 pub struct NowPlayingStatus {
-    pub title: Option<String>,
-    pub artist: Option<String>,
     pub listeners_count: Option<usize>,
 }
 
 #[derive(Deserialize)]
 struct NowPlayingResponse {
     listeners_count: Option<usize>,
-    current_track: Option<NowPlayingTrack>,
-}
-
-#[derive(Deserialize)]
-struct NowPlayingTrack {
-    title: String,
-    artist: Option<String>,
 }
 
 pub async fn fetch(state: &AppState) -> anyhow::Result<NowPlayingStatus> {
@@ -50,12 +43,7 @@ pub async fn fetch(state: &AppState) -> anyhow::Result<NowPlayingStatus> {
 
     metrics::record_now_playing_fetch("success");
 
-    let title = np.current_track.as_ref().map(|t| t.title.clone());
-    let artist = np.current_track.and_then(|t| t.artist);
-
     Ok(NowPlayingStatus {
-        title,
-        artist,
         listeners_count: np.listeners_count,
     })
 }

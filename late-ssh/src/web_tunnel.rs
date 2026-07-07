@@ -11,6 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use late_core::{
     MutexRecover,
     models::{
+        article_feed_read::ArticleFeedRead,
         server_ban::ServerBan,
         user::{User, UserParams},
     },
@@ -20,20 +21,22 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit, mpsc},
+    sync::{Mutex as TokioMutex, OwnedSemaphorePermit, mpsc},
     time::{MissedTickBehavior, timeout},
 };
 
 use crate::{
+    app::activity::event::ActivityEvent,
     app::state::App,
     metrics,
+    render_signal::RenderSignal,
     session_bootstrap::{SessionBootstrapInputs, build_session_config},
-    state::{ActiveSession, ActiveUser, ActivityEvent, State},
+    state::{ActiveSession, ActiveUser, State},
 };
 
 const INPUT_QUEUE_CAP: usize = 256;
@@ -63,20 +66,6 @@ enum InputEvent {
     Resize { cols: u16, rows: u16 },
 }
 
-struct RenderSignal {
-    dirty: AtomicBool,
-    notify: Notify,
-}
-
-impl RenderSignal {
-    fn new() -> Self {
-        Self {
-            dirty: AtomicBool::new(false),
-            notify: Notify::new(),
-        }
-    }
-}
-
 struct WebTunnelGuard {
     state: State,
     peer_ip: IpAddr,
@@ -102,6 +91,7 @@ impl Drop for WebTunnelGuard {
     fn drop(&mut self) {
         if self.active_user_incremented {
             metrics::add_ssh_session(-1);
+            let mut user_still_afk = false;
             let mut active_users = self.state.active_users.lock_recover();
             if let Some(active) = active_users.get_mut(&self.user_id) {
                 active
@@ -111,8 +101,11 @@ impl Drop for WebTunnelGuard {
                     active_users.remove(&self.user_id);
                 } else {
                     active.connection_count -= 1;
+                    user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
             }
+            drop(active_users);
+            crate::state::set_afk_user(&self.state.afk_users, self.user_id, user_still_afk);
         }
 
         if self.per_ip_incremented {
@@ -187,11 +180,9 @@ pub async fn ws_handler(
     track_active_user(&state, &user, peer_ip, &session_token);
     guard.active_user_incremented = true;
 
-    let _ = state.activity_feed.send(ActivityEvent {
-        username: user.username.clone(),
-        action: "joined".to_string(),
-        at: Instant::now(),
-    });
+    let _ = state
+        .activity_feed
+        .send(ActivityEvent::joined(user.id, user.username.clone()));
 
     tracing::info!(
         peer_ip = %peer_ip,
@@ -235,11 +226,13 @@ async fn handle_socket(session: WebTunnelSession) {
             is_new_user,
             cols,
             rows,
+            term: "xterm-256color".to_string(),
             session_token,
             session_rx: None,
             activity_feed_rx: Some(state.activity_feed.subscribe()),
             supports_reconnect_on_drain: false,
             reconnect_reason: None,
+            room_join_rx: Some(state.room_join_feed.subscribe()),
         },
     )
     .await;
@@ -274,8 +267,8 @@ async fn handle_socket(session: WebTunnelSession) {
 
     let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE_CAP);
     let signal = Arc::new(RenderSignal::new());
-    signal.dirty.store(true, Ordering::Release);
-    signal.notify.notify_one();
+    app.lock().await.set_repaint_signal(Arc::clone(&signal));
+    signal.wake();
     let render = tokio::spawn(run_render_loop(
         Arc::clone(&app),
         input_rx,
@@ -343,8 +336,7 @@ fn enqueue_input(
     match input_tx.try_reserve() {
         Ok(permit) => {
             permit.send(event);
-            signal.dirty.store(true, Ordering::Release);
-            signal.notify.notify_one();
+            signal.wake();
         }
         Err(mpsc::error::TrySendError::Full(_)) => {
             tracing::warn!(
@@ -554,6 +546,9 @@ async fn ensure_web_tunnel_user(state: &State, peer_ip: IpAddr) -> Result<(User,
         if let Err(err) = User::update_last_seen(&mut user, &client).await {
             tracing::warn!(error = ?err, "failed to update web tunnel user last_seen");
         }
+        if let Err(err) = User::ensure_ssh_key(&client, user.id, fingerprint).await {
+            tracing::warn!(error = ?err, "failed to ensure web tunnel ssh key");
+        }
         return Ok((user, false));
     }
 
@@ -568,8 +563,12 @@ async fn ensure_web_tunnel_user(state: &State, peer_ip: IpAddr) -> Result<(User,
         },
     )
     .await?;
+    User::ensure_ssh_key(&client, user.id, fingerprint).await?;
     if let Err(err) = state.chat_service.auto_join_public_rooms(user.id).await {
         tracing::warn!(user_id = %user.id, error = ?err, "failed to seed web tunnel chat rooms");
+    }
+    if let Err(err) = ArticleFeedRead::seed_read_for_new_user(&client, user.id).await {
+        tracing::warn!(user_id = %user.id, error = ?err, "failed to seed web tunnel news read cursor");
     }
     Ok((user, true))
 }
@@ -580,6 +579,7 @@ fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token:
         token: session_token.to_string(),
         fingerprint: Some(user.fingerprint.clone()),
         peer_ip: Some(peer_ip),
+        afk: None,
     };
 
     if let Some(active) = active_users.get_mut(&user.id) {
@@ -587,6 +587,7 @@ fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token:
         active.username = user.username.clone();
         active.fingerprint = Some(user.fingerprint.clone());
         active.peer_ip = Some(peer_ip);
+        active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
         active.last_login_at = Instant::now();
         active.sessions.push(session);
     } else {
@@ -596,12 +597,15 @@ fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token:
                 username: user.username.clone(),
                 fingerprint: Some(user.fingerprint.clone()),
                 peer_ip: Some(peer_ip),
+                audio_source: late_core::models::user::extract_audio_source(&user.settings),
                 sessions: vec![session],
                 connection_count: 1,
                 last_login_at: Instant::now(),
             },
         );
     }
+    drop(active_users);
+    crate::usernames::upsert(&state.username_directory, user.id, user.username.clone());
     metrics::add_ssh_session(1);
 }
 

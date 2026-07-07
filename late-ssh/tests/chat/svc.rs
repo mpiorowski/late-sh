@@ -1,24 +1,31 @@
+use dartboard_core::{Canvas, CanvasOp, Pos, RgbColor};
 use late_core::models::{
+    artboard::Snapshot as ArtboardSnapshot,
     artboard_ban::ArtboardBan,
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::{ChatRoom, ChatRoomParams},
     chat_room_member::ChatRoomMember,
+    chat_slow_mode::ChatSlowMode,
+    moderation_audit_log::ModerationAuditLog,
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::ServerBan,
-    user::User,
+    user::{RightSidebarMode, User, default_right_sidebar_components},
 };
+use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::{ChatEvent, ChatService};
 use late_ssh::authz::Permissions;
+use late_ssh::dartboard;
 use late_ssh::moderation::command::ServerUserAction;
 use late_ssh::moderation::event::ModerationEvent;
+use late_ssh::moderation::service::ModerationInfra;
 use late_ssh::session::{SessionMessage, SessionRegistry};
 use late_ssh::state::{ActiveSession, ActiveUser};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
-use tokio::time::{Duration, timeout};
+use tokio::time::{Duration, sleep, timeout};
 use uuid::Uuid;
 
 use super::helpers::new_test_db;
@@ -245,7 +252,7 @@ async fn emits_message_reactions_updated_when_member_reacts() {
     .await
     .expect("message");
 
-    service.toggle_message_reaction_task(reactor.id, message.id, 4);
+    service.toggle_message_reaction_task(reactor.id, message.id, "👀".to_string());
 
     let event = timeout(Duration::from_secs(2), events.recv())
         .await
@@ -261,7 +268,7 @@ async fn emits_message_reactions_updated_when_member_reacts() {
             assert_eq!(room_id, room.id);
             assert_eq!(message_id, message.id);
             assert_eq!(reactions.len(), 1);
-            assert_eq!(reactions[0].kind, 4);
+            assert_eq!(reactions[0].icon, "👀");
             assert_eq!(reactions[0].count, 1);
         }
         _ => panic!("expected message reactions updated event"),
@@ -279,9 +286,10 @@ async fn emits_send_failed_event_when_non_admin_posts_to_announcements() {
     let client = test_db.db.get().await.expect("db client");
 
     let user = create_test_user(&test_db.db, "alice").await;
-    let room = ChatRoom::ensure_permanent(&client, "announcements")
+    let room = ChatRoom::find_non_dm_by_slug(&client, "announcements")
         .await
-        .expect("room");
+        .expect("find announcements room")
+        .expect("announcements room");
     ChatRoomMember::join(&client, room.id, user.id)
         .await
         .expect("join");
@@ -324,9 +332,7 @@ async fn admin_can_toggle_message_pin() {
     let client = test_db.db.get().await.expect("db client");
 
     let admin = create_test_user(&test_db.db, "pin_admin").await;
-    let room = ChatRoom::ensure_general(&client)
-        .await
-        .expect("general room");
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge room");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
@@ -338,7 +344,8 @@ async fn admin_can_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(message.id, true);
+    let (pinned_tx, _pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    service.toggle_message_pin_task(message.id, true, pinned_tx);
 
     timeout(Duration::from_secs(2), async {
         loop {
@@ -366,9 +373,7 @@ async fn non_admin_cannot_toggle_message_pin() {
     let client = test_db.db.get().await.expect("db client");
 
     let user = create_test_user(&test_db.db, "pin_non_admin").await;
-    let room = ChatRoom::ensure_general(&client)
-        .await
-        .expect("general room");
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge room");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
@@ -380,7 +385,8 @@ async fn non_admin_cannot_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(message.id, false);
+    let (pinned_tx, _pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    service.toggle_message_pin_task(message.id, false, pinned_tx);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let updated = ChatMessage::get(&client, message.id)
@@ -458,48 +464,48 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
     let target_user = create_test_user(&test_db.db, "target").await;
     let author_user = create_test_user(&test_db.db, "author").await;
 
-    let general_room = ChatRoom::create(
+    let lounge_room = ChatRoom::create(
         &client,
         ChatRoomParams {
-            kind: "general".to_string(),
+            kind: "lounge".to_string(),
             visibility: "public".to_string(),
             auto_join: true,
             permanent: true,
-            slug: Some("general".to_string()),
+            slug: Some("lounge".to_string()),
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
         },
     )
     .await
-    .expect("create general room");
+    .expect("create lounge room");
     let lang_room = ChatRoom::get_or_create_language(&client, "en")
         .await
         .expect("language room");
 
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
-        .expect("join target general");
+        .expect("join target lounge");
     ChatRoomMember::join(&client, lang_room.id, target_user.id)
         .await
         .expect("join target language");
-    ChatRoomMember::join(&client, general_room.id, author_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, author_user.id)
         .await
-        .expect("join author general");
+        .expect("join author lounge");
     ChatRoomMember::join(&client, lang_room.id, author_user.id)
         .await
         .expect("join author language");
 
-    let general_message = ChatMessage::create(
+    let lounge_message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general_room.id,
+            room_id: lounge_room.id,
             user_id: author_user.id,
             body: "g-msg".to_string(),
         },
     )
     .await
-    .expect("general message");
+    .expect("lounge message");
     let lang_message = ChatMessage::create(
         &client,
         ChatMessageParams {
@@ -522,8 +528,8 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
     let snapshot = state_rx.borrow_and_update().clone();
 
     assert_eq!(snapshot.user_id, Some(target_user.id));
-    assert_eq!(snapshot.general_room_id, Some(general_room.id));
-    assert_eq!(snapshot.unread_counts.get(&general_room.id), Some(&1));
+    assert_eq!(snapshot.lounge_room_id, Some(lounge_room.id));
+    assert_eq!(snapshot.unread_counts.get(&lounge_room.id), Some(&1));
     assert_eq!(snapshot.unread_counts.get(&lang_room.id), Some(&1));
     assert!(snapshot.ignored_user_ids.is_empty());
 
@@ -537,16 +543,16 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
         "summary refresh should not preload selected room history"
     );
 
-    let general_in_snapshot = snapshot
+    let lounge_in_snapshot = snapshot
         .chat_rooms
         .iter()
-        .find(|(room, _)| room.id == general_room.id)
-        .expect("general room present");
+        .find(|(room, _)| room.id == lounge_room.id)
+        .expect("lounge room present");
     assert!(
-        general_in_snapshot.1.is_empty(),
-        "summary refresh should not preload general room history"
+        lounge_in_snapshot.1.is_empty(),
+        "summary refresh should not preload lounge room history"
     );
-    assert_ne!(general_message.id, lang_message.id);
+    assert_ne!(lounge_message.id, lang_message.id);
     refresh_task.abort();
 }
 
@@ -562,45 +568,45 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
     let target_user = create_test_user(&test_db.db, "target2").await;
     let author_user = create_test_user(&test_db.db, "author2").await;
 
-    let general_room = ChatRoom::create(
+    let lounge_room = ChatRoom::create(
         &client,
         ChatRoomParams {
-            kind: "general".to_string(),
+            kind: "lounge".to_string(),
             visibility: "public".to_string(),
             auto_join: true,
             permanent: true,
-            slug: Some("general".to_string()),
+            slug: Some("lounge".to_string()),
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
         },
     )
     .await
-    .expect("create general room");
+    .expect("create lounge room");
     let lang_room = ChatRoom::get_or_create_language(&client, "fr")
         .await
         .expect("language room");
 
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
-        .expect("join target general");
+        .expect("join target lounge");
     ChatRoomMember::join(&client, lang_room.id, target_user.id)
         .await
         .expect("join target language");
-    ChatRoomMember::join(&client, general_room.id, author_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, author_user.id)
         .await
-        .expect("join author general");
+        .expect("join author lounge");
 
-    let general_message = ChatMessage::create(
+    let lounge_message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general_room.id,
+            room_id: lounge_room.id,
             user_id: author_user.id,
             body: "fallback-msg".to_string(),
         },
     )
     .await
-    .expect("general message");
+    .expect("lounge message");
 
     let (_room_tx, room_rx) = tokio::sync::watch::channel(None);
     let (mut state_rx, _refresh_tx, refresh_task) =
@@ -612,13 +618,13 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
         .expect("watch changed");
     let snapshot = state_rx.borrow_and_update().clone();
 
-    let general_entry = snapshot
+    let lounge_entry = snapshot
         .chat_rooms
         .iter()
-        .find(|(room, _)| room.id == general_room.id)
-        .expect("general room present");
+        .find(|(room, _)| room.id == lounge_room.id)
+        .expect("lounge room present");
     assert!(
-        general_entry.1.is_empty(),
+        lounge_entry.1.is_empty(),
         "summary refresh should not preload fallback room history"
     );
     let other_entry = snapshot
@@ -630,7 +636,7 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
         other_entry.1.is_empty(),
         "non-selected room should not include messages in summary"
     );
-    assert_eq!(general_message.room_id, general_room.id);
+    assert_eq!(lounge_message.room_id, lounge_room.id);
     refresh_task.abort();
 }
 
@@ -647,22 +653,22 @@ async fn room_tail_task_loads_favorite_room_history() {
     let target_user = create_test_user(&test_db.db, "favorite_target").await;
     let author_user = create_test_user(&test_db.db, "favorite_author").await;
 
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
     let favorite_room = ChatRoom::get_or_create_public_room(&client, "favorites")
         .await
         .expect("favorite room");
 
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
-        .expect("join target general");
+        .expect("join target lounge");
     ChatRoomMember::join(&client, favorite_room.id, target_user.id)
         .await
         .expect("join target favorite");
-    ChatRoomMember::join(&client, general_room.id, author_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, author_user.id)
         .await
-        .expect("join author general");
+        .expect("join author lounge");
     ChatRoomMember::join(&client, favorite_room.id, author_user.id)
         .await
         .expect("join author favorite");
@@ -696,11 +702,18 @@ async fn room_tail_task_loads_favorite_room_history() {
             notify_format: None,
             theme_id: Some("late".to_string()),
             enable_background_color: false,
+            text_brightness_adjustment: 0,
             show_dashboard_header: true,
             show_right_sidebar: true,
-            show_games_sidebar: true,
-            show_settings_on_connect: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_components: default_right_sidebar_components(),
+            show_room_list_sidebar: true,
+            keep_composer_focused: false,
+            start_with_music_muted: false,
+            land_on_home: false,
+            show_flag_fallback: false,
             favorite_room_ids: vec![favorite_room.id],
+            birthday: None,
         },
     )
     .await
@@ -748,13 +761,13 @@ async fn publishes_snapshot_with_persisted_ignored_user_ids() {
     let target_user = create_test_user(&test_db.db, "target_ignore_snapshot").await;
     let ignored_user = create_test_user(&test_db.db, "author_ignore_snapshot").await;
 
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
         .expect("join target");
-    ChatRoomMember::join(&client, general_room.id, ignored_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, ignored_user.id)
         .await
         .expect("join ignored user");
 
@@ -762,7 +775,7 @@ async fn publishes_snapshot_with_persisted_ignored_user_ids() {
         .await
         .expect("persist ignored user id");
 
-    let (_room_tx, room_rx) = tokio::sync::watch::channel(Some(general_room.id));
+    let (_room_tx, room_rx) = tokio::sync::watch::channel(Some(lounge_room.id));
     let (mut state_rx, _refresh_tx, refresh_task) =
         service.start_user_refresh_task(target_user.id, room_rx);
 
@@ -788,9 +801,9 @@ async fn discover_task_lists_public_rooms_user_has_not_joined() {
     let target_user = create_test_user(&test_db.db, "discover_target").await;
     let author_user = create_test_user(&test_db.db, "discover_author").await;
 
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
     let discover_room = ChatRoom::get_or_create_public_room(&client, "rust")
         .await
         .expect("create discover room");
@@ -798,12 +811,12 @@ async fn discover_task_lists_public_rooms_user_has_not_joined() {
         .await
         .expect("create joined room");
 
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
-        .expect("join target general");
-    ChatRoomMember::join(&client, general_room.id, author_user.id)
+        .expect("join target lounge");
+    ChatRoomMember::join(&client, lounge_room.id, author_user.id)
         .await
-        .expect("join author general");
+        .expect("join author lounge");
     ChatRoomMember::join(&client, discover_room.id, author_user.id)
         .await
         .expect("join author discover room");
@@ -1291,18 +1304,15 @@ async fn admin_delete_event_carries_admin_user_id_not_author() {
         other => panic!("expected MessageDeleted, got {other:?}"),
     }
 
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*)
-             FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'message_delete'
-               AND target_id = $2",
-            &[&admin.id, &msg.id],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == admin.id
+                && entry.action == "message_delete"
+                && entry.target_id == Some(msg.id)
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1318,13 +1328,13 @@ async fn ignore_user_task_persists_and_emits_update() {
 
     let viewer = create_test_user(&test_db.db, "ignore_viewer").await;
     let target = create_test_user(&test_db.db, "ignore_target").await;
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general_room.id, target.id)
+    ChatRoomMember::join(&client, lounge_room.id, target.id)
         .await
         .expect("join target");
 
@@ -1365,13 +1375,13 @@ async fn unignore_user_task_persists_and_emits_update() {
 
     let viewer = create_test_user(&test_db.db, "unignore_viewer").await;
     let target = create_test_user(&test_db.db, "unignore_target").await;
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general_room.id, target.id)
+    ChatRoomMember::join(&client, lounge_room.id, target.id)
         .await
         .expect("join target");
     User::add_ignored_user_id(&client, viewer.id, target.id)
@@ -1430,13 +1440,13 @@ async fn ignore_user_task_emits_error_for_self_or_duplicate() {
     }
 
     let target = create_test_user(&test_db.db, "ignore_dup_target").await;
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general_room.id, target.id)
+    ChatRoomMember::join(&client, lounge_room.id, target.id)
         .await
         .expect("join target");
     User::add_ignored_user_id(&client, viewer.id, target.id)
@@ -1485,13 +1495,13 @@ async fn unignore_user_task_emits_error_for_missing_user_or_entry() {
     }
 
     let target = create_test_user(&test_db.db, "unignore_missing_target").await;
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general_room.id, target.id)
+    ChatRoomMember::join(&client, lounge_room.id, target.id)
         .await
         .expect("join target");
 
@@ -1508,6 +1518,93 @@ async fn unignore_user_task_emits_error_for_missing_user_or_entry() {
         }
         other => panic!("expected IgnoreFailed, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn friend_user_task_persists_and_emits_update() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let viewer = create_test_user(&test_db.db, "friend_viewer").await;
+    let target = create_test_user(&test_db.db, "friend_target").await;
+
+    service.friend_user_task(viewer.id, "friend_target".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::FriendListUpdated {
+            user_id,
+            friend_user_ids,
+            target_user_id,
+            target_username,
+            message,
+        } => {
+            assert_eq!(user_id, viewer.id);
+            assert_eq!(friend_user_ids, vec![target.id]);
+            assert_eq!(target_user_id, target.id);
+            assert_eq!(target_username, "friend_target");
+            assert_eq!(message, "Added @friend_target to friends");
+        }
+        other => panic!("expected FriendListUpdated, got {other:?}"),
+    }
+
+    let friends = User::friend_user_ids(&client, viewer.id)
+        .await
+        .expect("load friend list");
+    assert_eq!(friends, vec![target.id]);
+}
+
+#[tokio::test]
+async fn unfriend_user_task_persists_and_emits_update() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let viewer = create_test_user(&test_db.db, "unfriend_viewer").await;
+    let target = create_test_user(&test_db.db, "unfriend_target").await;
+    User::add_friend_user_id(&client, viewer.id, target.id)
+        .await
+        .expect("seed friend user id");
+
+    service.unfriend_user_task(viewer.id, "unfriend_target".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::FriendListUpdated {
+            user_id,
+            friend_user_ids,
+            target_user_id,
+            target_username,
+            message,
+        } => {
+            assert_eq!(user_id, viewer.id);
+            assert!(friend_user_ids.is_empty());
+            assert_eq!(target_user_id, target.id);
+            assert_eq!(target_username, "unfriend_target");
+            assert_eq!(message, "Removed @unfriend_target from friends");
+        }
+        other => panic!("expected FriendListUpdated, got {other:?}"),
+    }
+
+    let friends = User::friend_user_ids(&client, viewer.id)
+        .await
+        .expect("load friend list");
+    assert!(friends.is_empty());
 }
 
 #[tokio::test]
@@ -1534,7 +1631,7 @@ async fn mod_room_ban_command_bans_kicks_and_audits() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "room ban #mod-ban-room @mod_ban_target 1h test cleanup".to_string(),
+        "ban #mod-ban-room @mod_ban_target 1h test cleanup".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1566,17 +1663,15 @@ async fn mod_room_ban_command_bans_kicks_and_audits() {
             .await
             .expect("membership lookup")
     );
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'room_ban'
-               AND target_id = $2",
-            &[&actor.id, &target.id],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "room_ban"
+                && entry.target_id == Some(target.id)
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1654,20 +1749,127 @@ async fn mod_rename_room_command_updates_slug_and_audits() {
         other => panic!("expected room renamed moderation event, got {other:?}"),
     }
 
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'rename_room'
-               AND target_kind = 'room'
-               AND target_id = $2
-               AND metadata->>'old_slug' = 'rename-room-old'
-               AND metadata->>'new_slug' = 'rename-room-new'",
-            &[&actor.id, &room.id],
-        )
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "rename_room"
+                && entry.target_kind == "room"
+                && entry.target_id == Some(room.id)
+                && entry.metadata["old_slug"] == "rename-room-old"
+                && entry.metadata["new_slug"] == "rename-room-new"
+        })
+        .count();
+    assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
+async fn mod_rename_user_command_updates_username_active_user_and_audits() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "rename_user_actor").await;
+    let target = create_test_user(&test_db.db, "rename_user_old").await;
+    let active_users = Arc::new(Mutex::new(HashMap::from([(
+        target.id,
+        ActiveUser {
+            username: target.username.clone(),
+            fingerprint: Some(target.fingerprint.clone()),
+            peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
+            sessions: Vec::new(),
+            connection_count: 1,
+            last_login_at: std::time::Instant::now(),
+        },
+    )])));
+    let service = ChatService::new_with_active_users(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+        active_users.clone(),
+    );
+    let mut events = service.subscribe_events();
+    let mut moderation_events = service.subscribe_moderation_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "rename-user @rename_user_old @rename_user_new".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
         .await
-        .expect("audit count")
-        .get(0);
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines, vec!["renamed @rename_user_old to @rename_user_new"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let moderation_event = timeout(Duration::from_secs(2), moderation_events.recv())
+        .await
+        .expect("moderation event timeout")
+        .expect("moderation event");
+    match moderation_event {
+        ModerationEvent::UserRenamed {
+            actor_user_id,
+            target_user_id,
+            old_username,
+            new_username,
+            active_user_updated,
+        } => {
+            assert_eq!(actor_user_id, actor.id);
+            assert_eq!(target_user_id, target.id);
+            assert_eq!(old_username, "rename_user_old");
+            assert_eq!(new_username, "rename_user_new");
+            assert!(active_user_updated);
+        }
+        other => panic!("expected user renamed moderation event, got {other:?}"),
+    }
+
+    assert!(
+        User::find_by_username(&client, "rename_user_old")
+            .await
+            .expect("old username lookup")
+            .is_none()
+    );
+    let renamed = User::find_by_username(&client, "rename_user_new")
+        .await
+        .expect("new username lookup")
+        .expect("renamed user exists");
+    assert_eq!(renamed.id, target.id);
+    assert_eq!(
+        active_users
+            .lock()
+            .expect("active users lock")
+            .get(&target.id)
+            .expect("active target")
+            .username,
+        "rename_user_new"
+    );
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "rename_user"
+                && entry.target_kind == "user"
+                && entry.target_id == Some(target.id)
+                && entry.metadata["old_username"] == "rename_user_old"
+                && entry.metadata["new_username"] == "rename_user_new"
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1685,10 +1887,12 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: Some(peer_ip),
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: Some(peer_ip),
+                afk: None,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -1696,7 +1900,9 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -1710,7 +1916,7 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "server kick @server_kick_target cool off".to_string(),
+        "kick server @server_kick_target cool off".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1740,17 +1946,15 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
         other => panic!("expected terminate message, got {other:?}"),
     }
 
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'server_kick'
-               AND target_id = $2",
-            &[&actor.id, &target.id],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "server_kick"
+                && entry.target_id == Some(target.id)
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1768,10 +1972,12 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: Some(peer_ip),
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: Some(peer_ip),
+                afk: None,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -1779,7 +1985,9 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -1794,7 +2002,7 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "server ban @server_ban_target 1h test ban".to_string(),
+        "ban server @server_ban_target 1h test ban".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1861,17 +2069,15 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
         Some(target.fingerprint.as_str())
     );
 
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'server_ban'
-               AND target_id = $2",
-            &[&actor.id, &target.id],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "server_ban"
+                && entry.target_id == Some(target.id)
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1888,10 +2094,12 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: None,
+                afk: None,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -1899,7 +2107,9 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -1913,7 +2123,7 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "artboard ban @artboard_ban_target 1h paint cooldown".to_string(),
+        "ban artboard @artboard_ban_target 1h paint cooldown".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1954,6 +2164,359 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
 }
 
 #[tokio::test]
+async fn mod_artboard_restore_command_restores_daily_snapshot_and_audits() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "artboard_restore_actor").await;
+
+    let mut main_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = main_canvas.put_glyph(Pos { x: 0, y: 0 }, 'M');
+    let mut main_provenance = ArtboardProvenance::default();
+    main_provenance.set_username(Pos { x: 0, y: 0 }, "main_owner");
+
+    let mut daily_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = daily_canvas.put_glyph(Pos { x: 0, y: 0 }, 'D');
+    let mut daily_provenance = ArtboardProvenance::default();
+    daily_provenance.set_username(Pos { x: 0, y: 0 }, "daily_owner");
+
+    ArtboardSnapshot::upsert(
+        &client,
+        ArtboardSnapshot::MAIN_BOARD_KEY,
+        serde_json::to_value(&main_canvas).expect("serialize main canvas"),
+        serde_json::to_value(&main_provenance).expect("serialize main provenance"),
+    )
+    .await
+    .expect("insert main snapshot");
+    ArtboardSnapshot::upsert(
+        &client,
+        "daily:2026-05-06",
+        serde_json::to_value(&daily_canvas).expect("serialize daily canvas"),
+        serde_json::to_value(&daily_provenance).expect("serialize daily provenance"),
+    )
+    .await
+    .expect("insert daily snapshot");
+
+    let shared_provenance = main_provenance.shared();
+    let server = dartboard::spawn_persistent_server_with_interval(
+        test_db.db.clone(),
+        Some(main_canvas),
+        shared_provenance.clone(),
+        Duration::from_millis(10),
+    );
+    server.submit_op_for(
+        0,
+        1,
+        CanvasOp::PaintCell {
+            pos: Pos { x: 0, y: 0 },
+            ch: 'O',
+            fg: RgbColor::new(1, 2, 3),
+        },
+    );
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    )
+    .with_moderation_infra(
+        ModerationInfra::default().with_artboard_handles(server.clone(), shared_provenance.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let mut moderation_events = service.subscribe_moderation_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "artboard restore 2026-05-06 rollback vandalism".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines[0], "restored artboard from daily:2026-05-06");
+            assert!(
+                lines
+                    .get(1)
+                    .is_some_and(|line| line.starts_with("backup: restore-backup:main:")),
+                "missing backup line: {lines:?}"
+            );
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let moderation_event = timeout(Duration::from_secs(2), moderation_events.recv())
+        .await
+        .expect("moderation event timeout")
+        .expect("moderation event");
+    match moderation_event {
+        ModerationEvent::ArtboardRestored {
+            actor_user_id,
+            source_key,
+            backup_key,
+            reason,
+        } => {
+            assert_eq!(actor_user_id, actor.id);
+            assert_eq!(source_key, "daily:2026-05-06");
+            assert!(backup_key.is_some());
+            assert_eq!(reason, "rollback vandalism");
+        }
+        other => panic!("expected artboard restored moderation event, got {other:?}"),
+    }
+
+    let live_canvas = server.canvas_snapshot();
+    assert_eq!(live_canvas.get(Pos { x: 0, y: 0 }), 'D');
+    assert_eq!(
+        shared_provenance
+            .lock()
+            .expect("shared provenance lock")
+            .username_at(&live_canvas, Pos { x: 0, y: 0 }),
+        Some("daily_owner")
+    );
+
+    let main_snapshot =
+        ArtboardSnapshot::find_by_board_key(&client, ArtboardSnapshot::MAIN_BOARD_KEY)
+            .await
+            .expect("load restored main")
+            .expect("restored main exists");
+    let persisted_canvas: Canvas =
+        serde_json::from_value(main_snapshot.canvas).expect("decode persisted canvas");
+    assert_eq!(persisted_canvas.get(Pos { x: 0, y: 0 }), 'D');
+    sleep(Duration::from_millis(50)).await;
+    let main_snapshot =
+        ArtboardSnapshot::find_by_board_key(&client, ArtboardSnapshot::MAIN_BOARD_KEY)
+            .await
+            .expect("reload restored main")
+            .expect("restored main still exists");
+    let persisted_canvas: Canvas =
+        serde_json::from_value(main_snapshot.canvas).expect("decode persisted canvas");
+    assert_eq!(persisted_canvas.get(Pos { x: 0, y: 0 }), 'D');
+
+    let backups = ArtboardSnapshot::list_by_board_key_prefix(&client, "restore-backup:main:")
+        .await
+        .expect("backup snapshots");
+    assert_eq!(backups.len(), 1);
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "artboard_restore"
+                && entry.target_kind == "artboard"
+                && entry.metadata["source_key"] == "daily:2026-05-06"
+                && entry.metadata["reason"] == "rollback vandalism"
+        })
+        .count();
+    assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
+async fn mod_artboard_curate_command_copies_daily_snapshot_and_disambiguates_key() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "artboard_curate_actor").await;
+
+    let mut daily_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = daily_canvas.put_glyph(Pos { x: 0, y: 0 }, 'D');
+    let mut daily_provenance = ArtboardProvenance::default();
+    daily_provenance.set_username(Pos { x: 0, y: 0 }, "daily_owner");
+    ArtboardSnapshot::upsert(
+        &client,
+        "daily:2026-05-25",
+        serde_json::to_value(&daily_canvas).expect("serialize daily canvas"),
+        serde_json::to_value(&daily_provenance).expect("serialize daily provenance"),
+    )
+    .await
+    .expect("insert daily snapshot");
+    ArtboardSnapshot::upsert(
+        &client,
+        "curated:2026-05-25",
+        serde_json::json!({"width":384,"height":192,"cells":[],"colors":[]}),
+        serde_json::json!({"cells":[]}),
+    )
+    .await
+    .expect("insert existing curated snapshot");
+
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let mut moderation_events = service.subscribe_moderation_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "artboard curate 2026-05-25 saved before cleanup".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(
+                lines,
+                vec!["curated artboard snapshot curated:2026-05-25-2 from daily:2026-05-25"]
+            );
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let moderation_event = timeout(Duration::from_secs(2), moderation_events.recv())
+        .await
+        .expect("moderation event timeout")
+        .expect("moderation event");
+    match moderation_event {
+        ModerationEvent::ArtboardCurated {
+            actor_user_id,
+            board_key,
+            reason,
+        } => {
+            assert_eq!(actor_user_id, actor.id);
+            assert_eq!(board_key, "curated:2026-05-25-2");
+            assert_eq!(reason, "saved before cleanup");
+        }
+        other => panic!("expected artboard curated moderation event, got {other:?}"),
+    }
+
+    let curated = ArtboardSnapshot::find_by_board_key(&client, "curated:2026-05-25-2")
+        .await
+        .expect("load curated snapshot")
+        .expect("curated snapshot exists");
+    let curated_canvas: Canvas =
+        serde_json::from_value(curated.canvas).expect("decode curated canvas");
+    let curated_provenance: ArtboardProvenance =
+        serde_json::from_value(curated.provenance).expect("decode curated provenance");
+    assert_eq!(curated_canvas.get(Pos { x: 0, y: 0 }), 'D');
+    assert_eq!(
+        curated_provenance.username_at(&curated_canvas, Pos { x: 0, y: 0 }),
+        Some("daily_owner")
+    );
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "artboard_curate"
+                && entry.target_kind == "artboard"
+                && entry.metadata["source_key"] == "daily:2026-05-25"
+                && entry.metadata["target_key"] == "curated:2026-05-25-2"
+                && entry.metadata["reason"] == "saved before cleanup"
+        })
+        .count();
+    assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
+async fn mod_artboard_curate_live_flushes_and_copies_main_snapshot() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "artboard_curate_live_actor").await;
+
+    let mut main_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = main_canvas.put_glyph(Pos { x: 0, y: 0 }, 'M');
+    let mut main_provenance = ArtboardProvenance::default();
+    main_provenance.set_username(Pos { x: 0, y: 0 }, "main_owner");
+
+    let mut live_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = live_canvas.put_glyph(Pos { x: 0, y: 0 }, 'L');
+    let mut live_provenance = ArtboardProvenance::default();
+    live_provenance.set_username(Pos { x: 0, y: 0 }, "live_owner");
+
+    ArtboardSnapshot::upsert(
+        &client,
+        ArtboardSnapshot::MAIN_BOARD_KEY,
+        serde_json::to_value(&main_canvas).expect("serialize main canvas"),
+        serde_json::to_value(&main_provenance).expect("serialize main provenance"),
+    )
+    .await
+    .expect("insert main snapshot");
+
+    let shared_provenance = live_provenance.shared();
+    let server = dartboard::spawn_persistent_server_with_interval(
+        test_db.db.clone(),
+        Some(live_canvas),
+        shared_provenance.clone(),
+        Duration::from_secs(60 * 60),
+    );
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    )
+    .with_moderation_infra(
+        ModerationInfra::default().with_artboard_handles(server.clone(), shared_provenance.clone()),
+    );
+    let mut events = service.subscribe_events();
+
+    let request_id = Uuid::now_v7();
+    let target_key = dartboard::curated_board_key(chrono::Utc::now().date_naive(), 0);
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "artboard curate live preserve live".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(
+                lines,
+                vec![format!("curated artboard snapshot {target_key} from main")]
+            );
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let curated = ArtboardSnapshot::find_by_board_key(&client, &target_key)
+        .await
+        .expect("load curated snapshot")
+        .expect("curated snapshot exists");
+    let curated_canvas: Canvas =
+        serde_json::from_value(curated.canvas).expect("decode curated canvas");
+    assert_eq!(curated_canvas.get(Pos { x: 0, y: 0 }), 'L');
+
+    let main = ArtboardSnapshot::find_by_board_key(&client, ArtboardSnapshot::MAIN_BOARD_KEY)
+        .await
+        .expect("load main snapshot")
+        .expect("main snapshot exists");
+    let main_canvas: Canvas = serde_json::from_value(main.canvas).expect("decode main canvas");
+    assert_eq!(main_canvas.get(Pos { x: 0, y: 0 }), 'L');
+}
+
+#[tokio::test]
 async fn mod_bans_command_lists_active_bans() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -1972,9 +2535,9 @@ async fn mod_bans_command_lists_active_bans() {
         .expect("create room");
 
     for command in [
-        "server ban @list_server_target 1h server reason",
-        "artboard ban @list_artboard_target 1h art reason",
-        "room ban #list-bans-room @list_room_target 1h room reason",
+        "ban server @list_server_target 1h server reason",
+        "ban artboard @list_artboard_target 1h art reason",
+        "ban #list-bans-room @list_room_target 1h room reason",
     ] {
         service.run_mod_command_task(
             actor.id,
@@ -1997,7 +2560,7 @@ async fn mod_bans_command_lists_active_bans() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "bans 10".to_string(),
+        "view bans".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2066,7 +2629,7 @@ async fn mod_audit_command_lists_recent_audit_entries() {
         actor.id,
         Permissions::new(false, true),
         Uuid::now_v7(),
-        "server kick @list_audit_target audit reason".to_string(),
+        "kick server @list_audit_target audit reason".to_string(),
     );
     let event = timeout(Duration::from_secs(2), events.recv())
         .await
@@ -2082,7 +2645,7 @@ async fn mod_audit_command_lists_recent_audit_entries() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "audit 5".to_string(),
+        "view audit".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2101,7 +2664,7 @@ async fn mod_audit_command_lists_recent_audit_entries() {
             assert!(
                 lines
                     .iter()
-                    .any(|line| line == "recent audit log entries (limit 5)")
+                    .any(|line| line == "recent audit log entries (page 1, 15 per page)")
             );
             assert!(lines.iter().any(|line| line.contains("@list_audit_actor")
                 && line.contains("server_kick")
@@ -2132,10 +2695,12 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: None,
+                afk: None,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -2143,7 +2708,9 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -2157,7 +2724,7 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "room ban #room-notify @room_notify_target 1h test".to_string(),
+        "ban #room-notify @room_notify_target 1h test".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2187,6 +2754,114 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
 }
 
 #[tokio::test]
+async fn mod_slow_command_creates_row_audits_and_notifies_target_session() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "slow_actor").await;
+    let target = create_test_user(&test_db.db, "slow_target").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "slow-notify")
+        .await
+        .expect("create room");
+    ChatRoomMember::join(&client, room.id, target.id)
+        .await
+        .expect("join target");
+
+    let session_token = "slow-notify-session".to_string();
+    let active_users = Arc::new(Mutex::new(HashMap::from([(
+        target.id,
+        ActiveUser {
+            username: target.username.clone(),
+            fingerprint: Some(target.fingerprint.clone()),
+            peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
+            sessions: vec![ActiveSession {
+                token: session_token.clone(),
+                fingerprint: Some(target.fingerprint.clone()),
+                peer_ip: None,
+                afk: None,
+            }],
+            connection_count: 1,
+            last_login_at: std::time::Instant::now(),
+        },
+    )])));
+    let registry = SessionRegistry::new();
+    let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
+    registry
+        .register(session_token, session_tx, target.id)
+        .await;
+    let service = ChatService::new_with_active_users(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+        active_users,
+    )
+    .with_session_registry(registry);
+    let mut events = service.subscribe_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "slow #slow-notify @slow_target 90s permanent high volume".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            user_id,
+            request_id: got_request,
+            lines,
+            success,
+        } => {
+            assert_eq!(user_id, actor.id);
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(
+                lines,
+                vec!["slowed @slow_target in #slow-notify: one message every 1m 30s for permanent"]
+            );
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let message = timeout(Duration::from_secs(2), session_rx.recv())
+        .await
+        .expect("session message timeout")
+        .expect("session message");
+    match message {
+        SessionMessage::Toast { message, error } => {
+            assert!(error);
+            assert_eq!(
+                message,
+                "Slow mode in #slow-notify: one message every 1m 30s. No expiry set."
+            );
+        }
+        other => panic!("expected toast message, got {other:?}"),
+    }
+
+    let slow_mode = ChatSlowMode::find_active_for_room_and_user(&client, room.id, target.id)
+        .await
+        .expect("slow mode lookup")
+        .expect("active slow mode");
+    assert_eq!(slow_mode.interval_secs, 90);
+    assert!(slow_mode.expires_at.is_none());
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "room_slow"
+                && entry.target_id == Some(target.id)
+        })
+        .count();
+    assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
 async fn grant_mod_command_updates_active_session_permissions() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -2200,10 +2875,12 @@ async fn grant_mod_command_updates_active_session_permissions() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: None,
+                afk: None,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -2211,7 +2888,9 @@ async fn grant_mod_command_updates_active_session_permissions() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -2225,7 +2904,7 @@ async fn grant_mod_command_updates_active_session_permissions() {
         actor.id,
         Permissions::new(true, false),
         request_id,
-        "grant mod @grant_mod_target".to_string(),
+        "admin grant mod @grant_mod_target".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2252,6 +2931,163 @@ async fn grant_mod_command_updates_active_session_permissions() {
         .expect("user lookup")
         .expect("target user");
     assert!(updated.is_moderator);
+}
+
+#[tokio::test]
+async fn admin_ultimate_cast_command_broadcasts_to_active_sessions_and_audits() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "ultimate_cast_admin").await;
+    let target = create_test_user(&test_db.db, "ultimate_cast_target").await;
+
+    let actor_token = "ultimate-admin-session".to_string();
+    let target_token = "ultimate-target-session".to_string();
+    let active_users = Arc::new(Mutex::new(HashMap::from([
+        (
+            actor.id,
+            ActiveUser {
+                username: actor.username.clone(),
+                fingerprint: Some(actor.fingerprint.clone()),
+                peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::default(),
+                sessions: vec![ActiveSession {
+                    token: actor_token.clone(),
+                    fingerprint: Some(actor.fingerprint.clone()),
+                    peer_ip: None,
+                    afk: None,
+                }],
+                connection_count: 1,
+                last_login_at: std::time::Instant::now(),
+            },
+        ),
+        (
+            target.id,
+            ActiveUser {
+                username: target.username.clone(),
+                fingerprint: Some(target.fingerprint.clone()),
+                peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::default(),
+                sessions: vec![ActiveSession {
+                    token: target_token.clone(),
+                    fingerprint: Some(target.fingerprint.clone()),
+                    peer_ip: None,
+                    afk: None,
+                }],
+                connection_count: 1,
+                last_login_at: std::time::Instant::now(),
+            },
+        ),
+    ])));
+    let registry = SessionRegistry::new();
+    let (actor_session_tx, mut actor_session_rx) = tokio::sync::mpsc::channel(1);
+    let (target_session_tx, mut target_session_rx) = tokio::sync::mpsc::channel(1);
+    registry
+        .register(actor_token, actor_session_tx, actor.id)
+        .await;
+    registry
+        .register(target_token, target_session_tx, target.id)
+        .await;
+    let service = ChatService::new_with_active_users(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+        active_users,
+    )
+    .with_session_registry(registry);
+    let mut events = service.subscribe_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(true, false),
+        request_id,
+        "admin ultimate cast thematrix".to_string(),
+    );
+
+    let actor_message = timeout(Duration::from_secs(2), actor_session_rx.recv())
+        .await
+        .expect("actor session message timeout")
+        .expect("actor session message");
+    let target_message = timeout(Duration::from_secs(2), target_session_rx.recv())
+        .await
+        .expect("target session message timeout")
+        .expect("target session message");
+    for message in [actor_message, target_message] {
+        match message {
+            SessionMessage::UltimateCast {
+                ultimate_id,
+                duration_ms,
+                ..
+            } => {
+                assert_eq!(ultimate_id, "thematrix");
+                assert!(duration_ms > 0);
+            }
+            other => panic!("expected ultimate cast message, got {other:?}"),
+        }
+    }
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines, vec!["cast The Matrix ultimate to 2 active sessions"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    assert!(audit.iter().any(|entry| {
+        entry.actor_user_id == actor.id
+            && entry.action == "ultimate_cast"
+            && entry.target_kind == "ultimate"
+            && entry.metadata["ultimate_id"] == "thematrix"
+            && entry.metadata["notified_sessions"] == 2
+    }));
+}
+
+#[tokio::test]
+async fn moderator_cannot_run_admin_ultimate_cast_command() {
+    let test_db = new_test_db().await;
+    let actor = create_test_user(&test_db.db, "ultimate_cast_mod").await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "admin ultimate cast thematrix".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(!success);
+            assert_eq!(lines, vec!["error: admin only"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -2299,6 +3135,100 @@ async fn send_message_task_rejects_active_room_ban_even_if_still_member() {
             assert_eq!(user_id, user.id);
             assert_eq!(got_request, request_id);
             assert_eq!(message, "You are banned from this room.");
+        }
+        other => panic!("expected SendFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn send_message_task_rejects_active_slow_mode_until_interval_passes() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let actor = create_test_user(&test_db.db, "send_slow_actor").await;
+    let user = create_test_user(&test_db.db, "send_slow_target").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "send-slow-room")
+        .await
+        .expect("create room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join user");
+
+    let first_request_id = Uuid::now_v7();
+    service.send_message_task(
+        user.id,
+        room.id,
+        room.slug.clone(),
+        "first message".to_string(),
+        first_request_id,
+        false,
+    );
+    let mut saw_created = false;
+    let mut saw_success = false;
+    for _ in 0..2 {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("first send event timeout")
+            .expect("first send event");
+        match event {
+            ChatEvent::MessageCreated { message, .. } => {
+                saw_created = true;
+                assert_eq!(message.body, "first message");
+            }
+            ChatEvent::SendSucceeded { request_id, .. } => {
+                saw_success = true;
+                assert_eq!(request_id, first_request_id);
+            }
+            other => panic!("unexpected first send event: {other:?}"),
+        }
+    }
+    assert!(saw_created);
+    assert!(saw_success);
+
+    ChatSlowMode::activate(
+        &client,
+        room.id,
+        user.id,
+        actor.id,
+        90,
+        "too fast",
+        Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+    )
+    .await
+    .expect("activate slow mode");
+
+    let second_request_id = Uuid::now_v7();
+    service.send_message_task(
+        user.id,
+        room.id,
+        room.slug.clone(),
+        "second message".to_string(),
+        second_request_id,
+        false,
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::SendFailed {
+            user_id,
+            request_id: got_request,
+            message,
+        } => {
+            assert_eq!(user_id, user.id);
+            assert_eq!(got_request, second_request_id);
+            assert!(
+                message.starts_with("Slow mode in #send-slow-room: wait "),
+                "{message}"
+            );
+            assert!(message.ends_with(" before sending again."), "{message}");
         }
         other => panic!("expected SendFailed, got {other:?}"),
     }

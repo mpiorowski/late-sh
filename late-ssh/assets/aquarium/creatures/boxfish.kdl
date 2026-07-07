@@ -1,0 +1,54 @@
+name "boxfish"
+title "a smaller fish"
+description "a boxy body, larger eye, visible pectoral fin, beaky mouth, and curved tail"
+sauce author=mevanlc date=20260504 license=CCBYSA4.0
+
+count 2
+
+right ###"""
+  __
+)|-o'>
+ '--'
+"""###
+
+right1 ###"""
+  __
+}|-o'>
+ '--'
+"""###
+
+left ###"""
+  __
+<'o-|(
+ '--'
+"""###
+
+left1 ###"""
+  __
+<'o-|{
+ '--'
+"""###
+
+face ###"""
+  __
+-|oo|-
+ '--'
+"""###
+
+face1 ###"""
+  __
+_|oo|_
+ '--'
+"""###
+
+face-away ###"""
+  __
+-|)(|-
+ '--'
+"""###
+
+face-away1 ###"""
+  __
+_|()|_
+ '--'
+"""###

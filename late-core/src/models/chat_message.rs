@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use std::collections::HashMap;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -10,7 +11,8 @@ crate::model! {
     struct ChatMessage {
         @generated
         pub pinned: bool,
-        pub reply_to_message_id: Option<Uuid>;
+        pub reply_to_message_id: Option<Uuid>,
+        pub reply_to_user_id: Option<Uuid>;
         @data
         pub room_id: Uuid,
         pub user_id: Uuid,
@@ -19,6 +21,38 @@ crate::model! {
 }
 
 impl ChatMessage {
+    pub async fn last_message_at_for_rooms(
+        client: &Client,
+        room_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Option<DateTime<Utc>>>> {
+        if room_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query(
+                "SELECT room_ids.room_id,
+                        latest.created AS last_message_at
+                 FROM unnest($1::uuid[]) AS room_ids(room_id)
+                 LEFT JOIN LATERAL (
+                    SELECT created
+                    FROM chat_messages
+                    WHERE room_id = room_ids.room_id
+                    ORDER BY created DESC, id DESC
+                    LIMIT 1
+                 ) latest ON true",
+                &[&room_ids],
+            )
+            .await?;
+
+        let mut last_message_at = HashMap::with_capacity(rows.len());
+        for row in rows {
+            last_message_at.insert(row.get("room_id"), row.get("last_message_at"));
+        }
+
+        Ok(last_message_at)
+    }
+
     pub async fn list_recent_for_rooms(
         client: &Client,
         room_ids: &[Uuid],
@@ -30,18 +64,19 @@ impl ChatMessage {
 
         let rows = client
             .query(
-                "SELECT ranked.*
+                "SELECT cm.*
                  FROM (
-                    SELECT cm.*,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY cm.room_id
-                               ORDER BY cm.created DESC, cm.id DESC
-                           ) AS rn
+                    SELECT DISTINCT room_id
+                    FROM unnest($1::uuid[]) AS room_ids(room_id)
+                 ) room_ids
+                 JOIN LATERAL (
+                    SELECT *
                     FROM chat_messages cm
-                    WHERE cm.room_id = ANY($1)
-                 ) ranked
-                 WHERE ranked.rn <= $2
-                 ORDER BY ranked.room_id, ranked.created DESC, ranked.id DESC",
+                    WHERE cm.room_id = room_ids.room_id
+                    ORDER BY cm.created DESC, cm.id DESC
+                    LIMIT $2
+                 ) cm ON true
+                 ORDER BY cm.room_id, cm.created DESC, cm.id DESC",
                 &[&room_ids, &limit_per_room],
             )
             .await?;
@@ -130,20 +165,33 @@ impl ChatMessage {
     }
 
     pub async fn create_with_reply_to(
-        client: &Client,
+        client: &impl GenericClient,
         params: ChatMessageParams,
         reply_to_message_id: Option<Uuid>,
     ) -> Result<Self> {
+        Self::create_with_reply_targets(client, params, reply_to_message_id, None).await
+    }
+
+    /// Create a message, optionally recording both the replied-to message and
+    /// the user this message is a response to. `reply_to_user_id` is used to
+    /// filter bot replies for viewers who ignore the triggering user.
+    pub async fn create_with_reply_targets(
+        client: &impl GenericClient,
+        params: ChatMessageParams,
+        reply_to_message_id: Option<Uuid>,
+        reply_to_user_id: Option<Uuid>,
+    ) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO chat_messages (room_id, user_id, body, reply_to_message_id)
-                 VALUES ($1, $2, $3, $4)
+                "INSERT INTO chat_messages (room_id, user_id, body, reply_to_message_id, reply_to_user_id)
+                 VALUES ($1, $2, $3, $4, $5)
                  RETURNING *",
                 &[
                     &params.room_id,
                     &params.user_id,
                     &params.body,
                     &reply_to_message_id,
+                    &reply_to_user_id,
                 ],
             )
             .await?;
@@ -152,7 +200,7 @@ impl ChatMessage {
     }
 
     pub async fn edit_by_author(
-        client: &Client,
+        client: &impl GenericClient,
         message_id: Uuid,
         user_id: Uuid,
         body: &str,
@@ -175,7 +223,34 @@ impl ChatMessage {
         Ok(row.map(Self::from))
     }
 
-    pub async fn delete_by_author(client: &Client, message_id: Uuid, user_id: Uuid) -> Result<u64> {
+    pub async fn edit_after_authorization(
+        client: &impl GenericClient,
+        message_id: Uuid,
+        body: &str,
+    ) -> Result<Self> {
+        let body = body.trim();
+        if body.is_empty() {
+            bail!("message body cannot be empty");
+        }
+
+        let row = client
+            .query_one(
+                "UPDATE chat_messages
+                 SET body = $1, updated = current_timestamp
+                 WHERE id = $2
+                 RETURNING *",
+                &[&body, &message_id],
+            )
+            .await?;
+
+        Ok(Self::from(row))
+    }
+
+    pub async fn delete_by_author(
+        client: &impl GenericClient,
+        message_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<u64> {
         let count = client
             .execute(
                 "DELETE FROM chat_messages WHERE id = $1 AND user_id = $2",
@@ -185,7 +260,7 @@ impl ChatMessage {
         Ok(count)
     }
 
-    pub async fn delete_by_admin(client: &Client, message_id: Uuid) -> Result<u64> {
+    pub async fn delete_by_admin(client: &impl GenericClient, message_id: Uuid) -> Result<u64> {
         let count = client
             .execute("DELETE FROM chat_messages WHERE id = $1", &[&message_id])
             .await?;
@@ -205,21 +280,28 @@ impl ChatMessage {
         Ok(Self::from(row))
     }
 
-    /// Delete a news announcement chat message posted by a specific user
-    /// that contains the given marker and URL.
+    /// Delete news announcement chat messages posted by a specific user
+    /// that contain the given marker and URL, returning `(room_id, message_id)`
+    /// for each removed row.
     pub async fn delete_news_by_user_and_url(
-        client: &Client,
+        client: &impl GenericClient,
         user_id: Uuid,
         news_marker: &str,
         url: &str,
-    ) -> Result<u64> {
-        let pattern = format!("{}%{}%", news_marker, url);
-        let count = client
-            .execute(
-                "DELETE FROM chat_messages WHERE user_id = $1 AND body LIKE $2",
-                &[&user_id, &pattern],
+    ) -> Result<Vec<(Uuid, Uuid)>> {
+        let rows = client
+            .query(
+                "DELETE FROM chat_messages
+                 WHERE user_id = $1
+                   AND strpos(body, $2) > 0
+                   AND strpos(body, $3) > 0
+                 RETURNING room_id, id",
+                &[&user_id, &news_marker, &url],
             )
             .await?;
-        Ok(count)
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("room_id"), row.get("id")))
+            .collect())
     }
 }

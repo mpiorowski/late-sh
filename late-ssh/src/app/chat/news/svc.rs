@@ -1,4 +1,7 @@
-use crate::app::{ai::svc::AiService, chat::svc::ChatService};
+use crate::app::{
+    ai::svc::AiService,
+    chat::svc::{ChatService, SendLoungeMessageTask},
+};
 use anyhow::{Context, Result};
 use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_MARKER};
 use late_core::{
@@ -6,8 +9,6 @@ use late_core::{
     models::{
         article::{Article, ArticleParams},
         article_feed_read::ArticleFeedRead,
-        chat_message::ChatMessage,
-        chat_room::ChatRoom,
         moderation_audit_log::ModerationAuditLog,
         user::User,
     },
@@ -218,15 +219,18 @@ impl ArticleService {
                         json!({ "target_user_id": article.user_id, "url": article.url }),
                     )
                     .await?;
+                    drop(client);
 
-                    // Delete the news announcement from general chat
-                    if let Err(e) = ChatMessage::delete_news_by_user_and_url(
-                        &client,
-                        article.user_id,
-                        NEWS_MARKER,
-                        &article.url,
-                    )
-                    .await
+                    // Delete the news announcement from lounge chat and
+                    // notify active chat clients so the stale card disappears.
+                    if let Err(e) = service
+                        .chat_service
+                        .delete_news_announcements_by_user_and_url(
+                            article.user_id,
+                            NEWS_MARKER,
+                            &article.url,
+                        )
+                        .await
                     {
                         tracing::warn!(
                             error = ?e,
@@ -252,6 +256,7 @@ impl ArticleService {
                         service.publish_event(ArticleEvent::Failed {
                             user_id,
                             error: e.to_string(),
+                            url: None,
                         });
                     }
                 }
@@ -294,6 +299,7 @@ impl ArticleService {
                     service.publish_event(ArticleEvent::Failed {
                         user_id,
                         error: e.to_string(),
+                        url: Some(target_url.clone()),
                     });
                 }
             }
@@ -352,23 +358,16 @@ impl ArticleService {
             .await?;
         }
 
-        // Post the announcement into #general via the same send path as any
-        // other message. No special-case task needed — resolve the room id
-        // here and call send_message_task like a normal composer submit.
-        let general_room_id = {
-            let client = self.db.get().await?;
-            ChatRoom::find_general(&client).await?.map(|room| room.id)
-        };
-        if let Some(room_id) = general_room_id {
-            self.chat_service.send_message_task(
+        // Post the announcement into #lounge via the same send path as any
+        // other message, preserving the normal composer success/failure event.
+        self.chat_service
+            .send_lounge_message_task(SendLoungeMessageTask {
                 user_id,
-                room_id,
-                Some("general".to_string()),
-                announcement,
-                Uuid::now_v7(),
-                false,
-            );
-        }
+                body: announcement,
+                request_id: Some(Uuid::now_v7()),
+                join_if_needed: false,
+                failure_log: "failed to share news in lounge chat",
+            });
 
         // Refresh the shared feed snapshot immediately so clients see the new item
         // without waiting for the periodic poll tick.
@@ -393,7 +392,10 @@ impl ArticleService {
 
         // 5. Publish Event
         tracing::info!(%url, "publishing ArticleEvent::Created");
-        self.publish_event(ArticleEvent::Created { user_id });
+        self.publish_event(ArticleEvent::Created {
+            user_id,
+            url: url.to_string(),
+        });
 
         Ok(())
     }

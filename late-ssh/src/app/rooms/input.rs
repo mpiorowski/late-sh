@@ -1,15 +1,23 @@
 use crate::app::state::DashboardGameToggleTarget;
+use std::time::{Duration, Instant};
+
 use crate::app::{
-    common::primitives::{Banner, Screen},
-    input::{MouseEventKind, ParsedInput, sanitize_paste_markers},
+    common::primitives::Banner,
+    input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput, sanitize_paste_markers},
     rooms::{
         backend::{CreateModalAction, CreateRoomFlow, InputAction},
         filter::RoomsFilter,
+        svc::GameKind,
     },
     state::App,
 };
+use ratatui::{
+    layout::{Constraint, Layout, Rect},
+    widgets::{Block, Borders},
+};
 
 const SEARCH_QUERY_MAX_LEN: usize = 32;
+const ROOM_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
 
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.rooms_active_room.is_some() && app.rooms_create_flow.is_none() {
@@ -25,10 +33,12 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             ParsedInput::PageDown => {
                 return handle_active_room_scroll(app, -active_room_page_step(app));
             }
-            ParsedInput::End => return handle_active_room_scroll(app, isize::MIN),
             ParsedInput::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => return handle_active_room_scroll(app, 1),
                 MouseEventKind::ScrollDown => return handle_active_room_scroll(app, -1),
+                MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+                    return handle_active_room_mouse(app, *mouse);
+                }
                 _ => {}
             },
             _ => {}
@@ -237,10 +247,15 @@ fn handle_create_picker_event(app: &mut App, kind_index: usize, event: &ParsedIn
 
 fn submit_create_modal(
     app: &mut App,
-    game_kind: crate::app::rooms::svc::GameKind,
+    game_kind: GameKind,
     display_name: String,
     settings: serde_json::Value,
 ) {
+    if !can_create_room(game_kind, app.is_admin, app.is_moderator) {
+        app.banner = Some(Banner::error("You cannot create this room."));
+        return;
+    }
+
     let display_name = display_name.trim().to_string();
     if display_name.is_empty() {
         app.banner = Some(Banner::error("Table name is required."));
@@ -278,6 +293,10 @@ fn open_selected_create_modal(app: &mut App, kind_index: usize) {
     else {
         return;
     };
+    if !can_create_room(kind, app.is_admin, app.is_moderator) {
+        app.banner = Some(Banner::error("You cannot create this room."));
+        return;
+    }
     let modal = app.room_game_registry.open_create_modal(kind);
     app.rooms_create_flow = Some(CreateRoomFlow::Game { kind, modal });
 }
@@ -436,14 +455,36 @@ fn enter_selected_room(app: &mut App) {
 }
 
 pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListItem) -> bool {
-    if !can_enter_room(app.is_admin, app.is_moderator) {
-        app.banner = Some(Banner::error("Rooms are locked for now."));
+    if !can_enter_room(room.game_kind, app.is_admin, app.is_moderator) {
+        app.banner = Some(Banner::error("You cannot enter this room."));
+        return false;
+    }
+
+    app.rooms_enter_request_id = app.rooms_enter_request_id.wrapping_add(1);
+    let request_id = app.rooms_enter_request_id;
+    app.rooms_pending_enter_request_id = Some(request_id);
+    app.rooms_service
+        .enter_game_room_task(app.user_id, request_id, room.clone());
+    app.banner = Some(Banner::success(&format!(
+        "Entering table: {}",
+        room.display_name
+    )));
+    true
+}
+
+pub(crate) fn complete_enter_room(
+    app: &mut App,
+    room: crate::app::rooms::svc::RoomListItem,
+) -> bool {
+    if !can_enter_room(room.game_kind, app.is_admin, app.is_moderator) {
+        app.banner = Some(Banner::error("You cannot enter this room."));
         return false;
     }
 
     app.chat.join_game_room_chat(room.chat_room_id);
-    app.chat.request_room_tail(room.chat_room_id);
     app.rooms_service.touch_room_task(room.id);
+    app.rooms_last_touched_room_id = Some(room.id);
+    app.rooms_last_touched_at = Some(Instant::now());
     let same_room = app
         .active_room_game
         .as_ref()
@@ -470,8 +511,7 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
     touch_active_room_activity(app);
 
     if byte == b'`' {
-        app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
-        app.set_screen(Screen::Dashboard);
+        crate::app::dashboard::input::cycle_game_workspace(app);
         return true;
     }
 
@@ -485,20 +525,42 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    if should_route_active_room_chat_key(app, chat_room_id, byte)
+    if should_route_active_room_chat_priority_key(app, byte)
         && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
     {
         return true;
     }
 
+    if should_route_active_room_selected_chat_key(app, chat_room_id, byte)
+        && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
+    {
+        return true;
+    }
+
+    if handle_active_room_game_key(app, byte) {
+        return true;
+    }
+
+    false
+}
+
+fn handle_active_room_game_key(app: &mut App, byte: u8) -> bool {
     let Some(active_room_game) = &mut app.active_room_game else {
         return false;
     };
-    match active_room_game.handle_key(byte) {
+    let action = active_room_game.handle_key(byte);
+    match action {
         InputAction::Ignored => false,
         InputAction::Handled => true,
         InputAction::Leave => {
+            let drop_backend = app
+                .active_room_game
+                .as_ref()
+                .is_some_and(|game| game.drop_on_leave());
             app.rooms_active_room = None;
+            if drop_backend {
+                app.active_room_game = None;
+            }
             true
         }
     }
@@ -518,6 +580,21 @@ fn handle_active_room_arrow(app: &mut App, key: u8) -> bool {
     crate::app::chat::input::handle_message_arrow_in_room(app, chat_room_id, key)
 }
 
+fn handle_active_room_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    let content_area = rooms_content_area(app);
+    let Some(active_room_game) = app.active_room_game.as_ref() else {
+        return false;
+    };
+    let game_area = crate::app::rooms::ui::active_room_game_area(&**active_room_game, content_area);
+    if !rect_contains_mouse(game_area, mouse) {
+        return false;
+    }
+    touch_active_room_activity(app);
+    app.active_room_game
+        .as_mut()
+        .is_some_and(|game| game.handle_mouse(mouse, game_area))
+}
+
 fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
@@ -528,7 +605,45 @@ fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
     true
 }
 
+fn rooms_content_area(app: &App) -> Rect {
+    let area = Rect::new(0, 0, app.size.0, app.size.1);
+    let mut inner = Block::default().borders(Borders::ALL).inner(area);
+    if app.show_aquarium_tray && app.shop_state.entitlements().has_aquarium() {
+        let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+        inner.height = inner.height.saturating_sub(tray.height);
+    }
+
+    let profile = app.profile_state.profile();
+    if crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, app.screen) {
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
+    } else {
+        inner
+    }
+}
+
+fn rect_contains_mouse(area: Rect, mouse: MouseEvent) -> bool {
+    let Some(x) = mouse.x.checked_sub(1) else {
+        return false;
+    };
+    let Some(y) = mouse.y.checked_sub(1) else {
+        return false;
+    };
+    x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
+}
+
 fn touch_active_room_activity(app: &mut App) {
+    if let Some(room_id) = app.rooms_active_room.as_ref().map(|room| room.id) {
+        let now = Instant::now();
+        let should_touch = app.rooms_last_touched_room_id != Some(room_id)
+            || app
+                .rooms_last_touched_at
+                .is_none_or(|last| now.duration_since(last) >= ROOM_TOUCH_INTERVAL);
+        if should_touch {
+            app.rooms_service.touch_room_task(room_id);
+            app.rooms_last_touched_room_id = Some(room_id);
+            app.rooms_last_touched_at = Some(now);
+        }
+    }
     if let Some(active_room_game) = &app.active_room_game {
         active_room_game.touch_activity();
     }
@@ -538,13 +653,18 @@ fn active_room_page_step(app: &App) -> isize {
     (app.size.1 / 6).max(1) as isize
 }
 
-fn should_route_active_room_chat_key(app: &App, chat_room_id: uuid::Uuid, byte: u8) -> bool {
+fn should_route_active_room_chat_priority_key(app: &App, byte: u8) -> bool {
     if app.chat.is_reaction_leader_active() {
         return true;
     }
-    if matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15) {
-        return true;
-    }
+    matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15)
+}
+
+fn should_route_active_room_selected_chat_key(
+    app: &App,
+    chat_room_id: uuid::Uuid,
+    byte: u8,
+) -> bool {
     let selected_in_room = app
         .chat
         .selected_message_body_in_room(chat_room_id)
@@ -573,14 +693,18 @@ fn can_delete_room(is_admin: bool) -> bool {
     is_admin
 }
 
-fn can_enter_room(is_admin: bool, is_moderator: bool) -> bool {
-    let _ = (is_admin, is_moderator);
+fn can_create_room(_game_kind: GameKind, _is_admin: bool, _is_moderator: bool) -> bool {
+    true
+}
+
+fn can_enter_room(_game_kind: GameKind, _is_admin: bool, _is_moderator: bool) -> bool {
     true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{can_delete_room, can_enter_room};
+    use super::{can_create_room, can_delete_room, can_enter_room};
+    use crate::app::rooms::svc::GameKind;
 
     #[test]
     fn room_deletion_stays_admin_only() {
@@ -589,10 +713,40 @@ mod tests {
     }
 
     #[test]
-    fn room_entry_allows_all_users() {
-        assert!(can_enter_room(true, false));
-        assert!(can_enter_room(false, true));
-        assert!(can_enter_room(true, true));
-        assert!(can_enter_room(false, false));
+    fn blackjack_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(GameKind::Blackjack, false, false));
+        assert!(can_enter_room(GameKind::Blackjack, false, false));
+    }
+
+    #[test]
+    fn chess_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(GameKind::Chess, false, false));
+        assert!(can_enter_room(GameKind::Chess, false, false));
+        assert!(can_create_room(GameKind::Chess, true, false));
+        assert!(can_enter_room(GameKind::Chess, true, false));
+        assert!(can_create_room(GameKind::Chess, false, true));
+        assert!(can_enter_room(GameKind::Chess, false, true));
+    }
+
+    #[test]
+    fn tictactoe_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(GameKind::TicTacToe, false, false));
+        assert!(can_enter_room(GameKind::TicTacToe, false, false));
+    }
+
+    #[test]
+    fn poker_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(GameKind::Poker, false, false));
+        assert!(can_enter_room(GameKind::Poker, false, false));
+    }
+
+    #[test]
+    fn tron_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(GameKind::Tron, false, false));
+        assert!(can_enter_room(GameKind::Tron, false, false));
+        assert!(can_create_room(GameKind::Tron, true, false));
+        assert!(can_enter_room(GameKind::Tron, true, false));
+        assert!(can_create_room(GameKind::Tron, false, true));
+        assert!(can_enter_room(GameKind::Tron, false, true));
     }
 }

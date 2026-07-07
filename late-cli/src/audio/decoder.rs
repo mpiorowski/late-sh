@@ -48,18 +48,19 @@ impl<R: Read> Read for PrefixThenRead<R> {
 
 impl SymphoniaStreamDecoder {
     pub(super) fn new_http(url: &str) -> Result<Self> {
-        let stream_url = url.to_string() + "/stream";
+        let stream_url = resolve_stream_url(url);
         let mut resp = reqwest::blocking::get(&stream_url)
             .context("http get")?
             .error_for_status()
             .with_context(|| format!("stream request failed for {stream_url}"))?;
+        let final_url = resp.url().clone();
         let prefix = read_until_mp3_sync(&mut resp)
             .with_context(|| format!("failed to align MP3 stream from {stream_url}"))?;
         let source = ReadOnlySource::new(PrefixThenRead::new(prefix, resp));
 
         let mss = MediaSourceStream::new(Box::new(source), Default::default());
         let mut hint = Hint::new();
-        hint.with_extension("mp3");
+        hint.with_extension(stream_extension(final_url.path()).unwrap_or("mp3"));
 
         let probed = get_probe().format(
             &hint,
@@ -229,16 +230,34 @@ fn push_interleaved_samples(
 }
 
 pub(super) fn probe_stream_spec(audio_base_url: &str) -> Result<AudioSpec> {
-    let decoder = SymphoniaStreamDecoder::new_http(&trim_stream_suffix(audio_base_url))
+    let decoder = SymphoniaStreamDecoder::new_http(audio_base_url)
         .context("failed to create audio decoder for stream probe")?;
     Ok(decoder.spec())
 }
 
-pub(super) fn trim_stream_suffix(audio_base_url: &str) -> String {
-    audio_base_url
-        .trim_end_matches('/')
-        .trim_end_matches("/stream")
-        .to_string()
+pub(super) fn resolve_stream_url(audio_base_url: &str) -> String {
+    let trimmed = audio_base_url.trim_end_matches('/');
+    if trimmed.ends_with("/stream")
+        || trimmed.contains("/stream/")
+        || stream_extension(trimmed).is_some()
+    {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/stream")
+    }
+}
+
+fn stream_extension(path_or_url: &str) -> Option<&'static str> {
+    let path = path_or_url.split('?').next().unwrap_or(path_or_url);
+    if path.ends_with(".mp3") {
+        Some("mp3")
+    } else if path.ends_with(".m4a") {
+        Some("m4a")
+    } else if path.ends_with(".aac") {
+        Some("aac")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -246,14 +265,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn trim_stream_suffix_normalizes_base_url() {
+    fn resolve_stream_url_appends_icecast_mount() {
         assert_eq!(
-            trim_stream_suffix("http://audio.late.sh/stream"),
-            "http://audio.late.sh"
+            resolve_stream_url("http://audio.late.sh"),
+            "http://audio.late.sh/stream"
         );
         assert_eq!(
-            trim_stream_suffix("http://audio.late.sh/"),
-            "http://audio.late.sh"
+            resolve_stream_url("http://audio.late.sh/"),
+            "http://audio.late.sh/stream"
+        );
+    }
+
+    #[test]
+    fn resolve_stream_url_preserves_mount_or_direct_url() {
+        assert_eq!(
+            resolve_stream_url("http://audio.late.sh/stream"),
+            "http://audio.late.sh/stream"
+        );
+        assert_eq!(
+            resolve_stream_url("https://late.sh/stream/chill"),
+            "https://late.sh/stream/chill"
+        );
+        assert_eq!(
+            resolve_stream_url("https://stream.nightride.fm/chillsynth.m4a"),
+            "https://stream.nightride.fm/chillsynth.m4a"
         );
     }
 

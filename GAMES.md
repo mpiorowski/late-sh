@@ -2,7 +2,7 @@
 
 This guide is for contributors who want to add a new multiplayer game room to
 late.sh. By the end you should know what to write, where it lives, and which
-patterns the existing games (Blackjack, Tic-Tac-Toe) already prove out.
+patterns the existing games (Blackjack, Chess, Poker, Tic-Tac-Toe, Tron) already prove out.
 
 If anything here disagrees with the code, trust the code and please open a PR
 to fix this file.
@@ -16,7 +16,7 @@ and the room still exists, but the runtime starts fresh.
 
 Every game shares the same outer chrome:
 
-- A directory page that lists rooms (`Rooms` screen, key `4`)
+- A directory page that lists rooms (`Rooms` screen, key `3`)
 - A modal flow to create a new room
 - A two-pane active view: game on top, embedded chat on bottom
 
@@ -25,7 +25,13 @@ game's own runtime. You will not touch the rooms layer.
 
 Live reference implementations:
 
+- `late-ssh/src/app/rooms/asterion/` — real-time private-view room game with
+  daily chip payout and runtime loop cleanup
 - `late-ssh/src/app/rooms/tictactoe/` — minimal example, ~6 small files
+- `late-ssh/src/app/rooms/chess/` — two-seat timed board game using a rules crate
+- `late-ssh/src/app/rooms/tron/` — four-seat real-time light-cycle example
+- `late-ssh/src/app/rooms/poker/` — asymmetric-info example with public table
+  state plus per-user private hole-card state
 - `late-ssh/src/app/rooms/blackjack/` — complex example with chips, settlements,
   AFK timer
 - `late-ssh/src/app/rooms/CONTEXT.md` — internal architecture notes
@@ -116,6 +122,7 @@ pub trait ActiveRoomBackend: Send {
     fn preferred_game_height(&self, area: Rect) -> u16;      // height negotiation
     fn draw(&self, frame: &mut Frame, area: Rect, ctx: GameDrawCtx<'_>);
     fn title_details(&self) -> Option<RoomTitleDetails> { None }
+    fn drop_on_leave(&self) -> bool { false }
     fn chip_balance(&self) -> Option<i64> { None }
     fn can_sync_external_chip_balance(&self) -> bool { false }
     fn sync_external_chip_balance(&mut self, _balance: i64) {}
@@ -134,6 +141,9 @@ Notes:
   minimum (currently 8 rows) — your wish gets clamped if needed.
 - `title_details` lets you contribute strings to the rooms title bar. Anything
   you don't want to show, leave as `None`.
+- `drop_on_leave` is for games where the per-session wrapper itself owns a
+  reservation. Leave it false for explicit-seat games unless dropping the
+  wrapper should also leave the game.
 - The chip methods are optional. If your game has nothing to do with chips,
   ignore them — defaults return `None`/`false`.
 
@@ -243,7 +253,10 @@ field and a footer.
    let your_game_table_manager = YourGameTableManager::new(/* deps */);
    let room_game_registry = RoomGameRegistry::new(
        blackjack_table_manager.clone(),
+       chess_table_manager,
+       poker_table_manager,
        tictactoe_table_manager,
+       tron_table_manager,
        your_game_table_manager,            // add this
    );
    ```
@@ -302,12 +315,12 @@ re-validates against the truth under the lock. Be defensive in `SharedState`
 methods: turn checks, occupancy checks, "are you actually seated" checks.
 Stale-cache races are normal and harmless if you validate.
 
-### Asymmetric-info games (poker-style)
+### Asymmetric-info games
 
-The current pattern publishes the same snapshot to all sessions. Games like
-poker, where each player sees a different view (own hole cards visible,
-others' hidden), are supported by the existing trait surface without changes.
-See the "Future: Asymmetric-Info Games" section in
+Most simple games publish the same snapshot to all sessions. Poker now proves
+the pattern for games where each player sees a different view (own hole cards
+visible, others' hidden), without changing the room trait surface. See the
+"Asymmetric-Info Game Pattern" section in
 `late-ssh/src/app/rooms/CONTEXT.md` for the recommended split-channel pattern.
 
 Short version: one `watch::Sender<PublicSnapshot>` plus a
@@ -388,7 +401,7 @@ changes per game — that's where the rules live.
   before opening a PR.
 - **Tests** for pure logic (rules, settings parsing, key routing helpers) go
   inline as `#[cfg(test)] mod tests`. Anything touching `RoomsService`, DB,
-  chips, or service tasks goes in `late-ssh/tests/` and uses testcontainers.
+  chips, or service tasks goes in `late-ssh/tests/` and uses the shared DB test helper.
 
 ## What you do not need to touch
 

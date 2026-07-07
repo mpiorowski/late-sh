@@ -1,41 +1,115 @@
 use std::{
+    cell::Cell,
+    cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
+use chrono::{DateTime, Utc};
 use late_core::{
     MutexRecover,
     models::{
-        article::NEWS_MARKER,
+        article::{ArticleFeedItem, NEWS_MARKER},
         chat_message::ChatMessage,
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
+        chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
+        voice_channel::VoiceChannel,
     },
+};
+use rand_core::{OsRng, RngCore};
+use ratatui::{
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
 };
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
+use crate::app::common::theme;
 
 use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
+use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
 use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
 use crate::state::{ActiveUser, ActiveUsers};
+use crate::usernames::UsernameResolver;
 
 use super::{
-    discover, news, notifications,
+    commands::{RoomScopedCommand, rank_command_matches, room_owns_command},
+    discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
-    svc::{ChatEvent, ChatService, ChatSnapshot},
-    ui_text::reaction_label,
+    svc::{ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, RoomMemberListItem},
+    ui_text::{NewsPayload, parse_news_payload},
     work,
 };
 
-pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
+pub(crate) const ROOM_JUMP_KEYS: &[u8] =
+    b"asdfghjklqwertyuiopzxcvbnm1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const USER_CREATED_CHANNEL_NAME_MAX_CHARS: usize = 16;
 const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
 const REACTION_OWNER_COLUMNS: usize = 3;
+const INLINE_IMAGE_FETCHES_PER_TICK: usize = 8;
+const INLINE_IMAGE_SCAN_LIMIT: usize = 100;
+const INLINE_IMAGE_MAX_WIDTH: u32 = 96;
+const INLINE_IMAGE_MAX_ROWS: u32 = 12;
+const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
+const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
+const TERMINAL_IMAGE_MAX_COLS: u32 = 200;
+const TERMINAL_IMAGE_MAX_ROWS: u32 = 60;
+const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const READ_CURSOR_FLUSH_DELAY: Duration = Duration::from_secs(2);
+
+pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
+pub(crate) type InlineImageRenderSettings =
+    crate::app::files::inline_image::InlineImageRenderSettings;
+pub(crate) type InlineImageRenderResult = (
+    Uuid,
+    InlineImageRenderSettings,
+    Result<InlineImagePreview, String>,
+);
+pub(crate) type TerminalImageRenderResult = (
+    Uuid,
+    Result<crate::app::files::terminal_image::TerminalImageData, String>,
+);
+
+#[derive(Clone, Copy, Debug)]
+struct InlineImageFailure {
+    attempts: u8,
+    next_retry_at: Instant,
+}
+
+#[derive(Default)]
+struct PendingReadCursorFlush {
+    rooms: HashSet<Uuid>,
+    flush_at: Option<Instant>,
+}
+
+impl PendingReadCursorFlush {
+    fn queue(&mut self, room_id: Uuid, now: Instant) {
+        self.rooms.insert(room_id);
+        if self.flush_at.is_none() {
+            self.flush_at = Some(now + READ_CURSOR_FLUSH_DELAY);
+        }
+    }
+
+    fn take_due(&mut self, now: Instant) -> Vec<Uuid> {
+        match self.flush_at {
+            Some(deadline) if now >= deadline => self.take_all(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn take_all(&mut self) -> Vec<Uuid> {
+        self.flush_at = None;
+        self.rooms.drain().collect()
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionMatch {
@@ -68,9 +142,57 @@ pub(crate) struct ModCommandOutput {
     pub success: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingUrlUpload {
+    pub url: String,
+    pub room_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingClipboardImageUpload {
+    pub room_id: Option<Uuid>,
+    requested_at: Instant,
+}
+
+impl PendingClipboardImageUpload {
+    fn new(room_id: Option<Uuid>) -> Self {
+        Self {
+            room_id,
+            requested_at: Instant::now(),
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.requested_at.elapsed() >= CLIPBOARD_IMAGE_REQUEST_TIMEOUT
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NewsModalState {
+    pub payload: NewsPayload,
+    pub meta: String,
+    pub article_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImageModalState {
+    pub message_id: Uuid,
+    pub url: String,
+}
+
+/// A voice control requested from the composer (`/voice`, `/mute`)
+/// in a voice-enabled room. `App` owns the paired-CLI voice plumbing, so the
+/// composer just records the intent and `App` carries it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VoiceCommand {
+    Join,
+    Mute,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
+    Feeds,
     News,
     Notifications,
     Discover,
@@ -78,7 +200,131 @@ pub(crate) enum RoomSlot {
     Work,
 }
 
-pub(super) fn is_chat_list_room(room: &ChatRoom) -> bool {
+/// Collapsible groupings of the room-list rail. Each maps to one section
+/// header drawn by `build_cozy_room_rail_rows`. A section in
+/// `ChatState::collapsed_sections` renders header-only and its rooms drop out
+/// of `visual_order` (so navigation skips them too).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RoomSection {
+    Favorites,
+    Core,
+    Channels,
+    Updates,
+    Dms,
+}
+
+impl RoomSection {
+    /// The header label as rendered in the rail. Used to map a clicked header
+    /// row back to its section.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            RoomSection::Favorites => "favorites",
+            RoomSection::Core => "core",
+            RoomSection::Channels => "channels",
+            RoomSection::Updates => "updates",
+            RoomSection::Dms => "dms",
+        }
+    }
+
+    pub(crate) fn shortcut(self) -> u8 {
+        match self {
+            RoomSection::Favorites => b'f',
+            RoomSection::Core => b'o',
+            RoomSection::Channels => b'c',
+            RoomSection::Updates => b'u',
+            RoomSection::Dms => b'd',
+        }
+    }
+
+    /// Resolve a header label back to its section (inverse of `label`).
+    pub(crate) fn from_label(label: &str) -> Option<RoomSection> {
+        match label {
+            "favorites" => Some(RoomSection::Favorites),
+            "core" => Some(RoomSection::Core),
+            "channels" => Some(RoomSection::Channels),
+            "updates" => Some(RoomSection::Updates),
+            "dms" => Some(RoomSection::Dms),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SelectedRoomSlotState {
+    pub selected_room_id: Option<Uuid>,
+    pub feeds_selected: bool,
+    pub news_selected: bool,
+    pub notifications_selected: bool,
+    pub discover_selected: bool,
+    pub showcase_selected: bool,
+    pub work_selected: bool,
+}
+
+pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) -> bool {
+    match slot {
+        RoomSlot::Room(room_id) => {
+            !selected.feeds_selected
+                && !selected.news_selected
+                && !selected.notifications_selected
+                && !selected.discover_selected
+                && !selected.showcase_selected
+                && !selected.work_selected
+                && selected.selected_room_id == Some(room_id)
+        }
+        RoomSlot::Feeds => selected.feeds_selected,
+        RoomSlot::News => selected.news_selected,
+        RoomSlot::Notifications => selected.notifications_selected,
+        RoomSlot::Discover => selected.discover_selected,
+        RoomSlot::Showcase => selected.showcase_selected,
+        RoomSlot::Work => selected.work_selected,
+    }
+}
+
+fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
+    selected.feeds_selected
+        || selected.news_selected
+        || selected.notifications_selected
+        || selected.discover_selected
+        || selected.showcase_selected
+        || selected.work_selected
+}
+
+fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
+    if state.feeds_selected {
+        return Some(RoomSlot::Feeds);
+    }
+    if state.news_selected {
+        return Some(RoomSlot::News);
+    }
+    if state.notifications_selected {
+        return Some(RoomSlot::Notifications);
+    }
+    if state.discover_selected {
+        return Some(RoomSlot::Discover);
+    }
+    if state.showcase_selected {
+        return Some(RoomSlot::Showcase);
+    }
+    if state.work_selected {
+        return Some(RoomSlot::Work);
+    }
+    state.selected_room_id.map(RoomSlot::Room)
+}
+
+fn room_membership_command_target(
+    composer_room_id: Option<Uuid>,
+    selected: SelectedRoomSlotState,
+) -> Option<Uuid> {
+    composer_room_id.or_else(|| {
+        if synthetic_entry_selected(selected) {
+            None
+        } else {
+            selected.selected_room_id
+        }
+    })
+}
+
+pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
     if room.kind == "game" {
         return false;
     }
@@ -86,28 +332,50 @@ pub(super) fn is_chat_list_room(room: &ChatRoom) -> bool {
     room.kind == "dm" || room.permanent || matches!(room.visibility.as_str(), "public" | "private")
 }
 
+/// Payload handed from chat to the app layer (via `take_requested_open_sheet`)
+/// to open the character sheet modal. `editable` is true when the sheet
+/// belongs to the viewer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SheetOpenRequest {
+    pub room_id: Uuid,
+    pub target_username: String,
+    pub name: String,
+    pub body: String,
+    pub editable: bool,
+}
+
 pub struct ChatState {
     pub(crate) service: ChatService,
     user_id: Uuid,
     permissions: Permissions,
     is_admin: bool,
+    is_moderator: bool,
     active_users: Option<ActiveUsers>,
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
     moderation_event_rx: tokio::sync::broadcast::Receiver<ModerationEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pub(crate) active_polls: HashMap<Uuid, ActiveChatPoll>,
     pinned_messages: Vec<ChatMessage>,
-    general_room_id: Option<Uuid>,
+    lounge_room_id: Option<Uuid>,
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
+    friend_user_ids: HashSet<Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
     pinned_rx: watch::Receiver<Vec<ChatMessage>>,
     pinned_tx: watch::Sender<Vec<ChatMessage>>,
     overlay: Option<Overlay>,
+    news_modal: Option<NewsModalState>,
+    image_modal: Option<ImageModalState>,
+    /// Cells the open image modal can devote to an image, reported back from
+    /// the previous frame's draw. Sixel fetches encode to fit this.
+    image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
+    pub(crate) room_unread_markers: HashMap<Uuid, Option<DateTime<Utc>>>,
     pending_read_rooms: HashSet<Uuid>,
+    pending_read_flush: PendingReadCursorFlush,
     visible_room_id: Option<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
     refresh_tx: mpsc::UnboundedSender<()>,
@@ -118,21 +386,55 @@ pub struct ChatState {
     composer: TextArea<'static>,
     pub(crate) composing: bool,
     composer_room_id: Option<Uuid>,
+    /// Index into the cup-art variant list, advanced each time the user
+    /// runs `/coffee` or `/tea` so back-to-back rituals rotate through
+    /// different ASCII cups within a session. Session-local; never
+    /// persisted.
+    next_cup_variant: u8,
+    /// Last-rendered chat composer area, set by `chat::ui` during draw and
+    /// consumed by mouse hit-testing in `app::input`. `Cell` keeps the
+    /// interior mutable through the immutable view references used in
+    /// rendering. Reset to `None` at the start of every frame.
+    pub(crate) last_composer_rect: Cell<Option<Rect>>,
+    /// Top visible wrapped composer row, updated on every render that draws
+    /// the composer. Mouse clicks use this to map visible rows back to the
+    /// underlying multiline composer when `ratatui_textarea` has scrolled.
+    /// Unlike `last_composer_rect` this persists across frames: it mirrors
+    /// the widget's own persistent `Viewport` (which the crate keeps
+    /// `pub(crate)`), and the minimal-scroll replay in
+    /// `next_composer_viewport_top` needs the previous top as input.
+    pub(crate) last_composer_viewport_top: Cell<Option<usize>>,
+    /// Most recent left-button click coordinates + timestamp inside the
+    /// composer rect, used to detect a double-click that enters compose mode.
+    pub(crate) last_composer_click: Option<(u16, u16, Instant)>,
+    /// Last-rendered chat-scroll hit layout (content rect + per-row hit
+    /// info), set by `chat::ui` during draw and consumed by mouse
+    /// hit-testing in `app::input`. Reset to `None` at the top of every
+    /// frame alongside `last_composer_rect`. Only one chat surface paints
+    /// per frame, so this single cell covers Home #lounge, Home chat
+    /// center, and embedded Rooms chat.
+    pub(crate) last_chat_hit_layout: Cell<Option<super::ui::ChatHitLayout>>,
     pending_send_notices: VecDeque<Uuid>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
     pub(crate) all_usernames: Arc<Vec<String>>,
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
+    pub(crate) chat_badges: HashMap<Uuid, String>,
+    pub(crate) profile_award_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub(crate) voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
     pub(crate) selected_message_id: Option<Uuid>,
     pub(crate) reaction_leader_active: bool,
     pub(crate) highlighted_message_id: Option<Uuid>,
     pub(crate) edited_message_id: Option<Uuid>,
     pub(crate) reply_target: Option<ReplyTarget>,
+    pub(crate) room_last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
     bg_task: tokio::task::AbortHandle,
 
     /// News (shown as a virtual room in the room list)
     pub(crate) news_selected: bool,
+    pub(crate) feeds_selected: bool,
+    pub feeds: feeds::state::State,
     pub(crate) news: news::state::State,
 
     /// Notifications / mentions (shown as a virtual room in the room list)
@@ -144,27 +446,68 @@ pub struct ChatState {
     pub(crate) showcase: showcase::state::State,
     pub(crate) work_selected: bool,
     pub(crate) work: work::state::State,
+    favorite_room_ids: Vec<Uuid>,
 
-    /// Pending desktop notifications drained on render. `kind` matches the
-    /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
-    pub(crate) pending_notifications: Vec<PendingNotification>,
+    /// Producer handle for desktop notifications; drained by render through
+    /// `App::notify_outbox`.
+    notifier: Notifier,
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
+    requested_ultimate_modal: bool,
+    requested_icon_picker: bool,
+    requested_petname: Option<PetnameRequest>,
+    requested_open_profile: Option<(Uuid, String)>,
+    requested_open_sheet: Option<SheetOpenRequest>,
     requested_quit: bool,
+    requested_audio_url: Option<String>,
+    requested_audio_fallback_url: Option<String>,
+    requested_audio_skip: bool,
+    /// Set by /voice or /mute in a voice-enabled room; consumed by `App`
+    /// (which owns the paired-CLI voice controls).
+    requested_voice_command: Option<VoiceCommand>,
+    requested_poll_room: Option<Uuid>,
+    /// Set by /brb command; contains the custom message (empty = no message).
+    requested_brb: Option<String>,
+    /// Set when a real (non-command) chat message is sent; used to clear AFK.
+    sent_regular_message: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
-}
 
-pub(crate) struct PendingNotification {
-    pub kind: &'static str,
-    pub title: String,
-    pub body: String,
+    /// Room-list sections the user has collapsed. Empty = all expanded
+    /// (the default). Session-only — resets on reconnect.
+    pub(crate) collapsed_sections: HashSet<RoomSection>,
+
+    // image upload
+    pub(crate) image_upload_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
+    pub(crate) image_upload_pending: bool,
+    pub(crate) image_upload_target_room_id: Option<Uuid>,
+    pub(crate) requested_url_upload: Option<PendingUrlUpload>,
+    requested_clipboard_image_upload: Option<PendingClipboardImageUpload>,
+    pending_clipboard_image_upload: Option<PendingClipboardImageUpload>,
+
+    // inline image rendering
+    pub(crate) inline_image_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<InlineImageRenderResult>>,
+    pub(crate) inline_image_tx: Option<tokio::sync::mpsc::UnboundedSender<InlineImageRenderResult>>,
+    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImagePreview>,
+    pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
+    inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
+    inline_image_render_settings: InlineImageRenderSettings,
+    inline_image_tracked_order: VecDeque<uuid::Uuid>,
+    terminal_image_rx: Option<tokio::sync::mpsc::UnboundedReceiver<TerminalImageRenderResult>>,
+    terminal_image_tx: Option<tokio::sync::mpsc::UnboundedSender<TerminalImageRenderResult>>,
+    pub(crate) terminal_image_cache:
+        HashMap<uuid::Uuid, crate::app::files::terminal_image::TerminalImageData>,
+    terminal_image_requested: HashSet<uuid::Uuid>,
+    terminal_image_failed: HashSet<uuid::Uuid>,
+    pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
 pub(crate) struct ChatServices {
     pub chat: ChatService,
     pub notifications: NotificationService,
     pub articles: news::svc::ArticleService,
+    pub feeds: feeds::svc::FeedService,
     pub showcases: showcase::svc::ShowcaseService,
     pub work: work::svc::WorkService,
 }
@@ -181,11 +524,13 @@ impl ChatState {
         user_id: Uuid,
         permissions: Permissions,
         active_users: Option<ActiveUsers>,
+        notifier: Notifier,
     ) -> Self {
         let ChatServices {
             chat: service,
             notifications: notification_service,
             articles: article_service,
+            feeds: feed_service,
             showcases: showcase_service,
             work: work_service,
         } = services;
@@ -193,31 +538,42 @@ impl ChatState {
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
         let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
+        service.load_pinned_messages_task(pinned_tx.clone());
         let (room_tx, room_rx) = watch::channel(None);
         let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
+        let (inline_image_tx, inline_image_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (terminal_image_tx, terminal_image_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             service,
             user_id,
             permissions,
             is_admin: permissions.is_admin(),
+            is_moderator: permissions.is_moderator(),
             active_users,
             snapshot_rx,
             event_rx,
             moderation_event_rx,
             rooms: Vec::new(),
+            active_polls: HashMap::new(),
             pinned_messages: Vec::new(),
-            general_room_id: None,
+            lounge_room_id: None,
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
+            friend_user_ids: HashSet::new(),
             username_rx,
             pinned_rx,
             pinned_tx,
             overlay: None,
+            news_modal: None,
+            image_modal: None,
+            image_modal_capacity: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
+            room_unread_markers: HashMap::new(),
             pending_read_rooms: HashSet::new(),
+            pending_read_flush: PendingReadCursorFlush::default(),
             visible_room_id: None,
             room_tx,
             refresh_tx,
@@ -228,19 +584,30 @@ impl ChatState {
             composer: new_chat_textarea(),
             composing: false,
             composer_room_id: None,
+            next_cup_variant: 0,
+            last_composer_rect: Cell::new(None),
+            last_composer_viewport_top: Cell::new(None),
+            last_composer_click: None,
+            last_chat_hit_layout: Cell::new(None),
             pending_send_notices: VecDeque::new(),
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
             all_usernames: Arc::new(Vec::new()),
             bonsai_glyphs: HashMap::new(),
+            chat_badges: HashMap::new(),
+            profile_award_badges: HashMap::new(),
             message_reactions: HashMap::new(),
+            voice_channels_by_room_id: HashMap::new(),
             selected_message_id: None,
             reaction_leader_active: false,
             highlighted_message_id: None,
             edited_message_id: None,
             reply_target: None,
+            room_last_message_at: HashMap::new(),
             bg_task,
             news_selected: false,
+            feeds_selected: false,
+            feeds: feeds::state::State::new(feed_service, article_service.clone(), user_id),
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
@@ -254,12 +621,45 @@ impl ChatState {
             ),
             work_selected: false,
             work: work::state::State::new(work_service, user_id, permissions.is_admin()),
-            pending_notifications: Vec::new(),
+            favorite_room_ids: Vec::new(),
+            notifier,
             requested_help_topic: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
+            requested_ultimate_modal: false,
+            requested_icon_picker: false,
+            requested_petname: None,
+            requested_open_profile: None,
+            requested_open_sheet: None,
             requested_quit: false,
+            requested_voice_command: None,
+            requested_audio_url: None,
+            requested_audio_fallback_url: None,
+            requested_audio_skip: false,
+            requested_poll_room: None,
+            requested_brb: None,
+            sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
+            collapsed_sections: HashSet::new(),
+            image_upload_rx: None,
+            image_upload_pending: false,
+            image_upload_target_room_id: None,
+            requested_url_upload: None,
+            requested_clipboard_image_upload: None,
+            pending_clipboard_image_upload: None,
+            inline_image_rx: Some(inline_image_rx),
+            inline_image_tx: Some(inline_image_tx),
+            inline_image_cache: HashMap::new(),
+            inline_image_requested: HashSet::new(),
+            inline_image_failures: HashMap::new(),
+            inline_image_render_settings: InlineImageRenderSettings::default(),
+            inline_image_tracked_order: VecDeque::new(),
+            terminal_image_rx: Some(terminal_image_rx),
+            terminal_image_tx: Some(terminal_image_tx),
+            terminal_image_cache: HashMap::new(),
+            terminal_image_requested: HashSet::new(),
+            terminal_image_failed: HashSet::new(),
+            last_image_upload_at: None,
         }
     }
 
@@ -303,6 +703,7 @@ impl ChatState {
     }
 
     pub fn request_list(&mut self) {
+        self.flush_pending_read_cursors();
         self.sync_refresh_room_id();
         let _ = self.refresh_tx.send(());
         if let Some(room_id) = self.selected_room_id {
@@ -358,7 +759,12 @@ impl ChatState {
     pub fn mark_room_read(&mut self, room_id: Uuid) {
         self.pending_read_rooms.insert(room_id);
         self.unread_counts.insert(room_id, 0);
-        self.service.mark_room_read_task(self.user_id, room_id);
+        self.pending_read_flush.queue(room_id, Instant::now());
+    }
+
+    pub fn mark_room_read_at(&self, room_id: Uuid, read_at: DateTime<Utc>) {
+        self.service
+            .mark_room_read_at_task(self.user_id, room_id, read_at);
     }
 
     pub fn mark_selected_room_read(&mut self) {
@@ -374,7 +780,26 @@ impl ChatState {
     }
 
     pub fn set_visible_room_id(&mut self, room_id: Option<Uuid>) {
+        if self.visible_room_id != room_id {
+            self.flush_pending_read_cursors();
+        }
         self.visible_room_id = room_id;
+    }
+
+    fn flush_pending_read_cursors(&mut self) {
+        let room_ids = self.pending_read_flush.take_all();
+        self.flush_read_cursors(room_ids);
+    }
+
+    fn flush_pending_read_cursors_if_due(&mut self) {
+        let room_ids = self.pending_read_flush.take_due(Instant::now());
+        self.flush_read_cursors(room_ids);
+    }
+
+    fn flush_read_cursors(&self, room_ids: Vec<Uuid>) {
+        for room_id in room_ids {
+            self.service.mark_room_read_task(self.user_id, room_id);
+        }
     }
 
     /// Returns visible messages for the given room.
@@ -392,6 +817,61 @@ impl ChatState {
 
     pub(crate) fn has_overlay(&self) -> bool {
         self.overlay.is_some()
+    }
+
+    pub(crate) fn news_modal(&self) -> Option<&NewsModalState> {
+        self.news_modal.as_ref()
+    }
+
+    pub(crate) fn has_news_modal(&self) -> bool {
+        self.news_modal.is_some()
+    }
+
+    pub(crate) fn close_news_modal(&mut self) {
+        self.news_modal = None;
+    }
+
+    pub(crate) fn image_modal(&self) -> Option<&ImageModalState> {
+        self.image_modal.as_ref()
+    }
+
+    pub(crate) fn has_image_modal(&self) -> bool {
+        self.image_modal.is_some()
+    }
+
+    pub(crate) fn close_image_modal(&mut self) {
+        if let Some(modal) = self.image_modal.as_ref() {
+            self.terminal_image_failed.remove(&modal.message_id);
+        }
+        self.image_modal = None;
+        self.image_modal_capacity = None;
+    }
+
+    pub(crate) fn set_image_modal_capacity(&mut self, capacity: Option<(u16, u16)>) {
+        if let Some(capacity) = capacity {
+            self.image_modal_capacity = Some(capacity);
+        }
+    }
+
+    pub(crate) fn news_modal_url(&self) -> Option<&str> {
+        self.news_modal
+            .as_ref()
+            .map(|modal| modal.payload.url.as_str())
+    }
+
+    pub(crate) fn jump_to_news_modal_article(&mut self) -> bool {
+        let Some(modal) = self.news_modal.take() else {
+            return false;
+        };
+        self.select_news();
+        if let Some(article_id) = modal.article_id {
+            self.news.select_article_by_id(article_id);
+            return true;
+        }
+        if let Some(article_id) = self.news.article_id_by_url(&modal.payload.url) {
+            self.news.select_article_by_id(article_id);
+        }
+        true
     }
 
     pub fn close_overlay(&mut self) {
@@ -417,13 +897,109 @@ impl ChatState {
         std::mem::take(&mut self.requested_mod_modal)
     }
 
+    pub fn take_requested_ultimate_modal(&mut self) -> bool {
+        std::mem::take(&mut self.requested_ultimate_modal)
+    }
+
+    pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
+        self.requested_petname.take()
+    }
+
+    pub fn take_requested_icon_picker(&mut self) -> bool {
+        std::mem::take(&mut self.requested_icon_picker)
+    }
+
+    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String)> {
+        self.requested_open_profile.take()
+    }
+
+    pub fn take_requested_open_sheet(&mut self) -> Option<SheetOpenRequest> {
+        self.requested_open_sheet.take()
+    }
+
     pub fn take_requested_quit(&mut self) -> bool {
         std::mem::take(&mut self.requested_quit)
+    }
+
+    pub fn take_requested_audio_url(&mut self) -> Option<String> {
+        self.requested_audio_url.take()
+    }
+
+    pub fn take_requested_audio_fallback_url(&mut self) -> Option<String> {
+        self.requested_audio_fallback_url.take()
+    }
+
+    pub fn take_requested_brb(&mut self) -> Option<String> {
+        self.requested_brb.take()
+    }
+
+    pub fn take_sent_regular_message(&mut self) -> bool {
+        std::mem::replace(&mut self.sent_regular_message, false)
+    }
+
+    pub fn take_requested_audio_skip(&mut self) -> bool {
+        std::mem::take(&mut self.requested_audio_skip)
+    }
+
+    pub(crate) fn take_requested_voice_command(&mut self) -> Option<VoiceCommand> {
+        self.requested_voice_command.take()
+    }
+
+    pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
+        self.requested_poll_room.take()
+    }
+
+    pub fn create_poll(
+        &self,
+        room_id: Uuid,
+        question: String,
+        options: Vec<String>,
+        duration_secs: i64,
+    ) {
+        self.service
+            .create_poll_task(self.user_id, room_id, question, options, duration_secs);
+    }
+
+    pub fn cast_poll_vote_for_selected_room(&self, option_position: i32) -> bool {
+        let Some(room_id) = self.visible_real_room_id_for_poll() else {
+            return false;
+        };
+        let Some(poll) = self.active_polls.get(&room_id) else {
+            return false;
+        };
+        if !poll
+            .options
+            .iter()
+            .any(|option| option.position == option_position)
+        {
+            return false;
+        }
+        self.service
+            .cast_poll_vote_task(self.user_id, poll.poll.id, option_position);
+        true
+    }
+
+    fn visible_real_room_id_for_poll(&self) -> Option<Uuid> {
+        if self.feeds_selected
+            || self.news_selected
+            || self.notifications_selected
+            || self.discover_selected
+            || self.showcase_selected
+            || self.work_selected
+        {
+            return None;
+        }
+        self.selected_room_id
+    }
+
+    pub fn active_poll_for_room(&self, room_id: Uuid) -> Option<&ActiveChatPoll> {
+        self.active_polls.get(&room_id)
     }
 
     pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
         self.permissions = permissions;
         self.is_admin = permissions.is_admin();
+        self.is_moderator = permissions.is_moderator();
         self.news.set_is_admin(self.is_admin);
         self.showcase.set_is_admin(self.is_admin);
         self.work.set_is_admin(self.is_admin);
@@ -481,6 +1057,7 @@ impl ChatState {
     pub fn focus_message_in_room(&mut self, room_id: Uuid, message_id: Uuid) {
         self.reaction_leader_active = false;
         self.room_jump_active = false;
+        self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
         self.discover_selected = false;
@@ -641,28 +1218,140 @@ impl ChatState {
             .map(|m| m.body.clone())
     }
 
-    pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
-        let message = self.selected_message_in_room(room_id)?;
-        let user_id = message.user_id;
-        let display_name = self
-            .usernames
+    pub fn selected_message_id_in_room(&self, room_id: Uuid) -> Option<Uuid> {
+        self.selected_message_in_room(room_id).map(|m| m.id)
+    }
+
+    pub fn selected_message_is_news_in_room(&self, room_id: Uuid) -> bool {
+        self.selected_message_in_room(room_id)
+            .and_then(|m| parse_news_payload(&m.body))
+            .is_some()
+    }
+
+    pub fn selected_message_has_inline_image_in_room(&self, room_id: Uuid) -> bool {
+        self.selected_message_in_room(room_id)
+            .and_then(|m| inline_image_url_in_body(&m.body))
+            .is_some()
+    }
+
+    /// Display name for a user id with the trim + non-empty +
+    /// `short_user_id` fallback. Single source of truth for chat-author
+    /// labeling — `selected_message_author_in_room`,
+    /// `message_author_in_room`, and the chat-scroll click dispatcher
+    /// all route through this helper.
+    pub fn username_for(&self, user_id: Uuid) -> String {
+        self.usernames
             .get(&user_id)
             .map(|name| name.trim())
             .filter(|name| !name.is_empty())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| short_user_id(user_id));
-        Some((user_id, display_name))
+            .unwrap_or_else(|| short_user_id(user_id))
+    }
+
+    pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
+        let user_id = self.selected_message_in_room(room_id)?.user_id;
+        Some((user_id, self.username_for(user_id)))
+    }
+
+    /// Same shape as `selected_message_author_in_room` but for an arbitrary
+    /// message id — used by mouse hit-testing in the chat scroll.
+    pub fn message_author_in_room(
+        &self,
+        room_id: Uuid,
+        message_id: Uuid,
+    ) -> Option<(Uuid, String)> {
+        let user_id = self.find_message_in_room(room_id, message_id)?.user_id;
+        Some((user_id, self.username_for(user_id)))
+    }
+
+    /// Move the message cursor onto a specific message id in `room_id`. Used
+    /// by mouse hit-testing; no-op if the message is not in the visible tail.
+    /// Mirrors the field writes in `select_message_in_room` (clears the reply
+    /// highlight + reaction-leader transient state, leaves the room selection
+    /// alone). Returns `true` if the selection actually moved.
+    pub fn select_message_by_id_in_room(&mut self, room_id: Uuid, message_id: Uuid) -> bool {
+        if self.find_message_in_room(room_id, message_id).is_none() {
+            return false;
+        }
+        self.reaction_leader_active = false;
+        self.highlighted_message_id = None;
+        let changed = self.selected_message_id != Some(message_id);
+        self.selected_message_id = Some(message_id);
+        changed
+    }
+
+    /// Drop the user into compose mode in `room_id` (if not already) and
+    /// append `@username ` at the textarea cursor. Used by the chat-scroll
+    /// double-click-username gesture. Composer text already in the box is
+    /// preserved.
+    pub fn insert_mention_in_room(&mut self, room_id: Uuid, username: &str) {
+        let trimmed = username.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if !self.composing || self.composer_room_id != Some(room_id) {
+            self.start_composing_in_room(room_id);
+        }
+        // Mirror `ac_confirm`'s pattern: insert a space-terminated mention at
+        // the cursor so subsequent typing flows naturally.
+        self.composer.insert_str(format!("@{trimmed} "));
+        let composing = self.composing;
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
+    }
+
+    pub fn open_selected_news_modal_in_room(&mut self, room_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some((chat_payload, user_id, created)) =
+            self.selected_message_in_room(room_id).and_then(|m| {
+                parse_news_payload(&m.body).map(|payload| (payload, m.user_id, m.created))
+            })
+        else {
+            return false;
+        };
+
+        let (payload, author, created, article_id) = if let Some((payload, author, created, id)) =
+            news_modal_source_from_articles(self.news.all_articles(), &chat_payload.url)
+        {
+            (payload, author, created, Some(id))
+        } else {
+            let author =
+                modal_author_label(self.usernames.get(&user_id).map(String::as_str), user_id);
+            (chat_payload, author, created, None)
+        };
+        let relative = crate::app::common::primitives::format_relative_time(created);
+        let meta = format!(
+            "{author} - {relative} - {}",
+            created.format("%a %Y-%m-%d %H:%M UTC")
+        );
+        self.news_modal = Some(NewsModalState {
+            payload,
+            meta,
+            article_id,
+        });
+        true
+    }
+
+    pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some((message_id, url)) = self.selected_message_in_room(room_id).and_then(|message| {
+            inline_image_url_in_body(&message.body).map(|url| (message.id, url))
+        }) else {
+            return false;
+        };
+        self.terminal_image_failed.remove(&message_id);
+        self.image_modal = Some(ImageModalState { message_id, url });
+        true
     }
 
     pub fn react_to_selected_message_in_room(
         &mut self,
         room_id: Uuid,
-        kind: i16,
+        icon: String,
     ) -> Option<Banner> {
         self.reaction_leader_active = false;
         let message = self.selected_message_in_room(room_id)?;
         self.service
-            .toggle_message_reaction_task(self.user_id, message.id, kind);
+            .toggle_message_reaction_task(self.user_id, message.id, icon);
         None
     }
 
@@ -672,7 +1361,7 @@ impl ChatState {
             return Some(Banner::error("Admin only: pin messages"));
         }
         self.service
-            .toggle_message_pin_task(message.id, self.is_admin);
+            .toggle_message_pin_task(message.id, self.is_admin, self.pinned_tx.clone());
         let label = if message.pinned {
             "Unpinning message..."
         } else {
@@ -692,60 +1381,161 @@ impl ChatState {
         room_slug_for(&self.rooms, room_id)
     }
 
-    fn selected_room_slug(&self) -> Option<String> {
-        self.selected_room().and_then(|room| room.slug.clone())
-    }
-
-    fn selected_room(&self) -> Option<&ChatRoom> {
-        let room_id = self.selected_room_id?;
+    fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
         self.rooms
             .iter()
             .find(|(room, _)| room.id == room_id)
             .map(|(room, _)| room)
     }
 
-    pub fn general_room_id(&self) -> Option<Uuid> {
-        self.general_room_id.or_else(|| {
+    /// Enabled voice channel for a chat room, if one exists.
+    pub(crate) fn room_voice_channel_id(&self, room_id: Uuid) -> Option<Uuid> {
+        self.voice_channels_by_room_id
+            .get(&room_id)
+            .filter(|channel| channel.enabled)
+            .map(|channel| channel.id)
+    }
+
+    /// Whether the room the composer is currently in owns the room-scoped
+    /// command `name`. Room-scoped command branches in `submit_composer` guard
+    /// on this so they only fire in their owning room (and fall through to the
+    /// "unknown command" handler elsewhere).
+    fn composer_room_owns_command(&self, command: RoomScopedCommand) -> bool {
+        self.composer_room_id
+            .and_then(|id| self.room_by_id(id))
+            .is_some_and(|room| room_owns_command(room, command.name()))
+    }
+
+    fn room_membership_command_target(&self) -> Option<Uuid> {
+        room_membership_command_target(self.composer_room_id, self.selected_slot_state())
+    }
+
+    fn selected_slot_state(&self) -> SelectedRoomSlotState {
+        SelectedRoomSlotState {
+            selected_room_id: self.selected_room_id,
+            feeds_selected: self.feeds_selected,
+            news_selected: self.news_selected,
+            notifications_selected: self.notifications_selected,
+            discover_selected: self.discover_selected,
+            showcase_selected: self.showcase_selected,
+            work_selected: self.work_selected,
+        }
+    }
+
+    /// The room slot currently selected, if any.
+    fn current_slot(&self) -> Option<RoomSlot> {
+        current_slot_from_state(self.selected_slot_state())
+    }
+
+    /// Collapse/expand a room-list section. If collapsing hides the currently
+    /// selected room, selection snaps to the first still-visible slot so the
+    /// cursor never ends up stranded inside a hidden section.
+    pub(crate) fn toggle_section(&mut self, section: RoomSection) {
+        if !self.collapsed_sections.remove(&section) {
+            self.collapsed_sections.insert(section);
+        }
+        let order = self.visual_order();
+        let still_visible = match self.current_slot() {
+            Some(slot) => order.contains(&slot),
+            None => true,
+        };
+        if !still_visible && let Some(&first) = order.first() {
+            self.select_room_slot(first);
+        }
+    }
+
+    fn selected_synthetic_entry_label(&self) -> Option<&'static str> {
+        if self.news_selected {
+            Some("news")
+        } else if self.feeds_selected {
+            Some("rss")
+        } else if self.notifications_selected {
+            Some("mentions")
+        } else if self.discover_selected {
+            Some("browse rooms")
+        } else if self.showcase_selected {
+            Some("showcase")
+        } else if self.work_selected {
+            Some("work")
+        } else {
+            None
+        }
+    }
+
+    fn leave_selected_synthetic_entry(&mut self) -> Option<&'static str> {
+        let label = self.selected_synthetic_entry_label()?;
+        self.feeds_selected = false;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+
+        if self.selected_room_id.is_none() {
+            self.selected_room_id = self
+                .rooms
+                .iter()
+                .find(|(room, _)| is_chat_list_room(room))
+                .map(|(room, _)| room.id);
+        }
+        if let Some(room_id) = self.selected_room_id {
+            self.visible_room_id = Some(room_id);
+            self.mark_room_read(room_id);
+            self.request_room_tail(room_id);
+        }
+
+        Some(label)
+    }
+
+    pub fn lounge_room_id(&self) -> Option<Uuid> {
+        self.lounge_room_id.or_else(|| {
             self.rooms
                 .iter()
-                .find(|(room, _)| room.kind == "general" && room.slug.as_deref() == Some("general"))
+                .find(|(room, _)| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
                 .map(|(room, _)| room.id)
         })
     }
 
-    /// Flatten joined rooms into the pick-list the settings modal shows in
-    /// its Favorites tab. Labels are pre-resolved here (DMs → `@peer`, rooms
-    /// → `#slug`, language rooms → `#lang-xx`) so the modal stays ignorant of
-    /// `ChatRoom` internals.
-    pub fn favorite_room_options(&self) -> Vec<crate::app::settings_modal::state::RoomOption> {
-        use crate::app::settings_modal::state::RoomOption;
-        self.rooms
-            .iter()
-            .filter(|(room, _)| is_chat_list_room(room))
-            .map(|(room, _)| {
-                let label = if room.kind == "dm" {
-                    self.dm_display_name(room)
-                } else if let Some(slug) = room.slug.as_deref().filter(|s| !s.is_empty()) {
-                    format!("#{slug}")
-                } else if let Some(code) = room.language_code.as_deref() {
-                    format!("#lang-{code}")
-                } else {
-                    format!("#{}", room.kind)
-                };
-                RoomOption { id: room.id, label }
-            })
-            .collect()
+    pub(crate) fn set_favorite_room_ids(&mut self, favorite_room_ids: Vec<Uuid>) {
+        self.favorite_room_ids = favorite_room_ids;
     }
 
-    fn dm_display_name(&self, room: &ChatRoom) -> String {
-        dm_sort_key(room, self.user_id, &self.usernames)
+    pub(crate) fn favorite_room_ids(&self) -> &[Uuid] {
+        &self.favorite_room_ids
+    }
+
+    pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
+        if self.feeds_selected
+            || self.news_selected
+            || self.notifications_selected
+            || self.discover_selected
+            || self.showcase_selected
+            || self.work_selected
+        {
+            return None;
+        }
+        let room_id = self.selected_room_id?;
+        self.rooms
+            .iter()
+            .any(|(room, _)| room.id == room_id && is_chat_list_room(room))
+            .then_some(room_id)
     }
 
     /// Build the flat visual navigation order.
-    /// Order: core (general, announcements) → news → showcases → work
-    /// → mentions → discover → public rooms (alpha) → private rooms (alpha) → DMs
+    /// Order matches the cozy rail exactly: favorites, core/mentions/news/rss,
+    /// channels, updates, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames)
+        visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &self.rooms,
+            user_id: self.user_id,
+            usernames: &self.usernames,
+            unread_counts: &self.unread_counts,
+            room_last_message_at: &self.room_last_message_at,
+            feeds_available: self.feeds.has_feeds(),
+            favorite_room_ids: &self.favorite_room_ids,
+            collapsed_sections: &self.collapsed_sections,
+            ignored_user_ids: &self.ignored_user_ids,
+        })
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -770,6 +1560,11 @@ impl ChatState {
         self.highlighted_message_id = None;
 
         match slot {
+            RoomSlot::Feeds => {
+                let changed = !self.feeds_selected;
+                self.select_feeds();
+                changed
+            }
             RoomSlot::News => {
                 let changed = !self.news_selected;
                 self.select_news();
@@ -803,12 +1598,14 @@ impl ChatState {
                 {
                     return false;
                 }
-                let changed = self.news_selected
+                let changed = self.feeds_selected
+                    || self.news_selected
                     || self.notifications_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
                     || self.selected_room_id != Some(next_id);
+                self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
                 self.discover_selected = false;
@@ -852,7 +1649,9 @@ impl ChatState {
             return false;
         }
 
-        let current_item = if self.notifications_selected {
+        let current_item = if self.feeds_selected {
+            RoomSlot::Feeds
+        } else if self.notifications_selected {
             RoomSlot::Notifications
         } else if self.discover_selected {
             RoomSlot::Discover
@@ -940,6 +1739,13 @@ impl ChatState {
         self.overlay = Some(Overlay::new(title, lines));
     }
 
+    fn open_members_overlay(&mut self, title: &str, members: Vec<RoomMemberListItem>) {
+        self.overlay = Some(Overlay::styled(
+            title,
+            format_member_overlay_lines(&members, self.active_users.as_ref()),
+        ));
+    }
+
     fn reaction_owner_lines(&self, owners: &[ChatMessageReactionOwners]) -> Vec<String> {
         if owners.is_empty() {
             return vec!["No reactions yet".to_string()];
@@ -952,12 +1758,7 @@ impl ChatState {
             }
             let count = reaction.user_ids.len();
             let noun = if count == 1 { "reaction" } else { "reactions" };
-            lines.push(format!(
-                "{} {} {}",
-                reaction_label(reaction.kind),
-                count,
-                noun
-            ));
+            lines.push(format!("{} {} {}", reaction.icon, count, noun));
 
             if reaction.user_ids.is_empty() {
                 lines.push("  unknown".to_string());
@@ -1009,43 +1810,52 @@ impl ChatState {
         labels
     }
 
+    fn friend_list_lines(&self) -> Vec<String> {
+        if self.friend_user_ids.is_empty() {
+            return vec!["Friends list is empty".to_string()];
+        }
+
+        let active_users = self.active_users.as_ref().map(|users| users.lock_recover());
+        let mut labels: Vec<String> = self
+            .friend_user_ids
+            .iter()
+            .map(|id| {
+                let username = self.usernames.get(id).cloned().or_else(|| {
+                    active_users
+                        .as_ref()
+                        .and_then(|users| users.get(id))
+                        .map(|user| user.username.clone())
+                });
+                let username =
+                    username.unwrap_or_else(|| format!("<unknown:{}>", short_user_id(*id)));
+                if active_users
+                    .as_ref()
+                    .is_some_and(|users| users.contains_key(id))
+                {
+                    format!("★ @{username} online")
+                } else {
+                    format!("★ @{username}")
+                }
+            })
+            .collect();
+        labels.sort();
+        labels
+    }
+
     fn active_user_lines(&self) -> Vec<String> {
-        format_active_user_lines(self.active_users.as_ref())
+        format_active_user_lines(self.active_users.as_ref(), &self.friend_user_ids)
     }
 
     pub(crate) fn open_active_users_overlay(&mut self) {
         self.open_overlay("Active Users", self.active_user_lines());
     }
 
-    pub fn submit_composer(&mut self, keep_open: bool, from_dashboard: bool) -> Option<Banner> {
+    pub fn submit_composer(&mut self, keep_open: bool, _from_dashboard: bool) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
-
-        // Room-membership commands are intentionally chat-page-only: they
-        // operate on `selected_room_id`, which the dashboard never drives.
-        // Rather than silently target the wrong room, refuse here and point
-        // the user at page 2.
-        if from_dashboard && parse_leave_command(&body) {
-            self.clear_composer_after_submit();
-            return Some(Banner::error(
-                "open the chat page (press 2) to leave a room",
-            ));
-        }
-        if from_dashboard && parse_user_command(&body, "/invite").is_some() {
-            self.clear_composer_after_submit();
-            return Some(Banner::error(
-                "open the chat page (press 2) to invite a user",
-            ));
-        }
 
         if body.trim() == "/binds" {
             self.clear_composer_after_submit();
             self.requested_help_topic = Some(HelpTopic::Chat);
-            return None;
-        }
-
-        if body.trim() == "/music" {
-            self.clear_composer_after_submit();
-            self.requested_help_topic = Some(HelpTopic::Music);
             return None;
         }
 
@@ -1058,6 +1868,64 @@ impl ChatState {
         if body.trim() == "/mod" {
             self.clear_composer_after_submit();
             self.requested_mod_modal = true;
+            return None;
+        }
+
+        if body.trim() == "/ultimate" {
+            self.clear_composer_after_submit();
+            self.requested_ultimate_modal = true;
+            return None;
+        }
+
+        if body.trim() == "/icons" {
+            self.clear_composer_after_submit();
+            self.requested_icon_picker = true;
+            return None;
+        }
+
+        if body.trim() == "/poll" {
+            let room_id = self.visible_real_room_id_for_poll();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Open a real room before starting a poll"));
+            };
+            self.service.check_poll_start_task(self.user_id, room_id);
+            return Some(Banner::success("Checking poll availability..."));
+        }
+
+        if let Some(parsed) = parse_petname_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                PetnameParse::Invalid => {
+                    return Some(Banner::error(
+                        "Usage: /petname <name> (up to 24 chars), or /petname clear",
+                    ));
+                }
+                PetnameParse::Request(request) => {
+                    self.requested_petname = Some(request);
+                    return None;
+                }
+            }
+        }
+
+        if let Some(target) = parse_user_command(&body, "/profile") {
+            self.clear_composer_after_submit();
+            match target {
+                None => {
+                    let username = self
+                        .usernames
+                        .get(&self.user_id)
+                        .map(|name| name.trim())
+                        .filter(|name| !name.is_empty())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| short_user_id(self.user_id));
+                    self.requested_open_profile = Some((self.user_id, username));
+                }
+                Some(name) => {
+                    self.service
+                        .open_profile_by_username_task(self.user_id, name.to_string());
+                }
+            }
             return None;
         }
 
@@ -1074,24 +1942,153 @@ impl ChatState {
             return None;
         }
 
+        if let Some(command) = match body.trim() {
+            "/voice" => Some(VoiceCommand::Join),
+            "/mute" => Some(VoiceCommand::Mute),
+            _ => None,
+        } {
+            self.clear_composer_after_submit();
+            self.requested_voice_command = Some(command);
+            return None;
+        }
+
+        if body.trim() == "/audio skip" {
+            self.clear_composer_after_submit();
+            if !self.is_admin && !self.is_moderator {
+                return Some(Banner::error("/audio is staff-only"));
+            }
+            self.requested_audio_skip = true;
+            return None;
+        }
+
+        if let Some(url) = body.trim().strip_prefix("/audio fallback ") {
+            let url = url.trim().to_string();
+            self.clear_composer_after_submit();
+            if !self.is_admin && !self.is_moderator {
+                return Some(Banner::error("/audio is staff-only"));
+            }
+            if url.is_empty() {
+                return Some(Banner::error("Usage: /audio fallback <youtube-url>"));
+            }
+            self.requested_audio_fallback_url = Some(url);
+            return None;
+        }
+
+        if let Some(url) = body.trim().strip_prefix("/audio ") {
+            let url = url.trim().to_string();
+            self.clear_composer_after_submit();
+            if !self.is_admin && !self.is_moderator {
+                return Some(Banner::error("/audio is staff-only"));
+            }
+            if url.is_empty() {
+                return Some(Banner::error("Usage: /audio <youtube-url>"));
+            }
+            self.requested_audio_url = Some(url);
+            return None;
+        }
+
+        if let Some(url) = body.trim().strip_prefix("/upload ") {
+            let url = url.trim().to_string();
+            if url.is_empty() {
+                return Some(Banner::error("Usage: /upload <url>"));
+            }
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Some(Banner::error("/upload: URL must start with http(s)://"));
+            }
+            if !crate::app::files::image_upload::is_file_upload_configured() {
+                return Some(Banner::error("File uploads are disabled"));
+            }
+            let room_id = self.upload_target_room_id();
+            self.clear_composer_after_submit();
+            self.requested_url_upload = Some(PendingUrlUpload { url, room_id });
+            return None;
+        }
+
+        if body.trim() == "/paste-image" {
+            if !crate::app::files::image_upload::is_file_upload_configured() {
+                return Some(Banner::error("File uploads are disabled"));
+            }
+            self.clear_expired_pending_clipboard_image_upload();
+            if self.pending_clipboard_image_upload.is_some()
+                || self.requested_clipboard_image_upload.is_some()
+            {
+                return Some(Banner::error(
+                    "A clipboard image request is already in progress",
+                ));
+            }
+            let room_id = self.upload_target_room_id();
+            self.clear_composer_after_submit();
+            self.requested_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+            return None;
+        }
+
         if body.trim() == "/active" {
             self.clear_composer_after_submit();
             self.open_active_users_overlay();
             return None;
         }
 
+        if let Some(msg) = parse_brb_command(&body) {
+            let chat_body = if msg.is_empty() {
+                "🌙 brb".to_string()
+            } else {
+                format!("🌙 brb — {msg}")
+            };
+            let room_id = self.composer_room_id;
+            if let Some(room_id) = room_id {
+                self.service
+                    .send_message_with_reply_task(super::svc::SendMessageTask {
+                        user_id: self.user_id,
+                        room_id,
+                        room_slug: self.room_slug(room_id),
+                        body: chat_body,
+                        reply_to_message_id: None,
+                        request_id: Uuid::now_v7(),
+                        is_admin: self.is_admin,
+                    });
+            }
+            self.requested_brb = Some(msg);
+            self.clear_composer_after_submit();
+            return None;
+        }
+
+        if body.trim() == "/friends" {
+            self.clear_composer_after_submit();
+            self.open_overlay("Friends", self.friend_list_lines());
+            return None;
+        }
+
         if body.trim() == "/members" {
-            // Resolve the target room BEFORE clearing the composer —
-            // `clear_composer_after_submit` nulls `composer_room_id`, so
-            // reading after would always fall back to the chat-page
-            // `selected_room_id` and miss the dashboard's active favorite.
-            let target = self.composer_room_id.or(self.selected_room_id);
+            // Resolve the target room BEFORE clearing the composer.
+            // Synthetic entries can retain a stale `selected_room_id`, so
+            // membership commands must go through the shared resolver.
+            let target = self.room_membership_command_target();
             self.clear_composer_after_submit();
             let Some(room_id) = target else {
-                return Some(Banner::error("no room selected"));
+                return Some(Banner::error("No member-list room selected"));
             };
             self.service.list_room_members_task(self.user_id, room_id);
             return None;
+        }
+
+        if let Some(parsed) = parse_gift_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                GiftParse::Invalid => {
+                    return Some(Banner::error("Usage: /gift @user <amount>"));
+                }
+                GiftParse::Gift {
+                    username,
+                    amount,
+                    message,
+                } => {
+                    self.service
+                        .gift_chips_task(self.user_id, username.clone(), amount, message);
+                    return Some(Banner::success(&format!(
+                        "Sending {amount} chips to @{username}..."
+                    )));
+                }
+            }
         }
 
         if body.trim() == "/list" {
@@ -1120,6 +2117,26 @@ impl ChatState {
             }
             return None;
         }
+        if let Some(target) = parse_user_command(&body, "/friend") {
+            self.clear_composer_after_submit();
+            match target {
+                None => self.open_overlay("Friends", self.friend_list_lines()),
+                Some(name) => self
+                    .service
+                    .friend_user_task(self.user_id, name.to_string()),
+            }
+            return None;
+        }
+        if let Some(target) = parse_user_command(&body, "/unfriend") {
+            self.clear_composer_after_submit();
+            match target {
+                None => self.open_overlay("Friends", self.friend_list_lines()),
+                Some(name) => self
+                    .service
+                    .unfriend_user_task(self.user_id, name.to_string()),
+            }
+            return None;
+        }
 
         if let Some(target) = parse_dm_command(&body) {
             self.service.start_dm_task(self.user_id, target.to_string());
@@ -1128,13 +2145,19 @@ impl ChatState {
         }
 
         if let Some(room) = parse_room_command(&body, "/public") {
+            if user_created_channel_name_too_long(room) {
+                return Some(user_created_channel_name_length_error());
+            }
+            self.clear_composer_after_submit();
             self.service
                 .open_public_room_task(self.user_id, room.to_string());
-            self.clear_composer_after_submit();
             return Some(Banner::success(&format!("Opening public #{room}...")));
         }
 
         if let Some(room) = parse_room_command(&body, "/private") {
+            if user_created_channel_name_too_long(room) {
+                return Some(user_created_channel_name_length_error());
+            }
             self.clear_composer_after_submit();
             self.service
                 .create_private_room_task(self.user_id, room.to_string());
@@ -1142,9 +2165,10 @@ impl ChatState {
         }
 
         if let Some(target) = parse_user_command(&body, "/invite") {
+            let room_id = self.room_membership_command_target();
             self.clear_composer_after_submit();
-            let Some(room_id) = self.selected_room_id else {
-                return Some(Banner::error("No room selected"));
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No inviteable room selected"));
             };
             let Some(target) = target else {
                 return Some(Banner::error("Usage: /invite @user"));
@@ -1155,14 +2179,19 @@ impl ChatState {
         }
 
         if parse_leave_command(&body) {
+            let target = self.room_membership_command_target();
+            let slug = target
+                .and_then(|room_id| self.room_slug(room_id))
+                .unwrap_or_else(|| "room".to_string());
             self.clear_composer_after_submit();
-            if let Some(room_id) = self.selected_room_id {
-                let slug = self.selected_room_slug().unwrap_or_default();
+            if let Some(room_id) = target {
                 self.service
                     .leave_room_task(self.user_id, room_id, slug.clone());
                 return Some(Banner::success(&format!("Leaving #{slug}...")));
+            } else if let Some(label) = self.leave_selected_synthetic_entry() {
+                return Some(Banner::success(&format!("Left #{label}")));
             } else {
-                return Some(Banner::error("No room selected"));
+                return Some(Banner::error("No leaveable room selected"));
             }
         }
 
@@ -1195,6 +2224,95 @@ impl ChatState {
             return Some(Banner::success(&format!("Filling #{slug}...")));
         }
 
+        if let Some(parsed) = parse_roll_command(&body) {
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let specs = match parsed {
+                RollParse::Invalid => {
+                    return Some(Banner::error("Usage: /roll [NdM ...]"));
+                }
+                RollParse::Specs(specs) => specs,
+            };
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Roll from inside a room"));
+            };
+            let rolls = roll_dice(&specs, &mut OsRng);
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: format_roll_result(&specs, &rolls),
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
+        }
+
+        if let Some(kind) = parse_cup_command(&body) {
+            // Snapshot the composer's room before `clear_composer_after_submit`
+            // wipes it — otherwise the send below has no room to target and
+            // the ritual silently no-ops.
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let room_id = room_id?;
+            let variant = self.next_cup_variant;
+            self.next_cup_variant = (variant + 1) % CUP_VARIANT_COUNT;
+            let art = cup_art(kind, variant);
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: art,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
+        }
+
+        if let Some(parsed) = parse_me_command(&body) {
+            let Some(action_body) = parsed else {
+                self.clear_composer_after_submit();
+                return Some(Banner::error("Usage: /me <action>"));
+            };
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Send actions from inside a room"));
+            };
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: action_body,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
+        }
+
+        if let Some(target) = parse_user_command(&body, "/sheet")
+            && self.composer_room_owns_command(RoomScopedCommand::Sheet)
+        {
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let room_id = room_id?;
+            self.service
+                .open_sheet_task(self.user_id, room_id, target.map(ToOwned::to_owned));
+            return None;
+        }
+
         if let Some(command) = unknown_slash_command(&body) {
             self.clear_composer_after_submit();
             return Some(Banner::error(&format!("Unknown command: {command}")));
@@ -1210,6 +2328,7 @@ impl ChatState {
             } else {
                 body
             };
+            self.sent_regular_message = true;
             if let Some(message_id) = self.edited_message_id {
                 self.service.edit_message_task(
                     self.user_id,
@@ -1266,6 +2385,10 @@ impl ChatState {
         self.composer.insert_char(ch);
     }
 
+    pub fn composer_push_str(&mut self, s: &str) {
+        self.composer.insert_str(s);
+    }
+
     pub fn composer_cursor_left(&mut self) {
         self.composer.move_cursor(CursorMove::Back);
     }
@@ -1282,12 +2405,66 @@ impl ChatState {
         self.composer.move_cursor(CursorMove::WordForward);
     }
 
+    pub fn composer_cursor_home(&mut self) {
+        self.composer.move_cursor(CursorMove::Head);
+    }
+
+    pub fn composer_cursor_end(&mut self) {
+        self.composer.move_cursor(CursorMove::End);
+    }
+
     pub fn composer_cursor_up(&mut self) {
         self.composer.move_cursor(CursorMove::Up);
     }
 
     pub fn composer_cursor_down(&mut self) {
         self.composer.move_cursor(CursorMove::Down);
+    }
+
+    /// Move the composer cursor to the screen cell the user clicked inside the
+    /// composer text area. `rect` is the composer block rect captured during
+    /// render (`last_composer_rect`, including the top/bottom border rows);
+    /// `x`/`y` are 0-based screen coordinates from the mouse event.
+    ///
+    /// The text is drawn one row below the top border and inset by one column
+    /// on each side, mirroring `draw_composer_block` (which renders into
+    /// `block.inner(TOP|BOTTOM)` then `horizontal_inset(1)`). We reuse the same
+    /// word-wrap model the height estimator uses (`build_composer_rows`) so the
+    /// clicked row lines up with what is painted, then translate the wrapped
+    /// row + display column into a logical `(line, char)` cursor for `Jump`,
+    /// which clamps anything past the end of the text.
+    ///
+    /// Known limitation: `build_composer_rows` wraps by char count and
+    /// hard-splits long words, while the widget's `WrapMode::Word` wraps by
+    /// display width and never splits a word wider than the bar. The two
+    /// models agree on typical ASCII prose, but for multi-row CJK/emoji
+    /// drafts or a pasted token longer than the composer width (e.g. a URL)
+    /// the row boundaries diverge and the caret can land on a neighboring
+    /// row. The same mismatch already affects composer height estimation;
+    /// the real fix is a screen-to-cursor API on `ratatui-textarea` itself.
+    pub(crate) fn composer_click_to_cursor(&mut self, rect: Rect, x: u16, y: u16) {
+        let text_x = rect.x.saturating_add(1);
+        let text_y = rect.y.saturating_add(1);
+        let text_width = rect.width.saturating_sub(2) as usize;
+        if text_width == 0 {
+            return;
+        }
+        // Clicks on the top border or left padding clamp to the first row /
+        // column 0 rather than bailing, so edge clicks still land sensibly.
+        let viewport_top = self.last_composer_viewport_top.get().unwrap_or(0);
+        let rel_row = viewport_top.saturating_add(y.saturating_sub(text_y) as usize);
+        let rel_col = x.saturating_sub(text_x) as usize;
+
+        let text = self.composer.lines().join("\n");
+        let rows = composer::build_composer_rows(&text, text_width);
+        let Some(row) = rows.get(rel_row.min(rows.len().saturating_sub(1))) else {
+            return;
+        };
+        let within = char_offset_for_display_col(&row.text, rel_col);
+        let global_char = row.start + within;
+        let (line, col) = global_char_to_line_col(&text, global_char);
+        self.composer
+            .move_cursor(CursorMove::Jump(line as u16, col as u16));
     }
 
     pub fn composer_paste(&mut self) {
@@ -1311,27 +2488,397 @@ impl ChatState {
         self.composer.input(input);
     }
 
+    pub fn start_image_upload(&mut self, bytes: Vec<u8>) -> Option<Banner> {
+        self.start_image_upload_in_room(bytes, self.upload_target_room_id())
+    }
+
+    pub(crate) fn start_image_upload_in_room(
+        &mut self,
+        bytes: Vec<u8>,
+        room_id: Option<Uuid>,
+    ) -> Option<Banner> {
+        let Some(mime) = crate::app::files::image_upload::detect_image_mime(&bytes) else {
+            return Some(Banner::error("Unsupported image type"));
+        };
+        if !crate::app::files::image_upload::is_file_upload_configured() {
+            return Some(Banner::error("File uploads are disabled"));
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Some(banner) = self.begin_image_upload(room_id, rx) {
+            return Some(banner);
+        }
+        let mime = mime.to_string();
+
+        tokio::spawn(async move {
+            let result = crate::app::files::image_upload::upload_image_bytes(bytes, &mime)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+
+        None
+    }
+
+    pub(crate) fn upload_target_room_id(&self) -> Option<Uuid> {
+        self.composer_room_id
+            .or(self.visible_room_id)
+            .or(self.selected_room_id)
+    }
+
+    pub(crate) fn begin_image_upload(
+        &mut self,
+        room_id: Option<Uuid>,
+        rx: tokio::sync::oneshot::Receiver<Result<String, String>>,
+    ) -> Option<Banner> {
+        if self.image_upload_pending {
+            return Some(Banner::error("An image upload is already in progress"));
+        }
+
+        if !self.is_admin
+            && let Some(last) = self.last_image_upload_at
+            && last.elapsed() < std::time::Duration::from_secs(30)
+        {
+            let wait = 30 - last.elapsed().as_secs();
+            return Some(Banner::error(&format!(
+                "Please wait {}s before uploading another image",
+                wait
+            )));
+        }
+
+        self.image_upload_rx = Some(rx);
+        self.image_upload_pending = true;
+        self.image_upload_target_room_id = room_id;
+        self.last_image_upload_at = Some(std::time::Instant::now());
+        None
+    }
+
+    pub(crate) fn take_image_upload_target_room_id(&mut self) -> Option<Uuid> {
+        self.image_upload_target_room_id.take()
+    }
+
+    pub(crate) fn take_requested_url_upload(&mut self) -> Option<PendingUrlUpload> {
+        self.requested_url_upload.take()
+    }
+
+    pub(crate) fn take_requested_clipboard_image_upload(
+        &mut self,
+    ) -> Option<PendingClipboardImageUpload> {
+        self.requested_clipboard_image_upload.take()
+    }
+
+    pub(crate) fn begin_pending_clipboard_image_upload(&mut self, room_id: Option<Uuid>) {
+        self.pending_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+    }
+
+    pub(crate) fn take_pending_clipboard_image_upload(
+        &mut self,
+    ) -> Option<PendingClipboardImageUpload> {
+        self.pending_clipboard_image_upload.take()
+    }
+
+    pub(crate) fn clear_pending_clipboard_image_upload(&mut self) {
+        self.pending_clipboard_image_upload = None;
+    }
+
+    fn clear_expired_pending_clipboard_image_upload(&mut self) -> bool {
+        if self
+            .pending_clipboard_image_upload
+            .as_ref()
+            .is_some_and(PendingClipboardImageUpload::is_expired)
+        {
+            self.pending_clipboard_image_upload = None;
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn expire_pending_clipboard_image_upload(&mut self) -> Option<Banner> {
+        if self.clear_expired_pending_clipboard_image_upload() {
+            return Some(Banner::error("Clipboard image request timed out"));
+        }
+        None
+    }
+
+    pub(crate) fn poll_image_upload(&mut self) -> Option<Result<String, String>> {
+        let rx = self.image_upload_rx.as_mut()?;
+        match rx.try_recv() {
+            Ok(result) => {
+                self.image_upload_rx = None;
+                self.image_upload_pending = false;
+                Some(result)
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                self.image_upload_rx = None;
+                self.image_upload_pending = false;
+                Some(Err("Upload cancelled".to_string()))
+            }
+        }
+    }
+
+    pub(crate) fn poll_inline_images(&mut self, settings: InlineImageRenderSettings) {
+        if settings != self.inline_image_render_settings {
+            self.clear_inline_image_previews();
+            self.inline_image_render_settings = settings;
+        }
+
+        let Some(rx) = self.inline_image_rx.as_mut() else {
+            return;
+        };
+        let now = Instant::now();
+        let mut completed = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            completed.push(result);
+        }
+
+        let mut received_ids = Vec::new();
+        for (msg_id, completed_settings, result) in completed {
+            if completed_settings != settings {
+                continue;
+            }
+            self.inline_image_requested.remove(&msg_id);
+            match result {
+                Ok(lines) => {
+                    self.inline_image_failures.remove(&msg_id);
+                    self.inline_image_cache.insert(msg_id, lines);
+                }
+                Err(error) => {
+                    let attempts = self
+                        .inline_image_failures
+                        .get(&msg_id)
+                        .map(|failure| failure.attempts)
+                        .unwrap_or(0)
+                        .saturating_add(1);
+                    let next_retry_at = now + inline_image_retry_delay(attempts);
+                    self.inline_image_failures.insert(
+                        msg_id,
+                        InlineImageFailure {
+                            attempts,
+                            next_retry_at,
+                        },
+                    );
+                    tracing::trace!(
+                        message_id = %msg_id,
+                        attempts,
+                        error,
+                        "inline image render failed"
+                    );
+                }
+            }
+            received_ids.push(msg_id);
+        }
+        for msg_id in received_ids {
+            self.track_inline_image_id(msg_id);
+        }
+
+        // Request missing images for currently visible room
+        let Some(room_id) = self.visible_room_id else {
+            return;
+        };
+        let Some(tx) = self.inline_image_tx.clone() else {
+            return;
+        };
+
+        let messages = self.messages_for_room(room_id);
+        if messages.is_empty() {
+            return;
+        }
+
+        let requests = inline_image_request_candidates(
+            messages,
+            &self.inline_image_requested,
+            &self.inline_image_cache,
+            &self.inline_image_failures,
+            now,
+        );
+
+        for (msg_id, url) in requests {
+            self.inline_image_requested.insert(msg_id);
+            self.track_inline_image_id(msg_id);
+            if !url.is_empty() {
+                let tx_clone = tx.clone();
+                tokio::spawn(async move {
+                    let result = crate::app::files::inline_image::fetch_and_render_image(
+                        url,
+                        INLINE_IMAGE_MAX_WIDTH,
+                        INLINE_IMAGE_MAX_ROWS,
+                        settings,
+                    )
+                    .await
+                    .map_err(|e| e.to_string());
+                    let _ = tx_clone.send((msg_id, settings, result));
+                });
+            }
+        }
+    }
+
+    pub(crate) fn poll_terminal_images(&mut self) {
+        let Some(rx) = self.terminal_image_rx.as_mut() else {
+            return;
+        };
+
+        let mut completed = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            completed.push(result);
+        }
+
+        for (msg_id, result) in completed {
+            self.terminal_image_requested.remove(&msg_id);
+            match result {
+                Ok(image) => {
+                    self.terminal_image_failed.remove(&msg_id);
+                    self.terminal_image_cache.insert(msg_id, image);
+                }
+                Err(error) => {
+                    self.terminal_image_failed.insert(msg_id);
+                    tracing::trace!(
+                        message_id = %msg_id,
+                        error,
+                        "terminal image render failed"
+                    );
+                }
+            }
+            self.track_inline_image_id(msg_id);
+        }
+    }
+
+    pub(crate) fn request_image_modal_terminal_image(
+        &mut self,
+        protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
+    ) {
+        let Some(protocol) = protocol else {
+            return;
+        };
+        let Some(modal) = self.image_modal.as_ref() else {
+            return;
+        };
+        let msg_id = modal.message_id;
+        // Sixel has no terminal-side scaling, so the encode must fit the
+        // modal's image area or the payload is dropped at draw time. The
+        // capacity is reported back from the previous frame's draw; until it
+        // arrives (one frame after the modal opens), hold off fetching.
+        let sixel = protocol == crate::app::files::terminal_image::TerminalImageProtocol::Sixel;
+        let (max_cols, max_rows) = if sixel {
+            let Some((cap_cols, cap_rows)) = self.image_modal_capacity else {
+                return;
+            };
+            (
+                TERMINAL_IMAGE_MAX_COLS.min(u32::from(cap_cols)),
+                TERMINAL_IMAGE_MAX_ROWS.min(u32::from(cap_rows)),
+            )
+        } else {
+            (TERMINAL_IMAGE_MAX_COLS, TERMINAL_IMAGE_MAX_ROWS)
+        };
+        let cached_fits = self.terminal_image_cache.get(&msg_id).is_some_and(|image| {
+            image.supports_protocol(protocol)
+                && (!sixel
+                    || (u32::from(image.display_cols) <= max_cols
+                        && u32::from(image.display_rows) <= max_rows))
+        });
+        if cached_fits
+            || self.terminal_image_requested.contains(&msg_id)
+            || self.terminal_image_failed.contains(&msg_id)
+        {
+            return;
+        }
+        self.terminal_image_cache.remove(&msg_id);
+        let Some(tx) = self.terminal_image_tx.clone() else {
+            return;
+        };
+
+        let url = modal.url.clone();
+        self.terminal_image_requested.insert(msg_id);
+        self.track_inline_image_id(msg_id);
+        tokio::spawn(async move {
+            let result = crate::app::files::terminal_image::fetch_terminal_image(
+                url, max_cols, max_rows, protocol,
+            )
+            .await
+            .map_err(|e| e.to_string());
+            let _ = tx.send((msg_id, result));
+        });
+    }
+
+    pub(crate) fn terminal_image_for_message(
+        &self,
+        message_id: Uuid,
+    ) -> Option<&crate::app::files::terminal_image::TerminalImageData> {
+        self.terminal_image_cache.get(&message_id)
+    }
+
+    pub(crate) fn clear_inline_image_previews(&mut self) {
+        self.inline_image_cache.clear();
+        self.inline_image_requested.clear();
+        self.inline_image_failures.clear();
+    }
+
+    fn track_inline_image_id(&mut self, msg_id: Uuid) {
+        if !self.inline_image_cache.contains_key(&msg_id)
+            && !self.inline_image_requested.contains(&msg_id)
+            && !self.inline_image_failures.contains_key(&msg_id)
+            && !self.terminal_image_cache.contains_key(&msg_id)
+            && !self.terminal_image_requested.contains(&msg_id)
+            && !self.terminal_image_failed.contains(&msg_id)
+        {
+            return;
+        }
+        if !self.inline_image_tracked_order.contains(&msg_id) {
+            self.inline_image_tracked_order.push_back(msg_id);
+        }
+        while self.inline_image_tracked_order.len() > INLINE_IMAGE_TRACKED_LIMIT {
+            if let Some(old_id) = self.inline_image_tracked_order.pop_front() {
+                self.inline_image_requested.remove(&old_id);
+                self.inline_image_cache.remove(&old_id);
+                self.inline_image_failures.remove(&old_id);
+                self.terminal_image_requested.remove(&old_id);
+                self.terminal_image_cache.remove(&old_id);
+                self.terminal_image_failed.remove(&old_id);
+            }
+        }
+    }
+
     pub fn tick(&mut self) -> Option<Banner> {
         self.sync_refresh_room_id();
         self.drain_username_directory();
         self.drain_snapshot();
         self.drain_pinned_messages();
+        let clipboard_banner = self.expire_pending_clipboard_image_upload();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
+        let feeds_banner = self.feeds.tick();
         let news_banner = self.news.tick();
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
         let work_banner = self.work.tick();
-        moderation_banner
+        self.flush_pending_read_cursors_if_due();
+        clipboard_banner
+            .or(moderation_banner)
             .or(banner)
+            .or(feeds_banner)
             .or(news_banner)
             .or(notif_banner)
             .or(showcase_banner)
             .or(work_banner)
     }
 
+    pub fn select_feeds(&mut self) {
+        self.room_jump_active = false;
+        self.feeds_selected = true;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+        self.feeds.list();
+        self.feeds.mark_read();
+    }
+
     pub fn select_news(&mut self) {
         self.room_jump_active = false;
+        self.feeds_selected = false;
         self.news_selected = true;
         self.notifications_selected = false;
         self.discover_selected = false;
@@ -1350,6 +2897,7 @@ impl ChatState {
     pub fn select_notifications(&mut self) {
         self.room_jump_active = false;
         self.notifications_selected = true;
+        self.feeds_selected = false;
         self.news_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
@@ -1363,6 +2911,7 @@ impl ChatState {
     pub fn select_discover(&mut self) {
         self.room_jump_active = false;
         self.discover_selected = true;
+        self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
         self.showcase_selected = false;
@@ -1376,6 +2925,7 @@ impl ChatState {
     pub fn select_showcase(&mut self) {
         self.room_jump_active = false;
         self.showcase_selected = true;
+        self.feeds_selected = false;
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
@@ -1389,6 +2939,7 @@ impl ChatState {
     pub fn select_work(&mut self) {
         self.room_jump_active = false;
         self.work_selected = true;
+        self.feeds_selected = false;
         self.showcase_selected = false;
         self.discover_selected = false;
         self.notifications_selected = false;
@@ -1412,6 +2963,17 @@ impl ChatState {
 
     pub fn is_autocomplete_active(&self) -> bool {
         self.mention_ac.active
+    }
+
+    pub(crate) fn username_mention_matches(&self, query_lower: &str) -> Vec<MentionMatch> {
+        let active_users = self.active_users.as_ref();
+        rank_mention_matches(self.all_usernames.as_ref(), query_lower, || {
+            online_username_set(active_users)
+        })
+    }
+
+    pub(crate) fn room_name_matches(&self, query_lower: &str) -> Vec<MentionMatch> {
+        rank_room_name_matches(self.rooms.iter().map(|(room, _)| room), query_lower)
     }
 
     pub fn update_autocomplete(&mut self) {
@@ -1441,12 +3003,10 @@ impl ChatState {
         let query = &text[offset + 1..];
         let query_lower = query.to_ascii_lowercase();
         let matches = if trigger_byte == b'@' {
-            let active_users = self.active_users.as_ref();
-            rank_mention_matches(self.all_usernames.as_ref(), &query_lower, || {
-                online_username_set(active_users)
-            })
+            self.username_mention_matches(&query_lower)
         } else {
-            rank_command_matches(&query_lower)
+            let room = self.composer_room_id.and_then(|id| self.room_by_id(id));
+            rank_command_matches(&query_lower, room)
         };
 
         if matches.is_empty() {
@@ -1496,11 +3056,11 @@ impl ChatState {
         self.mention_ac = MentionAutocomplete::default();
     }
 
-    pub fn general_messages(&self) -> &[ChatMessage] {
-        let Some(general_id) = self.general_room_id else {
+    pub fn lounge_messages(&self) -> &[ChatMessage] {
+        let Some(lounge_id) = self.lounge_room_id else {
             return &[];
         };
-        self.messages_for_room(general_id)
+        self.messages_for_room(lounge_id)
     }
 
     /// Messages for any joined room — used by the dashboard chat card when
@@ -1529,6 +3089,78 @@ impl ChatState {
         &self.bonsai_glyphs
     }
 
+    pub fn chat_badges(&self) -> &HashMap<Uuid, String> {
+        &self.chat_badges
+    }
+
+    pub fn profile_award_badges(&self) -> &HashMap<Uuid, String> {
+        &self.profile_award_badges
+    }
+
+    fn set_bonsai_glyph(&mut self, user_id: Uuid, glyph: Option<&str>) {
+        if let Some(glyph) = glyph.filter(|glyph| !glyph.trim().is_empty()) {
+            self.bonsai_glyphs.insert(user_id, glyph.to_string());
+        } else {
+            self.bonsai_glyphs.remove(&user_id);
+        }
+    }
+
+    pub fn set_chat_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
+        if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
+            self.chat_badges.insert(user_id, badge.to_string());
+        } else {
+            self.chat_badges.remove(&user_id);
+        }
+    }
+
+    fn set_profile_award_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
+        if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
+            self.profile_award_badges.insert(user_id, badge.to_string());
+        } else {
+            self.profile_award_badges.remove(&user_id);
+        }
+    }
+
+    pub fn friend_user_ids(&self) -> &HashSet<Uuid> {
+        &self.friend_user_ids
+    }
+
+    pub fn ignored_user_ids(&self) -> &HashSet<Uuid> {
+        &self.ignored_user_ids
+    }
+
+    pub fn active_friend_names(&self) -> Vec<String> {
+        let Some(active_users) = &self.active_users else {
+            return Vec::new();
+        };
+        let active_users = active_users.lock_recover();
+        let mut friends: Vec<&ActiveUser> = self
+            .friend_user_ids
+            .iter()
+            .filter_map(|id| active_users.get(id))
+            .collect();
+        friends.sort_by(|left, right| {
+            right.last_login_at.cmp(&left.last_login_at).then_with(|| {
+                left.username
+                    .to_ascii_lowercase()
+                    .cmp(&right.username.to_ascii_lowercase())
+            })
+        });
+        friends
+            .into_iter()
+            .map(|user| user.username.clone())
+            .collect()
+    }
+
+    pub fn note_friend_join(&mut self, user_id: Uuid, username: &str) -> Option<Banner> {
+        if user_id == self.user_id || !self.friend_user_ids.contains(&user_id) {
+            return None;
+        }
+        self.usernames.insert(user_id, username.to_string());
+        self.notifier.push(Notification::friend_online(username));
+        Some(Banner::success(&format!("Friend online: @{username}")))
+    }
+
     pub fn message_reactions(&self) -> &HashMap<Uuid, Vec<ChatMessageReactionSummary>> {
         &self.message_reactions
     }
@@ -1543,13 +3175,38 @@ impl ChatState {
             return;
         }
 
+        let refreshed_author_ids = snapshot
+            .chat_rooms
+            .iter()
+            .flat_map(|(_, messages)| messages.iter().map(|message| message.user_id))
+            .chain(snapshot.usernames.keys().copied())
+            .collect::<HashSet<_>>();
+        for user_id in &refreshed_author_ids {
+            if !snapshot.bonsai_glyphs.contains_key(user_id) {
+                self.bonsai_glyphs.remove(user_id);
+            }
+            if !snapshot.chat_badges.contains_key(user_id) {
+                self.chat_badges.remove(user_id);
+            }
+            if !snapshot.profile_award_badges.contains_key(user_id) {
+                self.profile_award_badges.remove(user_id);
+            }
+        }
+
         self.usernames.extend(snapshot.usernames);
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
+        self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
+        self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
-        self.general_room_id = snapshot.general_room_id;
+        self.lounge_room_id = snapshot.lounge_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
+        self.room_last_message_at = self.merge_room_last_message_at(snapshot.room_last_message_at);
+        self.active_polls = snapshot.active_polls;
         self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
+        self.chat_badges.extend(snapshot.chat_badges);
+        self.profile_award_badges
+            .extend(snapshot.profile_award_badges);
         self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
         self.sync_selection();
     }
@@ -1587,6 +3244,8 @@ impl ChatState {
                     target_user_ids,
                     author_username,
                     author_bonsai_glyph,
+                    author_chat_badge,
+                    author_profile_award_badges,
                 } => {
                     let is_targeted = target_user_ids.is_some();
                     if let Some(targets) = target_user_ids
@@ -1604,8 +3263,10 @@ impl ChatState {
                     }
                     // Desktop notification queueing. target_user_ids is Some for
                     // DM/private rooms, None for public rooms. Don't notify on
-                    // messages we authored ourselves.
-                    if message.user_id != self.user_id {
+                    // messages we authored ourselves, or on ignored users
+                    // (including DMs, so ignore silences DMs too).
+                    let ignored_author = self.message_is_ignored(&message);
+                    if message.user_id != self.user_id && !ignored_author {
                         let nickname = self
                             .usernames
                             .get(&message.user_id)
@@ -1615,31 +3276,27 @@ impl ChatState {
                             message.body.replace('\n', " ").chars().take(80).collect();
 
                         if is_targeted {
-                            self.pending_notifications.push(PendingNotification {
-                                kind: "dms",
-                                title: format!("New DM from {nickname}"),
-                                body: preview,
-                            });
+                            self.notifier.push(Notification::dm(&nickname, preview));
                         } else if let Some(me) = self.usernames.get(&self.user_id) {
                             let me_lc = me.to_ascii_lowercase();
                             if crate::app::common::mentions::extract_mentions(&message.body)
                                 .iter()
                                 .any(|m| m == &me_lc)
                             {
-                                self.pending_notifications.push(PendingNotification {
-                                    kind: "mentions",
-                                    title: format!("{nickname} mentioned you"),
-                                    body: preview,
-                                });
+                                self.notifier
+                                    .push(Notification::mention(&nickname, preview));
                             }
                         }
                     }
                     if let Some(username) = author_username {
                         self.usernames.insert(message.user_id, username);
                     }
-                    if let Some(glyph) = author_bonsai_glyph {
-                        self.bonsai_glyphs.insert(message.user_id, glyph);
-                    }
+                    self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
+                    self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
+                    self.set_profile_award_badge(
+                        message.user_id,
+                        author_profile_award_badges.as_deref(),
+                    );
                     self.push_message(message);
                 }
                 ChatEvent::SendSucceeded {
@@ -1663,17 +3320,44 @@ impl ChatState {
                 ChatEvent::RoomTailLoaded {
                     user_id,
                     room_id,
+                    last_read_at,
                     messages,
                     message_reactions,
                     usernames,
                     bonsai_glyphs,
+                    chat_badges,
+                    profile_award_badges,
                 } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
                     self.usernames.extend(usernames);
+                    for message in &messages {
+                        if !bonsai_glyphs.contains_key(&message.user_id) {
+                            self.bonsai_glyphs.remove(&message.user_id);
+                        }
+                        if !chat_badges.contains_key(&message.user_id) {
+                            self.chat_badges.remove(&message.user_id);
+                        }
+                        if !profile_award_badges.contains_key(&message.user_id) {
+                            self.profile_award_badges.remove(&message.user_id);
+                        }
+                    }
                     self.bonsai_glyphs.extend(bonsai_glyphs);
+                    self.chat_badges.extend(chat_badges);
+                    self.profile_award_badges.extend(profile_award_badges);
+                    if messages.iter().any(|message| {
+                        last_read_at.is_none_or(|read_at| message.created > read_at)
+                            && message.user_id != self.user_id
+                    }) {
+                        self.room_unread_markers.insert(room_id, last_read_at);
+                    } else {
+                        self.room_unread_markers.remove(&room_id);
+                    }
                     self.merge_room_tail(room_id, messages);
                     for (message_id, reactions) in message_reactions {
                         self.message_reactions.insert(message_id, reactions);
+                    }
+                    if self.visible_room_id == Some(room_id) {
+                        self.mark_room_read(room_id);
                     }
                 }
                 ChatEvent::RoomTailLoadFailed { user_id, room_id } if self.user_id == user_id => {
@@ -1688,6 +3372,7 @@ impl ChatState {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::DmOpened { user_id, room_id } if self.user_id == user_id => {
+                    self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
@@ -1701,11 +3386,41 @@ impl ChatState {
                 ChatEvent::DmFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::OpenProfileResolved {
+                    user_id,
+                    target_user_id,
+                    target_username,
+                } if self.user_id == user_id => {
+                    self.requested_open_profile = Some((target_user_id, target_username));
+                }
+                ChatEvent::OpenProfileFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&sentence_case(&message)));
+                }
+                ChatEvent::OpenSheetResolved {
+                    user_id,
+                    room_id,
+                    target_user_id,
+                    target_username,
+                    name,
+                    body,
+                } if self.user_id == user_id => {
+                    self.requested_open_sheet = Some(SheetOpenRequest {
+                        room_id,
+                        target_username,
+                        name,
+                        body,
+                        editable: target_user_id == self.user_id,
+                    });
+                }
+                ChatEvent::SheetError { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&sentence_case(&message)));
+                }
                 ChatEvent::RoomJoined {
                     user_id,
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
+                    self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
@@ -1736,6 +3451,7 @@ impl ChatState {
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
+                    self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
@@ -1780,11 +3496,19 @@ impl ChatState {
                         banner = Some(Banner::success("Message deleted"));
                     }
                 }
+                ChatEvent::MessageRemoved {
+                    room_id,
+                    message_id,
+                } => {
+                    self.remove_message(room_id, message_id);
+                }
                 ChatEvent::MessageEdited {
                     message,
                     target_user_ids,
                     author_username,
                     author_bonsai_glyph,
+                    author_chat_badge,
+                    author_profile_award_badges,
                 } => {
                     if let Some(targets) = target_user_ids
                         && !targets.contains(&self.user_id)
@@ -1794,9 +3518,12 @@ impl ChatState {
                     if let Some(username) = author_username {
                         self.usernames.insert(message.user_id, username);
                     }
-                    if let Some(glyph) = author_bonsai_glyph {
-                        self.bonsai_glyphs.insert(message.user_id, glyph);
-                    }
+                    self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
+                    self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
+                    self.set_profile_award_badge(
+                        message.user_id,
+                        author_profile_award_badges.as_deref(),
+                    );
                     self.replace_message(message);
                 }
                 ChatEvent::DiscoverRoomsLoaded { user_id, rooms } if self.user_id == user_id => {
@@ -1844,9 +3571,25 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.ignored_user_ids = ignored_user_ids.into_iter().collect();
                     self.refilter_local_messages();
+                    self.notifications.list();
+                    self.notifications.refresh_unread_count();
                     banner = Some(Banner::success(&message));
                 }
                 ChatEvent::IgnoreFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
+                ChatEvent::FriendListUpdated {
+                    user_id,
+                    friend_user_ids,
+                    target_user_id,
+                    target_username,
+                    message,
+                } if self.user_id == user_id => {
+                    self.friend_user_ids = friend_user_ids.into_iter().collect();
+                    self.usernames.insert(target_user_id, target_username);
+                    banner = Some(Banner::success(&message));
+                }
+                ChatEvent::FriendFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::RoomMembersListed {
@@ -1854,7 +3597,43 @@ impl ChatState {
                     title,
                     members,
                 } if self.user_id == user_id => {
-                    self.open_overlay(&title, members);
+                    self.open_members_overlay(&title, members);
+                }
+                ChatEvent::GiftSucceeded {
+                    user_id,
+                    recipient_username,
+                    amount,
+                    sender_balance,
+                    recipient_balance,
+                    message,
+                    ..
+                } if self.user_id == user_id => {
+                    let note = message
+                        .as_deref()
+                        .map(|m| format!(": \"{m}\""))
+                        .unwrap_or_default();
+                    banner = Some(Banner::success(&format!(
+                        "Gifted {amount} chips to @{recipient_username} ({sender_balance} left, recipient {recipient_balance}){note}"
+                    )));
+                }
+                ChatEvent::GiftSucceeded {
+                    recipient_id,
+                    sender_username,
+                    amount,
+                    recipient_balance,
+                    message,
+                    ..
+                } if self.user_id == recipient_id => {
+                    let note = message
+                        .as_deref()
+                        .map(|m| format!(": \"{m}\""))
+                        .unwrap_or_default();
+                    banner = Some(Banner::success(&format!(
+                        "@{sender_username} gifted you {amount} chips (balance {recipient_balance}){note}"
+                    )));
+                }
+                ChatEvent::GiftFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
                 }
                 ChatEvent::PublicRoomsListed {
                     user_id,
@@ -1922,6 +3701,42 @@ impl ChatState {
                         success,
                     });
                 }
+                ChatEvent::PollUpdated {
+                    actor_user_id,
+                    room_id,
+                    mut poll,
+                    message,
+                } => {
+                    if self.user_id != actor_user_id {
+                        poll.my_vote_option_id = self
+                            .active_polls
+                            .get(&room_id)
+                            .filter(|existing| existing.poll.id == poll.poll.id)
+                            .and_then(|existing| existing.my_vote_option_id);
+                    }
+                    // PollUpdated fires for votes too; only a previously
+                    // unseen poll id in a room we're a member of is a fresh
+                    // /poll start worth notifying about. The author is
+                    // notified too, doubling as a delivery check.
+                    let is_new_poll = self
+                        .active_polls
+                        .get(&room_id)
+                        .is_none_or(|existing| existing.poll.id != poll.poll.id);
+                    if is_new_poll && self.rooms.iter().any(|(room, _)| room.id == room_id) {
+                        self.notifier
+                            .push(Notification::poll_started(&poll.poll.question));
+                    }
+                    self.active_polls.insert(room_id, poll);
+                    if self.user_id == actor_user_id {
+                        banner = Some(Banner::success(&message));
+                    }
+                }
+                ChatEvent::PollStartAllowed { user_id, room_id } if self.user_id == user_id => {
+                    self.requested_poll_room = Some(room_id);
+                }
+                ChatEvent::PollFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
                 _ => {}
             }
         }
@@ -1948,22 +3763,23 @@ impl ChatState {
     }
 
     fn push_message(&mut self, message: ChatMessage) {
-        let in_dm_room = self
-            .rooms
-            .iter()
-            .any(|(room, _)| room.id == message.room_id && room.kind == "dm");
-
-        if !in_dm_room && self.message_is_ignored(&message) {
+        let room_id = message.room_id;
+        let created = message.created;
+        if !self.rooms.iter().any(|(room, _)| room.id == room_id) {
             return;
         }
 
-        let is_viewing_room = Some(message.room_id) == self.visible_room_id;
+        let is_viewing_room = Some(room_id) == self.visible_room_id;
+        if self.message_is_ignored(&message) {
+            if is_viewing_room {
+                self.mark_room_read(room_id);
+            }
+            return;
+        }
 
-        let Some((_, messages)) = self
-            .rooms
-            .iter_mut()
-            .find(|(room, _)| room.id == message.room_id)
-        else {
+        self.note_room_message_activity(room_id, created);
+
+        let Some((_, messages)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
             return;
         };
 
@@ -1972,7 +3788,6 @@ impl ChatState {
         }
 
         // Service snapshots are newest-first; keep same order for cheap appends at the front.
-        let room_id = message.room_id;
         messages.insert(0, message);
         if messages.len() > 500 {
             let removed_ids: Vec<Uuid> = messages
@@ -1986,10 +3801,11 @@ impl ChatState {
             }
         }
 
-        // Only mark the room as read if the user is actually viewing it.
-        // Other warm rooms keep their unread badge until the user opens them.
         if is_viewing_room {
-            self.unread_counts.insert(room_id, 0);
+            // Keep the DB cursor aligned with the visible live stream. Without
+            // this, the next snapshot can restore unread counts until the user
+            // switches away and back into the room.
+            self.mark_room_read(room_id);
         }
     }
 
@@ -2016,8 +3832,7 @@ impl ChatState {
     }
 
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
-        let Some((room, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id)
-        else {
+        let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
             return;
         };
 
@@ -2031,15 +3846,11 @@ impl ChatState {
         merged.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
         merged.truncate(500);
 
-        *stored = if room.kind == "dm" {
-            merged
-        } else {
-            let ignored = &self.ignored_user_ids;
-            merged
-                .into_iter()
-                .filter(|message| !ignored.contains(&message.user_id))
-                .collect()
-        };
+        let ignored = &self.ignored_user_ids;
+        *stored = merged
+            .into_iter()
+            .filter(|message| !message_is_ignored_in(ignored, message))
+            .collect();
     }
 
     fn replace_message(&mut self, message: ChatMessage) {
@@ -2074,12 +3885,7 @@ impl ChatState {
                 } else {
                     messages
                 };
-                // DMs: don't filter. Users leave the DM room if they want it gone.
-                let messages = if room.kind == "dm" {
-                    messages
-                } else {
-                    self.filter_messages(messages)
-                };
+                let messages = self.filter_messages(messages);
                 (room, messages)
             })
             .collect()
@@ -2096,6 +3902,32 @@ impl ChatState {
                 None => true,
             });
         incoming
+    }
+
+    fn merge_room_last_message_at(
+        &self,
+        mut incoming: HashMap<Uuid, Option<DateTime<Utc>>>,
+    ) -> HashMap<Uuid, Option<DateTime<Utc>>> {
+        for (room_id, current) in &self.room_last_message_at {
+            if let Some(incoming_value) = incoming.get_mut(room_id) {
+                let current_value = *current;
+                if current_value > *incoming_value {
+                    *incoming_value = current_value;
+                }
+            }
+        }
+        incoming
+    }
+
+    fn note_room_message_activity(&mut self, room_id: Uuid, created: DateTime<Utc>) {
+        let latest = self.room_last_message_at.entry(room_id).or_insert(None);
+        let should_update = latest
+            .as_ref()
+            .map(|current| created > *current)
+            .unwrap_or(true);
+        if should_update {
+            *latest = Some(created);
+        }
     }
 
     fn merge_message_reactions(
@@ -2127,99 +3959,270 @@ impl ChatState {
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
-        self.ignored_user_ids.contains(&message.user_id)
+        message_is_ignored_in(&self.ignored_user_ids, message)
     }
 
-    /// Strip already-stored messages from any newly-ignored author.
-    /// DM rooms are exempt -leaving the DM room is the way to dismiss them.
+    /// Strip already-stored messages from any newly-ignored author, including
+    /// DMs and bot replies directed at the newly-ignored user.
     fn refilter_local_messages(&mut self) {
         let ignored = &self.ignored_user_ids;
-        for (room, messages) in &mut self.rooms {
-            if room.kind == "dm" {
-                continue;
-            }
-            messages.retain(|m| !ignored.contains(&m.user_id));
+        for (_, messages) in &mut self.rooms {
+            messages.retain(|m| !message_is_ignored_in(ignored, m));
         }
         self.sync_selection();
     }
 }
 
-fn visual_order_for_rooms(
-    rooms: &[(ChatRoom, Vec<ChatMessage>)],
-    user_id: Uuid,
-    usernames: &HashMap<Uuid, String>,
+/// A message is ignored if its author is ignored, or if it is a bot/automated
+/// reply directed at an ignored user (so an ignored user can't be heard by
+/// proxy through a bot).
+fn message_is_ignored_in(ignored: &HashSet<Uuid>, message: &ChatMessage) -> bool {
+    ignored.contains(&message.user_id)
+        || message
+            .reply_to_user_id
+            .is_some_and(|target| ignored.contains(&target))
+}
+
+fn inline_image_request_candidates(
+    messages: &[ChatMessage],
+    requested: &HashSet<Uuid>,
+    cached: &HashMap<Uuid, InlineImagePreview>,
+    failures: &HashMap<Uuid, InlineImageFailure>,
+    now: Instant,
+) -> Vec<(Uuid, String)> {
+    let mut requests = Vec::new();
+    for msg in messages.iter().take(INLINE_IMAGE_SCAN_LIMIT) {
+        if requested.contains(&msg.id) || cached.contains_key(&msg.id) {
+            continue;
+        }
+        if let Some(failure) = failures.get(&msg.id)
+            && (failure.attempts >= INLINE_IMAGE_MAX_FAILURES || now < failure.next_retry_at)
+        {
+            continue;
+        }
+        if let Some(url) = inline_image_url_in_body(&msg.body) {
+            tracing::trace!("found image url in chat: {}", url);
+            requests.push((msg.id, url));
+            if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
+                break;
+            }
+        }
+    }
+    requests
+}
+
+fn inline_image_url_in_body(body: &str) -> Option<String> {
+    let mut rest = body;
+    while let Some(url_start) = rest.find("http") {
+        let url_str = &rest[url_start..];
+        let end_idx = url_str
+            .find(|c: char| c.is_ascii_whitespace() || c == ')' || c == ']' || c == '}')
+            .unwrap_or(url_str.len());
+        let mut url = &url_str[..end_idx];
+        while url.ends_with('.')
+            || url.ends_with(',')
+            || url.ends_with(';')
+            || url.ends_with('!')
+            || url.ends_with('?')
+        {
+            url = &url[..url.len() - 1];
+        }
+
+        if is_inline_image_url(url) {
+            return Some(url.to_string());
+        }
+
+        rest = &url_str["http".len()..];
+    }
+    None
+}
+
+fn is_inline_image_url(url: &str) -> bool {
+    let lower_url = url.to_ascii_lowercase();
+    if lower_url.contains("uguu.se")
+        || lower_url.contains("0x0.st")
+        || lower_url.contains("catbox.moe")
+    {
+        return true;
+    }
+
+    let path = reqwest::Url::parse(url)
+        .ok()
+        .map(|parsed| parsed.path().to_ascii_lowercase())
+        .unwrap_or(lower_url);
+
+    [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+        .iter()
+        .any(|ext| path.ends_with(ext))
+}
+
+fn inline_image_retry_delay(attempts: u8) -> Duration {
+    let exp = attempts.saturating_sub(1).min(5) as u32;
+    Duration::from_secs((1_u64 << exp).min(30))
+}
+
+pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
+    pub rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
+    pub user_id: Uuid,
+    pub usernames: &'a U,
+    pub unread_counts: &'a HashMap<Uuid, i64>,
+    pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
+    pub feeds_available: bool,
+    pub favorite_room_ids: &'a [Uuid],
+    pub collapsed_sections: &'a HashSet<RoomSection>,
+    pub ignored_user_ids: &'a HashSet<Uuid>,
+}
+
+pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
+    input: RoomVisualOrderInput<'_, U>,
 ) -> Vec<RoomSlot> {
+    let RoomVisualOrderInput {
+        rooms,
+        user_id,
+        usernames,
+        unread_counts,
+        room_last_message_at,
+        feeds_available,
+        favorite_room_ids,
+        collapsed_sections,
+        ignored_user_ids,
+    } = input;
+
     let mut order = Vec::new();
+    let mut pushed_rooms = HashSet::new();
+
+    // `pushed_rooms` must track membership even for collapsed sections so a
+    // room can't reappear later (e.g. a collapsed favorite leaking into
+    // Channels). Each section computes its slots, records them as pushed,
+    // then only appends to `order` when the section is expanded.
+    let favorites_collapsed = collapsed_sections.contains(&RoomSection::Favorites);
+    for favorite_id in favorite_room_ids {
+        if rooms.iter().any(|(room, _)| {
+            room.id == *favorite_id
+                && is_chat_list_room(room)
+                && !dm_peer_is_ignored(room, user_id, ignored_user_ids)
+        }) && pushed_rooms.insert(*favorite_id)
+            && !favorites_collapsed
+        {
+            order.push(RoomSlot::Room(*favorite_id));
+        }
+    }
 
     // Core: permanent rooms, hardcoded order
-    let core_order = ["general", "announcements", "suggestions", "bugs"];
+    let core_collapsed = collapsed_sections.contains(&RoomSection::Core);
+    let core_order = ["lounge", "announcements", "suggestions", "bugs"];
     for slug in &core_order {
         if let Some((room, _)) = rooms
             .iter()
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
+            && pushed_rooms.insert(room.id)
+            && !core_collapsed
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
-    // Any other permanent rooms not in the hardcoded list
+    if !core_collapsed {
+        order.push(RoomSlot::Notifications);
+        order.push(RoomSlot::News);
+        if feeds_available {
+            order.push(RoomSlot::Feeds);
+        }
+        // Discover ("browse rooms") lives at the bottom of Core.
+        order.push(RoomSlot::Discover);
+    }
+
+    // Channels: all non-DM rooms outside Core, public + private merged.
+    let channels_collapsed = collapsed_sections.contains(&RoomSection::Channels);
     for (room, _) in rooms {
         if is_chat_list_room(room)
             && room.kind != "dm"
-            && room.permanent
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+            && pushed_rooms.insert(room.id)
+            && !channels_collapsed
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
 
-    order.push(RoomSlot::News);
-    order.push(RoomSlot::Showcase);
-    order.push(RoomSlot::Work);
-    order.push(RoomSlot::Notifications);
-    order.push(RoomSlot::Discover);
-
-    // Public rooms (non-DM, non-permanent, alpha by slug)
-    let mut public: Vec<_> = rooms
+    // DMs: unread rooms first, then newest message, then display name.
+    // Hide DMs whose other participant is ignored so an ignored user can't
+    // resurface the DM (and its unread badge) by sending again.
+    let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
+    let mut dms: Vec<_> = rooms
         .iter()
-        .filter(|(r, _)| {
-            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "public"
-        })
+        .filter(|(r, _)| r.kind == "dm")
+        .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
         .collect();
-    public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-    order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-    // Private rooms (visibility=private, alpha by slug)
-    let mut private: Vec<_> = rooms
-        .iter()
-        .filter(|(r, _)| {
-            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "private"
-        })
-        .collect();
-    private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-    order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-    // DMs (sorted by display name to match nav rendering)
-    let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
-    dms.sort_by(|(a, _), (b, _)| {
-        let name_a = dm_sort_key(a, user_id, usernames);
-        let name_b = dm_sort_key(b, user_id, usernames);
-        name_a.cmp(&name_b)
+    dms.sort_by(|(a_room, _), (b_room, _)| {
+        compare_dm_rooms_for_nav(
+            a_room,
+            b_room,
+            user_id,
+            usernames,
+            unread_counts,
+            room_last_message_at,
+        )
     });
-    order.extend(dms.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+    order.extend(dms.iter().filter_map(|(r, _)| {
+        (pushed_rooms.insert(r.id) && !dms_collapsed).then_some(RoomSlot::Room(r.id))
+    }));
 
     order
 }
 
-/// Sort key for DMs: resolves the other participant's username.
-/// Must match the sort used by the nav UI (`dm_label` in `ui.rs`).
-fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>) -> String {
-    let other_id = if room.dm_user_a == Some(user_id) {
+pub(crate) fn compare_dm_rooms_for_nav(
+    a_room: &ChatRoom,
+    b_room: &ChatRoom,
+    user_id: Uuid,
+    usernames: &(impl UsernameResolver + ?Sized),
+    unread_counts: &HashMap<Uuid, i64>,
+    room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
+) -> Ordering {
+    let a_unread = unread_counts.get(&a_room.id).copied().unwrap_or(0) > 0;
+    let b_unread = unread_counts.get(&b_room.id).copied().unwrap_or(0) > 0;
+    b_unread
+        .cmp(&a_unread)
+        .then_with(|| {
+            room_activity_at(b_room.id, room_last_message_at)
+                .cmp(&room_activity_at(a_room.id, room_last_message_at))
+        })
+        .then_with(|| {
+            dm_sort_key(a_room, user_id, usernames).cmp(&dm_sort_key(b_room, user_id, usernames))
+        })
+        .then_with(|| a_room.id.cmp(&b_room.id))
+}
+
+pub(crate) fn room_activity_at(
+    room_id: Uuid,
+    room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
+) -> Option<DateTime<Utc>> {
+    room_last_message_at.get(&room_id).cloned().flatten()
+}
+
+/// The other participant in a DM room, from `user_id`'s perspective.
+fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
+    if room.dm_user_a == Some(user_id) {
         room.dm_user_b
     } else {
         room.dm_user_a
-    };
-    other_id
-        .and_then(|id| usernames.get(&id))
+    }
+}
+
+/// Whether `room` is a DM whose other participant is ignored. Such DMs are
+/// hidden from every room-list section (favorites included) so an ignored peer
+/// can't resurface the DM or its unread state by sending again.
+fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
+    room.kind == "dm" && dm_peer_id(room, user_id).is_some_and(|peer| ignored.contains(&peer))
+}
+
+/// Sort key for DMs: resolves the other participant's username.
+fn dm_sort_key(
+    room: &ChatRoom,
+    user_id: Uuid,
+    usernames: &(impl UsernameResolver + ?Sized),
+) -> String {
+    dm_peer_id(room, user_id)
+        .and_then(|id| usernames.username(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
 }
@@ -2241,6 +4244,49 @@ fn moderation_server_toast(event: &ModerationEvent) -> Option<String> {
     }
 }
 
+/// A parsed `/petname` command, drained by `handle_post_submit_requests`
+/// (which has the `App` access needed to update the cat).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PetnameRequest {
+    /// `/petname` with no argument — show the current name.
+    Show,
+    /// `/petname <name>` — set it. Holds the normalised name.
+    Set(String),
+    /// `/petname clear` — remove the name.
+    Clear,
+}
+
+/// Outcome of parsing a `/petname` line.
+pub(crate) enum PetnameParse {
+    Request(PetnameRequest),
+    /// `/petname` with an argument that normalised to nothing.
+    Invalid,
+}
+
+/// Parse a `/petname` command. Returns `None` if the input isn't a
+/// `/petname` command so `/petnames` (typo) still falls through to the
+/// unknown-command handler.
+pub(crate) fn parse_petname_command(input: &str) -> Option<PetnameParse> {
+    let rest = input.trim().strip_prefix("/petname")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let arg = rest.trim();
+    if arg.is_empty() {
+        return Some(PetnameParse::Request(PetnameRequest::Show));
+    }
+    if matches!(
+        arg.to_ascii_lowercase().as_str(),
+        "clear" | "remove" | "none" | "off"
+    ) {
+        return Some(PetnameParse::Request(PetnameRequest::Clear));
+    }
+    match late_core::models::pet::normalize_pet_name(arg) {
+        Some(name) => Some(PetnameParse::Request(PetnameRequest::Set(name))),
+        None => Some(PetnameParse::Invalid),
+    }
+}
+
 /// Parse `/dm @username` or `/dm username` from the composer text.
 /// Returns the target username if the input matches.
 fn parse_dm_command(input: &str) -> Option<&str> {
@@ -2250,6 +4296,117 @@ fn parse_dm_command(input: &str) -> Option<&str> {
         return None;
     }
     Some(username)
+}
+
+/// Max length of the optional note attached to a `/gift`.
+const GIFT_MESSAGE_MAX_CHARS: usize = 120;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GiftParse {
+    Invalid,
+    Gift {
+        username: String,
+        amount: i64,
+        /// Optional note: `/gift @user 100 happy birthday`.
+        message: Option<String>,
+    },
+}
+
+pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
+    let rest = input.trim().strip_prefix("/gift")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut parts = rest.split_whitespace();
+    let Some(username) = parts.next() else {
+        return Some(GiftParse::Invalid);
+    };
+    let Some(amount) = parts.next() else {
+        return Some(GiftParse::Invalid);
+    };
+    // Everything after the amount is an optional single-line note. Rejoining
+    // with single spaces drops any newlines/tabs; then strip control chars and
+    // cap the length.
+    let message: String = parts
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(GIFT_MESSAGE_MAX_CHARS)
+        .collect();
+    let message = {
+        let trimmed = message.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    };
+    let username = username.strip_prefix('@').unwrap_or(username).trim();
+    let Ok(amount) = amount.parse::<i64>() else {
+        return Some(GiftParse::Invalid);
+    };
+    if username.is_empty() || amount <= 0 || amount > GIFT_MAX_AMOUNT {
+        return Some(GiftParse::Invalid);
+    }
+    Some(GiftParse::Gift {
+        username: username.to_string(),
+        amount,
+        message,
+    })
+}
+
+fn parse_me_command(input: &str) -> Option<Option<String>> {
+    let trimmed = input.trim();
+    if trimmed == "/me" {
+        return Some(None);
+    }
+    let rest = trimmed.strip_prefix("/me ")?;
+    Some(super::action::encode_action_body(rest))
+}
+
+fn format_member_overlay_lines(
+    members: &[RoomMemberListItem],
+    active_users: Option<&ActiveUsers>,
+) -> Vec<Line<'static>> {
+    let online_ids = active_users
+        .map(|users| users.lock_recover().keys().copied().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let mut rows = members
+        .iter()
+        .map(|member| {
+            let online = online_ids.contains(&member.user_id);
+            let label = member
+                .username
+                .as_deref()
+                .map(|username| format!("@{username}"))
+                .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(member.user_id)));
+            (online, label.to_ascii_lowercase(), label)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    rows.into_iter()
+        .map(|(online, _, label)| {
+            let (status, status_style, name_style) = if online {
+                (
+                    "[on ]",
+                    Style::default()
+                        .fg(theme::SUCCESS())
+                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::TEXT()),
+                )
+            } else {
+                (
+                    "[off]",
+                    Style::default().fg(theme::TEXT_DIM()),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )
+            };
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(status, status_style),
+                Span::raw(" "),
+                Span::styled(label, name_style),
+            ])
+        })
+        .collect()
 }
 
 /// Parse `/leave` from the composer text.
@@ -2265,6 +4422,16 @@ fn parse_room_command<'a>(input: &'a str, command: &str) -> Option<&'a str> {
         return None;
     }
     Some(slug)
+}
+
+fn user_created_channel_name_too_long(slug: &str) -> bool {
+    slug.chars().count() > USER_CREATED_CHANNEL_NAME_MAX_CHARS
+}
+
+fn user_created_channel_name_length_error() -> Banner {
+    Banner::error(&format!(
+        "Channel names must be {USER_CREATED_CHANNEL_NAME_MAX_CHARS} characters or fewer"
+    ))
 }
 
 /// Parse `/create-room <slug>` from the composer text (admin only).
@@ -2297,11 +4464,163 @@ fn parse_fill_room_command(input: &str) -> Option<&str> {
     Some(slug)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DieSpec {
+    pub count: u32,
+    pub sides: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RollParse {
+    Invalid,
+    Specs(Vec<DieSpec>),
+}
+
+const ROLL_MAX_DICE_PER_GROUP: u32 = 100;
+const ROLL_MAX_SIDES: u32 = 1000;
+
+/// Parse `/roll [NdM ...]` from the composer text.
+/// `/roll` alone defaults to a single d20.
+pub(crate) fn parse_roll_command(input: &str) -> Option<RollParse> {
+    let rest = input.trim().strip_prefix("/roll")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let args = rest.trim();
+    if args.is_empty() {
+        return Some(RollParse::Specs(vec![DieSpec {
+            count: 1,
+            sides: 20,
+        }]));
+    }
+    let mut specs = Vec::new();
+    for token in args.split_whitespace() {
+        let Some(spec) = parse_die_spec(token) else {
+            return Some(RollParse::Invalid);
+        };
+        specs.push(spec);
+    }
+    Some(RollParse::Specs(specs))
+}
+
+fn parse_die_spec(token: &str) -> Option<DieSpec> {
+    let (count_part, sides_part) = token.split_once('d')?;
+    let count = if count_part.is_empty() {
+        1
+    } else {
+        count_part.parse::<u32>().ok()?
+    };
+    let sides = sides_part.parse::<u32>().ok()?;
+    if count == 0 || count > ROLL_MAX_DICE_PER_GROUP || !(2..=ROLL_MAX_SIDES).contains(&sides) {
+        return None;
+    }
+    Some(DieSpec { count, sides })
+}
+
+pub(crate) fn roll_dice<R: RngCore>(specs: &[DieSpec], rng: &mut R) -> Vec<Vec<u32>> {
+    specs
+        .iter()
+        .map(|spec| {
+            (0..spec.count)
+                .map(|_| (rng.next_u32() % spec.sides) + 1)
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) fn format_formula(specs: &[DieSpec]) -> String {
+    specs
+        .iter()
+        .map(|s| {
+            if s.count == 1 {
+                format!("d{}", s.sides)
+            } else {
+                format!("{}d{}", s.count, s.sides)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(crate) fn format_roll_result(specs: &[DieSpec], rolls: &[Vec<u32>]) -> String {
+    let formula = format_formula(specs);
+    let groups = rolls
+        .iter()
+        .map(|group| {
+            let inner = group
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("[{inner}]")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let total: u32 = rolls.iter().flatten().sum();
+    format!("{formula}: {groups} = {total}")
+}
+
 fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Option<String> {
     rooms
         .iter()
         .find(|(room, _)| room.id == room_id)
         .and_then(|(room, _)| room.slug.clone())
+}
+
+/// Parse `/brb [optional message]` from the composer.
+/// Returns `Some(message)` where message is empty if no custom text was given.
+fn parse_brb_command(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed == "/brb" {
+        return Some(String::new());
+    }
+    let rest = trimmed.strip_prefix("/brb ")?.trim();
+    Some(rest.to_string())
+}
+
+/// Which cup the user asked for. Coffee gets the mug-with-handle silhouette
+/// (`c[_]`), tea gets the handle-less cup (`\_/`); steam patterns are shared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CupKind {
+    Coffee,
+    Tea,
+}
+
+/// Number of distinct steam patterns in `CUP_STEAM_VARIANTS`. Cycled per
+/// invocation via `ChatState::next_cup_variant` so rapid back-to-back
+/// rituals don't all look identical.
+pub(crate) const CUP_VARIANT_COUNT: u8 = 4;
+
+const CUP_STEAM_VARIANTS: &[&str] = &[
+    "  )  )\n ( ( (",
+    "   ) )\n  ( ( (",
+    "  ) ) (\n   ( )",
+    "    )\n   ( )\n  ) ( (",
+];
+
+/// Parse `/coffee` or `/tea` (case-insensitive, no arguments) from the
+/// composer body. Returns `None` for anything else, including arguments
+/// like `/coffee please` so the unknown-command handler can still flag
+/// typos. Same shape as [`parse_petname_command`].
+pub(crate) fn parse_cup_command(input: &str) -> Option<CupKind> {
+    let trimmed = input.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    match lower.as_str() {
+        "/coffee" => Some(CupKind::Coffee),
+        "/tea" => Some(CupKind::Tea),
+        _ => None,
+    }
+}
+
+/// Build the multi-line ASCII body for `/coffee` or `/tea`. `variant`
+/// selects the steam pattern; out-of-range values wrap via modulo.
+pub(crate) fn cup_art(kind: CupKind, variant: u8) -> String {
+    let steam = CUP_STEAM_VARIANTS[(variant as usize) % CUP_STEAM_VARIANTS.len()];
+    let cup = match kind {
+        CupKind::Coffee => "  c[_]",
+        CupKind::Tea => "  \\___/",
+    };
+    format!("{steam}\n{cup}")
 }
 
 fn unknown_slash_command(input: &str) -> Option<&str> {
@@ -2372,41 +4691,43 @@ pub(crate) fn rank_mention_matches(
     matches.into_iter().map(|(_, m)| m).collect()
 }
 
-const CHAT_COMMANDS: &[(&str, &str)] = &[
-    ("active", "active users"),
-    ("binds", "chat guide"),
-    ("dm", "open DM"),
-    ("exit", "quit confirm"),
-    ("ignore", "mute user"),
-    ("invite", "add user"),
-    ("leave", "leave room"),
-    ("list", "public rooms"),
-    ("members", "room members"),
-    ("music", "music help"),
-    ("private", "new private room"),
-    ("public", "open public room for everyone"),
-    ("settings", "open settings"),
-    ("unignore", "unmute user"),
-];
-
-fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {
-    if !query_lower.is_empty() && CHAT_COMMANDS.iter().any(|(name, _)| *name == query_lower) {
-        return Vec::new();
-    }
-
-    CHAT_COMMANDS
-        .iter()
-        .filter(|(name, _)| name.starts_with(query_lower))
-        .map(|(name, description)| MentionMatch {
-            name: (*name).to_string(),
+pub(crate) fn rank_room_name_matches<'a>(
+    rooms: impl IntoIterator<Item = &'a ChatRoom>,
+    query_lower: &str,
+) -> Vec<MentionMatch> {
+    let mut rooms: Vec<(String, String)> = rooms
+        .into_iter()
+        .filter_map(|room| {
+            if room.kind == "dm" {
+                return None;
+            }
+            let name = room.slug.as_deref()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let lower = name.to_ascii_lowercase();
+            lower
+                .starts_with(query_lower)
+                .then(|| (lower, name.to_string()))
+        })
+        .collect();
+    rooms.sort_by(|(a, _), (b, _)| a.cmp(b));
+    rooms.dedup_by(|(a, _), (b, _)| a == b);
+    rooms
+        .into_iter()
+        .map(|(_, name)| MentionMatch {
+            name,
             online: true,
-            prefix: "/",
-            description: Some(*description),
+            prefix: "#",
+            description: None,
         })
         .collect()
 }
 
-fn format_active_user_lines(active_users: Option<&ActiveUsers>) -> Vec<String> {
+fn format_active_user_lines(
+    active_users: Option<&ActiveUsers>,
+    friend_user_ids: &HashSet<Uuid>,
+) -> Vec<String> {
     let Some(active_users) = active_users else {
         return vec!["Active user list unavailable".to_string()];
     };
@@ -2416,15 +4737,23 @@ fn format_active_user_lines(active_users: Option<&ActiveUsers>) -> Vec<String> {
         return vec!["No active users".to_string()];
     }
 
-    let mut users: Vec<&ActiveUser> = guard.values().collect();
-    users.sort_by_key(|user| user.username.to_ascii_lowercase());
+    let mut users: Vec<(&Uuid, &ActiveUser)> = guard.iter().collect();
+    users.sort_by_key(|(_, user)| user.username.to_ascii_lowercase());
     users
         .into_iter()
-        .map(|user| {
-            if user.connection_count > 1 {
-                format!("@{} ({} sessions)", user.username, user.connection_count)
+        .map(|(user_id, user)| {
+            let prefix = if friend_user_ids.contains(user_id) {
+                "★ @"
             } else {
-                format!("@{}", user.username)
+                "@"
+            };
+            if user.connection_count > 1 {
+                format!(
+                    "{prefix}{} ({} sessions)",
+                    user.username, user.connection_count
+                )
+            } else {
+                format!("{prefix}{}", user.username)
             }
         })
         .collect()
@@ -2443,7 +4772,8 @@ fn adjacent_composer_room(
         .iter()
         .filter_map(|slot| match slot {
             RoomSlot::Room(room_id) => Some(*room_id),
-            RoomSlot::News
+            RoomSlot::Feeds
+            | RoomSlot::News
             | RoomSlot::Notifications
             | RoomSlot::Discover
             | RoomSlot::Showcase
@@ -2460,8 +4790,40 @@ fn adjacent_composer_room(
     Some(rooms[wrapped_index(current, delta, rooms.len())])
 }
 
+fn news_modal_source_from_articles(
+    articles: &[ArticleFeedItem],
+    url: &str,
+) -> Option<(NewsPayload, String, chrono::DateTime<chrono::Utc>, Uuid)> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+
+    let item = articles
+        .iter()
+        .find(|item| item.article.url.trim() == url)?;
+    Some((
+        NewsPayload {
+            title: item.article.title.clone(),
+            summary: item.article.summary.clone(),
+            url: item.article.url.clone(),
+            ascii_art: item.article.ascii_art.clone(),
+        },
+        modal_author_label(Some(&item.author_username), item.article.user_id),
+        item.article.created,
+        item.article.id,
+    ))
+}
+
+fn modal_author_label(username: Option<&str>, user_id: Uuid) -> String {
+    username
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("@{name}"))
+        .unwrap_or_else(|| short_user_id(user_id))
+}
+
 fn resolve_room_jump_target(targets: &[(u8, RoomSlot)], byte: u8) -> Option<RoomSlot> {
-    let byte = byte.to_ascii_lowercase();
     targets
         .iter()
         .find_map(|(key, slot)| (*key == byte).then_some(*slot))
@@ -2488,6 +4850,14 @@ fn parse_user_command<'a>(input: &'a str, command: &str) -> Option<Option<&'a st
 fn short_user_id(user_id: Uuid) -> String {
     let id = user_id.to_string();
     id[..id.len().min(8)].to_string()
+}
+
+fn sentence_case(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// Given a message list containing `current`, return the id of the message
@@ -2539,16 +4909,50 @@ fn reply_preview_text(body: &str) -> String {
             .unwrap_or(first_content_line)
             .trim(),
     );
-    let preview: String = preview.chars().take(48).collect();
-    if preview.chars().count() == 48 {
-        format!("{}...", preview.trim_end())
-    } else {
-        preview
-    }
+    truncate_reply_preview(&preview)
 }
 
 pub(crate) fn new_chat_textarea() -> TextArea<'static> {
     composer::new_themed_textarea("Type a message...", WrapMode::Word, false)
+}
+
+/// Number of characters in `text` whose display cells all sit left of
+/// `target_col`, i.e. the char index at the start of the glyph under a click.
+/// Mirrors ratatui-textarea's own screen→char mapping so wide glyphs (CJK,
+/// emoji) line up with the rendered cursor.
+fn char_offset_for_display_col(text: &str, target_col: usize) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    let mut col = 0usize;
+    let mut chars = 0usize;
+    for c in text.chars() {
+        if col >= target_col {
+            break;
+        }
+        let width = c.width().unwrap_or(0);
+        if col + width > target_col {
+            break;
+        }
+        col += width;
+        chars += 1;
+    }
+    chars
+}
+
+/// Translate a global character offset — newlines counted as one char each,
+/// matching `build_composer_rows` — into a logical `(line, column)` pair for
+/// `CursorMove::Jump`.
+fn global_char_to_line_col(text: &str, target: usize) -> (usize, usize) {
+    let mut line = 0usize;
+    let mut col = 0usize;
+    for c in text.chars().take(target) {
+        if c == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
 }
 
 fn news_reply_preview_text(body: &str) -> Option<String> {
@@ -2565,12 +4969,16 @@ fn news_reply_preview_text(body: &str) -> Option<String> {
         .filter(|title| !title.is_empty())
         .unwrap_or("news update");
 
-    let preview: String = title.chars().take(48).collect();
-    Some(if preview.chars().count() == 48 {
+    Some(truncate_reply_preview(title))
+}
+
+fn truncate_reply_preview(text: &str) -> String {
+    let preview: String = text.chars().take(48).collect();
+    if preview.chars().count() == 48 {
         format!("{}...", preview.trim_end())
     } else {
         preview
-    })
+    }
 }
 
 fn strip_markdown_preview_markers(text: &str) -> String {
@@ -2602,6 +5010,18 @@ fn strip_markdown_preview_markers(text: &str) -> String {
     while idx < text.len() {
         let rest = &text[idx..];
 
+        if let Some(marker_len) = leading_backtick_run_len(rest) {
+            let marker = &rest[..marker_len];
+            let after_open = &rest[marker_len..];
+            if let Some(end_rel) = after_open.find(marker)
+                && end_rel > 0
+            {
+                out.push_str(&after_open[..end_rel]);
+                idx += marker_len + end_rel + marker_len;
+                continue;
+            }
+        }
+
         if rest.starts_with('[')
             && let Some(bracket_pos) = rest[1..].find(']')
             && bracket_pos > 0
@@ -2615,7 +5035,7 @@ fn strip_markdown_preview_markers(text: &str) -> String {
         }
 
         let mut stripped_marker = false;
-        for marker in ["***", "**", "~~", "`", "*"] {
+        for marker in ["***", "**", "~~", "*"] {
             if rest.starts_with(marker) {
                 idx += marker.len();
                 stripped_marker = true;
@@ -2635,6 +5055,11 @@ fn strip_markdown_preview_markers(text: &str) -> String {
 
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+
+fn leading_backtick_run_len(text: &str) -> Option<usize> {
+    let len = text.chars().take_while(|ch| *ch == '`').count();
+    (len > 0).then_some(len)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2642,6 +5067,141 @@ mod tests {
 
     fn names(matches: &[MentionMatch]) -> Vec<&str> {
         matches.iter().map(|m| m.name.as_str()).collect()
+    }
+
+    fn sorted_ids(mut ids: Vec<Uuid>) -> Vec<Uuid> {
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn click_display_col_maps_to_char_offset_ascii() {
+        // Clicking column N over "hello" lands the caret before the Nth char,
+        // and a click past the end clamps to the char count.
+        assert_eq!(char_offset_for_display_col("hello", 0), 0);
+        assert_eq!(char_offset_for_display_col("hello", 3), 3);
+        assert_eq!(char_offset_for_display_col("hello", 99), 5);
+    }
+
+    #[test]
+    fn click_display_col_accounts_for_wide_glyphs() {
+        // '世' and '界' render two cells each: 世 spans cols 0..2, 界 2..4,
+        // '!' at col 4. A click in a glyph's left half resolves to that glyph.
+        let text = "世界!";
+        assert_eq!(char_offset_for_display_col(text, 0), 0); // before 世
+        assert_eq!(char_offset_for_display_col(text, 1), 0); // left half of 世
+        assert_eq!(char_offset_for_display_col(text, 2), 1); // before 界
+        assert_eq!(char_offset_for_display_col(text, 4), 2); // before '!'
+    }
+
+    #[test]
+    fn click_global_offset_splits_into_line_and_col() {
+        // Newlines count as one char (matching build_composer_rows), so the
+        // offset just past a '\n' is column 0 of the next logical line.
+        let text = "ab\ncde";
+        assert_eq!(global_char_to_line_col(text, 0), (0, 0));
+        assert_eq!(global_char_to_line_col(text, 2), (0, 2));
+        assert_eq!(global_char_to_line_col(text, 3), (1, 0));
+        assert_eq!(global_char_to_line_col(text, 5), (1, 2));
+    }
+
+    #[test]
+    fn parse_gift_command_accepts_at_optional_username() {
+        assert_eq!(
+            parse_gift_command("/gift @alice 500"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+                message: None,
+            })
+        );
+        assert_eq!(
+            parse_gift_command("/gift alice 500"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+                message: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_gift_command_captures_optional_message() {
+        assert_eq!(
+            parse_gift_command("/gift @alice 500 happy birthday"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+                message: Some("happy birthday".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_gift_command_rejects_invalid_amounts_and_junk() {
+        assert_eq!(parse_gift_command("/gift"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gift @a 0"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gift @a -1"), Some(GiftParse::Invalid));
+        assert_eq!(
+            parse_gift_command("/gift @a 1000001"),
+            Some(GiftParse::Invalid)
+        );
+        assert_eq!(parse_gift_command("/gift @a wat"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gifted @a 5"), None);
+    }
+
+    #[test]
+    fn read_cursor_flush_queue_coalesces_room_until_deadline() {
+        let room_id = Uuid::from_u128(1);
+        let now = Instant::now();
+        let mut pending = PendingReadCursorFlush::default();
+
+        pending.queue(room_id, now);
+        let scheduled = pending.flush_at.unwrap();
+        pending.queue(room_id, now + Duration::from_millis(250));
+
+        assert_eq!(pending.flush_at, Some(scheduled));
+        assert_eq!(pending.rooms.len(), 1);
+        assert!(
+            pending
+                .take_due(scheduled - Duration::from_millis(1))
+                .is_empty()
+        );
+        assert_eq!(pending.take_due(scheduled), vec![room_id]);
+        assert!(pending.rooms.is_empty());
+        assert_eq!(pending.flush_at, None);
+    }
+
+    #[test]
+    fn read_cursor_flush_queue_batches_unique_rooms() {
+        let room_a = Uuid::from_u128(1);
+        let room_b = Uuid::from_u128(2);
+        let now = Instant::now();
+        let mut pending = PendingReadCursorFlush::default();
+
+        pending.queue(room_a, now);
+        pending.queue(room_b, now + Duration::from_millis(50));
+        pending.queue(room_a, now + Duration::from_millis(100));
+
+        assert_eq!(
+            sorted_ids(pending.take_due(now + READ_CURSOR_FLUSH_DELAY)),
+            vec![room_a, room_b]
+        );
+        assert!(pending.rooms.is_empty());
+        assert_eq!(pending.flush_at, None);
+    }
+
+    #[test]
+    fn read_cursor_flush_take_all_flushes_before_deadline() {
+        let room_id = Uuid::from_u128(1);
+        let now = Instant::now();
+        let mut pending = PendingReadCursorFlush::default();
+
+        pending.queue(room_id, now);
+
+        assert_eq!(pending.take_all(), vec![room_id]);
+        assert!(pending.rooms.is_empty());
+        assert_eq!(pending.flush_at, None);
     }
 
     fn online(names: &[&str]) -> HashSet<String> {
@@ -2712,34 +5272,22 @@ mod tests {
     }
 
     #[test]
-    fn rank_command_matches_lists_user_commands_for_empty_query() {
-        let ranked = rank_command_matches("");
-        let ranked_names = names(&ranked);
-        assert_eq!(
-            ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "dm", "exit"]
+    fn rank_room_name_matches_filters_and_prefixes_non_dm_rooms() {
+        let rust = make_room(Uuid::from_u128(1), "topic", "public", false, Some("rust"));
+        let recipes = make_room(
+            Uuid::from_u128(2),
+            "topic",
+            "public",
+            false,
+            Some("recipes"),
         );
-        let mut sorted = ranked_names.clone();
-        sorted.sort_unstable();
-        assert_eq!(ranked_names, sorted);
-        assert!(ranked.iter().all(|m| m.prefix == "/"));
-        assert!(ranked.iter().all(|m| m.description.is_some()));
-        assert!(!ranked_names.contains(&"create-room"));
-        assert!(!ranked_names.contains(&"delete-room"));
-        assert!(!ranked_names.contains(&"fill-room"));
-    }
+        let dm = make_room(Uuid::from_u128(3), "dm", "dm", false, None);
 
-    #[test]
-    fn rank_command_matches_excludes_admin_commands() {
-        assert!(rank_command_matches("c").is_empty());
-        assert!(rank_command_matches("delete").is_empty());
-        assert!(rank_command_matches("fill").is_empty());
-    }
+        let rooms = [&rust.0, &recipes.0, &dm.0];
+        let ranked = rank_room_name_matches(rooms, "r");
 
-    #[test]
-    fn rank_command_matches_hides_exact_command() {
-        assert!(rank_command_matches("exit").is_empty());
-        assert_eq!(names(&rank_command_matches("ex")), vec!["exit"]);
+        assert_eq!(names(&ranked), vec!["recipes", "rust"]);
+        assert!(ranked.iter().all(|m| m.prefix == "#"));
     }
 
     #[test]
@@ -2760,6 +5308,7 @@ mod tests {
                 username: "Alice".to_string(),
                 fingerprint: None,
                 peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),
@@ -2771,6 +5320,7 @@ mod tests {
                 username: "BOB".to_string(),
                 fingerprint: None,
                 peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 2,
                 last_login_at: Instant::now(),
@@ -2784,8 +5334,8 @@ mod tests {
 
     #[test]
     fn reply_preview_text_uses_message_body_for_nested_replies() {
-        let preview = reply_preview_text("> @mat: original message preview\nyou like tetris?");
-        assert_eq!(preview, "you like tetris?");
+        let preview = reply_preview_text("> @mat: original message preview\nyou like blocks?");
+        assert_eq!(preview, "you like blocks?");
     }
 
     #[test]
@@ -2797,9 +5347,56 @@ mod tests {
     }
 
     #[test]
+    fn news_modal_source_uses_full_article_snapshot_payload() {
+        use late_core::models::article::{Article, ArticleFeedItem};
+
+        let created = chrono::DateTime::parse_from_rfc3339("2026-05-08T11:28:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let user_id = Uuid::from_u128(9);
+        let item = ArticleFeedItem {
+            article: Article {
+                id: Uuid::from_u128(1),
+                created,
+                updated: created,
+                user_id,
+                url: "https://example.com/full".to_string(),
+                title: "Full article title".to_string(),
+                summary: "First full bullet keeps all words for two-line modal wrapping.\nSecond full bullet also keeps all words without chat truncation.\nThird full bullet remains available."
+                    .to_string(),
+                ascii_art: ".:-".to_string(),
+            },
+            author_username: "mat".to_string(),
+        };
+
+        let (payload, author, source_created, article_id) =
+            news_modal_source_from_articles(&[item], " https://example.com/full ").unwrap();
+
+        assert_eq!(payload.title, "Full article title");
+        assert!(payload.summary.contains("without chat truncation"));
+        assert!(!payload.summary.contains("..."));
+        assert_eq!(payload.ascii_art, ".:-");
+        assert_eq!(author, "@mat");
+        assert_eq!(source_created, created);
+        assert_eq!(article_id, Uuid::from_u128(1));
+    }
+
+    #[test]
     fn reply_preview_text_strips_markdown_markers() {
         let preview = reply_preview_text("**bold** `@graybeard` [docs](https://late.sh)");
         assert_eq!(preview, "bold @graybeard docs");
+    }
+
+    #[test]
+    fn reply_preview_text_preserves_unmatched_backtick_in_kaomoji() {
+        let preview = reply_preview_text("(╯`Д´)╯︵ ┻━┻");
+        assert_eq!(preview, "(╯`Д´)╯︵ ┻━┻");
+    }
+
+    #[test]
+    fn reply_preview_text_strips_double_backtick_code_markers() {
+        let preview = reply_preview_text("``(╯`Д´)╯︵ ┻━┻``");
+        assert_eq!(preview, "(╯`Д´)╯︵ ┻━┻");
     }
 
     #[test]
@@ -2853,7 +5450,7 @@ mod tests {
             actor_user_id: Uuid::now_v7(),
             target_user_id,
             room_id: Uuid::now_v7(),
-            room_slug: "general".to_string(),
+            room_slug: "lounge".to_string(),
             action: crate::moderation::command::RoomModAction::Kick,
             reason: String::new(),
             notified_sessions: 0,
@@ -2890,6 +5487,139 @@ mod tests {
     #[test]
     fn parse_dm_trims_whitespace() {
         assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
+    }
+
+    // --- parse_roll_command ---
+
+    fn specs(items: &[(u32, u32)]) -> RollParse {
+        RollParse::Specs(
+            items
+                .iter()
+                .map(|&(count, sides)| DieSpec { count, sides })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn parse_roll_bare_defaults_to_d20() {
+        assert_eq!(parse_roll_command("/roll"), Some(specs(&[(1, 20)])));
+    }
+
+    #[test]
+    fn parse_roll_single_die_without_count() {
+        assert_eq!(parse_roll_command("/roll d6"), Some(specs(&[(1, 6)])));
+    }
+
+    #[test]
+    fn parse_roll_with_count() {
+        assert_eq!(parse_roll_command("/roll 3d6"), Some(specs(&[(3, 6)])));
+    }
+
+    #[test]
+    fn parse_roll_mixed_dice() {
+        assert_eq!(
+            parse_roll_command("/roll 3d6 2d20"),
+            Some(specs(&[(3, 6), (2, 20)]))
+        );
+    }
+
+    #[test]
+    fn parse_roll_trims_extra_whitespace() {
+        assert_eq!(
+            parse_roll_command("  /roll   3d6  2d20  "),
+            Some(specs(&[(3, 6), (2, 20)]))
+        );
+    }
+
+    #[test]
+    fn parse_roll_rejects_malformed_args() {
+        assert_eq!(parse_roll_command("/roll 3"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll d"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll 0d6"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll 1d1"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll xd6"), Some(RollParse::Invalid));
+        assert_eq!(
+            parse_roll_command("/roll 3d6 bogus"),
+            Some(RollParse::Invalid)
+        );
+    }
+
+    #[test]
+    fn parse_roll_enforces_caps() {
+        assert_eq!(parse_roll_command("/roll 101d6"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll 1d1001"), Some(RollParse::Invalid));
+    }
+
+    #[test]
+    fn parse_roll_not_a_roll_command() {
+        assert_eq!(parse_roll_command("hello"), None);
+        assert_eq!(parse_roll_command("/rollover"), None);
+    }
+
+    #[test]
+    fn format_roll_result_single_group() {
+        let specs = vec![DieSpec { count: 3, sides: 6 }];
+        let rolls = vec![vec![1, 2, 5]];
+        assert_eq!(format_roll_result(&specs, &rolls), "3d6: [1 2 5] = 8");
+    }
+
+    #[test]
+    fn format_roll_result_single_die_omits_count() {
+        let specs = vec![DieSpec {
+            count: 1,
+            sides: 20,
+        }];
+        let rolls = vec![vec![12]];
+        assert_eq!(format_roll_result(&specs, &rolls), "d20: [12] = 12");
+    }
+
+    #[test]
+    fn format_formula_mixed() {
+        let specs = vec![
+            DieSpec {
+                count: 1,
+                sides: 20,
+            },
+            DieSpec { count: 3, sides: 6 },
+        ];
+        assert_eq!(format_formula(&specs), "d20 3d6");
+    }
+
+    #[test]
+    fn format_roll_result_mixed_groups() {
+        let specs = vec![
+            DieSpec { count: 3, sides: 6 },
+            DieSpec {
+                count: 2,
+                sides: 20,
+            },
+        ];
+        let rolls = vec![vec![2, 2, 5], vec![12, 20]];
+        assert_eq!(
+            format_roll_result(&specs, &rolls),
+            "3d6 2d20: [2 2 5] [12 20] = 41"
+        );
+    }
+
+    #[test]
+    fn roll_dice_respects_sides_and_count() {
+        let specs = vec![
+            DieSpec { count: 5, sides: 6 },
+            DieSpec {
+                count: 3,
+                sides: 20,
+            },
+        ];
+        let rolls = roll_dice(&specs, &mut rand_core::OsRng);
+        assert_eq!(rolls.len(), 2);
+        assert_eq!(rolls[0].len(), 5);
+        assert_eq!(rolls[1].len(), 3);
+        for v in &rolls[0] {
+            assert!((1..=6).contains(v));
+        }
+        for v in &rolls[1] {
+            assert!((1..=20).contains(v));
+        }
     }
 
     #[test]
@@ -2974,11 +5704,11 @@ mod tests {
     }
 
     #[test]
-    fn visual_order_places_work_after_showcases() {
+    fn visual_order_matches_cozy_rail_grouping() {
         let me = Uuid::from_u128(1);
         let alice = Uuid::from_u128(2);
         let bob = Uuid::from_u128(3);
-        let general = Uuid::from_u128(10);
+        let lounge = Uuid::from_u128(10);
         let announcements = Uuid::from_u128(11);
         let public_alpha = Uuid::from_u128(20);
         let public_zeta = Uuid::from_u128(21);
@@ -2994,7 +5724,7 @@ mod tests {
         let rooms = vec![
             make_room(public_zeta, "topic", "public", false, Some("zeta")),
             make_room(game_table, "game", "public", false, Some("bj-abc123")),
-            make_room(general, "general", "public", true, Some("general")),
+            make_room(lounge, "lounge", "public", true, Some("lounge")),
             (dm_bob.clone(), Vec::new()),
             make_room(private_beta, "topic", "private", false, Some("beta")),
             make_room(
@@ -3009,22 +5739,252 @@ mod tests {
         ];
 
         assert_eq!(
-            visual_order_for_rooms(&rooms, me, &usernames),
+            visual_order_for_rooms(RoomVisualOrderInput {
+                rooms: &rooms,
+                user_id: me,
+                usernames: &usernames,
+                unread_counts: &HashMap::new(),
+                room_last_message_at: &HashMap::new(),
+                feeds_available: true,
+                favorite_room_ids: &[],
+                collapsed_sections: &HashSet::new(),
+                ignored_user_ids: &HashSet::new(),
+            }),
             vec![
-                RoomSlot::Room(general),
+                RoomSlot::Room(lounge),
                 RoomSlot::Room(announcements),
-                RoomSlot::News,
-                RoomSlot::Showcase,
-                RoomSlot::Work,
                 RoomSlot::Notifications,
+                RoomSlot::News,
+                RoomSlot::Feeds,
                 RoomSlot::Discover,
-                RoomSlot::Room(public_alpha),
                 RoomSlot::Room(public_zeta),
                 RoomSlot::Room(private_beta),
+                RoomSlot::Room(public_alpha),
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
             ]
         );
+    }
+
+    #[test]
+    fn room_section_label_round_trips() {
+        for section in [
+            RoomSection::Favorites,
+            RoomSection::Core,
+            RoomSection::Channels,
+            RoomSection::Updates,
+            RoomSection::Dms,
+        ] {
+            assert_eq!(RoomSection::from_label(section.label()), Some(section));
+        }
+        assert_eq!(RoomSection::from_label("not-a-section"), None);
+    }
+
+    #[test]
+    fn collapsed_sections_drop_their_rooms_from_visual_order() {
+        let me = Uuid::from_u128(1);
+        let bob = Uuid::from_u128(3);
+        let lounge = Uuid::from_u128(10);
+        let announcements = Uuid::from_u128(11);
+        let public_alpha = Uuid::from_u128(20);
+        let dm_bob = make_dm(bob, me);
+        let usernames = HashMap::new();
+
+        let rooms = vec![
+            make_room(lounge, "lounge", "public", true, Some("lounge")),
+            make_room(
+                announcements,
+                "topic",
+                "public",
+                true,
+                Some("announcements"),
+            ),
+            make_room(public_alpha, "topic", "public", false, Some("alpha")),
+            (dm_bob.clone(), Vec::new()),
+        ];
+        let order = |collapsed: &HashSet<RoomSection>| {
+            visual_order_for_rooms(RoomVisualOrderInput {
+                rooms: &rooms,
+                user_id: me,
+                usernames: &usernames,
+                unread_counts: &HashMap::new(),
+                room_last_message_at: &HashMap::new(),
+                feeds_available: false,
+                favorite_room_ids: &[],
+                collapsed_sections: collapsed,
+                ignored_user_ids: &HashSet::new(),
+            })
+        };
+
+        // Nothing collapsed: every section's rooms are present.
+        let full = order(&HashSet::new());
+        assert!(full.contains(&RoomSlot::Room(lounge)));
+        assert!(full.contains(&RoomSlot::Room(public_alpha)));
+        assert!(full.contains(&RoomSlot::Room(dm_bob.id)));
+
+        // Channels collapsed: the channel drops out, Core/Updates/DMs stay.
+        let channels_collapsed = HashSet::from([RoomSection::Channels]);
+        let c = order(&channels_collapsed);
+        assert!(!c.contains(&RoomSlot::Room(public_alpha)));
+        assert!(c.contains(&RoomSlot::Room(lounge)));
+        assert!(c.contains(&RoomSlot::News));
+        assert!(c.contains(&RoomSlot::Room(dm_bob.id)));
+
+        // Core collapsed: core rooms and the core synthetic slots drop out.
+        let core_collapsed = HashSet::from([RoomSection::Core]);
+        let co = order(&core_collapsed);
+        assert!(!co.contains(&RoomSlot::Room(lounge)));
+        assert!(!co.contains(&RoomSlot::Room(announcements)));
+        assert!(!co.contains(&RoomSlot::Notifications));
+        assert!(!co.contains(&RoomSlot::News));
+        // Discover now lives at the bottom of Core, so it collapses with it.
+        assert!(!co.contains(&RoomSlot::Discover));
+        assert!(co.contains(&RoomSlot::Room(public_alpha)));
+
+        // Updates is now hosted by the Directory page, not the Home rail.
+        let updates_collapsed = HashSet::from([RoomSection::Updates]);
+        let u = order(&updates_collapsed);
+        assert!(u.contains(&RoomSlot::News));
+        assert!(!u.contains(&RoomSlot::Showcase));
+        assert!(!u.contains(&RoomSlot::Work));
+        // Discover lives in Core, which is expanded here, so it stays present.
+        assert!(u.contains(&RoomSlot::Discover));
+
+        // DMs collapsed: the DM drops out.
+        let dms_collapsed = HashSet::from([RoomSection::Dms]);
+        let d = order(&dms_collapsed);
+        assert!(!d.contains(&RoomSlot::Room(dm_bob.id)));
+        assert!(d.contains(&RoomSlot::Room(lounge)));
+    }
+
+    #[test]
+    fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
+        let me = Uuid::from_u128(1);
+        let alice = Uuid::from_u128(2);
+        let bob = Uuid::from_u128(3);
+        let dm_alice = make_dm(me, alice);
+        let dm_bob = make_dm(me, bob);
+        let older = chrono::Utc::now();
+        let newer = older + chrono::Duration::minutes(1);
+        let loaded_newer = newer + chrono::Duration::minutes(1);
+
+        let mut usernames = HashMap::new();
+        usernames.insert(alice, "alice".to_string());
+        usernames.insert(bob, "bob".to_string());
+
+        let rooms = vec![
+            (
+                dm_alice.clone(),
+                vec![ChatMessage {
+                    room_id: dm_alice.id,
+                    created: loaded_newer,
+                    updated: loaded_newer,
+                    ..make_msg(Uuid::from_u128(50))
+                }],
+            ),
+            (dm_bob.clone(), Vec::new()),
+        ];
+        let mut room_last_message_at = HashMap::new();
+        room_last_message_at.insert(dm_alice.id, Some(older));
+        room_last_message_at.insert(dm_bob.id, Some(newer));
+
+        let order = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &room_last_message_at,
+            feeds_available: false,
+            favorite_room_ids: &[],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &HashSet::new(),
+        });
+        let dm_order: Vec<_> = order
+            .into_iter()
+            .filter_map(|slot| match slot {
+                RoomSlot::Room(room_id) => Some(room_id),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(dm_order, vec![dm_bob.id, dm_alice.id]);
+    }
+
+    #[test]
+    fn visual_order_hides_dm_with_ignored_peer() {
+        let me = Uuid::from_u128(1);
+        let alice = Uuid::from_u128(2);
+        let bob = Uuid::from_u128(3);
+        let dm_alice = make_dm(me, alice);
+        let dm_bob = make_dm(me, bob);
+
+        let mut usernames = HashMap::new();
+        usernames.insert(alice, "alice".to_string());
+        usernames.insert(bob, "bob".to_string());
+
+        let rooms = vec![(dm_alice.clone(), Vec::new()), (dm_bob.clone(), Vec::new())];
+        let ignored = HashSet::from([bob]);
+
+        let order = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            favorite_room_ids: &[],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &ignored,
+        });
+
+        assert!(order.contains(&RoomSlot::Room(dm_alice.id)));
+        // The ignored peer's DM must not resurface in the rail.
+        assert!(!order.contains(&RoomSlot::Room(dm_bob.id)));
+
+        // Even when favorited, an ignored peer's DM stays hidden from every
+        // section so it can't be jump-addressable via the favorites path.
+        let favorited = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            favorite_room_ids: &[dm_bob.id],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &ignored,
+        });
+        assert!(!favorited.contains(&RoomSlot::Room(dm_bob.id)));
+    }
+
+    #[test]
+    fn message_is_ignored_in_covers_author_and_reply_target() {
+        let ignored_user = Uuid::from_u128(2);
+        let other = Uuid::from_u128(3);
+        let bot = Uuid::from_u128(4);
+        let ignored = HashSet::from([ignored_user]);
+
+        // Author ignored.
+        let mut by_author = make_msg(Uuid::from_u128(10));
+        by_author.user_id = ignored_user;
+        assert!(message_is_ignored_in(&ignored, &by_author));
+
+        // Bot reply directed at the ignored user.
+        let mut bot_reply = make_msg(Uuid::from_u128(11));
+        bot_reply.user_id = bot;
+        bot_reply.reply_to_user_id = Some(ignored_user);
+        assert!(message_is_ignored_in(&ignored, &bot_reply));
+
+        // Bot reply directed at someone else is kept.
+        let mut other_reply = make_msg(Uuid::from_u128(12));
+        other_reply.user_id = bot;
+        other_reply.reply_to_user_id = Some(other);
+        assert!(!message_is_ignored_in(&ignored, &other_reply));
+
+        // Ordinary message from a non-ignored author is kept.
+        let mut normal = make_msg(Uuid::from_u128(13));
+        normal.user_id = other;
+        assert!(!message_is_ignored_in(&ignored, &normal));
     }
 
     #[test]
@@ -3070,20 +6030,60 @@ mod tests {
     }
 
     #[test]
+    fn room_membership_command_target_ignores_stale_real_room_for_synthetic_entries() {
+        let stale_room = Uuid::from_u128(1);
+        let selected = SelectedRoomSlotState {
+            selected_room_id: Some(stale_room),
+            news_selected: true,
+            ..SelectedRoomSlotState::default()
+        };
+
+        assert_eq!(room_membership_command_target(None, selected), None);
+    }
+
+    #[test]
+    fn current_slot_prefers_synthetic_entry_over_stale_room_id() {
+        let stale_room = Uuid::from_u128(1);
+        let selected = SelectedRoomSlotState {
+            selected_room_id: Some(stale_room),
+            work_selected: true,
+            ..SelectedRoomSlotState::default()
+        };
+
+        assert_eq!(current_slot_from_state(selected), Some(RoomSlot::Work));
+    }
+
+    #[test]
+    fn room_membership_command_target_prefers_active_composer_room() {
+        let stale_room = Uuid::from_u128(1);
+        let composer_room = Uuid::from_u128(2);
+        let selected = SelectedRoomSlotState {
+            selected_room_id: Some(stale_room),
+            news_selected: true,
+            ..SelectedRoomSlotState::default()
+        };
+
+        assert_eq!(
+            room_membership_command_target(Some(composer_room), selected),
+            Some(composer_room)
+        );
+    }
+
+    #[test]
     fn room_slug_for_uses_explicit_room_id() {
-        let general_id = Uuid::from_u128(11);
+        let lounge_id = Uuid::from_u128(11);
         let announcements_id = Uuid::from_u128(12);
         let rooms = vec![
             (
                 ChatRoom {
-                    id: general_id,
+                    id: lounge_id,
                     created: chrono::Utc::now(),
                     updated: chrono::Utc::now(),
-                    kind: "general".to_string(),
+                    kind: "lounge".to_string(),
                     visibility: "public".to_string(),
                     auto_join: true,
                     permanent: true,
-                    slug: Some("general".to_string()),
+                    slug: Some("lounge".to_string()),
                     language_code: None,
                     dm_user_a: None,
                     dm_user_b: None,
@@ -3108,10 +6108,7 @@ mod tests {
             ),
         ];
 
-        assert_eq!(
-            room_slug_for(&rooms, general_id),
-            Some("general".to_string())
-        );
+        assert_eq!(room_slug_for(&rooms, lounge_id), Some("lounge".to_string()));
         assert_eq!(
             room_slug_for(&rooms, announcements_id),
             Some("announcements".to_string())
@@ -3119,10 +6116,20 @@ mod tests {
     }
 
     #[test]
-    fn resolve_room_jump_target_is_case_insensitive() {
+    fn room_jump_keys_continue_with_uppercase_after_digits() {
+        assert_eq!(
+            ROOM_JUMP_KEYS,
+            b"asdfghjklqwertyuiopzxcvbnm1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        );
+    }
+
+    #[test]
+    fn resolve_room_jump_target_is_case_sensitive() {
         let room_id = Uuid::from_u128(7);
+        let uppercase_room_id = Uuid::from_u128(8);
         let targets = [
             (b'a', RoomSlot::Room(room_id)),
+            (b'A', RoomSlot::Room(uppercase_room_id)),
             (b's', RoomSlot::News),
             (b'd', RoomSlot::Showcase),
             (b'w', RoomSlot::Work),
@@ -3132,16 +6139,13 @@ mod tests {
 
         assert_eq!(
             resolve_room_jump_target(&targets, b'A'),
-            Some(RoomSlot::Room(room_id))
+            Some(RoomSlot::Room(uppercase_room_id))
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b's'),
             Some(RoomSlot::News)
         );
-        assert_eq!(
-            resolve_room_jump_target(&targets, b'D'),
-            Some(RoomSlot::Showcase)
-        );
+        assert_eq!(resolve_room_jump_target(&targets, b'D'), None);
         assert_eq!(
             resolve_room_jump_target(&targets, b'w'),
             Some(RoomSlot::Work)
@@ -3150,10 +6154,7 @@ mod tests {
             resolve_room_jump_target(&targets, b'f'),
             Some(RoomSlot::Notifications)
         );
-        assert_eq!(
-            resolve_room_jump_target(&targets, b'G'),
-            Some(RoomSlot::Discover)
-        );
+        assert_eq!(resolve_room_jump_target(&targets, b'G'), None);
         assert_eq!(resolve_room_jump_target(&targets, b'x'), None);
     }
 
@@ -3218,6 +6219,33 @@ mod tests {
     fn parse_private_room_not_command() {
         assert_eq!(parse_room_command("hello", "/private"), None);
         assert_eq!(parse_room_command("/privates foo", "/private"), None);
+    }
+
+    #[test]
+    fn user_created_channel_name_length_allows_16_chars() {
+        assert!(!user_created_channel_name_too_long("1234567890123456"));
+    }
+
+    #[test]
+    fn user_created_channel_name_length_rejects_more_than_16_chars() {
+        assert!(user_created_channel_name_too_long("12345678901234567"));
+    }
+
+    #[test]
+    fn user_created_channel_name_length_counts_chars_not_bytes() {
+        let sixteen = "界".repeat(16);
+        let seventeen = "界".repeat(17);
+
+        assert!(!user_created_channel_name_too_long(&sixteen));
+        assert!(user_created_channel_name_too_long(&seventeen));
+    }
+
+    #[test]
+    fn parse_room_command_keeps_legacy_long_slugs_parseable() {
+        assert_eq!(
+            parse_room_command("/public #very-long-legacy-channel", "/public"),
+            Some("very-long-legacy-channel")
+        );
     }
 
     #[test]
@@ -3303,9 +6331,56 @@ mod tests {
     }
 
     #[test]
+    fn parse_cup_command_matches_coffee_and_tea_case_insensitively() {
+        assert_eq!(parse_cup_command("/coffee"), Some(CupKind::Coffee));
+        assert_eq!(parse_cup_command("/Coffee"), Some(CupKind::Coffee));
+        assert_eq!(parse_cup_command("  /COFFEE  "), Some(CupKind::Coffee));
+        assert_eq!(parse_cup_command("/tea"), Some(CupKind::Tea));
+        assert_eq!(parse_cup_command("/TEA"), Some(CupKind::Tea));
+    }
+
+    #[test]
+    fn parse_cup_command_rejects_arguments_and_typos() {
+        // Arguments fall through so the typo handler can still flag "/coffe".
+        assert_eq!(parse_cup_command("/coffee please"), None);
+        assert_eq!(parse_cup_command("/tea time"), None);
+        assert_eq!(parse_cup_command("/coffe"), None);
+        assert_eq!(parse_cup_command("/teas"), None);
+        assert_eq!(parse_cup_command("hello"), None);
+        assert_eq!(parse_cup_command(""), None);
+    }
+
+    #[test]
+    fn cup_art_uses_kind_specific_silhouette() {
+        let coffee = cup_art(CupKind::Coffee, 0);
+        assert!(
+            coffee.ends_with("c[_]"),
+            "coffee should end with mug glyph, got {coffee:?}"
+        );
+        let tea = cup_art(CupKind::Tea, 0);
+        assert!(
+            tea.ends_with("\\___/"),
+            "tea should end with handle-less cup, got {tea:?}"
+        );
+    }
+
+    #[test]
+    fn cup_art_rotates_steam_pattern_with_variant() {
+        let v0 = cup_art(CupKind::Coffee, 0);
+        let v1 = cup_art(CupKind::Coffee, 1);
+        let v2 = cup_art(CupKind::Coffee, 2);
+        let v3 = cup_art(CupKind::Coffee, 3);
+        assert_ne!(v0, v1);
+        assert_ne!(v1, v2);
+        assert_ne!(v2, v3);
+        // CUP_VARIANT_COUNT is the period — variant 4 wraps to variant 0.
+        assert_eq!(cup_art(CupKind::Coffee, 4), v0);
+    }
+
+    #[test]
     fn unknown_slash_command_detects_typo() {
         assert_eq!(unknown_slash_command("/lsit"), Some("/lsit"));
-        assert_eq!(unknown_slash_command("/lsit #general"), Some("/lsit"));
+        assert_eq!(unknown_slash_command("/lsit #lounge"), Some("/lsit"));
     }
 
     #[test]
@@ -3315,15 +6390,54 @@ mod tests {
         assert_eq!(unknown_slash_command("/bin/ls\nstill talking"), None);
     }
 
+    fn petname_request(input: &str) -> Option<PetnameRequest> {
+        match parse_petname_command(input) {
+            Some(PetnameParse::Request(r)) => Some(r),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn parse_petname_show_set_clear() {
+        assert_eq!(petname_request("/petname"), Some(PetnameRequest::Show));
+        assert_eq!(petname_request("/petname    "), Some(PetnameRequest::Show));
+        assert_eq!(
+            petname_request("/petname Whiskers"),
+            Some(PetnameRequest::Set("Whiskers".to_string()))
+        );
+        // Inner whitespace runs collapse to a single space.
+        assert_eq!(
+            petname_request("/petname Sir   Hopkins"),
+            Some(PetnameRequest::Set("Sir Hopkins".to_string()))
+        );
+        for word in ["clear", "remove", "none", "off", "CLEAR"] {
+            assert_eq!(
+                petname_request(&format!("/petname {word}")),
+                Some(PetnameRequest::Clear),
+                "{word}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_petname_ignores_non_petname_lines() {
+        assert!(parse_petname_command("/petnames").is_none());
+        assert!(parse_petname_command("/petnamer").is_none());
+        assert!(parse_petname_command("rename my pet").is_none());
+        assert!(parse_petname_command("/dm @alice").is_none());
+    }
+
     #[test]
     fn format_active_user_lines_sorts_and_shows_session_counts() {
+        let friend_id = Uuid::now_v7();
         let active_users = std::sync::Arc::new(std::sync::Mutex::new(HashMap::from([
             (
-                Uuid::now_v7(),
+                friend_id,
                 ActiveUser {
                     username: "zoe".to_string(),
                     fingerprint: None,
                     peer_ip: None,
+                    audio_source: late_core::models::user::AudioSource::Icecast,
                     sessions: Vec::new(),
                     connection_count: 2,
                     last_login_at: std::time::Instant::now(),
@@ -3335,6 +6449,7 @@ mod tests {
                     username: "alice".to_string(),
                     fingerprint: None,
                     peer_ip: None,
+                    audio_source: late_core::models::user::AudioSource::Icecast,
                     sessions: Vec::new(),
                     connection_count: 1,
                     last_login_at: std::time::Instant::now(),
@@ -3343,15 +6458,19 @@ mod tests {
         ])));
 
         assert_eq!(
-            format_active_user_lines(Some(&active_users)),
+            format_active_user_lines(Some(&active_users), &HashSet::new()),
             vec!["@alice".to_string(), "@zoe (2 sessions)".to_string()]
+        );
+        assert_eq!(
+            format_active_user_lines(Some(&active_users), &HashSet::from([friend_id])),
+            vec!["@alice".to_string(), "★ @zoe (2 sessions)".to_string()]
         );
     }
 
     #[test]
     fn format_active_user_lines_handles_missing_registry() {
         assert_eq!(
-            format_active_user_lines(None),
+            format_active_user_lines(None, &HashSet::new()),
             vec!["Active user list unavailable".to_string()]
         );
     }
@@ -3365,6 +6484,7 @@ mod tests {
             updated: chrono::Utc::now(),
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id: Uuid::from_u128(999),
             user_id: Uuid::from_u128(999),
             body: String::new(),
@@ -3376,6 +6496,104 @@ mod tests {
             reply_to_message_id: Some(reply_to_message_id),
             ..make_msg(id)
         }
+    }
+
+    #[test]
+    fn inline_image_url_in_body_accepts_image_url_with_query() {
+        assert_eq!(
+            inline_image_url_in_body("look https://example.com/image.webp?size=large"),
+            Some("https://example.com/image.webp?size=large".to_string())
+        );
+    }
+
+    #[test]
+    fn inline_image_request_candidates_scan_newest_messages_first() {
+        let now = Instant::now();
+        let mut messages: Vec<ChatMessage> = (1..=101)
+            .map(|idx| make_msg(Uuid::from_u128(idx)))
+            .collect();
+        messages[0].body = "https://files.example.com/newest.png".to_string();
+
+        let requests = inline_image_request_candidates(
+            &messages,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            now,
+        );
+
+        assert_eq!(
+            requests,
+            vec![(
+                messages[0].id,
+                "https://files.example.com/newest.png".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn inline_image_request_candidates_respect_retry_backoff() {
+        let now = Instant::now();
+        let mut message = make_msg(Uuid::from_u128(1));
+        message.body = "https://files.example.com/pending.png".to_string();
+        let messages = vec![message.clone()];
+        let mut failures = HashMap::from([(
+            message.id,
+            InlineImageFailure {
+                attempts: 1,
+                next_retry_at: now + Duration::from_secs(5),
+            },
+        )]);
+
+        assert!(
+            inline_image_request_candidates(
+                &messages,
+                &HashSet::new(),
+                &HashMap::new(),
+                &failures,
+                now,
+            )
+            .is_empty()
+        );
+
+        failures.insert(
+            message.id,
+            InlineImageFailure {
+                attempts: 1,
+                next_retry_at: now - Duration::from_secs(1),
+            },
+        );
+        assert_eq!(
+            inline_image_request_candidates(
+                &messages,
+                &HashSet::new(),
+                &HashMap::new(),
+                &failures,
+                now,
+            ),
+            vec![(
+                message.id,
+                "https://files.example.com/pending.png".to_string()
+            )]
+        );
+
+        failures.insert(
+            message.id,
+            InlineImageFailure {
+                attempts: INLINE_IMAGE_MAX_FAILURES,
+                next_retry_at: now - Duration::from_secs(1),
+            },
+        );
+        assert!(
+            inline_image_request_candidates(
+                &messages,
+                &HashSet::new(),
+                &HashMap::new(),
+                &failures,
+                now,
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -3498,5 +6716,35 @@ mod tests {
 
         let names: Vec<_> = dms.iter().map(|r| dm_sort_key(r, me, &usernames)).collect();
         assert_eq!(names, vec!["@alice", "@bob", "@charlie"]);
+    }
+
+    #[test]
+    fn parse_brb_bare_command() {
+        assert_eq!(parse_brb_command("/brb"), Some(String::new()));
+    }
+
+    #[test]
+    fn parse_brb_with_message() {
+        assert_eq!(
+            parse_brb_command("/brb grabbing coffee"),
+            Some("grabbing coffee".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_brb_trims_whitespace() {
+        assert_eq!(parse_brb_command("  /brb  "), Some(String::new()));
+        assert_eq!(
+            parse_brb_command("/brb   lots of spaces   "),
+            Some("lots of spaces".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_brb_rejects_non_command() {
+        assert_eq!(parse_brb_command("brb"), None);
+        assert_eq!(parse_brb_command("/brbx something"), None);
+        assert_eq!(parse_brb_command("hello /brb"), None);
+        assert_eq!(parse_brb_command(""), None);
     }
 }

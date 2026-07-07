@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use uuid::Uuid;
 
@@ -13,30 +11,23 @@ use crate::app::{
     common::theme,
     rooms::tictactoe::state::{Mark, State, Winner},
 };
+use crate::usernames::UsernameLookup;
 
 const SIDE_WIDE: u16 = 28;
 const SIDE_NARROW: u16 = 24;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<Uuid, String>) {
-    let block = Block::default()
-        .title(" Tic-Tac-Toe ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 11 || inner.width < 28 {
-        draw_compact(frame, inner, state);
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
+    if area.height < 11 || area.width < 28 {
+        draw_compact(frame, area, state);
         return;
     }
 
-    let side_w = if inner.width >= 60 {
+    let side_w = if area.width >= 60 {
         SIDE_WIDE
     } else {
         SIDE_NARROW
     };
-    let columns =
-        Layout::horizontal([Constraint::Min(20), Constraint::Length(side_w)]).split(inner);
+    let columns = Layout::horizontal([Constraint::Min(20), Constraint::Length(side_w)]).split(area);
     draw_board(frame, columns[0], state);
     draw_side(frame, columns[1], state, usernames);
 }
@@ -159,7 +150,7 @@ const O_3X3: &[&str] = &["███", "█ █", "███"];
 const X_1X1: &[&str] = &["X"];
 const O_1X1: &[&str] = &["O"];
 
-fn draw_side(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<Uuid, String>) {
+fn draw_side(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     let snapshot = state.snapshot();
     let seated = state.seat_index().is_some();
     let mut lines = vec![
@@ -185,7 +176,7 @@ fn draw_side(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<U
         ]);
     } else {
         lines.extend([
-            hint_line("s / Space / Enter", "sit"),
+            hint_line("s/Space/Enter", "sit"),
             Line::raw(""),
             hint_line("1-9", "place (after sitting)"),
             hint_line("w a s d", "move cursor"),
@@ -206,7 +197,7 @@ fn player_line(
     mark: &'static str,
     user_id: Option<Uuid>,
     state: &State,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) -> Line<'static> {
     let is_self = user_id.is_some_and(|uid| state.is_self(uid));
     let name = match user_id {
@@ -214,26 +205,22 @@ fn player_line(
             .get(&uid)
             .cloned()
             .unwrap_or_else(|| "player".to_string()),
-        None => "open seat".to_string(),
+        None => "open".to_string(),
     };
-    let mut spans = vec![
+    let display = if is_self { format!("▶ {name}") } else { name };
+    let name_style = if is_self {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else if user_id.is_some() {
+        Style::default().fg(theme::TEXT())
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    Line::from(vec![
         Span::styled(format!("{mark} "), mark_color(mark)),
-        Span::styled(
-            name,
-            Style::default().fg(if user_id.is_some() {
-                theme::TEXT()
-            } else {
-                theme::TEXT_DIM()
-            }),
-        ),
-    ];
-    if is_self {
-        spans.push(Span::styled(
-            "  (you)",
-            Style::default().fg(theme::AMBER_DIM()),
-        ));
-    }
-    Line::from(spans)
+        Span::styled(display, name_style),
+    ])
 }
 
 fn mark_color(mark: &str) -> Style {

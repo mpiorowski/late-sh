@@ -8,6 +8,8 @@ use std::{
 
 const DEV_TUNNEL_SECRET: &str = "dev-only-not-a-real-secret";
 
+use crate::app::voice::svc::VoiceConfig;
+
 #[derive(Clone, Debug)]
 pub struct AiConfig {
     pub enabled: bool,
@@ -20,6 +22,36 @@ pub struct WebTunnelConfig {
     pub token: String,
     pub username: String,
     pub fingerprint: String,
+}
+
+/// Embedded ircd settings; see devdocs/FRD-IRCD.md. All env vars are optional
+/// so environments without `LATE_IRC_*` settings are unaffected until the
+/// listener is explicitly enabled. The root Makefile opts local dev in.
+#[derive(Clone, Debug)]
+pub struct IrcConfig {
+    pub enabled: bool,
+    pub port: u16,
+    pub tls_cert_path: Option<PathBuf>,
+    pub tls_key_path: Option<PathBuf>,
+    pub max_conns_global: usize,
+    pub max_conns_per_user: usize,
+    pub max_auth_failures_per_ip: usize,
+    pub auth_failure_window_secs: u64,
+}
+
+impl Default for IrcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 6667,
+            tls_cert_path: None,
+            tls_key_path: None,
+            max_conns_global: 200,
+            max_conns_per_user: 3,
+            max_auth_failures_per_ip: 20,
+            auth_failure_window_secs: 300,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -36,9 +68,7 @@ pub struct Config {
     pub ssh_idle_timeout: u64,
     pub server_key_path: PathBuf,
     pub allowed_origins: Vec<String>,
-    pub liquidsoap_addr: String,
     pub frame_drop_log_every: u64,
-    pub vote_switch_interval_secs: u64,
     pub ssh_max_attempts_per_ip: usize,
     pub ssh_rate_limit_window_secs: u64,
     pub ssh_proxy_protocol: bool,
@@ -50,6 +80,23 @@ pub struct Config {
     pub tunnel_trusted_cidrs: Vec<IpNet>,
     pub web_tunnel: WebTunnelConfig,
     pub ai: AiConfig,
+    pub youtube_api_key: Option<String>,
+    pub voice: VoiceConfig,
+    pub irc: IrcConfig,
+    pub rebels_enabled: bool,
+    pub rebels_host: String,
+    pub rebels_port: u16,
+    pub rebels_secret: String,
+    pub nethack_enabled: bool,
+    pub nethack_host: String,
+    pub nethack_port: u16,
+    pub nethack_secret: String,
+    /// dopewars door game: reached over SSH like nethack. `enabled` gates only
+    /// the client; the host (`late-dopewars`) is deployed unconditionally.
+    pub dopewars_enabled: bool,
+    pub dopewars_host: String,
+    pub dopewars_port: u16,
+    pub dopewars_secret: String,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -81,10 +128,12 @@ fn required_bool(key: &str) -> anyhow::Result<bool> {
     Ok(v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
-fn optional_bool(key: &str) -> bool {
-    std::env::var(key)
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+fn parse_bool(key: &str, v: &str) -> anyhow::Result<bool> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => anyhow::bail!("{key} invalid: expected boolean"),
+    }
 }
 
 fn optional(key: &str) -> Option<String> {
@@ -104,7 +153,7 @@ fn parse_cidrs(key: &str) -> anyhow::Result<Vec<IpNet>> {
 }
 
 fn validate_tunnel_security(secret: &str, cidrs: &[IpNet]) -> anyhow::Result<()> {
-    if optional_bool("LATE_ALLOW_INSECURE_TUNNEL_DEV") {
+    if optional_bool("LATE_ALLOW_INSECURE_TUNNEL_DEV", false)? {
         return Ok(());
     }
     if secret == DEV_TUNNEL_SECRET {
@@ -131,6 +180,25 @@ fn validate_tunnel_security(secret: &str, cidrs: &[IpNet]) -> anyhow::Result<()>
     Ok(())
 }
 
+fn optional_bool(key: &str, default: bool) -> anyhow::Result<bool> {
+    match optional(key) {
+        Some(value) => parse_bool(key, &value),
+        None => Ok(default),
+    }
+}
+
+fn optional_parse<T: std::str::FromStr>(key: &str, default: T) -> anyhow::Result<T>
+where
+    T::Err: std::fmt::Display,
+{
+    match optional(key) {
+        Some(value) => value
+            .parse()
+            .map_err(|e| anyhow::anyhow!("{key} invalid: {e}")),
+        None => Ok(default),
+    }
+}
+
 impl Config {
     /// Log the full configuration at startup with human-readable descriptions.
     pub fn log_startup(&self) {
@@ -150,9 +218,8 @@ impl Config {
         );
         tracing::info!(
             icecast_url = %self.icecast_url,
-            liquidsoap_addr = %self.liquidsoap_addr,
             web_url = %self.web_url,
-            "audio: Icecast status endpoint, Liquidsoap telnet, web pairing URL"
+            "audio: Icecast status endpoint and web pairing URL"
         );
         tracing::info!(
             max_global = self.max_conns_global,
@@ -179,9 +246,8 @@ impl Config {
             "tunnel: bastion-only /tunnel WS listener (ClusterIP)"
         );
         tracing::info!(
-            vote_switch_secs = self.vote_switch_interval_secs,
             frame_drop_log_every = self.frame_drop_log_every,
-            "tuning: genre vote round duration, render frame-drop log throttle"
+            "tuning: render frame-drop log throttle"
         );
         tracing::info!(
             ai_enabled = self.ai.enabled,
@@ -190,18 +256,61 @@ impl Config {
             "ai: @bot chat responder model and status"
         );
         tracing::info!(
+            has_key = self.youtube_api_key.is_some(),
+            "youtube: Data API validation key status"
+        );
+        tracing::info!(
+            enabled = self.voice.enabled,
+            livekit_url = ?self.voice.livekit_url,
+            room = %self.voice.room_name,
+            has_key = self.voice.api_key.is_some(),
+            "voice: LiveKit RTC status"
+        );
+        tracing::info!(
             username = %self.web_tunnel.username,
             token_len = self.web_tunnel.token.len(),
             "web-tunnel: browser TUI display route"
         );
+        tracing::info!(
+            enabled = self.irc.enabled,
+            port = self.irc.port,
+            tls = self.irc.tls_cert_path.is_some(),
+            max_global = self.irc.max_conns_global,
+            max_per_user = self.irc.max_conns_per_user,
+            "irc: embedded ircd listener status"
+        );
+        tracing::info!(
+            enabled = self.rebels_enabled,
+            host = %self.rebels_host,
+            port = self.rebels_port,
+            has_secret = !self.rebels_secret.is_empty(),
+            "rebels: Rebels in the Sky door-game proxy target and status"
+        );
+        tracing::info!(
+            enabled = self.nethack_enabled,
+            host = %self.nethack_host,
+            port = self.nethack_port,
+            has_secret = !self.nethack_secret.is_empty(),
+            "nethack: NetHack door-game host (late-nethack) target and status"
+        );
+        tracing::info!(
+            enabled = self.dopewars_enabled,
+            host = %self.dopewars_host,
+            port = self.dopewars_port,
+            has_secret = !self.dopewars_secret.is_empty(),
+            "dopewars: dopewars door-game host (late-dopewars) target and status"
+        );
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
-        let ai_key_str = required("LATE_AI_API_KEY")?;
-        let ai_api_key = if ai_key_str.is_empty() {
-            None
+        let ai_enabled = required_bool("LATE_AI_ENABLED")?;
+        let ai_api_key = if ai_enabled {
+            Some(
+                optional("LATE_AI_API_KEY")
+                    .context("LATE_AI_API_KEY must be set when LATE_AI_ENABLED is true")?,
+            )
         } else {
-            Some(ai_key_str)
+            optional("LATE_AI_API_KEY")
         };
 
         let db = DbConfig {
@@ -216,6 +325,40 @@ impl Config {
         if web_tunnel_token.trim().is_empty() {
             anyhow::bail!("LATE_WEB_TUNNEL_TOKEN must not be empty");
         }
+        let voice = if optional_bool("LATE_VOICE_ENABLED", false)? {
+            VoiceConfig::enabled(
+                required("LATE_LIVEKIT_URL")?,
+                required("LATE_LIVEKIT_API_KEY")?,
+                required("LATE_LIVEKIT_API_SECRET")?,
+                optional("LATE_VOICE_ROOM").unwrap_or_else(|| "late-voice".to_string()),
+            )?
+        } else {
+            VoiceConfig::disabled()
+        };
+
+        let rebels_enabled = optional_bool("LATE_REBELS_ENABLED", true)?;
+        let rebels_secret = if rebels_enabled {
+            optional("LATE_REBELS_SECRET")
+                .context("LATE_REBELS_SECRET must be set when LATE_REBELS_ENABLED is true")?
+        } else {
+            optional("LATE_REBELS_SECRET").unwrap_or_default()
+        };
+
+        let nethack_enabled = optional_bool("LATE_NETHACK_ENABLED", false)?;
+        let nethack_secret = if nethack_enabled {
+            optional("LATE_NETHACK_SECRET")
+                .context("LATE_NETHACK_SECRET must be set when LATE_NETHACK_ENABLED is true")?
+        } else {
+            optional("LATE_NETHACK_SECRET").unwrap_or_default()
+        };
+
+        let dopewars_enabled = optional_bool("LATE_DOPEWARS_ENABLED", false)?;
+        let dopewars_secret = if dopewars_enabled {
+            optional("LATE_DOPEWARS_SECRET")
+                .context("LATE_DOPEWARS_SECRET must be set when LATE_DOPEWARS_ENABLED is true")?
+        } else {
+            optional("LATE_DOPEWARS_SECRET").unwrap_or_default()
+        };
 
         let tunnel_shared_secret = required_non_empty("LATE_TUNNEL_SHARED_SECRET")?;
         let tunnel_trusted_cidrs = parse_cidrs("LATE_TUNNEL_TRUSTED_CIDRS")?;
@@ -237,9 +380,7 @@ impl Config {
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect(),
-            liquidsoap_addr: required("LATE_LIQUIDSOAP_ADDR")?,
             frame_drop_log_every: required_parse("LATE_FRAME_DROP_LOG_EVERY")?,
-            vote_switch_interval_secs: required_parse("LATE_VOTE_SWITCH_INTERVAL_SECS")?,
             ssh_max_attempts_per_ip: required_parse("LATE_SSH_MAX_ATTEMPTS_PER_IP")?,
             ssh_rate_limit_window_secs: required_parse("LATE_SSH_RATE_LIMIT_WINDOW_SECS")?,
             ssh_proxy_protocol: required_bool("LATE_SSH_PROXY_PROTOCOL")?,
@@ -257,10 +398,73 @@ impl Config {
                     .unwrap_or_else(|| "web-tunnel-demo".to_string()),
             },
             ai: AiConfig {
-                enabled: required_bool("LATE_AI_ENABLED")?,
+                enabled: ai_enabled,
                 api_key: ai_api_key,
                 model: required("LATE_AI_MODEL")?,
             },
+            youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
+            voice,
+            irc: {
+                let defaults = IrcConfig::default();
+                let enabled = optional_bool("LATE_IRC_ENABLED", defaults.enabled)?;
+                let tls_cert_path = optional("LATE_IRC_TLS_CERT").map(PathBuf::from);
+                let tls_key_path = optional("LATE_IRC_TLS_KEY").map(PathBuf::from);
+                if enabled {
+                    match (&tls_cert_path, &tls_key_path) {
+                        (Some(_), Some(_)) | (None, None) => {}
+                        (Some(_), None) => {
+                            anyhow::bail!(
+                                "LATE_IRC_TLS_KEY must be set when LATE_IRC_TLS_CERT is set"
+                            );
+                        }
+                        (None, Some(_)) => {
+                            anyhow::bail!(
+                                "LATE_IRC_TLS_CERT must be set when LATE_IRC_TLS_KEY is set"
+                            );
+                        }
+                    }
+                }
+                let default_port = if enabled && tls_cert_path.is_some() {
+                    6697
+                } else {
+                    defaults.port
+                };
+                IrcConfig {
+                    enabled,
+                    port: optional_parse("LATE_IRC_PORT", default_port)?,
+                    tls_cert_path,
+                    tls_key_path,
+                    max_conns_global: optional_parse(
+                        "LATE_IRC_MAX_CONNS_GLOBAL",
+                        defaults.max_conns_global,
+                    )?,
+                    max_conns_per_user: optional_parse(
+                        "LATE_IRC_MAX_CONNS_PER_USER",
+                        defaults.max_conns_per_user,
+                    )?,
+                    max_auth_failures_per_ip: optional_parse(
+                        "LATE_IRC_MAX_AUTH_FAILURES_PER_IP",
+                        defaults.max_auth_failures_per_ip,
+                    )?,
+                    auth_failure_window_secs: optional_parse(
+                        "LATE_IRC_AUTH_FAILURE_WINDOW_SECS",
+                        defaults.auth_failure_window_secs,
+                    )?,
+                }
+            },
+            rebels_enabled,
+            rebels_host: optional("LATE_REBELS_HOST").unwrap_or_else(|| "frittura.org".to_string()),
+            rebels_port: optional_parse("LATE_REBELS_PORT", 3788)?,
+            rebels_secret,
+            nethack_enabled,
+            nethack_host: optional("LATE_NETHACK_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
+            nethack_port: optional_parse("LATE_NETHACK_PORT", 2323)?,
+            nethack_secret,
+            dopewars_enabled,
+            dopewars_host: optional("LATE_DOPEWARS_HOST")
+                .unwrap_or_else(|| "127.0.0.1".to_string()),
+            dopewars_port: optional_parse("LATE_DOPEWARS_PORT", 2324)?,
+            dopewars_secret,
         })
     }
 }

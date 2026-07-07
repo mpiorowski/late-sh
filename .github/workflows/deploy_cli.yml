@@ -3,9 +3,23 @@ name: deploy_cli
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy, for example v0.27.11-cli"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
 
 concurrency:
-  group: ${{ github.workflow }}-${{ endsWith(github.ref, '-cli') }}
+  group: ${{ ((github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli'))) && format('deploy-cli-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: true
 
 permissions:
@@ -14,14 +28,15 @@ permissions:
 jobs:
   ci:
     name: ci
-    if: endsWith(github.ref, '-cli')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli')) }}
     uses: ./.github/workflows/ci.yml
     with:
       package: late-cli
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
   build_cli:
     name: build_late_cli_${{ matrix.target }}
-    if: endsWith(github.ref, '-cli')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli')) }}
     needs: ci
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -45,30 +60,33 @@ jobs:
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             binary_name: late
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
             binary_name: late
-          - runner: windows-latest
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
             binary_name: late.exe
     steps:
       - name: checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
       - name: restore_rust_cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: cli-release-${{ matrix.target }}
+          cache-targets: false
 
       - name: install_linux_build_dependencies
         if: runner.os == 'Linux' && matrix.android != true
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config mold
+          sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev pkg-config mold
 
       - name: set_up_android_sdk
         if: matrix.android == true
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4.0.1
 
       - name: install_android_ndk
         if: matrix.android == true
@@ -105,8 +123,32 @@ jobs:
           esac
           echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
 
+      - name: configure_windows_msvc_runtime
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          @(
+            'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-C target-feature=+crt-static'
+            'CFLAGS_x86_64_pc_windows_msvc=/MT'
+            'CXXFLAGS_x86_64_pc_windows_msvc=/MT'
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: install_rust_target
         run: rustup target add ${{ matrix.target }}
+
+      - name: stamp_cli_version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.release_tag }}"
+          else
+            tag="${{ github.event.release.tag_name }}"
+          fi
+          test -n "$tag"
+          echo "stamping CLI version: ${tag}"
+          # build.rs reads this and embeds it as the binary version, matching
+          # the VERSION file published by publish_cli for the same tag.
+          echo "LATE_CLI_VERSION=${tag}" >> "$GITHUB_ENV"
 
       - name: cargo_build_cli
         if: matrix.android != true
@@ -131,21 +173,23 @@ jobs:
 
   publish_cli:
     name: publish_late_cli
-    if: endsWith(github.ref, '-cli')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli')) }}
     needs: build_cli
     runs-on: ubuntu-latest
-    environment: ${{ github.event.release.prerelease == true && 'staging' || 'production' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease == true && 'staging' || 'production') }}
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
       DIST_BUCKET: ${{ vars.BUCKET || 'late-sh-r' }}
       S3_ENDPOINT: ${{ vars.S3_ENDPOINT }}
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
-      IS_PRERELEASE: ${{ github.event.release.prerelease }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
+      IS_PRERELEASE: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging') || (github.event_name != 'workflow_dispatch' && github.event.release.prerelease) }}
     steps:
       - name: checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
       - name: download_cli_artifacts
         uses: actions/download-artifact@v8
@@ -211,7 +255,7 @@ jobs:
             --endpoint-url "${S3_ENDPOINT}"
 
       - name: upload_latest_distribution
-        if: github.event.release.prerelease == false
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || (github.event_name != 'workflow_dispatch' && github.event.release.prerelease == false) }}
         run: |
           aws s3 cp \
             publish/latest/ \

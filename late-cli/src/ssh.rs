@@ -24,6 +24,7 @@ use tracing::{debug, info};
 
 use super::{
     config::{Config, SshMode},
+    identity::ssh_key_setup_hint,
     pty::terminal_size_or_default,
 };
 
@@ -50,6 +51,22 @@ use tokio::process::{Child, Command};
 pub(super) const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
+const GENERIC_SSH_AUTH_HINT_MARKER: &str = "late.sh requires SSH public-key auth.";
+const TERMINAL_ENV_HINTS: &[&str] = &[
+    "TERM_PROGRAM",
+    "LC_TERMINAL",
+    "TERM_FEATURES",
+    "KITTY_WINDOW_ID",
+    "KITTY_PID",
+    "KITTY_PUBLIC_KEY",
+    "WEZTERM_PANE",
+    "WEZTERM_EXECUTABLE",
+    "KONSOLE_VERSION",
+    "GHOSTTY_RESOURCES_DIR",
+    "GHOSTTY_BIN_DIR",
+    "WT_SESSION",
+    "WT_PROFILE_ID",
+];
 
 #[cfg(any(
     target_os = "macos",
@@ -659,8 +676,9 @@ async fn spawn_native_ssh(
     let target = ResolvedTarget::from_config(config)?;
     let private_key = keys::load_secret_key(identity_file, None).with_context(|| {
         format!(
-            "failed to load SSH identity from {}",
-            identity_file.display()
+            "failed to load SSH identity from {}\n\n{}",
+            identity_file.display(),
+            ssh_key_setup_hint(identity_file)
         )
     })?;
     let handler = NativeClientHandler {
@@ -690,16 +708,20 @@ async fn spawn_native_ssh(
         .await
         .with_context(|| {
             format!(
-                "failed to authenticate to {}:{} as {}",
-                target.host, target.port, target.user
+                "failed to authenticate to {}:{} as {}\n\n{}",
+                target.host,
+                target.port,
+                target.user,
+                ssh_key_setup_hint(identity_file)
             )
         })?;
     if !auth.success() {
         anyhow::bail!(
-            "public key authentication failed for {}@{}:{}",
+            "public key authentication failed for {}@{}:{}\n\n{}",
             target.user,
             target.host,
-            target.port
+            target.port,
+            ssh_key_setup_hint(identity_file)
         );
     }
 
@@ -718,6 +740,7 @@ async fn spawn_native_ssh(
         .request_pty(true, &term, cols as u32, rows as u32, 0, 0, &[])
         .await
         .context("failed to request ssh pty")?;
+    send_terminal_env_hints(&channel).await;
     channel
         .request_shell(true)
         .await
@@ -749,6 +772,21 @@ async fn spawn_native_ssh(
         resize_handle: ResizeHandle::Native(writer_tx_for_resize),
         input_gate,
     })
+}
+
+async fn send_terminal_env_hints(channel: &russh::Channel<russh::client::Msg>) {
+    for name in TERMINAL_ENV_HINTS {
+        let Ok(value) = env::var(name) else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if let Err(err) = channel.set_env(false, *name, value).await {
+            debug!(%name, error = ?err, "failed to forward terminal env hint");
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1121,6 +1159,9 @@ impl client::Handler for NativeClientHandler {
         banner: &str,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
+        if banner.contains(GENERIC_SSH_AUTH_HINT_MARKER) {
+            return Ok(());
+        }
         eprint!("{banner}");
         Ok(())
     }
@@ -1283,6 +1324,7 @@ mod tests {
                 "/tmp/ssh_config".to_string(),
             ],
             audio_base_url: "https://audio.example".to_string(),
+            audio_output_device: None,
             api_base_url: "https://api.example".to_string(),
             verbose: false,
         }

@@ -26,6 +26,24 @@ impl ArticleFeedRead {
         Ok(())
     }
 
+    /// Seed a brand-new user's news cursor to "now" so the synthetic news
+    /// room doesn't surface the entire back catalog as unread on first login
+    /// (the unread count treats a missing row as "everything unread"). The
+    /// `DO NOTHING` makes this a one-time seed: it never moves an existing
+    /// cursor, so returning users keep their real unread count.
+    pub async fn seed_read_for_new_user(client: &Client, user_id: Uuid) -> Result<()> {
+        client
+            .execute(
+                "INSERT INTO article_feed_reads (user_id, last_read_at, updated)
+                 VALUES ($1, current_timestamp, current_timestamp)
+                 ON CONFLICT (user_id) DO NOTHING",
+                &[&user_id],
+            )
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn last_read_at(client: &Client, user_id: Uuid) -> Result<Option<DateTime<Utc>>> {
         let row = client
             .query_opt(

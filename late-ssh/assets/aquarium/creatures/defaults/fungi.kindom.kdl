@@ -1,0 +1,31 @@
+kindom fungi
+sauce author=mevanlc date=20260507 license=CCBYSA4.0
+
+constraints {
+    sessile attach=bottom to=floor
+}
+
+spawn { }
+
+preferences {
+    demersal 0.85
+    depth 0.75
+    reefer 0.8
+    nektonic 0.0
+    planktonic 0.0
+    territorial 0.0
+
+    territory-geometry {
+        rectangle {
+            width distribution=uniform min=1 max=4
+            height distribution=uniform min=1 max=3
+        }
+    }
+
+    sociality 0.1
+    schooler 0.0
+    kinophile 0.6
+    kinophobe 0.0
+    sedentary 1.0
+    flighty 0.0
+}

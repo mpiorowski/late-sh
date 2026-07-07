@@ -1,4 +1,3 @@
-pub mod cli_install;
 pub mod composer;
 pub mod markdown;
 pub(crate) mod mentions;
@@ -8,5 +7,6 @@ pub mod qr;
 pub mod readline;
 pub mod sidebar;
 pub mod splash_tips;
+pub mod textarea_input;
 pub mod theme;
 pub mod time;

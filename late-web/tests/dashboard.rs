@@ -52,11 +52,7 @@ async fn spawn_app(ssh_internal_url: String) -> (String, oneshot::Sender<()>) {
 async fn spawn_now_playing_server() -> (String, oneshot::Sender<()>) {
     async fn now_playing() -> Json<serde_json::Value> {
         Json(json!({
-            "listeners_count": 42,
-            "current_track": {
-                "title": "Night Drive",
-                "artist": "M83"
-            }
+            "listeners_count": 42
         }))
     }
 
@@ -102,8 +98,6 @@ async fn dashboard_page_renders_expected_fields() {
 
     assert!(body.contains("Dashboard"));
     assert!(body.contains("Mat's Stream"));
-    assert!(body.contains("Night Drive"));
-    assert!(body.contains("M83"));
     assert!(body.contains("42"));
     assert!(body.contains("LIVE"));
 
@@ -137,7 +131,7 @@ async fn status_partial_renders_with_valid_ranges() {
 }
 
 #[tokio::test]
-async fn now_playing_partial_renders_live_track_data() {
+async fn now_playing_partial_renders_live_listener_data() {
     init_test_tracing();
     let client = reqwest::Client::new();
     let (now_playing_url, now_playing_shutdown_tx) = spawn_now_playing_server().await;
@@ -146,8 +140,6 @@ async fn now_playing_partial_renders_live_track_data() {
 
     let body = client.get(url).send().await.unwrap().text().await.unwrap();
 
-    assert!(body.contains("Night Drive"));
-    assert!(body.contains("M83"));
     assert!(body.contains("42"));
     assert!(body.contains("LIVE"));
 

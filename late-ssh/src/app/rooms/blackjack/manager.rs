@@ -8,19 +8,21 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::{
+    activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
     rooms::{
         backend::{
-            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager,
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
+            RoomGameManager,
         },
         blackjack::{
             create_modal::BlackjackCreateModal,
             player::BlackjackPlayerDirectory,
             settings::BlackjackTableSettings,
-            state::{BlackjackSnapshot, Phase, State},
+            state::{BlackjackSnapshot, Phase, SeatPhase, State},
             svc::{BlackjackEvent, BlackjackService},
         },
-        svc::{GameKind, RoomListItem},
+        svc::{GameKind, RoomListItem, RoomsService},
     },
 };
 
@@ -28,18 +30,30 @@ use crate::app::{
 pub struct BlackjackTableManager {
     chip_svc: ChipService,
     player_directory: BlackjackPlayerDirectory,
+    activity: ActivityPublisher,
+    rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, BlackjackService>>>,
     event_tx: broadcast::Sender<BlackjackEvent>,
+    room_event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl BlackjackTableManager {
-    pub fn new(chip_svc: ChipService, player_directory: BlackjackPlayerDirectory) -> Self {
+    pub fn new(
+        chip_svc: ChipService,
+        player_directory: BlackjackPlayerDirectory,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel::<BlackjackEvent>(256);
+        let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
             player_directory,
+            activity,
+            rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
+            room_event_tx,
         }
     }
 
@@ -63,7 +77,9 @@ impl BlackjackTableManager {
                     self.chip_svc.clone(),
                     self.player_directory.clone(),
                     event_tx,
+                    self.activity.clone(),
                     settings,
+                    self.rooms_service.clone(),
                 )
             })
             .clone()
@@ -71,10 +87,17 @@ impl BlackjackTableManager {
 
     fn forward_table_events(&self, room_id: Uuid, mut rx: broadcast::Receiver<BlackjackEvent>) {
         let event_tx = self.event_tx.clone();
+        let room_event_tx = self.room_event_tx.clone();
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
+                        if let BlackjackEvent::SeatJoined { user_id, .. } = &event {
+                            let _ = room_event_tx.send(RoomGameEvent::SeatJoined {
+                                room_id,
+                                user_id: *user_id,
+                            });
+                        }
                         let _ = event_tx.send(event);
                     }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
@@ -142,6 +165,34 @@ impl RoomGameManager for BlackjackTableManager {
         })
     }
 
+    fn is_user_seated(&self, room_id: Uuid, user_id: Uuid) -> bool {
+        self.tables.lock_recover().get(&room_id).is_some_and(|svc| {
+            svc.current_snapshot()
+                .seats
+                .iter()
+                .any(|seat| seat.user_id == Some(user_id))
+        })
+    }
+
+    fn is_awaiting_user_action(&self, room: &RoomListItem, user_id: Uuid) -> bool {
+        self.tables.lock_recover().get(&room.id).is_some_and(|svc| {
+            let snapshot = svc.current_snapshot();
+            snapshot.phase == Phase::PlayerTurn
+                && snapshot
+                    .seats
+                    .iter()
+                    .any(|seat| seat.user_id == Some(user_id) && seat.phase == SeatPhase::Playing)
+        })
+    }
+
+    fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
+        self.room_event_tx.subscribe()
+    }
+
+    fn seat_join_ascii(&self) -> &'static [&'static str] {
+        &["╭───╮╭───╮", "│░░░││10♣│", "╰───╯╰───╯"]
+    }
+
     fn enter(
         &self,
         room: &RoomListItem,
@@ -161,6 +212,10 @@ impl ActiveRoomBackend for State {
 
     fn tick(&mut self) {
         State::tick(self);
+    }
+
+    fn awaiting_my_action(&self) -> bool {
+        self.awaiting_action()
     }
 
     fn touch_activity(&self) {

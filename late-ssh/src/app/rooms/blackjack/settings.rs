@@ -92,6 +92,11 @@ impl BlackjackTableSettings {
         self.pace.action_timeout_secs()
     }
 
+    /// Compact one-liner shown in room directory/dashboard summaries.
+    pub fn meta_label(&self) -> String {
+        format!("{} · {}", self.stake_label(), self.pace.label())
+    }
+
     fn normalized_ref(&self) -> Self {
         self.clone().normalized()
     }

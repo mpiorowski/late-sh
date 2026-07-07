@@ -8,6 +8,7 @@ use crate::{
     authz::Permissions,
     session::{SessionMessage, SessionRegistry},
     state::ActiveUsers,
+    usernames::{self, UsernameDirectory},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,17 +21,23 @@ pub(crate) struct ServerBanSnapshot {
 #[derive(Clone, Default)]
 pub(crate) struct ModerationSessionEffects {
     active_users: Option<ActiveUsers>,
+    username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
+    irc_registry: Option<crate::ircd::registry::IrcRegistry>,
 }
 
 impl ModerationSessionEffects {
     pub(crate) fn new(
         active_users: Option<ActiveUsers>,
+        username_directory: Option<UsernameDirectory>,
         session_registry: Option<SessionRegistry>,
+        irc_registry: Option<crate::ircd::registry::IrcRegistry>,
     ) -> Self {
         Self {
             active_users,
+            username_directory,
             session_registry,
+            irc_registry,
         }
     }
 
@@ -75,8 +82,30 @@ impl ModerationSessionEffects {
         notified
     }
 
+    pub(crate) async fn notify_toast(&self, user_id: Uuid, message: String) -> usize {
+        let mut notified = 0;
+        for token in self.session_tokens_for_user_id(user_id) {
+            if self
+                .send(
+                    &token,
+                    SessionMessage::Toast {
+                        message: message.clone(),
+                        error: true,
+                    },
+                )
+                .await
+            {
+                notified += 1;
+            }
+        }
+        notified
+    }
+
     pub(crate) async fn terminate_user_sessions(&self, user_id: Uuid, reason: &str) -> usize {
         let mut terminated = 0;
+        if let Some(irc_registry) = &self.irc_registry {
+            terminated += irc_registry.disconnect_user(user_id, reason);
+        }
         for token in self.session_tokens_for_user_id(user_id) {
             if self
                 .send(
@@ -131,6 +160,67 @@ impl ModerationSessionEffects {
         notified
     }
 
+    pub(crate) async fn broadcast_ultimate_cast(
+        &self,
+        ultimate_id: String,
+        seed: u64,
+        duration_ms: u64,
+    ) -> usize {
+        let mut notified = 0;
+        for token in self.all_session_tokens() {
+            if self
+                .send(
+                    &token,
+                    SessionMessage::UltimateCast {
+                        ultimate_id: ultimate_id.clone(),
+                        seed,
+                        duration_ms,
+                    },
+                )
+                .await
+            {
+                notified += 1;
+            }
+        }
+        notified
+    }
+
+    pub(crate) fn update_active_username(&self, user_id: Uuid, username: &str) -> bool {
+        let mut old_username = None;
+        if let Some(directory) = &self.username_directory {
+            old_username = usernames::snapshot(directory).get(&user_id).cloned();
+            usernames::upsert(directory, user_id, username);
+        }
+        let Some(active_users) = self.active_users.as_ref() else {
+            if let Some(irc_registry) = &self.irc_registry
+                && let Some(old_username) = old_username
+                && old_username != username
+            {
+                irc_registry.project_username_change(user_id, &old_username, username);
+            }
+            return false;
+        };
+        let mut guard = active_users.lock_recover();
+        let Some(user) = guard.get_mut(&user_id) else {
+            if let Some(irc_registry) = &self.irc_registry
+                && let Some(old_username) = old_username
+                && old_username != username
+            {
+                irc_registry.project_username_change(user_id, &old_username, username);
+            }
+            return false;
+        };
+        old_username.get_or_insert_with(|| user.username.clone());
+        user.username = username.to_string();
+        if let Some(irc_registry) = &self.irc_registry
+            && let Some(old_username) = old_username
+            && old_username != username
+        {
+            irc_registry.project_username_change(user_id, &old_username, username);
+        }
+        true
+    }
+
     async fn send(&self, token: &str, msg: SessionMessage) -> bool {
         let Some(registry) = self.session_registry.as_ref() else {
             return false;
@@ -147,6 +237,18 @@ impl ModerationSessionEffects {
             .get(&user_id)
             .map(|user| unique_session_tokens(user.sessions.iter().map(|session| &session.token)))
             .unwrap_or_default()
+    }
+
+    fn all_session_tokens(&self) -> Vec<String> {
+        let Some(active_users) = self.active_users.as_ref() else {
+            return Vec::new();
+        };
+        let guard = active_users.lock_recover();
+        unique_session_tokens(
+            guard
+                .values()
+                .flat_map(|user| user.sessions.iter().map(|session| &session.token)),
+        )
     }
 }
 

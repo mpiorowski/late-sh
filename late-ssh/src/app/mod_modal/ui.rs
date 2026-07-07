@@ -39,6 +39,14 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ModModalState) {
     draw_log(frame, layout[0], state);
     draw_input(frame, layout[1], state);
     draw_footer(frame, layout[2]);
+    if state.is_autocomplete_active() {
+        crate::app::chat::ui::draw_mention_autocomplete(
+            frame,
+            layout[1],
+            state.autocomplete_matches(),
+            state.autocomplete_selected(),
+        );
+    }
 }
 
 pub fn mouse_scroll_delta(mouse: MouseEvent) -> Option<i16> {
@@ -95,7 +103,7 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
     let line = Line::from(vec![
         Span::styled(" Enter", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" run  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Ctrl+L", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("Ctrl+X", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" clear screen  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↑↓ PgUp/PgDn", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
@@ -164,6 +172,76 @@ mod tests {
         assert!(
             text.contains("line 39"),
             "latest log line should render above the command box:\n{text}"
+        );
+    }
+
+    #[test]
+    fn draw_mod_modal_renders_mention_autocomplete() {
+        let backend = TestBackend::new(100, 32);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut state = ModModalState::new();
+        state.update_autocomplete_matches(
+            0,
+            String::new(),
+            vec![crate::app::chat::state::MentionMatch {
+                name: "alice".to_string(),
+                online: true,
+                prefix: "@",
+                description: None,
+            }],
+        );
+
+        terminal
+            .draw(|frame| draw(frame, frame.area(), &state))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+
+        assert!(
+            text.contains("@mentions") && text.contains("@alice"),
+            "autocomplete popup should render above the mod command input:\n{text}"
+        );
+    }
+
+    #[test]
+    fn draw_mod_modal_renders_room_autocomplete() {
+        let backend = TestBackend::new(100, 32);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut state = ModModalState::new();
+        state.update_autocomplete_matches(
+            0,
+            String::new(),
+            vec![crate::app::chat::state::MentionMatch {
+                name: "lounge".to_string(),
+                online: true,
+                prefix: "#",
+                description: None,
+            }],
+        );
+
+        terminal
+            .draw(|frame| draw(frame, frame.area(), &state))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+
+        assert!(
+            text.contains("#rooms") && text.contains("#lounge"),
+            "room autocomplete popup should render above the mod command input:\n{text}"
         );
     }
 }

@@ -13,9 +13,9 @@ async fn test_chat_room_member() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
 
     let user = User::create(
         &client,
@@ -58,9 +58,9 @@ async fn room_bans_block_join_and_auto_join() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
     let user = User::create(
         &client,
         UserParams {

@@ -1,5 +1,8 @@
 use crate::app::{
-    bonsai::care::{CareMode, branch_targets_for},
+    bonsai::{
+        care::{CareMode, branch_targets_for},
+        svc::{BonsaiService, WATER_CHIP_BONUS},
+    },
     input::{MouseEventKind, ParsedInput},
     state::App,
 };
@@ -61,13 +64,48 @@ fn water(app: &mut App) {
         app.bonsai_care_state.message = Some("New seed planted".to_string());
         return;
     }
-    let gained = app.bonsai_state.water();
-    if gained > 0 {
+    let dynamic_unlocked = app.shop_state.has_dynamic_bonsai();
+    let dynamic_was_dead = dynamic_unlocked && !app.bonsai_v2_state.is_alive;
+    if dynamic_was_dead {
+        app.bonsai_v2_state.respawn();
+    }
+    let earns_chips = app.bonsai_state.last_watered != Some(BonsaiService::today());
+    let classic_gain = app.bonsai_state.water();
+    let dynamic_changed = if dynamic_unlocked && !dynamic_was_dead {
+        app.bonsai_v2_state.water()
+    } else {
+        false
+    };
+    if let Some(gained) = classic_gain {
         app.bonsai_care_state.mark_watered();
-        app.bonsai_care_state.message = Some(format!("Watered: +{gained} points"));
+        let chip_bonus = if earns_chips {
+            format!(", +{WATER_CHIP_BONUS} chips")
+        } else {
+            String::new()
+        };
+        let growth_text = if gained > 0 {
+            format!("+{gained} points")
+        } else {
+            "growth maxed".to_string()
+        };
+        let dynamic_text = if dynamic_was_dead {
+            ", dynamic replanted"
+        } else if dynamic_changed {
+            ", dynamic watered"
+        } else {
+            ""
+        };
+        app.bonsai_care_state.message =
+            Some(format!("Watered: {growth_text}{chip_bonus}{dynamic_text}"));
     } else {
         app.bonsai_care_state.watered = true;
-        app.bonsai_care_state.message = Some("Already watered today".to_string());
+        app.bonsai_care_state.message = Some(if dynamic_was_dead {
+            "Already watered today, dynamic replanted".to_string()
+        } else if dynamic_changed {
+            "Already watered today, dynamic watered".to_string()
+        } else {
+            "Already watered today".to_string()
+        });
     }
 }
 
@@ -153,12 +191,17 @@ fn close(app: &mut App) {
 
 fn open_help(app: &mut App) {
     app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
+    app.help_modal_state
         .open(crate::app::help_modal::data::HelpTopic::Bonsai);
     app.show_help = true;
 }
 
 fn copy_snippet(app: &mut App) {
-    app.pending_clipboard = Some(app.bonsai_state.share_snippet());
+    app.pending_clipboard = Some(
+        app.bonsai_state
+            .share_snippet_with_care(&app.bonsai_care_state),
+    );
     app.banner = Some(crate::app::common::primitives::Banner::success(
         "Bonsai copied to clipboard!",
     ));

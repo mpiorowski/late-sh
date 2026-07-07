@@ -1,0 +1,16 @@
+name "bumble"
+title "a smaller fish"
+description "round of body with subtle dorsal fin, pelvic fin, long tail and narrow snout"
+sauce author=mevanlc date=20260503 license=CCBYSA4.0
+
+left ###"""
+   .-.
+ -(o )-<
+   '-'
+"""###
+
+right ###"""
+  .-.
+>-( o)-
+  '-'
+"""###

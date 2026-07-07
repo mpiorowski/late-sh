@@ -9,18 +9,24 @@ services:
       - "${LATE_SSH_PORT}:${LATE_SSH_PORT}"
       - "${LATE_API_PORT}:${LATE_API_PORT}"
       - "${LATE_TUNNEL_PORT}:${LATE_TUNNEL_PORT}"
+      - "${LATE_IRC_PORT:-6667}:${LATE_IRC_PORT:-6667}"
+      - "${LATE_IRC_TLS_HOST_PORT:-6697}:6697"
     env_file:
       - .env
       - path: .env.local
         required: false
     volumes:
       - .:/app
-      - cargo-registry-ssh:/usr/local/cargo/registry
-      - cargo-git-ssh:/usr/local/cargo/git
-      - cargo-target-ssh:/app/target
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
     depends_on:
       postgres:
         condition: service_healthy
+      service-nethack:
+        condition: service_started
+      service-dopewars:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "timeout 2 bash -c 'exec 3<>/dev/tcp/localhost/${LATE_API_PORT}; printf \"GET /api/health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \"200\"' || exit 1"]
       interval: 30s
@@ -65,17 +71,49 @@ services:
         required: false
     volumes:
       - .:/app
-      - cargo-registry-web:/usr/local/cargo/registry
-      - cargo-git-web:/usr/local/cargo/git
-      - cargo-target-web:/app/target
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
     depends_on:
       postgres:
+        condition: service_healthy
+      service-ssh:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/${LATE_WEB_PORT}' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+  service-nethack:
+    build:
+      context: .
+      target: dev-nethack
+    container_name: ${INSTANCE}-nethack
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
+
+  service-dopewars:
+    build:
+      context: .
+      target: dev-dopewars
+    container_name: ${INSTANCE}-dopewars
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
 
   postgres:
     container_name: ${INSTANCE}-postgres
@@ -87,10 +125,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
 
   icecast:
     image: libretime/icecast:2.4.4
@@ -114,19 +153,22 @@ services:
       - ./infra/liquidsoap/dev/lofi.m3u:/etc/liquidsoap/lofi.m3u:ro
       - ./infra/liquidsoap/dev/classic.m3u:/etc/liquidsoap/classic.m3u:ro
       - ./infra/liquidsoap/dev/ambient.m3u:/etc/liquidsoap/ambient.m3u:ro
-      - ./infra/liquidsoap/dev/jazz.m3u:/etc/liquidsoap/jazz.m3u:ro
       - ./music:/music:ro
     command: ["liquidsoap", "/etc/liquidsoap/radio.liq"]
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: ${INSTANCE}-livekit
+    command: ["--dev", "--bind", "0.0.0.0"]
     ports:
-      - "${LATE_LIQUIDSOAP_HOST_PORT}:1234"
+      - "${LATE_LIVEKIT_HOST_PORT}:7880"
+      - "${LATE_LIVEKIT_RTC_TCP_PORT}:7881"
+      - "${LATE_LIVEKIT_RTC_UDP_PORT}:7882/udp"
 
 volumes:
-  cargo-registry-ssh:
-  cargo-git-ssh:
-  cargo-target-ssh:
-  cargo-registry-web:
-  cargo-git-web:
-  cargo-target-web:
   cargo-registry-bastion:
   cargo-git-bastion:
   cargo-target-bastion:
+  cargo-registry:
+  cargo-git:
+  cargo-target:

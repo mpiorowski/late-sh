@@ -1,3 +1,5 @@
+use crate::app::activity::event::ActivityGame;
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -7,8 +9,33 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
+    use super::ActivityGame;
+
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
+    }
+
+    fn game_label(game: ActivityGame) -> &'static str {
+        match game {
+            ActivityGame::Asterion => "asterion",
+            ActivityGame::Blackjack => "blackjack",
+            ActivityGame::Chess => "chess",
+            ActivityGame::LeWord => "le_word",
+            ActivityGame::Minesweeper => "minesweeper",
+            ActivityGame::Mud => "mud",
+            ActivityGame::Nethack => "nethack",
+            ActivityGame::Nonogram => "nonogram",
+            ActivityGame::Poker => "poker",
+            ActivityGame::RubiksCube => "rubiks_cube",
+            ActivityGame::Sshattrick => "sshattrick",
+            ActivityGame::Solitaire => "solitaire",
+            ActivityGame::Sudoku => "sudoku",
+            ActivityGame::TicTacToe => "tictactoe",
+            ActivityGame::Lateris => "tetris",
+            ActivityGame::TwentyFortyEight => "2048",
+            ActivityGame::Tron => "tron",
+            ActivityGame::Snake => "snake",
+        }
     }
 
     fn ssh_connections_total() -> &'static Counter<u64> {
@@ -105,12 +132,12 @@ mod inner {
         })
     }
 
-    fn votes_cast_total() -> &'static Counter<u64> {
+    fn game_wins_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
             meter()
-                .u64_counter("late_ssh_votes_cast_total")
-                .with_description("Votes successfully cast")
+                .u64_counter("late_ssh_game_wins_total")
+                .with_description("Games won by game name")
                 .build()
         })
     }
@@ -163,13 +190,15 @@ mod inner {
         chat_messages_edited_total().add(1, &[]);
     }
 
-    pub fn record_vote_cast(genre: &str) {
-        votes_cast_total().add(1, &[KeyValue::new("genre", genre.to_string())]);
+    pub fn record_game_win(game: ActivityGame) {
+        game_wins_total().add(1, &[KeyValue::new("game", game_label(game))]);
     }
 }
 
 #[cfg(not(feature = "otel"))]
 mod inner {
+    use super::ActivityGame;
+
     pub fn record_ssh_connection() {}
     pub fn add_ssh_session(_delta: i64) {}
     pub fn record_ws_pair_success() {}
@@ -179,7 +208,7 @@ mod inner {
     pub fn record_render_frame_drop() {}
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
-    pub fn record_vote_cast(_genre: &str) {}
+    pub fn record_game_win(_game: ActivityGame) {}
 }
 
 pub use inner::*;

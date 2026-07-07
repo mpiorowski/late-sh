@@ -9,6 +9,10 @@ otel = ["late-core/otel", "opentelemetry", "tracing-opentelemetry", "opentelemet
 
 [dependencies]
 late-core.workspace = true
+asterion-core.workspace = true
+sshattrick-core.workspace = true
+nes = { path = "../vendor/potatis/nes" }
+irc-proto = { path = "../vendor/irc-proto" }
 
 # Core Utils
 anyhow = { workspace = true }
@@ -20,16 +24,22 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 ipnet.workspace = true
+kdl.workspace = true
 
 # Async Runtime
 tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+tokio-util = { workspace = true, features = ["codec"] }
 futures-util = { workspace = true }
+rustls.workspace = true
+rustls-pemfile.workspace = true
 
 # Memory allocator
 tikv-jemallocator = "0.6"
 
 # Database
 tokio-postgres = { workspace = true }
+cozy-chess.workspace = true
 crossterm.workspace = true
 dartboard-core.workspace = true
 dartboard-editor.workspace = true
@@ -44,8 +54,13 @@ getrandom.workspace = true
 rand_core = { workspace = true, features = ["std"] }
 base64.workspace = true
 bitflags.workspace = true
+chafa-syms-rs.workspace = true
+blake3.workspace = true
+hex.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+vt100.workspace = true
 vte.workspace = true
-pkcs5.workspace = true
 russh.workspace = true
 
 # Web / HTTP
@@ -60,6 +75,11 @@ rumenx-sudoku.workspace = true
 opentelemetry = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry-http = { workspace = true, optional = true }
+rand.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# PTY allocation for the nethack door game (openpty/setsid/TIOCSWINSZ).
+nix = { workspace = true, features = ["term", "process"] }
 
 [dev-dependencies]
 late-core = { workspace = true, features = ["testing"] }

@@ -1,0 +1,43 @@
+[package]
+name = "late-nethack"
+version = "0.1.0"
+edition = "2024"
+
+# Standalone host for the NetHack door game. Runs the real upstream NetHack
+# binary on a PTY and exposes it over SSH, so late-ssh reaches it as a
+# network-proxied door (the rebels camp) instead of spawning a local child.
+# See late-ssh/src/app/door/nethack/CONTEXT.md.
+
+[[bin]]
+name = "late-nethack"
+path = "src/main.rs"
+
+[features]
+# No-op: CI builds/tests the workspace with `--features otel`, which requires
+# every member to define the feature. This host has no telemetry deps of its own
+# (it logs via tracing-subscriber fmt), so `otel` is a no-op here. Wire real OTLP
+# exporters in if host-side traces/metrics are ever wanted.
+otel = []
+
+[dependencies]
+# Core Utils
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Async / Runtime
+tokio = { workspace = true }
+
+# SSH transport
+russh = { workspace = true }
+
+# Identity: shared-secret -> derived ed25519 client key (mirrors the rebels door)
+blake3 = { workspace = true }
+
+# Server host-key generation (matches late-ssh's RNG usage)
+getrandom = { workspace = true }
+
+# PTY allocation for the nethack child (openpty/setsid/TIOCSWINSZ) plus `signal`
+# for the SIGHUP graceful-save on teardown (see host.rs). This is a Linux-only
+# host (it serves a PTY-bound game), so nix is an unconditional dep.
+nix = { workspace = true, features = ["term", "process", "signal"] }

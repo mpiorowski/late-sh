@@ -1,50 +1,53 @@
 use std::cell::Cell;
 
+use chrono::{DateTime, Utc};
 use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
-use late_core::models::user::sanitize_username_input;
+use late_core::models::rss_feed::RssFeed;
+use late_core::models::user::{
+    RightSidebarComponentSetting, RightSidebarMode, normalize_text_brightness_adjustment,
+    sanitize_username_input,
+};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
+use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::common::theme;
-use crate::app::profile::svc::ProfileService;
+use crate::app::profile::svc::{IrcTokenStatus, ProfileEvent, ProfileService};
+use crate::app::{
+    chat::feeds::svc::{FeedEvent, FeedService, FeedSnapshot},
+    common::primitives::Banner,
+};
 
 use super::data::{CountryOption, filter_countries, filter_timezones};
 use super::gem::GemState;
 
-const USERNAME_MAX_LEN: usize = 12;
-const SYSTEM_FIELD_MAX_LEN: usize = 48;
+pub(crate) const USERNAME_MAX_LEN: usize = 12;
+const DELETE_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
+const LINK_CODE_MAX_LEN: usize = 16;
+const LINK_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
+pub(crate) const SYSTEM_FIELD_MAX_LEN: usize = 48;
+pub(crate) const FEED_URL_MAX_LEN: usize = 2000;
 pub const BIO_MAX_LEN: usize = 1000;
+pub const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
+pub const LINK_CONFIRM_MISMATCH: &str = "Typed username does not match the main username.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PickerKind {
     Country,
     Timezone,
-    Room,
-}
-
-/// Snapshot of one room the user is a member of, flattened to the minimum
-/// the modal needs to render + filter. Built by the caller (dashboard/chat
-/// code has access to slug/kind/DM peer usernames), so this module stays
-/// decoupled from `ChatRoom` and `usernames` lookups.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RoomOption {
-    pub id: Uuid,
-    /// Display label: e.g. `"#general"`, `"#rust-nerds"`, `"@alice"`.
-    pub label: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Row {
     Username,
+    Birthday,
     Ide,
     Terminal,
     Os,
     Langs,
     Theme,
-    BackgroundColor,
-    DashboardHeader,
-    RightSidebar,
     Country,
     Timezone,
     DirectMessages,
@@ -56,18 +59,16 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 17] = [
+    pub const ALL: [Row; 15] = [
         Row::Username,
+        Row::Country,
+        Row::Timezone,
+        Row::Birthday,
+        Row::Theme,
         Row::Ide,
         Row::Terminal,
         Row::Os,
         Row::Langs,
-        Row::Theme,
-        Row::BackgroundColor,
-        Row::DashboardHeader,
-        Row::RightSidebar,
-        Row::Country,
-        Row::Timezone,
         Row::DirectMessages,
         Row::Mentions,
         Row::GameEvents,
@@ -78,7 +79,65 @@ impl Row {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountRow {
+    LinkAccounts,
+    IrcToken,
+    DeleteAccount,
+}
+
+impl AccountRow {
+    pub const ALL: [AccountRow; 3] = [
+        AccountRow::LinkAccounts,
+        AccountRow::IrcToken,
+        AccountRow::DeleteAccount,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TweakRow {
+    // Appearance group.
+    BackgroundColor,
+    TextBrightness,
+    RightSidebar,
+    RoomListSidebar,
+    LoungeInfo,
+    // Compose / Music / Display / Startup groups.
+    ComposerKeepFocused,
+    StartWithMusicMuted,
+    FlagFallback,
+    LandOnHome,
+}
+
+impl TweakRow {
+    pub const ALL: [TweakRow; 9] = [
+        TweakRow::BackgroundColor,
+        TweakRow::TextBrightness,
+        TweakRow::RightSidebar,
+        TweakRow::RoomListSidebar,
+        TweakRow::LoungeInfo,
+        TweakRow::ComposerKeepFocused,
+        TweakRow::StartWithMusicMuted,
+        TweakRow::FlagFallback,
+        TweakRow::LandOnHome,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkAccountStep {
+    EnterCode,
+    Confirm,
+    Pending,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkAccountEnterCodeFocus {
+    GenerateCode,
+    PeerCode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SystemField {
+    Birthday,
     Ide,
     Terminal,
     Os,
@@ -88,6 +147,7 @@ pub enum SystemField {
 impl SystemField {
     pub(crate) fn from_row(row: Row) -> Option<Self> {
         match row {
+            Row::Birthday => Some(Self::Birthday),
             Row::Ide => Some(Self::Ide),
             Row::Terminal => Some(Self::Terminal),
             Row::Os => Some(Self::Os),
@@ -98,6 +158,7 @@ impl SystemField {
 
     fn value(self, profile: &Profile) -> Option<String> {
         match self {
+            Self::Birthday => profile.birthday.clone(),
             Self::Ide => profile.ide.clone(),
             Self::Terminal => profile.terminal.clone(),
             Self::Os => profile.os.clone(),
@@ -107,6 +168,9 @@ impl SystemField {
 
     fn set_value(self, profile: &mut Profile, text: String) {
         match self {
+            Self::Birthday => {
+                profile.birthday = late_core::models::birthday::normalize_birthday(&text);
+            }
             Self::Ide => profile.ide = normalize_optional_text(&text),
             Self::Terminal => profile.terminal = normalize_optional_text(&text),
             Self::Os => profile.os = normalize_optional_text(&text),
@@ -120,35 +184,36 @@ impl SystemField {
 /// Top-level tab in the settings modal. `Settings` holds every compact row
 /// (identity/appearance/location/notifications); `Themes` is a fast browser
 /// for the expanded theme catalog; `Bio` is a separate full-width pane with
-/// the markdown editor + preview; `Favorites` manages the dashboard
-/// quick-switch room list.
+/// the markdown editor + preview; `Tweaks` holds power-user toggles and the
+/// gem easter egg.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
+    Tweaks,
     Bio,
     Themes,
-    Favorites,
-    /// Hidden until the user has filled out at least one of bio, country,
-    /// or timezone. Currently houses the "Show settings on connect" toggle.
-    Special,
+    Account,
+    Feeds,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Settings,
         Tab::Bio,
         Tab::Themes,
-        Tab::Favorites,
-        Tab::Special,
+        Tab::Tweaks,
+        Tab::Account,
+        Tab::Feeds,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
+            Tab::Tweaks => "Tweaks",
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
-            Tab::Favorites => "Favorites",
-            Tab::Special => "Special",
+            Tab::Account => "Account",
+            Tab::Feeds => "RSS",
         }
     }
 }
@@ -174,17 +239,210 @@ pub struct PickerState {
     pub visible_height: Cell<usize>,
 }
 
+pub struct DeleteAccountDialogState {
+    open: bool,
+    input: TextArea<'static>,
+    status: Option<String>,
+    pending: bool,
+}
+
+impl DeleteAccountDialogState {
+    fn new() -> Self {
+        Self {
+            open: false,
+            input: new_short_textarea(false),
+            status: None,
+            pending: false,
+        }
+    }
+
+    pub fn open(&self) -> bool {
+        self.open
+    }
+
+    pub fn input(&self) -> &TextArea<'static> {
+        &self.input
+    }
+
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+
+    pub fn pending(&self) -> bool {
+        self.pending
+    }
+}
+
+/// Which action button is focused in the IRC token dialog. `Reset` and
+/// `Revoke` are only reachable when a token currently exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IrcTokenFocus {
+    /// Create (no token yet) or Reset (token exists) — same slot.
+    Primary,
+    Revoke,
+}
+
+/// Settings → Account IRC token dialog. Drives mint/reset/revoke and shows a
+/// freshly minted token exactly once. See devdocs/FRD-IRCD.md §5.
+pub struct IrcTokenDialogState {
+    open: bool,
+    /// `None` while the status load is in flight; `Some(None)` = no token;
+    /// `Some(Some(_))` = an active token with metadata.
+    status: Option<Option<IrcTokenStatus>>,
+    focus: IrcTokenFocus,
+    /// Plaintext token to display exactly once, right after minting.
+    revealed_token: Option<String>,
+    /// True once the user has armed the (destructive) revoke and must confirm.
+    confirming_revoke: bool,
+    pending: bool,
+    message: Option<String>,
+}
+
+impl IrcTokenDialogState {
+    fn new() -> Self {
+        Self {
+            open: false,
+            status: None,
+            focus: IrcTokenFocus::Primary,
+            revealed_token: None,
+            confirming_revoke: false,
+            pending: false,
+            message: None,
+        }
+    }
+
+    pub fn open(&self) -> bool {
+        self.open
+    }
+
+    /// `None` while loading, otherwise the current token status.
+    pub fn status(&self) -> Option<&Option<IrcTokenStatus>> {
+        self.status.as_ref()
+    }
+
+    pub fn has_token(&self) -> bool {
+        matches!(self.status, Some(Some(_)))
+    }
+
+    pub fn focus(&self) -> IrcTokenFocus {
+        self.focus
+    }
+
+    pub fn revealed_token(&self) -> Option<&str> {
+        self.revealed_token.as_deref()
+    }
+
+    pub fn confirming_revoke(&self) -> bool {
+        self.confirming_revoke
+    }
+
+    pub fn pending(&self) -> bool {
+        self.pending
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+}
+
+pub struct LinkAccountDialogState {
+    open: bool,
+    step: LinkAccountStep,
+    own_code: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+    enter_code_focus: LinkAccountEnterCodeFocus,
+    code_input: TextArea<'static>,
+    peer_user_id: Option<Uuid>,
+    peer_username: Option<String>,
+    peer_created: Option<DateTime<Utc>>,
+    keep_current: bool,
+    confirm_input: TextArea<'static>,
+    status: Option<String>,
+    pending: bool,
+}
+
+impl LinkAccountDialogState {
+    fn new() -> Self {
+        Self {
+            open: false,
+            step: LinkAccountStep::EnterCode,
+            own_code: None,
+            expires_at: None,
+            enter_code_focus: LinkAccountEnterCodeFocus::GenerateCode,
+            code_input: new_short_textarea(false),
+            peer_user_id: None,
+            peer_username: None,
+            peer_created: None,
+            keep_current: true,
+            confirm_input: new_short_textarea(false),
+            status: None,
+            pending: false,
+        }
+    }
+
+    pub fn open(&self) -> bool {
+        self.open
+    }
+
+    pub fn step(&self) -> LinkAccountStep {
+        self.step
+    }
+
+    pub fn own_code(&self) -> Option<&str> {
+        self.own_code.as_deref()
+    }
+
+    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
+        self.expires_at.as_ref().cloned()
+    }
+
+    pub fn enter_code_focus(&self) -> LinkAccountEnterCodeFocus {
+        self.enter_code_focus
+    }
+
+    pub fn code_input(&self) -> &TextArea<'static> {
+        &self.code_input
+    }
+
+    pub fn peer_username(&self) -> Option<&str> {
+        self.peer_username.as_deref()
+    }
+
+    pub fn peer_created(&self) -> Option<DateTime<Utc>> {
+        self.peer_created.as_ref().cloned()
+    }
+
+    pub fn keep_current(&self) -> bool {
+        self.keep_current
+    }
+
+    pub fn confirm_input(&self) -> &TextArea<'static> {
+        &self.confirm_input
+    }
+
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+
+    pub fn pending(&self) -> bool {
+        self.pending
+    }
+}
+
 pub struct SettingsModalState {
     profile_service: ProfileService,
+    feed_service: FeedService,
     user_id: Uuid,
     draft: Profile,
     selected_tab: Tab,
     row_index: usize,
+    account_row_index: usize,
+    tweak_row_index: usize,
     theme_index: usize,
     theme_selected_row: usize,
     theme_scroll_offset: usize,
     theme_visible_height: Cell<usize>,
-    theme_collapsed_groups: u16,
+    theme_collapsed_groups: u32,
     editing_username: bool,
     username_input: TextArea<'static>,
     editing_system_field: Option<SystemField>,
@@ -192,40 +450,74 @@ pub struct SettingsModalState {
     editing_bio: bool,
     bio_input: TextArea<'static>,
     picker: PickerState,
-    /// Catalog of rooms the user can pick favorites from. Re-supplied on
-    /// every modal open so we always reflect current membership.
-    available_rooms: Vec<RoomOption>,
-    /// Cursor in the Favorites tab: 0..favorites.len() selects a favorite,
-    /// the final slot (favorites.len()) selects the "Add favorite…" row.
-    favorites_index: usize,
+    link_account: LinkAccountDialogState,
+    delete_account: DeleteAccountDialogState,
+    irc_token: IrcTokenDialogState,
+    right_sidebar_components_open: bool,
+    right_sidebar_components_index: usize,
+    feeds: Vec<RssFeed>,
+    feed_index: usize,
+    editing_feed_url: bool,
+    feed_url_input: TextArea<'static>,
+    feed_snapshot_rx: watch::Receiver<FeedSnapshot>,
+    feed_event_rx: broadcast::Receiver<FeedEvent>,
+    profile_event_rx: broadcast::Receiver<ProfileEvent>,
     /// Per-session gem easter egg on the Special tab. Persists across modal
     /// open/close cycles for the lifetime of the SSH session.
     gem: GemState,
+    /// On-screen rects for each tab in the strip, indexed by the tab's
+    /// position in `Tab::ALL`. `None` if the tab is currently hidden (e.g.
+    /// the Special tab before it's unlocked). Populated by the renderer
+    /// each frame.
+    tab_rects: Cell<[Option<Rect>; Tab::ALL.len()]>,
+    /// Bounds of the body area (whichever tab is showing). Used to gate
+    /// scroll-wheel events to the body, so the wheel doesn't move the
+    /// row cursor when the pointer is hovering over the tab strip or footer.
+    body_area: Cell<Rect>,
 }
 
 impl SettingsModalState {
-    pub fn new(profile_service: ProfileService, user_id: Uuid) -> Self {
+    pub fn new(profile_service: ProfileService, feed_service: FeedService, user_id: Uuid) -> Self {
+        let feed_snapshot_rx = feed_service.subscribe_snapshot();
+        let feed_event_rx = feed_service.subscribe_events();
+        let profile_event_rx = profile_service.subscribe_events();
+        feed_service.list_task(user_id);
         Self {
             profile_service,
+            feed_service,
             user_id,
             draft: Profile::default(),
             selected_tab: Tab::Settings,
             row_index: 0,
+            account_row_index: 0,
+            tweak_row_index: 0,
             theme_index: 0,
             theme_selected_row: 0,
             theme_scroll_offset: 0,
             theme_visible_height: Cell::new(1),
             theme_collapsed_groups: 0,
             editing_username: false,
-            username_input: new_username_textarea(false),
+            username_input: new_short_textarea(false),
             editing_system_field: None,
             system_input: new_short_textarea(false),
             editing_bio: false,
             bio_input: new_bio_textarea(false),
             picker: PickerState::default(),
-            available_rooms: Vec::new(),
-            favorites_index: 0,
+            link_account: LinkAccountDialogState::new(),
+            delete_account: DeleteAccountDialogState::new(),
+            irc_token: IrcTokenDialogState::new(),
+            right_sidebar_components_open: false,
+            right_sidebar_components_index: 0,
+            feeds: Vec::new(),
+            feed_index: 0,
+            editing_feed_url: false,
+            feed_url_input: new_short_textarea(false),
+            feed_snapshot_rx,
+            feed_event_rx,
+            profile_event_rx,
             gem: GemState::new(),
+            tab_rects: Cell::new([None; Tab::ALL.len()]),
+            body_area: Cell::new(Rect::new(0, 0, 0, 0)),
         }
     }
 
@@ -237,26 +529,35 @@ impl SettingsModalState {
         &mut self.gem
     }
 
-    pub fn open_from_profile(
-        &mut self,
-        profile: &Profile,
-        available_rooms: Vec<RoomOption>,
-        _modal_width: u16,
-    ) {
+    pub fn open_from_profile(&mut self, profile: &Profile) {
         self.draft = profile.clone();
-        prune_favorites_against_loaded_rooms(&mut self.draft.favorite_room_ids, &available_rooms);
-        self.available_rooms = available_rooms;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
+        self.account_row_index = 0;
+        self.tweak_row_index = 0;
         self.sync_theme_index_to_draft();
         self.editing_username = false;
-        self.username_input = new_username_textarea(false);
+        self.username_input = new_short_textarea(false);
         self.editing_system_field = None;
         self.system_input = new_short_textarea(false);
         self.editing_bio = false;
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
-        self.favorites_index = 0;
+        self.link_account = LinkAccountDialogState::new();
+        self.delete_account = DeleteAccountDialogState::new();
+        self.irc_token = IrcTokenDialogState::new();
+        self.right_sidebar_components_open = false;
+        self.right_sidebar_components_index = 0;
+        self.feed_service.list_task(self.user_id);
+    }
+
+    pub fn tick(&mut self) -> Option<Banner> {
+        self.drain_feed_snapshot();
+        let mut banner = self.drain_profile_events();
+        if let Some(feed_banner) = self.drain_feed_events() {
+            banner = Some(feed_banner);
+        }
+        banner
     }
 
     pub fn selected_tab(&self) -> Tab {
@@ -277,7 +578,21 @@ impl SettingsModalState {
         } else {
             (idx + visible.len() - 1) % visible.len()
         };
-        let next = visible[next_idx];
+        self.switch_tab(visible[next_idx]);
+    }
+
+    /// Jump directly to a specific tab (e.g. via a mouse click on the tab
+    /// strip), running the same auto-save / edit-cleanup logic as `cycle_tab`.
+    /// Ignored if the tab isn't currently visible (e.g. clicking a stale
+    /// rect for the Special tab after it was hidden again).
+    pub fn select_tab(&mut self, next: Tab) {
+        if !self.visible_tabs().contains(&next) || next == self.selected_tab {
+            return;
+        }
+        self.switch_tab(next);
+    }
+
+    fn switch_tab(&mut self, next: Tab) {
         if self.selected_tab == Tab::Bio && next != Tab::Bio && self.editing_bio {
             self.stop_bio_edit();
             self.save();
@@ -291,45 +606,42 @@ impl SettingsModalState {
             self.submit_system_field();
             self.save();
         }
+        if self.selected_tab == Tab::Feeds && self.editing_feed_url {
+            self.cancel_feed_url_edit();
+        }
         if next == Tab::Themes {
             self.sync_theme_index_to_draft();
         }
         self.selected_tab = next;
     }
 
-    /// Tabs to show in the tab strip in display order. The Special tab is
-    /// hidden until the user has filled out at least one of bio, country,
-    /// or timezone.
-    pub fn visible_tabs(&self) -> Vec<Tab> {
+    pub fn set_tab_rects(&self, rects: [Option<Rect>; Tab::ALL.len()]) {
+        self.tab_rects.set(rects);
+    }
+
+    pub fn set_body_area(&self, area: Rect) {
+        self.body_area.set(area);
+    }
+
+    /// Hit-test the tab strip. Returns the tab whose cell contains the
+    /// (0-based ratatui) point, if any.
+    pub fn tab_at_point(&self, x: u16, y: u16) -> Option<Tab> {
+        let rects = self.tab_rects.get();
         Tab::ALL
             .iter()
             .copied()
-            .filter(|tab| *tab != Tab::Special || self.special_tab_unlocked())
-            .collect()
+            .zip(rects.iter())
+            .find_map(|(tab, slot)| slot.filter(|rect| rect_contains(*rect, x, y)).map(|_| tab))
     }
 
-    pub fn special_tab_unlocked(&self) -> bool {
-        let bio_filled = !self.draft.bio.trim().is_empty();
-        let country_filled = self
-            .draft
-            .country
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-        let timezone_filled = self
-            .draft
-            .timezone
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-        bio_filled || country_filled || timezone_filled
+    pub fn body_contains(&self, x: u16, y: u16) -> bool {
+        rect_contains(self.body_area.get(), x, y)
     }
 
-    /// Flip the "show settings on connect" toggle (the sole control on the
-    /// Special tab) and persist.
-    pub fn toggle_show_settings_on_connect(&mut self) {
-        self.draft.show_settings_on_connect ^= true;
-        self.save();
+    /// Tabs to show in the tab strip in display order. All tabs are always
+    /// visible — there is no unlock gating.
+    pub fn visible_tabs(&self) -> Vec<Tab> {
+        Tab::ALL.to_vec()
     }
 
     pub fn set_modal_width(&mut self, _modal_width: u16) {
@@ -342,6 +654,542 @@ impl SettingsModalState {
 
     pub fn selected_row(&self) -> Row {
         Row::ALL[self.row_index]
+    }
+
+    pub fn right_sidebar_components_open(&self) -> bool {
+        self.right_sidebar_components_open
+    }
+
+    pub fn open_right_sidebar_components(&mut self) {
+        self.right_sidebar_components_open = true;
+        self.right_sidebar_components_index = 0;
+    }
+
+    pub fn close_right_sidebar_components(&mut self) {
+        self.right_sidebar_components_open = false;
+    }
+
+    pub fn right_sidebar_components_index(&self) -> usize {
+        self.right_sidebar_components_index
+    }
+
+    pub fn right_sidebar_components(&self) -> &[RightSidebarComponentSetting] {
+        &self.draft.right_sidebar_components
+    }
+
+    pub fn move_right_sidebar_components_cursor(&mut self, delta: isize) {
+        let last = self.draft.right_sidebar_components.len().saturating_sub(1) as isize;
+        self.right_sidebar_components_index =
+            (self.right_sidebar_components_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    /// Toggle the on/off state of the selected component.
+    pub fn toggle_right_sidebar_component(&mut self) {
+        if let Some(setting) = self
+            .draft
+            .right_sidebar_components
+            .get_mut(self.right_sidebar_components_index)
+        {
+            setting.enabled ^= true;
+            self.save();
+        }
+    }
+
+    /// Move the selected component up or down in the render order, keeping the
+    /// cursor on the moved row.
+    pub fn move_right_sidebar_component(&mut self, delta: isize) {
+        let len = self.draft.right_sidebar_components.len();
+        if len == 0 {
+            return;
+        }
+        let from = self.right_sidebar_components_index;
+        let to = (from as isize + delta).clamp(0, len as isize - 1) as usize;
+        if to == from {
+            return;
+        }
+        let setting = self.draft.right_sidebar_components.remove(from);
+        self.draft.right_sidebar_components.insert(to, setting);
+        self.right_sidebar_components_index = to;
+        self.save();
+    }
+
+    pub fn selected_account_row(&self) -> AccountRow {
+        AccountRow::ALL[self.account_row_index]
+    }
+
+    pub fn move_account_row(&mut self, delta: isize) {
+        let last = AccountRow::ALL.len().saturating_sub(1) as isize;
+        self.account_row_index = (self.account_row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn selected_tweak_row(&self) -> TweakRow {
+        TweakRow::ALL[self.tweak_row_index]
+    }
+
+    pub fn move_tweak_row(&mut self, delta: isize) {
+        let last = TweakRow::ALL.len().saturating_sub(1) as isize;
+        self.tweak_row_index = (self.tweak_row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn toggle_selected_tweak(&mut self) {
+        match self.selected_tweak_row() {
+            TweakRow::BackgroundColor => {
+                self.draft.enable_background_color ^= true;
+            }
+            TweakRow::TextBrightness => {
+                self.cycle_text_brightness_adjustment(true);
+                return;
+            }
+            TweakRow::RightSidebar => {
+                self.draft.right_sidebar_mode = self.draft.right_sidebar_mode.cycle(true);
+                self.draft.show_right_sidebar =
+                    self.draft.right_sidebar_mode != RightSidebarMode::Off;
+            }
+            TweakRow::RoomListSidebar => {
+                self.draft.show_room_list_sidebar ^= true;
+            }
+            TweakRow::LoungeInfo => {
+                self.draft.show_dashboard_header ^= true;
+            }
+            TweakRow::ComposerKeepFocused => {
+                self.draft.keep_composer_focused ^= true;
+            }
+            TweakRow::StartWithMusicMuted => {
+                self.draft.start_with_music_muted ^= true;
+            }
+            TweakRow::FlagFallback => {
+                self.draft.show_flag_fallback ^= true;
+            }
+            TweakRow::LandOnHome => {
+                self.draft.land_on_home ^= true;
+            }
+        }
+        self.save();
+    }
+
+    pub fn cycle_selected_tweak(&mut self, forward: bool) {
+        match self.selected_tweak_row() {
+            TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
+            _ => self.toggle_selected_tweak(),
+        }
+    }
+
+    fn cycle_text_brightness_adjustment(&mut self, forward: bool) {
+        let delta = if forward { 1 } else { -1 };
+        self.draft.text_brightness_adjustment =
+            normalize_text_brightness_adjustment(self.draft.text_brightness_adjustment + delta);
+        self.save();
+    }
+
+    pub fn link_account_dialog(&self) -> &LinkAccountDialogState {
+        &self.link_account
+    }
+
+    pub fn open_link_account_dialog(&mut self) {
+        self.link_account = LinkAccountDialogState {
+            open: true,
+            step: LinkAccountStep::EnterCode,
+            own_code: None,
+            expires_at: None,
+            enter_code_focus: LinkAccountEnterCodeFocus::GenerateCode,
+            code_input: new_short_textarea(false),
+            peer_user_id: None,
+            peer_username: None,
+            peer_created: None,
+            keep_current: true,
+            confirm_input: new_short_textarea(false),
+            status: None,
+            pending: false,
+        };
+    }
+
+    pub fn close_link_account_dialog(&mut self) {
+        self.link_account = LinkAccountDialogState::new();
+    }
+
+    pub fn generate_link_account_code(&mut self) {
+        if self.link_account.pending {
+            return;
+        }
+        self.link_account.pending = true;
+        self.link_account.status = Some("Creating link code...".to_string());
+        self.profile_service.create_account_link_code(self.user_id);
+    }
+
+    pub fn move_link_account_enter_code_focus(&mut self, focus: LinkAccountEnterCodeFocus) {
+        if self.link_account.step != LinkAccountStep::EnterCode {
+            return;
+        }
+        self.link_account.enter_code_focus = focus;
+        set_short_textarea_cursor_visible(
+            &mut self.link_account.code_input,
+            focus == LinkAccountEnterCodeFocus::PeerCode,
+        );
+    }
+
+    pub fn activate_link_account_enter_code(&mut self) {
+        match self.link_account.enter_code_focus {
+            LinkAccountEnterCodeFocus::GenerateCode => self.generate_link_account_code(),
+            LinkAccountEnterCodeFocus::PeerCode => self.submit_link_account_code(),
+        }
+    }
+
+    fn submit_link_account_code(&mut self) {
+        if self.link_account.pending {
+            return;
+        }
+        let code = self.link_account_code_text();
+        if code.trim().is_empty() {
+            self.link_account.status = Some("Enter the other account's code.".to_string());
+            return;
+        }
+        self.link_account.pending = true;
+        self.link_account.status = Some("Checking code...".to_string());
+        self.profile_service
+            .preview_account_link_code(self.user_id, code);
+    }
+
+    pub fn select_link_account_main(&mut self, keep_current: bool) {
+        if self.link_account.keep_current != keep_current {
+            self.link_account.keep_current = keep_current;
+            self.link_account.confirm_input = new_short_textarea(true);
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn submit_link_account_confirmation(&mut self) {
+        if self.link_account.pending || self.link_account.step != LinkAccountStep::Confirm {
+            return;
+        }
+        let Some(peer_user_id) = self.link_account.peer_user_id else {
+            self.link_account.status = Some("Enter the other account's code first.".to_string());
+            self.link_account.step = LinkAccountStep::EnterCode;
+            return;
+        };
+        let Some(kept_username) = self.link_account_kept_username() else {
+            self.link_account.status = Some("Choose the main account to keep.".to_string());
+            return;
+        };
+        let typed = self.link_account_confirm_text();
+        if typed != kept_username {
+            self.link_account.status = Some(LINK_CONFIRM_MISMATCH.to_string());
+            return;
+        }
+        let kept_user_id = if self.link_account.keep_current {
+            self.user_id
+        } else {
+            peer_user_id
+        };
+        let code = self.link_account_code_text();
+        self.link_account.pending = true;
+        self.link_account.step = LinkAccountStep::Pending;
+        self.link_account.status = Some("Linking accounts...".to_string());
+        self.profile_service
+            .complete_account_link(self.user_id, peer_user_id, code, kept_user_id);
+    }
+
+    pub fn link_account_kept_username(&self) -> Option<String> {
+        if self.link_account.keep_current {
+            Some(self.draft.username.clone())
+        } else {
+            self.link_account.peer_username.clone()
+        }
+    }
+
+    pub fn link_account_push(&mut self, ch: char) {
+        match self.link_account.step {
+            LinkAccountStep::EnterCode => {
+                if self.link_account.enter_code_focus != LinkAccountEnterCodeFocus::PeerCode {
+                    self.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::PeerCode);
+                }
+                if single_line_char_count(&self.link_account.code_input) < LINK_CODE_MAX_LEN
+                    && ch.is_ascii_alphanumeric()
+                {
+                    self.link_account
+                        .code_input
+                        .insert_char(ch.to_ascii_uppercase());
+                    self.link_account.status = None;
+                }
+            }
+            LinkAccountStep::Confirm => {
+                if single_line_char_count(&self.link_account.confirm_input)
+                    < LINK_CONFIRM_USERNAME_MAX_LEN
+                    && !ch.is_control()
+                    && ch != '\n'
+                    && ch != '\r'
+                {
+                    self.link_account.confirm_input.insert_char(ch);
+                    self.link_account.status = None;
+                }
+            }
+            LinkAccountStep::Pending => {}
+        }
+    }
+
+    pub fn link_account_backspace(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.delete_char();
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn link_account_delete_right(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.delete_next_char();
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn link_account_delete_word_left(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.delete_word();
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn link_account_delete_word_right(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.delete_next_word();
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn link_account_cursor_left(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::Back);
+        }
+    }
+
+    pub fn link_account_cursor_right(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::Forward);
+        }
+    }
+
+    pub fn link_account_cursor_word_left(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::WordBack);
+        }
+    }
+
+    pub fn link_account_cursor_word_right(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::WordForward);
+        }
+    }
+
+    pub fn link_account_cursor_home(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::Head);
+        }
+    }
+
+    pub fn link_account_cursor_end(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::End);
+        }
+    }
+
+    pub fn clear_link_account_input(&mut self) {
+        match self.link_account.step {
+            LinkAccountStep::EnterCode => {
+                self.link_account.enter_code_focus = LinkAccountEnterCodeFocus::PeerCode;
+                self.link_account.code_input = new_short_textarea(true);
+            }
+            LinkAccountStep::Confirm => {
+                self.link_account.confirm_input = new_short_textarea(true);
+            }
+            LinkAccountStep::Pending => {}
+        }
+        self.link_account.status = None;
+    }
+
+    fn link_account_active_input_mut(&mut self) -> Option<&mut TextArea<'static>> {
+        match self.link_account.step {
+            LinkAccountStep::EnterCode
+                if self.link_account.enter_code_focus == LinkAccountEnterCodeFocus::PeerCode =>
+            {
+                Some(&mut self.link_account.code_input)
+            }
+            LinkAccountStep::Confirm => Some(&mut self.link_account.confirm_input),
+            LinkAccountStep::EnterCode | LinkAccountStep::Pending => None,
+        }
+    }
+
+    fn link_account_code_text(&self) -> String {
+        self.link_account.code_input.lines().join("")
+    }
+
+    fn link_account_confirm_text(&self) -> String {
+        self.link_account.confirm_input.lines().join("")
+    }
+
+    pub fn delete_account_dialog(&self) -> &DeleteAccountDialogState {
+        &self.delete_account
+    }
+
+    pub fn open_delete_account_dialog(&mut self) {
+        self.delete_account.open = true;
+        self.delete_account.input = new_short_textarea(true);
+        self.delete_account.status = None;
+        self.delete_account.pending = false;
+    }
+
+    pub fn close_delete_account_dialog(&mut self) {
+        self.delete_account = DeleteAccountDialogState::new();
+    }
+
+    pub fn submit_delete_account_confirmation(&mut self) {
+        if self.delete_account.pending {
+            return;
+        }
+        let typed = self.delete_account_text();
+        if typed != self.draft.username {
+            self.delete_account.status = Some(DELETE_CONFIRM_MISMATCH.to_string());
+            return;
+        }
+        self.delete_account.pending = true;
+        self.delete_account.status = Some("Deleting account...".to_string());
+        self.profile_service.delete_account(self.user_id);
+    }
+
+    pub fn delete_account_push(&mut self, ch: char) {
+        if single_line_char_count(&self.delete_account.input) < DELETE_CONFIRM_USERNAME_MAX_LEN {
+            self.delete_account.input.insert_char(ch);
+            self.delete_account.status = None;
+        }
+    }
+
+    pub fn delete_account_backspace(&mut self) {
+        self.delete_account.input.delete_char();
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_delete_right(&mut self) {
+        self.delete_account.input.delete_next_char();
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_delete_word_left(&mut self) {
+        self.delete_account.input.delete_word();
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_delete_word_right(&mut self) {
+        self.delete_account.input.delete_next_word();
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_cursor_left(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::Back);
+    }
+
+    pub fn delete_account_cursor_right(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::Forward);
+    }
+
+    pub fn delete_account_cursor_word_left(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::WordBack);
+    }
+
+    pub fn delete_account_cursor_word_right(&mut self) {
+        self.delete_account
+            .input
+            .move_cursor(CursorMove::WordForward);
+    }
+
+    pub fn delete_account_cursor_home(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::Head);
+    }
+
+    pub fn delete_account_cursor_end(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::End);
+    }
+
+    pub fn clear_delete_account_confirmation(&mut self) {
+        self.delete_account.input = new_short_textarea(true);
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_text(&self) -> String {
+        self.delete_account.input.lines().join("")
+    }
+
+    pub fn irc_token_dialog(&self) -> &IrcTokenDialogState {
+        &self.irc_token
+    }
+
+    pub fn open_irc_token_dialog(&mut self) {
+        self.irc_token = IrcTokenDialogState::new();
+        self.irc_token.open = true;
+        // status stays `None` (loading) until the service replies.
+        self.profile_service.load_irc_token_status(self.user_id);
+    }
+
+    pub fn close_irc_token_dialog(&mut self) {
+        self.irc_token = IrcTokenDialogState::new();
+    }
+
+    /// Move focus between the IRC token action buttons. Only meaningful while a
+    /// token exists (Create-only state has a single button).
+    pub fn move_irc_token_focus(&mut self, focus: IrcTokenFocus) {
+        if self.irc_token.revealed_token.is_some() || !self.irc_token.has_token() {
+            return;
+        }
+        self.irc_token.focus = focus;
+        self.irc_token.confirming_revoke = false;
+        self.irc_token.message = None;
+    }
+
+    /// Dismiss the one-time token reveal and reload the (now-active) status.
+    pub fn dismiss_irc_token_reveal(&mut self) {
+        if self.irc_token.revealed_token.take().is_some() {
+            self.irc_token.message = None;
+            self.irc_token.status = None;
+            self.irc_token.focus = IrcTokenFocus::Primary;
+            self.profile_service.load_irc_token_status(self.user_id);
+        }
+    }
+
+    /// Activate the focused IRC token action (Enter). Mints/resets or arms and
+    /// then performs a revoke. No-op while a request is in flight.
+    pub fn activate_irc_token_focus(&mut self) {
+        if self.irc_token.revealed_token.is_some() {
+            self.dismiss_irc_token_reveal();
+            return;
+        }
+        if self.irc_token.pending || self.irc_token.status.is_none() {
+            return;
+        }
+        match self.irc_token.focus {
+            IrcTokenFocus::Primary => {
+                self.irc_token.pending = true;
+                self.irc_token.confirming_revoke = false;
+                self.irc_token.message = Some(if self.irc_token.has_token() {
+                    "Resetting token...".to_string()
+                } else {
+                    "Creating token...".to_string()
+                });
+                self.profile_service.mint_irc_token(self.user_id);
+            }
+            IrcTokenFocus::Revoke => {
+                if !self.irc_token.has_token() {
+                    return;
+                }
+                if !self.irc_token.confirming_revoke {
+                    self.irc_token.confirming_revoke = true;
+                    self.irc_token.message = Some(
+                        "Revoke token? Connected IRC clients will be disconnected. \
+                         Press Enter again to confirm."
+                            .to_string(),
+                    );
+                    return;
+                }
+                self.irc_token.pending = true;
+                self.irc_token.message = Some("Revoking token...".to_string());
+                self.profile_service.revoke_irc_token(self.user_id);
+            }
+        }
     }
 
     pub fn move_row(&mut self, delta: isize) {
@@ -570,16 +1418,24 @@ impl SettingsModalState {
         &self.username_input
     }
 
-    fn username_text(&self) -> String {
-        self.username_input.lines().join("")
+    pub(crate) fn username_input_mut(&mut self) -> &mut TextArea<'static> {
+        &mut self.username_input
     }
 
-    fn username_char_count(&self) -> usize {
-        self.username_input
-            .lines()
-            .iter()
-            .map(|l| l.chars().count())
-            .sum()
+    pub(crate) fn system_input_mut(&mut self) -> &mut TextArea<'static> {
+        &mut self.system_input
+    }
+
+    pub(crate) fn bio_input_mut(&mut self) -> &mut TextArea<'static> {
+        &mut self.bio_input
+    }
+
+    pub(crate) fn feed_url_input_mut(&mut self) -> &mut TextArea<'static> {
+        &mut self.feed_url_input
+    }
+
+    fn username_text(&self) -> String {
+        self.username_input.lines().join("")
     }
 
     pub fn system_input(&self) -> &TextArea<'static> {
@@ -590,29 +1446,28 @@ impl SettingsModalState {
         self.system_input.lines().join("")
     }
 
-    fn system_char_count(&self) -> usize {
-        self.system_input
-            .lines()
-            .iter()
-            .map(|l| l.chars().count())
-            .sum()
-    }
-
     pub fn bio_input(&self) -> &TextArea<'static> {
         &self.bio_input
     }
 
-    fn bio_text(&self) -> String {
-        self.bio_input.lines().join("\n")
+    pub fn feeds(&self) -> &[RssFeed] {
+        &self.feeds
     }
 
-    fn bio_char_count(&self) -> usize {
-        self.bio_input
-            .lines()
-            .iter()
-            .map(|l| l.chars().count())
-            .sum::<usize>()
-            + self.bio_input.lines().len().saturating_sub(1) // count newlines between lines
+    pub fn feed_index(&self) -> usize {
+        self.feed_index
+    }
+
+    pub fn editing_feed_url(&self) -> bool {
+        self.editing_feed_url
+    }
+
+    pub fn feed_url_input(&self) -> &TextArea<'static> {
+        &self.feed_url_input
+    }
+
+    fn bio_text(&self) -> String {
+        self.bio_input.lines().join("\n")
     }
 
     pub fn picker(&self) -> &PickerState {
@@ -642,25 +1497,10 @@ impl SettingsModalState {
         filter_timezones(&self.picker.query)
     }
 
-    /// Rooms the user is a member of but hasn't favorited yet, filtered by
-    /// the picker's current query. Returns references into `available_rooms`
-    /// so we don't clone the label on every keystroke.
-    pub fn filtered_rooms(&self) -> Vec<&RoomOption> {
-        let query = self.picker.query.trim().to_ascii_lowercase();
-        let favorited: std::collections::HashSet<&Uuid> =
-            self.draft.favorite_room_ids.iter().collect();
-        self.available_rooms
-            .iter()
-            .filter(|room| !favorited.contains(&room.id))
-            .filter(|room| query.is_empty() || room.label.to_ascii_lowercase().contains(&query))
-            .collect()
-    }
-
     pub fn picker_len(&self) -> usize {
         match self.picker.kind {
             Some(PickerKind::Country) => self.filtered_countries().len(),
             Some(PickerKind::Timezone) => self.filtered_timezones().len(),
-            Some(PickerKind::Room) => self.filtered_rooms().len(),
             None => 0,
         }
     }
@@ -704,19 +1544,6 @@ impl SettingsModalState {
                     mutated = true;
                 }
             }
-            Some(PickerKind::Room) => {
-                let chosen_id = self
-                    .filtered_rooms()
-                    .get(self.picker.selected_index)
-                    .map(|room| room.id);
-                if let Some(id) = chosen_id {
-                    self.draft.favorite_room_ids.push(id);
-                    // Leave cursor on the freshly-added entry so follow-up
-                    // reorders feel continuous.
-                    self.favorites_index = self.draft.favorite_room_ids.len().saturating_sub(1);
-                    mutated = true;
-                }
-            }
             Some(PickerKind::Timezone) => {
                 let options = self.filtered_timezones();
                 if let Some(timezone) = options.get(self.picker.selected_index) {
@@ -735,81 +1562,21 @@ impl SettingsModalState {
     pub fn start_username_edit(&mut self) {
         self.editing_system_field = None;
         self.editing_username = true;
-        self.username_input = new_username_textarea(true);
+        self.username_input = new_short_textarea(true);
         self.username_input.insert_str(&self.draft.username);
     }
 
     pub fn cancel_username_edit(&mut self) {
         self.editing_username = false;
-        self.username_input = new_username_textarea(false);
+        self.username_input = new_short_textarea(false);
     }
 
     pub fn submit_username(&mut self) {
         self.editing_username = false;
         let normalized = sanitize_username_input(self.username_text().trim());
-        self.username_input = new_username_textarea(false);
+        self.username_input = new_short_textarea(false);
         self.draft.username = normalized;
         self.save();
-    }
-
-    pub fn username_push(&mut self, ch: char) {
-        if self.username_char_count() < USERNAME_MAX_LEN {
-            self.username_input.insert_char(ch);
-        }
-    }
-
-    pub fn username_backspace(&mut self) {
-        self.username_input.delete_char();
-    }
-
-    pub fn username_delete_right(&mut self) {
-        self.username_input.delete_next_char();
-    }
-
-    pub fn username_delete_word_left(&mut self) {
-        self.username_input.delete_word();
-    }
-
-    pub fn username_delete_word_right(&mut self) {
-        self.username_input.delete_next_word();
-    }
-
-    pub fn username_cursor_left(&mut self) {
-        self.username_input.move_cursor(CursorMove::Back);
-    }
-
-    pub fn username_cursor_right(&mut self) {
-        self.username_input.move_cursor(CursorMove::Forward);
-    }
-
-    pub fn username_cursor_word_left(&mut self) {
-        self.username_input.move_cursor(CursorMove::WordBack);
-    }
-
-    pub fn username_cursor_word_right(&mut self) {
-        self.username_input.move_cursor(CursorMove::WordForward);
-    }
-
-    pub fn username_cursor_home(&mut self) {
-        self.username_input.move_cursor(CursorMove::Head);
-    }
-
-    pub fn username_cursor_end(&mut self) {
-        self.username_input.move_cursor(CursorMove::End);
-    }
-
-    pub fn username_paste(&mut self) {
-        let yank = self.username_input.yank_text();
-        insert_username_text_limited(&mut self.username_input, &yank);
-    }
-
-    pub fn username_undo(&mut self) {
-        self.username_input.undo();
-    }
-
-    pub fn clear_username(&mut self) {
-        let editing = self.editing_username;
-        self.username_input = new_username_textarea(editing);
     }
 
     pub fn start_system_field_edit(&mut self, field: SystemField) {
@@ -836,65 +1603,6 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn system_push(&mut self, ch: char) {
-        if self.system_char_count() < SYSTEM_FIELD_MAX_LEN {
-            self.system_input.insert_char(ch);
-        }
-    }
-
-    pub fn system_backspace(&mut self) {
-        self.system_input.delete_char();
-    }
-
-    pub fn system_delete_right(&mut self) {
-        self.system_input.delete_next_char();
-    }
-
-    pub fn system_delete_word_left(&mut self) {
-        self.system_input.delete_word();
-    }
-
-    pub fn system_delete_word_right(&mut self) {
-        self.system_input.delete_next_word();
-    }
-
-    pub fn system_cursor_left(&mut self) {
-        self.system_input.move_cursor(CursorMove::Back);
-    }
-
-    pub fn system_cursor_right(&mut self) {
-        self.system_input.move_cursor(CursorMove::Forward);
-    }
-
-    pub fn system_cursor_word_left(&mut self) {
-        self.system_input.move_cursor(CursorMove::WordBack);
-    }
-
-    pub fn system_cursor_word_right(&mut self) {
-        self.system_input.move_cursor(CursorMove::WordForward);
-    }
-
-    pub fn system_cursor_home(&mut self) {
-        self.system_input.move_cursor(CursorMove::Head);
-    }
-
-    pub fn system_cursor_end(&mut self) {
-        self.system_input.move_cursor(CursorMove::End);
-    }
-
-    pub fn system_paste(&mut self) {
-        let yank = self.system_input.yank_text();
-        insert_system_text_limited(&mut self.system_input, &yank);
-    }
-
-    pub fn system_undo(&mut self) {
-        self.system_input.undo();
-    }
-
-    pub fn clear_system_field(&mut self) {
-        self.system_input = new_short_textarea(self.editing_system_field.is_some());
-    }
-
     pub fn start_bio_edit(&mut self) {
         self.editing_bio = true;
         move_bio_cursor_to_end(&mut self.bio_input);
@@ -909,134 +1617,194 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn bio_push(&mut self, ch: char) {
-        if self.bio_char_count() < BIO_MAX_LEN {
-            self.bio_input.insert_char(ch);
-        }
-    }
-
-    pub fn bio_backspace(&mut self) {
-        self.bio_input.delete_char();
-    }
-
-    pub fn bio_delete_right(&mut self) {
-        self.bio_input.delete_next_char();
-    }
-
-    pub fn bio_delete_word_left(&mut self) {
-        self.bio_input.delete_word();
-    }
-
-    pub fn bio_delete_word_right(&mut self) {
-        self.bio_input.delete_next_word();
-    }
-
-    pub fn bio_cursor_left(&mut self) {
-        self.bio_input.move_cursor(CursorMove::Back);
-    }
-
-    pub fn bio_cursor_right(&mut self) {
-        self.bio_input.move_cursor(CursorMove::Forward);
-    }
-
-    pub fn bio_cursor_up(&mut self) {
-        self.bio_input.move_cursor(CursorMove::Up);
-    }
-
-    pub fn bio_cursor_down(&mut self) {
-        self.bio_input.move_cursor(CursorMove::Down);
-    }
-
-    pub fn bio_cursor_word_left(&mut self) {
-        self.bio_input.move_cursor(CursorMove::WordBack);
-    }
-
-    pub fn bio_cursor_word_right(&mut self) {
-        self.bio_input.move_cursor(CursorMove::WordForward);
-    }
-
-    pub fn bio_paste(&mut self) {
-        let yank = self.bio_input.yank_text();
-        insert_bio_text_limited(&mut self.bio_input, &yank);
-    }
-
-    pub fn bio_undo(&mut self) {
-        self.bio_input.undo();
-    }
-
-    pub fn bio_clear(&mut self) {
-        self.bio_input = new_bio_textarea(self.editing_bio);
-    }
-
-    pub fn favorites(&self) -> &[Uuid] {
-        &self.draft.favorite_room_ids
-    }
-
-    pub fn available_rooms(&self) -> &[RoomOption] {
-        &self.available_rooms
-    }
-
-    /// Number of navigable slots on the Favorites tab: every pinned room
-    /// plus the trailing "Add favorite…" row.
-    pub fn favorites_slot_count(&self) -> usize {
-        self.draft.favorite_room_ids.len() + 1
-    }
-
-    pub fn favorites_index(&self) -> usize {
-        self.favorites_index
-    }
-
-    pub fn favorites_index_is_add_row(&self) -> bool {
-        self.favorites_index == self.draft.favorite_room_ids.len()
-    }
-
-    pub fn room_label(&self, room_id: Uuid) -> Option<&str> {
-        self.available_rooms
-            .iter()
-            .find(|room| room.id == room_id)
-            .map(|room| room.label.as_str())
-    }
-
-    pub fn move_favorites_cursor(&mut self, delta: isize) {
-        let last = self.favorites_slot_count().saturating_sub(1) as isize;
-        self.favorites_index = (self.favorites_index as isize + delta).clamp(0, last) as usize;
-    }
-
-    /// Swap the selected favorite with its neighbor (positive `delta` moves
-    /// toward the end of the list). No-op on the "Add favorite…" row.
-    pub fn reorder_selected_favorite(&mut self, delta: isize) {
-        if self.favorites_index_is_add_row() {
+    pub fn move_feed_cursor(&mut self, delta: isize) {
+        let len = self.feed_slot_count();
+        if len == 0 {
+            self.feed_index = 0;
             return;
         }
-        let len = self.draft.favorite_room_ids.len();
-        if len < 2 {
-            return;
-        }
-        let from = self.favorites_index;
-        let to = (from as isize + delta).clamp(0, len as isize - 1) as usize;
-        if to == from {
-            return;
-        }
-        self.draft.favorite_room_ids.swap(from, to);
-        self.favorites_index = to;
-        self.save();
+        self.feed_index = (self.feed_index as isize + delta).clamp(0, len as isize - 1) as usize;
     }
 
-    pub fn remove_selected_favorite(&mut self) {
-        if self.favorites_index_is_add_row() {
+    pub fn feed_slot_count(&self) -> usize {
+        self.feeds.len() + 1
+    }
+
+    pub fn feed_index_is_add_row(&self) -> bool {
+        self.feed_index == self.feeds.len()
+    }
+
+    pub fn start_feed_url_edit(&mut self) {
+        self.editing_feed_url = true;
+        self.feed_url_input = new_short_textarea(true);
+    }
+
+    pub fn cancel_feed_url_edit(&mut self) {
+        self.editing_feed_url = false;
+        self.feed_url_input = new_short_textarea(false);
+    }
+
+    pub fn submit_feed_url(&mut self) {
+        let url = self.feed_url_input.lines().join("").trim().to_string();
+        self.cancel_feed_url_edit();
+        if url.is_empty() {
             return;
         }
-        let idx = self.favorites_index;
-        if idx >= self.draft.favorite_room_ids.len() {
+        self.feed_service.add_feed_task(self.user_id, url);
+    }
+
+    pub fn remove_selected_feed(&mut self) {
+        if self.feed_index_is_add_row() {
             return;
         }
-        self.draft.favorite_room_ids.remove(idx);
-        // Keep the cursor stable: if the deleted entry was the last pinned
-        // room, fall back onto the "Add favorite…" row.
-        if idx >= self.draft.favorite_room_ids.len() {
-            self.favorites_index = self.draft.favorite_room_ids.len();
+        let Some(feed) = self.feeds.get(self.feed_index) else {
+            return;
+        };
+        self.feed_service.delete_feed_task(self.user_id, feed.id);
+    }
+
+    pub fn refresh_feeds(&self) {
+        self.feed_service.poll_once_task();
+        self.feed_service.list_task(self.user_id);
+    }
+
+    fn drain_feed_snapshot(&mut self) {
+        if let Ok(true) = self.feed_snapshot_rx.has_changed() {
+            let snapshot = self.feed_snapshot_rx.borrow_and_update().clone();
+            if snapshot.user_id == Some(self.user_id) {
+                self.feeds = snapshot.feeds;
+                self.feed_index = self
+                    .feed_index
+                    .min(self.feed_slot_count().saturating_sub(1));
+            }
         }
-        self.save();
+    }
+
+    fn drain_feed_events(&mut self) -> Option<Banner> {
+        let mut banner = None;
+        loop {
+            match self.feed_event_rx.try_recv() {
+                Ok(FeedEvent::FeedAdded { user_id }) if user_id == self.user_id => {
+                    banner = Some(Banner::success("RSS connected."));
+                }
+                Ok(FeedEvent::FeedDeleted { user_id }) if user_id == self.user_id => {
+                    banner = Some(Banner::success("RSS removed."));
+                }
+                Ok(FeedEvent::FeedFailed { user_id, error }) if user_id == self.user_id => {
+                    banner = Some(Banner::error(&format!("RSS failed: {error}")));
+                }
+                Ok(_) => {}
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(e) => {
+                    tracing::error!(%e, "failed to receive settings feed event");
+                    break;
+                }
+            }
+        }
+        banner
+    }
+
+    fn drain_profile_events(&mut self) -> Option<Banner> {
+        let mut banner = None;
+        loop {
+            match self.profile_event_rx.try_recv() {
+                Ok(ProfileEvent::AccountLinkCodeCreated {
+                    user_id,
+                    code,
+                    expires_at,
+                }) if user_id == self.user_id => {
+                    self.link_account.own_code = Some(code);
+                    self.link_account.expires_at = Some(expires_at);
+                    self.link_account.pending = false;
+                    if self.link_account.step == LinkAccountStep::EnterCode {
+                        self.link_account.status = Some("Link code ready.".to_string());
+                        self.move_link_account_enter_code_focus(
+                            LinkAccountEnterCodeFocus::PeerCode,
+                        );
+                    }
+                }
+                Ok(ProfileEvent::AccountLinkPeerLoaded {
+                    user_id,
+                    peer_user_id,
+                    peer_username,
+                    peer_created,
+                }) if user_id == self.user_id => {
+                    self.link_account.peer_user_id = Some(peer_user_id);
+                    self.link_account.peer_username = Some(peer_username);
+                    self.link_account.peer_created = Some(peer_created);
+                    self.link_account.keep_current = true;
+                    self.link_account.confirm_input = new_short_textarea(true);
+                    self.link_account.step = LinkAccountStep::Confirm;
+                    self.link_account.pending = false;
+                    self.link_account.status = None;
+                }
+                Ok(ProfileEvent::AccountLinked {
+                    kept_user_id,
+                    abandoned_user_id,
+                    kept_username,
+                    abandoned_username: _,
+                }) if kept_user_id == self.user_id || abandoned_user_id == self.user_id => {
+                    self.link_account = LinkAccountDialogState::new();
+                    if kept_user_id == self.user_id {
+                        self.draft.username = kept_username.clone();
+                    }
+                    banner = Some(Banner::success(&format!(
+                        "Linked accounts. Both SSH keys now open {kept_username}."
+                    )));
+                }
+                Ok(ProfileEvent::IrcTokenStatus { user_id, status }) if user_id == self.user_id => {
+                    if self.irc_token.open && self.irc_token.revealed_token.is_none() {
+                        let had_token = status.is_some();
+                        self.irc_token.status = Some(status);
+                        self.irc_token.pending = false;
+                        if !had_token {
+                            self.irc_token.focus = IrcTokenFocus::Primary;
+                            self.irc_token.confirming_revoke = false;
+                        }
+                    }
+                }
+                Ok(ProfileEvent::IrcTokenMinted { user_id, token }) if user_id == self.user_id => {
+                    if self.irc_token.open {
+                        self.irc_token.revealed_token = Some(token);
+                        self.irc_token.pending = false;
+                        self.irc_token.confirming_revoke = false;
+                        self.irc_token.message =
+                            Some("Save this token now — it will not be shown again.".to_string());
+                    }
+                }
+                Ok(ProfileEvent::IrcTokenRevoked { user_id }) if user_id == self.user_id => {
+                    if self.irc_token.open {
+                        self.irc_token.status = Some(None);
+                        self.irc_token.revealed_token = None;
+                        self.irc_token.confirming_revoke = false;
+                        self.irc_token.pending = false;
+                        self.irc_token.focus = IrcTokenFocus::Primary;
+                        self.irc_token.message = Some("Token revoked.".to_string());
+                    }
+                }
+                Ok(ProfileEvent::Error { user_id, message }) if user_id == self.user_id => {
+                    if self.irc_token.open {
+                        self.irc_token.pending = false;
+                        self.irc_token.confirming_revoke = false;
+                        self.irc_token.message = Some(message.clone());
+                    }
+                    if self.link_account.open {
+                        self.link_account.pending = false;
+                        if self.link_account.step == LinkAccountStep::Pending {
+                            self.link_account.step = LinkAccountStep::Confirm;
+                        }
+                        self.link_account.status = Some(message);
+                    }
+                }
+                Ok(_) => {}
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(e) => {
+                    tracing::error!(%e, "failed to receive settings profile event");
+                    break;
+                }
+            }
+        }
+        banner
     }
 
     /// Cycle the value of the currently selected row and auto-persist.
@@ -1052,18 +1820,6 @@ impl SettingsModalState {
                     .unwrap_or_else(|| theme::normalize_id(""));
                 self.draft.theme_id = Some(theme::cycle_id(current, forward).to_string());
                 self.sync_theme_index_to_draft();
-                true
-            }
-            Row::BackgroundColor => {
-                self.draft.enable_background_color ^= true;
-                true
-            }
-            Row::DashboardHeader => {
-                self.draft.show_dashboard_header ^= true;
-                true
-            }
-            Row::RightSidebar => {
-                self.draft.show_right_sidebar ^= true;
                 true
             }
             Row::DirectMessages => {
@@ -1093,7 +1849,7 @@ impl SettingsModalState {
                 );
                 true
             }
-            Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
+            Row::Birthday | Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
             _ => false,
         };
         if mutated {
@@ -1124,11 +1880,18 @@ impl SettingsModalState {
                         .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
                 ),
                 enable_background_color: self.draft.enable_background_color,
+                text_brightness_adjustment: self.draft.text_brightness_adjustment,
                 show_dashboard_header: self.draft.show_dashboard_header,
                 show_right_sidebar: self.draft.show_right_sidebar,
-                show_games_sidebar: self.draft.show_games_sidebar,
-                show_settings_on_connect: self.draft.show_settings_on_connect,
+                right_sidebar_mode: self.draft.right_sidebar_mode,
+                right_sidebar_components: self.draft.right_sidebar_components.clone(),
+                show_room_list_sidebar: self.draft.show_room_list_sidebar,
+                keep_composer_focused: self.draft.keep_composer_focused,
+                start_with_music_muted: self.draft.start_with_music_muted,
+                land_on_home: self.draft.land_on_home,
+                show_flag_fallback: self.draft.show_flag_fallback,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
+                birthday: self.draft.birthday.clone(),
             },
         );
     }
@@ -1146,19 +1909,6 @@ fn cycle_notify_format(current: Option<&str>, forward: bool) -> &'static str {
         (idx + OPTIONS.len() - 1) % OPTIONS.len()
     };
     OPTIONS[next]
-}
-
-fn prune_favorites_against_loaded_rooms(favorite_room_ids: &mut Vec<Uuid>, rooms: &[RoomOption]) {
-    if rooms.is_empty() {
-        return;
-    }
-
-    // Drop favorites the user is no longer a member of so the modal never
-    // shows ghost entries. Preserve order of the survivors. An empty room
-    // catalog means chat membership has not loaded yet, not that every room
-    // was left.
-    let member_ids: std::collections::HashSet<Uuid> = rooms.iter().map(|room| room.id).collect();
-    favorite_room_ids.retain(|id| member_ids.contains(id));
 }
 
 fn toggle_kind(kinds: &mut Vec<String>, kind: &str) {
@@ -1183,60 +1933,13 @@ fn cycle_cooldown_value(current: i32, forward: bool) -> i32 {
     OPTIONS[next]
 }
 
-fn bio_char_count_for_input(input: &TextArea<'static>) -> usize {
-    input
-        .lines()
-        .iter()
-        .map(|l| l.chars().count())
-        .sum::<usize>()
-        + input.lines().len().saturating_sub(1)
-}
-
-fn username_char_count_for_input(input: &TextArea<'static>) -> usize {
-    input.lines().iter().map(|l| l.chars().count()).sum()
-}
-
-fn system_char_count_for_input(input: &TextArea<'static>) -> usize {
+fn single_line_char_count(input: &TextArea<'static>) -> usize {
     input.lines().iter().map(|l| l.chars().count()).sum()
 }
 
 fn normalize_optional_text(text: &str) -> Option<String> {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     (!normalized.is_empty()).then_some(normalized)
-}
-
-fn insert_username_text_limited(input: &mut TextArea<'static>, text: &str) {
-    for ch in text.chars() {
-        if username_char_count_for_input(input) >= USERNAME_MAX_LEN {
-            break;
-        }
-        if !ch.is_control() && ch != '\n' && ch != '\r' {
-            input.insert_char(ch);
-        }
-    }
-}
-
-fn insert_system_text_limited(input: &mut TextArea<'static>, text: &str) {
-    for ch in text.chars() {
-        if system_char_count_for_input(input) >= SYSTEM_FIELD_MAX_LEN {
-            break;
-        }
-        if !ch.is_control() && ch != '\n' && ch != '\r' {
-            input.insert_char(ch);
-        }
-    }
-}
-
-fn insert_bio_text_limited(input: &mut TextArea<'static>, text: &str) {
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    for ch in normalized.chars() {
-        if bio_char_count_for_input(input) >= BIO_MAX_LEN {
-            break;
-        }
-        if ch == '\n' || (!ch.is_control() && ch != '\u{7f}') {
-            input.insert_char(ch);
-        }
-    }
 }
 
 fn reset_bio_view_to_top(input: &mut TextArea<'static>) {
@@ -1273,51 +1976,35 @@ fn set_bio_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
     ta.set_cursor_style(style);
 }
 
-fn new_username_textarea(editing: bool) -> TextArea<'static> {
-    new_short_textarea(editing)
-}
-
 fn new_short_textarea(editing: bool) -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_cursor_line_style(Style::default());
     ta.set_wrap_mode(WrapMode::None);
+    set_short_textarea_cursor_visible(&mut ta, editing);
+    ta
+}
+
+fn set_short_textarea_cursor_visible(ta: &mut TextArea<'static>, editing: bool) {
     let style = if editing {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
         Style::default()
     };
     ta.set_cursor_style(style);
-    ta
+}
+
+fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && x >= rect.x
+        && x < rect.x + rect.width
+        && y >= rect.y
+        && y < rect.y + rect.height
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn username_yank_respects_max_length() {
-        let mut input = new_username_textarea(true);
-        input.insert_str("abcdefghijk");
-        input.set_yank_text("xyz");
-        let yank = input.yank_text();
-
-        insert_username_text_limited(&mut input, &yank);
-
-        assert_eq!(input.lines().join(""), "abcdefghijkx");
-        assert_eq!(username_char_count_for_input(&input), USERNAME_MAX_LEN);
-    }
-
-    #[test]
-    fn system_yank_respects_max_length() {
-        let mut input = new_short_textarea(true);
-        input.insert_str("a".repeat(SYSTEM_FIELD_MAX_LEN - 1));
-        input.set_yank_text("xyz");
-        let yank = input.yank_text();
-
-        insert_system_text_limited(&mut input, &yank);
-
-        assert_eq!(system_char_count_for_input(&input), SYSTEM_FIELD_MAX_LEN);
-    }
 
     #[test]
     fn normalize_optional_text_trims_and_collapses_blank() {
@@ -1326,22 +2013,6 @@ mod tests {
             Some("VS Code")
         );
         assert_eq!(normalize_optional_text("   "), None);
-    }
-
-    #[test]
-    fn bio_yank_respects_max_length() {
-        let mut input = new_bio_textarea(true);
-        input.insert_str("a".repeat(BIO_MAX_LEN - 1));
-        input.set_yank_text("xyz");
-        let yank = input.yank_text();
-
-        insert_bio_text_limited(&mut input, &yank);
-
-        assert_eq!(bio_char_count_for_input(&input), BIO_MAX_LEN);
-        assert_eq!(
-            input.lines().join(""),
-            format!("{}x", "a".repeat(BIO_MAX_LEN - 1))
-        );
     }
 
     #[test]
@@ -1357,38 +2028,5 @@ mod tests {
         move_bio_cursor_to_end(&mut input);
 
         assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
-    }
-
-    #[test]
-    fn empty_room_catalog_preserves_favorites() {
-        let first = Uuid::from_u128(1);
-        let second = Uuid::from_u128(2);
-        let mut favorites = vec![first, second];
-
-        prune_favorites_against_loaded_rooms(&mut favorites, &[]);
-
-        assert_eq!(favorites, vec![first, second]);
-    }
-
-    #[test]
-    fn loaded_room_catalog_prunes_unjoined_favorites() {
-        let first = Uuid::from_u128(1);
-        let second = Uuid::from_u128(2);
-        let third = Uuid::from_u128(3);
-        let mut favorites = vec![first, second, third];
-        let rooms = vec![
-            RoomOption {
-                id: third,
-                label: "#third".to_string(),
-            },
-            RoomOption {
-                id: first,
-                label: "#first".to_string(),
-            },
-        ];
-
-        prune_favorites_against_loaded_rooms(&mut favorites, &rooms);
-
-        assert_eq!(favorites, vec![first, third]);
     }
 }

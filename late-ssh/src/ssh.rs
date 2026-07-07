@@ -2,37 +2,48 @@ use anyhow::{Context, Result};
 use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::{
+    article_feed_read::ArticleFeedRead,
     server_ban::ServerBan,
-    user::{User, UserParams, extract_theme_id},
+    user::{User, UserParams},
 };
 use late_core::tunnel_protocol::{SshInputEvent, TUNNEL_CLOSE_SESSION_ENDED};
 use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::*;
-use serde_json::{Value, json};
+use serde_json::json;
 #[cfg(unix)]
 use std::fs::Permissions;
 use std::net::{IpAddr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{self, Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
+use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
-use crate::app::{common::theme, state::App};
+use crate::app::activity::event::ActivityEvent;
+use crate::app::dashboard::state::DashboardRoomJoinReceiver;
+use crate::app::state::App;
 use crate::metrics;
+pub(crate) use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
 use crate::session_io::{FrameSink, RusshFrameSink};
-use crate::state::{ActiveSession, ActivityEvent, State};
+use crate::state::{ActiveSession, State};
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
+const AUTH_SETUP_BANNER: &str = "\r\nlate.sh requires SSH public-key auth.\r\n\
+New here? Install the companion CLI:\r\n\
+  curl -fsSL https://cli.late.sh/install.sh | bash\r\n\
+  late\r\n\
+Or create a key manually with:\r\n\
+  ssh-keygen -t ed25519 -C late.sh\r\n\
+  ssh late.sh\r\n";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
 pub(crate) const INPUT_QUEUE_CAP: usize = 256;
 
@@ -43,26 +54,6 @@ const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
 /// per-session render rate so that keystroke floods or other signal sources
 /// can't drive renders faster than this.
 const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
-
-/// Paired "there is unrendered input" flag + wakeup. `Notify` is just the
-/// alarm clock; `dirty` is the source of truth. The input path sets `dirty`
-/// after enqueuing bytes for the render task, and the render task clears it
-/// immediately before draining that queue under the app mutex. Using `Notify`
-/// alone leaves a stored permit after a batched render, causing one spurious
-/// identical frame per typing burst.
-pub(crate) struct RenderSignal {
-    pub(crate) dirty: AtomicBool,
-    pub(crate) notify: Notify,
-}
-
-impl RenderSignal {
-    pub(crate) fn new() -> Self {
-        Self {
-            dirty: AtomicBool::new(false),
-            notify: Notify::new(),
-        }
-    }
-}
 
 #[derive(Clone)]
 struct Server {
@@ -86,9 +77,11 @@ struct ClientHandler {
 
     /// Activity feed
     activity_feed_rx: Option<tokio::sync::broadcast::Receiver<ActivityEvent>>,
+    room_join_rx: Option<DashboardRoomJoinReceiver>,
 
     /// Session bindings
     channel: Option<Channel<Msg>>,
+    app_channel_id: Option<ChannelId>,
     app: Option<Arc<TokioMutex<crate::app::state::App>>>,
     /// Signaled by input/resize paths to request an immediate (world-stateless)
     /// render, so typed characters echo without waiting for the next world tick.
@@ -96,6 +89,7 @@ struct ClientHandler {
     input_tx: Option<tokio::sync::mpsc::Sender<SshInputEvent>>,
     input_rx: Option<tokio::sync::mpsc::Receiver<SshInputEvent>>,
     cli_mode: bool,
+    terminal_env_hints: Vec<(String, String)>,
     session_token: Option<String>,
     session_rx: Option<tokio::sync::mpsc::Receiver<crate::session::SessionMessage>>,
 }
@@ -143,6 +137,10 @@ pub async fn run_with_listener(
             state.config.ssh_idle_timeout,
         )),
         auth_rejection_time: std::time::Duration::from_secs(3),
+        // Don't penalize the client's initial `none`-auth probe; only delay
+        // repeated failures. Without this, every connection waits 3s before
+        // the real publickey auth is even attempted.
+        auth_rejection_time_initial: Some(std::time::Duration::ZERO),
         keys,
         window_size: 8 * 1024 * 1024, // 8MB window size
         event_buffer_size: 128,
@@ -286,6 +284,7 @@ impl Server {
             user: None,
             is_new_user: false,
             activity_feed_rx: None,
+            room_join_rx: None,
             transport_peer_addr,
             peer_addr: effective_peer_addr,
             peer_ip,
@@ -294,11 +293,13 @@ impl Server {
             active_user_incremented: false,
             over_limit,
             channel: None,
+            app_channel_id: None,
             app: None,
             render_signal: None,
             input_tx: None,
             input_rx: None,
             cli_mode: false,
+            terminal_env_hints: Vec::new(),
             session_token: None,
             session_rx: None,
         }
@@ -352,18 +353,23 @@ impl Drop for ClientHandler {
             && let Some(user) = self.user.as_ref()
         {
             metrics::add_ssh_session(-1);
+            let user_id = user.id;
+            let mut user_still_afk = false;
             let mut active_users = self.state.active_users.lock_recover();
 
-            if let Some(active) = active_users.get_mut(&user.id) {
+            if let Some(active) = active_users.get_mut(&user_id) {
                 if let Some(token) = self.session_token.as_ref() {
                     active.sessions.retain(|session| session.token != *token);
                 }
                 if active.connection_count <= 1 {
-                    active_users.remove(&user.id);
+                    active_users.remove(&user_id);
                 } else {
                     active.connection_count -= 1;
+                    user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
             }
+            drop(active_users);
+            crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
         }
 
         if self.over_limit || !self.per_ip_incremented {
@@ -389,11 +395,16 @@ impl ClientHandler {
             return Ok(token);
         }
 
+        let user_id =
+            self.user.as_ref().map(|u| u.id).ok_or_else(|| {
+                anyhow::anyhow!("cli session requested before user authenticated")
+            })?;
+
         let session_token = crate::session::new_session_token();
         let (session_tx, session_rx) = tokio::sync::mpsc::channel(64);
         self.state
             .session_registry
-            .register(session_token.clone(), session_tx)
+            .register(session_token.clone(), session_tx, user_id)
             .await;
         self.session_token = Some(session_token.clone());
         self.session_rx = Some(session_rx);
@@ -419,12 +430,17 @@ impl ClientHandler {
             token: session_token.to_string(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: self.peer_ip,
+            afk: None,
         });
     }
 }
 
 impl russh::server::Handler for ClientHandler {
     type Error = anyhow::Error;
+
+    async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
+        Ok(Some(AUTH_SETUP_BANNER.to_string()))
+    }
 
     #[tracing::instrument(skip(self, key), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
     async fn auth_publickey(
@@ -475,6 +491,7 @@ impl russh::server::Handler for ClientHandler {
                 active.username = user.username.clone();
                 active.fingerprint = Some(fingerprint.clone());
                 active.peer_ip = self.peer_ip;
+                active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
                 active.last_login_at = std::time::Instant::now();
             } else {
                 active_users.insert(
@@ -483,6 +500,7 @@ impl russh::server::Handler for ClientHandler {
                         username: user.username.clone(),
                         fingerprint: Some(fingerprint.clone()),
                         peer_ip: self.peer_ip,
+                        audio_source: late_core::models::user::extract_audio_source(&user.settings),
                         sessions: Vec::new(),
                         connection_count: 1,
                         last_login_at: std::time::Instant::now(),
@@ -492,7 +510,13 @@ impl russh::server::Handler for ClientHandler {
             self.active_user_incremented = true;
             metrics::add_ssh_session(1);
         }
+        crate::usernames::upsert(
+            &self.state.username_directory,
+            user.id,
+            user.username.clone(),
+        );
 
+        let user_id = user.id;
         let username = user.username.clone();
 
         tracing::info!(
@@ -503,11 +527,11 @@ impl russh::server::Handler for ClientHandler {
 
         self.user = Some(user);
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
-        let _ = self.state.activity_feed.send(ActivityEvent {
-            username,
-            action: "joined".to_string(),
-            at: time::Instant::now(),
-        });
+        self.room_join_rx = Some(self.state.room_join_feed.subscribe());
+        let _ = self
+            .state
+            .activity_feed
+            .send(ActivityEvent::joined(user_id, username));
         Ok(Auth::Accept)
     }
 
@@ -579,16 +603,21 @@ impl russh::server::Handler for ClientHandler {
                 is_new_user: self.is_new_user,
                 cols: col_width as u16,
                 rows: row_height as u16,
+                term: term.to_string(),
                 session_token,
                 session_rx: Some(session_rx),
                 activity_feed_rx: self.activity_feed_rx.take(),
+                room_join_rx: self.room_join_rx.take(),
                 supports_reconnect_on_drain: false,
                 reconnect_reason: None,
             },
         )
         .await;
-        let app = crate::app::state::App::new(session_config)
+        let mut app = crate::app::state::App::new(session_config)
             .context("failed to initialize app for PTY session")?;
+        for (name, value) in &self.terminal_env_hints {
+            app.apply_terminal_env_hint(name, value);
+        }
         self.app = Some(Arc::new(TokioMutex::new(app)));
         self.input_tx = Some(input_tx);
         self.input_rx = Some(input_rx);
@@ -613,6 +642,19 @@ impl russh::server::Handler for ClientHandler {
                 cli_mode = self.cli_mode,
                 "updated cli mode from env request"
             );
+        } else if crate::app::files::terminal_image::protocol_from_env_hint(
+            variable_name,
+            variable_value,
+        )
+        .is_some()
+        {
+            self.terminal_env_hints
+                .push((variable_name.to_string(), variable_value.to_string()));
+            if let Some(app) = self.app.as_ref() {
+                app.lock()
+                    .await
+                    .apply_terminal_env_hint(variable_name, variable_value);
+            }
         }
         match session.channel_success(channel) {
             Ok(()) => tracing::debug!(variable_name, "env channel_success sent"),
@@ -693,6 +735,7 @@ impl russh::server::Handler for ClientHandler {
                 anyhow::anyhow!("session input receiver missing during shell request")
             })?;
             let channel_id = chan.id();
+            self.app_channel_id = Some(channel_id);
             let handle = session.handle();
 
             if self.cli_mode
@@ -727,11 +770,15 @@ impl russh::server::Handler for ClientHandler {
     #[tracing::instrument(skip(self, data, _session), fields(peer = ?self.peer_addr, len = data.len()))]
     async fn data(
         &mut self,
-        _channel: ChannelId,
+        channel: ChannelId,
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(len = data.len(), "received input data");
+        if self.app_channel_id != Some(channel) {
+            tracing::debug!(?channel, "ignoring input from non-app channel");
+            return Ok(());
+        }
         if self.app.is_none() {
             return Ok(());
         }
@@ -755,8 +802,7 @@ impl russh::server::Handler for ClientHandler {
             }
         }
         if let Some(signal) = self.render_signal.as_ref() {
-            signal.dirty.store(true, Ordering::Release);
-            signal.notify.notify_one();
+            signal.wake();
         }
         Ok(())
     }
@@ -768,7 +814,9 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(?channel, "client sent channel EOF");
-        if let Some(app) = self.app.as_ref() {
+        if self.app_channel_id == Some(channel)
+            && let Some(app) = self.app.as_ref()
+        {
             let mut app = app.lock().await;
             // Peer already closed; no backend close-code signal remains to send.
             app.running = false;
@@ -783,10 +831,13 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(?channel, "client closed channel");
-        if let Some(app) = self.app.as_ref() {
+        if self.app_channel_id == Some(channel)
+            && let Some(app) = self.app.as_ref()
+        {
             let mut app = app.lock().await;
             // Peer already closed; no backend close-code signal remains to send.
             app.running = false;
+            self.app_channel_id = None;
         }
         Ok(())
     }
@@ -832,8 +883,7 @@ impl russh::server::Handler for ClientHandler {
             }
         }
         if let Some(signal) = self.render_signal.as_ref() {
-            signal.dirty.store(true, Ordering::Release);
-            signal.notify.notify_one();
+            signal.wake();
         }
         Ok(())
     }
@@ -849,6 +899,7 @@ pub(crate) async fn run_session<S: FrameSink>(
     frame_drop_log_every: u64,
     signal: Arc<RenderSignal>,
 ) {
+    app.lock().await.set_repaint_signal(Arc::clone(&signal));
     let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
     world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut previous_render: Option<Instant> = None;
@@ -1056,6 +1107,9 @@ pub(crate) async fn ensure_user(
             if let Err(e) = User::update_last_seen(&mut row.clone(), &client).await {
                 tracing::warn!(error = ?e, "failed to update last_seen for user");
             }
+            if let Err(e) = User::ensure_ssh_key(&client, row.id, fingerprint).await {
+                tracing::warn!(error = ?e, "failed to ensure ssh key for user");
+            }
             (row, false)
         }
         None => {
@@ -1069,6 +1123,7 @@ pub(crate) async fn ensure_user(
                 },
             )
             .await?;
+            User::ensure_ssh_key(&client, user.id, fingerprint).await?;
             match state.chat_service.auto_join_public_rooms(user.id).await {
                 Ok(joined) => {
                     tracing::debug!(
@@ -1084,6 +1139,13 @@ pub(crate) async fn ensure_user(
                         "failed to seed auto-join chat rooms for newly created user"
                     );
                 }
+            }
+            if let Err(e) = ArticleFeedRead::seed_read_for_new_user(&client, user.id).await {
+                tracing::warn!(
+                    user_id = %user.id,
+                    error = ?e,
+                    "failed to seed news read cursor for newly created user"
+                );
             }
             (user, true)
         }
@@ -1137,35 +1199,6 @@ pub(crate) async fn check_ssh_admission(
     Ok(())
 }
 
-#[cfg(test)]
-async fn has_active_server_ban(
-    client: &tokio_postgres::Client,
-    user: &User,
-    fingerprint: &str,
-    peer_ip: Option<IpAddr>,
-) -> Result<bool> {
-    if ServerBan::find_active_for_user_id(client, user.id)
-        .await?
-        .is_some()
-    {
-        return Ok(true);
-    }
-    if ServerBan::find_active_for_fingerprint(client, fingerprint)
-        .await?
-        .is_some()
-    {
-        return Ok(true);
-    }
-    let Some(peer_ip) = peer_ip else {
-        return Ok(false);
-    };
-    Ok(
-        ServerBan::find_active_for_ip_address(client, &peer_ip.to_string())
-            .await?
-            .is_some(),
-    )
-}
-
 async fn has_active_server_ban_before_user_lookup(
     client: &tokio_postgres::Client,
     fingerprint: &str,
@@ -1183,10 +1216,6 @@ async fn has_active_server_ban_before_user_lookup(
         .is_some())
 }
 
-pub(crate) fn late_ssh_theme_id(settings: &Value) -> String {
-    extract_theme_id(settings).unwrap_or_else(|| theme::DEFAULT_ID.to_string())
-}
-
 fn reject_publickey_only() -> Auth {
     Auth::Reject {
         proceed_with_methods: Some(MethodSet::from(&[MethodKind::PublicKey][..])),
@@ -1197,11 +1226,6 @@ fn reject_publickey_only() -> Auth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use late_core::{
-        models::server_ban::{ServerBan, ServerBanActivation},
-        test_utils::{create_test_user, test_db},
-    };
-    use std::str::FromStr;
 
     #[test]
     fn reject_publickey_only_advertises_only_publickey() {
@@ -1218,105 +1242,6 @@ mod tests {
             }
             _ => panic!("expected reject auth"),
         }
-    }
-
-    #[tokio::test]
-    async fn has_active_server_ban_matches_user_fingerprint_and_ip() {
-        let test_db = test_db().await;
-        let client = test_db.db.get().await.expect("db client");
-        let actor = create_test_user(&test_db.db, "ban_actor").await;
-        let target = create_test_user(&test_db.db, "ban_target").await;
-        let fingerprint_target = create_test_user(&test_db.db, "ban_fp_target").await;
-        let ip_target = create_test_user(&test_db.db, "ban_ip_target").await;
-        let banned_ip = IpAddr::from_str("203.0.113.10").expect("test ip");
-
-        assert!(
-            !has_active_server_ban(&client, &target, &target.fingerprint, None)
-                .await
-                .expect("ban lookup")
-        );
-
-        ServerBan::activate(
-            &client,
-            ServerBanActivation {
-                target_user_id: target.id,
-                fingerprint: Some(&target.fingerprint),
-                ip_address: None,
-                snapshot_username: Some(&target.username),
-                actor_user_id: actor.id,
-                reason: "test ban",
-                expires_at: None,
-            },
-        )
-        .await
-        .expect("activate server ban");
-
-        assert!(
-            has_active_server_ban(&client, &target, &target.fingerprint, None)
-                .await
-                .expect("ban lookup")
-        );
-
-        assert!(
-            !has_active_server_ban(
-                &client,
-                &fingerprint_target,
-                &fingerprint_target.fingerprint,
-                None
-            )
-            .await
-            .expect("pre-fingerprint ban lookup")
-        );
-        ServerBan::activate(
-            &client,
-            ServerBanActivation {
-                target_user_id: fingerprint_target.id,
-                fingerprint: Some(&fingerprint_target.fingerprint),
-                ip_address: None,
-                snapshot_username: Some(&fingerprint_target.username),
-                actor_user_id: actor.id,
-                reason: "test fingerprint ban",
-                expires_at: None,
-            },
-        )
-        .await
-        .expect("activate fingerprint ban");
-        assert!(
-            has_active_server_ban(
-                &client,
-                &fingerprint_target,
-                &fingerprint_target.fingerprint,
-                None
-            )
-            .await
-            .expect("fingerprint ban lookup")
-        );
-
-        assert!(
-            !has_active_server_ban(&client, &ip_target, &ip_target.fingerprint, Some(banned_ip))
-                .await
-                .expect("pre-ip ban lookup")
-        );
-        let banned_ip_text = banned_ip.to_string();
-        ServerBan::activate(
-            &client,
-            ServerBanActivation {
-                target_user_id: ip_target.id,
-                fingerprint: Some(&ip_target.fingerprint),
-                ip_address: Some(&banned_ip_text),
-                snapshot_username: Some(&ip_target.username),
-                actor_user_id: actor.id,
-                reason: "test ip ban",
-                expires_at: None,
-            },
-        )
-        .await
-        .expect("activate ip ban");
-        assert!(
-            has_active_server_ban(&client, &ip_target, &ip_target.fingerprint, Some(banned_ip))
-                .await
-                .expect("ip ban lookup")
-        );
     }
 
     #[test]

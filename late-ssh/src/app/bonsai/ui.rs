@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet, time::SystemTime};
 
+use chrono::{Datelike, Utc};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -24,6 +25,66 @@ pub(crate) struct TreeOverlay<'a> {
     pub show_selection: bool,
 }
 
+/// Borderless bonsai render for the merged shell. Drops the outer block and
+/// "Bonsai (Xd)" title; the rail's whitespace separates it from neighbors.
+/// A single dim line at the bottom shows age + care hint.
+pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32) {
+    if area.height < 3 || area.width < 10 {
+        return;
+    }
+
+    let stage = state.stage();
+    let wilting = state.is_wilting();
+    let tree_art = tree_ascii(stage, state.seed, wilting);
+    let tree_height = tree_art.len();
+
+    // Reserve last 1 row for the age + care-hint footer ("5d  w care").
+    let footer_height: usize = 1;
+    let tree_space = (area.height as usize).saturating_sub(footer_height);
+    let padding_top = tree_space.saturating_sub(tree_height);
+
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    for _ in 0..padding_top {
+        lines.push(Line::from(""));
+    }
+    lines.extend(render_tree_art_lines(
+        stage,
+        state.seed,
+        wilting,
+        area.width as usize,
+        beat,
+        None,
+    ));
+    while lines.len() < tree_space {
+        lines.push(Line::from(""));
+    }
+
+    // Footer
+    let age_color = if state.is_alive {
+        theme::TEXT_DIM()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    let age_text = if state.is_alive {
+        format!("{}d", state.age_days)
+    } else {
+        "rip".to_string()
+    };
+    let mut footer = vec![Span::styled(age_text, Style::default().fg(age_color))];
+    if state.is_alive {
+        footer.push(Span::raw("  "));
+        footer.push(Span::styled(
+            "w care",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+    lines.push(Line::from(footer).centered());
+
+    frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
+}
+
 /// Render the bonsai widget for the sidebar. Takes a fixed area.
 pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32) {
     let title = if state.is_alive {
@@ -40,7 +101,7 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         } else {
             theme::TEXT_FAINT()
         }));
-    if let Some(hint) = water_hint_title(state.can_water(), area.width) {
+    if let Some(hint) = water_hint_title(area.width) {
         block = block.title_top(hint);
     }
     let inner = block.inner(area);
@@ -101,7 +162,7 @@ pub(crate) fn render_tree_art_lines(
     let leaf_color = if wilting {
         theme::AMBER_DIM()
     } else {
-        leaf_color_for_stage(stage)
+        seasonal_leaf_color(stage, current_season())
     };
     let trunk_color = if wilting {
         theme::TEXT_FAINT()
@@ -266,7 +327,7 @@ fn cursor_display(ch: char, cursor_here: bool) -> String {
 }
 
 fn status_lines(state: &BonsaiState) -> Vec<Line<'static>> {
-    status_line_specs(state.is_alive, state.stage(), state.can_water())
+    status_line_specs(state.is_alive, state.can_water())
         .into_iter()
         .map(|spec| match spec {
             StatusLineSpec::DeadHint => Line::from(Span::styled(
@@ -289,7 +350,7 @@ enum StatusLineSpec {
     WateredToday,
 }
 
-fn status_line_specs(is_alive: bool, _stage: Stage, can_water: bool) -> Vec<StatusLineSpec> {
+fn status_line_specs(is_alive: bool, can_water: bool) -> Vec<StatusLineSpec> {
     if !is_alive {
         return vec![StatusLineSpec::DeadHint];
     }
@@ -301,8 +362,8 @@ fn status_line_specs(is_alive: bool, _stage: Stage, can_water: bool) -> Vec<Stat
     lines
 }
 
-fn water_hint_title(can_water: bool, width: u16) -> Option<Line<'static>> {
-    if !can_water || width < 12 {
+fn water_hint_title(width: u16) -> Option<Line<'static>> {
+    if width < 12 {
         return None;
     }
     Some(
@@ -330,6 +391,48 @@ fn leaf_color_for_stage(stage: Stage) -> ratatui::style::Color {
         Stage::Mature => theme::BONSAI_CANOPY(),
         Stage::Ancient => theme::BONSAI_BLOOM(),
         Stage::Blossom => theme::BONSAI_BLOOM(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Season {
+    Spring,
+    Summer,
+    Autumn,
+    Winter,
+}
+
+/// Calendar-month seasons in the northern hemisphere. The server uses UTC, so
+/// the date users see in their bonsai always matches the rest of the
+/// late.sh UI clock.
+fn season_for_month(month: u32) -> Season {
+    match month {
+        3..=5 => Season::Spring,
+        6..=8 => Season::Summer,
+        9..=11 => Season::Autumn,
+        // 12, 1, 2 — and anything out of range, defensively.
+        _ => Season::Winter,
+    }
+}
+
+fn current_season() -> Season {
+    season_for_month(Utc::now().month())
+}
+
+/// Leaf color biased by season for the foliated stages. The base palette
+/// still drives Seed/Sprout/Dead — they have no foliage to tint — and Ancient
+/// and Blossom stages already use BONSAI_BLOOM year-round, so the seasonal
+/// accent shows up most clearly on Sapling/Young/Mature canopies.
+fn seasonal_leaf_color(stage: Stage, season: Season) -> Color {
+    let foliated = matches!(stage, Stage::Sapling | Stage::Young | Stage::Mature);
+    if !foliated {
+        return leaf_color_for_stage(stage);
+    }
+    match season {
+        Season::Spring => theme::BONSAI_BLOOM(),
+        Season::Autumn => theme::AMBER_DIM(),
+        Season::Winter => theme::TEXT_DIM(),
+        Season::Summer => leaf_color_for_stage(stage),
     }
 }
 
@@ -1541,16 +1644,16 @@ mod tests {
     #[test]
     fn status_specs_for_dead_tree_show_respawn_hint() {
         assert_eq!(
-            status_line_specs(false, Stage::Dead, false),
+            status_line_specs(false, false),
             vec![StatusLineSpec::DeadHint]
         );
     }
 
     #[test]
-    fn status_specs_show_stage_and_watering_status() {
-        assert_eq!(status_line_specs(true, Stage::Young, true), vec![]);
+    fn status_specs_show_watering_status() {
+        assert_eq!(status_line_specs(true, true), vec![]);
         assert_eq!(
-            status_line_specs(true, Stage::Young, false),
+            status_line_specs(true, false),
             vec![StatusLineSpec::WateredToday]
         );
     }
@@ -1585,5 +1688,65 @@ mod tests {
                 take_chars: 22,
             }
         );
+    }
+
+    #[test]
+    fn season_for_month_groups_calendar_months_correctly() {
+        assert_eq!(season_for_month(3), Season::Spring);
+        assert_eq!(season_for_month(5), Season::Spring);
+        assert_eq!(season_for_month(6), Season::Summer);
+        assert_eq!(season_for_month(8), Season::Summer);
+        assert_eq!(season_for_month(9), Season::Autumn);
+        assert_eq!(season_for_month(11), Season::Autumn);
+        assert_eq!(season_for_month(12), Season::Winter);
+        assert_eq!(season_for_month(1), Season::Winter);
+        assert_eq!(season_for_month(2), Season::Winter);
+    }
+
+    #[test]
+    fn season_for_month_defaults_out_of_range_to_winter() {
+        assert_eq!(season_for_month(0), Season::Winter);
+        assert_eq!(season_for_month(13), Season::Winter);
+    }
+
+    #[test]
+    fn seasonal_leaf_color_leaves_non_foliated_stages_unchanged() {
+        for stage in [
+            Stage::Dead,
+            Stage::Seed,
+            Stage::Sprout,
+            Stage::Ancient,
+            Stage::Blossom,
+        ] {
+            for season in [
+                Season::Spring,
+                Season::Summer,
+                Season::Autumn,
+                Season::Winter,
+            ] {
+                assert_eq!(
+                    seasonal_leaf_color(stage, season),
+                    leaf_color_for_stage(stage),
+                    "non-foliated stage {stage:?} should ignore season {season:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn seasonal_leaf_color_tints_foliated_stages_by_season() {
+        // Summer matches the year-round palette — it's the baseline.
+        assert_eq!(
+            seasonal_leaf_color(Stage::Young, Season::Summer),
+            leaf_color_for_stage(Stage::Young),
+        );
+        // Spring / Autumn / Winter pull the foliated stages off the baseline.
+        for season in [Season::Spring, Season::Autumn, Season::Winter] {
+            assert_ne!(
+                seasonal_leaf_color(Stage::Young, season),
+                leaf_color_for_stage(Stage::Young),
+                "season {season:?} should differ from the summer baseline"
+            );
+        }
     }
 }

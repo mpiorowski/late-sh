@@ -4,7 +4,10 @@ use uuid::Uuid;
 
 use late_core::models::bonsai::{MAX_GROWTH_POINTS, Tree};
 
-use super::svc::BonsaiService;
+use super::{
+    care::{BonsaiCareState, branch_targets_for},
+    svc::BonsaiService,
+};
 
 pub(crate) const STAGE_GROWTH_POINTS: i32 = 100;
 pub(crate) const WRONG_CUT_GROWTH_LOSS: i32 = 10;
@@ -15,7 +18,6 @@ const GROWTH_TICK_INTERVAL: usize = 15 * 60 * 10; // 15fps * 600s = 9000 ticks
 pub struct BonsaiState {
     pub user_id: Uuid,
     pub svc: BonsaiService,
-    pub is_admin: bool,
 
     // Cached tree state (refreshed on water/respawn)
     pub growth_points: i32,
@@ -33,7 +35,7 @@ pub struct BonsaiState {
 }
 
 impl BonsaiState {
-    pub fn new(user_id: Uuid, svc: BonsaiService, tree: Tree, is_admin: bool) -> Self {
+    pub fn new(user_id: Uuid, svc: BonsaiService, tree: Tree) -> Self {
         let today = chrono::Utc::now().date_naive();
         let created_date = tree.created.date_naive();
         let age_days = (today - created_date).num_days().max(0);
@@ -41,7 +43,6 @@ impl BonsaiState {
         Self {
             user_id,
             svc,
-            is_admin,
             growth_points: tree.growth_points,
             last_watered: tree.last_watered,
             seed: tree.seed,
@@ -75,14 +76,14 @@ impl BonsaiState {
         }
     }
 
-    /// Water the tree. Returns points granted (0 if already watered today or dead).
-    pub fn water(&mut self) -> i32 {
+    /// Water the tree. Returns growth points granted, or None if already watered today or dead.
+    pub fn water(&mut self) -> Option<i32> {
         if !self.is_alive {
-            return 0;
+            return None;
         }
         let today = BonsaiService::today();
-        if !self.is_admin && self.last_watered == Some(today) {
-            return 0; // Already watered
+        if self.last_watered == Some(today) {
+            return None; // Already watered
         }
 
         let bonus = if let Some(last) = self.last_watered {
@@ -94,8 +95,8 @@ impl BonsaiState {
         self.last_watered = Some(today);
         self.watered_this_session = true;
 
-        self.svc.water_task(self.user_id, self.is_admin);
-        gained
+        self.svc.water_task(self.user_id);
+        Some(gained)
     }
 
     /// Respawn a dead tree
@@ -130,12 +131,7 @@ impl BonsaiState {
 
     /// Can water right now?
     pub fn can_water(&self) -> bool {
-        can_water_on(
-            self.is_alive,
-            self.last_watered,
-            BonsaiService::today(),
-            self.is_admin,
-        )
+        can_water_on(self.is_alive, self.last_watered, BonsaiService::today())
     }
 
     /// Cut/prune the tree — drops one growth stage, changes visual variant.
@@ -195,6 +191,12 @@ impl BonsaiState {
         let label = share_label(self.is_alive, self.age_days);
         format!("{art}\n{label}")
     }
+
+    pub(crate) fn share_snippet_with_care(&self, care: &BonsaiCareState) -> String {
+        let art = share_art_with_care(self.stage(), self.seed, care);
+        let label = share_label(self.is_alive, self.age_days);
+        format!("{art}\n{label}")
+    }
 }
 
 fn should_die(reference_date: NaiveDate, today: NaiveDate) -> bool {
@@ -224,13 +226,8 @@ fn is_wilting_state(is_alive: bool, age_days: i64, days_since_watered: Option<i6
     is_alive && days_since_watered.map_or(age_days >= 2, |days| days >= 2)
 }
 
-fn can_water_on(
-    is_alive: bool,
-    last_watered: Option<NaiveDate>,
-    today: NaiveDate,
-    is_admin: bool,
-) -> bool {
-    is_alive && (is_admin || last_watered != Some(today))
+fn can_water_on(is_alive: bool, last_watered: Option<NaiveDate>, today: NaiveDate) -> bool {
+    is_alive && last_watered != Some(today)
 }
 
 fn share_label(is_alive: bool, age_days: i64) -> String {
@@ -286,6 +283,29 @@ impl Stage {
 /// Derives from the same `tree_ascii` used by the UI so the two never drift.
 fn share_art(stage: Stage, seed: i64) -> String {
     let lines = super::ui::tree_ascii(stage, seed, false);
+    share_lines(&lines)
+}
+
+fn share_art_with_care(stage: Stage, seed: i64, care: &BonsaiCareState) -> String {
+    let mut lines = super::ui::tree_ascii(stage, seed, false);
+    let targets = branch_targets_for(stage, seed, care.date, &lines, care.branch_goal);
+    for target in targets {
+        if care.cut_branch_ids.contains(&target.id) {
+            continue;
+        }
+        let Some(line) = lines.get_mut(target.y) else {
+            continue;
+        };
+        let mut chars: Vec<char> = line.chars().collect();
+        if let Some(ch) = chars.get_mut(target.x) {
+            *ch = target.glyph;
+        }
+        *line = chars.into_iter().collect();
+    }
+    share_lines(&lines)
+}
+
+fn share_lines(lines: &[String]) -> String {
     lines
         .iter()
         .map(|l| l.trim_end())
@@ -328,22 +348,16 @@ mod tests {
         let today = BonsaiService::today();
 
         assert_eq!(days_since_watered_on(None, today), None);
-        assert!(can_water_on(true, None, today, false));
+        assert!(can_water_on(true, None, today));
 
         assert_eq!(days_since_watered_on(Some(today), today), Some(0));
-        assert!(!can_water_on(true, Some(today), today, false));
-        assert!(can_water_on(true, Some(today), today, true));
+        assert!(!can_water_on(true, Some(today), today));
 
         assert_eq!(
             days_since_watered_on(Some(today - Duration::days(1)), today),
             Some(1)
         );
-        assert!(can_water_on(
-            true,
-            Some(today - Duration::days(1)),
-            today,
-            false
-        ));
+        assert!(can_water_on(true, Some(today - Duration::days(1)), today));
     }
 
     #[test]
@@ -367,5 +381,27 @@ mod tests {
     fn share_label_reflects_alive_and_dead_states() {
         assert_eq!(share_label(true, 12), "ADMIRE my tree (Day 12)");
         assert_eq!(share_label(false, 12), "ADMIRE my tree [RIP]");
+    }
+
+    #[test]
+    fn share_art_with_care_includes_uncut_branch_glyphs() {
+        let date = NaiveDate::from_ymd_opt(2026, 5, 13).unwrap();
+        let stage = Stage::Mature;
+        let seed = 42;
+        let care = BonsaiCareState::fallback(date, seed, stage);
+        let base_lines = super::super::ui::tree_ascii(stage, seed, false);
+        let targets = branch_targets_for(stage, seed, date, &base_lines, care.branch_goal);
+        let target = targets.first().expect("branch target");
+
+        let base_char = base_lines[target.y].chars().nth(target.x);
+        assert_eq!(base_char, Some(' '));
+
+        let shared = share_art_with_care(stage, seed, &care);
+        let shared_char = shared
+            .lines()
+            .nth(target.y)
+            .and_then(|line| line.chars().nth(target.x));
+
+        assert_eq!(shared_char, Some(target.glyph));
     }
 }

@@ -35,6 +35,10 @@ resource "kubernetes_deployment_v1" "service_ssh" {
       spec {
         termination_grace_period_seconds = 21600
 
+        # NetHack now runs in the dedicated late-nethack pod (service-nethack.tf),
+        # which owns the nethack-save PVC + seed init_container. service-ssh only
+        # needs network reach to it (LATE_NETHACK_HOST below).
+
         container {
           image = var.SSH_IMAGE_TAG
           name  = "service-ssh"
@@ -54,9 +58,18 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name           = "tunnel"
           }
 
+          dynamic "port" {
+            for_each = local.irc_enabled_bool ? [1] : []
+
+            content {
+              container_port = local.irc_port
+              name           = "irc"
+            }
+          }
+
           resources {
             limits = {
-              cpu    = "4000m"
+              cpu    = "8000m"
               memory = "4Gi"
             }
             requests = {
@@ -170,10 +183,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name  = "LATE_ICECAST_URL"
             value = "http://icecast-sv:8000"
           }
-          env {
-            name  = "LATE_LIQUIDSOAP_ADDR"
-            value = "liquidsoap-sv:1234"
-          }
 
           # --- Web / CORS ---
           env {
@@ -194,6 +203,115 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # --- Door games ---
+          env {
+            name  = "LATE_REBELS_ENABLED"
+            value = local.rebels_enabled
+          }
+          env {
+            name  = "LATE_REBELS_HOST"
+            value = local.rebels_host
+          }
+          env {
+            name  = "LATE_REBELS_PORT"
+            value = local.rebels_port
+          }
+          env {
+            name = "LATE_REBELS_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.rebels_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
+          # NetHack is served by the late-nethack host pod (service-nethack.tf);
+          # late-ssh connects to it over SSH. HOST/PORT target that Service and
+          # SECRET (shared with the host) authorizes the connection.
+          env {
+            name  = "LATE_NETHACK_ENABLED"
+            value = local.nethack_enabled
+          }
+          env {
+            name  = "LATE_NETHACK_HOST"
+            value = local.nethack_service_host
+          }
+          env {
+            name  = "LATE_NETHACK_PORT"
+            value = local.nethack_port
+          }
+          env {
+            name = "LATE_NETHACK_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.nethack_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
+          # dopewars is served by the late-dopewars host pod (service-dopewars.tf);
+          # late-ssh connects to it over SSH. HOST/PORT target that Service and
+          # SECRET (shared with the host) authorizes the connection.
+          env {
+            name  = "LATE_DOPEWARS_ENABLED"
+            value = local.dopewars_enabled
+          }
+          env {
+            name  = "LATE_DOPEWARS_HOST"
+            value = local.dopewars_service_host
+          }
+          env {
+            name  = "LATE_DOPEWARS_PORT"
+            value = local.dopewars_port
+          }
+          env {
+            name = "LATE_DOPEWARS_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.dopewars_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
+          # --- Files / uploads ---
+          env {
+            name  = "LATE_FILES_S3_ENDPOINT"
+            value = var.S3_ENDPOINT
+          }
+          env {
+            name  = "LATE_FILES_S3_BUCKET"
+            value = var.FILES_BUCKET
+          }
+          env {
+            name  = "LATE_FILES_PUBLIC_BASE_URL"
+            value = var.FILES_PUBLIC_BASE_URL
+          }
+          env {
+            name  = "LATE_FILES_S3_REGION"
+            value = var.FILES_S3_REGION
+          }
+          env {
+            name = "LATE_FILES_S3_ACCESS_KEY_ID"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.s3_credentials.metadata[0].name
+                key  = "ACCESS_KEY_ID"
+              }
+            }
+          }
+          env {
+            name = "LATE_FILES_S3_SECRET_ACCESS_KEY"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.s3_credentials.metadata[0].name
+                key  = "SECRET_ACCESS_KEY"
+              }
+            }
+          }
+
           # --- SSH ---
           env {
             name  = "LATE_SSH_KEY_PATH"
@@ -209,7 +327,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           }
           env {
             name  = "LATE_MAX_CONNS_GLOBAL"
-            value = var.MAX_CONNS_GLOBAL
+            value = "1000"
           }
           env {
             name  = "LATE_MAX_CONNS_PER_IP"
@@ -252,10 +370,41 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             value = var.DB_POOL_SIZE
           }
 
-          # --- Vote ---
+          # --- IRC ---
           env {
-            name  = "LATE_VOTE_SWITCH_INTERVAL_SECS"
-            value = var.VOTE_SWITCH_INTERVAL_SECS
+            name  = "LATE_IRC_ENABLED"
+            value = local.irc_enabled
+          }
+          env {
+            name  = "LATE_IRC_PORT"
+            value = tostring(local.irc_port)
+          }
+          env {
+            name  = "LATE_IRC_MAX_CONNS_GLOBAL"
+            value = local.irc_max_conns_global
+          }
+          env {
+            name  = "LATE_IRC_MAX_CONNS_PER_USER"
+            value = local.irc_max_conns_per_user
+          }
+          env {
+            name  = "LATE_IRC_MAX_AUTH_FAILURES_PER_IP"
+            value = local.irc_max_auth_failures_per_ip
+          }
+          env {
+            name  = "LATE_IRC_AUTH_FAILURE_WINDOW_SECS"
+            value = local.irc_auth_failure_window_secs
+          }
+          dynamic "env" {
+            for_each = local.irc_enabled_bool ? {
+              LATE_IRC_TLS_CERT = "${local.irc_tls_mount_path}/tls.crt"
+              LATE_IRC_TLS_KEY  = "${local.irc_tls_mount_path}/tls.key"
+            } : {}
+
+            content {
+              name  = env.key
+              value = env.value
+            }
           }
 
           # --- AI ---
@@ -277,12 +426,66 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             value = var.AI_MODEL
           }
 
+          # --- YouTube Data API ---
+          env {
+            name = "LATE_YOUTUBE_API_KEY"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.youtube_credentials.metadata[0].name
+                key  = "api_key"
+              }
+            }
+          }
+
+          # --- Voice / LiveKit ---
+          env {
+            name  = "LATE_VOICE_ENABLED"
+            value = local.voice_enabled
+          }
+          env {
+            name  = "LATE_LIVEKIT_URL"
+            value = local.livekit_url
+          }
+          env {
+            name = "LATE_LIVEKIT_API_KEY"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.livekit.metadata[0].name
+                key  = "api_key"
+              }
+            }
+          }
+          env {
+            name = "LATE_LIVEKIT_API_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.livekit.metadata[0].name
+                key  = "api_secret"
+              }
+            }
+          }
+          env {
+            name  = "LATE_VOICE_ROOM"
+            value = local.voice_room
+          }
+
           # --- SSH host key volume ---
           volume_mount {
             name       = "ssh-host-key"
             mount_path = "/app/keys"
             read_only  = true
           }
+
+          dynamic "volume_mount" {
+            for_each = local.irc_enabled_bool ? [1] : []
+
+            content {
+              name       = "irc-tls"
+              mount_path = local.irc_tls_mount_path
+              read_only  = true
+            }
+          }
+
         }
 
         volume {
@@ -295,6 +498,18 @@ resource "kubernetes_deployment_v1" "service_ssh" {
               key  = "server_key"
               path = "server_key"
               mode = "0444"
+            }
+          }
+        }
+
+        dynamic "volume" {
+          for_each = local.irc_enabled_bool ? [1] : []
+
+          content {
+            name = "irc-tls"
+
+            secret {
+              secret_name = local.irc_tls_secret_name
             }
           }
         }
@@ -327,6 +542,16 @@ resource "kubernetes_service_v1" "service_ssh_sv" {
       name        = "api"
       port        = 4000
       target_port = "api"
+    }
+
+    dynamic "port" {
+      for_each = local.irc_enabled_bool ? [1] : []
+
+      content {
+        name        = "irc"
+        port        = local.irc_port
+        target_port = "irc"
+      }
     }
   }
 }

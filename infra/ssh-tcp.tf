@@ -31,6 +31,9 @@ resource "kubernetes_manifest" "nginx_tcp_config" {
           },
           var.BASTION_ENABLED == "1" ? {
             "5222" = "default/service-bastion-sv:${var.BASTION_SSH_PORT}::PROXY"
+          } : {},
+          local.irc_enabled_bool ? {
+            tostring(local.irc_port) = "default/service-ssh-sv:${local.irc_port}"
           } : {}
         )
       })

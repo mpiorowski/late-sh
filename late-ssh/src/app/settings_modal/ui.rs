@@ -6,12 +6,17 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+use late_core::models::user::RightSidebarMode;
+
 use crate::app::common::{markdown::render_body_to_lines, theme};
 
 use super::{
     data::country_label,
     gem::{GemPosition, GemState, MoveDirection},
-    state::{BIO_MAX_LEN, PickerKind, Row, SettingsModalState, Tab, ThemeTreeRow},
+    state::{
+        AccountRow, BIO_MAX_LEN, IrcTokenFocus, LinkAccountEnterCodeFocus, LinkAccountStep,
+        PickerKind, Row, SettingsModalState, Tab, ThemeTreeRow, TweakRow,
+    },
 };
 
 pub const MODAL_WIDTH: u16 = 96;
@@ -43,13 +48,15 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     .split(inner);
 
     draw_tabs(frame, layout[1], state);
+    state.set_body_area(layout[3]);
 
     match state.selected_tab() {
         Tab::Settings => draw_settings_tab(frame, layout[3], state),
+        Tab::Tweaks => draw_tweaks_tab(frame, layout[3], state),
         Tab::Themes => draw_themes_tab(frame, layout[3], state),
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
-        Tab::Favorites => draw_favorites_tab(frame, layout[3], state),
-        Tab::Special => draw_special_tab(frame, layout[3], state),
+        Tab::Account => draw_account_tab(frame, layout[3], state),
+        Tab::Feeds => draw_feeds_tab(frame, layout[3], state),
     }
 
     draw_footer(frame, layout[4], state.selected_tab(), state.editing_bio());
@@ -57,11 +64,25 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     if state.picker_open() {
         draw_picker(frame, popup, state);
     }
+    if state.right_sidebar_components_open() {
+        draw_right_sidebar_components_dialog(frame, popup, state);
+    }
+    if state.link_account_dialog().open() {
+        draw_link_account_dialog(frame, popup, state);
+    }
+    if state.delete_account_dialog().open() {
+        draw_delete_account_dialog(frame, popup, state);
+    }
+    if state.irc_token_dialog().open() {
+        draw_irc_token_dialog(frame, popup, state);
+    }
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let selected = state.selected_tab();
     let mut spans = vec![Span::raw("  ")];
+    let mut rects: [Option<Rect>; Tab::ALL.len()] = [None; Tab::ALL.len()];
+    let mut cursor_x = area.x.saturating_add(2);
     for tab in state.visible_tabs() {
         let active = tab == selected;
         let style = if active {
@@ -72,9 +93,22 @@ fn draw_tabs(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        spans.push(Span::styled(format!(" {} ", tab.label()), style));
+        let label = format!(" {} ", tab.label());
+        let width = label.chars().count() as u16;
+        let cell_end = cursor_x.saturating_add(width).min(area.x + area.width);
+        if let Some(slot_idx) = Tab::ALL.iter().position(|t| *t == tab) {
+            rects[slot_idx] = Some(Rect::new(
+                cursor_x,
+                area.y,
+                cell_end.saturating_sub(cursor_x),
+                area.height.min(1),
+            ));
+        }
+        spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
+        cursor_x = cell_end.saturating_add(1);
     }
+    state.set_tab_rects(rects);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -130,8 +164,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
-        (Tab::Special, _) => {
+        (Tab::Tweaks, _) => {
             spans.extend([
+                Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("←→ ↵", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
@@ -140,18 +176,28 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
-        (Tab::Favorites, _) => {
+        (Tab::Account, _) => {
+            spans.extend([
+                Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" open  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+            ]);
+        }
+        (Tab::Feeds, _) => {
             spans.extend([
                 Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("J/K", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" reorder  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("↵/a", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" add  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("d", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" remove  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" add  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("r", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" refresh  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);
@@ -348,20 +394,16 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     let sections = Layout::vertical([
         Constraint::Length(1), // Identity heading
         Constraint::Length(1), // Username row
+        Constraint::Length(1), // Country row
+        Constraint::Length(1), // Timezone row
+        Constraint::Length(1), // Birthday row
+        Constraint::Length(1), // Theme row
+        Constraint::Length(1), // breathing room
+        Constraint::Length(1), // late.fetch heading
         Constraint::Length(1), // IDE row
         Constraint::Length(1), // Terminal row
         Constraint::Length(1), // OS row
         Constraint::Length(1), // Languages row
-        Constraint::Length(1), // breathing room
-        Constraint::Length(1), // Appearance heading
-        Constraint::Length(1), // Theme
-        Constraint::Length(1), // Background
-        Constraint::Length(1), // Stream + vote
-        Constraint::Length(1), // Right sidebar
-        Constraint::Length(1), // breathing room
-        Constraint::Length(1), // Location heading
-        Constraint::Length(1), // Country
-        Constraint::Length(1), // Timezone
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Notifications heading
         Constraint::Length(1), // DMs
@@ -370,6 +412,8 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Bell
         Constraint::Length(1), // Cooldown
         Constraint::Length(1), // Format
+        Constraint::Length(1), // breathing room
+        Constraint::Length(1), // shortcuts hint
     ])
     .split(area);
 
@@ -403,49 +447,39 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::Ide,
+            Row::Country,
             width,
-            "IDE",
-            system_field_value(state, Row::Ide, state.draft().ide.clone()),
+            "Country",
+            value_with_picker_hint(country_label(state.draft().country.as_deref())),
         )),
         sections[2],
     );
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::Terminal,
+            Row::Timezone,
             width,
-            "Terminal",
-            system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
+            "Timezone",
+            value_with_picker_hint(
+                state
+                    .draft()
+                    .timezone
+                    .clone()
+                    .unwrap_or_else(|| "not set".to_string()),
+            ),
         )),
         sections[3],
     );
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::Os,
+            Row::Birthday,
             width,
-            "OS",
-            system_field_value(state, Row::Os, state.draft().os.clone()),
+            "Birthday",
+            system_field_value(state, Row::Birthday, state.draft().birthday.clone()),
         )),
         sections[4],
     );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Langs,
-            width,
-            "Langs",
-            system_field_value(
-                state,
-                Row::Langs,
-                (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
-            ),
-        )),
-        sections[5],
-    );
-
-    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[7]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -464,69 +498,58 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
+        sections[5],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("late.fetch")), sections[7]);
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Ide,
+            width,
+            "IDE",
+            system_field_value(state, Row::Ide, state.draft().ide.clone()),
+        )),
         sections[8],
     );
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::BackgroundColor,
+            Row::Terminal,
             width,
-            "Background",
-            toggle_span(state.draft().enable_background_color),
+            "Terminal",
+            system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
         )),
         sections[9],
     );
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::DashboardHeader,
+            Row::Os,
             width,
-            "Stream + vote",
-            toggle_span(state.draft().show_dashboard_header),
+            "OS",
+            system_field_value(state, Row::Os, state.draft().os.clone()),
         )),
         sections[10],
     );
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::RightSidebar,
+            Row::Langs,
             width,
-            "Right sidebar",
-            toggle_span(state.draft().show_right_sidebar),
-        )),
-        sections[11],
-    );
-    frame.render_widget(Paragraph::new(section_heading("Location")), sections[13]);
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Country,
-            width,
-            "Country",
-            value_with_picker_hint(country_label(state.draft().country.as_deref())),
-        )),
-        sections[14],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Timezone,
-            width,
-            "Timezone",
-            value_with_picker_hint(
-                state
-                    .draft()
-                    .timezone
-                    .clone()
-                    .unwrap_or_else(|| "not set".to_string()),
+            "Langs",
+            system_field_value(
+                state,
+                Row::Langs,
+                (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
             ),
         )),
-        sections[15],
+        sections[11],
     );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[17],
+        sections[13],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -536,7 +559,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[18],
+        sections[14],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -546,7 +569,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[19],
+        sections[15],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -556,7 +579,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[20],
+        sections[16],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -566,7 +589,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[21],
+        sections[17],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -583,7 +606,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[22],
+        sections[18],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -596,75 +619,186 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[23],
+        sections[19],
     );
+
+    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[21]);
 }
 
-fn draw_special_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
-    // Reserve a 7-line strip at the bottom: 6 for the shining grand gem
-    // (5-line body + 1 row of sparkles above) and 1 row of padding off the
+fn shortcuts_hint_line(width: usize) -> Line<'static> {
+    let bg = theme::BG_HIGHLIGHT();
+    let key_style = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
+    let text_style = Style::default().fg(theme::TEXT_BRIGHT()).bg(bg);
+    let bg_style = Style::default().bg(bg);
+
+    let leading = "   ";
+    let key1 = "?";
+    let text1 = "  Guide";
+    let separator = "      ";
+    let key2 = "Ctrl+O";
+    let text2 = "  reopen settings anywhere";
+
+    let used = leading.chars().count()
+        + key1.chars().count()
+        + text1.chars().count()
+        + separator.chars().count()
+        + key2.chars().count()
+        + text2.chars().count();
+    let trailing = " ".repeat(width.saturating_sub(used));
+
+    Line::from(vec![
+        Span::styled(leading, bg_style),
+        Span::styled(key1, key_style),
+        Span::styled(text1, text_style),
+        Span::styled(separator, bg_style),
+        Span::styled(key2, key_style),
+        Span::styled(text2, text_style),
+        Span::styled(trailing, bg_style),
+    ])
+}
+
+fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    // Reserve a 7-line strip at the bottom for the shining grand gem:
+    // 5-line body + 1 row of sparkles above + 1 row of padding off the
     // dialog's bottom border.
     const GEM_STRIP_HEIGHT: u16 = 7;
-    let gem_strip_height = GEM_STRIP_HEIGHT.min(area.height.saturating_sub(4));
+    let gem_strip_height = GEM_STRIP_HEIGHT.min(area.height.saturating_sub(8));
 
     let sections = Layout::vertical([
-        Constraint::Length(1),                // heading
-        Constraint::Length(1),                // hint
+        Constraint::Length(1),                // Appearance subsection heading
+        Constraint::Length(1),                // background color row
+        Constraint::Length(1),                // text brightness row
+        Constraint::Length(1),                // right sidebar row
+        Constraint::Length(1),                // room list row
+        Constraint::Length(1),                // activity boxes row
         Constraint::Length(1),                // breathing
-        Constraint::Length(1),                // toggle row
+        Constraint::Length(1),                // Compose subsection heading
+        Constraint::Length(1),                // composer keep-focused row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Music subsection heading
+        Constraint::Length(1),                // start-with-music-muted row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Display subsection heading
+        Constraint::Length(1),                // flag fallback row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Startup subsection heading
+        Constraint::Length(1),                // land on home row
         Constraint::Min(0),                   // flex spacer
         Constraint::Length(gem_strip_height), // gem
     ])
     .split(area);
 
-    frame.render_widget(Paragraph::new(section_heading("Special")), sections[0]);
-
-    let hint = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "Power-user toggles unlocked by completing your profile.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(hint), sections[1]);
-
     let width = area.width as usize;
-    let label = "Show settings on connect";
-    let value = toggle_span(state.draft().show_settings_on_connect);
 
-    let prefix_style = Style::default()
-        .fg(theme::AMBER_GLOW())
-        .bg(theme::BG_SELECTION())
-        .add_modifier(Modifier::BOLD);
-    let label_style = Style::default()
-        .fg(theme::TEXT_BRIGHT())
-        .bg(theme::BG_SELECTION())
-        .add_modifier(Modifier::BOLD);
-    let value_style = value.style.bg(theme::BG_SELECTION());
-    let trailing_style = Style::default().bg(theme::BG_SELECTION());
+    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[0]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::BackgroundColor,
+            width,
+            "Background color",
+            toggle_span(state.draft().enable_background_color),
+        )),
+        sections[1],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::TextBrightness,
+            width,
+            "Text Brightness",
+            text_brightness_span(state.draft().text_brightness_adjustment),
+        )),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::RightSidebar,
+            width,
+            "Right sidebar",
+            right_sidebar_mode_span(state.draft().right_sidebar_mode),
+        )),
+        sections[3],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::RoomListSidebar,
+            width,
+            "Room list",
+            toggle_span(state.draft().show_room_list_sidebar),
+        )),
+        sections[4],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::LoungeInfo,
+            width,
+            "Activity boxes",
+            toggle_span(state.draft().show_dashboard_header),
+        )),
+        sections[5],
+    );
 
-    let prefix = " › ".to_string();
-    let label_text = format!("{label:<26}");
-    let mut used = prefix.chars().count() + label_text.chars().count() + value.text.chars().count();
-    if used > width {
-        used = width;
-    }
-    let trailing = " ".repeat(width.saturating_sub(used));
+    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[7]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::ComposerKeepFocused,
+            width,
+            "Send and keep open on Enter",
+            toggle_span(state.draft().keep_composer_focused),
+        )),
+        sections[8],
+    );
 
-    let line = Line::from(vec![
-        Span::styled(prefix, prefix_style),
-        Span::styled(label_text, label_style),
-        Span::styled(value.text, value_style),
-        Span::styled(trailing, trailing_style),
-    ]);
-    frame.render_widget(Paragraph::new(line), sections[3]);
+    frame.render_widget(Paragraph::new(section_heading("Music")), sections[10]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::StartWithMusicMuted,
+            width,
+            "Start app with music muted",
+            toggle_span(state.draft().start_with_music_muted),
+        )),
+        sections[11],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[13]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::FlagFallback,
+            width,
+            "Chat flag text fallback",
+            toggle_span(state.draft().show_flag_fallback),
+        )),
+        sections[14],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[16]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::LandOnHome,
+            width,
+            "Land on Home page",
+            toggle_span(state.draft().land_on_home),
+        )),
+        sections[17],
+    );
 
     if gem_strip_height > 0 {
         // Pad 2 cols off each side and lift the gem 1 row off the bottom
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[5];
+        let strip = sections[19];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(
@@ -681,6 +815,369 @@ fn draw_special_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     } else {
         state.gem().hit_area.set(None);
     }
+}
+
+fn tweak_row_line(
+    state: &SettingsModalState,
+    row: TweakRow,
+    width: usize,
+    label: &str,
+    value: ValueSpan,
+) -> Line<'static> {
+    let selected = state.selected_tweak_row() == row;
+
+    let marker = if selected { "›" } else { " " };
+    let prefix_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let label_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    let value_style = if selected {
+        value.style.bg(theme::BG_SELECTION())
+    } else {
+        value.style
+    };
+
+    let prefix = format!(" {marker} ");
+    let label_text = format!("{label:<32}");
+    let mut used = prefix.chars().count() + label_text.chars().count() + value.text.chars().count();
+    if used > width {
+        used = width;
+    }
+    let padding = width.saturating_sub(used);
+    let trailing = " ".repeat(padding);
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(label_text, label_style),
+        Span::styled(value.text, value_style),
+        Span::styled(trailing, trailing_style),
+    ])
+}
+
+fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let sections = Layout::vertical([
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // link row
+        Constraint::Length(1), // link description
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // IRC token row
+        Constraint::Length(1), // IRC token description
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // delete row
+        Constraint::Length(1), // delete description
+        Constraint::Min(0),
+    ])
+    .split(area);
+
+    frame.render_widget(Paragraph::new(section_heading("Account")), sections[0]);
+
+    let width = area.width as usize;
+    frame.render_widget(
+        Paragraph::new(account_row_line(
+            state,
+            AccountRow::LinkAccounts,
+            width,
+            "Link Accounts",
+            false,
+        )),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(
+                "Move this SSH key onto another late.sh account. No data is merged.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        sections[3],
+    );
+    frame.render_widget(
+        Paragraph::new(account_row_line(
+            state,
+            AccountRow::IrcToken,
+            width,
+            "IRC access token",
+            false,
+        )),
+        sections[5],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(
+                "Create, reset, or revoke the token used by IRC clients.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        sections[6],
+    );
+    frame.render_widget(
+        Paragraph::new(account_row_line(
+            state,
+            AccountRow::DeleteAccount,
+            width,
+            "Delete Account",
+            true,
+        )),
+        sections[8],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(
+                "Delete your own account (cannot be undone!)",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        sections[9],
+    );
+}
+
+fn account_row_line(
+    state: &SettingsModalState,
+    row: AccountRow,
+    width: usize,
+    label: &str,
+    destructive: bool,
+) -> Line<'static> {
+    let selected = state.selected_account_row() == row;
+    let marker = if selected { "›" } else { " " };
+    let accent = if destructive {
+        theme::ERROR()
+    } else {
+        theme::AMBER_GLOW()
+    };
+    let prefix_style = if selected {
+        Style::default()
+            .fg(accent)
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let label_style = if selected {
+        Style::default()
+            .fg(if destructive {
+                theme::ERROR()
+            } else {
+                theme::TEXT_BRIGHT()
+            })
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else if destructive {
+        Style::default().fg(theme::ERROR())
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    let prefix = format!(" {marker} ");
+    let used = prefix.chars().count() + label.chars().count();
+    let trailing = " ".repeat(width.saturating_sub(used));
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(label.to_string(), label_style),
+        Span::styled(trailing, trailing_style),
+    ])
+}
+
+fn draw_feeds_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let sections = Layout::vertical([
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // hint
+        Constraint::Length(1), // breathing
+        Constraint::Min(4),    // list
+    ])
+    .split(area);
+
+    frame.render_widget(Paragraph::new(section_heading("RSS")), sections[0]);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "RSS/Atom entries stay private until you share them from Chat > rss.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        sections[1],
+    );
+
+    let width = sections[3].width as usize;
+    let mut lines = Vec::new();
+    for (idx, feed) in state.feeds().iter().enumerate() {
+        lines.push(feed_row_line(
+            idx == state.feed_index() && !state.editing_feed_url(),
+            width,
+            feed_display_title(feed),
+            feed.url.as_str(),
+            feed.last_error.as_deref(),
+        ));
+    }
+    lines.push(feed_add_line(
+        state.feed_index_is_add_row() && !state.editing_feed_url(),
+        state.editing_feed_url(),
+        width,
+        state,
+    ));
+
+    frame.render_widget(Paragraph::new(lines), sections[3]);
+}
+
+fn feed_display_title(feed: &late_core::models::rss_feed::RssFeed) -> String {
+    let title = feed.title.trim();
+    if title.is_empty() {
+        "untitled RSS".to_string()
+    } else {
+        title.to_string()
+    }
+}
+
+fn feed_row_line(
+    selected: bool,
+    width: usize,
+    title: String,
+    url: &str,
+    error: Option<&str>,
+) -> Line<'static> {
+    let marker = if selected { "›" } else { " " };
+    let prefix_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let title_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_BRIGHT())
+    };
+    let url_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_DIM())
+            .bg(theme::BG_SELECTION())
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let error_style = if selected {
+        Style::default()
+            .fg(theme::ERROR())
+            .bg(theme::BG_SELECTION())
+    } else {
+        Style::default().fg(theme::ERROR())
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    let prefix = format!(" {marker} ");
+    let title_text = format!("{title:<28}  ");
+    let status_text = error
+        .map(|err| format!("  error: {err}"))
+        .unwrap_or_default();
+    let used = prefix.chars().count()
+        + title_text.chars().count()
+        + url.chars().count()
+        + status_text.chars().count();
+    let padding = width.saturating_sub(used.min(width));
+
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(title_text, title_style),
+        Span::styled(url.to_string(), url_style),
+        Span::styled(status_text, error_style),
+        Span::styled(" ".repeat(padding), trailing_style),
+    ])
+}
+
+fn feed_add_line(
+    selected: bool,
+    editing: bool,
+    width: usize,
+    state: &SettingsModalState,
+) -> Line<'static> {
+    let active = selected || editing;
+    let marker = if active { "›" } else { " " };
+    let prefix_style = if active {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let trailing_style = if active {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    let prefix = format!(" {marker} ");
+    let (text, text_style) = if editing {
+        let typed = state.feed_url_input().lines().join("");
+        let display = if typed.is_empty() {
+            "█".to_string()
+        } else {
+            text_with_caret(&typed, state.feed_url_input().cursor().1)
+        };
+        (
+            display,
+            Style::default()
+                .fg(theme::AMBER())
+                .bg(theme::BG_SELECTION()),
+        )
+    } else if active {
+        (
+            "+ Add RSS…".to_string(),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            "+ Add RSS…".to_string(),
+            Style::default().fg(theme::AMBER_DIM()),
+        )
+    };
+
+    let used = prefix.chars().count() + text.chars().count();
+    let padding = width.saturating_sub(used.min(width));
+
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(text, text_style),
+        Span::styled(" ".repeat(padding), trailing_style),
+    ])
 }
 
 /// Layout note: `area` is the 6-line strip reserved at the bottom of the
@@ -956,126 +1453,6 @@ fn draw_bio_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), padded);
 }
 
-fn draw_favorites_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
-    let sections = Layout::vertical([
-        Constraint::Length(1), // heading
-        Constraint::Length(1), // hint
-        Constraint::Length(1), // breathing
-        Constraint::Min(4),    // body
-    ])
-    .split(area);
-
-    frame.render_widget(
-        Paragraph::new(section_heading("Favorite rooms")),
-        sections[0],
-    );
-
-    let hint = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "Pin rooms to the dashboard quick-switch strip ([ / ]).",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(hint), sections[1]);
-
-    let body_width = sections[3].width as usize;
-    let favorites = state.favorites();
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(favorites.len() + 1);
-
-    for (idx, room_id) in favorites.iter().enumerate() {
-        let selected = state.favorites_index() == idx;
-        let label_text = state
-            .room_label(*room_id)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "(unknown room)".to_string());
-        let position_text = format!("{:>2}. ", idx + 1);
-        let label_style = if selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_BRIGHT())
-        };
-        let position_style = if selected {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_FAINT())
-        };
-        let marker = if selected { "›" } else { " " };
-        let prefix_style = if selected {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_FAINT())
-        };
-        let prefix = format!(" {marker} ");
-        let used =
-            prefix.chars().count() + position_text.chars().count() + label_text.chars().count();
-        let padding = body_width.saturating_sub(used);
-        let trailing = " ".repeat(padding);
-        let trailing_style = if selected {
-            Style::default().bg(theme::BG_SELECTION())
-        } else {
-            Style::default()
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled(prefix, prefix_style),
-            Span::styled(position_text, position_style),
-            Span::styled(label_text, label_style),
-            Span::styled(trailing, trailing_style),
-        ]));
-    }
-
-    // Trailing "Add favorite…" row. Highlighted like a favorite row when
-    // selected so the visual language is consistent.
-    let add_selected = state.favorites_index_is_add_row();
-    let add_text = if state.available_rooms().len() == favorites.len() {
-        "(no more rooms to add — join one in chat first)"
-    } else {
-        "+ Add favorite room…"
-    };
-    let add_style = if add_selected {
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::AMBER_DIM())
-    };
-    let marker = if add_selected { "›" } else { " " };
-    let prefix_style = if add_selected {
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_FAINT())
-    };
-    let prefix = format!(" {marker} ");
-    let used = prefix.chars().count() + add_text.chars().count();
-    let padding = body_width.saturating_sub(used);
-    let trailing_style = if add_selected {
-        Style::default().bg(theme::BG_SELECTION())
-    } else {
-        Style::default()
-    };
-    lines.push(Line::from(vec![
-        Span::styled(prefix, prefix_style),
-        Span::styled(add_text.to_string(), add_style),
-        Span::styled(" ".repeat(padding), trailing_style),
-    ]));
-
-    frame.render_widget(Paragraph::new(lines), sections[3]);
-}
-
 fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let popup = centered_rect(54, 20, area);
     frame.render_widget(Clear, popup);
@@ -1083,7 +1460,6 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let title = match state.picker().kind {
         Some(PickerKind::Country) => " Pick Country ",
         Some(PickerKind::Timezone) => " Pick Timezone ",
-        Some(PickerKind::Room) => " Pick Room ",
         None => " Picker ",
     };
     let block = Block::default()
@@ -1132,11 +1508,6 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             .into_iter()
             .map(ToString::to_string)
             .collect(),
-        Some(PickerKind::Room) => state
-            .filtered_rooms()
-            .into_iter()
-            .map(|room| room.label.clone())
-            .collect(),
         None => Vec::new(),
     };
 
@@ -1182,6 +1553,858 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[3]);
+}
+
+fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let components = state.right_sidebar_components();
+    let count = components.len() as u16;
+    // rows + heading + blank + 2 footer lines + borders.
+    let popup = centered_rect(46, count + 7, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Sidebar panels ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut constraints = vec![
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // blank
+    ];
+    constraints.extend(std::iter::repeat_n(Constraint::Length(1), components.len()));
+    constraints.push(Constraint::Min(0));
+    constraints.push(Constraint::Length(1)); // footer line 1
+    constraints.push(Constraint::Length(1)); // footer line 2
+    let layout = Layout::vertical(constraints).split(inner);
+
+    let width = inner.width as usize;
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "Clock is always shown on top.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[0],
+    );
+
+    for (idx, setting) in components.iter().enumerate() {
+        let selected = state.right_sidebar_components_index() == idx;
+        let marker = if selected { ">" } else { " " };
+        let checkbox = if setting.enabled { "[x]" } else { "[ ]" };
+        let label = setting.component.label();
+        let text = format!(" {marker} {checkbox} {label}");
+        let style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else if setting.enabled {
+            Style::default().fg(theme::TEXT())
+        } else {
+            Style::default().fg(theme::TEXT_FAINT())
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                pad_to_width(&text, width, selected),
+                style,
+            ))),
+            layout[idx + 2],
+        );
+    }
+
+    let footer_top = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" select  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("[ ]", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" reorder  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" toggle", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    let footer_bottom = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(footer_top), layout[layout.len() - 2]);
+    frame.render_widget(Paragraph::new(footer_bottom), layout[layout.len() - 1]);
+}
+
+fn draw_link_account_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let popup = centered_rect(76, 22, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Link Accounts ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    match state.link_account_dialog().step() {
+        LinkAccountStep::EnterCode => draw_link_account_enter_code(frame, &layout, state),
+        LinkAccountStep::Confirm | LinkAccountStep::Pending => {
+            draw_link_account_confirm(frame, &layout, state)
+        }
+    }
+}
+
+fn draw_link_account_enter_code(frame: &mut Frame, layout: &[Rect], state: &SettingsModalState) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Open Settings > Account on the other account and exchange codes.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[0],
+    );
+
+    let own_code = state
+        .link_account_dialog()
+        .own_code()
+        .map(str::to_string)
+        .unwrap_or_else(|| "not generated".to_string());
+    let expires = state
+        .link_account_dialog()
+        .expires_at()
+        .map(|expires| format!("  expires {}", expires.format("%H:%M UTC")))
+        .unwrap_or_default();
+    let enter_focus = state.link_account_dialog().enter_code_focus();
+    frame.render_widget(
+        Paragraph::new(link_account_generate_line(
+            enter_focus == LinkAccountEnterCodeFocus::GenerateCode,
+            state.link_account_dialog().pending(),
+            layout[2].width as usize,
+        )),
+        layout[2],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "This account code: ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled(
+                own_code,
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(expires, Style::default().fg(theme::TEXT_FAINT())),
+        ])),
+        layout[4],
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Other account code:",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[6],
+    );
+    frame.render_widget(
+        Paragraph::new(link_account_input_line(
+            state.link_account_dialog().code_input(),
+            "code",
+            state.link_account_dialog().pending(),
+            enter_focus == LinkAccountEnterCodeFocus::PeerCode,
+        )),
+        layout[7],
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "No data is merged. You will choose the main account on the next screen.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[9],
+    );
+    draw_link_account_status(frame, layout[10], state);
+    draw_link_account_footer(frame, layout[16], state);
+}
+
+fn draw_link_account_confirm(frame: &mut Frame, layout: &[Rect], state: &SettingsModalState) {
+    let dialog = state.link_account_dialog();
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Choose the main account to keep.",
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        layout[0],
+    );
+
+    let width = layout[2].width as usize;
+    frame.render_widget(
+        Paragraph::new(link_account_choice_line(
+            dialog.keep_current(),
+            width,
+            "Current",
+            state.draft().username.as_str(),
+            state.draft().created_at.as_ref().cloned(),
+        )),
+        layout[2],
+    );
+    frame.render_widget(
+        Paragraph::new(link_account_choice_line(
+            !dialog.keep_current(),
+            width,
+            "Other",
+            dialog.peer_username().unwrap_or("unknown"),
+            dialog.peer_created(),
+        )),
+        layout[3],
+    );
+
+    let warning = [
+        "Both SSH keys will open the main account.",
+        "The other account's data will be abandoned.",
+        "No chips, messages, scores, streaks, or settings are merged.",
+    ];
+    for (idx, text) in warning.into_iter().enumerate() {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(text, Style::default().fg(theme::ERROR())),
+            ])),
+            layout[5 + idx],
+        );
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Type the main username to confirm:",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[9],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                state
+                    .link_account_kept_username()
+                    .unwrap_or_else(|| "main username".to_string()),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        layout[10],
+    );
+    frame.render_widget(
+        Paragraph::new(link_account_input_line(
+            dialog.confirm_input(),
+            "main username",
+            dialog.pending(),
+            true,
+        )),
+        layout[11],
+    );
+
+    draw_link_account_status(frame, layout[13], state);
+    draw_link_account_footer(frame, layout[16], state);
+}
+
+fn link_account_choice_line(
+    selected: bool,
+    width: usize,
+    label: &str,
+    username: &str,
+    created: Option<chrono::DateTime<chrono::Utc>>,
+) -> Line<'static> {
+    let marker = if selected { "●" } else { "○" };
+    let choice = if selected { "  main" } else { "" };
+    let content = format!(
+        " {marker} {label:<8} {username:<18} {}{choice}",
+        created_label(created)
+    );
+    let style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    Line::from(Span::styled(pad_to_width(&content, width, selected), style))
+}
+
+fn created_label(created: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    created
+        .map(|created| format!("created {}", created.format("%Y-%m-%d")))
+        .unwrap_or_else(|| "created unknown".to_string())
+}
+
+fn link_account_generate_line(selected: bool, pending: bool, width: usize) -> Line<'static> {
+    let marker = if selected { "›" } else { " " };
+    let label = if pending {
+        "Generating Link Code..."
+    } else {
+        "Generate Link Code"
+    };
+    let prefix_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let label_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::AMBER_DIM())
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+    let prefix = format!(" {marker} ");
+    let used = prefix.chars().count() + label.chars().count();
+    let trailing = " ".repeat(width.saturating_sub(used));
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(label.to_string(), label_style),
+        Span::styled(trailing, trailing_style),
+    ])
+}
+
+fn link_account_input_line(
+    input: &ratatui_textarea::TextArea<'static>,
+    placeholder: &str,
+    pending: bool,
+    focused: bool,
+) -> Line<'static> {
+    let typed = input.lines().join("");
+    let text = if typed.is_empty() {
+        placeholder.to_string()
+    } else if pending {
+        typed.clone()
+    } else if focused {
+        text_with_caret(&typed, input.cursor().1)
+    } else {
+        typed.clone()
+    };
+    let marker = if focused { "›" } else { " " };
+    let prefix_style = if focused {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let style = if typed.is_empty() && focused {
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .bg(theme::BG_SELECTION())
+    } else if typed.is_empty() {
+        Style::default().fg(theme::TEXT_FAINT())
+    } else if focused {
+        Style::default()
+            .fg(theme::AMBER())
+            .bg(theme::BG_SELECTION())
+    } else {
+        Style::default().fg(theme::AMBER())
+    };
+    Line::from(vec![
+        Span::styled(format!(" {marker} "), prefix_style),
+        Span::styled(text, style),
+    ])
+}
+
+fn draw_link_account_status(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let Some(status) = state.link_account_dialog().status() else {
+        return;
+    };
+    let dialog = state.link_account_dialog();
+    let color = if dialog.pending() {
+        theme::AMBER()
+    } else if status == "Link code ready." || dialog.step() == LinkAccountStep::Pending {
+        theme::SUCCESS()
+    } else {
+        theme::ERROR()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(status.to_string(), Style::default().fg(color)),
+        ])),
+        area,
+    );
+}
+
+fn draw_link_account_footer(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let footer = match state.link_account_dialog().step() {
+        LinkAccountStep::EnterCode => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" generate/check  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        LinkAccountStep::Confirm => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("↑← / ↓→", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" choose main  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" link  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        LinkAccountStep::Pending => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+    };
+    frame.render_widget(Paragraph::new(footer), area);
+}
+
+fn draw_irc_token_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let dialog = state.irc_token_dialog();
+    let popup_height = if dialog.revealed_token().is_some() {
+        15
+    } else {
+        13
+    };
+    let popup = centered_rect(76, popup_height, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" IRC Access Token ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    if let Some(token) = dialog.revealed_token() {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    "Save this token now. It will not be shown again.",
+                    Style::default()
+                        .fg(theme::SUCCESS())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])),
+            layout[0],
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    token.to_string(),
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])),
+            layout[2],
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    "Paste it into your IRC client's server password field.",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ])),
+            layout[4],
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    "Use any nick; late.sh forces your account username.",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ])),
+            layout[5],
+        );
+        draw_irc_token_message(frame, layout[6], state);
+        draw_irc_token_footer(frame, layout[8], true, false);
+        return;
+    }
+
+    match dialog.status() {
+        None => {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("Loading...", Style::default().fg(theme::TEXT_DIM())),
+                ])),
+                layout[0],
+            );
+        }
+        Some(None) => {
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(
+                            "No IRC token exists for this account.",
+                            Style::default().fg(theme::TEXT_BRIGHT()),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(
+                            "Create one to connect an IRC client to late.sh chat.",
+                            Style::default().fg(theme::TEXT_DIM()),
+                        ),
+                    ]),
+                ])
+                .wrap(Wrap { trim: false }),
+                layout[0],
+            );
+            frame.render_widget(
+                Paragraph::new(irc_token_single_button_line(
+                    "Create token",
+                    true,
+                    dialog.pending(),
+                    layout[3].width as usize,
+                )),
+                layout[3],
+            );
+        }
+        Some(Some(status)) => {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("Active since ", Style::default().fg(theme::TEXT_DIM())),
+                    Span::styled(
+                        token_time_label(&status.created),
+                        Style::default()
+                            .fg(theme::TEXT_BRIGHT())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])),
+                layout[0],
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("Last used ", Style::default().fg(theme::TEXT_DIM())),
+                    Span::styled(
+                        status
+                            .last_used
+                            .as_ref()
+                            .map(token_time_label)
+                            .unwrap_or_else(|| "never".to_string()),
+                        Style::default().fg(theme::TEXT_BRIGHT()),
+                    ),
+                ])),
+                layout[1],
+            );
+            frame.render_widget(
+                Paragraph::new(irc_token_action_line(
+                    dialog.focus(),
+                    dialog.pending(),
+                    layout[3].width as usize,
+                )),
+                layout[3],
+            );
+        }
+    }
+
+    draw_irc_token_message(frame, layout[6], state);
+    draw_irc_token_footer(frame, layout[8], false, dialog.pending());
+}
+
+fn draw_irc_token_message(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let Some(message) = state.irc_token_dialog().message() else {
+        return;
+    };
+    let dialog = state.irc_token_dialog();
+    let color = if dialog.pending() {
+        theme::AMBER()
+    } else if dialog.confirming_revoke() {
+        theme::ERROR()
+    } else {
+        theme::SUCCESS()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(message.to_string(), Style::default().fg(color)),
+        ])),
+        area,
+    );
+}
+
+fn draw_irc_token_footer(frame: &mut Frame, area: Rect, reveal: bool, pending: bool) {
+    let footer = if reveal {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Enter/Space/Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" hide token", Style::default().fg(theme::TEXT_DIM())),
+        ])
+    } else if pending {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Working...", Style::default().fg(theme::AMBER_DIM())),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("↑↓←→ j/k", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Enter/Space", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" activate  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ])
+    };
+    frame.render_widget(Paragraph::new(footer), area);
+}
+
+fn irc_token_action_line(focus: IrcTokenFocus, pending: bool, width: usize) -> Line<'static> {
+    let left = irc_token_button_span("Reset", focus == IrcTokenFocus::Primary, pending, false);
+    let spacer = Span::raw("  ");
+    let right = irc_token_button_span("Revoke", focus == IrcTokenFocus::Revoke, pending, true);
+    let used = 2 + 9 + 2 + 10;
+    Line::from(vec![
+        Span::raw(" "),
+        left,
+        spacer,
+        right,
+        Span::raw(" ".repeat(width.saturating_sub(used))),
+    ])
+}
+
+fn irc_token_single_button_line(
+    label: &'static str,
+    selected: bool,
+    pending: bool,
+    width: usize,
+) -> Line<'static> {
+    let button = irc_token_button_span(label, selected, pending, false);
+    let used = 1 + label.chars().count() + 4;
+    Line::from(vec![
+        Span::raw(" "),
+        button,
+        Span::raw(" ".repeat(width.saturating_sub(used))),
+    ])
+}
+
+fn irc_token_button_span(
+    label: &'static str,
+    selected: bool,
+    pending: bool,
+    destructive: bool,
+) -> Span<'static> {
+    let label = if pending && selected {
+        format!("[ {label}... ]")
+    } else {
+        format!("[ {label} ]")
+    };
+    let fg = if destructive {
+        theme::ERROR()
+    } else {
+        theme::TEXT_BRIGHT()
+    };
+    let style = if selected {
+        Style::default()
+            .fg(fg)
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else if destructive {
+        Style::default().fg(theme::ERROR())
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    Span::styled(label, style)
+}
+
+fn token_time_label(time: &chrono::DateTime<chrono::Utc>) -> String {
+    time.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+fn draw_delete_account_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let popup = centered_rect(64, 12, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Delete Account ")
+        .title_style(
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::ERROR()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "This cannot be undone.",
+                Style::default()
+                    .fg(theme::ERROR())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        layout[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Type your username to confirm:",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[2],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                state.draft().username.clone(),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        layout[3],
+    );
+
+    let typed = state.delete_account_dialog().input().lines().join("");
+    let input_text = if typed.is_empty() {
+        "username".to_string()
+    } else if state.delete_account_dialog().pending() {
+        typed.clone()
+    } else {
+        format!("{typed}█")
+    };
+    let input_style = if typed.is_empty() {
+        Style::default().fg(theme::TEXT_FAINT())
+    } else {
+        Style::default().fg(theme::AMBER())
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" › ", Style::default().fg(theme::AMBER_GLOW())),
+            Span::styled(input_text, input_style),
+        ])),
+        layout[4],
+    );
+
+    if let Some(status) = state.delete_account_dialog().status() {
+        let color = if state.delete_account_dialog().pending() {
+            theme::AMBER()
+        } else {
+            theme::ERROR()
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(status.to_string(), Style::default().fg(color)),
+            ])),
+            layout[5],
+        );
+    }
+
+    let footer = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" delete  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(footer), layout[7]);
 }
 
 fn section_heading(title: &str) -> Line<'static> {
@@ -1232,6 +2455,7 @@ fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String
             .filter(|value| !value.is_empty())
         {
             Some(value) => value_span(value.to_string(), theme::TEXT_BRIGHT()),
+            None if row == Row::Birthday => value_span("MM-DD", theme::TEXT_FAINT()),
             None if row == Row::Langs => value_span("comma sep…", theme::TEXT_FAINT()),
             None => value_span("not set", theme::TEXT_FAINT()),
         }
@@ -1260,6 +2484,48 @@ fn toggle_span(enabled: bool) -> ValueSpan {
             style: Style::default().fg(theme::TEXT_FAINT()),
         }
     }
+}
+
+fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
+    match mode {
+        RightSidebarMode::On => ValueSpan {
+            // The trailing affordance hints that Enter opens the panel editor.
+            text: "● on  ⏎ panels".to_string(),
+            style: Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        },
+        RightSidebarMode::Off => ValueSpan {
+            text: "○ off".to_string(),
+            style: Style::default().fg(theme::TEXT_FAINT()),
+        },
+    }
+}
+
+fn text_brightness_span(adjustment: i32) -> ValueSpan {
+    let adjustment = adjustment.clamp(-5, 5);
+    let text = match adjustment {
+        -5 => "-5 darker",
+        -4 => "-4 darker",
+        -3 => "-3 darker",
+        -2 => "-2 darker",
+        -1 => "-1 darker",
+        0 => "neutral",
+        1 => "+1 lighter",
+        2 => "+2 lighter",
+        3 => "+3 lighter",
+        4 => "+4 lighter",
+        5 => "+5 lighter",
+        _ => unreachable!(),
+    };
+    let color = if adjustment > 0 {
+        theme::TEXT_BRIGHT()
+    } else if adjustment < 0 {
+        theme::TEXT_DIM()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    value_span(text, color)
 }
 
 fn value_with_picker_hint(text: String) -> ValueSpan {

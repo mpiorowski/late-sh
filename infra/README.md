@@ -62,16 +62,30 @@ forwards traffic into the existing IPv4 ingress path.
 
 This enables:
 - `ssh late.sh` — SSH TUI
+- `irc.late.sh:6697` — IRC over TLS, when `IRC_ENABLED=1`
 - `https://late.sh` — Web landing + audio pairing
 - `https://api.late.sh` — SSH API / WebSocket
 - `https://audio.late.sh` — Icecast audio stream
+- `https://rtc.late.sh` — LiveKit voice signaling
+- `https://files.late.sh` — Public uploaded chat files (R2 custom domain)
 - `https://grafana.late.sh` — Monitoring
+
+`rtc.<domain>` must be reachable directly for LiveKit media ports. Do not use
+standard Cloudflare proxying for this host unless the selected Cloudflare
+product also forwards the raw WebRTC/TURN ports listed below; the browser/CLI
+signaling path uses HTTPS/WSS, but media uses ICE/TCP, ICE/UDP, and TURN.
 
 ### 5. Set Up S3 Buckets
 
-Create two buckets in your S3-compatible provider:
+Create the required buckets in your S3-compatible provider:
 - `{context}-tf-state` — Terraform state
 - `{context}-db-backups` — Database backups
+
+Optionally create a files bucket for public chat uploads:
+- `{context}-files` — Public uploaded chat files
+
+For Cloudflare R2, attach a custom domain such as `files.<domain>` to the
+files bucket and set `FILES_PUBLIC_BASE_URL` to that exact public base URL.
 
 ### 6. Deploy
 
@@ -108,14 +122,21 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 
 | Component | Service | Ports | Description |
 |-----------|---------|-------|-------------|
-| late-ssh | `service-ssh-sv` | 2222 (SSH), 4000 (API) | SSH TUI server + HTTP API |
+| late-ssh | `service-ssh-sv` | 2222 (SSH), 4000 (API), 6697 (IRC TLS when enabled) | SSH TUI server + HTTP API + embedded IRC |
 | late-web | `service-web-sv` | 3000 | Web landing page + pairing |
 | Icecast | `icecast-sv` | 8000 | Audio streaming server |
-| Liquidsoap | `liquidsoap-sv` | 1234 (telnet) | Playlist manager + encoder |
+| Liquidsoap | none (dials out to `icecast-sv`) | - | Playlist encoder |
+| LiveKit | `livekit-sv` | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media |
 | PostgreSQL | `postgres-rw` | 5432 | CloudNativePG cluster |
 | Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various | Full observability stack |
 
 SSH traffic on port 22 is routed via NGINX TCP passthrough to late-ssh pod port 2222.
+LiveKit signaling is routed through NGINX ingress on `rtc.<domain>`, while
+LiveKit media ports are bound directly on the node by the `livekit` pod.
+On a fresh cluster, the `livekit` pod may wait for cert-manager to create the
+`livekit-tls` secret used by embedded TURN/TLS. If it sits in
+`ContainerCreating`, check certificate issuance before treating the rollout as
+failed.
 
 ## Configuration Parameters
 
@@ -148,6 +169,23 @@ All parameters are set as Terraform variables (via GitHub secrets/variables for 
 | `WS_PAIR_RATE_LIMIT_WINDOW_SECS` | WebSocket pair rate limit window in seconds |
 | `DB_POOL_SIZE` | Database connection pool size |
 
+### IRC
+
+IRC is disabled unless explicitly enabled. When `IRC_ENABLED=1`, Terraform
+requests a Let's Encrypt certificate for `IRC_HOST` with cert-manager, mounts
+the generated Kubernetes TLS secret into `service-ssh`, starts the embedded IRC
+listener with in-process TLS, and exposes the raw TCP port through ingress.
+
+| Variable | Description |
+|----------|-------------|
+| `IRC_ENABLED` | Enable embedded IRC listener, defaults to `0` |
+| `IRC_HOST` | Public IRC hostname, defaults to `irc.<DOMAIN>` |
+| `IRC_PORT` | IRC TLS port, defaults to `6697` |
+| `IRC_MAX_CONNS_GLOBAL` | Max total concurrent IRC connections, defaults to `200` |
+| `IRC_MAX_CONNS_PER_USER` | Max concurrent IRC connections per user, defaults to `3` |
+| `IRC_MAX_AUTH_FAILURES_PER_IP` | Max failed auth attempts per IP, defaults to `20` |
+| `IRC_AUTH_FAILURE_WINDOW_SECS` | Auth failure rate-limit window, defaults to `300` |
+
 ### IPv6 edge proxy
 
 | Variable | Description |
@@ -164,11 +202,21 @@ All parameters are set as Terraform variables (via GitHub secrets/variables for 
 | `AI_API_KEY` | Gemini API key |
 | `AI_MODEL` | Gemini model name |
 
-### Vote
+### Voice / LiveKit
 
 | Variable | Description |
 |----------|-------------|
-| `VOTE_SWITCH_INTERVAL_SECS` | Vote round duration in seconds |
+| `VOICE_ENABLED` | Enable voice controls in late-ssh, defaults to `1` |
+| `VOICE_ROOM` | Shared MVP voice room name, defaults to `late-voice` |
+| `LIVEKIT_SUBDOMAIN` | Public LiveKit subdomain under `DOMAIN`, defaults to `rtc` |
+| `LIVEKIT_IMAGE` | LiveKit server image |
+| `LIVEKIT_LOG_LEVEL` | LiveKit server log level |
+| `LIVEKIT_API_KEY` | LiveKit API key; API secret is generated into the Kubernetes `livekit` secret |
+| `LIVEKIT_RTC_TCP_PORT` | ICE/TCP fallback port, default `7881` |
+| `LIVEKIT_RTC_UDP_PORT` | ICE/UDP mux port, default `7882` |
+| `LIVEKIT_TURN_ENABLED` | Enable embedded TURN/STUN, default `true` |
+| `LIVEKIT_TURN_UDP_PORT` | TURN/STUN UDP port, default `3478` |
+| `LIVEKIT_TURN_TLS_PORT` | TURN/TLS TCP port, default `5349` |
 
 ### S3 Storage
 
@@ -178,6 +226,9 @@ All parameters are set as Terraform variables (via GitHub secrets/variables for 
 | `S3_SECRET_ACCESS_KEY` | S3 secret key |
 | `S3_ENDPOINT` | S3 endpoint URL |
 | `DB_BACKUPS_BUCKET` | Bucket for CloudNativePG backups |
+| `FILES_BUCKET` | Bucket for public uploaded chat files |
+| `FILES_PUBLIC_BASE_URL` | Public base URL for uploaded files |
+| `FILES_S3_REGION` | S3 signing region for file uploads, defaults to `auto` for R2 |
 
 ## Production Considerations
 

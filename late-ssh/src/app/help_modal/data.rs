@@ -1,161 +1,389 @@
 use crate::app::ai::ghost::GRAYBEARD_MENTION_COOLDOWN;
+use crate::app::common::qr::{Barcode, HalfBlock};
+use qrcodegen::{QrCode, QrCodeEcc};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HelpTopic {
+    Pair,
     Overview,
     Architecture,
     Chat,
-    Music,
+    Irc,
+    Social,
+    Directory,
     News,
     Arcade,
-    Artboard,
+    Tables,
+    Lateania,
+    TerminalCopy,
+    TerminalLinks,
+    TerminalImages,
+    TerminalSelection,
+    TerminalNotifications,
+    TerminalCliYoutube,
+    Economy,
     Bonsai,
     Settings,
+    Voice,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 9] = [
+    pub const ALL: [HelpTopic; 21] = [
+        HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
-        HelpTopic::Music,
+        HelpTopic::Irc,
+        HelpTopic::Social,
+        HelpTopic::Directory,
         HelpTopic::News,
         HelpTopic::Arcade,
-        HelpTopic::Artboard,
+        HelpTopic::Tables,
+        HelpTopic::Lateania,
+        HelpTopic::TerminalCopy,
+        HelpTopic::TerminalLinks,
+        HelpTopic::TerminalImages,
+        HelpTopic::TerminalSelection,
+        HelpTopic::TerminalNotifications,
+        HelpTopic::TerminalCliYoutube,
+        HelpTopic::Economy,
         HelpTopic::Bonsai,
         HelpTopic::Settings,
+        HelpTopic::Voice,
         HelpTopic::Architecture,
     ];
 
     pub fn title(self) -> &'static str {
         match self {
+            HelpTopic::Pair => "Pair",
             HelpTopic::Overview => "Overview",
             HelpTopic::Architecture => "Architecture",
             HelpTopic::Chat => "Chat",
-            HelpTopic::Music => "Music",
+            HelpTopic::Irc => "IRC",
+            HelpTopic::Social => "Social",
+            HelpTopic::Directory => "Directory",
             HelpTopic::News => "News",
             HelpTopic::Arcade => "Arcade",
-            HelpTopic::Artboard => "Artboard",
+            HelpTopic::Tables => "Tables",
+            HelpTopic::Lateania => "Lateania",
+            HelpTopic::TerminalCopy => "Copy",
+            HelpTopic::TerminalLinks => "Links",
+            HelpTopic::TerminalImages => "Images",
+            HelpTopic::TerminalSelection => "Selection",
+            HelpTopic::TerminalNotifications => "Notifications",
+            HelpTopic::TerminalCliYoutube => "CLI YouTube",
+            HelpTopic::Economy => "Economy",
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
-        }
-    }
-
-    pub fn short_label(self) -> &'static str {
-        match self {
-            HelpTopic::Overview => "Overview",
-            HelpTopic::Architecture => "Arch",
-            HelpTopic::Chat => "Chat",
-            HelpTopic::Music => "Music",
-            HelpTopic::News => "News",
-            HelpTopic::Arcade => "Arcade",
-            HelpTopic::Artboard => "Art",
-            HelpTopic::Bonsai => "Bonsai",
-            HelpTopic::Settings => "Settings",
+            HelpTopic::Voice => "Voice",
         }
     }
 
     pub fn index(self) -> usize {
         match self {
-            HelpTopic::Overview => 0,
-            HelpTopic::Chat => 1,
-            HelpTopic::Music => 2,
-            HelpTopic::News => 3,
-            HelpTopic::Arcade => 4,
-            HelpTopic::Artboard => 5,
-            HelpTopic::Bonsai => 6,
-            HelpTopic::Settings => 7,
-            HelpTopic::Architecture => 8,
+            HelpTopic::Pair => 0,
+            HelpTopic::Overview => 1,
+            HelpTopic::Chat => 2,
+            HelpTopic::Irc => 3,
+            HelpTopic::Social => 4,
+            HelpTopic::Directory => 5,
+            HelpTopic::News => 6,
+            HelpTopic::Arcade => 7,
+            HelpTopic::Tables => 8,
+            HelpTopic::Lateania => 9,
+            HelpTopic::TerminalCopy => 10,
+            HelpTopic::TerminalLinks => 11,
+            HelpTopic::TerminalImages => 12,
+            HelpTopic::TerminalSelection => 13,
+            HelpTopic::TerminalNotifications => 14,
+            HelpTopic::TerminalCliYoutube => 15,
+            HelpTopic::Economy => 16,
+            HelpTopic::Bonsai => 17,
+            HelpTopic::Settings => 18,
+            HelpTopic::Voice => 19,
+            HelpTopic::Architecture => 20,
         }
     }
 }
 
-pub fn lines_for(topic: HelpTopic) -> Vec<String> {
+pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) -> Vec<String> {
     match topic {
+        HelpTopic::Pair => pair_help_lines(pair_url),
         HelpTopic::Overview => overview_lines(),
         HelpTopic::Architecture => architecture_lines(),
-        HelpTopic::Chat => chat_help_lines(),
-        HelpTopic::Music => music_help_lines(),
+        HelpTopic::Chat => chat_help_lines(keep_composer_focused),
+        HelpTopic::Irc => irc_help_lines(),
+        HelpTopic::Social => social_help_lines(),
+        HelpTopic::Directory => directory_help_lines(),
         HelpTopic::News => news_help_lines(),
         HelpTopic::Arcade => arcade_help_lines(),
-        HelpTopic::Artboard => artboard_help_lines(),
+        HelpTopic::Tables => tables_help_lines(),
+        HelpTopic::Lateania => lateania_help_lines(),
+        HelpTopic::TerminalCopy => {
+            terminal_faq_topic_lines(crate::app::help_modal::terminal_faq::TerminalHelpTopic::Copy)
+        }
+        HelpTopic::TerminalLinks => {
+            terminal_faq_topic_lines(crate::app::help_modal::terminal_faq::TerminalHelpTopic::Links)
+        }
+        HelpTopic::TerminalImages => terminal_faq_topic_lines(
+            crate::app::help_modal::terminal_faq::TerminalHelpTopic::Images,
+        ),
+        HelpTopic::TerminalSelection => terminal_faq_topic_lines(
+            crate::app::help_modal::terminal_faq::TerminalHelpTopic::Selection,
+        ),
+        HelpTopic::TerminalNotifications => terminal_faq_topic_lines(
+            crate::app::help_modal::terminal_faq::TerminalHelpTopic::Notifications,
+        ),
+        HelpTopic::TerminalCliYoutube => terminal_faq_topic_lines(
+            crate::app::help_modal::terminal_faq::TerminalHelpTopic::CliYoutube,
+        ),
+        HelpTopic::Economy => economy_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
+        HelpTopic::Voice => voice_help_lines(),
     }
 }
 
 pub fn bot_app_context() -> String {
-    let mut out = String::from("APP CONTEXT:\n");
+    let mut out = String::from(
+        "APP CONTEXT:\n\
+        CRITICAL FACTS:\n\
+        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
+        - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar.\n\
+        - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free.\n\
+        - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. The printed word only shows from buzzed (level 2) up; tipsy just glows quietly. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
+        - The buzz sobers up on its own over time, no action needed: it decays 300 points an hour, so even a maxed-out binge is fully sober again well within a day.\n\
+        - Drunk level tints the username label's background everywhere it appears (the Clubhouse floor and chat author labels alike), light green through yellow and orange to red as the level climbs.\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Tables (4), Artboard (5), Directory (6), and World Cup (7).\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, Green Dragon, dopewars, and Rebels; each is launched from there, not from its own top-level page.\n\
+        - Directory page 6 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
+    );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
-        for line in lines_for(topic) {
-            if line.trim().is_empty() {
+        // Bot context is per-app, not per-user — describe the default Enter/
+        // Alt+S binding rather than any one user's `keep_composer_focused`
+        // tweak state.
+        for line in lines_for(topic, false, "") {
+            let line = line.trim();
+            if line.is_empty() || is_restricted_bot_context_line(line) {
                 continue;
             }
             out.push_str("- ");
-            out.push_str(line.trim());
+            out.push_str(line);
             out.push('\n');
         }
     }
     out
 }
 
-pub fn chat_help_lines() -> Vec<String> {
+fn is_restricted_bot_context_line(line: &str) -> bool {
+    let line = line.to_lowercase();
     [
+        "/audio",
+        "/create-room",
+        "/delete-room",
+        "/fill-room",
+        "/mod",
+        "staff",
+        "admin",
+        "moderation",
+        "unskippable",
+    ]
+    .iter()
+    .any(|forbidden| line.contains(forbidden))
+}
+
+const SHELL_INSTALL_COMMAND: &str = "curl -fsSL https://cli.late.sh/install.sh | bash";
+const WINDOWS_INSTALL_COMMAND: &str = "irm https://cli.late.sh/install.ps1 | iex";
+const NIX_COMMAND: &str = "nix run github:mpiorowski/late-sh#late";
+const SOURCE_URL: &str = "https://github.com/mpiorowski/late-sh";
+const QR_QUIET_ZONE: i32 = 4;
+
+fn pair_help_lines(pair_url: &str) -> Vec<String> {
+    let pair_url = pair_url.trim();
+    let pair_url = if pair_url.is_empty() {
+        "your pairing link appears here in-session"
+    } else {
+        pair_url
+    };
+    let mut lines = vec![
+        "Install `late` / Pair Browser".to_string(),
+        "".to_string(),
+        "Recommended: install the native CLI and run `late` instead of `ssh late.sh`.".to_string(),
+        "That gives one process for SSH, local Icecast audio, YouTube webview fallback, and OS clipboard image reads.".to_string(),
+        "".to_string(),
+        "Install".to_string(),
+        format!("  linux / macos / termux   {SHELL_INSTALL_COMMAND}"),
+        format!("  windows powershell       {WINDOWS_INSTALL_COMMAND}"),
+        format!("  nixos                    {NIX_COMMAND}"),
+        format!("  source                   git clone {SOURCE_URL}"),
+        "                           cargo build --release --bin late".to_string(),
+        "".to_string(),
+        "What `late` unlocks".to_string(),
+        "  audio       Icecast playback and visualizer on your machine".to_string(),
+        "  youtube     embedded webview hosts the shared queue locally".to_string(),
+        "  clipboard   /paste-image reads your OS clipboard image into chat".to_string(),
+        "  controls    m mute, +/- volume, v+x source, v+v Music Booth".to_string(),
+        "".to_string(),
+        "Browser pairing".to_string(),
+        "  Open this link on any device, or scan the QR below.".to_string(),
+        "  The browser plays your selected source, including YouTube.".to_string(),
+        "  A real browser takes over YouTube from the CLI webview helper while it is paired.".to_string(),
+        "".to_string(),
+    ];
+
+    lines.extend(qr_lines(pair_url));
+    lines.extend([
+        "".to_string(),
+        pair_url.to_string(),
+        "scan with your phone or open the link on any device".to_string(),
+        "".to_string(),
+        "Trouble?".to_string(),
+        "  The terminal-specific tabs below cover copy, links, images, selection, notifications, and CLI YouTube.".to_string(),
+    ]);
+    lines.push("".to_string());
+    lines.extend(music_pair_lines());
+    lines
+}
+
+fn qr_lines(pair_url: &str) -> Vec<String> {
+    if !(pair_url.starts_with("https://") || pair_url.starts_with("http://")) {
+        return Vec::new();
+    }
+    let Ok(qr) = QrCode::encode_text(pair_url, QrCodeEcc::Low) else {
+        return Vec::new();
+    };
+    let size = qr.size();
+    let total = size + QR_QUIET_ZONE * 2;
+    let module = |x: i32, y: i32| -> bool {
+        let mx = x - QR_QUIET_ZONE;
+        let my = y - QR_QUIET_ZONE;
+        if mx < 0 || my < 0 || mx >= size || my >= size {
+            return false;
+        }
+        qr.get_module(mx, my)
+    };
+
+    let mut out = Vec::with_capacity(((total + 1) / 2) as usize);
+    let mut y = 0i32;
+    while y < total {
+        let mut row = String::with_capacity(total as usize);
+        for x in 0..total {
+            let top = module(x, y);
+            let bot = module(x, y + 1);
+            let bits = (top as u32) | ((bot as u32) << 1);
+            row.push(HalfBlock::glyph(bits));
+        }
+        out.push(format!("  {row}"));
+        y += 2;
+    }
+    out
+}
+
+fn terminal_faq_topic_lines(
+    topic: crate::app::help_modal::terminal_faq::TerminalHelpTopic,
+) -> Vec<String> {
+    crate::app::help_modal::terminal_faq::lines_for(topic)
+}
+
+fn economy_lines() -> Vec<String> {
+    crate::app::help_modal::hub_guide::bot_context_lines()
+}
+
+pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
+    let compose_send_lines: &[&str] = if keep_composer_focused {
+        &["  Enter              send and keep open"]
+    } else {
+        &[
+            "  Enter              send and exit",
+            "  Alt+S              send and keep open",
+        ]
+    };
+    let mut lines: Vec<String> = [
         "Commands",
         "  /binds             open this guide",
-        "  /public #room      open/create public room for everyone",
+        "  /settings          open your settings modal",
+        "  /icons             open emoji / nerd font picker",
+        "  /petname [name]    show or set your pet's name",
+        "  /brb [message]     show away badge and mute paired audio",
+        "  /coffee            post a coffee cup",
+        "  /tea               post a tea cup",
+        "  /ultimate          open owned Ultimate Spells",
+        "  /profile [@user]   open your profile, or another user's profile",
+        "  /exit              open quit confirm",
+        "  /public #room      open/create opt-in public room",
         "  /private #room     create a private room",
         "  /invite @user      add a user to the current room",
         "  /leave             leave the current room",
-        "  /create-room #room admin: create a permanent public room",
-        "  /delete-room #room admin: delete a permanent room",
-        "  /fill-room #room   admin: add all users and enable auto-join",
         "  /dm @user          open a direct message",
         "  /active            list active users",
+        "  /friends           list friends",
+        "  /friend [@user]    list friends, or mark a user as a friend",
+        "  /unfriend [@user]  list friends, or remove a friend mark",
         "  /members           list users in this room",
         "  /list              list public rooms",
+        "  /poll              start a Home room poll with 2-3 options",
+        "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
+        "  /sheet [@user]     your character sheet, or another user's (#dnd)",
+        "  /paste-image       upload image from paired CLI clipboard (see Images)",
+        "  /upload <url>      download and upload an image URL (see Images)",
         "  /ignore [@user]    ignore a user, or list ignored users",
-        "  /unignore [@user]  remove a user from your ignore list",
-        "  /music             explain how music works",
-        "  /settings          open your settings modal",
-        "  /exit              open quit confirm",
+        "  /unignore [@user]  unignore a user, or list ignored users",
+        "",
+        "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
+        "  Ctrl+G             open Hub",
+        "  Ctrl+Q / Alt+A     toggle your Aquarium tray after unlocking it in Shop",
+        "  Ctrl+F             feed your Aquarium tray with bought Aquarium Food",
+        "  Ctrl+/             search and jump to a room, DM, or Home entry",
+        "  ?                  open this guide; Pair and terminal-specific tabs live here",
         "",
         "Messages",
         "  j / k              select older / newer message",
         "  ↑ / ↓              same as j / k",
         "  Ctrl+U / Ctrl+D    half page up / down",
         "  PageUp / PageDown  half page up / down",
-        "  End                jump to most recent",
         "  g / G              clear selection (back to live view)",
         "  p                  open selected user's profile",
-        "  f then 1 / 2 / 3 / 4 / 5",
-        "                     react to selected message on any layout",
+        "  f then 1-9        quick-react to selected message",
+        "  f then 0          choose any icon-picker reaction",
+        "  f then f          list reaction owners",
         "  Enter              jump to loaded original for selected reply",
+        "  Enter              open selected image or News item when present",
+        "  g                  jump to a reply's original even if it has an image",
         "  r                  reply to selected message",
         "  e                  edit selected message",
         "  d                  delete selected message",
         "  c                  copy selected message to clipboard",
+        "  Ctrl+P             pin / unpin selected message",
         "",
         "Rooms",
         "  h / l  or  ← / →   previous / next room",
         "  Space              room jump hints",
         "  Enter / i          start composing",
-        "  C                  copy a web-chat link to this session",
+        "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
+        "",
+        "Polls",
+        "  /poll              create a 10/20/30-minute poll in the selected Home room",
+        "  va / vb / vc       vote while a poll is visible",
+        "  v1 / v2 / v3       select music streams/stations",
+        "  limit              one active poll per room",
         "",
         "Compose",
-        "  Enter              send and exit",
-        "  Alt+S              send and keep open",
+        // `<<COMPOSE_SEND_LINES>>` marker is replaced after collection so the
+        // Enter/Alt+S section can collapse to a single line when the
+        // `keep_composer_focused` tweak is on. Keep this token unique.
+        "<<COMPOSE_SEND_LINES>>",
         "  Alt+Enter / Ctrl+J newline",
         "  Esc                exit compose",
         "  Backspace          delete char",
         "  Ctrl+W / Ctrl+Backspace",
         "                     delete word left",
         "  Ctrl+Delete        delete word right",
-        "  Ctrl+U             clear composer",
+        "  Ctrl+U             delete to start of line",
         "  Ctrl+← / Ctrl+→    move cursor by word",
         "  @user              mention (Tab/Enter to confirm)",
         "  Ctrl+]             open emoji / nerd font picker",
+        "  paste image bytes  upload PNG/JPEG/GIF/WebP when file storage is configured",
         "",
         "Markdown",
         "  # / ## / ###       headings",
@@ -175,6 +403,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  Ctrl+U / Ctrl+D    half page up / down",
         "  PageUp / PageDown  jump a page",
         "  type to filter     search by name",
+        "  Tab / Shift+Tab    switch icon tabs",
         "  Enter              insert and close",
         "  Alt+Enter          insert and keep open",
         "  click / wheel      select / scroll",
@@ -184,41 +413,359 @@ pub fn chat_help_lines() -> Vec<String> {
         "Overlay windows",
         "  Esc / q            close overlay",
         "  j / k              scroll overlay",
+        "  image modal        Enter/c copy image URL; Esc/q close; see Images",
         "",
-        "Showcases room",
-        "  A synthetic room where users post project links.",
-        "  j / k              navigate showcases list",
-        "  Enter              copy selected URL to clipboard",
-        "  i                  open the new-showcase composer",
-        "  e                  edit your own showcase",
-        "  d                  delete your own showcase (admin: any)",
-        "  Composer fields    title (≤120) · url · tags (comma-sep, ≤8) · description (≤800)",
-        "  Tab / Shift+Tab    cycle composer fields",
-        "  Enter              submit",
-        "  Alt+Enter / Ctrl+J newline (description only)",
-        "  Esc                cancel compose",
+        "Synthetic entries",
+        "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
+        "  Directory page 6 contains Profiles, Projects, and Pinstar.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    let marker_idx = lines
+        .iter()
+        .position(|l| l == "<<COMPOSE_SEND_LINES>>")
+        .expect("compose-send marker present");
+    lines.splice(
+        marker_idx..=marker_idx,
+        compose_send_lines.iter().map(|s| s.to_string()),
+    );
+    lines
+}
+
+fn irc_help_lines() -> Vec<String> {
+    [
+        "IRC access",
         "",
-        "Work room",
-        "  A synthetic room where users post one work profile.",
-        "  j / k              navigate work profiles",
-        "  Enter / c          copy selected profile summary",
-        "  i                  create/edit your own profile",
-        "  e                  edit your own profile (admin: any)",
-        "  d                  delete your own profile (admin: any)",
-        "  Fields             headline, status, type, location, contact, links, skills, summary",
-        "  Status             open, casual, or not-looking",
-        "  Tab / Shift+Tab    cycle composer fields",
-        "  Enter              submit",
-        "  Alt+Enter          newline (summary only)",
-        "  Esc                cancel compose",
+        "late.sh includes an optional IRC surface for the same chat account.",
+        "It is not a separate account or a separate chat system: IRC reads and writes the same rooms, DMs, usernames, and bans.",
+        "",
+        "How to connect",
+        "  Create token      Settings > Account > IRC access token",
+        "  Server password   paste that token into your IRC client's server password / PASS field",
+        "  Nick              any configured nick is accepted, then locked to your late.sh username",
+        "  Dev server        localhost:6667 with TLS off when running make start",
+        "  Production        irc.late.sh port 6697 with TLS/SSL enabled",
+        "  Verify TLS        keep certificate verification on when using irc.late.sh",
+        "",
+        "WeeChat quick setup",
+        "  /server add late irc.late.sh/6697",
+        "  /set irc.server.late.tls on",
+        "  /set irc.server.late.tls_verify on",
+        "  /set irc.server.late.password \"late-irc-...\"",
+        "  /connect late",
+        "",
+        "Connection troubleshooting",
+        "  IRC is raw TCP, so irc.late.sh must be DNS-only, not proxied.",
+        "  If hostname connects hang, check that DNS resolves to late.sh node IPs.",
+        "  Avoid pasting tokens in public logs or chat; reset the token if it leaks.",
+        "",
+        "Good Arch clients",
+        "  WeeChat           terminal-native; pacman -S weechat",
+        "  Halloy            GUI client; pacman -S halloy",
+        "",
+        "Useful IRC commands",
+        "  /list             list public channels and private channels you can access",
+        "  /join #lounge     join a channel; #lounge is joined automatically",
+        "  /msg #room text   send to a late.sh room",
+        "  /msg nick text    send a late.sh DM",
+        "  /names #room      show online channel users",
+        "  /whois nick       show basic user info",
+        "  /part #room       detach the IRC view; late.sh membership stays unchanged",
+        "",
+        "Room mapping",
+        "  #lounge, language rooms, and topic rooms with slugs are IRC channels.",
+        "  Private topic rooms only appear to members.",
+        "  DMs stay direct messages, not channels.",
+        "  Game-room chat is not exposed as IRC channels.",
+        "",
+        "Token behavior",
+        "  New users start with no IRC token and cannot connect over IRC.",
+        "  Resetting a token shows the new value once and disconnects old IRC clients.",
+        "  Revoking the token disables IRC access for the account.",
+        "  Deleting or linking accounts disconnects live IRC clients for the affected account.",
+        "",
+        "Client expectations",
+        "  Most clients call the token a server password.",
+        "  Nick changes from IRC are refused; change your username in late.sh settings.",
+        "  Long late.sh messages may appear as multiple IRC PRIVMSG lines.",
+        "  Edited messages arrive with an [edit] prefix.",
+        "  Presence is bridged: TUI and IRC users both count as online.",
     ]
     .into_iter()
     .map(str::to_string)
     .collect()
 }
 
-pub fn music_help_lines() -> Vec<String> {
-    MUSIC_HELP_TEXT.lines().map(str::to_string).collect()
+fn music_pair_lines() -> Vec<String> {
+    MUSIC_PAIR_TEXT.lines().map(str::to_string).collect()
+}
+
+fn social_help_lines() -> Vec<String> {
+    [
+        "Social surfaces",
+        "",
+        "These are Home-adjacent feeds and notification surfaces. Directory page 6 has its own guide tab for Profiles, Projects, and Pinstar.",
+        "",
+        "RSS",
+        "  Private per-user RSS/Atom inbox.",
+        "  Manage subscriptions in Settings > RSS.",
+        "  Entries stay private until shared.",
+        "  j / k or ↑ / ↓   navigate entries",
+        "  Enter             copy selected entry URL",
+        "  s                 share selected entry through News processing",
+        "  d                 dismiss selected entry",
+        "  r                 refresh RSS now",
+        "  After sharing, the URL becomes a public News article and #lounge announcement.",
+        "",
+        "Mentions",
+        "  User-targeted notification feed for @user mentions.",
+        "  Selecting Mentions marks it read.",
+        "  j / k or ↑ / ↓   navigate notifications",
+        "  Enter             jump to referenced room/message when possible",
+        "  Rules             actor excluded; DMs notify participants; private rooms notify members",
+        "  Game-room chat does not create Mentions feed notifications.",
+        "",
+        "Discover",
+        "  Lists public topic rooms you have not joined.",
+        "  Loads only when selected.",
+        "  j / k or ↑ / ↓   navigate rooms",
+        "  Enter             join selected public room",
+        "",
+        "Read-only profile modal",
+        "  p                 open selected chat author's profile card",
+        "  /profile [@user]  open your own profile card, or another user's",
+        "  j / k, arrows     scroll",
+        "  PageUp/PageDown   page",
+        "  Esc / q           close",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn directory_help_lines() -> Vec<String> {
+    [
+        "Directory",
+        "",
+        "Directory page 6 owns public profiles, project showcases, and Pinstar diagrams.",
+        "  8                 open Directory",
+        "  h / l or [ / ]   switch Directory tabs",
+        "                    h/l switch only when a Profiles/Projects form is not editing",
+        "  j / k or ↑ / ↓   navigate the active list",
+        "  PageUp/PageDown   jump rows",
+        "  Esc               cancel the active Profiles/Projects form or Pinstar popup",
+        "",
+        "Profiles",
+        "  Public work-profile feed; one profile per user.",
+        "  Creating again updates your existing profile and preserves its public w_ slug.",
+        "  Public pages live at /profiles and /profiles/{slug}.",
+        "  List is recently updated first.",
+        "  Detail panel       previews the public page: profile fields, Bio, late.fetch, Showcases",
+        "  j / k or ↑ / ↓   navigate profiles",
+        "  Enter / c         copy selected public profile link",
+        "  i                 create/edit your own profile",
+        "  e                 edit your own profile",
+        "  d                 delete your own profile",
+        "  /                 toggle filter to only your profile",
+        "  Fields            headline, status, type, location, contact, links, skills, summary",
+        "  Status            open, casual, or not-looking",
+        "  Limits            headline 120 chars, contact 200 chars, summary 1000 chars",
+        "  Links             http(s) only, max 6",
+        "  Skills            max 12, max 24 chars each, lowercase, # stripped",
+        "  Tab / Shift+Tab   cycle composer fields",
+        "  Enter             submit",
+        "  Ctrl+J            newline in summary",
+        "  Esc               cancel compose",
+        "",
+        "Public web profile",
+        "  /profiles         public index of work profiles; open first, then casual, then not-looking",
+        "  /profiles/{slug}  detail page created from your Directory Profile slug",
+        "  Profile fields    headline, @username, status, work type, location, summary, skills, contact, links",
+        "  Bio               comes from Settings > Bio; rendered as sanitized Markdown when non-empty",
+        "  late.fetch        comes from identity settings: created date, theme, IDE, terminal, OS, languages",
+        "  Showcases         all your Directory Projects appear below the profile when available",
+        "                    each shows title, URL, description, tags, and links out to the project",
+        "  Index cards       show headline, user/status, type/location, summary preview, and skills",
+        "",
+        "Projects / Showcases",
+        "  Public project-link feed; separate from chat messages.",
+        "  List is newest first.",
+        "  j / k or ↑ / ↓   navigate showcases",
+        "  Enter             copy selected URL",
+        "  i                 create a showcase",
+        "  e                 edit your own showcase",
+        "  d                 delete your own showcase",
+        "  /                 toggle filter to only your showcases",
+        "  Fields            title, URL, tags, description",
+        "  Required          title, http(s) URL, description",
+        "  Limits            title 120 chars, description 800 chars",
+        "  Tags              max 8, max 24 chars each, lowercase, # stripped",
+        "  Tab / Shift+Tab   cycle composer fields",
+        "  Enter             submit",
+        "  Ctrl+J            newline in description",
+        "  Esc               cancel compose",
+        "",
+        "Pinstar",
+        "  Collaborative diagram browser/editor.",
+        "  j / k or ↑ / ↓   navigate diagrams in the browser",
+        "  Enter             open selected diagram",
+        "  c                 copy selected diagram source",
+        "  n                 create a diagram",
+        "  I                 import canvas JSON",
+        "  a                 join with invite token",
+        "  i                 create invite token for an owned diagram",
+        "  r                 rename an owned diagram",
+        "  d                 delete an owned diagram; staff can delete any",
+        "  ? / Ctrl+P        open Pinstar local help",
+        "  Esc / q           close local help/popups, then return from diagram to browser",
+        "  Active diagrams own h/l for node navigation, so tab switching resumes in the browser.",
+        "",
+        "Read-only profile modal",
+        "  p                 open selected chat author's profile card",
+        "  /profile [@user]  open your own profile card, or another user's",
+        "  j / k, arrows     scroll profile modal",
+        "  PageUp/PageDown   page profile modal",
+        "  Esc / q           close profile modal",
+        "  Profiles show username, birthday, country, timezone/current time, chips, markdown bio,",
+        "  bonsai, late.fetch fields, and the user's showcases when available.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn arcade_help_lines() -> Vec<String> {
+    [
+        "Arcade",
+        "",
+        "The Arcade is for single-player terminal games, daily puzzles, endless runs, and leaderboard play.",
+        "  2                 open The Arcade",
+        "  j / k or ↑ / ↓   browse games",
+        "  Enter             play selected game",
+        "  Esc / q           leave current game",
+        "  `                 return to Dashboard while a run is active",
+        "",
+        "Notes",
+        "  Game-specific controls appear inside the Arcade page.",
+        "  Daily puzzle completions, run scores, chips, payouts, and leaderboards are covered in Economy.",
+        "",
+        "Leaderboard badges",
+        "  Awarded each month to the previous month's top players. They show",
+        "  first in your chat username badge stack, wrapped in brackets.",
+        "  The trailing digit is your rank, 1-3 (so [AW1] is that month's #1).",
+        "  [CHIP]    Top Chips",
+        "  [AW]      Arcade Wins",
+        "  [LA]      Lateris (Tetris)",
+        "  [24#]     2048",
+        "  [SN]      Snake",
+        "  The Lateania and NetHack badges are one-off feats, shown with no rank digit.",
+        "  [LMG]     Lateania Archdemon",
+        "  [LKN]     Lateania Frontier King",
+        "  [LYS]     Lateania Sundering Deep",
+        "  [NHA]     NetHack Amulet",
+        "  [NHY]     NetHack Ascension",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn tables_help_lines() -> Vec<String> {
+    [
+        "Tables",
+        "",
+        "Tables are persistent multiplayer sessions for table-style games with paired embedded chat.",
+        "  3                 open Tables",
+        "  j / k or ↑ / ↓   navigate tables",
+        "  h / l or ← / →   cycle filters",
+        "  /                 search by table name",
+        "  Enter             enter selected table",
+        "  n                 create a new table",
+        "  Esc               clears create/search/query/filter before leaving table state",
+        "  Directory rows show name, game, creator, seats, pace, stakes, and status.",
+        "",
+        "Table creation",
+        "  n                 open game picker",
+        "  j / k or ↑ / ↓   choose game kind",
+        "  Enter             open selected create form",
+        "  first letter      shortcut to a game kind",
+        "  Esc               cancel picker/form",
+        "  Game-specific forms and limits live in the Economy tab.",
+        "",
+        "Active table",
+        "  Layout            game on top, embedded game chat below",
+        "  `                 cycle Dashboard and tables where you are seated",
+        "  Esc               clears selected embedded-chat message first",
+        "  q / Esc           game backend may leave the active table",
+        "  i                 compose in embedded chat",
+        "  j / k             embedded-chat message selection unless game claims the key",
+        "  PageUp/PageDown   scroll embedded chat",
+        "  r/e/d/p/c/f       reply, edit, delete, profile, copy, react selected chat message",
+        "  g                 jump to a reply's original even if it has an image",
+        "  Ctrl+P            pin / unpin selected embedded-chat message",
+        "  Arrows            game gets first chance; otherwise embedded chat handles them",
+        "",
+        "Home shortcuts",
+        "  \\                 cycle room list and info panel visibility",
+        "  3                 open Tables",
+        "  b then 1-4         enter one of the recent table shortcuts in lounge",
+        "",
+        "Economy",
+        "  Economy tab        Arcade game list, Arcade controls, table-game controls, chips, scoring, and leaderboards.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn lateania_help_lines() -> Vec<String> {
+    [
+        "Lateania",
+        "",
+        "Lateania is the persistent BBS-style world, opened from the Games hub.",
+        "  3                 open the Games hub, then select the Lateania card",
+        "  Enter             step through the gate from the hub",
+        "  d                 reset your Lateania character after confirmation",
+        "  Esc               leave the active world back to the Games hub",
+        "  ?                 open global guide from the hub or active game",
+        "",
+        "Rebels in the Sky",
+        "  Pirate basketball across the galaxy, proxied live from frittura.org.",
+        "  3 then Enter      open the Games hub, select Rebels, connect",
+        "  Esc / Ctrl-C      quit the game; you return to the Games hub",
+        "  Disconnecting (or the server closing) also returns to the hub.",
+        "",
+        "Lateania",
+        "  1-5               choose class before your first adventure",
+        "  w/a/s/d or arrows move north/west/south/east",
+        "  y/u/n/m           diagonal movement",
+        "  < / >             move up / down where exits exist",
+        "  o                 look around",
+        "  Space / Enter / x attack",
+        "  1-9, 0            use ability slots 1-10 after choosing a class",
+        "  v then Enter      cast any ability from the panel, however deep the roster",
+        "  z                 flee combat",
+        "",
+        "Panels",
+        "  c                 character",
+        "  v                 abilities",
+        "  t                 inventory",
+        "  b                 shop, when a merchant is present",
+        "  j                 quest journal",
+        "  k                 earned titles",
+        "  r                 recall to Embergate when out of combat",
+        "  f                 follow another adventurer in the room",
+        "  Enter             activate selected inventory/shop row",
+        "  x                 sell selected inventory item at a shop",
+        "",
+        "Persistence",
+        "  Your Lateania character is saved when you leave and periodically while present.",
+        "  Press d on the Lateania card in the Games hub to reset and start over.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn overview_lines() -> Vec<String> {
@@ -228,41 +775,83 @@ fn overview_lines() -> Vec<String> {
         "late.sh is a terminal clubhouse over SSH: chat, music, news, games, settings, and shared presence in one session.",
         "",
         "Primary screens",
-        "  1 Dashboard       stream status, voting, and chat snapshot",
-        "  2 Chat            public rooms, DMs, mentions, web-chat links",
-        "  3 The Arcade      daily puzzles, endless games, leaderboard",
-        "  4 Rooms           persistent table-game rooms",
+        "  0 Clubhouse       the Late Lounge: walk around, everyone is live",
+        "  1 Home            chat, tables, music, and live activity",
+        "  2 The Arcade      daily puzzles, endless games, leaderboard",
+        "  3 Games           Lateania, Rebels, and NetHack in one hub",
+        "  4 Tables          persistent table games",
         "  5 Artboard        shared persistent ASCII canvas",
+        "  6 Directory       Profiles, Projects, and Pinstar",
+        "  7 World Cup       live scores, groups, and the bracket",
         "",
+        "You land in the Clubhouse: hjkl/arrows walk, i talks (your words float",
+        "over your head and land in #lounge), w waves, x dances, Enter interacts.",
+        "",
+        "The Games hub is a selector: arrow keys or h/l switch between the Lateania,",
+        "Rebels, and NetHack cards; Enter launches the selected game.",
+        "",
+        "Directory has its own guide tab; Artboard and active Pinstar diagrams keep page-local editing help.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  1-5               jump straight to a screen",
+        "  0-7               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
+        "  Ctrl+O            open Settings",
+        "  Ctrl+G            open Hub",
+        "  Ctrl+Q / Alt+A    toggle Aquarium tray after unlocking it in Shop",
+        "  Ctrl+F            feed Aquarium tray with bought Aquarium Food",
+        "  Ctrl+/            search and jump to a room, DM, or synthetic Home entry",
+        "  ?                 open this guide; Pair and terminal-specific tabs live here",
+        "  w                 open Bonsai Care when not composing",
+        "  c                 open Cat Companion after unlocking it",
         "  m                 mute paired client",
         "  + / -             paired client volume",
+        "  v then v          open the Music Booth (submit + queue + votes)",
+        "  v then x          cycle audio source: Icecast → YouTube → Radio",
+        "  v then s          skip-vote the current YouTube track",
+        "  v then 1..5       select stream/station in the active source",
         "",
-        "Dashboard",
-        "  P                 show browser pairing QR",
-        "  B                 open CLI install / BUILD SOURCE modal",
+        "Home",
+        "  click top bar     jump screens",
+        "  click room rail   select room or synthetic entry",
+        "  click unread HUD  jump to Mentions",
         "",
-        "Dashboard favorites",
-        "  Pin rooms in Settings → Favorites so the dashboard's chat card",
-        "  can switch between them without leaving the home screen.",
-        "  Strip appears once you have 2+ pins.",
-        "  [ / ]             cycle prev / next pinned room",
-        "  ,                 jump back to the previously-active pin",
-        "  g then 1-9        jump directly to favorite slot N",
-        "  `                 toggle Dashboard / last game",
+        "Room favorites",
+        "  f                 favorite / unfavorite the selected room",
+        "  [ / ]             move the selected favorite up / down",
+        "  favorites appear first in the room rail and room picker",
+        "  `                 cycle Dashboard / seated game rooms",
+        "",
+        "Hub",
+        "  Ctrl+G            open Shop, Leaderboard, Quests, Events",
+        "  Tab / Shift+Tab   switch Hub tabs",
+        "  1-4               jump to Hub tab",
+        "  Shop              j/k select, [/] subtab, Enter buy with Late Chips",
+        "  Economy tab       chips, payouts, leaderboards, Arcade, table games",
+        "",
+        "Jump search",
+        "  Ctrl+/            open / close jump modal",
+        "  type              filter rooms, DMs, RSS, News, Voice, Mentions, Discover",
+        "  @query / #query   bias toward users or rooms",
+        "  ↑/↓ or Ctrl+K/J   move selection",
+        "  PageUp/PageDown   jump 8 rows",
+        "  Backspace         delete query char",
+        "  Ctrl+Backspace    delete query word",
+        "  Enter             jump to selected destination",
+        "  Esc               close",
+        "",
+        "Home room shortcuts",
+        "  3                 open Tables",
+        "  b then 1-4         enter one of the recent table shortcuts in lounge",
         "",
         "This modal",
         "  Tab / Shift+Tab   next / previous tab",
         "  j / k / ↑ / ↓     scroll current tab",
-        "  Esc / q / ?       close",
+        "  ? / Esc / q       close",
         "",
-        "Use /help and /music in chat if you want to jump directly to those slides from the composer.",
+        "Use /binds in chat if you want to jump directly to this slide from the composer.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -282,21 +871,24 @@ fn architecture_lines() -> Vec<String> {
         "  late-cli          local CLI companion for audio playback and controls",
         "",
         "State and persistence",
-        "  PostgreSQL stores users, chat, profiles, games, chips, and leaderboard data",
+        "  PostgreSQL stores users, chat, profiles, social feeds, game rooms, chips, and leaderboard data",
         "  services publish watch snapshots and broadcast events into SSH sessions",
         "",
         "Audio stack",
-        "  users currently vote lofi / classic / ambient",
-        "  the winning genre streams for everyone",
-        "  Icecast serves audio and Liquidsoap manages playlists",
+        "  Icecast has chill and classical house streams",
+        "  Radio has Nightride guest stations",
+        "  Liquidsoap manages the house playlists",
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Dashboard, Chat, The Arcade, Artboard, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Games (Lateania/Rebels/NetHack hub), Tables, Artboard, Directory, and the persistent bonsai sidebar",
+        "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
+        "  Tables are persistent DB rows with paired chat_rooms(kind='game')",
+        "  Table game runtime state is process-local and can reset on SSH server restart",
         "",
         "Important characteristics",
         "  terminal-first, always-on, social, and zero-signup",
-        "  SSH key fingerprint is the identity anchor",
+        "  SSH keys are identity/device anchors; linked keys can point to one late.sh identity",
         "",
         "Highest-risk runtime areas are render-loop backpressure, chat sync consistency, connection limiting, and paired-client state drift.",
         "",
@@ -315,10 +907,15 @@ fn news_help_lines() -> Vec<String> {
         "",
         "How it works",
         "  i                 start the URL composer",
-        "  Enter             submit the link",
+        "  Enter             copy selected link",
+        "  Enter in composer submit link",
         "  Esc               cancel URL entry",
         "  j / k             browse stories",
         "  d                 delete your own story",
+        "  /                 toggle filter to only your stories",
+        "  Enter on news msg open the news item modal",
+        "  Enter in modal    copy link and close",
+        "  N in modal        jump to News with story selected",
         "",
         "What happens after submit",
         "  1. late.sh fetches the article or video page",
@@ -328,103 +925,18 @@ fn news_help_lines() -> Vec<String> {
         "",
         "Good inputs",
         "  tech articles, launch posts, docs, YouTube links, tweets/x links",
+        "  private RSS/Atom entries from the RSS room when you press s there",
+        "",
+        "RSS relationship",
+        "  RSS is a private inbox in the Home room rail.",
+        "  RSS/Atom subscriptions are managed in Settings > RSS.",
+        "  Sharing an RSS entry sends its URL through this News pipeline.",
+        "  Only shared entries become public News articles and #lounge announcements.",
         "",
         "Notes",
         "  summaries are intentionally compact for terminal reading",
         "  thumbnails only render when they fit the layout",
         "  the room acts like a curated backlog, not high-speed chat",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
-}
-
-fn arcade_help_lines() -> Vec<String> {
-    [
-        "The Arcade and leaderboard",
-        "",
-        "The Arcade mixes daily puzzle runs with endless score chases. Your progress feeds the shared leaderboard and streak system.",
-        "",
-        "Games in rotation",
-        "  High score: 2048, Tetris",
-        "  Daily: Sudoku, Nonograms, Minesweeper, Solitaire",
-        "",
-        "Hub controls",
-        "  j / k             browse games",
-        "  Enter             play selected game",
-        "  Esc               leave current game",
-        "",
-        "Artboard",
-        "  5                 open dedicated Artboard page",
-        "  i / Enter         enter active mode",
-        "  Esc               return Artboard to view mode",
-        "",
-        "What matters",
-        "  daily puzzles build streaks",
-        "  wins can award Late Chips",
-        "  leaderboard tracks streak leaders, all-time highs, and chip balances",
-        "  chat badges reflect streak tiers",
-        "",
-        "Why it exists",
-        "",
-        "It gives the app a slower social loop than chat: drop in, play a run, show up on the board, come back tomorrow.",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
-}
-
-fn artboard_help_lines() -> Vec<String> {
-    [
-        "Artboard",
-        "",
-        "The Artboard is a shared, persistent ASCII canvas. Everyone paints on the same live board from the dedicated screen.",
-        "",
-        "Where to find it",
-        "  5                 open the Artboard screen",
-        "  Tab / Shift+Tab   cycle to it from other screens",
-        "  https://late.sh/gallery",
-        "                    web gallery for Artboard snapshots",
-        "",
-        "Modes",
-        "  view mode         inspect and pan without editing",
-        "  active mode       type, erase, select, stamp, and draw",
-        "  i / Enter         enter active mode from live view",
-        "  Esc               return to view mode or dismiss local editor state",
-        "",
-        "Important keys",
-        "  ?                 toggle Artboard page help in view mode",
-        "  Ctrl+P            toggle Artboard help while editing",
-        "  g                 open daily/monthly snapshot browser",
-        "  Ctrl+\\           toggle owner overlay",
-        "  Ctrl+]            open emoji / Unicode glyph picker",
-        "  Ctrl+U / Ctrl+Y   previous / next paint color",
-        "",
-        "Drawing basics",
-        "  arrows            move cursor / focus",
-        "  Home / End        jump to line edges",
-        "  PgUp / PgDn       jump vertically",
-        "  <type>            draw a character",
-        "  Space             erase",
-        "  Shift+arrows      start or extend a selection",
-        "  Ctrl+C / Ctrl+X   copy or cut selection into swatches",
-        "  Ctrl+A/S/D/F/G    activate swatch slots 1..5",
-        "  Enter / Ctrl+V    stamp the floating brush",
-        "",
-        "Snapshots and gallery",
-        "  live board saves every 5 minutes and on shutdown",
-        "  daily snapshots are archived as daily:YYYY-MM-DD",
-        "  the newest 7 daily snapshots are kept",
-        "  monthly snapshots are archived as monthly:YYYY-MM",
-        "  on UTC month rollover, the prior daily snapshot becomes the monthly archive and the live board resets blank",
-        "  Artboard view mode g opens the terminal snapshot gallery",
-        "  web gallery is public at https://late.sh/gallery",
-        "",
-        "What is shared",
-        "  canvas cells, connected peers, your assigned color, and cell ownership provenance",
-        "",
-        "What stays local",
-        "  cursor, viewport, selections, swatches, selected paint color, brush previews, glyph search, and help scroll",
     ]
     .into_iter()
     .map(str::to_string)
@@ -439,23 +951,71 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "Your identity and preferences live in the settings modal.".to_string(),
         "".to_string(),
+        "Tabs".to_string(),
+        "  Settings          username, late.fetch fields, country, timezone, notifications, layout toggles"
+            .to_string(),
+        "  Bio               multiline markdown bio".to_string(),
+        "  Themes            expanded theme browser".to_string(),
+        "  RSS               private RSS/Atom subscriptions".to_string(),
+        "  Account           link SSH keys across accounts, or delete your account".to_string(),
+        "  IRC access token  create, reset, or revoke the token used by IRC clients"
+            .to_string(),
+        "  Special           show-settings-on-connect toggle; unlocks after profile setup"
+            .to_string(),
+        "".to_string(),
         "What you can set".to_string(),
         "  username".to_string(),
-        "  theme".to_string(),
-        "  notifications, bell, cooldown".to_string(),
+        "  birthday as month/day".to_string(),
+        "  theme and background color".to_string(),
+        "  notifications, bell, cooldown, notification format".to_string(),
         "  multiline bio".to_string(),
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
-        "  favorite rooms (dashboard quick-switch strip)".to_string(),
+        "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
+        "  background color, room list, and the Activity boxes toggle".to_string(),
+        "  right sidebar mode (on/off/custom) for Home, Arcade, and Tables".to_string(),
+        "  private RSS/Atom subscriptions".to_string(),
+        "  IRC access token for external IRC clients".to_string(),
         "".to_string(),
         "How to open it".to_string(),
         "  on login, the settings modal opens automatically".to_string(),
         "  press Ctrl+O anywhere in the app".to_string(),
         "  or use /settings from chat".to_string(),
         "".to_string(),
+        "Modal controls".to_string(),
+        "  Tab / Shift+Tab switch settings tabs".to_string(),
+        "  j / k or arrows move rows".to_string(),
+        "  Left / Right cycle option rows".to_string(),
+        "  Enter / e edit text or open pickers".to_string(),
+        "  Space quick-cycles simple toggles".to_string(),
+        "  Pickers: type to filter, Enter pick, Esc cancel".to_string(),
+        "  Custom sidebar: Enter on Custom opens the three-page checklist".to_string(),
+        "  Account: Enter opens Link Accounts or Delete Account".to_string(),
+        "  ? opens this guide; Esc / q closes".to_string(),
+        "".to_string(),
+        "Account linking".to_string(),
+        "  Use Settings > Account > Link Accounts when two SSH keys created separate late.sh accounts.".to_string(),
+        "  Open Link Accounts on both accounts; one side generates a 10-minute link code.".to_string(),
+        "  Enter the other account's code to preview its username and created date.".to_string(),
+        "  Choose the main account to keep: Current or Other.".to_string(),
+        "  Type the main username exactly, then press Enter to link.".to_string(),
+        "  Both SSH keys will open the main account after linking.".to_string(),
+        "  The other account is abandoned; chips, messages, scores, streaks, settings, and other data are not merged.".to_string(),
+        "  Linking is unavailable while either account has an active ban.".to_string(),
+        "".to_string(),
+        "Account deletion".to_string(),
+        "  Settings > Account > Delete Account opens delete confirmation; type DELETE to confirm".to_string(),
+        "".to_string(),
+        "RSS tab".to_string(),
+        "  j / k or arrows move through RSS rows".to_string(),
+        "  Enter / a on the add row starts URL input".to_string(),
+        "  d / Delete removes the selected RSS source".to_string(),
+        "  r refreshes RSS".to_string(),
+        "  RSS/Atom URLs must be http(s) and are capped at 2000 chars".to_string(),
+        "".to_string(),
         "Why country matters".to_string(),
         "".to_string(),
-        "The saved ISO country code can later render a flag in chat and other user surfaces."
+        "The saved ISO country code belongs to profile/settings identity surfaces; equipped chat flags come from Hub Shop."
             .to_string(),
         "".to_string(),
         "Notifications".to_string(),
@@ -463,10 +1023,22 @@ fn settings_help_lines() -> Vec<String> {
         "Terminal notifications run through OSC 777 / OSC 9.".to_string(),
         "Best support today: kitty, Ghostty, rxvt-unicode, foot, wezterm, konsole, and iTerm2."
             .to_string(),
-        "tmux is not supported here, so notification escape sequences can get mangled or dropped."
+        "tmux strips notification escapes by default; see the Notifications tab for passthrough setup."
             .to_string(),
-        "Notifications can fire for DMs, mentions, and game events.".to_string(),
+        "Notifications can fire for DMs, mentions, friend joins, and game events.".to_string(),
         "Bell and cooldown decide how loud and how often they show up.".to_string(),
+        "".to_string(),
+        "Native CLI config file".to_string(),
+        "".to_string(),
+        "These in-app settings are separate from the native `late` CLI's own config.".to_string(),
+        "The CLI config is explicit and optional: nothing is ever created for you, and the CLI runs fine with no file at all.".to_string(),
+        "  Path              $XDG_CONFIG_HOME/late/config.toml, or ~/.config/late/config.toml".to_string(),
+        "  Override          run `late --config <path>` to point at a different file".to_string(),
+        "  Missing file      silently ignored; built-in defaults apply".to_string(),
+        "Precedence, lowest to highest: built-in defaults, then the config file, then LATE_* env vars, then CLI flags. A later layer wins.".to_string(),
+        "Flat TOML keys mirror the flags: ssh-target, ssh-port, ssh-user, ssh-mode, key, audio-base-url, api-base-url, audio-output-device, verbose.".to_string(),
+        "  Example           ssh-target = \"late.example\"".to_string(),
+        "  Note              sections like [foo] are rejected; it is a flat key = value file.".to_string(),
         "".to_string(),
         "@bot".to_string(),
         "".to_string(),
@@ -486,27 +1058,169 @@ fn settings_help_lines() -> Vec<String> {
     ]
 }
 
+fn voice_help_lines() -> Vec<String> {
+    [
+        "Voice rooms",
+        "",
+        "Voice is live talk attached to a room, backed by LiveKit. It is not a separate call screen: voice rides whatever room you are already in, so you keep chatting, playing, or browsing while connected.",
+        "",
+        "Where voice shows up",
+        "  A two-line voice strip sits at the top of any voice-enabled room: who is connected on top, controls below.",
+        "  DMs, private rooms, and game rooms have voice enabled by default.",
+        "  Public rooms stay voice-off until a staffer turns them on.",
+        "  When voice is off on the server or in this room, the strip says so and no one can join.",
+        "",
+        "Joining and controls",
+        "  Ctrl+V            join the room's voice, switch to it if you are in another, or leave when already in this one",
+        "  Ctrl+T            mute / unmute your microphone",
+        "  /voice            same as Ctrl+V from the composer",
+        "  /mute             same as Ctrl+T from the composer",
+        "  You always join muted; unmute with Ctrl+T when you want to talk.",
+        "  Deafen exists in the protocol but has no in-app shortcut yet.",
+        "  Artboard and Pinstar keep Ctrl+V / Ctrl+T for their own editing, so voice chords are ignored there.",
+        "",
+        "Reading the roster",
+        "  🟢 speaking       mic on and currently talking (name turns green)",
+        "  ⚪ listening      joined, mic on, silent",
+        "  🔇 muted          mic off",
+        "  🔕 deafened       not hearing the room",
+        "  Your own name is always amber so you can spot yourself.",
+        "",
+        "Top-right badge",
+        "  While you are connected to any voice room, a `mic <room> [status]` badge shows in the top chrome.",
+        "  It follows you across screens so you always know you are still live and where.",
+        "",
+        "Staying connected",
+        "  Entering a DM, private room, or game does not auto-join voice; joining is always an explicit Ctrl+V.",
+        "  Once joined you stay in voice across room, screen, and game navigation.",
+        "  You leave only when you press Ctrl+V to leave, switch to another voice room, disconnect the native CLI, go stale, or a moderator removes you.",
+        "",
+        "What you need to join",
+        "  Voice media runs in the native `late` CLI, so install it and run `late` (see the Pair tab).",
+        "  Supported for joining on Linux and Windows.",
+        "  Raw `ssh late.sh` sessions and macOS can see the roster and badge but cannot join or listen yet.",
+        "  If no capable CLI is paired, the strip prompts you to run the native late CLI.",
+        "",
+        "How it works under the hood",
+        "  LiveKit carries the actual audio; late.sh never relays voice media through SSH or the music stack.",
+        "  late.sh only mints a short-lived LiveKit token per join and tracks who is connected, muted, or speaking for the roster.",
+        "  The native CLI captures your mic and plays back the room over LiveKit, and reports its state back so the TUI roster stays in sync.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 fn bonsai_help_lines() -> Vec<String> {
     [
-        "Bonsai",
+        "Dynamic Bonsai",
         "",
-        "The bonsai is your slow-burn presence artifact. It grows while you keep showing up, and its state is persistent.",
+        "Dynamic Bonsai is the living tree. It is not a fixed ladder of pictures: it keeps a real branch graph, and every choice you make is remembered in how it grows next. Water it, steer the tips, cut your mistakes, and pinch foliage, and the silhouette becomes a record of how you tended it.",
+        "",
+        "Unlock it in the Hub Shop for 1000 chips. While it is equipped, w opens Dynamic Bonsai instead of classic Bonsai; clear the slot to switch back.",
         "",
         "Controls",
-        "  w                 water or replant",
+        "  w                 water, or replant when the tree has died",
+        "  tab / n           select the next live tip",
+        "  shift-tab         select the previous live tip",
+        "  wheel             scroll-select tips with the mouse",
+        "  ←↓↑→ / hjkl       steer the selected tip's future growth",
+        "  x                 cut the selected branch and everything above it",
+        "  p                 pinch the selected tip toward a leaf pad",
+        "  s                 split the selected tip on the next growth",
+        "  c                 copy the tree to clipboard",
+        "  ?                 open this guide",
+        "  q / Esc           close",
+        "",
+        "The two meters",
+        "  vigor             growth strength 0-100; high vigor grows wider, tidier waves",
+        "  stress            dry-neglect pressure 0-120; high stress narrows and wilds growth",
+        "  watering          +vigor, big -stress, and an immediate growth wave",
+        "  a dry day         +stress, -vigor, and messier side shoots",
+        "  status line       shows Day, vigor, stress, and mode at a glance",
+        "",
+        "Watering",
+        "  w waters once per UTC day: +18 vigor, -35 stress, and a fresh growth wave.",
+        "  It earns the same 200 chips as classic watering, once per day.",
+        "  Skip days and stress climbs while vigor falls.",
+        "",
+        "Selecting a tip",
+        "  tab / n and shift-tab cycle only the live tips: the branch ends that can still grow.",
+        "  The trunk is never selectable; structure branches are skipped until they become tips.",
+        "  Steering, pinching, and splitting all act on the selected tip.",
+        "",
+        "Steering (wiring)",
+        "  Arrows or hjkl lean the selected tip: h/← left, l/→ right, k/↑ reach up, j/↓ droop down.",
+        "  Wiring does not move the branch now. It biases where this tip grows next, and new growth keeps the lean.",
+        "  Press a direction again to bias harder. A downward wire makes a drooping, cascade look.",
+        "  Only live tips wire; pinched, leaf, and dead wood will not.",
+        "",
+        "Cutting",
+        "  x removes the selected branch and every branch above it, cleanly, with no scar.",
+        "  Cut where you want the shape to stop; growth resumes from the tips you keep.",
+        "  The trunk cannot be cut. Cutting costs a little vigor.",
+        "",
+        "Pinching into leaf pads",
+        "  p pinches the selected tip so it stops extending and stays compact.",
+        "  Pinch the same spot three times, each over a separate growth wave, to set a leaf pad of dense foliage.",
+        "  After a pinch, wait for the tip to read \"ready to pinch\" again before the next one counts.",
+        "  Leaf pads carry the most canopy weight, so pinched tips are how you build a full crown.",
+        "",
+        "Splitting",
+        "  s marks the selected tip to fork into two on the next growth wave.",
+        "  It only forks when both new tips have open space; otherwise the mark waits.",
+        "  Split-marked tips grow first in the wave. Splits build structure on purpose instead of waiting for random side shoots.",
+        "",
+        "How a growth wave works",
+        "  Growth comes in waves, not one tip at a time: split-marked tips first, then your selected tip, then a spread of other live tips.",
+        "  Watering grows the widest wave; high vigor widens it; stress narrows it.",
+        "  Healthy growth reaches up and stays tidy; dry, stressed growth throws messy sideways shoots.",
+        "  It also creeps a little on its own while you stay connected, as long as vigor is high enough.",
+        "  The graph caps at 96 branches total; once a tree reaches that size, growth quietly stops adding new ones, though you can still steer, pinch, cut, and split what's already there.",
+        "",
+        "When it dies",
+        "  Dynamic Bonsai only dies when stress maxes out and vigor hits zero at the same time, so it stays recoverable-but-ugly before then.",
+        "  Weak tips harden into grey deadwood.",
+        "  The first w after death replants a fresh seedling; water again the next day to feed it.",
+        "",
+        "Reading the tree",
+        "  amber wood        live branches and trunk",
+        "  green foliage     leaf pads and a healthy canopy",
+        "  bright tip        just pinched, still setting",
+        "  green tip         ready to pinch again",
+        "  grey and faint    deadwood, or a tree that has died",
+        "  dry leaves        the canopy browns out when stress is high",
+        "  The sidebar preview is a compact silhouette; denser foliage reads as * and #.",
+        "",
+        "The chat badge",
+        "  Your chat glyph is earned from the live tree: branch length plus leaf-pad weight, scaled by health.",
+        "  Ladder: · ⚘ 🌱 🌲 🌳 🌸 🌼.",
+        "  Neglect lowers the score, so a big tangled mess is not automatically prestigious. A dead tree shows no badge.",
+        "",
+        "────────────────────────────────────────",
+        "",
+        "Classic Bonsai and companions",
+        "",
+        "Classic Bonsai is the default tree until you equip Dynamic Bonsai. It is your slow-burn presence artifact: it grows while you keep showing up, and its state is persistent.",
+        "",
+        "Bonsai controls",
+        "  w                 open Bonsai Care when not composing",
+        "  w                 water or replant inside Bonsai Care",
         "  hjkl / arrows     move the pruning cursor",
         "  x                 cut the branch under the cursor",
         "  p                 prune hard: -1 stage, new shape",
         "  s                 copy the bonsai to clipboard",
         "  ?                 open this help section",
+        "  Esc / q           close Bonsai Care",
         "",
         "How growth works",
-        "  watering gives +10 growth",
+        "  watering gives +10 growth (+5 streak) and 200 chips once per UTC day",
         "  it also grows slowly while connected",
         "  after 7 dry days it dies",
-        "  missed daily wrong-branch cuts cost -10 growth",
+        "  missed daily branch cuts cost -10 growth once",
         "  cutting the wrong spot costs -10 growth immediately",
         "  cutting all wrong branches preserves the current shape",
+        "  daily care is water plus the listed overgrown branches",
         "",
         "Stages",
         "  0-99              Seed",
@@ -520,34 +1234,272 @@ fn bonsai_help_lines() -> Vec<String> {
         "Why it matters",
         "  it gives the app a calm personal loop outside chat and games",
         "  the tree becomes a little signature of how you inhabit late.sh over time",
+        "  the bonsai stage is one part of the chat username badge stack",
+        "",
+        "Pet Companion",
+        "  Unlock            Hub Shop companion bought with Late Chips",
+        "  c                 open pet care after unlocking it",
+        "  f                 feed (every 2 days)",
+        "  w                 water (daily)",
+        "  p                 play (daily; 3-day care streak unlocks happy)",
+        "  q / Esc           close",
+        "  play mode         hjkl / WASD / arrows move toy",
+        "  Space / Enter / p dash toy",
+        "  c                 stop play",
     ]
     .into_iter()
     .map(str::to_string)
     .collect()
 }
 
-const MUSIC_HELP_TEXT: &str = "\
-How music works on late.sh
+const MUSIC_PAIR_TEXT: &str = "\
+Music controls
 
-SSH is a terminal protocol - it carries text, not audio. To hear music you need a second audio channel that pairs with your SSH session.
+late.sh has three music sources:
 
-Option 1 (recommended): Install the CLI
+  Icecast    24/7 house radio with chill and classical streams.
+  YouTube    a shared queue everyone can submit links to.
+  Radio      direct Nightride guest stations.
 
-  curl -fsSL https://cli.late.sh/install.sh | bash
+Your paired client plays the selected source. Use v then 1..5 to select a stream or station inside the active source.
 
-Then run `late` instead of `ssh late.sh`. It launches SSH + local audio playback in one process - no browser needed. The CLI decodes the MP3 stream locally, plays through your system audio, and pairs with the TUI over WebSocket for visualizer + controls.
+Plain stream, no pairing:
+  vlc https://late.sh/stream
+  mpv https://late.sh/stream
 
-Don't trust the install script? Build from source:
+Direct stream playback is Icecast only. Pair the CLI or browser for source switching, mute/volume keys, visualizer sync, or the shared YouTube queue.
 
-  git clone https://github.com/mpiorowski/late-sh
-  cargo install --path late-cli
+Global keys (work anywhere)
+  ?                open this guide, including Pair and terminal-specific tabs
+  m                 mute paired client
+  + / -             volume up / down
 
-Option 2: Browser pairing
+Select stream or station
+  Icecast active: v then 1 / 2 selects chill / classical
+  Radio active:   v then 1..5 selects Chillsynth / Nightride / Datawave / Spacesynth / Ambient
 
-On the Dashboard, press `P` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
+Swap which source you hear
+  v then x          cycle your paired client through Icecast → YouTube → Radio. Your choice is saved per-user, so a refresh keeps it.
 
-Both options give you:
-  m = mute | +/- = volume | visualizer in the sidebar
-  Vote for genres on the Dashboard: L C A
+Music Booth (v then v)
 
-The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";
+  Opens a modal with a URL submit row on top and Queue/History below.
+
+  Tab               switch focus between submit, queue, and history
+  [ or ]            switch Queue / History
+  Esc               close
+
+  Submit focus:
+    type            paste or type a YouTube URL
+    Enter           submit
+    ↓ or Ctrl+J     drop into the queue
+    Backspace       delete char
+
+  Queue focus:
+    ↑ / ↓ or Ctrl+K/J
+                     move selection
+    PageUp/PageDown jump 8 rows
+    + or =          upvote selected item
+    - or _          downvote selected item
+    0               clear your vote
+    s               skip-vote the currently playing track
+    d               delete your own queued item
+    ↑ at the top    back to the submit row
+
+  History focus:
+    ↑ / ↓ or Ctrl+K/J
+                     move selection
+    PageUp/PageDown jump 8 rows
+    + or =          upvote historical track
+    - or _          downvote historical track
+    0               clear your history vote
+    Enter           queue selected track fresh
+    d               delete selected track (staff)
+
+  The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
+  History keeps up to 50 unique played tracks, ranked by separate history votes. Requeued history tracks start with 0 live queue votes.
+
+Skip the current track
+  v then s          add your vote to skip. The track skips once enough active YouTube-source users agree.
+  s                 same thing, while you're in the booth queue.
+
+Track length
+
+  Every track is capped at 1 hour. Shorter videos play to their real end; anything longer (long mixes, live streams, the YouTube fallback) gets cut off at the 1h mark and the queue moves on.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_purpose_guide_keeps_artboard_out_of_topic_tabs() {
+        assert!(
+            !HelpTopic::ALL
+                .iter()
+                .any(|topic| topic.title() == "Artboard")
+        );
+        assert!(!bot_app_context().contains("## Artboard\n"));
+    }
+
+    #[test]
+    fn all_purpose_guide_splits_game_topics() {
+        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Arcade"));
+        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Tables"));
+        assert!(
+            HelpTopic::ALL
+                .iter()
+                .any(|topic| topic.title() == "Lateania")
+        );
+        assert!(!HelpTopic::ALL.iter().any(|topic| topic.title() == "Games"));
+        assert!(bot_app_context().contains("## Arcade\n"));
+        assert!(bot_app_context().contains("## Tables\n"));
+        assert!(bot_app_context().contains("## Lateania\n"));
+        assert!(!bot_app_context().contains("## Games\n"));
+    }
+
+    #[test]
+    fn all_purpose_guide_folds_music_into_pair_topic() {
+        assert!(!HelpTopic::ALL.iter().any(|topic| topic.title() == "Music"));
+        assert!(!bot_app_context().contains("## Music\n"));
+        let pair = lines_for(HelpTopic::Pair, false, "").join("\n");
+        assert!(pair.contains("Music controls"));
+        assert!(pair.contains("Music Booth"));
+        assert!(pair.contains("active YouTube-source users"));
+    }
+
+    #[test]
+    fn bot_context_includes_hub_guide_facts() {
+        let context = bot_app_context();
+        assert!(context.contains("## Economy\n"));
+        assert!(context.contains("Monthly Top Chips counts net chip delta."));
+        assert!(context.contains("Lateris, 2048, and Snake record run scores."));
+        assert!(context.contains("Blackjack form: name, pace, stake."));
+        assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
+    }
+
+    #[test]
+    fn bot_context_includes_terminal_faq_and_image_facts() {
+        let context = bot_app_context();
+        assert!(context.contains("## Copy\n"));
+        assert!(context.contains("## Images\n"));
+        assert!(context.contains("## CLI YouTube\n"));
+        assert!(context.contains("Why copy sometimes silently fails"));
+        assert!(context.contains("CLI YouTube playback"));
+        assert!(context.contains("/paste-image"));
+        assert!(context.contains("This is CLI-only"));
+        assert!(context.contains("The original-quality image is the uploaded/copied URL."));
+        assert!(context.contains("Kitty protocol: kitty, Ghostty, rio, warp, Konsole."));
+        assert!(context.contains("iTerm2 inline images: iTerm2, WezTerm, mintty, hterm."));
+    }
+
+    #[test]
+    fn bot_context_includes_account_linking_flow() {
+        let context = bot_app_context();
+        assert!(context.contains("## Settings\n"));
+        assert!(context.contains("Use Settings > Account > Link Accounts"));
+        assert!(context.contains("one side generates a 10-minute link code"));
+        assert!(context.contains("Choose the main account to keep: Current or Other."));
+        assert!(context.contains("Both SSH keys will open the main account after linking."));
+        assert!(
+            context.contains(
+                "chips, messages, scores, streaks, settings, and other data are not merged"
+            )
+        );
+    }
+
+    #[test]
+    fn bot_context_includes_irc_access_flow() {
+        let context = bot_app_context();
+        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "IRC"));
+        assert!(context.contains("## IRC\n"));
+        assert!(context.contains("Settings > Account > IRC access token"));
+        assert!(context.contains("server password / PASS field"));
+        assert!(context.contains("localhost:6667 with TLS off when running make start"));
+        assert!(context.contains("irc.late.sh port 6697 with TLS/SSL enabled"));
+        assert!(context.contains("/server add late irc.late.sh/6697"));
+        assert!(context.contains("IRC is raw TCP, so irc.late.sh must be DNS-only"));
+        assert!(context.contains("Game-room chat is not exposed as IRC channels."));
+        assert!(context.contains("Resetting a token shows the new value once"));
+    }
+
+    #[test]
+    fn chat_guide_lists_user_facing_slash_commands() {
+        let lines = chat_help_lines(false).join("\n");
+        for expected in [
+            "/brb [message]",
+            "/coffee",
+            "/friend [@user]",
+            "/friends",
+            "/icons",
+            "/petname [name]",
+            "/poll",
+            "/profile [@user]",
+            "/tea",
+            "/upload <url>",
+        ] {
+            assert!(lines.contains(expected), "missing {expected}");
+        }
+        assert!(!lines.contains("/music"));
+    }
+
+    #[test]
+    fn music_guide_defers_pairing_setup_to_pair_tab() {
+        assert!(MUSIC_PAIR_TEXT.contains("three music sources"));
+        assert!(MUSIC_PAIR_TEXT.contains("active YouTube-source users"));
+        assert!(!MUSIC_PAIR_TEXT.contains("two audio surfaces"));
+        assert!(!MUSIC_PAIR_TEXT.contains("paired users agree"));
+        assert!(!MUSIC_PAIR_TEXT.contains(SHELL_INSTALL_COMMAND));
+        assert!(!MUSIC_PAIR_TEXT.contains(WINDOWS_INSTALL_COMMAND));
+        assert!(!MUSIC_PAIR_TEXT.contains(NIX_COMMAND));
+        assert!(!MUSIC_PAIR_TEXT.contains(SOURCE_URL));
+    }
+
+    #[test]
+    fn chat_guide_collapses_compose_section_when_keep_composer_focused() {
+        let off = chat_help_lines(false).join("\n");
+        assert!(off.contains("Enter              send and exit"));
+        assert!(off.contains("Alt+S              send and keep open"));
+        assert!(!off.contains("<<COMPOSE_SEND_LINES>>"));
+
+        let on = chat_help_lines(true).join("\n");
+        assert!(on.contains("Enter              send and keep open"));
+        assert!(!on.contains("Alt+S"));
+        assert!(!on.contains("send and exit"));
+        assert!(!on.contains("<<COMPOSE_SEND_LINES>>"));
+    }
+
+    #[test]
+    fn bot_context_does_not_leak_restricted_commands() {
+        let context = bot_app_context();
+        for forbidden in [
+            "/audio",
+            "/create-room",
+            "/delete-room",
+            "/fill-room",
+            "/mod",
+            "staff",
+            "admin",
+            "moderation",
+            "unskippable",
+        ] {
+            assert!(
+                !context.to_lowercase().contains(forbidden),
+                "bot context leaked {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn global_guide_points_to_hub_for_game_details() {
+        let arcade = arcade_help_lines().join("\n");
+        let tables = tables_help_lines().join("\n");
+        let lateania = lateania_help_lines().join("\n");
+        assert!(arcade.contains("Economy"));
+        assert!(tables.contains("Economy tab"));
+        assert!(lateania.contains("Lateania"));
+        // The badge glossary names games to explain each badge code; game
+        // details still live in the hub, not here.
+        assert!(!tables.contains("Sudoku"));
+        assert!(!lateania.contains("Clock presets"));
+    }
+}

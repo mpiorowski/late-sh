@@ -4,42 +4,57 @@ use std::{
 };
 
 use late_core::MutexRecover;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::rooms::{
-    backend::{ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager},
-    svc::{GameKind, RoomListItem},
-    tictactoe::{
-        create_modal::TicTacToeCreateModal,
-        state::{State, Winner},
-        svc::TicTacToeService,
+use crate::app::{
+    activity::publisher::ActivityPublisher,
+    rooms::{
+        backend::{
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
+            RoomGameManager,
+        },
+        svc::{GameKind, RoomListItem, RoomsService},
+        tictactoe::{
+            create_modal::TicTacToeCreateModal,
+            state::{State, Winner},
+            svc::TicTacToeService,
+        },
     },
 };
 
 #[derive(Clone)]
 pub struct TicTacToeTableManager {
+    activity: ActivityPublisher,
+    rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, TicTacToeService>>>,
+    event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl TicTacToeTableManager {
-    pub fn new() -> Self {
+    pub fn new(activity: ActivityPublisher, rooms_service: RoomsService) -> Self {
+        let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
+            activity,
+            rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
+            event_tx,
         }
     }
 
-    pub fn get_or_create(&self, room_id: Uuid) -> TicTacToeService {
+    pub fn get_or_create(&self, room: &RoomListItem) -> TicTacToeService {
         let mut tables = self.tables.lock_recover();
         tables
-            .entry(room_id)
-            .or_insert_with(|| TicTacToeService::new(room_id))
+            .entry(room.id)
+            .or_insert_with(|| {
+                TicTacToeService::new_with_events(
+                    room.id,
+                    self.activity.clone(),
+                    self.event_tx.clone(),
+                    self.rooms_service.clone(),
+                )
+            })
             .clone()
-    }
-}
-
-impl Default for TicTacToeTableManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -82,13 +97,42 @@ impl RoomGameManager for TicTacToeTableManager {
         Some(DirectoryHints { occupied, total: 2 })
     }
 
+    fn is_user_seated(&self, room_id: Uuid, user_id: Uuid) -> bool {
+        self.tables
+            .lock_recover()
+            .get(&room_id)
+            .is_some_and(|svc| svc.current_snapshot().seats.contains(&Some(user_id)))
+    }
+
+    fn is_awaiting_user_action(&self, room: &RoomListItem, user_id: Uuid) -> bool {
+        self.tables.lock_recover().get(&room.id).is_some_and(|svc| {
+            let snapshot = svc.current_snapshot();
+            if snapshot.winner.is_some() || snapshot.seats.iter().any(Option::is_none) {
+                return false;
+            }
+            let turn_index = match snapshot.turn {
+                crate::app::rooms::tictactoe::state::Mark::X => 0,
+                crate::app::rooms::tictactoe::state::Mark::O => 1,
+            };
+            snapshot.seats[turn_index] == Some(user_id)
+        })
+    }
+
+    fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
+        self.event_tx.subscribe()
+    }
+
+    fn seat_join_ascii(&self) -> &'static [&'static str] {
+        &[" X │ · │ · ", " · │ · │ · ", " · │ · │ · "]
+    }
+
     fn enter(
         &self,
         room: &RoomListItem,
         user_id: Uuid,
         _chip_balance: i64,
     ) -> Box<dyn ActiveRoomBackend> {
-        Box::new(State::new(self.get_or_create(room.id), user_id))
+        Box::new(State::new(self.get_or_create(room), user_id))
     }
 }
 
@@ -99,6 +143,13 @@ impl ActiveRoomBackend for State {
 
     fn tick(&mut self) {
         State::tick(self);
+    }
+
+    fn awaiting_my_action(&self) -> bool {
+        let snapshot = self.snapshot();
+        snapshot.winner.is_none()
+            && snapshot.seats.iter().all(Option::is_some)
+            && self.user_mark() == Some(snapshot.turn)
     }
 
     fn touch_activity(&self) {

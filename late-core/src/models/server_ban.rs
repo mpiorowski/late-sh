@@ -109,6 +109,14 @@ impl ServerBan {
         client: &Client,
         limit: i64,
     ) -> Result<Vec<ServerBanListItem>> {
+        Self::active_with_usernames_page(client, limit, 0).await
+    }
+
+    pub async fn active_with_usernames_page(
+        client: &Client,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ServerBanListItem>> {
         let rows = client
             .query(
                 "SELECT sb.*, target.username AS target_username, actor.username AS actor_username
@@ -117,8 +125,8 @@ impl ServerBan {
                  LEFT JOIN users actor ON actor.id = sb.actor_user_id
                  WHERE sb.expires_at IS NULL OR sb.expires_at > current_timestamp
                  ORDER BY sb.created DESC
-                 LIMIT $1",
-                &[&limit],
+                 LIMIT $1 OFFSET $2",
+                &[&limit, &offset],
             )
             .await?;
         Ok(rows

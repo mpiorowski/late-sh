@@ -3,10 +3,24 @@ name: deploy_infra
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy, for example v0.27.11-infra"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
 
 concurrency:
-  group: ${{ endsWith(github.ref, '-infra') && format('terraform-deploy-{0}', github.event.release.prerelease && 'staging' || 'production') || format('{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: false
+  group: ${{ ((github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-infra')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-infra'))) && format('deploy-infra-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -14,12 +28,14 @@ permissions:
 jobs:
   get_images:
     name: get_current_image_tags
-    if: endsWith(github.ref, '-infra')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-infra')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-infra')) }}
     runs-on: ubuntu-latest
-    environment: ${{ github.event.release.prerelease == true && 'staging' || 'production' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease == true && 'staging' || 'production') }}
     outputs:
       ssh_image_tag: ${{ steps.ssh_image.outputs.image_tag }}
       web_image_tag: ${{ steps.web_image.outputs.image_tag }}
+      nethack_image_tag: ${{ steps.nethack_image.outputs.image_tag }}
+      dopewars_image_tag: ${{ steps.dopewars_image.outputs.image_tag }}
     steps:
       - name: setup_kubectl
         uses: azure/setup-kubectl@v5
@@ -41,9 +57,21 @@ jobs:
           tag=$(kubectl get deployment service-web -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
 
+      - name: get_nethack_image_tag
+        id: nethack_image
+        run: |
+          tag=$(kubectl get deployment late-nethack -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_dopewars_image_tag
+        id: dopewars_image
+        run: |
+          tag=$(kubectl get deployment late-dopewars -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
   terraform:
     name: terraform_apply
-    if: endsWith(github.ref, '-infra')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-infra')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-infra')) }}
     needs: get_images
     uses: ./.github/workflows/terraform.yml
     permissions:
@@ -52,14 +80,17 @@ jobs:
     with:
       ssh_image_tag: ${{ needs.get_images.outputs.ssh_image_tag }}
       web_image_tag: ${{ needs.get_images.outputs.web_image_tag }}
-      environment: ${{ github.event.release.prerelease == true && 'staging' || 'production' }}
+      nethack_image_tag: ${{ needs.get_images.outputs.nethack_image_tag }}
+      dopewars_image_tag: ${{ needs.get_images.outputs.dopewars_image_tag }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease == true && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
   sync_music:
     name: sync_music_from_r2
-    if: endsWith(github.ref, '-infra')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-infra')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-infra')) }}
     needs: terraform
     runs-on: ubuntu-latest
-    environment: ${{ github.event.release.prerelease == true && 'staging' || 'production' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease == true && 'staging' || 'production') }}
     steps:
       - name: setup_kubectl
         uses: azure/setup-kubectl@v5

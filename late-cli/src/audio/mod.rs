@@ -3,16 +3,17 @@ use cpal::traits::StreamTrait;
 use std::{
     env,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicU64},
         mpsc,
     },
+    time::Duration,
 };
 use tokio::sync::broadcast;
 
 mod decoder;
 
-use decoder::{SymphoniaStreamDecoder, probe_stream_spec, trim_stream_suffix};
+use decoder::{SymphoniaStreamDecoder, probe_stream_spec};
 
 #[derive(Debug, Clone)]
 pub(super) struct VizSample {
@@ -28,6 +29,21 @@ pub(super) struct AudioRuntime {
     pub(super) stop: Arc<AtomicBool>,
     pub(super) muted: Arc<AtomicBool>,
     pub(super) volume_percent: Arc<AtomicU8>,
+    pub(super) icecast_output_available: Arc<AtomicBool>,
+    /// True when the user's audio_source preference is a direct stream the
+    /// CLI can decode locally (Icecast or Radio). False when the user picked
+    /// YouTube, so we silence the output without touching the user-controlled
+    /// `muted` flag. Driven by `SetPlaybackSource` over the pair WS.
+    pub(super) source_is_icecast: Arc<AtomicBool>,
+    /// The user's intent half of `source_is_icecast`: true while the
+    /// selected source is a native stream. Written only by the pair-WS
+    /// handler; the decoder thread reads it so a switch/reconnect finishing
+    /// after the user moved to YouTube cannot re-enable output.
+    pub(super) native_source_selected: Arc<AtomicBool>,
+    pub(super) stream_url: Arc<Mutex<String>>,
+    pub(super) stream_generation: Arc<AtomicU64>,
+    pub(super) stream_flushed_generation: Arc<AtomicU64>,
+    pub(super) icecast_stream_url: String,
     pub(super) enabled: bool,
 }
 
@@ -46,6 +62,9 @@ mod output;
 use output::{PlaybackQueue, PlayedRing, build_output_stream, output_sample_rate_for};
 use ringbuf::{HeapRb, traits::Split};
 
+const AUDIO_STARTUP_RETRIES: usize = 3;
+const AUDIO_STARTUP_RETRY_DELAY: Duration = Duration::from_millis(750);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AudioBackendProfile {
     Default,
@@ -53,7 +72,10 @@ pub(super) enum AudioBackendProfile {
 }
 
 impl AudioRuntime {
-    pub(super) async fn start(audio_base_url: String) -> Result<Self> {
+    pub(super) async fn start(
+        audio_base_url: String,
+        audio_output_device: Option<String>,
+    ) -> Result<Self> {
         if local_audio_disabled_on_this_platform() {
             return Ok(Self::disabled());
         }
@@ -64,35 +86,63 @@ impl AudioRuntime {
             AudioBackendProfile::Default
         };
 
-        match Self::start_enabled(audio_base_url, profile).await {
+        match Self::start_enabled(audio_base_url, audio_output_device, profile).await {
             Ok(runtime) => Ok(runtime),
-            Err(err) if profile == AudioBackendProfile::Wsl => {
+            Err(err) => {
                 let hint = audio_startup_hint();
-                eprintln!(
-                    "late: local WSL audio could not start; continuing without CLI audio.\n\
-                     late: use browser pairing or the Windows-native late.exe for audio.\n\
-                     late: {err:#}\n\n{hint}"
-                );
-                tracing::warn!(error = ?err, "WSL audio startup failed; continuing without local audio");
+                if profile == AudioBackendProfile::Wsl {
+                    eprintln!(
+                        "late: local WSL audio could not start; continuing without CLI audio.\n\
+                         late: use browser pairing or the Windows-native late.exe for audio.\n\
+                         late: {err:#}\n\n{hint}"
+                    );
+                } else {
+                    eprintln!(
+                        "late: local audio could not start; continuing without CLI audio.\n\
+                         late: use browser pairing for audio.\n\
+                         late: {err:#}\n\n{hint}"
+                    );
+                }
+                tracing::warn!(error = ?err, "audio startup failed; continuing without local audio");
                 Ok(Self::disabled())
             }
-            Err(err) => Err(err),
         }
     }
 
-    async fn start_enabled(audio_base_url: String, profile: AudioBackendProfile) -> Result<Self> {
+    async fn start_enabled(
+        audio_base_url: String,
+        audio_output_device: Option<String>,
+        profile: AudioBackendProfile,
+    ) -> Result<Self> {
         let probe_url = audio_base_url.clone();
-        let source_spec = tokio::task::spawn_blocking(move || probe_stream_spec(&probe_url))
-            .await
-            .context("audio stream probe task failed")??;
-        let output_sample_rate = output_sample_rate_for(source_spec)?;
+        let source_spec = tokio::task::spawn_blocking(move || {
+            probe_stream_spec_with_retries(&probe_url, AUDIO_STARTUP_RETRIES)
+        })
+        .await
+        .context("audio stream probe task failed")??;
+        let output_sample_rate =
+            output_sample_rate_for(source_spec, audio_output_device.as_deref())?;
         let queue_capacity = output_sample_rate as usize * source_spec.channels * 2;
         let (queue_tx, queue_rx) = HeapRb::<f32>::new(queue_capacity).split();
         let (played_tx, played_rx) = HeapRb::<f32>::new(4096).split();
         let played_samples = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
-        let muted = Arc::new(AtomicBool::new(false));
+        // Boot silent. The cpal output stream is started before the pair-WS
+        // has had a chance to deliver the user's intended initial mute
+        // state, so playing samples right away would bleed audio for the
+        // round-trip duration. The server's first reply to client_state
+        // unmutes us if the user's preference is "play on connect".
+        let muted = Arc::new(AtomicBool::new(true));
         let volume_percent = Arc::new(AtomicU8::new(30));
+        let icecast_output_available = Arc::new(AtomicBool::new(true));
+        // Default to Icecast (play). The server's pair-WS connect always
+        // sends SetPlaybackSource right after register, which flips this if
+        // the user's persisted preference is Youtube.
+        let source_is_icecast = Arc::new(AtomicBool::new(true));
+        let native_source_selected = Arc::new(AtomicBool::new(true));
+        let stream_url = Arc::new(Mutex::new(audio_base_url.clone()));
+        let stream_generation = Arc::new(AtomicU64::new(0));
+        let stream_flushed_generation = Arc::new(AtomicU64::new(0));
         let (analyzer_tx, _) = broadcast::channel(32);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
@@ -103,12 +153,21 @@ impl AudioRuntime {
             Arc::clone(&played_samples),
             Arc::clone(&muted),
             Arc::clone(&volume_percent),
+            Arc::clone(&icecast_output_available),
+            Arc::clone(&source_is_icecast),
+            Arc::clone(&stream_generation),
+            Arc::clone(&stream_flushed_generation),
+            audio_output_device.as_deref(),
             profile,
         )?;
         let output_sample_rate = stream.sample_rate;
         let stream = stream.stream;
         spawn_decoder_thread(
-            audio_base_url,
+            Arc::clone(&stream_url),
+            Arc::clone(&stream_generation),
+            Arc::clone(&stream_flushed_generation),
+            Arc::clone(&source_is_icecast),
+            Arc::clone(&native_source_selected),
             queue_tx,
             source_spec,
             output_sample_rate,
@@ -137,6 +196,13 @@ impl AudioRuntime {
             stop,
             muted,
             volume_percent,
+            icecast_output_available,
+            source_is_icecast,
+            native_source_selected,
+            stream_url,
+            stream_generation,
+            stream_flushed_generation,
+            icecast_stream_url: audio_base_url,
             enabled: true,
         })
     }
@@ -151,6 +217,13 @@ impl AudioRuntime {
             stop: Arc::new(AtomicBool::new(false)),
             muted: Arc::new(AtomicBool::new(false)),
             volume_percent: Arc::new(AtomicU8::new(0)),
+            icecast_output_available: Arc::new(AtomicBool::new(false)),
+            source_is_icecast: Arc::new(AtomicBool::new(true)),
+            native_source_selected: Arc::new(AtomicBool::new(true)),
+            stream_url: Arc::new(Mutex::new(String::new())),
+            stream_generation: Arc::new(AtomicU64::new(0)),
+            stream_flushed_generation: Arc::new(AtomicU64::new(0)),
+            icecast_stream_url: String::new(),
             enabled: false,
         }
     }
@@ -163,6 +236,26 @@ fn prebuffer_samples(profile: AudioBackendProfile, sample_rate: u32, channels: u
         // short half-second runway there without increasing native-platform
         // latency.
         AudioBackendProfile::Wsl => (sample_rate as usize * channels) / 2,
+    }
+}
+
+fn probe_stream_spec_with_retries(audio_base_url: &str, max_retries: usize) -> Result<AudioSpec> {
+    let mut attempt = 0;
+    loop {
+        match probe_stream_spec(audio_base_url) {
+            Ok(spec) => return Ok(spec),
+            Err(err) if attempt < max_retries => {
+                attempt += 1;
+                tracing::warn!(
+                    error = ?err,
+                    attempt,
+                    max_retries,
+                    "audio stream probe failed during startup; retrying"
+                );
+                std::thread::sleep(AUDIO_STARTUP_RETRY_DELAY);
+            }
+            Err(err) => return Err(err),
+        }
     }
 }
 
@@ -261,5 +354,10 @@ mod tests {
             0
         );
         assert!(!runtime.muted.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(
+            !runtime
+                .icecast_output_available
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
     }
 }

@@ -42,6 +42,16 @@ variable "WEB_IMAGE_TAG" {
   type        = string
 }
 
+variable "NETHACK_IMAGE_TAG" {
+  description = "Docker image for late-nethack, the NetHack door host (e.g., ghcr.io/org/late-nethack:sha-abc123)."
+  type        = string
+}
+
+variable "DOPEWARS_IMAGE_TAG" {
+  description = "Docker image for late-dopewars, the dopewars door host (e.g., ghcr.io/org/late-dopewars:sha-abc123)."
+  type        = string
+}
+
 # =============================================================================
 # SSH Host Key
 # =============================================================================
@@ -140,7 +150,6 @@ variable "DB_POOL_SIZE" {
   type        = string
 }
 
-# =============================================================================
 # Bastion (late-bastion)
 # =============================================================================
 
@@ -210,6 +219,50 @@ variable "BASTION_TUNNEL_TRUSTED_CIDRS" {
 }
 
 # =============================================================================
+# Door Games
+# =============================================================================
+
+variable "REBELS_ENABLED" {
+  description = "Enable the Rebels in the Sky SSH door game."
+  type        = string
+  default     = ""
+}
+
+variable "REBELS_HOST" {
+  description = "Rebels in the Sky SSH server hostname."
+  type        = string
+  default     = ""
+}
+
+variable "REBELS_PORT" {
+  description = "Rebels in the Sky SSH server port."
+  type        = string
+  default     = ""
+}
+
+variable "NETHACK_ENABLED" {
+  description = "Enable the NetHack SSH door game (real upstream binary on a PTY). Empty defaults to on; the nethack-save PVC is provisioned regardless. See infra/nethack.tf."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.NETHACK_ENABLED)))
+    error_message = "NETHACK_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
+variable "DOPEWARS_ENABLED" {
+  description = "Enable the dopewars door game CLIENT (service-ssh reaches the late-dopewars host over SSH; the host pod is always deployed). Empty defaults to on."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DOPEWARS_ENABLED)))
+    error_message = "DOPEWARS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
+# =============================================================================
 # AI (Gemini)
 # =============================================================================
 
@@ -230,15 +283,142 @@ variable "AI_ENABLED" {
 }
 
 # =============================================================================
-# Vote
+# YouTube Data API
 # =============================================================================
 
-variable "VOTE_SWITCH_INTERVAL_SECS" {
-  description = "Vote round duration in seconds."
+variable "YOUTUBE_API_KEY" {
+  description = "YouTube Data API key for queue submit validation."
   type        = string
+  sensitive   = true
 }
 
 # =============================================================================
+# Voice / LiveKit
+# =============================================================================
+
+variable "VOICE_ENABLED" {
+  description = "Enable late voice rooms in late-ssh."
+  type        = string
+  default     = ""
+}
+
+variable "VOICE_ROOM" {
+  description = "Default LiveKit room used by the late voice room MVP."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_SUBDOMAIN" {
+  description = "Subdomain used for the public LiveKit endpoint under DOMAIN."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_IMAGE" {
+  description = "LiveKit server image."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_LOG_LEVEL" {
+  description = "LiveKit server log level."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_API_KEY" {
+  description = "LiveKit API key used by late-ssh for token minting."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_RTC_TCP_PORT" {
+  description = "LiveKit ICE/TCP fallback port exposed directly on the node."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_RTC_UDP_PORT" {
+  description = "LiveKit ICE/UDP mux port exposed directly on the node."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_RTC_USE_EXTERNAL_IP" {
+  description = "Let LiveKit discover and advertise the node public IP for RTC candidates."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_TURN_ENABLED" {
+  description = "Enable LiveKit's embedded TURN/STUN service."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_TURN_UDP_PORT" {
+  description = "LiveKit embedded TURN/STUN UDP port exposed directly on the node."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_TURN_TLS_PORT" {
+  description = "LiveKit embedded TURN/TLS port exposed directly on the node."
+  type        = string
+  default     = ""
+}
+
+# =============================================================================
+# IRC
+# =============================================================================
+
+variable "IRC_ENABLED" {
+  description = "Enable the embedded IRC listener in late-ssh. Production should use TLS."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.IRC_ENABLED)))
+    error_message = "IRC_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
+variable "IRC_HOST" {
+  description = "Public IRC hostname used for the TLS certificate."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_PORT" {
+  description = "Public and container IRC TLS port."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_MAX_CONNS_GLOBAL" {
+  description = "Max total concurrent IRC connections."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_MAX_CONNS_PER_USER" {
+  description = "Max concurrent IRC connections per late.sh user."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_MAX_AUTH_FAILURES_PER_IP" {
+  description = "Max failed IRC auth attempts per IP in the auth failure window."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_AUTH_FAILURE_WINDOW_SECS" {
+  description = "IRC auth failure rate-limit window in seconds."
+  type        = string
+  default     = ""
+}
+
 # S3-Compatible Storage (for DB backups)
 # =============================================================================
 
@@ -262,4 +442,20 @@ variable "S3_ENDPOINT" {
 variable "DB_BACKUPS_BUCKET" {
   description = "S3 bucket name for CloudNativePG backups."
   type        = string
+}
+
+variable "FILES_BUCKET" {
+  description = "S3/R2 bucket name for public uploaded files."
+  type        = string
+}
+
+variable "FILES_PUBLIC_BASE_URL" {
+  description = "Public base URL for uploaded files."
+  type        = string
+}
+
+variable "FILES_S3_REGION" {
+  description = "S3/R2 signing region for uploaded files. Cloudflare R2 uses auto."
+  type        = string
+  default     = "auto"
 }

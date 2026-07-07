@@ -1,0 +1,27 @@
+[package]
+name = "irc-proto"
+version = "1.1.0"
+authors = ["Ariel Weiss <aweiss@hey.com>"]
+edition = "2018"
+rust-version = "1.60"
+description = "The IRC protocol distilled."
+documentation = "https://docs.rs/irc-proto/"
+repository = "https://github.com/aatxe/irc"
+license = "MPL-2.0"
+keywords = ["irc", "protocol", "tokio"]
+categories = ["network-programming"]
+
+[badges]
+travis-ci = { repository = "aatxe/irc" }
+
+[features]
+default = ["tokio"]
+tokio = ["bytes", "dep:tokio", "tokio-util"]
+
+[dependencies]
+encoding = { version = "0.2.33", optional = true }
+thiserror = "1.0.40"
+
+bytes = { version = "1.4.0", optional = true }
+tokio = { version = "1.27.0", optional = true }
+tokio-util = { version = "0.7.7", features = ["codec"], optional = true }

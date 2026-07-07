@@ -70,9 +70,21 @@ impl ChatRoomMember {
         let count = client
             .execute(
                 "INSERT INTO chat_room_members (room_id, user_id)
-                 SELECT $1, id
-                 FROM users
-                 WHERE fingerprint = $2
+                 SELECT $1, resolved.user_id
+                 FROM (
+                     SELECT k.user_id
+                     FROM user_ssh_keys k
+                     WHERE k.fingerprint = $2
+                     UNION
+                     SELECT u.id
+                     FROM users u
+                     WHERE u.fingerprint = $2
+                       AND NOT EXISTS (
+                           SELECT 1
+                           FROM user_ssh_keys k
+                           WHERE k.fingerprint = $2
+                       )
+                 ) resolved
                  ON CONFLICT (room_id, user_id) DO NOTHING",
                 &[&room_id, &fingerprint],
             )
@@ -114,6 +126,39 @@ impl ChatRoomMember {
         Ok(rows.into_iter().map(|r| r.get("user_id")).collect())
     }
 
+    pub async fn list_memberships_for_users_in_rooms(
+        client: &Client,
+        user_ids: &[Uuid],
+        room_ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, Uuid)>> {
+        if user_ids.is_empty() || room_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = client
+            .query(
+                "SELECT user_id, room_id
+                 FROM chat_room_members
+                 WHERE user_id = ANY($1) AND room_id = ANY($2)
+                 ORDER BY user_id, room_id",
+                &[&user_ids, &room_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("user_id"), row.get("room_id")))
+            .collect())
+    }
+
+    pub async fn count_for_room(client: &Client, room_id: Uuid) -> Result<i64> {
+        let row = client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM chat_room_members WHERE room_id = $1",
+                &[&room_id],
+            )
+            .await?;
+        Ok(row.get(0))
+    }
+
     pub async fn leave(client: &impl GenericClient, room_id: Uuid, user_id: Uuid) -> Result<u64> {
         let count = client
             .execute(
@@ -127,8 +172,14 @@ impl ChatRoomMember {
     pub async fn auto_join_public_rooms(client: &Client, user_id: Uuid) -> Result<u64> {
         let count = client
             .execute(
-                "INSERT INTO chat_room_members (room_id, user_id)
-                 SELECT id, $1
+                // Auto-joined rooms start "read" so new users aren't flooded
+                // with unread badges - EXCEPT #announcements, which is joined
+                // with a NULL cursor so the login splash surfaces the recent
+                // announcements the user has never seen.
+                "INSERT INTO chat_room_members (room_id, user_id, last_read_at)
+                 SELECT id, $1,
+                        CASE WHEN slug = 'announcements' THEN NULL
+                             ELSE current_timestamp END
                  FROM chat_rooms
                  WHERE visibility = 'public' AND auto_join = true
                    AND NOT EXISTS (
@@ -151,14 +202,16 @@ impl ChatRoomMember {
     ) -> Result<HashMap<Uuid, i64>> {
         let rows = client
             .query(
-                "SELECT m.room_id, COUNT(msg.id)::bigint AS unread_count
+                "SELECT m.room_id, COALESCE(unread.unread_count, 0)::bigint AS unread_count
                  FROM chat_room_members m
-                 LEFT JOIN chat_messages msg
-                   ON msg.room_id = m.room_id
-                  AND msg.user_id <> m.user_id
-                  AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
-                 WHERE m.user_id = $1
-                 GROUP BY m.room_id",
+                 LEFT JOIN LATERAL (
+                    SELECT COUNT(msg.id)::bigint AS unread_count
+                    FROM chat_messages msg
+                    WHERE msg.room_id = m.room_id
+                      AND msg.user_id <> m.user_id
+                      AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
+                 ) unread ON true
+                 WHERE m.user_id = $1",
                 &[&user_id],
             )
             .await?;

@@ -144,8 +144,8 @@ late-ssh/tests/
   bonsai/
     main.rs                   # mirrors app/bonsai/
     svc.rs
-  games/
-    main.rs                   # mirrors app/games/ — all game tests compile here
+  arcade/
+    main.rs                   # mirrors app/arcade/ — all game tests compile here
     minesweeper/
       mod.rs
       svc.rs
@@ -173,7 +173,7 @@ late-core/tests/
 ```
 
 - Anything that touches the database, services, or cross-module orchestration.
-- Always use `helpers::new_test_db()` (testcontainers) — never hardcoded
+- Always use `helpers::new_test_db()` — never hardcoded
   connection strings.
 - Mirror the domain structure: `tests/<domain>/svc.rs` tests `app/<domain>/svc.rs`.
 

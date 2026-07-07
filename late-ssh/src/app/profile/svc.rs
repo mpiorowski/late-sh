@@ -1,6 +1,11 @@
 use anyhow::Result;
-use late_core::models::bonsai::Tree;
+use chrono::{DateTime, NaiveDate, Utc};
+use late_core::models::account_link;
+use late_core::models::bonsai::{BonsaiV2Tree, Tree};
+use late_core::models::irc_token::IrcToken;
+use late_core::models::marketplace;
 use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::profile_award::{ProfileAward, list_profile_awards_for_user};
 use late_core::models::user::{User, sanitize_username_input};
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
@@ -12,7 +17,10 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, info_span};
 
+use crate::ircd::registry::IrcRegistry;
+use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::ActiveUsers;
+use crate::usernames::{self, UsernameDirectory};
 
 #[derive(Clone)]
 pub struct ProfileService {
@@ -20,19 +28,138 @@ pub struct ProfileService {
     snapshot_txs: Arc<Mutex<HashMap<Uuid, watch::Sender<ProfileSnapshot>>>>,
     evt_tx: broadcast::Sender<ProfileEvent>,
     active_users: ActiveUsers,
+    username_directory: Option<UsernameDirectory>,
+    session_registry: Option<SessionRegistry>,
+    irc_registry: Option<IrcRegistry>,
 }
 
 #[derive(Clone, Default)]
 pub struct ProfileSnapshot {
     pub user_id: Option<Uuid>,
     pub profile: Option<Profile>,
+    pub chip_balance: Option<i64>,
     pub bonsai: Option<Tree>,
+    pub bonsai_v2: Option<BonsaiV2Tree>,
+    pub dynamic_bonsai_selected: bool,
+    pub aquarium_fish: Vec<(String, usize)>,
+    pub profile_awards: Vec<ProfileAward>,
 }
 
 #[derive(Clone, Debug)]
 pub enum ProfileEvent {
-    Saved { user_id: Uuid },
-    Error { user_id: Uuid, message: String },
+    Saved {
+        user_id: Uuid,
+    },
+    AccountLinkCodeCreated {
+        user_id: Uuid,
+        code: String,
+        expires_at: DateTime<Utc>,
+    },
+    AccountLinkPeerLoaded {
+        user_id: Uuid,
+        peer_user_id: Uuid,
+        peer_username: String,
+        peer_created: DateTime<Utc>,
+    },
+    AccountLinked {
+        kept_user_id: Uuid,
+        abandoned_user_id: Uuid,
+        kept_username: String,
+        abandoned_username: String,
+    },
+    Error {
+        user_id: Uuid,
+        message: String,
+    },
+    /// Connect-time summary of friends whose birthday is today or within the
+    /// next week. Surfaced as an in-app banner.
+    BirthdayAlert {
+        user_id: Uuid,
+        message: String,
+    },
+    /// Current IRC token status for the settings Account tab. `status` is
+    /// `None` when no token is minted. See devdocs/FRD-IRCD.md §5.
+    IrcTokenStatus {
+        user_id: Uuid,
+        status: Option<IrcTokenStatus>,
+    },
+    /// A freshly minted IRC token. The plaintext is shown exactly once — it is
+    /// never persisted and cannot be recovered afterwards.
+    IrcTokenMinted {
+        user_id: Uuid,
+        token: String,
+    },
+    /// The user's IRC token was revoked; live IRC connections were dropped.
+    IrcTokenRevoked {
+        user_id: Uuid,
+    },
+}
+
+/// Displayable IRC token metadata (the token value itself is unrecoverable).
+#[derive(Clone, Debug)]
+pub struct IrcTokenStatus {
+    pub created: DateTime<Utc>,
+    pub last_used: Option<DateTime<Utc>>,
+}
+
+impl From<&IrcToken> for IrcTokenStatus {
+    fn from(token: &IrcToken) -> Self {
+        Self {
+            created: token.created,
+            last_used: token.last_used,
+        }
+    }
+}
+
+/// Build a one-line alert from tracked `(username, MM-DD)` pairs: anyone whose
+/// birthday is today, then anyone within the next 7 days. `None` if nobody
+/// qualifies. Pure — `today` is injected so it is unit-testable.
+pub(crate) fn build_birthday_alert(
+    birthdays: &[(String, String)],
+    today: NaiveDate,
+) -> Option<String> {
+    use late_core::models::birthday::{days_until, is_today};
+    let mut today_names = Vec::new();
+    let mut soon = Vec::new();
+    for (name, mmdd) in birthdays {
+        if is_today(mmdd, today) {
+            today_names.push(name.clone());
+        } else if let Some(d) = days_until(mmdd, today)
+            && (1..=7).contains(&d)
+        {
+            soon.push((d, name.clone()));
+        }
+    }
+    let mut parts = Vec::new();
+    if !today_names.is_empty() {
+        parts.push(format!("{} — birthday today!", today_names.join(", ")));
+    }
+    soon.sort();
+    for (d, name) in soon {
+        let when = if d == 1 {
+            "tomorrow".to_string()
+        } else {
+            format!("in {d} days")
+        };
+        parts.push(format!("{name}'s birthday {when}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// Parse an account's timezone tweak into a `chrono_tz::Tz`. `None` (unset,
+/// blank, or unparseable) means "no local zone" — callers fall back to UTC.
+pub fn parse_account_tz(timezone: Option<&str>) -> Option<chrono_tz::Tz> {
+    timezone
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<chrono_tz::Tz>().ok())
+}
+
+fn date_for_timezone(now: DateTime<Utc>, timezone: Option<&str>) -> NaiveDate {
+    match parse_account_tz(timezone) {
+        Some(tz) => now.with_timezone(&tz).date_naive(),
+        None => now.date_naive(),
+    }
 }
 
 impl ProfileService {
@@ -44,7 +171,25 @@ impl ProfileService {
             snapshot_txs: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
             active_users,
+            username_directory: None,
+            session_registry: None,
+            irc_registry: None,
         }
+    }
+
+    pub fn with_username_directory(mut self, username_directory: UsernameDirectory) -> Self {
+        self.username_directory = Some(username_directory);
+        self
+    }
+
+    pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
+        self.session_registry = Some(session_registry);
+        self
+    }
+
+    pub fn with_irc_registry(mut self, irc_registry: IrcRegistry) -> Self {
+        self.irc_registry = Some(irc_registry);
+        self
     }
 
     // Snapshot
@@ -108,16 +253,56 @@ impl ProfileService {
     #[tracing::instrument(skip(self), fields(user_id = %user_id))]
     async fn do_find_profile(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        let profile = Profile::load(&client, user_id).await?;
+        let profile = Profile::load_with_chip_balance(&client, user_id).await?;
         let bonsai = Tree::find_by_user_id(&client, user_id).await?;
+        let bonsai_v2 = BonsaiV2Tree::find_by_user_id(&client, user_id).await?;
+        let dynamic_bonsai_selected =
+            marketplace::is_dynamic_bonsai_selected(&client, user_id).await?;
+        let aquarium_fish = marketplace::active_aquarium_fish_for_user(&client, user_id).await?;
+        let profile_awards = list_profile_awards_for_user(&client, user_id).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
                 user_id: Some(user_id),
-                profile: Some(profile),
+                profile: Some(profile.profile),
+                chip_balance: Some(profile.chip_balance),
                 bonsai,
+                bonsai_v2,
+                dynamic_bonsai_selected,
+                aquarium_fish,
+                profile_awards,
             },
         )?;
+        Ok(())
+    }
+
+    /// Fire-and-forget: on connect, surface a single banner for friends whose
+    /// birthday is today or within the next week.
+    pub fn check_birthdays_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_check_birthdays(user_id).await {
+                    late_core::error_span!(
+                        "birthday_alert_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to compute birthday alert"
+                    );
+                }
+            }
+            .instrument(info_span!("profile.check_birthdays", user_id = %user_id)),
+        );
+    }
+
+    async fn do_check_birthdays(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let profile = Profile::load(&client, user_id).await?;
+        let birthdays = User::friend_birthdays(&client, user_id).await?;
+        let today = date_for_timezone(Utc::now(), profile.timezone.as_deref());
+        if let Some(message) = build_birthday_alert(&birthdays, today) {
+            self.publish_event(ProfileEvent::BirthdayAlert { user_id, message });
+        }
         Ok(())
     }
 
@@ -145,14 +330,28 @@ impl ProfileService {
     async fn do_edit_profile(&self, user_id: Uuid, mut params: ProfileParams) -> Result<()> {
         let client = self.db.get().await?;
         params.username = sanitize_username_input(&params.username);
-        let _ = Profile::update(&client, user_id, params).await?;
+        let old_username = User::get(&client, user_id)
+            .await?
+            .map(|user| user.username)
+            .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+        let profile = Profile::update(&client, user_id, params).await?;
 
-        if let Ok(mut usernames) = User::list_usernames_by_ids(&client, &[user_id]).await
-            && let Some(username) = usernames.remove(&user_id)
-            && let Ok(mut users) = self.active_users.lock()
-            && let Some(user) = users.get_mut(&user_id)
+        if let Ok(mut username_map) = User::list_usernames_by_ids(&client, &[user_id]).await
+            && let Some(username) = username_map.remove(&user_id)
         {
-            user.username = username;
+            if let Some(directory) = &self.username_directory {
+                usernames::upsert(directory, user_id, username.clone());
+            }
+            if let Ok(mut users) = self.active_users.lock()
+                && let Some(user) = users.get_mut(&user_id)
+            {
+                user.username = username;
+            }
+        }
+        if old_username != profile.username
+            && let Some(registry) = &self.irc_registry
+        {
+            registry.project_username_change(user_id, &old_username, &profile.username);
         }
 
         self.find_profile(user_id);
@@ -188,6 +387,340 @@ impl ProfileService {
         self.publish_event(ProfileEvent::Saved { user_id });
         Ok(())
     }
+
+    /// Fire-and-forget: mark the clubhouse first-visit tutorial finished so
+    /// it never runs again for this user. No event on success; a failure is
+    /// only logged (the tutorial would simply run once more next session).
+    pub fn set_clubhouse_tutorial_done(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_clubhouse_tutorial_done(&client, user_id).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist clubhouse tutorial completion");
+                }
+            }
+            .instrument(info_span!("profile.clubhouse_tutorial_task", user_id = %user_id)),
+        );
+    }
+
+    pub fn delete_account(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_delete_account(user_id).await {
+                    late_core::error_span!(
+                        "account_delete_failed",
+                        error = ?e,
+                        "failed to delete account"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: "Could not delete account. Please try again.".to_string(),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.delete_account_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn do_delete_account(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let deleted = User::delete_by_id(&client, user_id).await?;
+        if deleted == 0 {
+            anyhow::bail!("user not found");
+        }
+
+        self.terminate_active_sessions(user_id, "account deleted")
+            .await;
+        if let Ok(mut users) = self.active_users.lock() {
+            users.remove(&user_id);
+        }
+        if let Some(directory) = &self.username_directory {
+            usernames::remove(directory, user_id);
+        }
+        Ok(())
+    }
+
+    /// Fire-and-forget: load the user's current IRC token status and publish
+    /// it as an `IrcTokenStatus` event so the settings Account tab can render
+    /// "none / active since / last used".
+    pub fn load_irc_token_status(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_load_irc_token_status(user_id).await {
+                    late_core::error_span!(
+                        "irc_token_status_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to load IRC token status"
+                    );
+                }
+            }
+            .instrument(info_span!("profile.irc_token_status_task", user_id = %user_id)),
+        );
+    }
+
+    async fn do_load_irc_token_status(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let status = IrcToken::find_for_user(&client, user_id)
+            .await?
+            .as_ref()
+            .map(IrcTokenStatus::from);
+        self.publish_event(ProfileEvent::IrcTokenStatus { user_id, status });
+        Ok(())
+    }
+
+    /// Fire-and-forget: mint (or re-mint) the user's IRC token. Any prior token
+    /// is invalidated, so live IRC connections are dropped. The plaintext token
+    /// is published once via `IrcTokenMinted`.
+    pub fn mint_irc_token(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_mint_irc_token(user_id).await {
+                    late_core::error_span!(
+                        "irc_token_mint_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to mint IRC token"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: "Could not create IRC token. Please try again.".to_string(),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.irc_token_mint_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn do_mint_irc_token(&self, user_id: Uuid) -> Result<()> {
+        let token = {
+            let client = self.db.get().await?;
+            IrcToken::mint(&client, user_id).await?
+        };
+        // Re-minting invalidates the previous token; drop any connection still
+        // authenticated with it. See devdocs/FRD-IRCD.md §5.
+        if let Some(registry) = &self.irc_registry {
+            registry.disconnect_user(user_id, "IRC token reset");
+        }
+        self.publish_event(ProfileEvent::IrcTokenMinted { user_id, token });
+        Ok(())
+    }
+
+    /// Fire-and-forget: revoke the user's IRC token and drop any live IRC
+    /// connections that were authenticated with it.
+    pub fn revoke_irc_token(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_revoke_irc_token(user_id).await {
+                    late_core::error_span!(
+                        "irc_token_revoke_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to revoke IRC token"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: "Could not revoke IRC token. Please try again.".to_string(),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.irc_token_revoke_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn do_revoke_irc_token(&self, user_id: Uuid) -> Result<()> {
+        {
+            let client = self.db.get().await?;
+            IrcToken::revoke(&client, user_id).await?;
+        }
+        if let Some(registry) = &self.irc_registry {
+            registry.disconnect_user(user_id, "IRC token revoked");
+        }
+        self.publish_event(ProfileEvent::IrcTokenRevoked { user_id });
+        Ok(())
+    }
+
+    pub fn create_account_link_code(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_create_account_link_code(user_id).await {
+                    late_core::error_span!(
+                        "account_link_code_create_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to create account link code"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: account_link_error_message(&e),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.account_link_code_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn do_create_account_link_code(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let (code, expires_at) = account_link::create_code(&client, user_id).await?;
+        self.publish_event(ProfileEvent::AccountLinkCodeCreated {
+            user_id,
+            code,
+            expires_at,
+        });
+        Ok(())
+    }
+
+    pub fn preview_account_link_code(&self, user_id: Uuid, code: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_preview_account_link_code(user_id, &code).await {
+                    late_core::error_span!(
+                        "account_link_preview_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to preview account link code"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: account_link_error_message(&e),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.account_link_preview_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self, code), fields(user_id = %user_id))]
+    async fn do_preview_account_link_code(&self, user_id: Uuid, code: &str) -> Result<()> {
+        let client = self.db.get().await?;
+        let peer = account_link::peer_for_code(&client, user_id, code).await?;
+        self.publish_event(ProfileEvent::AccountLinkPeerLoaded {
+            user_id,
+            peer_user_id: peer.user_id,
+            peer_username: peer.username,
+            peer_created: peer.created,
+        });
+        Ok(())
+    }
+
+    pub fn complete_account_link(
+        &self,
+        current_user_id: Uuid,
+        peer_user_id: Uuid,
+        code: String,
+        kept_user_id: Uuid,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service
+                    .do_complete_account_link(current_user_id, peer_user_id, &code, kept_user_id)
+                    .await
+                {
+                    late_core::error_span!(
+                        "account_link_complete_failed",
+                        error = ?e,
+                        current_user_id = %current_user_id,
+                        peer_user_id = %peer_user_id,
+                        kept_user_id = %kept_user_id,
+                        "failed to complete account link"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id: current_user_id,
+                        message: account_link_error_message(&e),
+                    });
+                }
+            }
+            .instrument(info_span!(
+                "profile.account_link_complete_task",
+                current_user_id = %current_user_id,
+                peer_user_id = %peer_user_id,
+                kept_user_id = %kept_user_id
+            )),
+        );
+    }
+
+    #[tracing::instrument(skip(self, code), fields(current_user_id = %current_user_id, peer_user_id = %peer_user_id, kept_user_id = %kept_user_id))]
+    async fn do_complete_account_link(
+        &self,
+        current_user_id: Uuid,
+        peer_user_id: Uuid,
+        code: &str,
+        kept_user_id: Uuid,
+    ) -> Result<()> {
+        let mut client = self.db.get().await?;
+        let result = account_link::complete(
+            &mut client,
+            current_user_id,
+            peer_user_id,
+            code,
+            kept_user_id,
+        )
+        .await?;
+
+        self.find_profile(result.kept_user_id);
+        self.publish_event(ProfileEvent::AccountLinked {
+            kept_user_id: result.kept_user_id,
+            abandoned_user_id: result.abandoned_user_id,
+            kept_username: result.kept_username,
+            abandoned_username: result.abandoned_username,
+        });
+        self.terminate_active_sessions(result.abandoned_user_id, "account linked")
+            .await;
+        if let Ok(mut users) = self.active_users.lock() {
+            users.remove(&result.abandoned_user_id);
+        }
+        if let Some(directory) = &self.username_directory {
+            usernames::remove(directory, result.abandoned_user_id);
+        }
+        Ok(())
+    }
+
+    async fn terminate_active_sessions(&self, user_id: Uuid, reason: &str) {
+        let tokens = self
+            .active_users
+            .lock()
+            .ok()
+            .and_then(|users| users.get(&user_id).cloned())
+            .map(|user| {
+                user.sessions
+                    .into_iter()
+                    .map(|session| session.token)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if let Some(irc_registry) = &self.irc_registry {
+            irc_registry.disconnect_user(user_id, reason);
+        }
+        if let Some(registry) = self.session_registry.clone() {
+            for token in tokens {
+                let _ = registry
+                    .send_message(
+                        &token,
+                        SessionMessage::Terminate {
+                            reason: reason.to_string(),
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
 }
 
 fn should_prune_snapshot_sender(sender: &watch::Sender<ProfileSnapshot>) -> bool {
@@ -207,6 +740,13 @@ fn profile_error_message(error: &anyhow::Error) -> &'static str {
         SqlState::CHECK_VIOLATION => "Username must be between 1 and 32 characters.",
         _ => "Could not save profile. Please try again.",
     }
+}
+
+fn account_link_error_message(error: &anyhow::Error) -> String {
+    if error.downcast_ref::<tokio_postgres::Error>().is_some() {
+        return "Could not link accounts. Please try again.".to_string();
+    }
+    error.to_string()
 }
 
 #[cfg(test)]
@@ -239,5 +779,43 @@ mod tests {
         let (tx, rx) = watch::channel(ProfileSnapshot::default());
         drop(rx);
         assert!(should_prune_snapshot_sender(&tx));
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn no_friend_birthdays_yields_no_alert() {
+        assert_eq!(build_birthday_alert(&[], day(2026, 5, 20)), None);
+        let none_soon = vec![("zoe".to_string(), "11-30".to_string())];
+        assert_eq!(build_birthday_alert(&none_soon, day(2026, 5, 20)), None);
+    }
+
+    #[test]
+    fn today_birthday_is_called_out_first() {
+        let b = vec![
+            ("ada".to_string(), "05-20".to_string()),
+            ("bo".to_string(), "05-23".to_string()),
+        ];
+        let msg = build_birthday_alert(&b, day(2026, 5, 20)).unwrap();
+        assert!(msg.starts_with("ada — birthday today!"), "{msg}");
+        assert!(msg.contains("bo's birthday in 3 days"), "{msg}");
+    }
+
+    #[test]
+    fn tomorrow_is_phrased_specially_and_sorted_by_proximity() {
+        let b = vec![
+            ("far".to_string(), "05-27".to_string()),
+            ("near".to_string(), "05-21".to_string()),
+        ];
+        let msg = build_birthday_alert(&b, day(2026, 5, 20)).unwrap();
+        assert_eq!(msg, "near's birthday tomorrow · far's birthday in 7 days");
+    }
+
+    #[test]
+    fn eight_days_out_is_outside_the_window() {
+        let b = vec![("late".to_string(), "05-28".to_string())];
+        assert_eq!(build_birthday_alert(&b, day(2026, 5, 20)), None);
     }
 }

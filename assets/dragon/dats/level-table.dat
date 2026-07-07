@@ -1,0 +1,12 @@
+{"level":1,"title":"Muddy Boots","xp_required":0,"hp_base":20,"forest_fights":24,"player_fights":1,"trainer_attack":6,"trainer_defense":1,"monster_bucket":1}
+{"level":2,"title":"Fence Jumper","xp_required":100,"hp_base":28,"forest_fights":23,"player_fights":1,"trainer_attack":10,"trainer_defense":3,"monster_bucket":2}
+{"level":3,"title":"Lantern Bearer","xp_required":300,"hp_base":38,"forest_fights":22,"player_fights":1,"trainer_attack":15,"trainer_defense":5,"monster_bucket":3}
+{"level":4,"title":"Gate Bruiser","xp_required":700,"hp_base":52,"forest_fights":21,"player_fights":2,"trainer_attack":22,"trainer_defense":8,"monster_bucket":4}
+{"level":5,"title":"Road Warden","xp_required":1400,"hp_base":70,"forest_fights":20,"player_fights":2,"trainer_attack":31,"trainer_defense":11,"monster_bucket":5}
+{"level":6,"title":"Cinder Hand","xp_required":2600,"hp_base":94,"forest_fights":19,"player_fights":2,"trainer_attack":43,"trainer_defense":15,"monster_bucket":6}
+{"level":7,"title":"Bell Breaker","xp_required":4500,"hp_base":126,"forest_fights":18,"player_fights":2,"trainer_attack":58,"trainer_defense":20,"monster_bucket":7}
+{"level":8,"title":"Wound Singer","xp_required":7600,"hp_base":168,"forest_fights":17,"player_fights":3,"trainer_attack":77,"trainer_defense":26,"monster_bucket":8}
+{"level":9,"title":"Grave Laugher","xp_required":12500,"hp_base":224,"forest_fights":16,"player_fights":3,"trainer_attack":101,"trainer_defense":34,"monster_bucket":9}
+{"level":10,"title":"Storm Caller","xp_required":20000,"hp_base":300,"forest_fights":15,"player_fights":3,"trainer_attack":132,"trainer_defense":44,"monster_bucket":10}
+{"level":11,"title":"Ash Crown","xp_required":32000,"hp_base":400,"forest_fights":14,"player_fights":3,"trainer_attack":172,"trainer_defense":57,"monster_bucket":11}
+{"level":12,"title":"Dragon Ready","xp_required":50000,"hp_base":540,"forest_fights":13,"player_fights":4,"trainer_attack":224,"trainer_defense":74,"monster_bucket":12}

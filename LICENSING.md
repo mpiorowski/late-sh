@@ -84,6 +84,13 @@ right to submit it under the repository's license terms and agree to the
 [Developer Certificate of Origin (DCO v1.1)](https://developercertificate.org/).
 Sign off your commits with `git commit -s`.
 
+## Third-party components
+
+late.sh bundles, installs, or runs some third-party programs under their own
+licenses. These are listed, with their source and attribution, in
+[`NOTICE`](NOTICE). For example, the NetHack door game runs the unmodified
+upstream NetHack under the NetHack General Public License.
+
 ## No legal advice
 
 This file is an explanatory policy for contributors and operators. The actual

@@ -42,11 +42,11 @@ async fn spawn_upstream(body: &'static [u8]) -> (String, oneshot::Sender<()>) {
     }
 
     let app = if body == b"upstream-audio" {
-        axum::Router::new().route("/stream", get(stream_handler))
+        axum::Router::new().route("/chill", get(stream_handler))
     } else {
         let bytes = body.to_vec();
         axum::Router::new().route(
-            "/stream",
+            "/chill",
             get(move || {
                 let bytes = bytes.clone();
                 async move { (StatusCode::OK, Body::from(bytes)) }

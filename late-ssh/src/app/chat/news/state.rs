@@ -12,13 +12,16 @@ pub struct State {
     article_service: ArticleService,
     user_id: Uuid,
     is_admin: bool,
+    source_articles: Vec<ArticleFeedItem>,
     articles: Vec<ArticleFeedItem>,
+    mine_only: bool,
     selected: usize,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     event_rx: broadcast::Receiver<ArticleEvent>,
     unread_count: i64,
     last_read_at: Option<DateTime<Utc>>,
     marker_read_at: Option<DateTime<Utc>>,
+    preserve_marker_read_at: bool,
     composing: bool,
     composer: TextArea<'static>,
     processing: bool,
@@ -35,13 +38,16 @@ impl State {
             article_service,
             user_id,
             is_admin,
+            source_articles: Vec::new(),
             articles: Vec::new(),
+            mine_only: false,
             selected: 0,
             snapshot_rx,
             event_rx,
             unread_count: 0,
             last_read_at: None,
             marker_read_at: None,
+            preserve_marker_read_at: false,
             composing: false,
             composer: new_news_textarea(),
             processing: false,
@@ -49,7 +55,16 @@ impl State {
         }
     }
 
+    /// All articles known to the client, ignoring any mine-only filter.
+    /// Used by surfaces that should not be affected by chat-page filtering.
     pub fn all_articles(&self) -> &[ArticleFeedItem] {
+        &self.source_articles
+    }
+
+    /// Articles in current display order, with the mine-only filter applied
+    /// when active. This is what the chat news view renders and what the
+    /// j/k/d/Enter selection operates on.
+    pub fn displayed_articles(&self) -> &[ArticleFeedItem] {
         &self.articles
     }
 
@@ -59,7 +74,36 @@ impl State {
 
     pub fn list_articles(&self) {
         self.article_service.list_articles_task();
-        self.article_service.refresh_unread_count_task(self.user_id);
+    }
+
+    pub fn mine_only(&self) -> bool {
+        self.mine_only
+    }
+
+    pub fn toggle_mine_only(&mut self) {
+        self.mine_only = !self.mine_only;
+        self.rebuild_display();
+    }
+
+    fn rebuild_display(&mut self) {
+        let prev_id = self
+            .articles
+            .get(self.selected.min(self.articles.len().saturating_sub(1)))
+            .map(|item| item.article.id);
+
+        let mut next: Vec<ArticleFeedItem> = self.source_articles.clone();
+        if self.mine_only {
+            next.retain(|item| item.article.user_id == self.user_id);
+        }
+
+        self.articles = next;
+        if let Some(id) = prev_id
+            && let Some(idx) = self.articles.iter().position(|item| item.article.id == id)
+        {
+            self.selected = idx;
+        } else {
+            self.selected = clamp_index(self.selected, self.articles.len());
+        }
     }
 
     pub fn selected_index(&self) -> usize {
@@ -73,6 +117,26 @@ impl State {
             .position(|item| item.article.id == article_id)
         {
             self.selected = index;
+            return;
+        }
+
+        // The article exists but is hidden by the mine-only filter. Drop the
+        // filter so the article becomes visible and selectable.
+        if self.mine_only
+            && self
+                .source_articles
+                .iter()
+                .any(|item| item.article.id == article_id)
+        {
+            self.mine_only = false;
+            self.rebuild_display();
+            if let Some(index) = self
+                .articles
+                .iter()
+                .position(|item| item.article.id == article_id)
+            {
+                self.selected = index;
+            }
         }
     }
 
@@ -84,6 +148,21 @@ impl State {
         self.articles
             .get(self.selected_index())
             .map(|item| item.article.url.as_str())
+    }
+
+    pub fn selected_item(&self) -> Option<&ArticleFeedItem> {
+        self.articles.get(self.selected_index())
+    }
+
+    pub fn article_id_by_url(&self, url: &str) -> Option<Uuid> {
+        let url = url.trim();
+        if url.is_empty() {
+            return None;
+        }
+        self.source_articles
+            .iter()
+            .find(|item| item.article.url.trim() == url)
+            .map(|item| item.article.id)
     }
 
     pub fn unread_count(&self) -> i64 {
@@ -126,7 +205,8 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = Some(Utc::now());
+        self.marker_read_at = self.last_read_at;
+        self.preserve_marker_read_at = true;
         self.unread_count = 0;
         self.article_service.mark_read_task(self.user_id);
     }
@@ -207,6 +287,19 @@ impl State {
         }
     }
 
+    pub fn composer_cursor_home(&mut self) {
+        if !self.processing {
+            self.composer
+                .move_cursor(ratatui_textarea::CursorMove::Head);
+        }
+    }
+
+    pub fn composer_cursor_end(&mut self) {
+        if !self.processing {
+            self.composer.move_cursor(ratatui_textarea::CursorMove::End);
+        }
+    }
+
     pub fn delete_selected(&mut self) {
         if let Some(item) = self.articles.get(self.selected_index()) {
             let is_owner = item.article.user_id == self.user_id;
@@ -236,8 +329,8 @@ impl State {
     fn drain_snapshot(&mut self) {
         if let Ok(true) = self.snapshot_rx.has_changed() {
             let snapshot = self.snapshot_rx.borrow_and_update().clone();
-            self.articles = snapshot.articles;
-            self.selected = clamp_index(self.selected, self.articles.len());
+            self.source_articles = snapshot.articles;
+            self.rebuild_display();
         }
     }
 
@@ -246,14 +339,14 @@ impl State {
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => match event {
-                    ArticleEvent::Created { user_id } if self.user_id == user_id => {
+                    ArticleEvent::Created { user_id, .. } if self.user_id == user_id => {
                         self.current_task = None;
                         self.composing = false;
                         self.processing = false;
                         self.composer = new_news_textarea();
                         banner = Some(Banner::success("Article shared!"));
                     }
-                    ArticleEvent::Failed { user_id, error } if self.user_id == user_id => {
+                    ArticleEvent::Failed { user_id, error, .. } if self.user_id == user_id => {
                         self.current_task = None;
                         self.processing = false;
                         composer::set_themed_textarea_cursor_visible(
@@ -272,7 +365,7 @@ impl State {
                     } if self.user_id == user_id => {
                         self.unread_count = unread_count;
                         self.last_read_at = last_read_at;
-                        if unread_count == 0 {
+                        if unread_count == 0 && !self.preserve_marker_read_at {
                             self.marker_read_at = last_read_at;
                         }
                     }

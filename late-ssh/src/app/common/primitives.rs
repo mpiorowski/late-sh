@@ -9,8 +9,6 @@ use ratatui::{
 };
 
 use super::theme;
-use crate::app::vote::svc::Genre;
-
 #[derive(Debug, Clone)]
 pub enum BannerKind {
     Success,
@@ -49,40 +47,60 @@ impl Banner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Dashboard,
-    Chat,
+    Arcade,
     Games,
     Rooms,
+    Lateania,
+    Rebels,
+    Nethack,
+    Dopewars,
+    GreenDragon,
     Artboard,
+    Pinstar,
+    WorldCup,
+    Clubhouse,
 }
 
 impl Screen {
+    /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
+    /// through World Cup (`7`). The door games (Lateania, Rebels, Nethack,
+    /// Green Dragon) are reached through the Games hub, not the tab bar, so
+    /// they are absent from the cycle; if one is somehow current,
+    /// `next`/`prev` fall back to the hub that owns them.
     pub fn next(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Chat,
-            Screen::Chat => Screen::Games,
+            Screen::Clubhouse => Screen::Dashboard,
+            Screen::Dashboard => Screen::Arcade,
+            Screen::Arcade => Screen::Games,
             Screen::Games => Screen::Rooms,
             Screen::Rooms => Screen::Artboard,
-            Screen::Artboard => Screen::Dashboard,
+            Screen::Artboard => Screen::Pinstar,
+            Screen::Pinstar => Screen::WorldCup,
+            Screen::WorldCup => Screen::Clubhouse,
+            Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dopewars
+            | Screen::GreenDragon => Screen::Games,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Artboard,
-            Screen::Chat => Screen::Dashboard,
-            Screen::Games => Screen::Chat,
+            Screen::Clubhouse => Screen::WorldCup,
+            Screen::Dashboard => Screen::Clubhouse,
+            Screen::Arcade => Screen::Dashboard,
+            Screen::Games => Screen::Arcade,
             Screen::Rooms => Screen::Games,
             Screen::Artboard => Screen::Rooms,
+            Screen::Pinstar => Screen::Artboard,
+            Screen::WorldCup => Screen::Pinstar,
+            Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dopewars
+            | Screen::GreenDragon => Screen::Games,
         }
-    }
-}
-
-pub fn genre_label(genre: Genre) -> &'static str {
-    match genre {
-        Genre::Lofi => "Lofi",
-        Genre::Classic => "Classic",
-        Genre::Ambient => "Ambient",
-        Genre::Jazz => "Jazz",
     }
 }
 
@@ -96,10 +114,18 @@ pub fn format_duration_mmss(duration: Duration) -> String {
 pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     let label = match current {
         Screen::Dashboard => "Dashboard",
-        Screen::Chat => "Chat",
         Screen::Games => "Games",
-        Screen::Rooms => "Rooms",
+        Screen::Lateania => "Lateania",
+        Screen::Rebels => "Rebels",
+        Screen::Nethack => "NetHack",
+        Screen::Dopewars => "dopewars",
+        Screen::GreenDragon => "Green Dragon",
+        Screen::Arcade => "Arcade",
+        Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
+        Screen::Pinstar => "Directory",
+        Screen::WorldCup => "World Cup",
+        Screen::Clubhouse => "Clubhouse",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -148,34 +174,70 @@ pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
+/// Build a one-line action-hint footer: `key desc · key desc · …`.
+///
+/// Keys render in amber, descriptions dim, separators faint. This is the shared
+/// recipe behind every bottom hint bar (the Directory footers, the Pinstar
+/// browser) so the foot of each page reads the same.
+pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
+    let key_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(theme::TEXT_DIM());
+    let sep_style = Style::default().fg(theme::TEXT_FAINT());
+
+    let mut spans = Vec::with_capacity(hints.len() * 4 + 1);
+    spans.push(Span::styled(" ", desc_style));
+    for (idx, (key, desc)) in hints.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(" · ", sep_style));
+        }
+        spans.push(Span::styled((*key).to_string(), key_style));
+        spans.push(Span::styled(format!(" {desc}"), desc_style));
+    }
+    Line::from(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn screen_next_cycles_all_screens() {
-        assert_eq!(Screen::Dashboard.next(), Screen::Chat);
-        assert_eq!(Screen::Chat.next(), Screen::Games);
+    fn screen_next_cycles_top_level_screens() {
+        assert_eq!(Screen::Clubhouse.next(), Screen::Dashboard);
+        assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
+        assert_eq!(Screen::Arcade.next(), Screen::Games);
         assert_eq!(Screen::Games.next(), Screen::Rooms);
         assert_eq!(Screen::Rooms.next(), Screen::Artboard);
-        assert_eq!(Screen::Artboard.next(), Screen::Dashboard);
+        assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
+        assert_eq!(Screen::Pinstar.next(), Screen::WorldCup);
+        assert_eq!(Screen::WorldCup.next(), Screen::Clubhouse);
     }
 
     #[test]
-    fn screen_prev_cycles_all_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::Artboard);
-        assert_eq!(Screen::Chat.prev(), Screen::Dashboard);
-        assert_eq!(Screen::Games.prev(), Screen::Chat);
+    fn screen_prev_cycles_top_level_screens() {
+        assert_eq!(Screen::Clubhouse.prev(), Screen::WorldCup);
+        assert_eq!(Screen::Dashboard.prev(), Screen::Clubhouse);
+        assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
+        assert_eq!(Screen::Games.prev(), Screen::Arcade);
         assert_eq!(Screen::Rooms.prev(), Screen::Games);
         assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
+        assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
+        assert_eq!(Screen::WorldCup.prev(), Screen::Pinstar);
     }
 
     #[test]
-    fn genre_label_maps_variants() {
-        assert_eq!(genre_label(Genre::Lofi), "Lofi");
-        assert_eq!(genre_label(Genre::Classic), "Classic");
-        assert_eq!(genre_label(Genre::Ambient), "Ambient");
-        assert_eq!(genre_label(Genre::Jazz), "Jazz");
+    fn door_games_are_outside_the_tab_cycle_and_fall_back_to_the_hub() {
+        for door in [
+            Screen::Lateania,
+            Screen::Rebels,
+            Screen::Nethack,
+            Screen::Dopewars,
+            Screen::GreenDragon,
+        ] {
+            assert_eq!(door.next(), Screen::Games);
+            assert_eq!(door.prev(), Screen::Games);
+        }
     }
 
     #[test]

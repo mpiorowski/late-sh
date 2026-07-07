@@ -246,7 +246,7 @@ fn is_tree_char(ch: Option<char>) -> bool {
     ch.is_some_and(|ch| {
         matches!(
             ch,
-            '/' | '\\' | '|' | '_' | '~' | '@' | '#' | '*' | '.' | ','
+            '/' | '\\' | '|' | '_' | '~' | '@' | '#' | '*' | '.' | ',' | '\'' | 'o' | 'O'
         )
     })
 }
@@ -302,5 +302,12 @@ mod tests {
         assert_eq!(state.cut_at_cursor(&targets), Some(7));
         assert_eq!(state.cut_at_cursor(&targets), None);
         assert_eq!(state.branches_done(), 1);
+    }
+
+    #[test]
+    fn tree_char_detection_includes_all_foliage_textures() {
+        for ch in ['@', '#', '*', '.', ',', '\'', 'o', 'O'] {
+            assert!(is_tree_char(Some(ch)), "missing foliage glyph {ch}");
+        }
     }
 }

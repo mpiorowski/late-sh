@@ -1,6 +1,6 @@
 # late.sh
 
-> A cozy terminal clubhouse for developers. Lofi beats, casual games, chat, and tech news, all via SSH.
+A cozy command-line clubhouse for computer people. Chat, music, games, art, coding, and tech news. Connect with any SSH client!
 
 ```bash
 ssh late.sh
@@ -82,6 +82,12 @@ Windows PowerShell (x64):
 irm https://cli.late.sh/install.ps1 | iex
 ```
 
+Nix / NixOS:
+
+```bash
+nix run github:mpiorowski/late-sh#late
+```
+
 Or build it from source:
 
 ```bash
@@ -113,14 +119,23 @@ Use `mise install` to get the expected Rust toolchain, `mold` linker, and
 
 ## Verification
 
-Run before opening a PR:
+Run the fast local gate while iterating:
 
 ```bash
 make check
 ```
 
 This runs `cargo fmt --check`, `cargo clippy`, and `cargo nextest`.
-Some integration tests require Docker via testcontainers.
+The local check starts a dedicated Compose Postgres project (`late-check`) on
+port `55433` and points DB integration tests at it via `TEST_DATABASE_URL`.
+Override `CHECK_INSTANCE` or `CHECK_PG_HOST_PORT` if you need a parallel check
+database.
+
+Run the broader PR-style gate before opening a PR:
+
+```bash
+make checkci
+```
 
 ## Contributing
 

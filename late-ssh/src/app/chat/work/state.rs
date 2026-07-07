@@ -78,7 +78,9 @@ pub struct State {
     service: WorkService,
     user_id: Uuid,
     is_admin: bool,
+    source_items: Vec<WorkFeedItem>,
     items: Vec<WorkFeedItem>,
+    mine_only: bool,
     selected: usize,
     snapshot_rx: watch::Receiver<WorkSnapshot>,
     event_rx: broadcast::Receiver<WorkEvent>,
@@ -98,6 +100,7 @@ pub struct State {
     unread_count: i64,
     last_read_at: Option<DateTime<Utc>>,
     marker_read_at: Option<DateTime<Utc>>,
+    preserve_marker_read_at: bool,
 }
 
 impl State {
@@ -115,7 +118,9 @@ impl State {
             service,
             user_id,
             is_admin,
+            source_items: Vec::new(),
             items: Vec::new(),
+            mine_only: false,
             selected: 0,
             snapshot_rx,
             event_rx,
@@ -135,6 +140,7 @@ impl State {
             unread_count: 0,
             last_read_at: None,
             marker_read_at: None,
+            preserve_marker_read_at: false,
         }
     }
 
@@ -148,7 +154,40 @@ impl State {
 
     pub fn list(&self) {
         self.service.list_task();
-        self.refresh_unread_count();
+    }
+
+    pub fn mine_only(&self) -> bool {
+        self.mine_only
+    }
+
+    pub fn toggle_mine_only(&mut self) {
+        self.mine_only = !self.mine_only;
+        self.rebuild_display();
+    }
+
+    fn rebuild_display(&mut self) {
+        let prev_selected_id = self
+            .items
+            .get(self.selected.min(self.items.len().saturating_sub(1)))
+            .map(|item| item.profile.id);
+
+        let mut next = self.source_items.clone();
+
+        if self.mine_only {
+            next.retain(|item| item.profile.user_id == self.user_id);
+        }
+
+        self.items = next;
+        if let Some(prev_id) = prev_selected_id
+            && let Some(idx) = self
+                .items
+                .iter()
+                .position(|item| item.profile.id == prev_id)
+        {
+            self.selected = idx;
+        } else {
+            self.selected = clamp_index(self.selected, self.items.len());
+        }
     }
 
     pub fn refresh_unread_count(&self) {
@@ -156,7 +195,8 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = Some(Utc::now());
+        self.marker_read_at = self.last_read_at;
+        self.preserve_marker_read_at = true;
         self.unread_count = 0;
         self.service.mark_read_task(self.user_id);
     }
@@ -183,6 +223,10 @@ impl State {
 
     pub fn move_selection(&mut self, delta: isize) {
         self.selected = move_index(self.selected_index(), delta, self.items.len());
+    }
+
+    pub fn select_index(&mut self, index: usize) {
+        self.selected = clamp_index(index, self.items.len());
     }
 
     pub fn selected_can_edit(&self) -> bool {
@@ -265,7 +309,7 @@ impl State {
     }
 
     fn start_editing_profile(&mut self, id: Uuid, slug: String) -> bool {
-        let Some(item) = self.items.iter().find(|item| item.profile.id == id) else {
+        let Some(item) = self.source_items.iter().find(|item| item.profile.id == id) else {
             return false;
         };
         let profile = item.profile.clone();
@@ -418,8 +462,8 @@ impl State {
     fn drain_snapshot(&mut self) {
         if let Ok(true) = self.snapshot_rx.has_changed() {
             let snapshot = self.snapshot_rx.borrow_and_update().clone();
-            self.items = snapshot.items;
-            self.selected = clamp_index(self.selected, self.items.len());
+            self.source_items = snapshot.items;
+            self.rebuild_display();
         }
     }
 
@@ -452,7 +496,7 @@ impl State {
                     } if self.user_id == user_id => {
                         self.unread_count = unread_count;
                         self.last_read_at = last_read_at;
-                        if unread_count == 0 {
+                        if unread_count == 0 && !self.preserve_marker_read_at {
                             self.marker_read_at = last_read_at;
                         }
                     }
@@ -531,7 +575,7 @@ impl State {
     }
 
     fn own_profile_id_slug(&self) -> Option<(Uuid, String)> {
-        self.items
+        self.source_items
             .iter()
             .find(|item| item.profile.user_id == self.user_id)
             .map(|item| (item.profile.id, item.profile.slug.clone()))

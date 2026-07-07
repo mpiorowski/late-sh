@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-05-01
+- Last updated: 2026-06-22
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -28,7 +28,7 @@ This file is the working context for `late-cli`. The root project context lives 
 
 ## 1. Summary [STABLE]
 
-`late-cli` builds the `late` companion binary. It launches an SSH TUI session, plays the Icecast MP3 stream locally, analyzes audible samples for the TUI visualizer, and pairs with the active SSH session over `/api/ws/pair`.
+`late-cli` builds the `late` companion binary. It launches an SSH TUI session, plays the Icecast MP3 stream locally, analyzes audible samples for the TUI visualizer, pairs with the active SSH session over `/api/ws/pair`, and provides the native LiveKit voice media runtime for late.sh voice rooms.
 
 Primary responsibilities:
 - Local SSH launcher for `late.sh`
@@ -36,12 +36,14 @@ Primary responsibilities:
 - MP3 stream decoding via `symphonia`
 - FFT visualizer frames sent to the SSH TUI over WebSocket
 - Paired mute/volume controls received from the TUI
+- LiveKit voice capture/playout for native desktop CLI users, controlled over the pair WebSocket
 - Cross-platform installer targets for Linux, macOS, Windows, and Android/Termux
 
 Highest-risk areas:
 - SSH token handshake compatibility between client and server
 - Paired-client WebSocket routing/state drift
 - Audio backend/device differences, especially sample-rate fallback and WSL
+- LiveKit/WebRTC native audio runtime differences for voice on desktop platforms
 - Terminal resize forwarding and pre-token input gating
 
 `late-cli` intentionally has no `late-core` dependency.
@@ -64,7 +66,7 @@ flowchart LR
 ```
 
 Runtime flow:
-1. Resolve config from env and CLI args.
+1. Resolve config from built-in defaults, optional config file, env, and CLI args.
 2. Resolve/generate SSH identity unless OpenSSH mode is allowed to use normal OpenSSH discovery.
 3. Start local audio and analyzer, except OpenSSH mode which authenticates and fetches the token before audio starts.
 4. Fetch a session token through the selected SSH transport.
@@ -79,13 +81,15 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 ## 3. Entry Points and Files [STABLE]
 
 - `src/main.rs` - top-level orchestration, mode split, audio/WS lifecycle
+- `src/clipboard.rs` - paired `/paste-image` clipboard read, Wayland/X clipboard backend use, PNG encoding, and local size guards. Clipboard support is only advertised on Linux, macOS, and Windows; Android/Termux builds do not depend on `arboard`.
 - `src/config.rs` - flags, env vars, defaults, logging
 - `src/identity.rs` - dedicated key discovery/generation
 - `src/ssh.rs` - native SSH, OpenSSH ControlMaster mode, legacy PTY subprocess mode, token parsing, resize forwarding
 - `src/pty.rs` - terminal size/PTY helpers
 - `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding
 - `src/ws.rs` - paired-client WebSocket protocol, control handling, client state
-- `src/audio/` - stream probing, decoding, playback queue, resampling, analyzer
+- `src/voice.rs` - LiveKit voice-room media runtime; see `../late-ssh/src/app/voice/CONTEXT.md` for full voice protocol and invariants
+- `src/audio/` - stream probing, decoding, playback queue, resampling, analyzer. `resolve_stream_url` supports Icecast-style base URLs, `/stream/...` paths, and direct `.mp3`/`.m4a`/`.aac` URLs. Pair-WS `set_playback_source` can retarget native audio to a server-provided `stream_url`; `src/ws.rs` keeps a hardcoded Chillsynth URL only as a legacy radio fallback when an old server omits `stream_url`.
 - `Cargo.toml` - crate metadata; `otel` feature currently exists but is empty and default features are empty
 - `README.md` - user-facing CLI docs
 - `../scripts/install.sh` and `../scripts/install.ps1` - public installers
@@ -96,21 +100,36 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 
 ## 4. Config and Env Vars [STABLE]
 
+Config resolution order is built-in defaults, then the optional config file, then env vars, then explicit CLI args.
+
+The config file path defaults to `$XDG_CONFIG_HOME/late/config.toml` or `~/.config/late/config.toml`; `--config <path>` overrides it. Missing default config files are ignored. Missing explicit config files and parse errors print a warning and continue with lower-precedence values. Supported config-file keys are flat TOML keys matching the main CLI flags: `ssh-target`, `ssh-port`, `ssh-user`, `ssh-mode`, `key`, `audio-base-url`, `api-base-url`, `audio-output-device`, and `verbose`. TUI keybinds, themes, room/sidebar settings, and other in-app preferences are server-side user settings and do not belong in the CLI config file.
+
 Defaults in `src/config.rs`:
+- `--config <path>`: optional config file override; no env var
 - `--ssh-target` / `LATE_SSH_TARGET`: default `late.sh`
 - `--ssh-port` / `LATE_SSH_PORT`: optional
 - `--ssh-user` / `LATE_SSH_USER`: optional
 - `--key`, `--identity-file` / `LATE_KEY_FILE` / legacy `LATE_IDENTITY_FILE`: optional identity override
 - `--ssh-mode` / `LATE_SSH_MODE`: `native` default; also `openssh` or `old`
 - `--ssh-bin` / `LATE_SSH_BIN`: default `ssh`; parsed with shell-like quoting for OpenSSH/old modes
-- `--audio-base-url` / `LATE_AUDIO_BASE_URL`: default `https://audio.late.sh`
+- `--audio-base-url` / `LATE_AUDIO_BASE_URL`: default `https://late.sh`; this is a legacy fallback/proxy URL. Current servers send authoritative native stream URLs over pair-WS `set_playback_source`.
+- `--audio-output-device` / `LATE_AUDIO_OUTPUT_DEVICE`: optional exact CPAL output device name. When unset, the CLI uses the system default output device.
 - `--api-base-url` / `LATE_API_BASE_URL`: default `https://api.late.sh`
-- `-v`, `--verbose`: enables stderr debug logging when `RUST_LOG` is not set
+- `LATE_LOG_FILE`: optional parent CLI tracing log path override. Default is `$XDG_STATE_HOME/late/late.log`, `~/.local/state/late/late.log`, or platform temp fallback.
+- `LATE_LOG_STDERR=1`: force parent CLI tracing to stderr. Without this, an interactive `late --verbose` writes tracing to the log file so logs do not corrupt the SSH TUI. If stderr is already redirected, tracing writes to stderr for compatibility with `late -v 2>late-debug.log`.
+- `LATE_WEBVIEW_LOG`: optional embedded YouTube helper stderr log path override. Default is `$XDG_STATE_HOME/late/webview.log`, `~/.local/state/late/webview.log`, or platform temp fallback.
+- `LATE_WEBVIEW_DEBUG_STDERR=1`: inherit the embedded YouTube helper's stderr instead of redirecting it to the helper log file. Useful with `late -v 2>late-debug.log` when diagnosing GTK/WebKit/GStreamer startup.
+- The parent starts the embedded YouTube helper with `NO_AT_BRIDGE=1` to opt the helper out of the AT-SPI accessibility bridge. This avoids host `libatk-bridge-2.0` crashes caused by stale `at-spi-bus-launcher`/dbus state while keeping the setting scoped to the helper process. On Linux it also sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` by default if the caller did not set that variable, matching the common Arch/Wayland workaround for WebKitGTK DMABUF renderer failures.
+- `-v`, `--verbose`: enables debug logging when `RUST_LOG` is not set
+- `LATE_NO_UPDATE_CHECK=1`: skips the pre-connect "update available" check (see §13). Any non-empty value other than `0` disables it.
+- `LATE_INSTALL_BASE_URL`: distribution host override shared with the installer; the update check fetches `{base}/VERSION` from it (default `https://cli.late.sh`).
 
 Logging:
 - Without `RUST_LOG` and without `--verbose`, tracing output is disabled.
 - With `--verbose` and no `RUST_LOG`, the filter is `warn,symphonia=error,late=debug`.
 - If `RUST_LOG` is set, it wins through `tracing_subscriber::EnvFilter`.
+- In an interactive terminal, enabled tracing goes to `LATE_LOG_FILE`/the default CLI log path and startup prints that path once before the TUI takes over. Set `LATE_LOG_STDERR=1` for old stderr behavior.
+- `main()` installs Rustls' `ring` crypto provider before any config, HTTP, WebSocket, or LiveKit setup. This is required because the CLI dependency graph can contain both Rustls providers (`aws-lc-rs` from `reqwest` defaults and `ring` from LiveKit/WebSocket TLS), and Rustls panics if no process-level provider is selected explicitly.
 
 Local helper scripts use local override env vars:
 - `LATE_LOCAL_SSH_PORT`, falling back to `.env` `LATE_SSH_PORT` or `2222`
@@ -182,6 +201,8 @@ Server tokens are compact URL-safe base64 UUIDv7 strings. Current tokens are 22 
 - `LATE_IDENTITY_FILE` remains a legacy env fallback
 - If the selected key path does not exist and stdin/stdout are interactive, the CLI offers to generate an Ed25519 key natively
 - If the selected key path does not exist in a non-interactive terminal, the CLI fails with an explicit message
+- Native SSH key-load and public-key authentication failures append a generic key setup hint with `ssh-keygen -t ed25519 -f <path> -C late.sh` plus `late --key <path>`. Keep this generic to avoid username/fingerprint enumeration.
+- Native mode suppresses the server's generic pre-auth public-key setup banner; the CLI owns more precise local key generation and auth-failure hints. OpenSSH/old modes use system OpenSSH paths and may display server auth banners directly.
 - On Unix, generated directories/files are chmod'd toward `0700` and `0600`
 - Home lookup order is `HOME`, then `USERPROFILE`, then `HOMEDRIVE` + `HOMEPATH`
 
@@ -219,8 +240,10 @@ Client to server:
   "client_kind": "cli",
   "ssh_mode": "native",
   "platform": "linux",
+  "capabilities": ["clipboard_image"],
   "muted": false,
-  "volume_percent": 30
+  "volume_percent": 30,
+  "icecast_output_available": true
 }
 ```
 
@@ -238,15 +261,62 @@ Server to client:
 { "event": "volume_down" }
 ```
 
+```json
+{ "event": "request_clipboard_image" }
+```
+
+```json
+{ "event": "set_playback_source", "source": "icecast|youtube|radio", "stream_url": "...", "station": "...", "embedded_webview_enabled": true }
+```
+
+```json
+{ "event": "voice_join", "room": "late-voice-00000000-0000-0000-0000-000000000000", "url": "wss://rtc.late.sh", "token": "...", "muted": true, "deafened": false }
+{ "event": "voice_leave" }
+{ "event": "voice_set_muted", "muted": true }
+{ "event": "voice_set_deafened", "deafened": true }
+```
+
+Client to server, in response to `request_clipboard_image`:
+
+```json
+{ "event": "clipboard_image", "data_base64": "<base64 png bytes>" }
+```
+
+```json
+{ "event": "clipboard_image_failed", "message": "clipboard does not contain an image" }
+```
+
+Client to server for voice state:
+
+```json
+{ "event": "voice_state", "joined": true, "room": "late-voice-00000000-0000-0000-0000-000000000000", "muted": false, "deafened": false, "speaking": false }
+```
+
 Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
+- `capabilities`: optional list; Linux and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, and `voice`; macOS desktop CLI builds advertise `clipboard_image` and `youtube`; Android/Termux builds leave it empty.
 
 Pairing behavior:
 - The server stores one paired-client sender/state entry per token.
 - If multiple browser/CLI clients pair with the same token, latest registration owns control/state until it disconnects.
 - CLI WebSocket reconnects up to 10 consecutive failures with a 2s delay.
-- The first `client_state` is sent immediately after connect, then sent again after any applied control message.
+- The pair WebSocket loop is selected alongside SSH session completion in the root async task, not spawned with `tokio::spawn`. This is intentional because native LiveKit voice room state is not guaranteed to be `Send` across desktop platforms.
+- The first `client_state` is sent immediately after connect. It is resent after local mute/volume controls and when `icecast_output_available` changes; source changes and voice controls use their own handling/`voice_state`.
+- `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client's `client_state.capabilities`, so older CLIs and browser pairs do not receive unsupported control events.
+- Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
+- Clipboard images are converted to PNG in the CLI before upload. The CLI rejects zero-size images, very large decoded RGBA buffers, and PNG payloads above the upload cap before sending them over the pair socket.
+
+Embedded YouTube helper window:
+- `late webview-pair` opens a minimal 200x200 non-resizable, undecorated webview window only while the user source is YouTube and no real browser connect page is paired. The helper page gives the YouTube iframe the full viewport, disables YouTube's visible controls, and does not draw app UI over the player.
+- The helper page is served from a loopback listener but loaded as `http://localhost:<port>/`, sends `Referrer-Policy: strict-origin-when-cross-origin`, and passes `window.location.origin` as the YouTube IFrame `origin`.
+- By default the parent redirects helper stderr to the webview log path. For a single combined debug capture, run `LATE_WEBVIEW_DEBUG_STDERR=1 late -v 2>late-debug.log`; this captures both parent CLI tracing and helper GTK/WebKit/GStreamer output.
+- The normal helper spawn sets `NO_AT_BRIDGE=1` and, on Linux, sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the user already set it. If `late webview-spike ...` is run directly during debugging and crashes in `libatk-bridge-2.0.so` after `dbind-WARNING`, retry as `NO_AT_BRIDGE=1 late webview-spike <video_id>` or restart stale `at-spi-bus-launcher` processes.
+- If the embedded helper exits or fails to start 3 times within 60 seconds, the parent disables embedded YouTube fallback for 5 minutes and logs the helper log path. This prevents the repeated open/close loop when a host WebKit/GStreamer install is broken; a real browser connect page can still take over YouTube playback.
+- The helper requests no initial focus, always-on-bottom placement, and an initial top-right position on the primary monitor; on Linux it also skips the taskbar. These are best-effort window-manager hints, not a hidden/background player. On Linux/Wayland the app id/class is `sh.late.youtube`; Hyprland may ignore always-on-bottom or client-side positioning, so users who need stronger routing should use a special workspace/scratchpad instead of relying on fully off-screen placement.
+- On initial helper open only, `webview-pair` uses the first `queue_update.current.started_at_ms` snapshot to apply one `startSeconds` value to the first matching `load_video`. If a `load_video` arrives before that first snapshot, the relay buffers it and flushes it when the snapshot decision is known. After that first load is dispatched, heartbeats and later track switches do not receive a seek offset and continue through the normal `loadVideoById({ videoId })` path.
+- The helper page suppresses transient YouTube IFrame `unstarted`/`cued` states and only reports `ended` after the current item has reached `playing`; the server still owns queue advancement through its playback timer.
+- If YouTube rejects the embedded iframe with `101`, `150`, or `153`, the helper logs the rejection and stays on its controlled bridge page. It does not navigate to the normal `youtube.com/watch` page because that would leave the local player bridge and make source switching/state harder to reason about.
 
 ---
 
@@ -256,7 +326,7 @@ Pairing behavior:
 
 Audio path:
 1. Probe the MP3 stream with `SymphoniaStreamDecoder`.
-2. Choose the output sample rate from the default `cpal` output device.
+2. Choose the output sample rate from the configured `cpal` output device, or the system default when no device name is configured.
 3. Prefer the stream's native `44.1 kHz` when supported.
 4. If the device requires another rate, such as `48 kHz`, resample locally with streaming linear resampling.
 5. Decode frames into a lock-free SPSC playback ring buffer.
@@ -271,20 +341,22 @@ Critical audio invariant:
 Platform notes:
 - Android/Termux currently disables local audio in the runtime and still allows the SSH/client path to proceed.
 - WSL uses a dedicated audio profile: fixed 2048-frame CPAL buffer where possible, a short prebuffer before `stream.play()`, and fail-open startup. If local WSL audio cannot start, the CLI continues into SSH with audio disabled and points users to browser pairing or Windows-native `late.exe`.
-- On non-WSL, non-Android platforms, audio startup failure aborts the CLI before the interactive SSH session proceeds.
+- On all platforms, local audio startup failure now fails open: the CLI continues into SSH/pairing with audio disabled and reports `icecast_output_available=false` in `client_state`.
 - WSL startup failures include a targeted hint that checks `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER`.
-- A working default local audio output device is required for full desktop CLI startup.
+- A working configured or default local audio output device is required for full desktop CLI audio, but not for SSH connection.
 - MP3 is the only enabled stream format.
-- Stream URL normalization trims `/stream` and appends `/stream`.
+- Stream URL normalization trims trailing slashes, preserves `/stream`, `/stream/...`, and direct `.mp3`/`.m4a`/`.aac` URLs, and appends `/stream` only for base URLs.
 - Stream probing scans up to 64 KiB for MP3 sync/ID3 before probing.
-- Initial volume is 30%, mute starts false, and volume uses squared scaling.
+- Initial volume is 30%. Enabled desktop audio boots muted until the pair WebSocket delivers the user's initial mute/source state; if pairing repeatedly fails, the CLI releases startup mute after the 10 failed pair attempts. Volume uses squared scaling.
 - The playback queue caps at roughly two seconds of output samples.
 - Analyzer cadence is about 15 Hz with a 1024-sample FFT and 8 log-spaced bands.
 
 Audio and stream resiliency:
 - WebSocket pairing has a 10-attempt retry loop with 2s delay.
+- Startup stream probing and the decoder thread's first stream open each retry 3 times with a short 750ms delay before aborting startup. This covers rare Icecast/network timing blips where the first CLI launch says "failed to create audio decoder" but immediately joining again works.
 - Decoder recovery re-probes `SymphoniaStreamDecoder` in place after stream failures, sleeps 2s between reconnects, and gives up after 10 consecutive failures.
-- Browser and CLI visualizers share schema, not implementation. Browser uses Web Audio `AnalyserNode`; CLI uses Rust FFT over local playback samples. Similar behavior is expected, identical numbers are not.
+- CPAL output stream errors mark `icecast_output_available=false`; the pair WebSocket sends an updated `client_state` so the server can allow browser Icecast takeover while the CLI remains connected.
+- The native CLI is the current real visualizer source. It sends pair-WS `viz` frames from a Rust FFT over audible playback samples; the browser connect page no longer creates a Web Audio analyzer or sends analyzer frames.
 
 ---
 
@@ -303,6 +375,8 @@ The CLI binary must forward local terminal resizes so side-by-side panes and spl
 Raw mode:
 - Native and old modes enable CLI raw mode.
 - OpenSSH mode leaves raw mode to system OpenSSH so auth prompts retain normal terminal behavior.
+- On Windows native mode, the CLI must enable virtual-terminal/ANSI output before forwarding remote SSH bytes and virtual-terminal input before forwarding local stdin bytes. The server sends alt-screen, mouse, bracketed-paste, OSC, color, and cursor sequences as raw bytes; PowerShell/conhost sessions can print literal `ESC[` text unless `late.exe` flips the console output mode first. Arrow keys, Esc-prefixed keys, and similar special keys can fail to reach the remote TUI unless `late.exe` also enables VT input on the console input handle.
+- Native mode forwards terminal capability env hints (`TERM_PROGRAM`, `LC_TERMINAL`, `TERM_FEATURES`, Kitty/WezTerm/Ghostty/Konsole vars, and Windows Terminal `WT_SESSION`/`WT_PROFILE_ID`) after PTY setup and before shell startup. `late-ssh` uses these hints to choose Kitty/iTerm2/Sixel image protocols when `TERM` alone is generic, which is especially important for Windows Terminal running PowerShell.
 
 Shutdown invariant:
 - Native mode treats SSH channel `EOF` the same as `Close` for interactive-session shutdown.
@@ -315,21 +389,46 @@ Shutdown invariant:
 Public installers:
 - macOS/Linux/Termux: `curl -fsSL https://cli.late.sh/install.sh | bash`
 - Windows PowerShell: `irm https://cli.late.sh/install.ps1 | iex`
+- Nix/NixOS: `nix run github:mpiorowski/late-sh#late`
 
 Installer defaults:
 - `scripts/install.sh` and `scripts/install.ps1` default to `https://cli.late.sh`
 - `LATE_INSTALL_BASE_URL` overrides distribution host
 - `LATE_INSTALL_VERSION` selects a specific version instead of `latest`
 - `LATE_INSTALL_DIR` overrides install directory
-- Shell installer detects WSL and Termux; Termux receives the Android build
-- Shell installer targets `/usr/local/bin`, `$HOME/.local/bin`, or the Termux prefix, depending on platform and permissions
+- Shell installer detects WSL, Termux, and Git Bash/MSYS/Cygwin; Termux receives the Android build and Windows shell environments receive the Windows `late.exe` build
+- Shell installer targets `/usr/local/bin`, `$HOME/.local/bin`, the Termux prefix, or `%LOCALAPPDATA%\Programs\late` under Windows shell environments, depending on platform and permissions
 - PowerShell installer places `late.exe` under `%LOCALAPPDATA%\Programs\late` unless overridden and prints a PATH hint when needed
+- PowerShell installer uses environment-based architecture detection instead of `RuntimeInformation.OSArchitecture` so older Windows PowerShell/.NET hosts can run it
+- PowerShell installer passes `-UseBasicParsing` on download requests for Windows PowerShell 5.1 compatibility.
 - Checksum verification runs when checksum download succeeds; checksum download failure is warning-only
 
 Release workflow:
 - `.github/workflows/deploy_cli.yml` builds `late-cli` release artifacts
+- `deploy_cli.yml` triggers on published `*-cli` GitHub Releases and also supports manual `workflow_dispatch` with `release_tag` and `environment` inputs. Manual dispatch checks out the requested tag through the shared `source_ref` path and is the recovery path when GitHub misses a release event.
+- Linux CI/release jobs install `libwebkit2gtk-4.1-dev` because the embedded YouTube webview compiles `wry`/WebKitGTK even when the normal terminal path is the primary runtime.
+- Desktop release artifacts include native LiveKit voice media on Linux and Windows only. macOS builds do not compile or advertise native voice. Keep Windows MSVC release builds on the static CRT (`crt-static`/`/MT`) because LiveKit's bundled WebRTC objects are built that way.
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
+
+Version stamping:
+- The release tag is the single source of truth for the CLI version. `deploy_cli.yml`'s `build_cli` job exports `LATE_CLI_VERSION=<tag>`, and `late-cli/build.rs` embeds it via `cargo:rustc-env` so the binary version matches the published `VERSION` file (`publish/VERSION`, `publish/latest/VERSION`) byte-for-byte. Local/dev and CI test builds fall back to the `Cargo.toml` version, so nothing needs to be set for `cargo build`.
+- `late --version` / `late -V` prints `late <version>` (`config::VERSION`). The published `VERSION` file carries a trailing newline; the update check `trim()`s the fetched body. No manual `Cargo.toml` version bumps are required per release.
+
+### Update check (`src/update.rs`)
+
+`update::check_for_update()` runs once early in `main()`, before identity/raw-mode/SSH, so the nag prints in normal cooked-terminal mode before the TUI takes over. It is best-effort and fail-open:
+- No-op on unstamped local/dev builds (`config::VERSION == env!("CARGO_PKG_VERSION")`) so source/Nix/cargo builds never nag, and no-op when `LATE_NO_UPDATE_CHECK` is set.
+- Fetches `{LATE_INSTALL_BASE_URL or https://cli.late.sh}/VERSION` with a 2s timeout. Any network/status/parse error is logged at debug and ignored (startup continues).
+- `sanitize_version` guards against a misconfigured host returning HTML/junk. `is_outdated` compares the numeric dotted core after stripping a leading `v` and trailing `-cli`, falling back to plain string inequality when either side isn't cleanly numeric.
+- When behind, prints an aligned per-platform install block (linux / macos / windows / nixos) built by `nag_lines`, then pauses 5s (`NAG_PAUSE`) before connecting anyway. Install commands are defined once in `install_methods` (curl installer for linux/macos, `irm` for windows, `nix run github:mpiorowski/late-sh#late` for nixos). The check matches the binary's stamped version against the same `VERSION` file `publish_cli` writes, so byte-for-byte equality means up-to-date.
+
+Nix flake outputs:
+- `packages.${system}.late` builds only the `late-cli` binary and sets `mainProgram = "late"`
+- `apps.${system}.late` runs that CLI package for `nix run ...#late`
+- `packages.${system}.late-sh` remains the default multi-binary package with `mainProgram = "late-ssh"`
+- On Linux, the Nix package builds with WebKitGTK 4.1, GTK3, ALSA, glib-networking, and GStreamer base/good/bad/ugly/libav plugins. The GStreamer path uses `gstreamer.out`, and `gst-plugins-bad` is overridden with `-Dlv2=disabled` to avoid `libgstlv2.so` crashes during plugin scanning. The installed `late` binary is wrapped with a fixed `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_PLUGIN_SCANNER`, `GIO_EXTRA_MODULES`, and `LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS`; on Linux the webview helper adds those GStreamer store paths to WebKitGTK's web-process sandbox before creating the webview.
+- On Linux, `default.nix` predeclares LiveKit's `webrtc-51ef663` WebRTC zip for x86_64/aarch64 and exports `LK_CUSTOM_WEBRTC` during the Cargo build. This keeps `webrtc-sys` from trying to download WebRTC from GitHub inside the Nix sandbox.
 
 ---
 
@@ -371,13 +470,13 @@ Local end-to-end pairing needs:
 - `late-ssh` SSH reachable, usually `localhost:2222`
 - `late-web` stream proxy reachable, usually `localhost:3000/stream`
 - Icecast/Liquidsoap stack serving `/stream`
-- A usable default audio output device unless running on Android
+- A usable configured or default audio output device unless running on Android
 
 Troubleshooting:
 - SSH will not connect: check `--ssh-target`, `--ssh-port`, selected SSH mode, key path, known-host trust, and whether `ssh late.sh` works directly.
 - Native/OpenSSH token failure: verify the server supports `late-cli-token-v1`; native and OpenSSH modes intentionally do not fall back to the legacy banner.
 - Old mode token failure: verify the server emits `LATE_SESSION_TOKEN=...` when `LATE_CLI_MODE=1` is sent.
-- No audio: check local output device, stream URL, Icecast/Liquidsoap health, and WSL audio env (`DISPLAY`, `WAYLAND_DISPLAY`, `PULSE_SERVER`).
+- No audio: check local output device, `--audio-output-device` / `LATE_AUDIO_OUTPUT_DEVICE`, stream URL, Icecast/Liquidsoap health, and WSL audio env (`DISPLAY`, `WAYLAND_DISPLAY`, `PULSE_SERVER`).
 - Visualizer not updating: check token match, `/api/ws/pair` reachability, WebSocket scheme rewriting, and whether analyzer frames are being produced from post-output samples.
 - TUI volume keys do nothing: ensure the CLI is the latest paired client for that session token and is sending `client_state`.
 
@@ -385,15 +484,13 @@ Relevant TUI controls:
 - `m`: toggle mute on paired client
 - `+` / `=`: volume up on paired client
 - `-` / `_`: volume down on paired client
-- `P`: dashboard browser-pairing QR
-- `B`: dashboard CLI install/build-source modal
+- `P`: Home combined install + pair modal, with curl, Nix, build-from-source options and browser pairing QR/link
 
 ---
 
 ## 12. Current Known Gaps [VOLATILE]
 
-- CLI startup still depends on a working local audio output device for full desktop audio.
-- On non-WSL, non-Android platforms, audio startup failure prevents the interactive SSH session from proceeding.
+- Full desktop CLI audio still depends on a working configured or default local audio output device; without one, the CLI proceeds into SSH/pairing with local audio disabled.
 - OpenSSH mode is Unix-only; Windows users should use native mode.
 - Old mode remains as a compatibility path and still depends on system OpenSSH plus PTY behavior.
 - Native mode does not handle OpenSSH/FIDO/YubiKey auth flows; users must switch to OpenSSH mode for those.

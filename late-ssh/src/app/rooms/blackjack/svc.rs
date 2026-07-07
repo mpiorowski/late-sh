@@ -1,5 +1,5 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -7,15 +7,19 @@ use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
+    activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::{cards::PlayingCard, chips::svc::ChipService},
-    rooms::blackjack::{
-        player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
-        settings::BlackjackTableSettings,
-        state::{
-            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase,
-            SETTLEMENT_MIN_VIEW_MS, SeatAction, SeatPhase, Shoe, can_double, dealer_must_hit,
-            is_bust, is_natural_blackjack, payout_credit, score, settle,
+    rooms::{
+        blackjack::{
+            player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
+            settings::BlackjackTableSettings,
+            state::{
+                Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase,
+                SETTLEMENT_MIN_VIEW_MS, SeatAction, SeatPhase, Shoe, can_double, dealer_must_hit,
+                is_bust, is_natural_blackjack, payout_credit, score, settle,
+            },
         },
+        svc::RoomsService,
     },
 };
 
@@ -32,6 +36,9 @@ pub struct BlackjackService {
     snapshot_tx: watch::Sender<BlackjackSnapshot>,
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_tx: broadcast::Sender<BlackjackEvent>,
+    activity: ActivityPublisher,
+    rooms_service: RoomsService,
+    room_in_round: Arc<AtomicBool>,
     table: Arc<Mutex<SharedTableState>>,
 }
 
@@ -192,13 +199,17 @@ impl BlackjackService {
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
     ) -> Self {
         Self::new_with_settings(
             room_id,
             chip_svc,
             player_directory,
             event_tx,
+            activity,
             BlackjackTableSettings::default(),
+            rooms_service,
         )
     }
 
@@ -207,7 +218,9 @@ impl BlackjackService {
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
+        activity: ActivityPublisher,
         settings: BlackjackTableSettings,
+        rooms_service: RoomsService,
     ) -> Self {
         let table = SharedTableState::new(settings);
         let initial_snapshot = table.snapshot();
@@ -219,6 +232,9 @@ impl BlackjackService {
             snapshot_tx,
             snapshot_rx,
             event_tx,
+            activity,
+            rooms_service,
+            room_in_round: Arc::new(AtomicBool::new(false)),
             table: Arc::new(Mutex::new(table)),
         }
     }
@@ -408,11 +424,15 @@ impl BlackjackService {
                     if let Some(dealer_turn_id) = success.dealer_turn_id {
                         svc.schedule_dealer_turn(dealer_turn_id);
                     }
-                    if let Err(e) = svc.persist_settlements(success.settlements).await {
-                        tracing::error!(error = ?e, %user_id, "blackjack submit_stake settlement failed");
-                        Err("internal error".to_string())
-                    } else {
-                        Ok(success.new_balance)
+                    match svc.persist_settlements(success.settlements).await {
+                        Ok(settled_balances) => {
+                            Ok(settled_balance_for_user(&settled_balances, user_id)
+                                .unwrap_or(success.new_balance))
+                        }
+                        Err(e) => {
+                            tracing::error!(error = ?e, %user_id, "blackjack submit_stake settlement failed");
+                            Err("internal error".to_string())
+                        }
                     }
                 }
                 Err(failure) => {
@@ -467,11 +487,15 @@ impl BlackjackService {
                     if let Some(dealer_turn_id) = success.dealer_turn_id {
                         svc.schedule_dealer_turn(dealer_turn_id);
                     }
-                    if let Err(e) = svc.persist_settlements(success.settlements).await {
-                        tracing::error!(error = ?e, %user_id, amount, "blackjack place_bet settlement failed");
-                        Err("internal error".to_string())
-                    } else {
-                        Ok(success.new_balance)
+                    match svc.persist_settlements(success.settlements).await {
+                        Ok(settled_balances) => {
+                            Ok(settled_balance_for_user(&settled_balances, user_id)
+                                .unwrap_or(success.new_balance))
+                        }
+                        Err(e) => {
+                            tracing::error!(error = ?e, %user_id, amount, "blackjack place_bet settlement failed");
+                            Err("internal error".to_string())
+                        }
                     }
                 }
                 Err(failure) => {
@@ -1018,15 +1042,39 @@ impl BlackjackService {
         });
     }
 
-    async fn persist_settlements(&self, settlements: Vec<Settlement>) -> anyhow::Result<()> {
+    async fn persist_settlements(
+        &self,
+        settlements: Vec<Settlement>,
+    ) -> anyhow::Result<Vec<SettledBalance>> {
+        // Quest progress only counts hands played against at least one other
+        // player; solo blackjack against the dealer earns chips but no dailies.
+        let round_was_multiplayer = { self.table.lock().await.round_player_count >= 2 };
+        let mut settled_balances = Vec::new();
         for settlement in settlements {
             let new_balance = if settlement.credit == 0 {
-                self.chip_svc.restore_floor(settlement.user_id).await?
+                self.chip_svc.restore_floor(settlement.user_id).await
             } else {
                 self.chip_svc
                     .credit_payout(settlement.user_id, settlement.credit)
-                    .await?
+                    .await
             };
+            let new_balance = match new_balance {
+                Ok(new_balance) => new_balance,
+                Err(error) => {
+                    tracing::error!(
+                        error = ?error,
+                        user_id = %settlement.user_id,
+                        bet = settlement.bet,
+                        credit = settlement.credit,
+                        "blackjack settlement chip update failed"
+                    );
+                    continue;
+                }
+            };
+            settled_balances.push(SettledBalance {
+                user_id: settlement.user_id,
+                new_balance,
+            });
             {
                 let mut table = self.table.lock().await;
                 table.update_player_balance(settlement.user_id, new_balance);
@@ -1040,12 +1088,39 @@ impl BlackjackService {
                 credit: settlement.credit,
                 new_balance,
             });
+            if round_was_multiplayer {
+                self.activity.game_played_task(
+                    settlement.user_id,
+                    ActivityGame::Blackjack,
+                    Some(format!("bet {}", settlement.bet)),
+                );
+                if matches!(
+                    settlement.outcome,
+                    Outcome::PlayerBlackjack | Outcome::PlayerWin
+                ) {
+                    self.activity.game_won_task(
+                        settlement.user_id,
+                        ActivityGame::Blackjack,
+                        Some(format!("bet {}", settlement.bet)),
+                        None,
+                    );
+                }
+            }
         }
-        Ok(())
+        Ok(settled_balances)
     }
 
     fn publish_snapshot_locked(&self, table: &SharedTableState) {
         let _ = self.snapshot_tx.send(table.snapshot());
+        self.sync_room_status(table.round_active());
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        self.rooms_service.sync_room_status_task(
+            self.room_id,
+            self.room_in_round.clone(),
+            in_round,
+        );
     }
 }
 
@@ -1063,6 +1138,10 @@ struct SharedTableState {
     dealer_turn_scheduled: bool,
     settled_at: Option<Instant>,
     status_message: String,
+    // Number of seats dealt into the current round (captured at deal time,
+    // before settlements clear bets). Quest credit is only granted when 2+
+    // players were dealt in, so solo play against the dealer earns no dailies.
+    round_player_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -1096,6 +1175,20 @@ struct Settlement {
     bet: i64,
     outcome: Outcome,
     credit: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SettledBalance {
+    user_id: Uuid,
+    new_balance: i64,
+}
+
+fn settled_balance_for_user(settled_balances: &[SettledBalance], user_id: Uuid) -> Option<i64> {
+    settled_balances
+        .iter()
+        .rev()
+        .find(|balance| balance.user_id == user_id)
+        .map(|balance| balance.new_balance)
 }
 
 impl SeatState {
@@ -1243,6 +1336,7 @@ impl SharedTableState {
             dealer_turn_scheduled: false,
             settled_at: None,
             status_message: "Sit to join, or watch the table.".to_string(),
+            round_player_count: 0,
         }
     }
 
@@ -1353,6 +1447,17 @@ impl SharedTableState {
         self.phase == Phase::PlayerTurn
             && self.action_deadline.is_some()
             && self.action_countdown_id == countdown_id
+    }
+
+    fn round_active(&self) -> bool {
+        match self.phase {
+            Phase::Betting => self
+                .seats
+                .iter()
+                .any(|seat| seat.bet.is_some() || seat.pending_bet.is_some()),
+            Phase::BetPending | Phase::PlayerTurn | Phase::DealerTurn => true,
+            Phase::Settling => false,
+        }
     }
 
     fn action_countdown_secs(&self) -> Option<u64> {
@@ -1702,6 +1807,7 @@ impl SharedTableState {
         }
 
         let auto_left_seats = self.record_missed_deals();
+        self.round_player_count = self.seats.iter().filter(|seat| seat.bet.is_some()).count();
         self.dealer_hand.clear();
         for seat in &mut self.seats {
             seat.stake_chips.clear();
@@ -2006,6 +2112,31 @@ mod tests {
     }
 
     #[test]
+    fn settled_balance_for_user_uses_latest_balance() {
+        let user = user_id();
+        let other = user_id();
+        let settled_balances = vec![
+            SettledBalance {
+                user_id: user,
+                new_balance: 750,
+            },
+            SettledBalance {
+                user_id: other,
+                new_balance: 1200,
+            },
+            SettledBalance {
+                user_id: user,
+                new_balance: 1250,
+            },
+        ];
+
+        assert_eq!(
+            settled_balance_for_user(&settled_balances, user),
+            Some(1250)
+        );
+    }
+
+    #[test]
     fn seats_allow_four_players() {
         let mut table = SharedTableState::new(BlackjackTableSettings::default());
         let users = (0..=MAX_SEATS).map(|_| user_id()).collect::<Vec<_>>();
@@ -2091,6 +2222,26 @@ mod tests {
             table.phase,
             Phase::PlayerTurn | Phase::DealerTurn | Phase::Settling
         ));
+    }
+
+    #[test]
+    fn round_player_count_tracks_betting_seats() {
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        assert_eq!(table.round_player_count, 0);
+
+        let solo = table.sit(user_id()).expect("seat should be open");
+        table.seats[solo].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.start_round().expect("round should start");
+        // Solo play against the dealer must not earn quest credit.
+        assert_eq!(table.round_player_count, 1);
+
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        let seat_a = table.sit(user_id()).expect("seat should be open");
+        let seat_b = table.sit(user_id()).expect("seat should be open");
+        table.seats[seat_a].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.seats[seat_b].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.start_round().expect("round should start");
+        assert_eq!(table.round_player_count, 2);
     }
 
     #[test]

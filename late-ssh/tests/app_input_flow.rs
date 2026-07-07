@@ -4,7 +4,7 @@ mod helpers;
 
 use helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
-    new_test_db, render_plain, wait_for_render_contains, wait_until,
+    make_app_with_permissions, new_test_db, render_plain, wait_for_render_contains, wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -15,6 +15,7 @@ use late_core::models::{
 };
 use late_core::test_utils::create_test_user;
 use late_core::tunnel_protocol::{TUNNEL_CLOSE_RECONNECT_REQUESTED, TUNNEL_CLOSE_SESSION_ENDED};
+use late_ssh::authz::Permissions;
 use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;
@@ -24,32 +25,25 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "popup-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "popup-flow-it");
 
-    // Hop through the chat screen first so the async room snapshot has
-    // definitely landed: `> general` only renders once `drain_snapshot`
-    // populates `general_room_id`, which the dashboard `i` handler needs.
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, "> general").await;
-    app.handle_input(b"1");
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    // Wait until the async room snapshot has landed: `lounge` only renders
+    // once `drain_snapshot` populates the visible Home chat rail.
+    wait_for_render_contains(&mut app, "lounge").await;
+    wait_for_render_contains(&mut app, " Home ").await;
 
     app.handle_input(b"i");
-    wait_for_render_contains(
-        &mut app,
-        "Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel)",
-    )
-    .await;
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
 
     app.handle_input(b"q$$$");
     wait_for_render_contains(&mut app, "$$$").await;
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
 }
 
 #[tokio::test]
@@ -166,8 +160,8 @@ async fn ctrl_c_does_not_quit_the_app() {
     );
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains(" Dashboard "),
-        "expected app to remain on the dashboard after Ctrl+C; frame={frame:?}"
+        frame.contains(" Home "),
+        "expected app to remain on Home after Ctrl+C; frame={frame:?}"
     );
     assert!(
         !frame.contains(" Quit? "),
@@ -176,32 +170,62 @@ async fn ctrl_c_does_not_quit_the_app() {
 }
 
 #[tokio::test]
-async fn screen_number_keys_switch_between_dashboard_chat_games_rooms_and_artboard() {
+async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "account-delete-flow").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "account-delete-flow-it");
+
+    app.handle_input(b"\x0f");
+    wait_for_render_contains(&mut app, "Account").await;
+    wait_for_render_contains(&mut app, "account-delete-flow").await;
+    for _ in 0..4 {
+        app.handle_input(b"\t");
+    }
+    app.handle_input(b"jj");
+    wait_for_render_contains(&mut app, "Delete Account").await;
+
+    app.handle_input(b"\rwrong-name\r");
+    wait_for_render_contains(&mut app, "Typed username does not match current username.").await;
+
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Typed username does not match current username."),
+        "expected Esc to dismiss delete confirmation; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn screen_number_keys_switch_between_pages_including_pinstar() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "screen-flow-it");
 
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Chat ").await;
-
-    app.handle_input(b"3");
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
+    app.handle_input(b"3");
+    wait_for_render_contains(&mut app, " Games ").await;
+
     app.handle_input(b"4");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, " Tables ").await;
 
     app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
+    app.handle_input(b"6");
+    wait_for_render_contains(&mut app, " Directory ").await;
+
     app.handle_input(b"1");
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
 }
 
 #[tokio::test]
@@ -209,54 +233,264 @@ async fn shift_tab_cycles_screens_backwards() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-backtab-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
 
     app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, "FIFA World Cup").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, "Directory").await;
+
+    app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, " Tables ").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Games ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Chat ").await;
-
-    app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
 }
 
 #[tokio::test]
-async fn tab_cycles_screens_forward_through_rooms() {
+async fn tab_cycles_screens_forward_through_all_including_pinstar() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-tab-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "screen-tab-flow-it");
-
-    app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Chat ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, " Games ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Tables ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, "Mode       view").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Directory ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, "FIFA World Cup").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Home ").await;
+}
+
+#[tokio::test]
+async fn global_ctrl_o_opens_settings_on_dashboard() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-o-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-o-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    // Ctrl+O opens settings modal
+    app.handle_input(b"\x0f");
+    wait_for_render_contains(&mut app, "Theme").await;
+
+    // Esc to close settings, back to Home
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Theme"),
+        "expected Esc to close settings; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn global_ctrl_g_opens_hub_on_dashboard() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-g-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-g-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    // Ctrl+G opens hub modal
+    app.handle_input(b"\x07");
+    wait_for_render_contains(&mut app, "Leaderboard").await;
+
+    // Esc to close hub
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Leaderboard"),
+        "expected Esc to close hub; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn legacy_terminal_help_byte_no_longer_opens_standalone_faq_on_dashboard() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-l-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-l-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    // The old terminal FAQ byte no longer opens a standalone modal; those topics now live in the guide.
+    app.handle_input(b"\x0c");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Why copy sometimes silently fails"),
+        "expected old FAQ byte not to open standalone FAQ; frame={frame:?}"
+    );
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "CLI YouTube").await;
+}
+
+#[tokio::test]
+async fn global_w_keeps_old_bonsai_without_dynamic_selection() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "w-bonsai-mod-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app_with_permissions(
+        test_db.db.clone(),
+        user.id,
+        "w-bonsai-mod-flow-it",
+        Permissions::new(false, true),
+    );
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Bonsai Care ").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains(" Dynamic Bonsai ") && !frame.contains("Branch Graph"),
+        "expected w to keep the old Bonsai care modal; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn global_ctrl_b_is_ignored_for_all_users() {
+    for (label, permissions) in [
+        ("regular", Permissions::default()),
+        ("admin", Permissions::new(true, false)),
+        ("moderator", Permissions::new(false, true)),
+    ] {
+        let test_db = new_test_db().await;
+        let user = create_test_user(&test_db.db, &format!("ctrl-b-{label}-it")).await;
+        let client = test_db.db.get().await.expect("db client");
+        let lounge = ChatRoom::ensure_lounge(&client)
+            .await
+            .expect("ensure lounge room");
+        ChatRoomMember::join(&client, lounge.id, user.id)
+            .await
+            .expect("join lounge room");
+        let mut app = make_app_with_permissions(
+            test_db.db.clone(),
+            user.id,
+            &format!("ctrl-b-{label}-flow-it"),
+            permissions,
+        );
+        wait_for_render_contains(&mut app, " Home ").await;
+
+        app.handle_input(b"\x02");
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let frame = render_plain(&mut app);
+        assert!(
+            !frame.contains(" Dynamic Bonsai ") && !frame.contains("Branch Graph"),
+            "expected Ctrl+B to stay inert for {label}; frame={frame:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn question_mark_opens_guide_on_dashboard() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-p-guide-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-p-guide-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
+    wait_for_render_contains(&mut app, "?/Esc/q close").await;
+
+    app.handle_input(b"?");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Install `late` / Pair Browser"),
+        "expected ? to close guide; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn question_mark_opens_lateania_guide_on_lateania_screen() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "lateania-guide-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "lateania-guide-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    // Lateania has no top-level key now: open the Games hub and launch the
+    // selected (default) Lateania card.
+    app.handle_input(b"3");
+    wait_for_render_contains(&mut app, " Games ").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, " Lateania ").await;
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Lateania is the persistent BBS-style world").await;
+
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Install `late` / Pair Browser"),
+        "expected Lateania guide tab instead of Pair tab; frame={frame:?}"
+    );
 }
 
 #[tokio::test]
@@ -273,7 +507,7 @@ async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
     wait_for_render_contains(&mut app, "Cursor     1,0").await;
 
     app.handle_input(b"1");
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
 }
 
 #[tokio::test]
@@ -342,7 +576,7 @@ async fn active_artboard_blocks_screen_number_hotkeys_until_escape() {
         "expected active artboard mode to keep focus after numeric hotkeys; frame={frame:?}"
     );
     assert!(
-        !frame.contains(" Dashboard "),
+        !frame.contains(" Home "),
         "expected active artboard mode to block screen switching; frame={frame:?}"
     );
 
@@ -350,7 +584,7 @@ async fn active_artboard_blocks_screen_number_hotkeys_until_escape() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"1");
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
 }
 
 #[tokio::test]
@@ -395,7 +629,7 @@ async fn artboard_help_modal_tab_switches_help_tabs_instead_of_pages() {
 
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains(" Dashboard "),
+        frame.contains("Artboard Help"),
         "expected Artboard help Tab to stay on Artboard instead of switching page; frame={frame:?}"
     );
 }
@@ -414,7 +648,7 @@ async fn artboard_view_mode_question_mark_opens_local_help() {
 
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains(" Guide "),
+        frame.contains("Artboard Help"),
         "expected ? on Artboard view mode to open local help, not the global guide; frame={frame:?}"
     );
 }
@@ -441,7 +675,7 @@ async fn active_artboard_question_mark_types_into_canvas_instead_of_opening_help
         "expected ? to stay inside active artboard mode; frame={frame:?}"
     );
     assert!(
-        !frame.contains(" Guide "),
+        !frame.contains("Tab/S+Tab"),
         "expected ? in active artboard mode to avoid the global guide; frame={frame:?}"
     );
 }
@@ -451,24 +685,22 @@ async fn dashboard_chat_compose_treats_screen_hotkeys_as_text() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dash-chat-compose-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "dash-chat-compose-flow-it");
 
-    // See `dashboard_chat_compose_blocks_quit_shortcut` — hop through chat
-    // once to guarantee the room snapshot has populated `general_room_id`.
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, "> general").await;
-    app.handle_input(b"1");
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    // See `dashboard_chat_compose_blocks_quit_shortcut`: wait for the Home
+    // chat rail so the room snapshot has populated `lounge_room_id`.
+    wait_for_render_contains(&mut app, "lounge").await;
+    wait_for_render_contains(&mut app, " Home ").await;
 
     app.handle_input(b"i3abc");
 
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
     wait_for_render_contains(&mut app, "3abc").await;
 }
 
@@ -477,24 +709,19 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "chat-compose-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "chat-compose-flow-it");
 
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "lounge").await;
 
     app.handle_input(b"i2hey");
     wait_for_render_contains(&mut app, "2hey").await;
-    wait_for_render_contains(
-        &mut app,
-        "Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel)",
-    )
-    .await;
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
 
     // Real terminals send CR (0x0D) for Enter in raw mode. Bare LF (0x0A) is
     // Ctrl+J and is aliased to "insert newline in chat composer", so we'd
@@ -546,11 +773,10 @@ async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
     app.handle_input(b"x\x7f!");
     let frame = render_plain(&mut app);
     assert!(
-        (frame.contains("│one!│")
-            || frame.contains("│one !│")
-            || frame.contains("│one ! │")
-            || frame.contains("│one! │"))
-            && !frame.contains("x"),
+        frame.contains("one")
+            && frame.contains("!")
+            && !frame.contains("onex")
+            && !frame.contains("one x"),
         "expected composer to keep accepting backspace and text after Alt+Backspace split, allowing for cursor-cell spacing in the rendered composer; frame={frame:?}"
     );
     assert!(
@@ -564,23 +790,21 @@ async fn chat_room_switch_ctrl_keys_wrap() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "chat-room-switch-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-switch-flow-it");
 
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
-    wait_for_render_contains(&mut app, "> general").await;
+    wait_for_render_contains(&mut app, "lounge").await;
 
     app.handle_input(b"\x10");
-    wait_for_render_contains(&mut app, "> discover").await;
+    wait_for_render_contains(&mut app, "+ browse rooms").await;
 
     app.handle_input(b"\x0e");
-    wait_for_render_contains(&mut app, "> general").await;
+    wait_for_render_contains(&mut app, "lounge").await;
 }
 
 #[tokio::test]
@@ -589,19 +813,19 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     let viewer = create_test_user(&test_db.db, "f-react-viewer").await;
     let author = create_test_user(&test_db.db, "f-react-author").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general.id, author.id)
+    ChatRoomMember::join(&client, lounge.id, author.id)
         .await
         .expect("join author");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: author.id,
             body: "reaction target".to_string(),
         },
@@ -610,8 +834,6 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     .expect("create message");
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "f-react-flow-it");
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
     wait_for_render_contains(&mut app, "reaction target").await;
 
     app.handle_input(b"j");
@@ -619,13 +841,13 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     wait_for_render_contains(&mut app, "1 👍").await;
     app.handle_input(b"1");
 
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
     wait_until(
         || async {
             ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
                 .await
                 .expect("load reaction")
-                .is_some_and(|reaction| reaction.kind == 1)
+                .is_some_and(|reaction| reaction.icon == "👍")
         },
         "f leader reaction to persist",
     )
@@ -644,46 +866,44 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
 #[tokio::test]
 async fn chat_room_list_is_mouse_clickable() {
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "chat-room-mouse-it").await;
-    let author = create_test_user(&test_db.db, "chat-room-mouse-author-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
-        .await
-        .expect("ensure general room");
-    let rust = ChatRoom::get_or_create_public_room(&client, "rust")
-        .await
-        .expect("create rust room");
-    for room in [general.id, rust.id] {
-        ChatRoomMember::join(&client, room, user.id)
+    let user = {
+        let user = create_test_user(&test_db.db, "chat-room-mouse-it").await;
+        let author = create_test_user(&test_db.db, "chat-room-mouse-author-it").await;
+        let client = test_db.db.get().await.expect("db client");
+        let lounge = ChatRoom::ensure_lounge(&client)
             .await
-            .expect("join viewer");
-        ChatRoomMember::join(&client, room, author.id)
+            .expect("ensure lounge room");
+        let rust = ChatRoom::get_or_create_public_room(&client, "rust")
             .await
-            .expect("join author");
-    }
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: rust.id,
-            user_id: author.id,
-            body: "rust room backlog".to_string(),
-        },
-    )
-    .await
-    .expect("create rust message");
+            .expect("create rust room");
+        for room in [lounge.id, rust.id] {
+            ChatRoomMember::join(&client, room, user.id)
+                .await
+                .expect("join viewer");
+            ChatRoomMember::join(&client, room, author.id)
+                .await
+                .expect("join author");
+        }
+        ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id: rust.id,
+                user_id: author.id,
+                body: "rust room backlog".to_string(),
+            },
+        )
+        .await
+        .expect("create rust message");
+        user
+    };
 
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
     wait_for_render_contains(&mut app, "rust").await;
 
-    let plain = render_plain(&mut app);
-    let rust_offset = plain
-        .find("rust")
-        .unwrap_or_else(|| panic!("rust room row should render: {plain:?}"));
-    let rust_y = rust_offset / 100 + 1;
-    let click = format!("\x1b[<0;5;{rust_y}M");
-    app.handle_input(click.as_bytes());
+    // Click the #rust row in the sidebar. It sits below the Core section
+    // (lounge, mentions, news, "+ browse rooms") and the Channels header, at
+    // rail row 10 (SGR mouse rows are 1-based).
+    app.handle_input(b"\x1b[<0;5;10M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }
@@ -694,19 +914,19 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
     let viewer = create_test_user(&test_db.db, "f-react-extended-viewer").await;
     let author = create_test_user(&test_db.db, "f-react-extended-author").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general.id, author.id)
+    ChatRoomMember::join(&client, lounge.id, author.id)
         .await
         .expect("join author");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: author.id,
             body: "extended reaction target".to_string(),
         },
@@ -715,22 +935,21 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
     .expect("create message");
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "f-react-extended-flow-it");
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    app.resize(160, 32).expect("resize test terminal");
     wait_for_render_contains(&mut app, "extended reaction target").await;
 
     app.handle_input(b"j");
     app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "8 🤔").await;
-    app.handle_input(b"8");
+    wait_for_render_contains(&mut app, "1 👍").await;
+    app.handle_input(b"5");
 
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
     wait_until(
         || async {
             ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
                 .await
                 .expect("load reaction")
-                .is_some_and(|reaction| reaction.kind == 8)
+                .is_some_and(|reaction| reaction.icon == "🔥")
         },
         "extended f leader reaction to persist",
     )
@@ -750,21 +969,21 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     let thumbs_6 = create_test_user(&test_db.db, "f-owners-thumbs-6").await;
     let thinking = create_test_user(&test_db.db, "f-owners-thinking").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
     for user in [
         &viewer, &author, &thumbs_1, &thumbs_2, &thumbs_3, &thumbs_4, &thumbs_5, &thumbs_6,
         &thinking,
     ] {
-        ChatRoomMember::join(&client, general.id, user.id)
+        ChatRoomMember::join(&client, lounge.id, user.id)
             .await
             .expect("join user");
     }
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: author.id,
             body: "owner reaction target".to_string(),
         },
@@ -774,16 +993,15 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     for user in [
         &thumbs_1, &thumbs_2, &thumbs_3, &thumbs_4, &thumbs_5, &thumbs_6,
     ] {
-        ChatMessageReaction::toggle(&client, message.id, user.id, 1)
+        ChatMessageReaction::toggle(&client, message.id, user.id, "👍")
             .await
             .expect("thumb reaction");
     }
-    ChatMessageReaction::toggle(&client, message.id, thinking.id, 8)
+    ChatMessageReaction::toggle(&client, message.id, thinking.id, "🤔")
         .await
         .expect("thinking reaction");
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "f-owners-flow-it");
-    app.handle_input(b"2");
     wait_for_render_contains(&mut app, "owner reaction target").await;
 
     app.handle_input(b"j");
@@ -830,19 +1048,19 @@ async fn chat_reaction_leader_cancels_and_consumes_non_digit_input() {
     let viewer = create_test_user(&test_db.db, "f-cancel-viewer").await;
     let author = create_test_user(&test_db.db, "f-cancel-author").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general.id, author.id)
+    ChatRoomMember::join(&client, lounge.id, author.id)
         .await
         .expect("join author");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: author.id,
             body: "cancel target".to_string(),
         },
@@ -851,7 +1069,6 @@ async fn chat_reaction_leader_cancels_and_consumes_non_digit_input() {
     .expect("create message");
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "f-cancel-flow-it");
-    app.handle_input(b"2");
     wait_for_render_contains(&mut app, "cancel target").await;
 
     app.handle_input(b"j");
@@ -886,23 +1103,22 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "help-notice-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "help-notice-flow-it");
 
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "lounge").await;
 
     app.handle_input(b"i/binds\r");
     wait_for_render_contains(&mut app, " Guide ").await;
     wait_for_render_contains(&mut app, " Chat ").await;
-    wait_for_render_contains(&mut app, "/ignore [@user]").await;
+    wait_for_render_contains(&mut app, "/settings").await;
 
-    let messages = ChatMessage::list_recent(&client, general.id, 20)
+    let messages = ChatMessage::list_recent(&client, lounge.id, 20)
         .await
         .expect("list recent messages");
     assert!(messages.is_empty(), "expected /binds to stay client-side");
@@ -914,12 +1130,12 @@ async fn members_command_shows_room_members_without_persisting_message() {
     let viewer = create_test_user(&test_db.db, "list-flow-viewer").await;
     let target = create_test_user(&test_db.db, "list-flow-target").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
-        .expect("join viewer to general");
+        .expect("join viewer to lounge");
 
     let private_room = ChatRoom::create_private_room(&client, "side")
         .await
@@ -933,16 +1149,10 @@ async fn members_command_shows_room_members_without_persisting_message() {
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "list-room-members-flow-it");
 
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
-    wait_for_render_contains(&mut app, "> general").await;
-    wait_for_render_contains(&mut app, " Private ").await;
-    wait_for_render_contains(&mut app, " side").await;
+    wait_for_render_contains(&mut app, "lounge").await;
+    wait_for_render_contains(&mut app, "side").await;
 
-    app.handle_input(b" ");
-    wait_for_render_contains(&mut app, "[j] side").await;
-    app.handle_input(b"j");
-    wait_for_render_contains(&mut app, "> side").await;
+    app.handle_input(b"llll");
 
     app.handle_input(b"i/members\r");
     wait_for_render_contains(&mut app, "#side Members").await;
@@ -960,23 +1170,21 @@ async fn exit_command_opens_quit_confirm_and_stays_client_side() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "exit-command-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join user to general");
+        .expect("join user to lounge");
 
     let mut app = make_app(test_db.db.clone(), user.id, "exit-command-flow-it");
 
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
-    wait_for_render_contains(&mut app, "> general").await;
+    wait_for_render_contains(&mut app, "lounge").await;
 
     app.handle_input(b"i/exit\r");
     wait_for_render_contains(&mut app, " Quit? ").await;
 
-    let messages = ChatMessage::list_recent(&client, general.id, 20)
+    let messages = ChatMessage::list_recent(&client, lounge.id, 20)
         .await
         .expect("list recent messages");
     assert!(messages.is_empty(), "expected /exit to stay client-side");
@@ -1011,19 +1219,19 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     let viewer = create_test_user(&test_db.db, "ignore-flow-viewer").await;
     let target = create_test_user(&test_db.db, "ignore-flow-target").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general.id, target.id)
+    ChatRoomMember::join(&client, lounge.id, target.id)
         .await
         .expect("join target");
     ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: target.id,
             body: "message from ignored user".to_string(),
         },
@@ -1033,8 +1241,6 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
 
     let (mut app, chat_service) =
         make_app_with_chat_service(test_db.db.clone(), viewer.id, "ignore-command-flow-it");
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
     wait_for_render_contains(&mut app, "message from ignored user").await;
 
     app.handle_input(b"i");
@@ -1049,15 +1255,15 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     let post_ignore_body = "fresh message from ignored user";
     chat_service.send_message_task(
         target.id,
-        general.id,
-        Some("general".to_string()),
+        lounge.id,
+        Some("lounge".to_string()),
         post_ignore_body.to_string(),
         Uuid::now_v7(),
         false,
     );
     wait_until(
         || async {
-            ChatMessage::list_recent(&client, general.id, 20)
+            ChatMessage::list_recent(&client, lounge.id, 20)
                 .await
                 .expect("list recent messages")
                 .iter()
@@ -1071,12 +1277,52 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
         .await;
 
     let mut refreshed_app = make_app(test_db.db.clone(), viewer.id, "ignore-command-refresh-it");
-    refreshed_app.handle_input(b"2");
-    wait_for_render_contains(&mut refreshed_app, " Rooms ").await;
+    wait_for_render_contains(&mut refreshed_app, "lounge").await;
     helpers::assert_render_not_contains_for(
         &mut refreshed_app,
         post_ignore_body,
         Duration::from_millis(300),
     )
     .await;
+}
+
+#[tokio::test]
+async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "sheet-modal-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    // Pre-create the #dnd room and join the user before the app starts so the
+    // room is in the initial snapshot; this avoids the async race of /public.
+    let dnd = ChatRoom::get_or_create_public_room(&client, "dnd")
+        .await
+        .expect("create dnd room");
+    ChatRoomMember::join(&client, dnd.id, user.id)
+        .await
+        .expect("join dnd room");
+    let mut app = make_app(test_db.db.clone(), user.id, "sheet-modal-flow-it");
+
+    wait_for_render_contains(&mut app, "lounge").await;
+    // Wait for the dnd room to appear in the sidebar.
+    wait_for_render_contains(&mut app, "dnd").await;
+
+    // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
+    // "+ browse rooms" (Discover, last in Core), then dnd (channels section).
+    // Press l four times to reach dnd from lounge.
+    app.handle_input(b"llll");
+    wait_for_render_contains(&mut app, "Home · dnd").await;
+
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
+
+    // /sheet is room-scoped to #dnd. Autocomplete deactivates with the
+    // trailing space before \r so the enter submits rather than confirms.
+    app.handle_input(b"/sheet \r");
+    wait_for_render_contains(&mut app, "character sheet").await;
+    wait_for_render_contains(&mut app, "sheet-modal-it").await;
 }

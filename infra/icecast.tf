@@ -57,12 +57,12 @@ resource "kubernetes_deployment_v1" "icecast" {
 
           resources {
             limits = {
-              cpu    = "200m"
-              memory = "128Mi"
+              cpu    = "500m"
+              memory = "512Mi"
             }
             requests = {
-              cpu    = "50m"
-              memory = "64Mi"
+              cpu    = "100m"
+              memory = "128Mi"
             }
           }
 

@@ -54,10 +54,12 @@ pub struct ArticleFeedItem {
 pub enum ArticleEvent {
     Created {
         user_id: Uuid,
+        url: String,
     },
     Failed {
         user_id: Uuid,
         error: String,
+        url: Option<String>,
     },
     Deleted {
         user_id: Uuid,

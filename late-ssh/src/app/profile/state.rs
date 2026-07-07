@@ -1,4 +1,5 @@
-use late_core::models::profile::Profile;
+use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::user::RightSidebarMode;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -25,6 +26,7 @@ impl ProfileState {
         let snapshot_rx = profile_service.subscribe_snapshot(user_id);
         let event_rx = profile_service.subscribe_events();
         profile_service.find_profile(user_id);
+        profile_service.check_birthdays_task(user_id);
         let profile = Profile {
             theme_id: Some(theme::normalize_id(&initial_theme_id).to_string()),
             ..Profile::default()
@@ -42,11 +44,80 @@ impl ProfileState {
         &self.profile
     }
 
+    pub fn service(&self) -> &ProfileService {
+        &self.profile_service
+    }
+
     pub fn theme_id(&self) -> &str {
         self.profile
             .theme_id
             .as_deref()
             .unwrap_or_else(|| theme::normalize_id(""))
+    }
+
+    pub fn toggle_favorite_room(&mut self, room_id: Uuid) -> bool {
+        let added = if let Some(index) = self
+            .profile
+            .favorite_room_ids
+            .iter()
+            .position(|id| *id == room_id)
+        {
+            self.profile.favorite_room_ids.remove(index);
+            false
+        } else {
+            self.profile.favorite_room_ids.push(room_id);
+            true
+        };
+        self.save_profile();
+        added
+    }
+
+    pub fn move_favorite_room(&mut self, room_id: Uuid, delta: isize) -> bool {
+        let Some(index) = self
+            .profile
+            .favorite_room_ids
+            .iter()
+            .position(|id| *id == room_id)
+        else {
+            return false;
+        };
+        let target = index as isize + delta;
+        if target < 0 || target >= self.profile.favorite_room_ids.len() as isize {
+            return false;
+        }
+        self.profile.favorite_room_ids.swap(index, target as usize);
+        self.save_profile();
+        true
+    }
+
+    /// Advance both sidebars through the 4-state layout cycle (the Home `\`
+    /// key): both on -> left off -> right off -> both off -> both on. `left`
+    /// is the room-list sidebar, `right` the info sidebar (its mode is kept in
+    /// step with the visibility flag). Persists and returns the new
+    /// `(left, right)` visibility.
+    pub fn cycle_sidebars(&mut self) -> (bool, bool) {
+        const CYCLE: [(bool, bool); 4] =
+            [(true, true), (false, true), (true, false), (false, false)];
+        let current = (
+            self.profile.show_room_list_sidebar,
+            self.profile.show_right_sidebar,
+        );
+        let idx = CYCLE.iter().position(|&s| s == current).unwrap_or(0);
+        let (left, right) = CYCLE[(idx + 1) % CYCLE.len()];
+        self.profile.show_room_list_sidebar = left;
+        self.profile.show_right_sidebar = right;
+        self.profile.right_sidebar_mode = if right {
+            RightSidebarMode::On
+        } else {
+            RightSidebarMode::Off
+        };
+        self.save_profile();
+        (left, right)
+    }
+
+    fn save_profile(&self) {
+        self.profile_service
+            .edit_profile(self.user_id, profile_params_from_profile(&self.profile));
     }
 
     // Tick
@@ -90,6 +161,9 @@ impl ProfileState {
                     ProfileEvent::Error { user_id, message } if self.user_id == user_id => {
                         banner = Some(Banner::error(&message));
                     }
+                    ProfileEvent::BirthdayAlert { user_id, message } if self.user_id == user_id => {
+                        banner = Some(Banner::success(&message));
+                    }
                     _ => (),
                 },
                 Err(broadcast::error::TryRecvError::Empty) => break,
@@ -100,5 +174,41 @@ impl ProfileState {
             }
         }
         banner
+    }
+}
+
+fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
+    ProfileParams {
+        username: profile.username.clone(),
+        bio: profile.bio.clone(),
+        country: profile.country.clone(),
+        timezone: profile.timezone.clone(),
+        ide: profile.ide.clone(),
+        terminal: profile.terminal.clone(),
+        os: profile.os.clone(),
+        langs: profile.langs.clone(),
+        notify_kinds: profile.notify_kinds.clone(),
+        notify_bell: profile.notify_bell,
+        notify_cooldown_mins: profile.notify_cooldown_mins,
+        notify_format: profile.notify_format.clone(),
+        theme_id: Some(
+            profile
+                .theme_id
+                .clone()
+                .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
+        ),
+        enable_background_color: profile.enable_background_color,
+        text_brightness_adjustment: profile.text_brightness_adjustment,
+        show_dashboard_header: profile.show_dashboard_header,
+        show_right_sidebar: profile.show_right_sidebar,
+        right_sidebar_mode: profile.right_sidebar_mode,
+        right_sidebar_components: profile.right_sidebar_components.clone(),
+        show_room_list_sidebar: profile.show_room_list_sidebar,
+        keep_composer_focused: profile.keep_composer_focused,
+        start_with_music_muted: profile.start_with_music_muted,
+        land_on_home: profile.land_on_home,
+        show_flag_fallback: profile.show_flag_fallback,
+        favorite_room_ids: profile.favorite_room_ids.clone(),
+        birthday: profile.birthday.clone(),
     }
 }

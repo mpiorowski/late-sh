@@ -17,14 +17,24 @@ pub(super) fn ensure_client_identity_at(explicit_path: Option<&Path>) -> Result<
     }
 
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        anyhow::bail!(
-            "no SSH identity found; generate {} manually or rerun in an interactive terminal",
-            identity_path.display()
-        );
+        anyhow::bail!("{}", ssh_key_setup_hint(&identity_path));
     }
 
     prompt_generate_identity(&identity_path)?;
     Ok(identity_path)
+}
+
+pub(super) fn ssh_key_setup_hint(path: &Path) -> String {
+    let path_text = path.to_string_lossy();
+    let quoted_path =
+        shlex::try_quote(&path_text).unwrap_or_else(|_| path.display().to_string().into());
+    format!(
+        "no usable SSH key found.\n\
+         Generate one with:\n\
+           ssh-keygen -t ed25519 -f {quoted_path} -C late.sh\n\
+         Then reconnect with:\n\
+           late --key {quoted_path}"
+    )
 }
 
 fn ssh_dir() -> Result<PathBuf> {
@@ -157,5 +167,14 @@ mod tests {
             home_dir_from_env(None, None, Some("C:".into()), Some("\\Users\\mat".into())).unwrap(),
             PathBuf::from("C:\\Users\\mat")
         );
+    }
+
+    #[test]
+    fn ssh_key_setup_hint_includes_generate_and_reconnect_commands() {
+        let hint = ssh_key_setup_hint(Path::new("/home/alice/.ssh/id_late_sh_ed25519"));
+
+        assert!(hint.contains("ssh-keygen -t ed25519"));
+        assert!(hint.contains("-f /home/alice/.ssh/id_late_sh_ed25519"));
+        assert!(hint.contains("late --key /home/alice/.ssh/id_late_sh_ed25519"));
     }
 }

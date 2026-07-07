@@ -1,0 +1,12 @@
+{"id":"send_mail","location":"mail","daily_limit":null,"requires_target":true,"public":false,"moderation":"private_text","outcomes":["private_message"]}
+{"id":"flirt_compliment","location":"inn","daily_limit":1,"requires_target":true,"public":true,"moderation":"template_only","outcomes":["romance_score_up","news_roll"]}
+{"id":"flirt_joke","location":"inn","daily_limit":1,"requires_target":true,"public":true,"moderation":"template_only","outcomes":["romance_score_up_or_down","news_roll"]}
+{"id":"propose","location":"inn","daily_limit":1,"requires_target":true,"public":true,"moderation":"template_only","outcomes":["marriage_yes_or_no","news"]}
+{"id":"insult","location":"town_square","daily_limit":2,"requires_target":true,"public":true,"moderation":"user_text_short","outcomes":["news","reputation_change"]}
+{"id":"apologize","location":"town_square","daily_limit":2,"requires_target":true,"public":true,"moderation":"template_or_user_text_short","outcomes":["news","reputation_change"]}
+{"id":"buy_round","location":"inn","daily_limit":3,"requires_target":false,"public":true,"moderation":"template_only","outcomes":["rumor_roll","charm_gain","gold_loss"]}
+{"id":"spread_rumor","location":"inn","daily_limit":1,"requires_target":true,"public":true,"moderation":"template_only","outcomes":["news","target_flag","reputation_risk"]}
+{"id":"challenge_duel","location":"pvp","daily_limit":"player_fights_left","requires_target":true,"public":true,"moderation":"template_only","outcomes":["pvp_combat","news"]}
+{"id":"break_room","location":"pvp","daily_limit":1,"requires_target":true,"public":true,"moderation":"template_only","outcomes":["gold_steal_roll","trap_risk","news"]}
+{"id":"write_brag","location":"pvp","daily_limit":3,"requires_target":false,"public":true,"moderation":"user_text_short","outcomes":["news_append"]}
+{"id":"rename_gear","location":"shop","daily_limit":2,"requires_target":false,"public":true,"moderation":"user_text_short","outcomes":["gear_display_change","news_roll"]}

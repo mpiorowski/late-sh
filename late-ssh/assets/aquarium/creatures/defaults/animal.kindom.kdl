@@ -1,0 +1,29 @@
+kindom animal
+sauce author=mevanlc date=20260505 license=CCBYSA4.0
+
+constraints { }
+
+spawn { }
+
+preferences {
+    demersal 0.2
+    depth 0.5
+    reefer 0.2
+    nektonic 0.45
+    planktonic 0.05
+    territorial 0.1
+
+    territory-geometry {
+        rectangle {
+            width distribution=uniform min=5 max=12
+            height distribution=uniform min=3 max=7
+        }
+    }
+
+    sociality 0.35
+    schooler 0.2
+    kinophile 0.5
+    kinophobe 0.0
+    sedentary 0.25
+    flighty 0.25
+}

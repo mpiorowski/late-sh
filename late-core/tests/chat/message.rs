@@ -13,9 +13,9 @@ async fn test_chat_message() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
 
     let user = User::create(
         &client,
@@ -68,9 +68,9 @@ async fn chat_message_can_reference_reply_target() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
 
     let user = User::create(
         &client,
@@ -122,9 +122,9 @@ async fn chat_message_reactions_toggle_and_summarize() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
 
     let author = User::create(
         &client,
@@ -158,16 +158,17 @@ async fn chat_message_reactions_toggle_and_summarize() {
     .await
     .unwrap();
 
-    ChatMessageReaction::toggle(&client, message.id, author.id, 1)
+    ChatMessageReaction::toggle(&client, message.id, author.id, "👍")
         .await
         .unwrap();
-    ChatMessageReaction::toggle(&client, message.id, viewer.id, 3)
+    ChatMessageReaction::toggle(&client, message.id, viewer.id, "😂")
         .await
         .unwrap();
-    ChatMessageReaction::toggle(&client, message.id, viewer.id, 3)
+    ChatMessageReaction::toggle(&client, message.id, viewer.id, "😂")
         .await
         .unwrap();
-    ChatMessageReaction::toggle(&client, message.id, viewer.id, 8)
+    let kaomoji = "(╯`Д´)╯︵ ┻━┻";
+    ChatMessageReaction::toggle(&client, message.id, viewer.id, kaomoji)
         .await
         .unwrap();
 
@@ -176,17 +177,17 @@ async fn chat_message_reactions_toggle_and_summarize() {
         .unwrap();
     let reactions = summaries.get(&message.id).expect("reactions");
     assert_eq!(reactions.len(), 2);
-    assert_eq!(reactions[0].kind, 1);
+    assert_eq!(reactions[0].icon, "👍");
     assert_eq!(reactions[0].count, 1);
-    assert_eq!(reactions[1].kind, 8);
+    assert_eq!(reactions[1].icon, kaomoji);
     assert_eq!(reactions[1].count, 1);
 
     let owners = ChatMessageReaction::list_owners_for_message(&client, message.id)
         .await
         .unwrap();
     assert_eq!(owners.len(), 2);
-    assert_eq!(owners[0].kind, 1);
+    assert_eq!(owners[0].icon, "👍");
     assert_eq!(owners[0].user_ids, vec![author.id]);
-    assert_eq!(owners[1].kind, 8);
+    assert_eq!(owners[1].icon, kaomoji);
     assert_eq!(owners[1].user_ids, vec![viewer.id]);
 }

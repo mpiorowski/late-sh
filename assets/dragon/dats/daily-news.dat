@@ -1,0 +1,42 @@
+{"key":"monster_kill","visibility":"public","severity":"low","template":"{player} came back from the forest with {monster} stuck to their boots."}
+{"key":"player_death_monster","visibility":"public","severity":"high","template":"{monster} ended {player}'s walk in the forest."}
+{"key":"found_gold","visibility":"public","severity":"low","template":"{player} found enough loose gold to become briefly annoying."}
+{"key":"stranger_choice","visibility":"public","severity":"medium","template":"{player}'s choice on the old road is already being retold badly."}
+{"key":"lost_in_forest","visibility":"public","severity":"low","template":"{player} got lost, returned, and blamed the trees."}
+{"key":"merchant_cart","visibility":"public","severity":"medium","template":"A forest merchant says {player} made the trip memorable."}
+{"key":"old_well","visibility":"public","severity":"medium","template":"The old well answered {player}. Nobody likes what it said."}
+{"key":"lantern_trial","visibility":"public","severity":"medium","template":"{player} stood before the lantern trial and came away changed."}
+{"key":"rival_tracks","visibility":"public","severity":"medium","template":"{player} followed fresh tracks and found a reason to check the rankings."}
+{"key":"buried_door","visibility":"public","severity":"high","template":"{player} found a buried door where yesterday there was only dirt."}
+{"key":"horse_offer","visibility":"public","severity":"low","template":"{player} negotiated with a horse and somehow both sides looked offended."}
+{"key":"mirror_duel","visibility":"public","severity":"high","template":"{player} fought a reflection and the reflection complained first."}
+{"key":"bad_poem","visibility":"public","severity":"low","template":"A bard has added {player} to a poem that should not survive the week."}
+{"key":"gem_under_tongue","visibility":"public","severity":"high","template":"{player} found a gem in a place nobody wants explained."}
+{"key":"storm_bell","visibility":"public","severity":"high","template":"The storm bell rang. {player} was seen nearby with a terrible expression."}
+{"key":"dragon_smoke","visibility":"public","severity":"high","template":"Dragon smoke crossed the forest path. {player} did not laugh after that."}
+{"key":"bank_interest_large","visibility":"public","severity":"low","template":"The bank smiled at {player}, which is never free."}
+{"key":"gold_transfer","visibility":"public","severity":"medium","template":"Gold moved between hands today. The bank pretended not to notice."}
+{"key":"healer_cure","visibility":"public","severity":"low","template":"The healer says {player} is probably fine now. Probably."}
+{"key":"big_purchase_weapon","visibility":"public","severity":"medium","template":"{player} bought a new weapon and immediately stood differently."}
+{"key":"big_purchase_armor","visibility":"public","severity":"medium","template":"{player} bought new armor and made everyone hear about the straps."}
+{"key":"weapon_renamed","visibility":"public","severity":"low","template":"{player} renamed a weapon. This will either be strategy or a cry for help."}
+{"key":"armor_renamed","visibility":"public","severity":"low","template":"{player} renamed armor and asked everyone to respect the craft."}
+{"key":"trainer_win","visibility":"public","severity":"high","template":"{player} survived the trainer and walked out at level {level}."}
+{"key":"trainer_loss","visibility":"public","severity":"medium","template":"The trainer returned {player} in educational condition."}
+{"key":"inn_rest_public","visibility":"public","severity":"low","template":"{player} took a room at the inn and locked the door twice."}
+{"key":"bought_round","visibility":"public","severity":"low","template":"{player} bought a round, so naturally everyone became an expert."}
+{"key":"flirt_public","visibility":"public","severity":"medium","template":"{player} flirted in public. Witnesses are divided on whether this helped."}
+{"key":"proposal_result","visibility":"public","severity":"high","template":"A proposal happened at the inn. The furniture is still processing it."}
+{"key":"pvp_result","visibility":"public","severity":"high","template":"{attacker} fought {defender}. The town has opinions."}
+{"key":"room_break_in","visibility":"public","severity":"high","template":"Someone tried a room break-in. The room may have won."}
+{"key":"player_brag","visibility":"public","severity":"medium","template":"{player} left a boast for the town to judge."}
+{"key":"new_day_summary","visibility":"public","severity":"low","template":"A new day begins. The forest has reset its teeth."}
+{"key":"dragon_result","visibility":"public","severity":"critical","template":"{player} challenged the dragon. The whole town stopped pretending not to care."}
+{"key":"hidden_market_seen","visibility":"public","severity":"high","template":"{player} found a market that is not on any honest map."}
+{"key":"skill_public_minor","visibility":"public","severity":"low","template":"{player} used a trick worth remembering."}
+{"key":"skill_public_risky","visibility":"public","severity":"medium","template":"{player} used a risky skill and made it everyone else's story."}
+{"key":"skill_public_major","visibility":"public","severity":"high","template":"{player} revealed a skill that changed the room temperature."}
+{"key":"marriage_yes","visibility":"public","severity":"high","template":"{target} said yes to {player}. The inn got louder."}
+{"key":"marriage_no","visibility":"public","severity":"medium","template":"{player} proposed. The answer arrived with witnesses."}
+{"key":"public_insult","visibility":"public","severity":"medium","template":"{player} called {target} something the newspaper refuses to spell."}
+{"key":"public_apology","visibility":"public","severity":"low","template":"{player} apologized to {target}. Suspicion remains healthy."}

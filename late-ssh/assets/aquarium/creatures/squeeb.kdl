@@ -1,0 +1,25 @@
+name "squeeb"
+title "octopus or squid?"
+description "round head with two eyes and three short dangling tentacles; the jury is out"
+sauce author=mevanlc date=20260430 license=CCBYSA4.0
+
+face ###"""
+ .-"-.
+( o o )
+ '-.-'
+ / | \
+"""###
+
+left-drag ###"""
+ .-"-.
+( o o )
+ '-.-'
+  \ \ \
+"""###
+
+right-drag ###"""
+ .-"-.
+( o o )
+ '-.-'
+/ / /
+"""###

@@ -25,8 +25,6 @@ impl Page {
 #[derive(Serialize)]
 struct DashboardData {
     username: String,
-    stream_status: String,
-    now_playing_artist: String,
     viewer_count: i32,
     is_live: bool,
 }
@@ -39,8 +37,6 @@ struct Page {
     timestamp: String,
     // Initial fields for the dashboard data
     username: String,
-    stream_status: String,
-    now_playing_artist: String,
     viewer_count: i32,
     is_live: bool,
 }
@@ -49,8 +45,6 @@ struct Page {
 #[template(path = "pages/dashboard/partial_now_playing.html")]
 struct NowPlayingPartial {
     username: String,
-    stream_status: String,
-    now_playing_artist: String,
     viewer_count: i32,
     is_live: bool,
 }
@@ -103,8 +97,6 @@ pub async fn handler(State(state): State<AppState>) -> Result<impl IntoResponse,
     let partial = build_now_playing_partial(&state).await;
     let data = DashboardData {
         username: partial.username.clone(),
-        stream_status: partial.stream_status.clone(),
-        now_playing_artist: partial.now_playing_artist.clone(),
         viewer_count: partial.viewer_count,
         is_live: partial.is_live,
     };
@@ -123,8 +115,6 @@ pub async fn handler(State(state): State<AppState>) -> Result<impl IntoResponse,
         mem_usage,
         timestamp,
         username: data.username,
-        stream_status: data.stream_status,
-        now_playing_artist: data.now_playing_artist,
         viewer_count: data.viewer_count,
         is_live: data.is_live,
     };
@@ -137,8 +127,6 @@ async fn build_now_playing_partial(state: &AppState) -> NowPlayingPartial {
     let np = now_playing::fetch(state).await.unwrap_or_default();
     NowPlayingPartial {
         username: "Mat".to_string(),
-        stream_status: np.title.unwrap_or_else(|| "Nothing playing".to_string()),
-        now_playing_artist: np.artist.unwrap_or_else(|| "Unknown artist".to_string()),
         viewer_count: np.listeners_count.unwrap_or_default() as i32,
         is_live: true,
     }

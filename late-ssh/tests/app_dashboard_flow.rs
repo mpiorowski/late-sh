@@ -4,18 +4,14 @@ mod helpers;
 
 use helpers::{
     make_app, make_app_with_paired_client, new_test_db, render_plain, wait_for_render_contains,
-    wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::ChatRoom,
     chat_room_member::ChatRoomMember,
-    profile::{Profile, ProfileParams},
-    vote::Vote,
 };
 use late_core::test_utils::create_test_user;
-use late_ssh::session::PairControlMessage;
-use tokio::time::{Duration, Instant, sleep};
+use late_ssh::paired_clients::PairControlMessage;
 
 async fn make_app_harness() -> (late_core::test_utils::TestDb, late_ssh::app::state::App) {
     let test_db = new_test_db().await;
@@ -25,73 +21,66 @@ async fn make_app_harness() -> (late_core::test_utils::TestDb, late_ssh::app::st
 }
 
 #[tokio::test]
-async fn uppercase_b_on_dashboard_opens_cli_install_modal() {
+async fn question_mark_opens_pair_guide_first() {
     let (_test_db, mut app) = make_app_harness().await;
 
     app.handle_input(b"b");
     assert!(
-        !render_plain(&mut app).contains("build from source"),
-        "lowercase b should not open the CLI install modal"
+        !render_plain(&mut app).contains("Install `late` / Pair Browser"),
+        "lowercase b should not open the guide"
     );
 
-    app.handle_input(b"B");
-    wait_for_render_contains(&mut app, "build from source").await;
-    wait_for_render_contains(&mut app, "curl -fsSL https://cli.late.sh/install.sh | bash").await;
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
+    wait_for_render_contains(&mut app, "https://cli.late.sh/install.sh | bash").await;
+    wait_for_render_contains(&mut app, "https://cli.late.sh/install.ps1 | iex").await;
+    wait_for_render_contains(&mut app, "What `late` unlocks").await;
 }
 
 #[tokio::test]
-async fn mouse_move_does_not_close_cli_install_modal() {
+async fn mouse_move_does_not_close_pair_guide() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"B");
-    wait_for_render_contains(&mut app, "build from source").await;
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
 
     app.handle_input(b"\x1b[<35;20;5M");
-    wait_for_render_contains(&mut app, "build from source").await;
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
 
-    app.handle_input(b"x");
-    assert!(!render_plain(&mut app).contains("build from source"));
+    app.handle_input(b"q");
+    assert!(!render_plain(&mut app).contains("Install `late` / Pair Browser"));
 }
 
 #[tokio::test]
-async fn uppercase_p_only_opens_pairing_qr_on_dashboard() {
+async fn ctrl_r_no_longer_opens_pairing_qr_on_home() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Chat ").await;
-    app.handle_input(b"P");
-    assert!(
-        !render_plain(&mut app).contains("Scan to pair audio"),
-        "uppercase P should not open the pairing QR outside Dashboard"
-    );
-
-    app.handle_input(b"1");
-    wait_for_render_contains(&mut app, " Dashboard ").await;
-    app.handle_input(b"P");
-    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+    app.handle_input(b"\x12");
+    let frame = render_plain(&mut app);
+    assert!(!frame.contains("Install `late` / Pair Browser"));
+    assert!(!frame.contains("Browser pairing"));
 }
 
 #[tokio::test]
-async fn mouse_move_does_not_close_pairing_qr() {
+async fn guide_pair_section_contains_pairing_qr_on_home() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"P");
-    wait_for_render_contains(&mut app, "Scan to pair audio").await;
-
-    app.handle_input(b"\x1b[<35;20;5M");
-    wait_for_render_contains(&mut app, "Scan to pair audio").await;
-
-    app.handle_input(b"x");
-    assert!(!render_plain(&mut app).contains("Scan to pair audio"));
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
+    for _ in 0..30 {
+        app.handle_input(b"j");
+    }
+    wait_for_render_contains(&mut app, "Open this link on any device").await;
+    wait_for_render_contains(&mut app, "█▀▀▀▀▀█").await;
 }
 
 #[tokio::test]
 async fn r_refresh_on_dashboard_keeps_dashboard_visible() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
     app.handle_input(b"r");
-    wait_for_render_contains(&mut app, " Dashboard ").await;
+    wait_for_render_contains(&mut app, " Home ").await;
 }
 
 #[tokio::test]
@@ -124,20 +113,20 @@ async fn plus_and_minus_send_volume_controls_to_paired_client() {
 }
 
 #[tokio::test]
-async fn c_on_dashboard_copies_selected_message_before_voting_classic() {
+async fn c_on_dashboard_copies_selected_message() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dashboard-copy-priority-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: user.id,
             body: "copy me from dashboard".to_string(),
         },
@@ -155,320 +144,4 @@ async fn c_on_dashboard_copies_selected_message_before_voting_classic() {
     app.handle_input(b"j");
     app.handle_input(b"c");
     wait_for_render_contains(&mut app, "Message copied to clipboard!").await;
-
-    let deadline = Instant::now() + Duration::from_millis(300);
-    while Instant::now() < deadline {
-        let vote = Vote::find_by_user(&client, user.id)
-            .await
-            .expect("load vote after dashboard copy");
-        assert!(
-            vote.is_none(),
-            "expected no vote to be recorded when copying a selected dashboard message"
-        );
-        sleep(Duration::from_millis(30)).await;
-    }
-}
-
-#[tokio::test]
-async fn c_on_dashboard_still_votes_classic_when_no_message_is_selected() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "dashboard-classic-vote-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
-        .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
-        .await
-        .expect("join general room");
-
-    let mut app = make_app(
-        test_db.db.clone(),
-        user.id,
-        "dashboard-classic-vote-flow-it",
-    );
-    wait_for_render_contains(&mut app, " Dashboard ").await;
-
-    app.handle_input(b"c");
-
-    wait_until(
-        || async {
-            Vote::find_by_user(&client, user.id)
-                .await
-                .expect("load dashboard classic vote")
-                .is_some_and(|vote| vote.genre == "classic")
-        },
-        "dashboard c to cast classic vote without a selected message",
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn dashboard_lazy_primes_favorite_histories_without_opening_chat() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "dashboard-prime-user-it").await;
-    let author = create_test_user(&test_db.db, "dashboard-prime-author-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
-        .await
-        .expect("ensure general room");
-    let alpha = ChatRoom::get_or_create_public_room(&client, "alpha-prime")
-        .await
-        .expect("create alpha room");
-    let beta = ChatRoom::get_or_create_public_room(&client, "beta-prime")
-        .await
-        .expect("create beta room");
-
-    for room in [general.id, alpha.id, beta.id] {
-        ChatRoomMember::join(&client, room, user.id)
-            .await
-            .expect("join viewer");
-        ChatRoomMember::join(&client, room, author.id)
-            .await
-            .expect("join author");
-    }
-
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: general.id,
-            user_id: author.id,
-            body: "general seed".to_string(),
-        },
-    )
-    .await
-    .expect("create general message");
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: alpha.id,
-            user_id: author.id,
-            body: "alpha backlog".to_string(),
-        },
-    )
-    .await
-    .expect("create alpha message");
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: beta.id,
-            user_id: author.id,
-            body: "beta backlog".to_string(),
-        },
-    )
-    .await
-    .expect("create beta message");
-
-    Profile::update(
-        &client,
-        user.id,
-        ProfileParams {
-            username: "dashboard-prime-user-it".to_string(),
-            bio: String::new(),
-            country: None,
-            timezone: None,
-            ide: None,
-            terminal: None,
-            os: None,
-            langs: Vec::new(),
-            notify_kinds: Vec::new(),
-            notify_bell: false,
-            notify_cooldown_mins: 0,
-            notify_format: None,
-            theme_id: Some("late".to_string()),
-            enable_background_color: false,
-            show_dashboard_header: true,
-            show_right_sidebar: true,
-            show_games_sidebar: true,
-            show_settings_on_connect: true,
-            favorite_room_ids: vec![alpha.id, beta.id],
-        },
-    )
-    .await
-    .expect("update favorites");
-
-    let mut app = make_app(test_db.db.clone(), user.id, "dashboard-prime-flow-it");
-
-    wait_for_render_contains(&mut app, "alpha backlog").await;
-
-    app.handle_input(b"]");
-    wait_for_render_contains(&mut app, "beta backlog").await;
-}
-
-#[tokio::test]
-async fn dashboard_switching_to_favorite_clears_strip_unread_count() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "dashboard-unread-user-it").await;
-    let author = create_test_user(&test_db.db, "dashboard-unread-author-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
-        .await
-        .expect("ensure general room");
-    let alpha = ChatRoom::get_or_create_public_room(&client, "alpha-unread")
-        .await
-        .expect("create alpha room");
-    let beta = ChatRoom::get_or_create_public_room(&client, "beta-unread")
-        .await
-        .expect("create beta room");
-
-    for room in [general.id, alpha.id, beta.id] {
-        ChatRoomMember::join(&client, room, user.id)
-            .await
-            .expect("join viewer");
-        ChatRoomMember::join(&client, room, author.id)
-            .await
-            .expect("join author");
-    }
-
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: beta.id,
-            user_id: author.id,
-            body: "beta unread seed".to_string(),
-        },
-    )
-    .await
-    .expect("create beta message");
-
-    Profile::update(
-        &client,
-        user.id,
-        ProfileParams {
-            username: "dashboard-unread-user-it".to_string(),
-            bio: String::new(),
-            country: None,
-            timezone: None,
-            ide: None,
-            terminal: None,
-            os: None,
-            langs: Vec::new(),
-            notify_kinds: Vec::new(),
-            notify_bell: false,
-            notify_cooldown_mins: 0,
-            notify_format: None,
-            theme_id: Some("late".to_string()),
-            enable_background_color: false,
-            show_dashboard_header: true,
-            show_right_sidebar: true,
-            show_games_sidebar: true,
-            show_settings_on_connect: true,
-            favorite_room_ids: vec![alpha.id, beta.id],
-        },
-    )
-    .await
-    .expect("update favorites");
-
-    let mut app = make_app(test_db.db.clone(), user.id, "dashboard-unread-flow-it");
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let mut saw_unread = false;
-    while Instant::now() < deadline {
-        if render_plain(&mut app).contains("2:#beta-unread (1)") {
-            saw_unread = true;
-            break;
-        }
-        sleep(Duration::from_millis(30)).await;
-    }
-    assert!(
-        saw_unread,
-        "dashboard strip should show beta unread count before switching"
-    );
-
-    app.handle_input(b"]");
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let mut cleared = false;
-    while Instant::now() < deadline {
-        let plain = render_plain(&mut app);
-        if plain.contains("2:#beta-unread") && !plain.contains("2:#beta-unread (1)") {
-            cleared = true;
-            break;
-        }
-        sleep(Duration::from_millis(30)).await;
-    }
-    assert!(cleared, "dashboard switch should clear beta unread count");
-}
-
-#[tokio::test]
-async fn dashboard_favorites_strip_is_mouse_clickable() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "dashboard-mouse-user-it").await;
-    let author = create_test_user(&test_db.db, "dashboard-mouse-author-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
-        .await
-        .expect("ensure general room");
-    let alpha = ChatRoom::get_or_create_public_room(&client, "alpha")
-        .await
-        .expect("create alpha room");
-    let beta = ChatRoom::get_or_create_public_room(&client, "beta")
-        .await
-        .expect("create beta room");
-
-    for room in [general.id, alpha.id, beta.id] {
-        ChatRoomMember::join(&client, room, user.id)
-            .await
-            .expect("join viewer");
-        ChatRoomMember::join(&client, room, author.id)
-            .await
-            .expect("join author");
-    }
-
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: alpha.id,
-            user_id: author.id,
-            body: "alpha click backlog".to_string(),
-        },
-    )
-    .await
-    .expect("create alpha message");
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: beta.id,
-            user_id: author.id,
-            body: "beta click backlog".to_string(),
-        },
-    )
-    .await
-    .expect("create beta message");
-
-    Profile::update(
-        &client,
-        user.id,
-        ProfileParams {
-            username: "dashboard-mouse-user-it".to_string(),
-            bio: String::new(),
-            country: None,
-            timezone: None,
-            ide: None,
-            terminal: None,
-            os: None,
-            langs: Vec::new(),
-            notify_kinds: Vec::new(),
-            notify_bell: false,
-            notify_cooldown_mins: 0,
-            notify_format: None,
-            theme_id: Some("late".to_string()),
-            enable_background_color: false,
-            show_dashboard_header: true,
-            show_right_sidebar: true,
-            show_games_sidebar: true,
-            show_settings_on_connect: true,
-            favorite_room_ids: vec![alpha.id, beta.id],
-        },
-    )
-    .await
-    .expect("update favorites");
-
-    let mut app = make_app(test_db.db.clone(), user.id, "dashboard-mouse-flow-it");
-
-    wait_for_render_contains(&mut app, "alpha click backlog").await;
-
-    let click = "\x1b[<0;16;7M";
-    app.handle_input(click.as_bytes());
-
-    wait_for_render_contains(&mut app, "beta click backlog").await;
 }

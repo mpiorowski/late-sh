@@ -1,0 +1,249 @@
+use std::sync::Arc;
+
+use ratatui::layout::Rect;
+
+use super::proxy::{DopewarsProcess, ProcessConfig, ProxyStatus};
+use crate::render_signal::RenderSignal;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    Launcher,
+    Running,
+}
+
+/// Ticks to swallow launcher input after a game exits. At the 66ms world tick
+/// this is ~0.7s, enough to absorb the player's trailing key-mashes (clearing
+/// dopewars' end-of-game high-score screen) so a stray `q` cannot reach the
+/// launcher's global quit and drop the whole SSH session.
+const EXIT_GRACE_TICKS: u8 = 10;
+
+pub struct State {
+    user_id: uuid::Uuid,
+    host: String,
+    port: u16,
+    secret: String,
+    /// Feature flag: when false the door is reachable but launching is a no-op
+    /// and the Launcher shows an "unavailable" message.
+    enabled: bool,
+    mode: Mode,
+    proxy: Option<DopewarsProcess>,
+    /// Inner viewport (below the top bar) from the last render, used for PTY
+    /// sizing.
+    viewport: Rect,
+    term: String,
+    /// Render-loop wakeup (from the transport). Passed to the proxy so new
+    /// output repaints promptly. `None` on headless/test paths.
+    repaint: Option<Arc<RenderSignal>>,
+    /// Ticks remaining in the post-exit input grace. Counts down in `tick()`
+    /// while in the Launcher; while non-zero the launcher swallows input so a
+    /// game's trailing keystrokes can't fall through to the global quit.
+    exit_grace: u8,
+}
+
+impl State {
+    pub fn new(
+        user_id: uuid::Uuid,
+        host: String,
+        port: u16,
+        secret: String,
+        term: String,
+        enabled: bool,
+        repaint: Option<Arc<RenderSignal>>,
+    ) -> Self {
+        Self {
+            user_id,
+            host,
+            port,
+            secret,
+            enabled,
+            mode: Mode::Launcher,
+            proxy: None,
+            viewport: Rect::new(0, 0, 80, 24),
+            term,
+            repaint,
+            exit_grace: 0,
+        }
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Whether the door is enabled (launchable). When false the Launcher shows
+    /// an "unavailable" message and `connect` is a no-op.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn is_running(&self) -> bool {
+        matches!(self.mode, Mode::Running)
+    }
+
+    pub fn set_viewport(&mut self, area: Rect) {
+        let resized = self.viewport.width != area.width || self.viewport.height != area.height;
+        self.viewport = area;
+        if resized && let Some(p) = &self.proxy {
+            p.resize(area.width, area.height);
+        }
+    }
+
+    pub fn connect(&mut self) {
+        if !self.enabled || self.proxy.is_some() {
+            return;
+        }
+        self.proxy = Some(DopewarsProcess::spawn(ProcessConfig {
+            host: self.host.clone(),
+            port: self.port,
+            secret: self.secret.clone(),
+            user_id: self.user_id,
+            cols: self.viewport.width.max(1),
+            rows: self.viewport.height.max(1),
+            term: self.term.clone(),
+            repaint: self.repaint.clone(),
+        }));
+        self.mode = Mode::Running;
+        self.exit_grace = 0;
+    }
+
+    /// Called every app tick: if the process closed (quit, end of game, or
+    /// crash), return to the Launcher. Treats all exits identically.
+    pub fn tick(&mut self) {
+        if self.mode == Mode::Running {
+            let closed = self
+                .proxy
+                .as_ref()
+                .is_none_or(|p| p.status() == ProxyStatus::Closed);
+            if closed {
+                self.proxy = None;
+                self.mode = Mode::Launcher;
+                // Open the input grace: the player is usually still clearing
+                // dopewars' end-of-game high-score screen, and those trailing
+                // keys must not reach the launcher's global `q` = quit handler.
+                self.exit_grace = EXIT_GRACE_TICKS;
+            }
+        } else if self.exit_grace > 0 {
+            self.exit_grace -= 1;
+        }
+    }
+
+    /// Whether the launcher should currently swallow input because a game just
+    /// exited and the player's trailing keystrokes are still arriving. Stops a
+    /// stray `q` from falling through to the global quit and dropping the
+    /// session.
+    pub fn in_exit_grace(&self) -> bool {
+        self.exit_grace > 0
+    }
+
+    pub fn proxy(&self) -> Option<&DopewarsProcess> {
+        self.proxy.as_ref()
+    }
+
+    /// Forward client bytes to dopewars, minus mouse and bracketed-paste reports.
+    /// dopewars is a keyboard-only curses game, but late.sh keeps any-event mouse
+    /// tracking on for its own UI, so the client streams motion reports whose
+    /// leading `ESC` would otherwise leak into the game as stray commands.
+    pub fn forward_input(&self, data: &[u8]) {
+        if let Some(proxy) = &self.proxy {
+            let filtered = strip_input_noise(data);
+            if !filtered.is_empty() {
+                proxy.send_input(filtered);
+            }
+        }
+    }
+}
+
+/// Drop terminal reports dopewars must never see: SGR mouse (`ESC [ < … M/m`),
+/// legacy X10 mouse (`ESC [ M b x y`), and bracketed-paste markers (`ESC [ 200~`
+/// / `ESC [ 201~`). Everything else, including real keys and arrow-key escapes,
+/// passes through verbatim. A sequence truncated at the chunk boundary falls
+/// through unchanged rather than swallowing a following keystroke.
+fn strip_input_noise(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == 0x1b && i + 1 < data.len() && data[i + 1] == b'[' {
+            let rest = &data[i + 2..];
+            // SGR mouse: ESC [ < … (M|m)
+            if rest.first() == Some(&b'<')
+                && let Some(end) = rest.iter().position(|&b| b == b'M' || b == b'm')
+            {
+                i += 2 + end + 1;
+                continue;
+            }
+            // Legacy X10 mouse: ESC [ M b x y (three bytes after M)
+            if rest.first() == Some(&b'M') && rest.len() >= 4 {
+                i += 2 + 4;
+                continue;
+            }
+            // Bracketed-paste markers.
+            if rest.starts_with(b"200~") || rest.starts_with(b"201~") {
+                i += 2 + 4;
+                continue;
+            }
+        }
+        out.push(data[i]);
+        i += 1;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn disabled_state() -> State {
+        State::new(
+            uuid::Uuid::nil(),
+            "127.0.0.1".to_string(),
+            2324,
+            String::new(),
+            "xterm".to_string(),
+            false,
+            None,
+        )
+    }
+
+    #[test]
+    fn connect_is_a_no_op_when_disabled() {
+        let mut state = disabled_state();
+        assert!(!state.is_enabled());
+        state.connect();
+        assert!(state.proxy().is_none());
+        assert_eq!(state.mode(), Mode::Launcher);
+    }
+
+    #[test]
+    fn forward_input_without_proxy_is_a_no_op() {
+        let state = disabled_state();
+        state.forward_input(b"hjkl");
+    }
+
+    #[test]
+    fn strip_input_noise_drops_mouse_keeps_keys() {
+        assert_eq!(strip_input_noise(b"\x1b[<35;10;5MJ"), b"J");
+        assert_eq!(strip_input_noise(b"J\x1b[<35;10;5m"), b"J");
+        assert_eq!(strip_input_noise(b"a\x1b[Mabcb"), b"ab");
+        assert_eq!(strip_input_noise(b"\x1b[200~hi\x1b[201~"), b"hi");
+    }
+
+    #[test]
+    fn strip_input_noise_passes_keys_and_arrows() {
+        assert_eq!(strip_input_noise(b"hjkl"), b"hjkl");
+        assert_eq!(strip_input_noise(b"\x1b[A\x1b[B"), b"\x1b[A\x1b[B");
+    }
+
+    #[test]
+    fn exit_grace_opens_on_close_and_counts_down() {
+        let mut state = disabled_state();
+        state.mode = Mode::Running;
+        assert!(!state.in_exit_grace());
+        state.tick();
+        assert_eq!(state.mode(), Mode::Launcher);
+        assert!(state.in_exit_grace());
+        for _ in 0..EXIT_GRACE_TICKS {
+            assert!(state.in_exit_grace());
+            state.tick();
+        }
+        assert!(!state.in_exit_grace());
+    }
+}

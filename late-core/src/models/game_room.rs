@@ -7,17 +7,35 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GameKind {
+    Asterion,
     Blackjack,
+    Chess,
+    Poker,
+    Sshattrick,
     TicTacToe,
+    Tron,
 }
 
 impl GameKind {
-    pub const ALL: [Self; 2] = [Self::Blackjack, Self::TicTacToe];
+    pub const ALL: [Self; 7] = [
+        Self::Asterion,
+        Self::Blackjack,
+        Self::Chess,
+        Self::Poker,
+        Self::Sshattrick,
+        Self::TicTacToe,
+        Self::Tron,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Asterion => "asterion",
             Self::Blackjack => "blackjack",
+            Self::Chess => "chess",
+            Self::Poker => "poker",
+            Self::Sshattrick => "sshattrick",
             Self::TicTacToe => "tictactoe",
+            Self::Tron => "tron",
         }
     }
 }
@@ -33,8 +51,13 @@ impl TryFrom<&str> for GameKind {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
+            "asterion" => Ok(Self::Asterion),
             "blackjack" => Ok(Self::Blackjack),
+            "chess" => Ok(Self::Chess),
+            "poker" => Ok(Self::Poker),
+            "sshattrick" => Ok(Self::Sshattrick),
             "tictactoe" => Ok(Self::TicTacToe),
+            "tron" => Ok(Self::Tron),
             _ => Err(anyhow::anyhow!("unknown game kind: {}", value)),
         }
     }
@@ -51,6 +74,7 @@ crate::model! {
         pub display_name: String,
         pub status: String,
         pub settings: Value,
+        pub runtime_state: Value,
         pub created_by: Option<Uuid>,
     }
 }
@@ -66,7 +90,7 @@ impl GameRoom {
     }
 
     pub async fn create_with_chat_room(
-        client: &Client,
+        client: &impl GenericClient,
         game_kind: GameKind,
         slug: &str,
         display_name: &str,
@@ -160,7 +184,8 @@ impl GameRoom {
                 &[&user_id, &game_kind],
             )
             .await?;
-        Ok(row.get("count"))
+        let count: i64 = row.get("count");
+        Ok(count)
     }
 
     pub async fn close_inactive(client: &Client, ttl: Duration) -> Result<u64> {
@@ -173,6 +198,71 @@ impl GameRoom {
                  WHERE status <> $1
                    AND updated < current_timestamp - ($2::bigint * interval '1 second')",
                 &[&Self::STATUS_CLOSED, &ttl_seconds],
+            )
+            .await?;
+        Ok(updated)
+    }
+
+    pub async fn delete_inactive_open(
+        client: &Client,
+        ttl: Duration,
+        chess_ttl: Duration,
+    ) -> Result<u64> {
+        let ttl_seconds = ttl.as_secs() as i64;
+        let chess_ttl_seconds = chess_ttl.as_secs() as i64;
+        let chess = GameKind::Chess.as_str();
+        let row = client
+            .query_one(
+                "WITH deleted_rooms AS (
+                     DELETE FROM game_rooms
+                     WHERE status = $1
+                       AND (
+                         (
+                           game_kind <> $3
+                           AND updated < current_timestamp - ($2::bigint * interval '1 second')
+                         )
+                         OR (
+                           game_kind = $3
+                           AND runtime_state->>'phase' IS DISTINCT FROM 'Active'
+                           AND updated < current_timestamp - ($4::bigint * interval '1 second')
+                         )
+                       )
+                     RETURNING id, chat_room_id
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING deleted_rooms r
+                     WHERE v.target_kind = 'game_room'
+                       AND v.target_id = r.id
+                     RETURNING v.id
+                 ),
+                 deleted_chats AS (
+                     DELETE FROM chat_rooms c
+                     USING deleted_rooms r
+                     WHERE c.id = r.chat_room_id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted_chats",
+                &[&Self::STATUS_OPEN, &ttl_seconds, &chess, &chess_ttl_seconds],
+            )
+            .await?;
+        let count: i64 = row.get("count");
+        Ok(count as u64)
+    }
+
+    pub async fn reconcile_in_round_after_restart(client: &Client) -> Result<u64> {
+        let chess = GameKind::Chess.as_str();
+        let updated = client
+            .execute(
+                "UPDATE game_rooms
+                 SET status = $1,
+                     updated = current_timestamp
+                 WHERE status = $2
+                   AND (
+                     game_kind <> $3
+                     OR runtime_state->>'phase' IS DISTINCT FROM 'Active'
+                   )",
+                &[&Self::STATUS_OPEN, &Self::STATUS_IN_ROUND, &chess],
             )
             .await?;
         Ok(updated)
@@ -192,6 +282,49 @@ impl GameRoom {
         Ok(updated)
     }
 
+    pub async fn delete_by_id(client: &Client, room_id: Uuid) -> Result<u64> {
+        let row = client
+            .query_one(
+                "WITH target AS (
+                     SELECT id, chat_room_id
+                     FROM game_rooms
+                     WHERE id = $1
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING target t
+                     WHERE v.target_kind = 'game_room'
+                       AND v.target_id = t.id
+                     RETURNING v.id
+                 ),
+                 deleted AS (
+                     DELETE FROM chat_rooms c
+                     USING target t
+                     WHERE c.id = t.chat_room_id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted",
+                &[&room_id],
+            )
+            .await?;
+        let count: i64 = row.get("count");
+        Ok(count as u64)
+    }
+
+    pub async fn update_status(client: &Client, room_id: Uuid, status: &str) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE game_rooms
+                 SET status = $2,
+                     updated = current_timestamp
+                 WHERE id = $1
+                   AND status <> $2",
+                &[&room_id, &status],
+            )
+            .await?;
+        Ok(updated)
+    }
+
     pub async fn touch_activity(client: &Client, room_id: Uuid) -> Result<u64> {
         let updated = client
             .execute(
@@ -200,6 +333,45 @@ impl GameRoom {
                  WHERE id = $1
                    AND status <> $2",
                 &[&room_id, &Self::STATUS_CLOSED],
+            )
+            .await?;
+        Ok(updated)
+    }
+
+    pub async fn update_runtime_state(
+        client: &Client,
+        room_id: Uuid,
+        runtime_state: Value,
+    ) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE game_rooms
+                 SET runtime_state = $2,
+                     updated = current_timestamp
+                 WHERE id = $1
+                   AND status <> $3
+                   AND (
+                     COALESCE(
+                       CASE
+                         WHEN runtime_state ? 'revision'
+                          AND runtime_state->>'revision' ~ '^[0-9]+$'
+                         THEN (runtime_state->>'revision')::bigint
+                         ELSE 0
+                       END,
+                       0
+                     )
+                     <=
+                     COALESCE(
+                       CASE
+                         WHEN ($2::jsonb) ? 'revision'
+                          AND ($2::jsonb)->>'revision' ~ '^[0-9]+$'
+                         THEN (($2::jsonb)->>'revision')::bigint
+                         ELSE 0
+                       END,
+                       0
+                     )
+                   )",
+                &[&room_id, &runtime_state, &Self::STATUS_CLOSED],
             )
             .await?;
         Ok(updated)
