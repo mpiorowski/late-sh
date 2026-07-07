@@ -19,8 +19,16 @@ use super::tracks::{ALL_TRACKS, DEFAULT_TRACK};
 pub struct Config;
 
 impl Config {
-    /// Total terminal rows allocated to the game viewport.
+    /// Reference viewport height in rows. The road is drawn into at most this
+    /// many rows (centred when the terminal is taller) and scales down to the
+    /// terminal on shorter screens. The world simulation — spawn horizon, AI,
+    /// minimap range — is defined against this reference so difficulty is
+    /// identical regardless of the player's terminal size; only how much road is
+    /// on screen changes. See `ui::road_anchor_row` for the runtime anchor.
     pub const VISIBLE_ROWS: u16 = 50;
+    /// Fewest road rows the game will render into. Below this the picker/HUD
+    /// shows a "terminal too small" notice instead of the road.
+    pub const MIN_ROAD_ROWS: u16 = 20;
     /// Width of a single lane in character columns.
     pub const LANE_WIDTH: u16 = 5;
     /// Height of any car (player and AI) in terminal rows. Drives collision
@@ -28,8 +36,11 @@ impl Config {
     pub const CAR_HEIGHT_ROWS: u16 = 3;
     /// Rows between the bottom of the player car and the bottom of the viewport.
     pub const PLAYER_BOTTOM_MARGIN: u16 = 4;
-    /// Screen row of the top edge of the player car (0 = top of viewport).
-    /// All road-to-screen geometry is anchored here.
+    /// Reference screen row of the top edge of the player car at the full
+    /// [`Self::VISIBLE_ROWS`] height (0 = top of viewport). Physics horizons
+    /// (`VISIBLE_AHEAD_M`, `PRE_STAGE_M`) are anchored here; rendering uses a
+    /// runtime anchor derived from the actual road height so the car keeps the
+    /// same bottom margin on any terminal.
     pub const PLAYER_TOP_ROW: u16 =
         Self::VISIBLE_ROWS - Self::CAR_HEIGHT_ROWS - Self::PLAYER_BOTTOM_MARGIN;
     /// World-space scale: metres represented by one terminal row.
@@ -86,7 +97,7 @@ impl Config {
     /// Minimum terminal width (columns) required to render the game.
     pub const MIN_TERMINAL_WIDTH_FLOOR: u16 = 70;
     /// Minimum terminal height (rows) required to render the game.
-    pub const MIN_TERMINAL_HEIGHT: u16 = Self::VISIBLE_ROWS + 3;
+    pub const MIN_TERMINAL_HEIGHT: u16 = Self::MIN_ROAD_ROWS;
 }
 
 // ─── Top-level state machine ─────────────────────────────────────────────────
@@ -323,6 +334,23 @@ impl State {
         track.grade_time(projected_time)
     }
 
+    /// Score banked when the player dies mid-run: the current pace grade scaled
+    /// by the fraction of the track distance actually covered. Finishing implies
+    /// `fraction == 1.0`, so this agrees with `grade_time` at the finish line;
+    /// dying halfway at a perfect pace banks half. Rewards distance, not just
+    /// pace, so a fast-but-brief run before a crash can't bank a full score.
+    fn death_score(&self) -> i64 {
+        let Some(track) = self.active_track else {
+            return 0;
+        };
+        let total_m = track.total_distance_km() * 1000.0 * self.distance_scale();
+        if total_m <= 0.0 {
+            return 0;
+        }
+        let frac = (self.player_pos_m.max(0.0) / total_m).clamp(0.0, 1.0);
+        ((self.projected_grade() as f32) * frac).round() as i64
+    }
+
     // ─── Active track / stage accessors ──────────────────────────────────────
 
     pub fn track(&self) -> Option<&'static Track> {
@@ -550,16 +578,21 @@ impl State {
         stage.road.lanes.get(self.player_lane_idx)
     }
 
-    /// Record a finished run. Only completed tracks earn a per-track score;
-    /// crashing/dying yields nothing. The Traffic high score is the sum of all
-    /// per-track bests.
+    /// Record the run's score as a per-track best. Finishing banks the full time
+    /// grade; dying banks a partial score for the distance covered (see
+    /// [`Self::death_score`]). The Traffic high score is the sum of all per-track
+    /// bests.
     fn record_best(&mut self) {
         let Some(track) = self.active_track else {
             return;
         };
-        let Phase::Finished { score, .. } = self.phase else {
+        // `self.score` is set by both end-of-run paths (finish and death) before
+        // this is called. Ignore non-positive scores so a wipe never lowers a
+        // stored best.
+        let score = self.score;
+        if score <= 0 {
             return;
-        };
+        }
         let entry = self.best_scores.entry(track.name).or_insert(0);
         if score > *entry {
             *entry = score;
@@ -695,17 +728,20 @@ impl State {
     }
 
     fn check_collision(&self) -> bool {
-        let p_top = Config::PLAYER_TOP_ROW as i32;
-        let p_bot = p_top + Config::CAR_HEIGHT_ROWS as i32 - 1;
+        // Overlap is decided in row units relative to the player, which sits at
+        // rows `0..CAR_HEIGHT_ROWS`. Only the player↔car gap matters, so this is
+        // independent of the render anchor (viewport height) — matching how the
+        // renderer places both cars.
+        let p_bot = Config::CAR_HEIGHT_ROWS as i32 - 1;
         for car in &self.ai_cars {
             if car.lane_idx != self.player_lane_idx {
                 continue;
             }
-            let center = self.track_to_screen_row(car.pos_m);
+            let center = ((self.player_pos_m - car.pos_m) / Config::METERS_PER_ROW) as i32;
             let h = car.height_rows as i32;
             let top = center - h / 2;
             let bot = top + h - 1;
-            if top <= p_bot && bot >= p_top {
+            if top <= p_bot && bot >= 0 {
                 return true;
             }
         }
@@ -719,6 +755,7 @@ impl State {
     fn handle_crash(&mut self) {
         self.lives = self.lives.saturating_sub(1);
         if self.lives == 0 {
+            self.score = self.death_score();
             self.phase = Phase::Dead;
             self.record_best();
             return;
@@ -963,9 +1000,13 @@ impl State {
 
     // ─── Geometry helpers (used by ui.rs) ────────────────────────────────────
 
-    pub fn track_to_screen_row(&self, track_pos_m: f32) -> i32 {
+    /// Map a world position to a screen row, given the render anchor row (the
+    /// row the player car's top occupies). The anchor is supplied by the
+    /// renderer so the mapping tracks the actual viewport height; see
+    /// `ui::road_anchor_row`.
+    pub fn track_to_screen_row(&self, track_pos_m: f32, anchor_row: i32) -> i32 {
         let offset_m = self.player_pos_m - track_pos_m;
-        Config::PLAYER_TOP_ROW as i32 + (offset_m / Config::METERS_PER_ROW) as i32
+        anchor_row + (offset_m / Config::METERS_PER_ROW) as i32
     }
 
     pub fn progress_pct(&self) -> f32 {

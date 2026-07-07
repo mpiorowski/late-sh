@@ -1307,7 +1307,7 @@ pub const TRACK: Track = Track {
         S20_DJ161D_3,
         S21_BATIN,
     ],
-    distance_scale: 0.5,
+    distance_scale: 0.20,
     speed_scale: 2.0,
-    lives: 1,
+    lives: 3,
 };

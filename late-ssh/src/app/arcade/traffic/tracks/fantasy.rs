@@ -417,7 +417,7 @@ pub const TRACK: Track = Track {
         S09_THE_CITADEL,
         S10_REALMS_END,
     ],
-    distance_scale: 0.45,
+    distance_scale: 0.18,
     speed_scale: 2.0,
     lives: 3,
 };

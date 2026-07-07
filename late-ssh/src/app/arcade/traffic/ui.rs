@@ -115,10 +115,6 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bo
             Span::styled(prefix.to_string(), style),
             Span::styled(t.name.to_string(), style),
         ]));
-        lines.push(Line::from(Span::styled(
-            format!("       by {}", t.author),
-            Style::default().fg(app_theme::TEXT_DIM()),
-        )));
         lines.push(Line::from(""));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), list_area);
@@ -130,10 +126,6 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bo
             Style::default()
                 .fg(app_theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
-        )));
-        det.push(Line::from(Span::styled(
-            format!("by {}", track.author),
-            Style::default().fg(app_theme::TEXT_DIM()),
         )));
         det.push(Line::from(""));
         det.push(Line::from(Span::styled(
@@ -330,13 +322,15 @@ fn draw_race(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool
 
     match &state.phase {
         Phase::Dead => {
-            draw_game_overlay(
-                frame,
-                road_area,
-                "CRASH!",
-                "Press r to restart",
-                app_theme::ERROR(),
-            );
+            let sub = if state.score > 0 {
+                format!(
+                    "Score {} banked · press r to restart",
+                    format_score(state.score)
+                )
+            } else {
+                "Press r to restart".to_string()
+            };
+            draw_game_overlay(frame, road_area, "CRASH!", &sub, app_theme::ERROR());
         }
         Phase::Crashed => {
             let sub = format!("{} lives left · any key", state.lives);
@@ -464,6 +458,15 @@ fn darken(c: Color, factor: f32) -> Color {
     }
 }
 
+/// Screen row where the top of the player car sits, given the drawn road
+/// height. Keeps the car a fixed margin above the bottom at any viewport
+/// height, so the road adapts to short terminals instead of clipping the
+/// player off-screen. At [`Config::VISIBLE_ROWS`] this equals
+/// [`Config::PLAYER_TOP_ROW`].
+fn road_anchor_row(road_height: u16) -> i32 {
+    road_height.saturating_sub(Config::CAR_HEIGHT_ROWS + Config::PLAYER_BOTTOM_MARGIN) as i32
+}
+
 fn draw_grass(
     frame: &mut Frame,
     road_area: Rect,
@@ -475,17 +478,15 @@ fn draw_grass(
 ) {
     let buf = frame.buffer_mut();
     let track_base = (state.player_pos_m / Config::METERS_PER_ROW) as i32;
+    let anchor = road_anchor_row(road_area.height);
     let left_bg = (stage.road.sceneries.left.background.bg)(stage.theme);
     let right_bg = (stage.road.sceneries.right.background.bg)(stage.theme);
     let road_right = road_area.x + road_area.width;
 
-    for r in 0..Config::VISIBLE_ROWS {
+    for r in 0..road_area.height {
         let screen_y = road_area.y + r;
-        if screen_y >= road_area.y + road_area.height {
-            break;
-        }
         let ri = r as i32;
-        let track_row = track_base - (ri - Config::PLAYER_TOP_ROW as i32);
+        let track_row = track_base - (ri - anchor);
 
         let bottom_fade_start = road_area.height.saturating_sub(FADE_ROWS);
         let fade: Option<f32> = if r < FADE_ROWS {
@@ -734,6 +735,7 @@ fn draw_road(
     let lanes = stage.road.lanes;
     let theme_id = stage.theme;
     let player_track_row = (state.player_pos_m / Config::METERS_PER_ROW) as i32;
+    let anchor = road_anchor_row(area.height);
 
     // Pre-compute which screen rows contain a stage separator and which stage
     // starts there. Stage 0 separator is at track pos 0 (pre-stage is before that).
@@ -741,18 +743,15 @@ fn draw_road(
     let mut sep_at: Vec<(i32, usize)> = Vec::with_capacity(track.stages.len());
     let mut sep_pos_m = 0.0f32;
     for (idx, stg) in track.stages.iter().enumerate() {
-        let sep_row = state.track_to_screen_row(sep_pos_m);
+        let sep_row = state.track_to_screen_row(sep_pos_m, anchor);
         sep_at.push((sep_row, idx));
         sep_pos_m += stg.distance_km * 1000.0 * scale;
     }
 
-    for r in 0..Config::VISIBLE_ROWS {
+    for r in 0..area.height {
         let screen_y = area.y + r;
-        if screen_y >= area.y + area.height {
-            break;
-        }
         let ri = r as i32;
-        let track_row = player_track_row - (ri - Config::PLAYER_TOP_ROW as i32);
+        let track_row = player_track_row - (ri - anchor);
 
         let bottom_fade_start = area.height.saturating_sub(FADE_ROWS);
         let fade_idx: Option<usize> = if r < FADE_ROWS {
@@ -778,13 +777,12 @@ fn draw_road(
             let lane_x_start = geom.lane_starts[lane_idx];
             let car_hit = state.ai_cars.iter().find(|c| {
                 c.lane_idx == lane_idx
-                    && ri >= car_top_row(state, c)
-                    && ri < car_top_row(state, c) + c.height_rows as i32
+                    && ri >= car_top_row(state, c, anchor)
+                    && ri < car_top_row(state, c, anchor) + c.height_rows as i32
             });
-            let obstacle_hit = state
-                .obstacles
-                .iter()
-                .find(|o| o.lane_idx == lane_idx && state.track_to_screen_row(o.pos_m) == ri);
+            let obstacle_hit = state.obstacles.iter().find(|o| {
+                o.lane_idx == lane_idx && state.track_to_screen_row(o.pos_m, anchor) == ri
+            });
 
             for col in 0..Config::LANE_WIDTH {
                 let screen_x = lane_x_start + col;
@@ -893,7 +891,7 @@ fn draw_road(
             }
         }
 
-        let p_top = Config::PLAYER_TOP_ROW as i32;
+        let p_top = anchor;
         let p_h = Config::CAR_HEIGHT_ROWS as i32;
         if ri >= p_top && ri < p_top + p_h && state.player_visible() {
             let body_x = player_body_x_start(geom, state.player_lane_display);
@@ -921,8 +919,8 @@ fn draw_road(
     }
 }
 
-fn car_top_row(state: &State, c: &super::state::AiCar) -> i32 {
-    let center = state.track_to_screen_row(c.pos_m);
+fn car_top_row(state: &State, c: &super::state::AiCar, anchor: i32) -> i32 {
+    let center = state.track_to_screen_row(c.pos_m, anchor);
     center - (c.height_rows as i32) / 2
 }
 
@@ -948,10 +946,6 @@ fn draw_stats(frame: &mut Frame, area: Rect, state: &State, track: &Track, stage
             Style::default()
                 .fg(app_theme::AMBER())
                 .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            format!("   by {}", track.author),
-            Style::default().fg(app_theme::TEXT_DIM()),
         )),
         Line::from(""),
         Line::from(vec![

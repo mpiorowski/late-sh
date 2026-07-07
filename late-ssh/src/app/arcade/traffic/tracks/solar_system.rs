@@ -401,7 +401,7 @@ pub const TRACK: Track = Track {
         S08_DEEP_SPACE,
         S09_PLUTOS_EDGE,
     ],
-    distance_scale: 0.50,
+    distance_scale: 0.20,
     speed_scale: 2.5,
     lives: 4,
 };

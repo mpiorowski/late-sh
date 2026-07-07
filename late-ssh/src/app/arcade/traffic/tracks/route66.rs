@@ -534,7 +534,7 @@ pub const TRACK: Track = Track {
         S12_SAN_BERNARDINO,
         S13_SANTA_MONICA,
     ],
-    distance_scale: 0.017,
+    distance_scale: 0.0068,
     speed_scale: 2.5,
     lives: 3,
 };

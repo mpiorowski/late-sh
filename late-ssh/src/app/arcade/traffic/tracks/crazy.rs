@@ -362,7 +362,7 @@ pub const TRACK: Track = Track {
         S07_IMPOSSIBLE_HIGHWAY,
         S08_FINAL_SPRINT,
     ],
-    distance_scale: 0.80,
+    distance_scale: 0.32,
     speed_scale: 3.0,
     lives: 5,
 };

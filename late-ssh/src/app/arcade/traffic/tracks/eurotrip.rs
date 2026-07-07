@@ -569,7 +569,7 @@ pub const TRACK: Track = Track {
         S15_MONACO,
         S16_BARCELONA,
     ],
-    distance_scale: 0.019,
+    distance_scale: 0.0076,
     speed_scale: 2.0,
     lives: 3,
 };

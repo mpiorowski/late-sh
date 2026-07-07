@@ -7,7 +7,7 @@
 //! sceneries, and dividers.
 //!
 //! Tracks are hard-coded as `&'static` Rust data (no file I/O), so authoring a
-//! new one is a code change. See `tracks/sample.rs` for an end-to-end example
+//! new one is a code change. See `tracks/fantasy.rs` for an end-to-end example
 //! and `tracks/presets.rs` for reusable building blocks.
 //!
 //! # Extensibility
