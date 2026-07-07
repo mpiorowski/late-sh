@@ -18,6 +18,10 @@ use late_core::{
         greendragon_bounty::GreenDragonBounty, greendragon_character::GreenDragonCharacter,
         greendragon_commentary::GreenDragonCommentary, greendragon_news::GreenDragonNews,
         greendragon_setting::GreenDragonSetting,
+        profile_award::{
+            GREENDRAGON_DRAGON_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
+        },
+        reward::GREENDRAGON_DRAGON_REWARD_KEY,
     },
 };
 use rand::Rng;
@@ -25,7 +29,10 @@ use serde_json::Value;
 use tokio::sync::{Mutex as TokioMutex, watch};
 use uuid::Uuid;
 
-use crate::app::{activity::publisher::ActivityPublisher, games::chips::svc::ChipService};
+use crate::app::{
+    activity::event::ActivityGame, activity::publisher::ActivityPublisher,
+    games::chips::svc::ChipService,
+};
 
 use super::commentary::CommentLine;
 use super::model::{self, Character};
@@ -85,6 +92,9 @@ const NEWS_PAGE_LIMIT: i64 = 200;
 /// (upstream `LOGINTIMEOUT`, 900 seconds), ANDed with the blob's presence
 /// flag exactly as upstream pairs `laston` with `loggedin`.
 pub const ONLINE_WINDOW_SECS: i64 = 900;
+
+/// Chip-ledger reason for the once-per-account dragon-kill payout.
+const GREENDRAGON_DRAGON_LEDGER_REASON: &str = "greendragon_dragon_slain";
 
 /// One character as the warrior roster / Hall of Fame reads it: the ranked
 /// stats decoded out of the saved blob, plus the presence signals. The
@@ -244,6 +254,17 @@ pub enum RosterLoad {
     Ready(Arc<Vec<RosterEntry>>),
 }
 
+/// The async result of the barman's paid enemy lookup (`darkhorse.php`'s
+/// bartender): the target's character decoded fresh off the DB — upstream
+/// SELECTs the row at pay time, so the sheet shows the purse as it stands,
+/// not the roster snapshot. `None` means the row is gone (or unreadable):
+/// no sheet, no charge.
+#[derive(Clone)]
+pub enum IntelLoad {
+    Loading,
+    Ready(Option<Box<Character>>),
+}
+
 #[derive(Clone)]
 pub struct GreenDragonService {
     inner: Arc<Inner>,
@@ -259,11 +280,7 @@ struct Inner {
     /// highest sequence committed so far. An older snapshot (lower seq) that
     /// wins the race is skipped, so saves never go backwards.
     gates: StdMutex<HashMap<Uuid, Arc<TokioMutex<u64>>>>,
-    // Held for the forthcoming dragon-kill reward path (chip payout + activity
-    // feed entry), mirroring Lateania's milestone awards. Not yet wired.
-    #[allow(dead_code)]
     activity: ActivityPublisher,
-    #[allow(dead_code)]
     chips: ChipService,
 }
 
@@ -792,6 +809,36 @@ impl GreenDragonService {
         rx
     }
 
+    /// Read one character fresh for the barman's paid intel (`darkhorse.php`
+    /// SELECTs the accounts row at pay time). A plain read — no lock, no
+    /// gate — since nothing is written.
+    pub fn load_enemy_intel(&self, target_id: Uuid) -> watch::Receiver<IntelLoad> {
+        let (tx, rx) = watch::channel(IntelLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let target = match inner.db.get().await {
+                Ok(client) => match GreenDragonCharacter::load(&client, target_id).await {
+                    Ok(Some(blob)) => {
+                        let c = persist::from_json(&blob);
+                        // A corrupt blob decodes nameless: nothing to sell.
+                        (!c.name.trim().is_empty()).then(|| Box::new(c))
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        tracing::warn!("greendragon intel read failed: {e}");
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("greendragon db get failed on intel read: {e}");
+                    None
+                }
+            };
+            let _ = tx.send(IntelLoad::Ready(target));
+        });
+        rx
+    }
+
     /// Engage a sleeping warrior (`lib/pvpsupport.php` `setup_target`): a
     /// row-locked transaction re-checks everything against the target's
     /// *fresh* blob — still there, within two levels either way (wider than
@@ -957,6 +1004,77 @@ impl GreenDragonService {
                     }
                 }
                 Err(e) => tracing::warn!("greendragon db get failed on bounty close: {e}"),
+            }
+        });
+    }
+
+    /// The dragon-kill reward, fire-and-forget (the Lateania/NetHack milestone
+    /// shape): a feed line for every kill, and — first kill only, deduped by
+    /// the lifetime reward template and the `NOT EXISTS` award insert — a
+    /// once-per-account chip payout plus the rankless GDS profile badge.
+    pub fn reward_dragon_kill(&self, user_id: Uuid, kills: u32) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            // Every kill makes the dashboard feed; the paper in the village
+            // square is the in-door counterpart.
+            inner.activity.game_won_task(
+                user_id,
+                ActivityGame::GreenDragon,
+                Some(format!("dragon kill #{kills}")),
+                None,
+            );
+
+            let grant = match inner
+                .chips
+                .credit_lifetime_reward_template(
+                    user_id,
+                    GREENDRAGON_DRAGON_REWARD_KEY,
+                    GREENDRAGON_DRAGON_LEDGER_REASON,
+                )
+                .await
+            {
+                Ok(grant) => grant,
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        user_id = %user_id,
+                        "failed to credit greendragon dragon-kill chips"
+                    );
+                    return;
+                }
+            };
+            // Already claimed on an earlier kill — nothing more to do.
+            if !grant.credited {
+                return;
+            }
+
+            let badge = award_badge(GREENDRAGON_DRAGON_AWARD_CATEGORY, 1);
+            match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(error) = grant_unique_milestone_award(
+                        &client,
+                        user_id,
+                        GREENDRAGON_DRAGON_AWARD_CATEGORY,
+                        grant.amount,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            ?error,
+                            user_id = %user_id,
+                            badge = %badge,
+                            "failed to grant greendragon profile award badge"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        user_id = %user_id,
+                        badge = %badge,
+                        "no db client for greendragon profile award badge"
+                    );
+                }
             }
         });
     }

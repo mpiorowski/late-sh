@@ -20,7 +20,7 @@ use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe,
 use super::specialty::{self, SkillEffect};
 use super::svc::{
     BountyBoardLoad, BountyPlace, CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService,
-    HauntLoad, NewsLoad, PvpEngage, PvpSettle, PvpTarget, RosterEntry, RosterLoad,
+    HauntLoad, IntelLoad, NewsLoad, PvpEngage, PvpSettle, PvpTarget, RosterEntry, RosterLoad,
 };
 use super::tavern;
 
@@ -92,6 +92,15 @@ pub enum Mode {
     /// The Dark Horse Tavern, stumbled on in the forest (`darkhorse.php`);
     /// its sub-views (the games) live in [`TavernView`].
     Tavern,
+    /// The Dark Horse barman's counter (`darkhorse.php`'s bartender): the
+    /// way to his paid word on your enemies.
+    TavernBartender,
+    /// Picking whose name to buy: typed on the talk line, then the matches
+    /// as rows (highest level first, upstream's ordering).
+    IntelTarget,
+    /// The barman's paid rundown of one warrior — or the mock sheet he
+    /// rattles off at anyone short the coin.
+    IntelSheet,
     /// A commentary room (the shared chat primitive, `lib/commentary.php`):
     /// which room decides the section, verb, window, and the way back.
     Commentary(CommentRoom),
@@ -393,6 +402,14 @@ pub struct State {
     haunt_matches: Vec<(Uuid, String)>,
     /// An in-flight haunt attempt, drained by [`State::tick`].
     haunt_rx: Option<tokio::sync::watch::Receiver<HauntLoad>>,
+    /// Search matches at the barman's counter: `(target, label)`.
+    intel_matches: Vec<(Uuid, String)>,
+    /// An in-flight paid intel read, drained by [`State::tick`]; the 100
+    /// gold is charged when the sheet lands, never on a vanished target.
+    intel_rx: Option<tokio::sync::watch::Receiver<IntelLoad>>,
+    /// The barman's last rundown (or his mock sheet for the penniless),
+    /// rendered on [`Mode::IntelSheet`].
+    intel_sheet: Option<Vec<String>>,
     /// Last persisted moment, for the idle presence heartbeat: a live
     /// session must never fall out of the roster's 15-minute online window,
     /// or it would look attackable (upstream's `laston` refreshes every
@@ -450,6 +467,9 @@ impl State {
             bounty_page_view: None,
             bounty_matches: Vec::new(),
             bounty_target: None,
+            intel_matches: Vec::new(),
+            intel_rx: None,
+            intel_sheet: None,
             bounty_place_rx: None,
             haunt_matches: Vec::new(),
             haunt_rx: None,
@@ -471,6 +491,7 @@ impl State {
         self.tick_pvp();
         self.tick_bounty();
         self.tick_haunt();
+        self.tick_intel();
         if self.character.is_some() {
             // The presence heartbeat: an idle session re-stamps its save
             // well inside the roster's 15-minute online window, so a live
@@ -607,6 +628,9 @@ impl State {
                 self.fivesix_pot,
                 self.fivesix_rx.is_some(),
             ),
+            Mode::TavernBartender => self.tavern_bartender_menu(),
+            Mode::IntelTarget => self.intel_target_menu(),
+            Mode::IntelSheet => self.intel_sheet_menu(),
             Mode::Commentary(room) => commentary_menu(room, self.commentary_posts_left()),
             Mode::WarriorList => warrior_list_menu(self.roster_page_view.as_ref()),
             Mode::HallOfFame => hall_of_fame_menu(
@@ -675,6 +699,9 @@ impl State {
             Mode::Outhouse => self.select_outhouse(),
             Mode::OuthouseWash(paid) => self.select_outhouse_wash(paid),
             Mode::Tavern => self.select_tavern(),
+            Mode::TavernBartender => self.select_tavern_bartender(),
+            Mode::IntelTarget => self.select_intel_target(),
+            Mode::IntelSheet => self.select_intel_sheet(),
             Mode::Commentary(room) => self.select_commentary(room),
             Mode::WarriorList => self.select_warrior_list(),
             Mode::HallOfFame => self.select_hall_of_fame(),
@@ -798,6 +825,16 @@ impl State {
                     self.tavern_view = TavernView::Hub;
                     self.cursor = 0;
                 }
+                Selection::Stay
+            }
+            // The barman's counter lets out into the taproom; his inner
+            // screens back out to the counter.
+            Mode::TavernBartender => {
+                self.leave_tavern_bartender();
+                Selection::Stay
+            }
+            Mode::IntelTarget | Mode::IntelSheet => {
+                self.goto(Mode::TavernBartender);
                 Selection::Stay
             }
             _ => {
@@ -1317,7 +1354,9 @@ impl State {
     pub fn talk_push(&mut self, ch: char) {
         let budget = match self.mode {
             Mode::Commentary(room) => commentary::max_post_len(room.verb()),
-            Mode::WarriorList | Mode::BountyTarget | Mode::Haunt => SEARCH_QUERY_BUDGET,
+            Mode::WarriorList | Mode::BountyTarget | Mode::Haunt | Mode::IntelTarget => {
+                SEARCH_QUERY_BUDGET
+            }
             // Gold amounts only: digits, capped well under any purse.
             Mode::BountyAmount => {
                 if !ch.is_ascii_digit() {
@@ -1374,6 +1413,10 @@ impl State {
         }
         if self.mode == Mode::Haunt {
             self.submit_haunt_search();
+            return;
+        }
+        if self.mode == Mode::IntelTarget {
+            self.submit_intel_search();
             return;
         }
         let Mode::Commentary(room) = self.mode else {
@@ -1767,6 +1810,12 @@ impl State {
     /// The built wanted-list page (`None` until the board and roster land).
     pub fn bounty_page_view(&self) -> Option<&ListPage> {
         self.bounty_page_view.as_ref()
+    }
+
+    /// The barman's rundown for [`Mode::IntelSheet`] (`None` while he pours
+    /// and thinks — the paid read is still in flight).
+    pub fn intel_sheet_lines(&self) -> Option<&[String]> {
+        self.intel_sheet.as_deref()
     }
 
     fn dag_table_menu(&self, c: &Character) -> Vec<(String, bool)> {
@@ -3150,6 +3199,9 @@ impl State {
                 // Any price on the slayer's head dies with the old life:
                 // open bounties close to the house (`dag`'s dragonkill hook).
                 self.svc.close_bounties_on(self.user_id);
+                // The dashboard feed line (every kill) and the first kill's
+                // once-per-account chip payout + GDS profile badge.
+                self.svc.reward_dragon_kill(self.user_id, kills);
                 self.encounter = None;
                 // The kill banks a dragon point; the spend gate opens at once.
                 self.goto(Mode::SpendDragonPoints);
@@ -3801,7 +3853,8 @@ impl State {
                     self.tavern_view = TavernView::StonesSide;
                     self.cursor = 0;
                 }
-                3 => self.open_commentary(CommentRoom::DarkHorse),
+                3 => self.open_tavern_bartender(),
+                4 => self.open_commentary(CommentRoom::DarkHorse),
                 _ => self.goto(Mode::Forest),
             },
             TavernView::DiceBet => {
@@ -4046,6 +4099,214 @@ impl State {
         self.save();
     }
 
+    // --- the barman's enemy intel (darkhorse.php's bartender) -----------------
+
+    /// Step up to the barman's counter, kicking a roster read — the name
+    /// search runs over it (upstream searches the accounts table outright:
+    /// every character, online or not, dead or alive, yourself included).
+    fn open_tavern_bartender(&mut self) {
+        self.intel_matches.clear();
+        self.intel_sheet = None;
+        self.kick_roster_load();
+        self.goto(Mode::TavernBartender);
+    }
+
+    /// Back to the taproom, dropping the roster snapshot and any sheet.
+    fn leave_tavern_bartender(&mut self) {
+        self.intel_matches.clear();
+        self.intel_sheet = None;
+        self.intel_rx = None;
+        self.talk_input = None;
+        self.roster_rx = None;
+        self.roster = None;
+        self.tavern_view = TavernView::Hub;
+        self.goto(Mode::Tavern);
+    }
+
+    fn tavern_bartender_menu(&self) -> Vec<(String, bool)> {
+        vec![
+            (
+                format!("Ask after your enemies ({} gold a name)", model::INTEL_COST),
+                // The asking is free (the coin changes hands only when he
+                // talks), but he needs his mental ledger of regulars first.
+                self.roster.is_some(),
+            ),
+            ("Back to the taproom".into(), true),
+        ]
+    }
+
+    fn select_tavern_bartender(&mut self) -> Selection {
+        match self.cursor {
+            0 => {
+                self.intel_matches.clear();
+                self.goto(Mode::IntelTarget);
+                self.talk_input = Some(String::new());
+            }
+            _ => self.leave_tavern_bartender(),
+        }
+        Selection::Stay
+    }
+
+    /// Run the typed name against the roster (`darkhorse.php`'s bartender
+    /// search): subsequence match over every character, highest level
+    /// first. More than 100 hits shows the top hundred — upstream's "I'll
+    /// just tell you about some of them" truncation, not a refusal (the
+    /// broker's search refuses instead; the two differ upstream too).
+    fn submit_intel_search(&mut self) {
+        let query = self.talk_input.take().unwrap_or_default();
+        let query = query.trim().to_string();
+        let Some(roster) = self.roster.as_ref() else {
+            self.push_log("The barman is still counting his regulars; give him a moment.".into());
+            return;
+        };
+        if query.is_empty() {
+            self.push_log("The barman waits, polishing a glass. \"A name would help.\"".into());
+            return;
+        }
+        let mut matches: Vec<&RosterEntry> = roster
+            .iter()
+            .filter(|e| name_matches(&e.name, &query))
+            .collect();
+        if matches.is_empty() {
+            self.push_log("The barman shakes his head. \"Never heard of them.\"".into());
+            return;
+        }
+        // Highest level first (upstream ORDER BY level DESC); the name
+        // breaks ties for a stable list (upstream leaves them to MySQL).
+        matches.sort_by(|a, b| {
+            b.level
+                .cmp(&a.level)
+                .then_with(|| a.handle.to_lowercase().cmp(&b.handle.to_lowercase()))
+        });
+        let truncated = matches.len() > MAX_SEARCH_MATCHES;
+        matches.truncate(MAX_SEARCH_MATCHES);
+        self.intel_matches = matches
+            .iter()
+            .map(|e| (e.user_id, format!("{} (level {})", e.name, e.level)))
+            .collect();
+        if truncated {
+            self.push_log(
+                "\"That could be half the county. I'll tell you of the ones that matter.\"".into(),
+            );
+        }
+    }
+
+    fn intel_target_menu(&self) -> Vec<(String, bool)> {
+        let mut rows: Vec<(String, bool)> = self
+            .intel_matches
+            .iter()
+            .map(|(_, label)| (label.clone(), true))
+            .collect();
+        if rows.is_empty() {
+            let note = if self.roster.is_none() {
+                "He polishes a glass while you think of a name..."
+            } else {
+                "Name a warrior and he'll tell you what he knows."
+            };
+            rows.push((note.into(), false));
+        }
+        rows.push(("Ask after another name".into(), self.roster.is_some()));
+        rows.push(("Back to the counter".into(), true));
+        rows
+    }
+
+    fn select_intel_target(&mut self) -> Selection {
+        let targets = self.intel_matches.len().max(1);
+        if self.cursor >= targets {
+            match self.cursor - targets {
+                0 => self.talk_input = Some(String::new()),
+                _ => self.goto(Mode::TavernBartender),
+            }
+            return Selection::Stay;
+        }
+        let Some((target_id, _)) = self.intel_matches.get(self.cursor) else {
+            return Selection::Stay;
+        };
+        let target_id = *target_id;
+        // He sizes up your purse before he says a word: short of the price,
+        // you get the mock sheet and keep your coin (`darkhorse.php`'s
+        // cheapskate block). Any name qualifies otherwise — even your own,
+        // upstream's own quirk: 100 gold to hear about yourself.
+        if self.character.as_ref().unwrap().gold < model::INTEL_COST {
+            self.intel_sheet = Some(intel_mock_sheet());
+            self.goto(Mode::IntelSheet);
+            return Selection::Stay;
+        }
+        // The paid word reads the target fresh off the DB (upstream SELECTs
+        // the row at pay time); the charge lands with the sheet in
+        // [`State::tick_intel`], never on a vanished target.
+        self.intel_rx = Some(self.svc.load_enemy_intel(target_id));
+        self.intel_sheet = None;
+        self.goto(Mode::IntelSheet);
+        Selection::Stay
+    }
+
+    fn intel_sheet_menu(&self) -> Vec<(String, bool)> {
+        let poured = self.intel_rx.is_none();
+        vec![
+            (
+                "Ask after another name".into(),
+                poured && self.roster.is_some(),
+            ),
+            ("Back to the counter".into(), poured),
+        ]
+    }
+
+    fn select_intel_sheet(&mut self) -> Selection {
+        match self.cursor {
+            0 => {
+                self.intel_matches.clear();
+                self.intel_sheet = None;
+                self.goto(Mode::IntelTarget);
+                self.talk_input = Some(String::new());
+            }
+            _ => {
+                self.intel_sheet = None;
+                self.goto(Mode::TavernBartender);
+            }
+        }
+        Selection::Stay
+    }
+
+    /// Drain a landed intel read: build the sheet and take the 100 gold. A
+    /// vanished target costs nothing (upstream charges only after finding
+    /// the row), and a player who walked off mid-pour keeps their coin too
+    /// (they never heard the goods).
+    fn tick_intel(&mut self) {
+        let Some(rx) = self.intel_rx.as_mut() else {
+            return;
+        };
+        let landed = match &*rx.borrow_and_update() {
+            IntelLoad::Loading => return,
+            IntelLoad::Ready(target) => target.clone(),
+        };
+        self.intel_rx = None;
+        if self.mode != Mode::IntelSheet {
+            return;
+        }
+        match landed {
+            Some(target) => {
+                let c = self.character.as_mut().unwrap();
+                // The purse was checked at pick time; re-check in case it
+                // thinned in between (the mock sheet is free either way).
+                if c.gold < model::INTEL_COST {
+                    self.intel_sheet = Some(intel_mock_sheet());
+                    return;
+                }
+                c.gold -= model::INTEL_COST;
+                let my_charm = c.charm;
+                self.intel_sheet = Some(build_intel_sheet(&target, my_charm));
+                self.save();
+            }
+            None => {
+                self.intel_sheet = Some(vec![
+                    "The barman turns the name over, then shakes his head.".into(),
+                    "\"Whoever that was, they're nobody now. Keep your coin.\"".into(),
+                ]);
+            }
+        }
+    }
+
     // --- dragon points --------------------------------------------------------
 
     /// Spend one dragon point on the highlighted upgrade; the gate lifts once
@@ -4254,6 +4515,60 @@ fn name_matches(name: &str, query: &str) -> bool {
         .to_lowercase()
         .chars()
         .all(|q| name_chars.any(|c| c == q))
+}
+
+/// The barman's paid rundown (`darkhorse.php`'s bartender), row for row as
+/// upstream lays it out — titled name, race, level, hitpoints, gold on hand,
+/// gear, attack and defense (our `attack()`/`defense()` fold the race bonus
+/// in, exactly what upstream's `adjuststats` hook adds for display) — capped
+/// by the charm comparison in its exact bands.
+fn build_intel_sheet(t: &Character, my_charm: u32) -> Vec<String> {
+    let mut lines = vec![
+        "The barman pockets the coin and leans in.".to_string(),
+        format!("Name:    {}", t.titled_name()),
+        format!("Race:    {}", t.race.name()),
+        format!("Level:   {}", t.level),
+        format!("Health:  {}", t.max_hitpoints()),
+        format!("Gold:    {}", t.gold),
+        format!("Weapon:  {}", data::weapon_name(t.weapon_tier)),
+        format!("Armor:   {}", data::armor_name(t.armor_tier)),
+        format!("Attack:  {}", t.attack()),
+        format!("Defense: {}", t.defense()),
+    ];
+    // The charm comparison, band for band (`darkhorse.php`: exact equality
+    // first, then the wide tests strict at ten either side).
+    let mine = my_charm as i64;
+    let theirs = t.charm as i64;
+    let verdict = if mine == theirs {
+        "every bit as homely as you are"
+    } else if mine - 10 > theirs {
+        "far homelier than you"
+    } else if mine > theirs {
+        "a shade homelier than you"
+    } else if mine + 10 < theirs {
+        "far fairer of face than you"
+    } else {
+        "fairer of face than you"
+    };
+    lines.push(format!("They are also, he notes, {verdict}."));
+    lines
+}
+
+/// The mock sheet for anyone short the price (`darkhorse.php`'s cheapskate
+/// block): the same rows, none of the answers, and no coin taken.
+fn intel_mock_sheet() -> Vec<String> {
+    vec![
+        "The barman eyes your purse and doesn't lower his voice.".to_string(),
+        "\"Let's see what I know about beggars,\" he says...".to_string(),
+        "Name:    Someone short a hundred gold".to_string(),
+        "Level:   Skint".to_string(),
+        "Health:  Better than your credit".to_string(),
+        "Gold:    More than yours, at any rate".to_string(),
+        "Weapon:  Sharper than your wit".to_string(),
+        "Armor:   Better patched than your purse".to_string(),
+        "Attack:  Considerable".to_string(),
+        "Defense: Airtight".to_string(),
+    ]
 }
 
 /// The "last seen" column, off seconds since the character's last save.
@@ -5095,6 +5410,13 @@ fn tavern_menu(
                         && !settling,
                 ),
                 ("Stones (call the pairs)".into(), c.gold > 0),
+                (
+                    format!(
+                        "A word with the barman ({} gold a name)",
+                        model::INTEL_COST
+                    ),
+                    true,
+                ),
                 ("Read the etchings in the table".into(), true),
                 ("Back out into the forest".into(), true),
             ]
@@ -5891,5 +6213,52 @@ mod tests {
         let rows = village_menu(&lvl(1));
         assert!(rows.iter().any(|(l, _)| l == "List Warriors"));
         assert!(rows.iter().any(|(l, _)| l == "The Hall of Fame"));
+    }
+
+    #[test]
+    fn tavern_hub_offers_the_barman() {
+        let rows = tavern_menu(&lvl(1), TavernView::Hub, None, false);
+        // The barman sits between the gambler's games and the etchings; the
+        // hub select arm indexes these rows, so the order is load-bearing.
+        assert!(rows[3].0.starts_with("A word with the barman"));
+        assert!(rows[3].1);
+        assert!(rows[4].0.contains("etchings"));
+    }
+
+    #[test]
+    fn intel_sheet_reads_the_charm_bands() {
+        // The verdict line follows `darkhorse.php`'s exact comparisons:
+        // equality first, then the wide tests strict at ten either side.
+        let verdict = |mine: u32, theirs: u32| {
+            let mut t = lvl(3);
+            t.charm = theirs;
+            build_intel_sheet(&t, mine).pop().unwrap()
+        };
+        assert!(verdict(5, 5).contains("every bit as homely"));
+        assert!(verdict(20, 9).contains("far homelier"));
+        // Exactly ten apart fails the strict wide test on both sides.
+        assert!(verdict(20, 10).contains("a shade homelier"));
+        assert!(verdict(10, 20).ends_with("fairer of face than you."));
+        assert!(!verdict(10, 20).contains("far fairer"));
+        assert!(verdict(9, 20).contains("far fairer"));
+    }
+
+    #[test]
+    fn intel_sheet_lays_out_the_stat_rows() {
+        let mut t = lvl(4);
+        t.gold = 321;
+        t.weapon_tier = 2;
+        t.armor_tier = 1;
+        let sheet = build_intel_sheet(&t, 0);
+        assert!(sheet.iter().any(|l| l.contains("Level:   4")));
+        assert!(sheet.iter().any(|l| l.contains("Gold:    321")));
+        assert!(
+            sheet
+                .iter()
+                .any(|l| l.contains(data::weapon_name(2)) && l.starts_with("Weapon:"))
+        );
+        // The mock sheet shares the shape but answers nothing.
+        let mock = intel_mock_sheet();
+        assert!(mock.iter().any(|l| l.starts_with("Level:   Skint")));
     }
 }

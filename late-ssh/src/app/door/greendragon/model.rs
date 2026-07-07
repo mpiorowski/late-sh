@@ -116,6 +116,9 @@ pub const FIVESIX_COST: u64 = 5;
 /// The shared Five Sixes pot's ceiling; growth past it is pocketed by the
 /// house (`maxjackpot`).
 pub const FIVESIX_MAX_POT: u64 = 5000;
+/// The Dark Horse barman's price for a word on one enemy (`darkhorse.php`'s
+/// bartender: a flat 100 gold per name, no bribe needed).
+pub const INTEL_COST: u64 = 100;
 /// Charm required to propose marriage (rung 7 checks `charm >= 22` directly).
 pub const MARRY_CHARM_REQUIRED: u32 = 22;
 

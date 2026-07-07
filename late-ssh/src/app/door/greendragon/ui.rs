@@ -543,6 +543,64 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // The barman's counter: his greeting and the price of a word.
+    if state.mode() == Mode::TavernBartender {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "The barman is a dried stick of a man, all knuckles and squint. \
+             He knows every warrior who ever drank here, and plenty who never did.",
+            dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "\"A hundred gold buys everything I know about a name. You carry {}.\"",
+                c.gold
+            ),
+            dim,
+        )));
+    }
+
+    // Picking whose name to buy: the terms, and the name line.
+    if state.mode() == Mode::IntelTarget {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "\"Who do you want to know about? {} gold a name, friend or foe — \
+                 I don't ask which.\"",
+                model::INTEL_COST
+            ),
+            dim,
+        )));
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("about whom? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The barman's rundown (or his mock sheet), line by line.
+    if state.mode() == Mode::IntelSheet {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        match state.intel_sheet_lines() {
+            Some(sheet) => {
+                for line in sheet {
+                    lines.push(Line::from(Span::styled(line.clone(), dim)));
+                }
+            }
+            None => {
+                lines.push(Line::from(Span::styled(
+                    "The barman pours slowly, gathering what he knows...",
+                    dim,
+                )));
+            }
+        }
+    }
+
     // The haunt: the warden's leave, your favor, and the name line.
     if state.mode() == Mode::Haunt {
         let dim = Style::default().fg(theme::TEXT_DIM());
@@ -627,6 +685,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         match state.mode() {
             Mode::WarriorList => "type a name   Enter ask around   Esc never mind",
             Mode::BountyTarget => "type a name   Enter check his book   Esc never mind",
+            Mode::IntelTarget => "type a name   Enter ask him   Esc never mind",
             Mode::BountyAmount => "type an amount   Enter slide the coins over   Esc never mind",
             Mode::Haunt => "type a name   Enter whisper it   Esc never mind",
             _ => "type your line   Enter say it   Esc think better of it",
@@ -700,6 +759,9 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Outhouse => "The Outhouse",
         Mode::OuthouseWash(_) => "The Rain Barrel",
         Mode::Tavern => "The Dark Horse Tavern",
+        Mode::TavernBartender => "The Barman's Counter",
+        Mode::IntelTarget => "Naming an Enemy",
+        Mode::IntelSheet => "The Barman's Word",
         Mode::Commentary(room) => match room {
             CommentRoom::Village => "The Town Square",
             CommentRoom::Inn => "The Long Table",
@@ -738,6 +800,10 @@ fn controls_hint(mode: Mode) -> &'static str {
         | Mode::Drinks
         | Mode::Romance => "up/down move   Enter choose   Esc back to the inn",
         Mode::Outhouse | Mode::Tavern => "up/down move   Enter choose   Esc back to the forest",
+        Mode::TavernBartender => "up/down move   Enter choose   Esc back to the taproom",
+        Mode::IntelTarget | Mode::IntelSheet => {
+            "up/down move   Enter choose   Esc back to the counter"
+        }
         Mode::OuthouseWash(_) => "up/down move   Enter choose   Esc slips out unwashed",
         Mode::Commentary(_) => "up/down move   Enter choose   Esc step away",
         Mode::DagTable => "up/down move   Enter choose   Esc back to the inn",

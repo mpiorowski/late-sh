@@ -387,8 +387,8 @@ romance NPCs is "your partner", and bard outcome 15. Field
   was no gold to lose.
 
 ### Dark Horse Tavern (restore `events::Tavern` into a full room)
-Menu: the old gambler (3 games), the tavern board + enemy intel (phase 4),
-leave. Games:
+Menu: the old gambler (3 games), the tavern board (phase 4's commentary),
+the barman's enemy intel (phase 4, see its section), leave. Games:
 - **Dice**: bet any amount ≤ gold. Player rolls d6, may keep or reroll
   (max 3 rolls). Old man then rolls with this AI: roll 1 — keep if
   `r > player || r == 6`; roll 2 — keep if `r >= player`; roll 3 — forced.
@@ -474,8 +474,8 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
   routes you to the inn's target list (the barkeep's keys). Bank payment
   keeps the +5% fee and requires a positive balance covering it.
 - **The Dark Horse** restores the gambler's three games; the comment board
-  and the bartender's paid enemy-intel are phase-4 features (commentary /
-  roster) and stay deferred. Abandoning a game mid-hand forfeits nothing,
+  and the barman's paid enemy-intel were phase-4 features and have since
+  landed (see phase 4). Abandoning a game mid-hand forfeits nothing,
   exactly like navigating away upstream (the stake settles only at the end).
 - **Five Sixes settles against the shared pot atomically** in the DB
   (migration 097); the stake is paid up front and refunded if the
@@ -497,7 +497,8 @@ online-roster path; the session stays authoritative for its own character
 ### Build order
 commentary ✓ → roster/HoF ✓ → gypsy ✓ (folded into the commentary slice — it
 is just a paid door onto the shade section) → PvP ✓ → bounties + haunt ✓ →
-clans → mail(?) → gardens ✓ / veterans' rock ✓. Commentary first: five
+barman's enemy intel ✓ + rewards wiring ✓ (the two small leftovers, 2026-07)
+→ clans → mail(?) → gardens ✓ / veterans' rock ✓. Commentary first: five
 other features are just sections of it.
 
 ### `commentary` — the one chat primitive — DONE
@@ -939,6 +940,57 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 - All prose is original: the six fumble vignettes (`data::HAUNT_FUMBLES`),
   the news lines, the warden's framing.
 
+### The barman's enemy intel (the Dark Horse bartender) — DONE
+
+Source: `modules/darkhorse.php` (`darkhorse_bartender`, lines 100–214).
+Implemented 2026-07, audited line-by-line against the local clone first.
+**Source-audit corrections** to what the docs previously claimed (both had
+called this "a bribe-priced read of the online roster" — wrong twice):
+
+1. **A flat 100 gold per name** — no bribe gate (the barman talks to
+   anyone), no level scaling. The bribe economy belongs to the *inn's*
+   barkeep; the Dark Horse barman just charges per question.
+2. **The search runs over ALL characters** (`accounts WHERE locked=0`), not
+   the online roster: offline, dead, PvP-immune, brand-new, and **yourself**
+   included (no self filter — 100 gold to hear about yourself, kept 1=1).
+3. **The charge lands only after the row is found**: gold `>= 100` is
+   checked before the read; a vanished target refuses without charging; a
+   purse under 100 gets the mock "cheapskate" stat block, also free.
+4. **Over 100 hits truncates to the top hundred** (ordered level DESC) with
+   a "too many names" line — a truncation, *not* the broker's "narrow it
+   down" refusal; the two searches genuinely differ upstream.
+
+- [x] **The counter** (`Mode::TavernBartender` off the taproom hub):
+  entering kicks a roster read (the search's index); the intro shows the
+  price and your purse.
+- [x] **The search** (`Mode::IntelTarget`): talk-line subsequence match
+  (the shared `name_matches`), ordered level DESC (upstream's ORDER BY),
+  truncated per correction 4. Every match is pickable — no refusal rows
+  (correction 2).
+- [x] **The paid sheet** (`Mode::IntelSheet`, `svc.load_enemy_intel`): a
+  fresh single-row read at pay time (upstream SELECTs the accounts row
+  then charges), decoded and laid out row for row — titled name, race,
+  level, max hitpoints, **gold on hand** (fresh, not the roster snapshot),
+  weapon, armor, attack, defense. Our `attack()`/`defense()` fold the race
+  bonus in, which is exactly upstream's `adjuststats` hook (the elf/troll
+  display adds). Capped by the **charm comparison** in its exact bands:
+  equality first, then strict `mine−10 > theirs` / `mine > theirs` /
+  `mine+10 < theirs` / else — ten-apart exactly lands in the narrow bands.
+- [x] **The mock sheet**: same rows, no answers, no charge (correction 3).
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- The **"Learn about colors" menu is omitted**: it teaches the web UI's
+  backtick color codes with a live practice form — meaningless in the TUI.
+- Level ties in the search sort break by name (upstream leaves them to
+  MySQL); the level-DESC ordering itself is upstream's.
+- Walking off mid-read costs nothing (the sheet never poured); upstream's
+  page renders synchronously so the case can't arise there.
+- All prose original: the barman's voice, the sheet framing, and the mock
+  sheet's non-answers (upstream's lisping bartender and his insult block
+  are their prose). The paid sheet adds a Race row to the mock sheet's
+  shape only where upstream's real sheet shows race too.
+
 ### Clans
 - Table `greendragon_clans`: id, name (5–50 chars, unique), tag (2–5
   letters, unique), motd/desc (authored), custom talk verb (≤15 chars).
@@ -968,12 +1020,27 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 - Veterans' rock: commentary room gated on `dragon_kills > 0`; non-veterans
   see only a flavor dead-end. Landed with the commentary slice.
 
-### Rewards wiring (the long-standing TODO)
-- `svc` already holds `ActivityPublisher` + `ChipService`: on dragon kill,
-  publish a dashboard activity item and pay a chip reward via a
-  `reward_templates` seed migration (mirror Lateania's `086` pattern);
-  consider a one-time `profile_awards` badge for the first kill, like
-  NetHack's `NHA`/`NHY` pair.
+### Rewards wiring (the long-standing TODO) — DONE
+
+Implemented 2026-07, mirroring the NetHack milestone shape
+(`door/nethack/award.rs`), fired from the dragon-kill arm in `state.rs`
+next to the bounty-closure hook:
+
+- [x] **Migration 100** seeds the `greendragon_dragon_slain` reward
+  template: 10,000 chips (the NetHack-Amulet / Lateania-Archdemon tier),
+  `per_event` claim policy, paid once per account through
+  `credit_lifetime_reward_template`.
+- [x] **Profile badge**: the rankless `GDS` ("Green Dragon Slayer") award,
+  granted with the chips on the first kill only (double-deduped: the
+  lifetime template and the `NOT EXISTS` award insert).
+- [x] **Activity feed**: `ActivityGame::GreenDragon` (key `greendragon`);
+  every kill publishes "prevailed in the Green Dragon (dragon kill #N)" —
+  the feed line is per kill, the chips/badge first-kill-only, exactly the
+  Lateania split. `activity_game()` on the door now returns the variant
+  instead of `None`.
+- This is a late.sh integration, not a LoGD port — no upstream file to
+  audit; the in-door counterparts (news, titles, dragon points) are the
+  ported parts and unchanged.
 
 ## Out of scope (not stock / not portable)
 
