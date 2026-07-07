@@ -799,9 +799,11 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 Sources: `modules/dag.php` + `modules/dag/{install,dohook,run,
 misc_functions}.php`, `lib/pvpsupport.php` (the `pvpwin` hook fires inside
 `pvpvictory` only — the attacker's win; a sleeper's win pays nothing).
-**Spec audited line-by-line 2026-07 against the local clone; implementation
-pending.** Source-audit corrections to what this section originally claimed
-(the specs below are already fixed to match):
+Spec audited line-by-line 2026-07 against the local clone; **implemented
+2026-07** (migration 099 + the `greendragon_bounty` model, svc round-trips,
+`Mode::DagTable`/`BountyList`/`BountyTarget`/`BountyAmount` off the inn).
+Source-audit corrections to what this section originally claimed (the specs
+below are already fixed to match):
 
 1. **Bounty immunity is Dag's own, one-notch-lenient test**, not the PvP
    list's: a target is refused when `level < 3` OR (`age < 5` AND

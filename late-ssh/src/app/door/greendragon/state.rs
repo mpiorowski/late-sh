@@ -122,6 +122,14 @@ pub enum Mode {
     Haunt,
 }
 
+/// A landed bounty-board read: the matured price on the player's own head
+/// and the wanted aggregates (per-target matured gold), joined against the
+/// roster snapshot at render time.
+struct BountyBoard {
+    on_my_head: u64,
+    wanted: std::sync::Arc<Vec<(Uuid, u64)>>,
+}
+
 /// Where sleeping warriors are hunted (`pvplist`'s location split): the
 /// fields off the village square, or the inn's rooms through the barkeep.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -364,7 +372,7 @@ pub struct State {
     bounty_board_rx: Option<tokio::sync::watch::Receiver<BountyBoardLoad>>,
     /// The loaded bounty board: the matured price on your own head and the
     /// wanted aggregates, joined against the roster at render.
-    bounty_board: Option<(u64, std::sync::Arc<Vec<(Uuid, u64)>>)>,
+    bounty_board: Option<BountyBoard>,
     /// Wanted-list ordering: gold desc when true, level desc otherwise
     /// (upstream's two sort links; level is the default).
     bounty_by_gold: bool,
@@ -1753,7 +1761,7 @@ impl State {
     /// The price on your own head, once the board has landed (the broker's
     /// greeting; `None` renders as him still sizing you up).
     pub fn bounty_on_my_head(&self) -> Option<u64> {
-        self.bounty_board.as_ref().map(|(on_my_head, _)| *on_my_head)
+        self.bounty_board.as_ref().map(|b| b.on_my_head)
     }
 
     /// The built wanted-list page (`None` until the board and roster land).
@@ -1832,11 +1840,11 @@ impl State {
     /// (Re)build the wanted list once both the board aggregates and the
     /// roster snapshot are in; also called on sort/page changes.
     fn rebuild_bounty_page(&mut self) {
-        let (Some((_, wanted)), Some(roster)) = (self.bounty_board.as_ref(), self.roster.as_ref())
+        let (Some(board), Some(roster)) = (self.bounty_board.as_ref(), self.roster.as_ref())
         else {
             return;
         };
-        let page = build_bounty_page(wanted, roster, self.bounty_by_gold, self.bounty_page);
+        let page = build_bounty_page(&board.wanted, roster, self.bounty_by_gold, self.bounty_page);
         self.bounty_page = page.page;
         self.bounty_page_view = Some(page);
     }
@@ -1849,6 +1857,10 @@ impl State {
         let query = self.talk_input.take().unwrap_or_default();
         let query = query.trim().to_string();
         let Some(roster) = self.roster.as_ref() else {
+            self.push_log(format!(
+                "{} is still thumbing through his book; give him a moment.",
+                data::BOUNTY_BROKER
+            ));
             return;
         };
         if query.is_empty() {
@@ -2028,9 +2040,10 @@ impl State {
         if let Some(rx) = self.bounty_board_rx.as_mut() {
             let ready = match &*rx.borrow_and_update() {
                 BountyBoardLoad::Loading => None,
-                BountyBoardLoad::Ready { on_my_head, wanted } => {
-                    Some((*on_my_head, wanted.clone()))
-                }
+                BountyBoardLoad::Ready { on_my_head, wanted } => Some(BountyBoard {
+                    on_my_head: *on_my_head,
+                    wanted: wanted.clone(),
+                }),
             };
             if let Some(board) = ready {
                 self.bounty_board = Some(board);
@@ -2121,6 +2134,7 @@ impl State {
         let query = self.talk_input.take().unwrap_or_default();
         let query = query.trim().to_string();
         let Some(roster) = self.roster.as_ref() else {
+            self.push_log("The veil is still parting; whisper again in a moment.".into());
             return;
         };
         if query.is_empty() {
