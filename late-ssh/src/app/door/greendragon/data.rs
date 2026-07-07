@@ -541,6 +541,26 @@ pub const BARMAID: &str = "Wren";
 pub const OSTLER: &str = "Fenwick";
 /// The one-eyed gambler at the Dark Horse Tavern (the "old man").
 pub const GAMBLER: &str = "the one-eyed gambler";
+/// The bounty broker sulking in the inn's darkest booth (the Dag
+/// Durnick-analog; upstream's name is theirs, this one is ours).
+pub const BOUNTY_BROKER: &str = "Varn";
+
+/// The six ways a haunt goes wrong (`case_haunt3.php` rolls one of six
+/// failure vignettes; the news carries the botch either way). **All lines
+/// original to late.sh** — `{name}` is replaced with the target's name.
+pub const HAUNT_FUMBLES: [&str; 6] = [
+    "You rear up over {name}'s bed, terrible and vast - and they roll over, dead asleep, and miss the whole performance.",
+    "You begin the wail you practiced, but {name}'s dog starts howling along, and the effect is entirely lost.",
+    "You sweep toward {name} in a rush of grave-cold air, snag on the bedpost, and dissipate with an embarrassed pop.",
+    "{name} opens one eye, mutters \"not tonight,\" and pulls the blanket over their head. You drift off, deflated.",
+    "You loom over {name} in glorious dread - then catch your own reflection in the window and flee shrieking.",
+    "{name} sits bolt upright, stares straight through you, and asks if you could haunt the tax collector instead.",
+];
+
+/// One random haunt-fumble vignette, with the target's name folded in.
+pub fn haunt_fumble(rng: &mut impl rand::Rng, name: &str) -> String {
+    HAUNT_FUMBLES[rng.gen_range(0..HAUNT_FUMBLES.len())].replace("{name}", name)
+}
 
 /// The romance partner for an address style: first-style characters court
 /// the barmaid, second-style ones the bard (upstream keys this off `sex`;

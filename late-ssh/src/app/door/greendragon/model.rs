@@ -142,6 +142,28 @@ pub const PVP_DEFENDER_GAIN_PCT: u32 = 10;
 /// Percent of experience a defeated attacker loses (`pvpattlose`).
 pub const PVP_ATTACKER_LOSE_PCT: u32 = 15;
 
+/// Bounty contracts one warrior may place per day (`dag.php` `maxbounties`).
+pub const BOUNTIES_PER_DAY: u32 = 5;
+/// The bounty floor per target level (`bountymin` 50).
+pub const BOUNTY_MIN_PER_LEVEL: u64 = 50;
+/// The cap on a target's *total open* bounty, per level (`bountymax` 200) —
+/// counted over every open contract, matured or not.
+pub const BOUNTY_MAX_PER_LEVEL: u64 = 200;
+/// The broker's listing fee (`bountyfee` 10): the setter pays
+/// `round(amount · 1.10)`.
+pub const BOUNTY_FEE_PCT: u64 = 10;
+/// The lowest level worth contracting on (`bountylevel` 3).
+pub const BOUNTY_MIN_TARGET_LEVEL: u8 = 3;
+/// A fresh bounty matures `e_rand(0, this)` seconds after placement
+/// (dag's "random set date up to 4 hours in the future").
+pub const BOUNTY_DELAY_MAX_SECS: i64 = 14_400;
+
+/// What the setter pays to place `amount`: the bounty plus the broker's
+/// [`BOUNTY_FEE_PCT`]% fee, rounded half-away like PHP `round`.
+pub fn bounty_cost(amount: u64) -> u64 {
+    (amount as f64 * (100 + BOUNTY_FEE_PCT) as f64 / 100.0).round() as u64
+}
+
 /// The forest hunting intensities. LoGD offers easier/harder pickings that
 /// shift the creature level relative to the player's own level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -327,6 +349,9 @@ pub struct Character {
     pub used_outhouse_today: bool,
     /// Five Sixes plays today (max [`FIVESIX_PLAYS_PER_DAY`]).
     pub fivesix_plays_today: u32,
+    /// Bounty contracts placed today (max [`BOUNTIES_PER_DAY`]; upstream
+    /// keeps this as a dag module pref, reset by its newday hook).
+    pub bounties_set_today: u32,
     /// PvP attacks left today (upstream `playerfights`): spent at engage,
     /// refilled to [`PVP_FIGHTS_PER_DAY`] by a normal dawn only (the paid
     /// resurrection skips them, exactly like grave fights).
@@ -343,6 +368,11 @@ pub struct Character {
     /// system mail): PvP settlements append here through the DB; the next
     /// door entry drains them into the log.
     pub pvp_reports: Vec<String>,
+    /// The name of the shade riding this character's dreams (upstream
+    /// `hauntedby`, the haunter's titled name), written cross-player through
+    /// the DB. Non-empty means the next new day — dawn or paid — docks a
+    /// turn and clears it. Empty = unhaunted.
+    pub haunted_by: String,
     /// UTC day-number of the last new-day reset, for turn/heal regeneration.
     pub last_day: i64,
     /// Presence flag mirroring upstream's `loggedin`: stamped true when the
@@ -408,12 +438,16 @@ impl PersistedBuff {
 }
 
 /// What a new day's shared module effects did (for log/news wiring).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewDayFx {
     /// The marriage ended at dawn (charm ran out) — makes the paper.
     pub divorced: bool,
     /// Woke up hungover (-1 turn).
     pub hangover: bool,
+    /// A shade rode last night's dreams (-1 turn): the haunter's name, taken
+    /// off the cleared mark (`newday.php`'s unconditional `hauntedby` block —
+    /// it fires on the paid resurrection too).
+    pub haunted_by: Option<String>,
 }
 
 /// The five potions on the barkeep's back shelf
@@ -758,12 +792,14 @@ impl Default for Character {
             heard_bard_today: false,
             used_outhouse_today: false,
             fivesix_plays_today: 0,
+            bounties_set_today: 0,
             // Seeded like grave fights: the skipped first-login new day would
             // have filled the day's PvP pool.
             player_fights: PVP_FIGHTS_PER_DAY,
             pk: false,
             pvp_engaged_at: 0,
             pvp_reports: Vec::new(),
+            haunted_by: String::new(),
             last_day: 0,
             online: false,
         }
@@ -1285,6 +1321,20 @@ impl Character {
             && self.experience <= PVP_IMMUNITY_MAX_EXP
     }
 
+    /// Whether the bounty broker refuses contracts on this character
+    /// (`dag.php`'s finalize check). Deliberately one notch more lenient
+    /// than [`Character::pvp_immune`]: strict `<` on both age and experience
+    /// where the PvP list uses `<=`, so a warrior at exactly age 5 or
+    /// exactly 1500 experience is still safe from attack yet already
+    /// bountyable. Ported 1=1, quirk and all. The level floor
+    /// ([`BOUNTY_MIN_TARGET_LEVEL`]) is the caller's separate check.
+    pub fn bounty_immune(&self) -> bool {
+        self.age < PVP_IMMUNITY_DAYS
+            && self.dragon_kills == 0
+            && !self.pk
+            && self.experience < PVP_IMMUNITY_MAX_EXP
+    }
+
     /// Resolve losing a PvP fight you started (`lib/pvpsupport.php`
     /// `pvpdefeat`): all on-hand gold lost, [`PVP_ATTACKER_LOSE_PCT`]% of
     /// experience lost, dead to the graveyard. Same death hygiene as
@@ -1500,6 +1550,17 @@ impl Character {
         self.heard_bard_today = false;
         self.used_outhouse_today = false;
         self.fivesix_plays_today = 0;
+        self.bounties_set_today = 0;
+        // A haunt collects (`newday.php`'s `hauntedby` block, unconditional —
+        // it fires on the paid resurrection too): one turn lost to the
+        // night's fright, and the mark clears. Upstream's `turns--` has no
+        // floor; ours saturates (unsigned field, documented deviation).
+        let haunted_by = if self.haunted_by.is_empty() {
+            None
+        } else {
+            self.turns = self.turns.saturating_sub(1);
+            Some(std::mem::take(&mut self.haunted_by))
+        };
         // Buffs fade at dawn unless flagged (transmutation sickness).
         self.persistent_buffs.retain(|b| b.survives_new_day);
         // Marriage upkeep (`lovers.php`): the partner's patience erodes by
@@ -1515,7 +1576,11 @@ impl Character {
                 divorced = true;
             }
         }
-        NewDayFx { divorced, hangover }
+        NewDayFx {
+            divorced,
+            hangover,
+            haunted_by,
+        }
     }
 
     /// Refill the day's specialty uses: `floor(skill/3)`, plus 1 for having
@@ -2099,6 +2164,65 @@ mod tests {
         // A real dawn refills it.
         c.roll_new_day(1, 0, 0, &mut rand::thread_rng());
         assert_eq!(c.player_fights, PVP_FIGHTS_PER_DAY);
+    }
+
+    #[test]
+    fn bounty_immunity_is_one_notch_more_lenient_than_pvp() {
+        // dag.php tests strict `<` on age and experience where the PvP
+        // list/warning use `<=`: exactly-at-the-bar warriors are still safe
+        // from attack yet already bountyable. Kept 1=1.
+        let mut c = Character::new("hero", 0);
+        c.age = PVP_IMMUNITY_DAYS;
+        c.experience = PVP_IMMUNITY_MAX_EXP;
+        assert!(c.pvp_immune());
+        assert!(!c.bounty_immune());
+
+        c.age = PVP_IMMUNITY_DAYS - 1;
+        c.experience = PVP_IMMUNITY_MAX_EXP - 1;
+        assert!(c.bounty_immune());
+        // Any of the escape hatches ends it: a kill, a pk, the thresholds.
+        c.pk = true;
+        assert!(!c.bounty_immune());
+    }
+
+    #[test]
+    fn bounty_cost_adds_the_ten_percent_fee_rounded() {
+        assert_eq!(bounty_cost(100), 110);
+        assert_eq!(bounty_cost(155), 171); // 170.5 rounds half-away
+        assert_eq!(bounty_cost(0), 0);
+    }
+
+    #[test]
+    fn new_day_collects_a_haunt_once_and_resets_the_bounty_count() {
+        let mut c = Character::new("hero", 0);
+        c.bounties_set_today = 4;
+        c.haunted_by = "Grimald the Grey".into();
+        let fx = c.roll_new_day(1, 0, 0, &mut rand::thread_rng()).unwrap();
+        // One turn gone against the freshly-assembled day, the mark cleared,
+        // and the haunter's name surfaced for the log/report.
+        assert_eq!(fx.haunted_by.as_deref(), Some("Grimald the Grey"));
+        assert_eq!(c.turns, TURNS_PER_DAY - 1);
+        assert!(c.haunted_by.is_empty());
+        assert_eq!(c.bounties_set_today, 0);
+        // The next dawn has nothing to collect.
+        let fx = c.roll_new_day(2, 0, 0, &mut rand::thread_rng()).unwrap();
+        assert_eq!(fx.haunted_by, None);
+        assert_eq!(c.turns, TURNS_PER_DAY);
+    }
+
+    #[test]
+    fn a_haunt_collects_on_the_paid_resurrection_too() {
+        // newday.php's hauntedby block is unconditional — a bought dawn
+        // pays the turn as surely as a real one.
+        let mut c = Character::new("hero", 0);
+        c.alive = false;
+        c.favor = RESURRECTION_FAVOR_COST;
+        c.haunted_by = "Grimald the Grey".into();
+        let fx = c.resurrect(0, &mut rand::thread_rng()).unwrap();
+        assert_eq!(fx.haunted_by.as_deref(), Some("Grimald the Grey"));
+        assert!(c.haunted_by.is_empty());
+        // base 10 + ff 0 - 6 = 4, then the haunt's -1.
+        assert_eq!(c.turns, 3);
     }
 
     #[test]

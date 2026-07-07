@@ -19,8 +19,8 @@ use super::inn;
 use super::model::{self, Character, DragonPointKind, ForestHunt, Race, SlainFoe, Specialty};
 use super::specialty::{self, SkillEffect};
 use super::svc::{
-    CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService, NewsLoad, PvpEngage, PvpSettle,
-    PvpTarget, RosterEntry, RosterLoad,
+    BountyBoardLoad, BountyPlace, CharacterLoad, CommentaryLoad, FiveSixLoad, GreenDragonService,
+    HauntLoad, NewsLoad, PvpEngage, PvpSettle, PvpTarget, RosterEntry, RosterLoad,
 };
 use super::tavern;
 
@@ -107,6 +107,19 @@ pub enum Mode {
     /// The PvP target list (`pvp.php` / the barkeep's keys): sleeping
     /// warriors at one of the two venues, each row an attack.
     PvpList(PvpVenue),
+    /// The bounty broker's booth at the inn (`modules/dag.php`): the price
+    /// on your own head, the wanted list, and placing contracts.
+    DagTable,
+    /// The wanted list: matured open bounties aggregated per head.
+    BountyList,
+    /// Picking a contract's target: a name typed on the talk line, then the
+    /// matches as rows.
+    BountyTarget,
+    /// Naming a contract's price: the amount typed on the talk line.
+    BountyAmount,
+    /// The haunt (`case_haunt*.php`), reached from the graveyard at 25
+    /// favor: a name typed on the talk line, then the matches as rows.
+    Haunt,
 }
 
 /// Where sleeping warriors are hunted (`pvplist`'s location split): the
@@ -346,6 +359,32 @@ pub struct State {
     /// A won fight's settlement round-trip (the victim's gold re-read),
     /// drained by [`State::tick`] into the attacker's purse.
     pvp_settle_rx: Option<tokio::sync::watch::Receiver<PvpSettle>>,
+    /// The in-flight bounty-board read (your head + the wanted list),
+    /// drained by [`State::tick`].
+    bounty_board_rx: Option<tokio::sync::watch::Receiver<BountyBoardLoad>>,
+    /// The loaded bounty board: the matured price on your own head and the
+    /// wanted aggregates, joined against the roster at render.
+    bounty_board: Option<(u64, std::sync::Arc<Vec<(Uuid, u64)>>)>,
+    /// Wanted-list ordering: gold desc when true, level desc otherwise
+    /// (upstream's two sort links; level is the default).
+    bounty_by_gold: bool,
+    /// The wanted list's current page (0-based).
+    bounty_page: usize,
+    /// The built wanted-list page (`None` until board + roster both land).
+    bounty_page_view: Option<ListPage>,
+    /// Search matches while picking a contract's target:
+    /// `(target, label, contractable)`.
+    bounty_matches: Vec<(Uuid, String, bool)>,
+    /// The picked contract target while naming the price:
+    /// `(target, level, name)`.
+    bounty_target: Option<(Uuid, u8, String)>,
+    /// An in-flight bounty placement: the quoted fee'd cost already taken
+    /// off the purse (refunded on refusal), and the round-trip.
+    bounty_place_rx: Option<(u64, tokio::sync::watch::Receiver<BountyPlace>)>,
+    /// Search matches on the haunt screen: `(target, label)`.
+    haunt_matches: Vec<(Uuid, String)>,
+    /// An in-flight haunt attempt, drained by [`State::tick`].
+    haunt_rx: Option<tokio::sync::watch::Receiver<HauntLoad>>,
     /// Last persisted moment, for the idle presence heartbeat: a live
     /// session must never fall out of the roster's 15-minute online window,
     /// or it would look attackable (upstream's `laston` refreshes every
@@ -396,6 +435,16 @@ impl State {
             pvp_engage_rx: None,
             pvp_ctx: None,
             pvp_settle_rx: None,
+            bounty_board_rx: None,
+            bounty_board: None,
+            bounty_by_gold: false,
+            bounty_page: 0,
+            bounty_page_view: None,
+            bounty_matches: Vec::new(),
+            bounty_target: None,
+            bounty_place_rx: None,
+            haunt_matches: Vec::new(),
+            haunt_rx: None,
             last_save: std::time::Instant::now(),
             hof_ranking: HofRanking::Kills,
             hof_least: false,
@@ -412,6 +461,8 @@ impl State {
         self.tick_commentary();
         self.tick_roster();
         self.tick_pvp();
+        self.tick_bounty();
+        self.tick_haunt();
         if self.character.is_some() {
             // The presence heartbeat: an idle session re-stamps its save
             // well inside the roster's 15-minute online window, so a live
@@ -557,6 +608,11 @@ impl State {
             ),
             Mode::BarkeepEar => barkeep_ear_menu(),
             Mode::PvpList(_) => self.pvp_list_menu(c),
+            Mode::DagTable => self.dag_table_menu(c),
+            Mode::BountyList => self.bounty_list_menu(),
+            Mode::BountyTarget => self.bounty_target_menu(),
+            Mode::BountyAmount => self.bounty_amount_menu(),
+            Mode::Haunt => self.haunt_menu(c),
             Mode::Loading => Vec::new(),
         }
     }
@@ -616,6 +672,11 @@ impl State {
             Mode::HallOfFame => self.select_hall_of_fame(),
             Mode::BarkeepEar => self.select_barkeep_ear(),
             Mode::PvpList(venue) => self.select_pvp_list(venue),
+            Mode::DagTable => self.select_dag_table(),
+            Mode::BountyList => self.select_bounty_list(),
+            Mode::BountyTarget => self.select_bounty_target(),
+            Mode::BountyAmount => self.select_bounty_amount(),
+            Mode::Haunt => self.select_haunt(),
             Mode::Loading => Selection::Stay,
         }
     }
@@ -702,6 +763,22 @@ impl State {
                     PvpVenue::Fields => Mode::Village,
                     PvpVenue::Inn => Mode::BarkeepEar,
                 });
+                Selection::Stay
+            }
+            // The broker's booth lets out into the common room; its inner
+            // screens back out to the booth (Esc while typing is handled
+            // upstream of this, dropping the line first).
+            Mode::DagTable => {
+                self.leave_dag_table();
+                Selection::Stay
+            }
+            Mode::BountyList | Mode::BountyTarget | Mode::BountyAmount => {
+                self.goto(Mode::DagTable);
+                Selection::Stay
+            }
+            // The haunt search lets out among the graves.
+            Mode::Haunt => {
+                self.goto(Mode::Graveyard);
                 Selection::Stay
             }
             // A game in progress folds (the stake was never taken); the
@@ -1232,7 +1309,14 @@ impl State {
     pub fn talk_push(&mut self, ch: char) {
         let budget = match self.mode {
             Mode::Commentary(room) => commentary::max_post_len(room.verb()),
-            Mode::WarriorList => SEARCH_QUERY_BUDGET,
+            Mode::WarriorList | Mode::BountyTarget | Mode::Haunt => SEARCH_QUERY_BUDGET,
+            // Gold amounts only: digits, capped well under any purse.
+            Mode::BountyAmount => {
+                if !ch.is_ascii_digit() {
+                    return;
+                }
+                AMOUNT_QUERY_BUDGET
+            }
             _ => return,
         };
         if let Some(buf) = self.talk_input.as_mut()
@@ -1270,6 +1354,18 @@ impl State {
                 self.roster_page = 0;
                 self.rebuild_roster_views();
             }
+            return;
+        }
+        if self.mode == Mode::BountyTarget {
+            self.submit_bounty_search();
+            return;
+        }
+        if self.mode == Mode::BountyAmount {
+            self.submit_bounty_amount();
+            return;
+        }
+        if self.mode == Mode::Haunt {
+            self.submit_haunt_search();
             return;
         }
         let Mode::Commentary(room) = self.mode else {
@@ -1373,6 +1469,9 @@ impl State {
                 }
             }
             Mode::PvpList(venue) => self.rebuild_pvp_rows(venue),
+            // The wanted list joins the roster; the booth and target picker
+            // just need it present (their menus re-read `self.roster`).
+            Mode::DagTable | Mode::BountyList => self.rebuild_bounty_page(),
             _ => {}
         }
     }
@@ -1504,8 +1603,11 @@ impl State {
                 PvpSettle::Loading => None,
                 PvpSettle::Ready {
                     win_gold,
-                    taken_gold,
-                } => Some(Some((*win_gold, *taken_gold))),
+                    taken_gold: _,
+                    bounty_gold,
+                    forfeited,
+                    victim,
+                } => Some(Some((*win_gold, *bounty_gold, *forfeited, victim.clone()))),
                 PvpSettle::Failed => Some(None),
             };
             match settled {
@@ -1514,7 +1616,7 @@ impl State {
                     self.pvp_settle_rx = None;
                     self.push_log("Their purse slips through your fingers in the dark.".into());
                 }
-                Some(Some((win_gold, _taken))) => {
+                Some(Some((win_gold, bounty_gold, forfeited, victim))) => {
                     self.pvp_settle_rx = None;
                     let c = self.character.as_mut().unwrap();
                     // The level-15 "no prowess" rule zeroes the attacker's
@@ -1527,8 +1629,30 @@ impl State {
                     } else {
                         c.gold = c.gold.saturating_add(win_gold);
                         self.push_log(format!("You rifle their purse: +{win_gold} gold."));
-                        self.save();
                     }
+                    // The bounty sweep pays on top, and — unlike the purse —
+                    // even at level 15 (`dag`'s hook runs after the zeroing).
+                    if bounty_gold > 0 {
+                        let c = self.character.as_mut().unwrap();
+                        c.gold = c.gold.saturating_add(bounty_gold);
+                        self.push_log(format!(
+                            "{} appears at your shoulder with a clinking purse: \
+                             the {bounty_gold} gold bounty on {victim}'s head.",
+                            data::BOUNTY_BROKER
+                        ));
+                        let who = self.character.as_ref().unwrap().titled_name();
+                        self.news(format!(
+                            "{who} collected the {bounty_gold} gold bounty on {victim}'s head!"
+                        ));
+                    }
+                    if forfeited > 0 {
+                        self.push_log(format!(
+                            "\"The {forfeited} gold you posted yourself, I'll be \
+                             keeping,\" {} adds, and is gone.",
+                            data::BOUNTY_BROKER
+                        ));
+                    }
+                    self.save();
                 }
             }
         }
@@ -1597,6 +1721,530 @@ impl State {
                 return;
             }
             self.encounter = Some(enc);
+        }
+    }
+
+    // --- the bounty broker's booth (modules/dag.php) -------------------------
+
+    /// Approach the broker: kick the board read (your head + the wanted
+    /// aggregates) and a roster read (the list's columns and the target
+    /// search both come off it).
+    fn open_dag_table(&mut self) {
+        self.bounty_board = None;
+        self.bounty_page_view = None;
+        self.bounty_board_rx = Some(self.svc.load_bounty_board(self.user_id));
+        self.kick_roster_load();
+        self.goto(Mode::DagTable);
+    }
+
+    /// Leave the booth for the common room, dropping the board and roster.
+    fn leave_dag_table(&mut self) {
+        self.bounty_board = None;
+        self.bounty_board_rx = None;
+        self.bounty_page_view = None;
+        self.bounty_matches.clear();
+        self.bounty_target = None;
+        self.talk_input = None;
+        self.roster_rx = None;
+        self.roster = None;
+        self.goto(Mode::Inn);
+    }
+
+    /// The price on your own head, once the board has landed (the broker's
+    /// greeting; `None` renders as him still sizing you up).
+    pub fn bounty_on_my_head(&self) -> Option<u64> {
+        self.bounty_board.as_ref().map(|(on_my_head, _)| *on_my_head)
+    }
+
+    /// The built wanted-list page (`None` until the board and roster land).
+    pub fn bounty_page_view(&self) -> Option<&ListPage> {
+        self.bounty_page_view.as_ref()
+    }
+
+    fn dag_table_menu(&self, c: &Character) -> Vec<(String, bool)> {
+        let ready = self.bounty_board.is_some() && self.roster.is_some();
+        let left = model::BOUNTIES_PER_DAY.saturating_sub(c.bounties_set_today);
+        vec![
+            ("Study the wanted list".into(), ready),
+            (
+                format!(
+                    "Put a price on a head ({left} contract{} left today)",
+                    if left == 1 { "" } else { "s" }
+                ),
+                ready && left > 0 && self.bounty_place_rx.is_none(),
+            ),
+            (format!("Leave {} to his pipe", data::BOUNTY_BROKER), true),
+        ]
+    }
+
+    fn select_dag_table(&mut self) -> Selection {
+        match self.cursor {
+            0 => {
+                self.bounty_page = 0;
+                self.rebuild_bounty_page();
+                self.goto(Mode::BountyList);
+            }
+            1 => {
+                self.bounty_matches.clear();
+                self.goto(Mode::BountyTarget);
+                self.talk_input = Some(String::new());
+            }
+            _ => self.leave_dag_table(),
+        }
+        Selection::Stay
+    }
+
+    fn bounty_list_menu(&self) -> Vec<(String, bool)> {
+        let pages = self.bounty_page_view.as_ref().map(|p| p.pages).unwrap_or(1);
+        vec![
+            (
+                if self.bounty_by_gold {
+                    "Order the list by level"
+                } else {
+                    "Order the list by gold"
+                }
+                .into(),
+                self.bounty_page_view.is_some(),
+            ),
+            ("Turn the page".into(), pages > 1),
+            ("Back to the booth".into(), true),
+        ]
+    }
+
+    fn select_bounty_list(&mut self) -> Selection {
+        match self.cursor {
+            0 => {
+                self.bounty_by_gold = !self.bounty_by_gold;
+                self.bounty_page = 0;
+                self.rebuild_bounty_page();
+            }
+            1 => {
+                if let Some(p) = self.bounty_page_view.as_ref() {
+                    self.bounty_page = (p.page + 1) % p.pages;
+                    self.rebuild_bounty_page();
+                }
+            }
+            _ => self.goto(Mode::DagTable),
+        }
+        Selection::Stay
+    }
+
+    /// (Re)build the wanted list once both the board aggregates and the
+    /// roster snapshot are in; also called on sort/page changes.
+    fn rebuild_bounty_page(&mut self) {
+        let (Some((_, wanted)), Some(roster)) = (self.bounty_board.as_ref(), self.roster.as_ref())
+        else {
+            return;
+        };
+        let page = build_bounty_page(wanted, roster, self.bounty_by_gold, self.bounty_page);
+        self.bounty_page = page.page;
+        self.bounty_page_view = Some(page);
+    }
+
+    /// Run the typed name against the roster for a contract target
+    /// (`dag.php`'s finalize search: subsequence match, >100 = narrow it
+    /// down). Matches render as rows; the broker's refusals — yourself, the
+    /// level floor, his one-notch-lenient immunity test — disable theirs.
+    fn submit_bounty_search(&mut self) {
+        let query = self.talk_input.take().unwrap_or_default();
+        let query = query.trim().to_string();
+        let Some(roster) = self.roster.as_ref() else {
+            return;
+        };
+        if query.is_empty() {
+            self.push_log(format!(
+                "{} doesn't look up. \"A name first.\"",
+                data::BOUNTY_BROKER
+            ));
+            return;
+        }
+        let mut matches: Vec<&RosterEntry> = roster
+            .iter()
+            .filter(|e| name_matches(&e.name, &query))
+            .collect();
+        if matches.is_empty() {
+            self.push_log(format!(
+                "{} shakes his head. \"Nobody I know answers to that name.\"",
+                data::BOUNTY_BROKER
+            ));
+            return;
+        }
+        if matches.len() > MAX_SEARCH_MATCHES {
+            self.push_log(format!(
+                "{} snorts. \"That could be half the town. Narrow it down.\"",
+                data::BOUNTY_BROKER
+            ));
+            return;
+        }
+        matches.sort_by(|a, b| {
+            a.level
+                .cmp(&b.level)
+                .then_with(|| a.handle.to_lowercase().cmp(&b.handle.to_lowercase()))
+        });
+        let me = self.user_id;
+        self.bounty_matches = matches
+            .iter()
+            .map(|e| {
+                if e.user_id == me {
+                    (
+                        e.user_id,
+                        format!("{} (level {}) - no contracts on yourself", e.name, e.level),
+                        false,
+                    )
+                } else if e.level < model::BOUNTY_MIN_TARGET_LEVEL || e.bounty_immune {
+                    (
+                        e.user_id,
+                        format!("{} (level {}) - not worth a contract", e.name, e.level),
+                        false,
+                    )
+                } else {
+                    (e.user_id, format!("{} (level {})", e.name, e.level), true)
+                }
+            })
+            .collect();
+    }
+
+    fn bounty_target_menu(&self) -> Vec<(String, bool)> {
+        let mut rows: Vec<(String, bool)> = self
+            .bounty_matches
+            .iter()
+            .map(|(_, label, ok)| (label.clone(), *ok))
+            .collect();
+        if rows.is_empty() {
+            let note = if self.roster.is_none() {
+                "He waits while you gather the name..."
+            } else {
+                "Name a head and he'll check his book."
+            };
+            rows.push((note.into(), false));
+        }
+        rows.push(("Ask after another name".into(), self.roster.is_some()));
+        rows.push(("Back to the booth".into(), true));
+        rows
+    }
+
+    fn select_bounty_target(&mut self) -> Selection {
+        let targets = self.bounty_matches.len().max(1);
+        if self.cursor >= targets {
+            match self.cursor - targets {
+                0 => self.talk_input = Some(String::new()),
+                _ => self.goto(Mode::DagTable),
+            }
+            return Selection::Stay;
+        }
+        let Some((target_id, _, _)) = self.bounty_matches.get(self.cursor) else {
+            return Selection::Stay;
+        };
+        let target_id = *target_id;
+        let Some(entry) = self
+            .roster
+            .as_ref()
+            .and_then(|r| r.iter().find(|e| e.user_id == target_id).cloned())
+        else {
+            return Selection::Stay;
+        };
+        self.bounty_target = Some((entry.user_id, entry.level, entry.name.clone()));
+        self.goto(Mode::BountyAmount);
+        self.talk_input = Some(String::new());
+        Selection::Stay
+    }
+
+    /// The picked contract target while naming the price, for the panel:
+    /// `(name, level)`.
+    pub fn bounty_target_info(&self) -> Option<(&str, u8)> {
+        self.bounty_target
+            .as_ref()
+            .map(|(_, level, name)| (name.as_str(), *level))
+    }
+
+    fn bounty_amount_menu(&self) -> Vec<(String, bool)> {
+        vec![
+            (
+                "Name your price".into(),
+                self.bounty_place_rx.is_none() && self.bounty_target.is_some(),
+            ),
+            ("Think better of it".into(), true),
+        ]
+    }
+
+    fn select_bounty_amount(&mut self) -> Selection {
+        match self.cursor {
+            0 => self.talk_input = Some(String::new()),
+            _ => {
+                self.bounty_target = None;
+                self.goto(Mode::DagTable);
+            }
+        }
+        Selection::Stay
+    }
+
+    /// Check and place the typed amount (`dag.php`'s finalize, upstream's
+    /// order): the per-level minimum, the fee'd cost against the purse, then
+    /// the open-total cap inside the placement transaction. The cost is
+    /// taken up front and refunded on a refusal (upstream leaves the coins
+    /// on the table; the net effect is identical).
+    fn submit_bounty_amount(&mut self) {
+        let raw = self.talk_input.take().unwrap_or_default();
+        let Some((target_id, level, name)) = self.bounty_target.clone() else {
+            self.goto(Mode::DagTable);
+            return;
+        };
+        let amount: u64 = raw.trim().parse().unwrap_or(0);
+        let min = model::BOUNTY_MIN_PER_LEVEL * level as u64;
+        let cap = model::BOUNTY_MAX_PER_LEVEL * level as u64;
+        if amount < min {
+            self.push_log(format!(
+                "{} scowls. \"{name}'s head is worth {min} gold to me at the least. \
+                 Come back with real coin.\"",
+                data::BOUNTY_BROKER
+            ));
+            return;
+        }
+        let cost = model::bounty_cost(amount);
+        let c = self.character.as_mut().unwrap();
+        if c.gold < cost {
+            self.push_log(format!(
+                "{} eyes your purse. \"That's {cost} gold with my listing fee, \
+                 and you don't have it.\"",
+                data::BOUNTY_BROKER
+            ));
+            return;
+        }
+        c.gold -= cost;
+        self.save();
+        self.bounty_place_rx = Some((
+            cost,
+            self.svc.place_bounty(self.user_id, target_id, amount, cap),
+        ));
+        self.push_log(format!(
+            "{} counts your coins twice and thumbs through his book...",
+            data::BOUNTY_BROKER
+        ));
+    }
+
+    /// Drain the bounty round-trips: a landed board read builds the list; a
+    /// landed placement charges (already-taken) or refunds.
+    fn tick_bounty(&mut self) {
+        if let Some(rx) = self.bounty_board_rx.as_mut() {
+            let ready = match &*rx.borrow_and_update() {
+                BountyBoardLoad::Loading => None,
+                BountyBoardLoad::Ready { on_my_head, wanted } => {
+                    Some((*on_my_head, wanted.clone()))
+                }
+            };
+            if let Some(board) = ready {
+                self.bounty_board = Some(board);
+                self.bounty_board_rx = None;
+                self.rebuild_bounty_page();
+            }
+        }
+        if let Some((cost, rx)) = self.bounty_place_rx.as_mut() {
+            let cost = *cost;
+            let placed = match &*rx.borrow_and_update() {
+                BountyPlace::Loading => None,
+                BountyPlace::Placed => Some(Ok(())),
+                BountyPlace::OverCap(current) => Some(Err(Some(*current))),
+                BountyPlace::Failed => Some(Err(None)),
+            };
+            match placed {
+                None => {}
+                Some(Ok(())) => {
+                    self.bounty_place_rx = None;
+                    let target = self.bounty_target.take();
+                    let c = self.character.as_mut().unwrap();
+                    c.bounties_set_today += 1;
+                    let name = target.map(|(_, _, n)| n).unwrap_or_default();
+                    // No placement news: contracts are anonymous until
+                    // collected (upstream's only tell is the collection item).
+                    self.push_log(format!(
+                        "{} palms the coins off the table. \"The word goes out \
+                         on {name}. Be patient, and watch the news.\"",
+                        data::BOUNTY_BROKER
+                    ));
+                    self.save();
+                    // The totals moved; re-read the board for the booth.
+                    self.bounty_board_rx = Some(self.svc.load_bounty_board(self.user_id));
+                    if self.mode == Mode::BountyAmount {
+                        self.goto(Mode::DagTable);
+                    }
+                }
+                Some(Err(refusal)) => {
+                    self.bounty_place_rx = None;
+                    let c = self.character.as_mut().unwrap();
+                    c.gold = c.gold.saturating_add(cost);
+                    self.save();
+                    match refusal {
+                        Some(current) => {
+                            let cap = self
+                                .bounty_target
+                                .as_ref()
+                                .map(|(_, level, _)| model::BOUNTY_MAX_PER_LEVEL * *level as u64)
+                                .unwrap_or(0);
+                            self.push_log(format!(
+                                "{} slides the coins back. \"That head already \
+                                 carries {current} gold in contracts, and {cap} \
+                                 is my ceiling. I'll not be called an assassin.\"",
+                                data::BOUNTY_BROKER
+                            ));
+                        }
+                        None => {
+                            self.push_log(format!(
+                                "{} slides the coins back. \"My book's gone \
+                                 missing. Another time.\"",
+                                data::BOUNTY_BROKER
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- the haunt (lib/graveyard/case_haunt*.php) ----------------------------
+
+    /// Open the haunt search off the favor menu: a fresh roster read and the
+    /// talk line for the name.
+    fn open_haunt(&mut self) {
+        self.haunt_matches.clear();
+        self.kick_roster_load();
+        self.goto(Mode::Haunt);
+        self.talk_input = Some(String::new());
+    }
+
+    /// Run the typed name against the roster (`case_haunt2.php`): the plain
+    /// subsequence search, capped at 100 ("narrow down the number of people
+    /// you wish to haunt"), sorted level then name (upstream `ORDER BY
+    /// level,login`). No other filter — the dead, the brand-new, the
+    /// PvP-immune, and even yourself all match, exactly as upstream; only
+    /// "already haunted" refuses, at attempt time.
+    fn submit_haunt_search(&mut self) {
+        let query = self.talk_input.take().unwrap_or_default();
+        let query = query.trim().to_string();
+        let Some(roster) = self.roster.as_ref() else {
+            return;
+        };
+        if query.is_empty() {
+            self.push_log("The veil swallows your empty whisper.".into());
+            return;
+        }
+        let mut matches: Vec<&RosterEntry> = roster
+            .iter()
+            .filter(|e| name_matches(&e.name, &query))
+            .collect();
+        if matches.is_empty() {
+            self.push_log(format!(
+                "{} could find no one who answers to that name.",
+                data::DEATH_OVERLORD
+            ));
+            return;
+        }
+        if matches.len() > MAX_SEARCH_MATCHES {
+            self.push_log(format!(
+                "{} thinks you should narrow down whom you wish to haunt.",
+                data::DEATH_OVERLORD
+            ));
+            return;
+        }
+        matches.sort_by(|a, b| {
+            a.level
+                .cmp(&b.level)
+                .then_with(|| a.handle.to_lowercase().cmp(&b.handle.to_lowercase()))
+        });
+        self.haunt_matches = matches
+            .iter()
+            .map(|e| (e.user_id, format!("{} (level {})", e.name, e.level)))
+            .collect();
+    }
+
+    fn haunt_menu(&self, c: &Character) -> Vec<(String, bool)> {
+        let can = c.favor >= model::HAUNT_FAVOR_THRESHOLD && self.haunt_rx.is_none();
+        let mut rows: Vec<(String, bool)> = self
+            .haunt_matches
+            .iter()
+            .map(|(_, label)| (format!("Haunt {label}"), can))
+            .collect();
+        if rows.is_empty() {
+            let note = if self.roster.is_none() {
+                "You peer across the veil..."
+            } else {
+                "Whisper a name to seek them out."
+            };
+            rows.push((note.into(), false));
+        }
+        rows.push(("Whisper another name".into(), self.roster.is_some()));
+        rows.push(("Back to the graves".into(), true));
+        rows
+    }
+
+    fn select_haunt(&mut self) -> Selection {
+        let targets = self.haunt_matches.len().max(1);
+        if self.cursor >= targets {
+            match self.cursor - targets {
+                0 => self.talk_input = Some(String::new()),
+                _ => self.goto(Mode::Graveyard),
+            }
+            return Selection::Stay;
+        }
+        let Some((target_id, _)) = self.haunt_matches.get(self.cursor) else {
+            return Selection::Stay;
+        };
+        let target_id = *target_id;
+        let c = self.character.as_ref().unwrap();
+        self.haunt_rx = Some(self.svc.haunt(c.level, c.titled_name(), target_id));
+        self.push_log("You gather your grave-chill and slip toward the mortal world...".into());
+        Selection::Stay
+    }
+
+    /// Drain a finished haunt attempt: the rolled outcomes charge the 25
+    /// favor (success and fumble alike — `case_haunt3.php` deducts before
+    /// the roll) and make the news; refusals cost nothing.
+    fn tick_haunt(&mut self) {
+        let Some(rx) = self.haunt_rx.as_mut() else {
+            return;
+        };
+        let outcome = match &*rx.borrow_and_update() {
+            HauntLoad::Loading => None,
+            outcome => Some(outcome.clone()),
+        };
+        let Some(outcome) = outcome else {
+            return;
+        };
+        self.haunt_rx = None;
+        let me = self.character.as_ref().unwrap().titled_name();
+        match outcome {
+            HauntLoad::Loading => {}
+            HauntLoad::Success { target } => {
+                let c = self.character.as_mut().unwrap();
+                c.favor = c.favor.saturating_sub(model::HAUNT_FAVOR_THRESHOLD);
+                self.push_log(format!(
+                    "You pour through the veil and rake cold fingers through \
+                     {target}'s dreams. They will wake the poorer for sleep."
+                ));
+                self.news(format!(
+                    "{me} slipped through the veil and haunted {target}!"
+                ));
+                self.save();
+            }
+            HauntLoad::Fumble { target } => {
+                let c = self.character.as_mut().unwrap();
+                c.favor = c.favor.saturating_sub(model::HAUNT_FAVOR_THRESHOLD);
+                let line = data::haunt_fumble(&mut rand::thread_rng(), &target);
+                self.push_log(line);
+                self.news(format!("{me} tried to haunt {target}, and botched it!"));
+                self.save();
+            }
+            HauntLoad::AlreadyHaunted { target } => {
+                self.push_log(format!(
+                    "{} stays your hand: another shade already rides {target}'s dreams.",
+                    data::DEATH_OVERLORD
+                ));
+            }
+            HauntLoad::Gone => {
+                self.push_log(format!(
+                    "{} has lost his grip on that soul; you cannot haunt them now.",
+                    data::DEATH_OVERLORD
+                ));
+            }
         }
     }
 
@@ -1794,6 +2442,13 @@ impl State {
                             "You come back hungover, of all things. It costs you a turn.".into(),
                         );
                     }
+                    // A haunt collects even on a bought dawn (`newday.php`'s
+                    // block is unconditional).
+                    if let Some(haunter) = fx.haunted_by.as_ref() {
+                        self.push_log(format!(
+                            "{haunter} haunted your brief death; the fright costs you a turn."
+                        ));
+                    }
                     if fx.divorced {
                         let (partner, who) = {
                             let c = self.character.as_ref().unwrap();
@@ -1815,8 +2470,9 @@ impl State {
                     ));
                 }
             }
-            3 => self.open_commentary(CommentRoom::ShadeGrave),
-            4 => return Selection::Leave,
+            3 => self.open_haunt(),
+            4 => self.open_commentary(CommentRoom::ShadeGrave),
+            5 => return Selection::Leave,
             _ => {}
         }
         Selection::Stay
@@ -2424,6 +3080,7 @@ impl State {
                 self.pvp_settle_rx = Some(self.svc.pvp_settle_victory(
                     target.user_id,
                     target.clone(),
+                    self.user_id,
                     who.clone(),
                 ));
                 // Both outcomes make the paper (`pvp.php`'s two variants).
@@ -2476,6 +3133,9 @@ impl State {
                 if title != old_title {
                     self.news(format!("{name} has earned the title {title}."));
                 }
+                // Any price on the slayer's head dies with the old life:
+                // open bounties close to the house (`dag`'s dragonkill hook).
+                self.svc.close_bounties_on(self.user_id);
                 self.encounter = None;
                 // The kill banks a dragon point; the spend gate opens at once.
                 self.goto(Mode::SpendDragonPoints);
@@ -2794,7 +3454,8 @@ impl State {
             }
             3 => self.goto(Mode::Drinks),
             4 => self.goto(Mode::Romance),
-            5 => self.open_commentary(CommentRoom::Inn),
+            5 => self.open_dag_table(),
+            6 => self.open_commentary(CommentRoom::Inn),
             _ => {}
         }
         Selection::Stay
@@ -3563,6 +4224,13 @@ const ROSTER_PAGE_SIZE: usize = 15;
 /// Typing budget for the warrior name search: a name's worth.
 const SEARCH_QUERY_BUDGET: usize = 30;
 
+/// Typing budget for a gold amount (the bounty stake): digits only.
+const AMOUNT_QUERY_BUDGET: usize = 9;
+
+/// Search-hit ceiling shared by the haunt and contract pickers (upstream's
+/// "narrow it down" check at 100, `maxlistsize`).
+const MAX_SEARCH_MATCHES: usize = 100;
+
 /// Upstream's name search interleaves `%` between every typed character
 /// (`list.php` builds `%j%o%e%`): a case-insensitive subsequence match.
 fn name_matches(name: &str, query: &str) -> bool {
@@ -3641,6 +4309,72 @@ fn build_warrior_page(
         header: Some(format!(
             "{:>2}  {:<24}  {:<10}  {:<9}  {:>5}",
             "Lv", "Name", "Race", "Where", "Seen"
+        )),
+        rows,
+        foot: Vec::new(),
+        page,
+        pages,
+    }
+}
+
+/// Build one wanted-list page (`dag.php` op=list): the matured open
+/// aggregates joined against the roster snapshot, ordered level desc with
+/// gold-desc ties by default or gold desc on the toggle (upstream's two sort
+/// links; ours breaks pure-gold ties by level where upstream leaves them to
+/// chance). Targets with no roster row are dropped — the board read already
+/// closed their contracts to the house.
+fn build_bounty_page(
+    wanted: &[(Uuid, u64)],
+    roster: &[RosterEntry],
+    by_gold: bool,
+    page: usize,
+) -> ListPage {
+    let mut picked: Vec<(&RosterEntry, u64)> = wanted
+        .iter()
+        .filter_map(|&(target, gold)| {
+            roster
+                .iter()
+                .find(|e| e.user_id == target)
+                .map(|e| (e, gold))
+        })
+        .collect();
+    if by_gold {
+        picked.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.level.cmp(&a.0.level)));
+    } else {
+        picked.sort_by(|a, b| b.0.level.cmp(&a.0.level).then(b.1.cmp(&a.1)));
+    }
+    let total = picked.len();
+    let pages = total.div_ceil(ROSTER_PAGE_SIZE).max(1);
+    let page = page.min(pages - 1);
+    let mut heading = format!(
+        "The wanted list ({total} head{})",
+        if total == 1 { "" } else { "s" }
+    );
+    if pages > 1 {
+        heading = format!("{heading} - page {} of {pages}", page + 1);
+    }
+    let rows = picked
+        .iter()
+        .skip(page * ROSTER_PAGE_SIZE)
+        .take(ROSTER_PAGE_SIZE)
+        .map(|(e, gold)| {
+            let seen = if e.online {
+                "here".to_string()
+            } else {
+                humanize_idle(e.idle_secs)
+            };
+            let whereabouts = if e.alive { "village" } else { "graveyard" };
+            format!(
+                "{:>7}  {:>2}  {:<24.24}  {:<9}  {:>5}",
+                gold, e.level, e.name, whereabouts, seen
+            )
+        })
+        .collect();
+    ListPage {
+        heading,
+        header: Some(format!(
+            "{:>7}  {:>2}  {:<24}  {:<9}  {:>5}",
+            "Gold", "Lv", "Name", "Where", "Seen"
         )),
         rows,
         foot: Vec::new(),
@@ -3936,6 +4670,10 @@ fn graveyard_menu(c: &Character) -> Vec<(String, bool)> {
             ),
             c.favor >= model::RESURRECTION_FAVOR_COST,
         ),
+        (
+            format!("Haunt a foe ({} favor)", model::HAUNT_FAVOR_THRESHOLD),
+            c.favor >= model::HAUNT_FAVOR_THRESHOLD,
+        ),
         ("Lament with the lost souls".into(), true),
         ("Wait for a new day (leave the realm)".into(), true),
     ]
@@ -4067,6 +4805,10 @@ fn inn_menu(c: &Character) -> Vec<(String, bool)> {
         ),
         ("Order a drink".into(), true),
         (format!("Sit with {}", data::partner(c.style)), true),
+        (
+            format!("Approach {} in his shadowed booth", data::BOUNTY_BROKER),
+            true,
+        ),
         ("Listen in at the long table".into(), true),
     ]
 }
@@ -4615,8 +5357,9 @@ mod tests {
         assert!(rows[1].0.contains("(3 favor)"));
         assert!(!rows[1].1); // can't afford restoration
         assert!(!rows[2].1); // resurrection needs 100 favor
-        assert!(rows[3].1); // the lost souls always listen
-        assert!(rows[4].1); // waiting always works
+        assert!(!rows[3].1); // haunting needs 25 favor
+        assert!(rows[4].1); // the lost souls always listen
+        assert!(rows[5].1); // waiting always works
 
         c.grave_fights = 4;
         c.favor = 100;
@@ -4624,6 +5367,7 @@ mod tests {
         assert!(rows[0].1);
         assert!(rows[1].1);
         assert!(rows[2].1);
+        assert!(rows[3].1); // 100 favor covers the haunt too
 
         // A whole soul has nothing to restore, whatever the favor.
         c.soulpoints = c.max_soulpoints();
@@ -4799,8 +5543,46 @@ mod tests {
             idle_secs: 0,
             lodged: false,
             pvp_immune: false,
+            bounty_immune: false,
             pvp_engaged_at: 0,
         }
+    }
+
+    // --- the bounty board (modules/dag.php) --------------------------------
+
+    #[test]
+    fn bounty_page_orders_by_level_then_gold_and_flips() {
+        let low = entry("low", 3);
+        let high = entry("high", 9);
+        let rich_low = entry("richlow", 3);
+        let wanted = vec![
+            (low.user_id, 200u64),
+            (high.user_id, 150u64),
+            (rich_low.user_id, 500u64),
+        ];
+        let roster = vec![low, high, rich_low];
+        // Default: level desc, gold desc within a level (dag's default sort).
+        let page = build_bounty_page(&wanted, &roster, false, 0);
+        assert!(page.rows[0].contains("high"));
+        assert!(page.rows[1].contains("richlow"));
+        assert!(page.rows[2].contains("low"));
+        // The gold toggle re-orders by the price alone.
+        let page = build_bounty_page(&wanted, &roster, true, 0);
+        assert!(page.rows[0].contains("richlow"));
+        assert!(page.rows[1].contains("low"));
+        assert!(page.rows[2].contains("high"));
+    }
+
+    #[test]
+    fn bounty_page_drops_targets_without_a_roster_row() {
+        // A vanished character's contracts were closed by the board read;
+        // whatever aggregate still arrives has no row to hang on.
+        let known = entry("known", 5);
+        let wanted = vec![(known.user_id, 100u64), (Uuid::from_u128(424242), 999u64)];
+        let roster = vec![known];
+        let page = build_bounty_page(&wanted, &roster, false, 0);
+        assert_eq!(page.rows.len(), 1);
+        assert!(page.heading.contains("1 head"));
     }
 
     // --- PvP target lists (pvp.php + lib/pvplist.php) ---------------------

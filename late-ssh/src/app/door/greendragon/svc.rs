@@ -15,8 +15,9 @@ use chrono::Utc;
 use late_core::{
     db::Db,
     models::{
-        greendragon_character::GreenDragonCharacter, greendragon_commentary::GreenDragonCommentary,
-        greendragon_news::GreenDragonNews, greendragon_setting::GreenDragonSetting,
+        greendragon_bounty::GreenDragonBounty, greendragon_character::GreenDragonCharacter,
+        greendragon_commentary::GreenDragonCommentary, greendragon_news::GreenDragonNews,
+        greendragon_setting::GreenDragonSetting,
     },
 };
 use rand::Rng;
@@ -122,6 +123,9 @@ pub struct RosterEntry {
     /// Under newbie PvP immunity ([`Character::pvp_immune`]) — off every
     /// target list.
     pub pvp_immune: bool,
+    /// Refused by the bounty broker ([`Character::bounty_immune`] — one
+    /// notch more lenient than the PvP test, upstream's own quirk).
+    pub bounty_immune: bool,
     /// Epoch seconds an attacker last engaged them (`pvpflag`); within
     /// [`model::PVP_TIMEOUT_SECS`] the row shows but can't be attacked.
     pub pvp_engaged_at: i64,
@@ -172,10 +176,63 @@ pub enum PvpSettle {
         win_gold: u64,
         /// What the victim actually lost off purse+bank (the lesser-of rule).
         taken_gold: u64,
+        /// The matured bounty gold swept off the victim's head (`dag`'s
+        /// `pvpwin` hook) — paid on top of `win_gold` and, unlike it,
+        /// exempt from the level-15 zeroing.
+        bounty_gold: u64,
+        /// The share the broker "keeps": matured bounties the attacker set
+        /// on this head themselves. Never paid — and never closed either
+        /// (upstream leaves them open for the next hunter).
+        forfeited: u64,
+        /// The victim's display name, for the bounty news line.
+        victim: String,
     },
     /// The DB failed; the attacker gets no spoils (and the victim keeps
     /// their skin — the fight still made the news).
     Failed,
+}
+
+/// The async result of reading the bounty broker's ledger.
+#[derive(Clone)]
+pub enum BountyBoardLoad {
+    Loading,
+    Ready {
+        /// The matured price on the *asking* player's own head — what the
+        /// broker admits to on approach.
+        on_my_head: u64,
+        /// The wanted list: matured open gold aggregated per target,
+        /// unordered (the view joins the roster and sorts).
+        wanted: Arc<Vec<(Uuid, u64)>>,
+    },
+}
+
+/// The async result of placing a bounty contract.
+#[derive(Clone)]
+pub enum BountyPlace {
+    Loading,
+    /// Inserted; the caller charges the fee'd cost it already quoted.
+    Placed,
+    /// The target's total open bounty (matured or not) would pass the
+    /// `200·level` cap; nothing was placed. Carries the current total.
+    OverCap(u64),
+    /// The DB failed; nothing was placed or charged.
+    Failed,
+}
+
+/// The async result of a haunt attempt (`case_haunt3.php`): the 25 favor is
+/// the caller's to charge on `Success`/`Fumble` only — a refused target
+/// costs nothing, exactly as upstream skips the deduction.
+#[derive(Clone)]
+pub enum HauntLoad {
+    Loading,
+    /// The roll won: the mark is on them and a report awaits their return.
+    Success { target: String },
+    /// The roll lost (publicly — the failure makes the news too).
+    Fumble { target: String },
+    /// Another shade already rides their dreams; no charge.
+    AlreadyHaunted { target: String },
+    /// The target vanished between the search and the attempt; no charge.
+    Gone,
 }
 
 /// The async result of loading the full character roster.
@@ -320,6 +377,7 @@ async fn pvp_settle_victory_tx(
     db: &Db,
     victim_id: Uuid,
     engage: &PvpTarget,
+    attacker_id: Uuid,
     attacker_name: &str,
 ) -> anyhow::Result<PvpSettle> {
     let mut client = db.get().await?;
@@ -335,21 +393,38 @@ async fn pvp_settle_victory_tx(
     let lost_exp =
         (model::PVP_DEFENDER_LOSE_PCT as f64 * engage.experience as f64 / 100.0).round() as u64;
     c.pvp_slain(taken_gold, lost_exp);
+    // The bounty sweep (`dag`'s `pvpwin` hook, run inside the settlement):
+    // matured contracts on this head close to the attacker — except any the
+    // attacker set themselves, which the broker "keeps" and quietly leaves
+    // open for the next hunter, exactly as upstream never closes them.
+    let bounty_gold = GreenDragonBounty::collect(&tx, victim_id, attacker_id).await?.max(0) as u64;
+    let forfeited = GreenDragonBounty::forfeited_total(&tx, victim_id, attacker_id)
+        .await?
+        .max(0) as u64;
     let where_slept = if engage.lodged {
         "in your room at the inn"
     } else {
         "in the fields"
     };
-    c.pvp_reports.push(format!(
+    let mut report = format!(
         "While you slept {where_slept}, {attacker_name} attacked and bested you: \
          {taken_gold} gold and {lost_exp} experience lost. The graveyard has your bones \
          now; perhaps revenge will warm them.",
-    ));
+    );
+    if bounty_gold > 0 {
+        report.push_str(&format!(
+            " They also collected the {bounty_gold} gold bounty on your head."
+        ));
+    }
+    c.pvp_reports.push(report);
     GreenDragonCharacter::update_data_keep_updated(&tx, victim_id, persist::to_json(&c)).await?;
     tx.commit().await?;
     Ok(PvpSettle::Ready {
         win_gold: model::pvp_win_gold(engage.level, taken_gold),
         taken_gold,
+        bounty_gold,
+        forfeited,
+        victim: engage.name.clone(),
     })
 }
 
@@ -470,6 +545,14 @@ impl GreenDragonService {
                 let spirits = rng.gen_range(-1..=1) + rng.gen_range(-1..=1);
                 character.roll_new_day(day, interest, spirits, &mut rng)
             };
+            // A haunt collected at this dawn (`newday.php`'s `hauntedby`
+            // block): the message rides the report drain, which the session
+            // empties into the log right after this load lands.
+            if let Some(haunter) = rolled.as_ref().and_then(|fx| fx.haunted_by.as_ref()) {
+                character.pvp_reports.push(format!(
+                    "{haunter} haunted your dreams in the night; the fright costs you a forest fight today."
+                ));
+            }
             // Entering the door marks the character present (upstream's
             // `loggedin`); every in-play save re-stamps it and the leave save
             // clears it, so the roster's 15-minute window reads true presence.
@@ -514,12 +597,15 @@ impl GreenDragonService {
     }
 
     /// Delete a user's saved character, fire-and-forget (the "start over"
-    /// action), ordered against any pending save through the same gate.
+    /// action), ordered against any pending save through the same gate. Any
+    /// open bounties on the departed head close to the house (`dag`'s
+    /// `delete_character` hook); the lazy stray sweep catches races.
     pub fn delete_character(&self, user_id: Uuid) {
         let seq = self.inner.next_seq();
         let gate = self.inner.gate(user_id);
         let db = self.inner.db.clone();
         tokio::spawn(commit_delete(db, gate, seq, user_id));
+        self.close_bounties_on(user_id);
     }
 
     /// Append a line to the village's daily news, fire-and-forget (LoGD
@@ -696,6 +782,7 @@ impl GreenDragonService {
                         idle_secs,
                         lodged: c.lodged_today,
                         pvp_immune: c.pvp_immune(),
+                        bounty_immune: c.bounty_immune(),
                         pvp_engaged_at: c.pvp_engaged_at,
                     })
                 })
@@ -744,6 +831,7 @@ impl GreenDragonService {
         &self,
         victim_id: Uuid,
         engage: PvpTarget,
+        attacker_id: Uuid,
         attacker_name: String,
     ) -> watch::Receiver<PvpSettle> {
         let (tx, rx) = watch::channel(PvpSettle::Loading);
@@ -751,14 +839,189 @@ impl GreenDragonService {
         tokio::spawn(async move {
             let gate = inner.gate(victim_id);
             let _held = gate.lock().await;
-            let msg =
-                match pvp_settle_victory_tx(&inner.db, victim_id, &engage, &attacker_name).await {
-                    Ok(settle) => settle,
-                    Err(e) => {
-                        tracing::warn!("greendragon pvp victory settle failed: {e}");
-                        PvpSettle::Failed
+            let msg = match pvp_settle_victory_tx(
+                &inner.db,
+                victim_id,
+                &engage,
+                attacker_id,
+                &attacker_name,
+            )
+            .await
+            {
+                Ok(settle) => settle,
+                Err(e) => {
+                    tracing::warn!("greendragon pvp victory settle failed: {e}");
+                    PvpSettle::Failed
+                }
+            };
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// Read the bounty broker's ledger: the matured price on `me`'s own head
+    /// plus the wanted list, sweeping stray (deleted-target) contracts and
+    /// pruning old closed rows on the way — upstream does both lazily at
+    /// list render.
+    pub fn load_bounty_board(&self, me: Uuid) -> watch::Receiver<BountyBoardLoad> {
+        let (tx, rx) = watch::channel(BountyBoardLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let (on_my_head, wanted) = match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(e) = GreenDragonBounty::sweep_stray(&client).await {
+                        tracing::warn!("greendragon bounty stray sweep failed: {e}");
                     }
+                    if let Err(e) = GreenDragonBounty::prune_closed(&client).await {
+                        tracing::warn!("greendragon bounty prune failed: {e}");
+                    }
+                    let on_my_head = GreenDragonBounty::matured_total_on(&client, me)
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("greendragon bounty head read failed: {e}");
+                            0
+                        })
+                        .max(0) as u64;
+                    let wanted = GreenDragonBounty::wanted_list(&client)
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("greendragon bounty list read failed: {e}");
+                            Vec::new()
+                        })
+                        .into_iter()
+                        .map(|(target, gold)| (target, gold.max(0) as u64))
+                        .collect();
+                    (on_my_head, wanted)
+                }
+                Err(e) => {
+                    tracing::warn!("greendragon db get failed on bounty read: {e}");
+                    (0, Vec::new())
+                }
+            };
+            let _ = tx.send(BountyBoardLoad::Ready {
+                on_my_head,
+                wanted: Arc::new(wanted),
+            });
+        });
+        rx
+    }
+
+    /// Place a bounty on `target`. The caller has already run the local
+    /// checks (self, level, immunity, the minimum, the fee'd cost against
+    /// gold on hand — upstream's order); this transaction runs the last one,
+    /// the per-target open-total cap (which counts immature contracts too),
+    /// and inserts with the `e_rand(0, 4h)` activation delay.
+    pub fn place_bounty(
+        &self,
+        setter: Uuid,
+        target: Uuid,
+        amount: u64,
+        cap: u64,
+    ) -> watch::Receiver<BountyPlace> {
+        let (tx, rx) = watch::channel(BountyPlace::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let placed = async {
+                let mut client = inner.db.get().await?;
+                let db_tx = client.transaction().await?;
+                let current = GreenDragonBounty::open_total_on(&db_tx, target).await?.max(0) as u64;
+                if amount + current > cap {
+                    return anyhow::Ok(BountyPlace::OverCap(current));
+                }
+                let delay = rand::thread_rng().gen_range(0..=model::BOUNTY_DELAY_MAX_SECS);
+                GreenDragonBounty::place(&db_tx, target, Some(setter), amount as i64, delay)
+                    .await?;
+                db_tx.commit().await?;
+                Ok(BountyPlace::Placed)
+            }
+            .await;
+            let msg = placed.unwrap_or_else(|e| {
+                tracing::warn!("greendragon bounty place failed: {e}");
+                BountyPlace::Failed
+            });
+            let _ = tx.send(msg);
+        });
+        rx
+    }
+
+    /// Close every open bounty on `user_id` to the house, fire-and-forget —
+    /// the dragon-kill and character-deletion hooks (`dag`'s `dragonkill` /
+    /// `delete_character`).
+    pub fn close_bounties_on(&self, user_id: Uuid) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(e) = GreenDragonBounty::close_all_on(&client, user_id).await {
+                        tracing::warn!("greendragon bounty close failed: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("greendragon db get failed on bounty close: {e}"),
+            }
+        });
+    }
+
+    /// Attempt a haunt (`case_haunt3.php`) as a row-locked cross-player
+    /// transaction: re-check "no active haunt" against the target's *fresh*
+    /// blob, roll `e_rand(0, yourLevel) > e_rand(0, targetLevel)` (strict —
+    /// ties fail), and on success write the mark plus a report in the same
+    /// write. The 25 favor is the caller's to charge on a rolled attempt;
+    /// refusals cost nothing. The target's `updated` stays untouched (being
+    /// haunted isn't presence), and their gate is held across the
+    /// transaction like every cross-player write.
+    pub fn haunt(
+        &self,
+        my_level: u8,
+        my_name: String,
+        target_id: Uuid,
+    ) -> watch::Receiver<HauntLoad> {
+        let (tx, rx) = watch::channel(HauntLoad::Loading);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let gate = inner.gate(target_id);
+            let _held = gate.lock().await;
+            let outcome = async {
+                let mut client = inner.db.get().await?;
+                let db_tx = client.transaction().await?;
+                let Some((blob, _)) =
+                    GreenDragonCharacter::load_for_update(&db_tx, target_id).await?
+                else {
+                    return anyhow::Ok(HauntLoad::Gone);
                 };
+                let mut c = persist::from_json(&blob);
+                let target = c.titled_name();
+                if !c.haunted_by.is_empty() {
+                    return Ok(HauntLoad::AlreadyHaunted { target });
+                }
+                // Strict: ties fail (`$roll2 > $roll1`).
+                let success = {
+                    let mut rng = rand::thread_rng();
+                    let theirs: u32 = rng.gen_range(0..=c.level as u32);
+                    let mine: u32 = rng.gen_range(0..=my_level as u32);
+                    mine > theirs
+                };
+                if !success {
+                    return Ok(HauntLoad::Fumble { target });
+                }
+                c.haunted_by = my_name.clone();
+                c.pvp_reports.push(format!(
+                    "{my_name}'s shade crept through your dreams in the night. \
+                     You will wake all the wearier for it."
+                ));
+                GreenDragonCharacter::update_data_keep_updated(
+                    &db_tx,
+                    target_id,
+                    persist::to_json(&c),
+                )
+                .await?;
+                db_tx.commit().await?;
+                Ok(HauntLoad::Success { target })
+            }
+            .await;
+            let msg = outcome.unwrap_or_else(|e| {
+                tracing::warn!("greendragon haunt failed: {e}");
+                HauntLoad::Gone
+            });
             let _ = tx.send(msg);
         });
         rx

@@ -376,10 +376,14 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
 
     // The warrior list and the Hall of Fame: a heading, a column header,
     // the built rows, and any footer lines (fuzz note, your percentile).
-    if matches!(state.mode(), Mode::WarriorList | Mode::HallOfFame) {
+    if matches!(
+        state.mode(),
+        Mode::WarriorList | Mode::HallOfFame | Mode::BountyList
+    ) {
         let dim = Style::default().fg(theme::TEXT_DIM());
         let page = match state.mode() {
             Mode::WarriorList => state.warrior_page(),
+            Mode::BountyList => state.bounty_page_view(),
             _ => state.hall_of_fame_page(),
         };
         lines.push(Line::raw(""));
@@ -464,6 +468,107 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // The bounty broker's booth: his greeting and the price on your head.
+    if state.mode() == Mode::DagTable {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{} sulks in the inn's darkest booth, a pipe clamped in his teeth. \
+                 He deals in one commodity: other people's deaths.",
+                data::BOUNTY_BROKER
+            ),
+            dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            match state.bounty_on_my_head() {
+                None => "He looks you over slowly, saying nothing yet.".to_string(),
+                Some(0) => {
+                    "\"No price on your head just now. I'd be keeping it that way.\"".to_string()
+                }
+                Some(gold) => format!(
+                    "\"There's {gold} gold riding on your head. I'd be watching \
+                     my back, were I you.\""
+                ),
+            },
+            dim,
+        )));
+    }
+
+    // Picking a contract's target: the broker's terms, and the name line.
+    if state.mode() == Mode::BountyTarget {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "\"Who's it to be? They must be level {} at the least, past the \
+                 realm's protection, and not carrying too much contract already. \
+                 My listing fee is {}%, paid when the ink dries.\"",
+                model::BOUNTY_MIN_TARGET_LEVEL,
+                model::BOUNTY_FEE_PCT
+            ),
+            dim,
+        )));
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("whose head? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // Naming the price: the floor, the ceiling, and the fee.
+    if state.mode() == Mode::BountyAmount {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        if let Some((name, level)) = state.bounty_target_info() {
+            let min = model::BOUNTY_MIN_PER_LEVEL * level as u64;
+            let cap = model::BOUNTY_MAX_PER_LEVEL * level as u64;
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "\"{name}, then. I'll take no less than {min} gold, and the \
+                     total on that head stops at {cap}. My {}% comes off the top.\"",
+                    model::BOUNTY_FEE_PCT
+                ),
+                dim,
+            )));
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("how much gold? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The haunt: the warden's leave, your favor, and the name line.
+    if state.mode() == Mode::Haunt {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{} parts the veil a finger's width: the mortal world, asleep and \
+                 unguarded. One haunting costs {} favor, roll the dice as it may.",
+                data::DEATH_OVERLORD,
+                model::HAUNT_FAVOR_THRESHOLD
+            ),
+            dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("You hold {} favor.", c.favor),
+            dim,
+        )));
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("whose dreams? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
     if state.mode() == Mode::ChooseStyle {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
@@ -521,6 +626,9 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     let hint = if state.is_typing() {
         match state.mode() {
             Mode::WarriorList => "type a name   Enter ask around   Esc never mind",
+            Mode::BountyTarget => "type a name   Enter check his book   Esc never mind",
+            Mode::BountyAmount => "type an amount   Enter slide the coins over   Esc never mind",
+            Mode::Haunt => "type a name   Enter whisper it   Esc never mind",
             _ => "type your line   Enter say it   Esc think better of it",
         }
     } else {
@@ -606,6 +714,11 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::BarkeepEar => "A Quiet Word",
         Mode::PvpList(PvpVenue::Fields) => "The Sleeping Fields",
         Mode::PvpList(PvpVenue::Inn) => "The Rooms Upstairs",
+        Mode::DagTable => "The Shadowed Booth",
+        Mode::BountyList => "The Wanted List",
+        Mode::BountyTarget => "Naming a Head",
+        Mode::BountyAmount => "Naming a Price",
+        Mode::Haunt => "Across the Veil",
     }
 }
 
@@ -627,6 +740,11 @@ fn controls_hint(mode: Mode) -> &'static str {
         Mode::Outhouse | Mode::Tavern => "up/down move   Enter choose   Esc back to the forest",
         Mode::OuthouseWash(_) => "up/down move   Enter choose   Esc slips out unwashed",
         Mode::Commentary(_) => "up/down move   Enter choose   Esc step away",
+        Mode::DagTable => "up/down move   Enter choose   Esc back to the inn",
+        Mode::BountyList | Mode::BountyTarget | Mode::BountyAmount => {
+            "up/down move   Enter choose   Esc back to the booth"
+        }
+        Mode::Haunt => "up/down move   Enter choose   Esc back to the graves",
         _ => "up/down move   Enter choose   Esc back to village",
     }
 }
