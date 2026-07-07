@@ -672,7 +672,7 @@ async fn promote_to_leader_tx(
         return Ok(None);
     };
     let mut c = persist::from_json(&blob);
-    if c.clan_id != Some(clan_id) || c.clan_rank <= model::CLAN_APPLICANT {
+    if c.clan_id != Some(clan_id) || c.clan_rank == model::CLAN_APPLICANT {
         return Ok(None);
     }
     c.clan_rank = model::CLAN_LEADER;

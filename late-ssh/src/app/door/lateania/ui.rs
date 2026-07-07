@@ -297,8 +297,14 @@ fn draw_log(frame: &mut Frame, area: Rect, view: &PlayerView) {
         Constraint::Min(1),
     ])
     .split(area);
-    frame.render_widget(Paragraph::new(truncate_lines(context_lines, context_h)), rows[0]);
-    frame.render_widget(Paragraph::new(separator_line(rows[1].width as usize)), rows[1]);
+    frame.render_widget(
+        Paragraph::new(truncate_lines(context_lines, context_h)),
+        rows[0],
+    );
+    frame.render_widget(
+        Paragraph::new(separator_line(rows[1].width as usize)),
+        rows[1],
+    );
 
     let events = recent_log_tail(view, rows[2].width as usize, rows[2].height as usize);
     frame.render_widget(Paragraph::new(events), rows[2]);
@@ -1758,7 +1764,11 @@ fn recent_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'
 
 fn collapsed_recent_log_lines(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let mut iter = view.log.iter().filter(|line| line.kind != LogKind::Room).rev();
+    let mut iter = view
+        .log
+        .iter()
+        .filter(|line| line.kind != LogKind::Room)
+        .rev();
     while let Some(line) = iter.next() {
         let mut repeats = 1;
         while let Some(next) = iter.clone().next() {

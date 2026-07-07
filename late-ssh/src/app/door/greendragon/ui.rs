@@ -757,7 +757,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
                         None => counts.push((m.rank, 1)),
                     }
                 }
-                counts.sort_by(|a, b| b.0.cmp(&a.0));
+                counts.sort_by_key(|b| std::cmp::Reverse(b.0));
                 let detail = counts
                     .iter()
                     .map(|(r, n)| format!("{}: {n}", model::clan_rank_name(*r)))
