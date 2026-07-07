@@ -520,14 +520,21 @@ async fn run_shell_loop(
             }
         };
 
-        for frame in [
-            ControlFrame::Pty {
-                term: ctx.term.clone(),
-                cols: ctx.cols,
-                rows: ctx.rows,
-            },
-            ControlFrame::ShellStart,
-        ] {
+        let mut setup_frames = Vec::with_capacity(ctx.env.len() + 2);
+        setup_frames.push(ControlFrame::Pty {
+            term: ctx.term.clone(),
+            cols: ctx.cols,
+            rows: ctx.rows,
+        });
+        setup_frames.extend(
+            ctx.env
+                .iter()
+                .cloned()
+                .map(|(name, value)| ControlFrame::Env { name, value }),
+        );
+        setup_frames.push(ControlFrame::ShellStart);
+
+        for frame in setup_frames {
             let payload = frame
                 .to_json()
                 .context("failed to encode tunnel setup frame")?;

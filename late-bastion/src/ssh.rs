@@ -13,7 +13,7 @@
 
 use anyhow::Result;
 use getrandom::SysRng;
-use late_core::tunnel_protocol::SshInputEvent;
+use late_core::tunnel_protocol::{SshInputEvent, is_tunnel_env_allowed};
 use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::{Channel, ChannelId, Sig};
@@ -79,6 +79,7 @@ pub struct ClientHandler {
     /// pty and shell requests).
     cols: u16,
     rows: u16,
+    env: Vec<(String, String)>,
     over_limit: bool,
     _permit: Option<OwnedSemaphorePermit>,
     channel: Option<Channel<Msg>>,
@@ -129,6 +130,7 @@ impl Server {
             session_id: Uuid::now_v7().to_string(),
             cols: 0,
             rows: 0,
+            env: Vec::new(),
             over_limit,
             _permit: permit,
             channel: None,
@@ -152,6 +154,7 @@ impl ClientHandler {
             rows: self.rows,
             reconnect_reason: None,
             session_id: self.session_id.clone(),
+            env: self.env.clone(),
         })
     }
 }
@@ -276,11 +279,21 @@ impl russh::server::Handler for ClientHandler {
     async fn env_request(
         &mut self,
         channel: ChannelId,
-        _variable_name: &str,
-        _variable_value: &str,
+        variable_name: &str,
+        variable_value: &str,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        fail_channel_request(session, channel, "env");
+        if is_tunnel_env_allowed(variable_name) {
+            let variable_name = variable_name.trim();
+            self.env
+                .push((variable_name.to_string(), variable_value.to_string()));
+            tracing::debug!(variable_name, "stored whitelisted env request");
+        } else {
+            tracing::debug!(variable_name, "ignoring non-whitelisted env request");
+        }
+        if let Err(e) = session.channel_success(channel) {
+            tracing::warn!(error = ?e, variable_name, "env channel_success failed");
+        }
         Ok(())
     }
 

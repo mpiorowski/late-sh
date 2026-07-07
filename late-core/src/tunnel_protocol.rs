@@ -31,6 +31,8 @@ pub const TUNNEL_CLOSE_PROTOCOL_ERROR: u16 = 4003;
 pub const TUNNEL_CLOSE_RECONNECT_REQUESTED: u16 = 4100;
 pub const TUNNEL_CLOSE_ABNORMAL: u16 = 1006;
 
+pub const ENV_LATE_CLI_MODE: &str = "LATE_CLI_MODE";
+
 /// Text-frame control message. Tagged on `t` so adding new variants is
 /// non-breaking as long as both ends are tolerant of unknown tags.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +48,9 @@ pub enum ControlFrame {
     /// whenever the user-SSH client's terminal is resized.
     #[serde(rename = "resize")]
     Resize { cols: u16, rows: u16 },
+    /// Whitelisted SSH env request. Sent before `shell_start` when present.
+    #[serde(rename = "env")]
+    Env { name: String, value: String },
     /// Bounded UTF-8 exec request. MVP supports one pre-shell exec with no stdin.
     #[serde(rename = "exec_request")]
     ExecRequest { id: String, command: String },
@@ -80,6 +85,26 @@ pub enum ControlFrame {
 pub enum SshInputEvent {
     Bytes(Vec<u8>),
     Resize { cols: u16, rows: u16 },
+}
+
+pub fn is_tunnel_env_allowed(name: &str) -> bool {
+    matches!(
+        name.trim(),
+        ENV_LATE_CLI_MODE
+            | "TERM_PROGRAM"
+            | "LC_TERMINAL"
+            | "TERM_FEATURES"
+            | "KITTY_WINDOW_ID"
+            | "KITTY_PID"
+            | "KITTY_PUBLIC_KEY"
+            | "WEZTERM_PANE"
+            | "WEZTERM_EXECUTABLE"
+            | "KONSOLE_VERSION"
+            | "GHOSTTY_RESOURCES_DIR"
+            | "GHOSTTY_BIN_DIR"
+            | "WT_SESSION"
+            | "WT_PROFILE_ID"
+    )
 }
 
 impl ControlFrame {
@@ -129,6 +154,42 @@ mod tests {
         assert!(json.contains(r#""t":"resize""#), "actual: {}", json);
         assert!(json.contains(r#""cols":80"#), "actual: {}", json);
         assert!(json.contains(r#""rows":24"#), "actual: {}", json);
+    }
+
+    #[test]
+    fn env_round_trips() {
+        let frame = ControlFrame::Env {
+            name: ENV_LATE_CLI_MODE.to_string(),
+            value: "1".to_string(),
+        };
+        let parsed = ControlFrame::from_json(&frame.to_json().unwrap()).unwrap();
+        assert_eq!(parsed, frame);
+    }
+
+    #[test]
+    fn tunnel_env_whitelist_allows_only_supported_names() {
+        for name in [
+            ENV_LATE_CLI_MODE,
+            "TERM_PROGRAM",
+            "LC_TERMINAL",
+            "TERM_FEATURES",
+            "KITTY_WINDOW_ID",
+            "KITTY_PID",
+            "KITTY_PUBLIC_KEY",
+            "WEZTERM_PANE",
+            "WEZTERM_EXECUTABLE",
+            "KONSOLE_VERSION",
+            "GHOSTTY_RESOURCES_DIR",
+            "GHOSTTY_BIN_DIR",
+            "WT_SESSION",
+            "WT_PROFILE_ID",
+        ] {
+            assert!(is_tunnel_env_allowed(name), "{name} should be allowed");
+        }
+
+        for name in ["TERM", "PATH", "HOME", "SSH_AUTH_SOCK", "LD_PRELOAD"] {
+            assert!(!is_tunnel_env_allowed(name), "{name} should be ignored");
+        }
     }
 
     #[test]

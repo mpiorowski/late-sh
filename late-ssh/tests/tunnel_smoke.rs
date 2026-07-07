@@ -14,7 +14,7 @@ use late_core::MutexRecover;
 use late_core::models::server_ban::{ServerBan, ServerBanActivation};
 use late_core::shutdown::CancellationToken;
 use late_core::test_utils::create_test_user;
-use late_core::tunnel_protocol::ControlFrame;
+use late_core::tunnel_protocol::{ControlFrame, ENV_LATE_CLI_MODE};
 use late_core::tunnel_protocol::{TUNNEL_CLOSE_BANNED, TUNNEL_CLOSE_PROTOCOL_ERROR};
 use late_ssh::app::state::App;
 use late_ssh::config::Config;
@@ -225,6 +225,94 @@ async fn tunnel_exec_request_returns_cli_token_response() {
             }
         }
         other => panic!("expected exec_response Text, got {other:?}"),
+    }
+
+    let _ = ws.close(None).await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn tunnel_env_cli_mode_emits_scrapeable_session_token_before_alt_screen() {
+    let (addr, _state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
+
+    let req = make_request(addr, "env-cli-user");
+    let (mut ws, response) = timeout(
+        Duration::from_secs(5),
+        tokio_tungstenite::connect_async(req),
+    )
+    .await
+    .expect("connect_async timeout")
+    .expect("connect_async");
+    assert_eq!(response.status().as_u16(), 101);
+
+    ws.send(Message::Text(
+        ControlFrame::Pty {
+            term: "xterm-256color".to_string(),
+            cols: 80,
+            rows: 24,
+        }
+        .to_json()
+        .expect("encode pty")
+        .into(),
+    ))
+    .await
+    .expect("send pty");
+    ws.send(Message::Text(
+        ControlFrame::Env {
+            name: "TERM".to_string(),
+            value: "should-be-ignored".to_string(),
+        }
+        .to_json()
+        .expect("encode ignored env")
+        .into(),
+    ))
+    .await
+    .expect("send ignored env");
+    ws.send(Message::Text(
+        ControlFrame::Env {
+            name: ENV_LATE_CLI_MODE.to_string(),
+            value: "1".to_string(),
+        }
+        .to_json()
+        .expect("encode cli env")
+        .into(),
+    ))
+    .await
+    .expect("send cli env");
+    ws.send(Message::Text(
+        ControlFrame::ShellStart
+            .to_json()
+            .expect("encode shell_start")
+            .into(),
+    ))
+    .await
+    .expect("send shell_start");
+
+    let first = timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("first frame timeout")
+        .expect("stream ended")
+        .expect("ws error");
+    match first {
+        Message::Binary(bytes) => {
+            let payload = String::from_utf8(bytes.to_vec()).expect("token banner utf8");
+            assert!(
+                payload.starts_with("LATE_SESSION_TOKEN="),
+                "unexpected first payload: {payload:?}"
+            );
+            assert!(payload.ends_with("\r\n"), "banner must be line-delimited");
+        }
+        other => panic!("expected token banner Binary, got {other:?}"),
+    }
+
+    let second = timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("second frame timeout")
+        .expect("stream ended")
+        .expect("ws error");
+    match second {
+        Message::Binary(bytes) => assert_eq!(bytes.as_ref(), App::enter_alt_screen().as_slice()),
+        other => panic!("expected alt-screen Binary, got {other:?}"),
     }
 
     let _ = ws.close(None).await;

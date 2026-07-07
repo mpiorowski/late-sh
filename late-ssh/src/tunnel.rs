@@ -31,7 +31,8 @@ use late_core::models::user::User;
 use late_core::shutdown::CancellationToken;
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::tunnel_protocol::{
-    ControlFrame, SshInputEvent, TUNNEL_CLOSE_BANNED, TUNNEL_CLOSE_PROTOCOL_ERROR,
+    ControlFrame, ENV_LATE_CLI_MODE, SshInputEvent, TUNNEL_CLOSE_BANNED,
+    TUNNEL_CLOSE_PROTOCOL_ERROR, is_tunnel_env_allowed,
 };
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -54,6 +55,7 @@ use crate::state::{ActiveSession, ActiveUser, State, TunnelSessionPermit};
 /// past this is surfaced to the render loop as `Ok(false)` (drop +
 /// repaint), matching the russh path's per-frame send timeout.
 const WS_OUT_BUFFER: usize = 8;
+const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 
 // Header names live in `late_core::tunnel_protocol` so the bastion and
 // backend reference the same constants. Re-exported here so existing
@@ -508,26 +510,42 @@ struct TunnelShell {
     render: tokio::task::JoinHandle<()>,
 }
 
+fn tunnel_cli_mode_from_env(env: &[(String, String)]) -> bool {
+    env.iter()
+        .rfind(|(name, _)| name.trim() == ENV_LATE_CLI_MODE)
+        .is_some_and(|(_, value)| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+}
+
+fn apply_tunnel_env_hint(app: &mut crate::app::state::App, name: &str, value: &str) {
+    if name.trim() != ENV_LATE_CLI_MODE {
+        app.apply_terminal_env_hint(name, value);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_tunnel_shell(
     state: &State,
     user: User,
     is_new_user: bool,
     pty: TunnelPty,
+    env: Vec<(String, String)>,
     session_token: String,
     session_rx: mpsc::Receiver<crate::session::SessionMessage>,
     reconnect_reason: Option<u16>,
     out_tx: mpsc::Sender<Message>,
     frame_drop_log_every: u64,
 ) -> Option<TunnelShell> {
+    let cli_mode = tunnel_cli_mode_from_env(&env);
     tracing::debug!(
         term = %pty.term,
         cols = pty.cols,
         rows = pty.rows,
+        cli_mode,
         "tunnel: shell_start accepted"
     );
 
     let (input_tx, input_rx) = mpsc::channel::<SshInputEvent>(INPUT_QUEUE_CAP);
+    let cli_session_token = session_token.clone();
     let session_config = build_session_config(
         state,
         SessionBootstrapInputs {
@@ -553,6 +571,20 @@ async fn start_tunnel_shell(
             return None;
         }
     };
+
+    {
+        let mut app_guard = app.lock().await;
+        for (name, value) in &env {
+            apply_tunnel_env_hint(&mut app_guard, name, value);
+        }
+    }
+
+    if cli_mode {
+        let banner = format!("{CLI_TOKEN_PREFIX}{cli_session_token}\r\n");
+        let _ = out_tx
+            .send(Message::Binary(banner.into_bytes().into()))
+            .await;
+    }
 
     // Initial alt-screen enter, mirroring shell_request's pre-loop write.
     let _ = out_tx
@@ -686,6 +718,7 @@ async fn handle_session(
     });
 
     let mut pty: Option<TunnelPty> = None;
+    let mut env: Vec<(String, String)> = Vec::new();
     let mut shell: Option<TunnelShell> = None;
     let mut exec_seen = false;
 
@@ -725,6 +758,25 @@ async fn handle_session(
                             }
                             pty = Some(TunnelPty { term, cols, rows });
                         }
+                        Ok(ControlFrame::Env { name, value }) => {
+                            if !is_tunnel_env_allowed(&name) {
+                                tracing::debug!(name, "tunnel: ignoring non-whitelisted env frame");
+                                continue;
+                            }
+                            if let Some(shell) = shell.as_ref() {
+                                if name.trim() == ENV_LATE_CLI_MODE {
+                                    tracing::debug!("tunnel: ignoring late LATE_CLI_MODE env frame");
+                                } else {
+                                    shell
+                                        .app
+                                        .lock()
+                                        .await
+                                        .apply_terminal_env_hint(&name, &value);
+                                }
+                            } else {
+                                env.push((name, value));
+                            }
+                        }
                         Ok(ControlFrame::ShellStart) => {
                             if shell.is_some() {
                                 tracing::warn!("tunnel: duplicate shell_start");
@@ -741,17 +793,20 @@ async fn handle_session(
                                 send_protocol_close(&out_tx, "session receiver missing").await;
                                 break;
                             };
-                            match start_tunnel_shell(
+                            let shell_runtime = start_tunnel_shell(
                                 &state,
                                 user.clone(),
                                 is_new_user,
                                 pty,
+                                std::mem::take(&mut env),
                                 session_token.clone(),
                                 rx,
                                 handshake.reconnect_reason,
                                 out_tx.clone(),
                                 frame_drop_log_every,
-                            ).await {
+                            )
+                            .await;
+                            match shell_runtime {
                                 Some(runtime) => shell = Some(runtime),
                                 None => break,
                             }

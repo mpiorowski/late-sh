@@ -38,6 +38,8 @@ pub struct HandshakeContext {
     /// reconnects so logs/metrics on either end can correlate the
     /// underlying user session.
     pub session_id: String,
+    /// Whitelisted SSH env requests captured before shell start.
+    pub env: Vec<(String, String)>,
 }
 
 /// Build a tungstenite `Request` for `connect_async` carrying the
@@ -87,6 +89,7 @@ mod tests {
             rows: 40,
             reconnect_reason: None,
             session_id: "01HX7Q4N4S2NS9X9".to_string(),
+            env: Vec::new(),
         }
     }
 

@@ -28,8 +28,8 @@ use late_bastion::config::Config;
 use late_bastion::ssh::{Server, load_or_generate_key};
 use late_core::shutdown::CancellationToken;
 use late_core::tunnel_protocol::{
-    ControlFrame, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT_REASON, HEADER_SECRET,
-    HEADER_SESSION_ID,
+    ControlFrame, ENV_LATE_CLI_MODE, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT_REASON,
+    HEADER_SECRET, HEADER_SESSION_ID,
 };
 use russh::client::{self as russh_client, Handler as ClientHandler};
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, signature::rand_core::UnwrapErr};
@@ -191,31 +191,26 @@ impl MockBackend {
             .expect("frame recv timeout")
     }
 
-    async fn expect_setup_frames(&mut self, term: &str, cols: u16, rows: u16) {
-        let pty = self.next_frame().await.expect("pty frame");
-        match pty {
-            WsMessage::Text(text) => {
-                let parsed = ControlFrame::from_json(text.as_str()).expect("parse pty");
-                assert_eq!(
-                    parsed,
-                    ControlFrame::Pty {
-                        term: term.to_string(),
-                        cols,
-                        rows
-                    }
-                );
-            }
-            other => panic!("expected pty Text frame, got {other:?}"),
+    async fn next_control_frame(&mut self, label: &str) -> ControlFrame {
+        match self.next_frame().await.expect(label) {
+            WsMessage::Text(text) => ControlFrame::from_json(text.as_str()).expect(label),
+            other => panic!("expected {label} Text frame, got {other:?}"),
         }
+    }
 
-        let shell_start = self.next_frame().await.expect("shell_start frame");
-        match shell_start {
-            WsMessage::Text(text) => {
-                let parsed = ControlFrame::from_json(text.as_str()).expect("parse shell_start");
-                assert_eq!(parsed, ControlFrame::ShellStart);
+    async fn expect_setup_frames(&mut self, term: &str, cols: u16, rows: u16) {
+        assert_eq!(
+            self.next_control_frame("pty frame").await,
+            ControlFrame::Pty {
+                term: term.to_string(),
+                cols,
+                rows
             }
-            other => panic!("expected shell_start Text frame, got {other:?}"),
-        }
+        );
+        assert_eq!(
+            self.next_control_frame("shell_start frame").await,
+            ControlFrame::ShellStart
+        );
     }
 
     async fn send(&self, msg: WsMessage) {
@@ -435,6 +430,79 @@ async fn bastion_proxies_ssh_to_tunnel_with_full_handshake_and_byte_flow() {
     // calling `Channel::window_change` is no longer available.
     drop(user_reader);
     drop(user_writer);
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_forwards_whitelisted_env_and_success_ignores_unknown_env() {
+    let mut backend = MockBackend::spawn().await.expect("backend");
+    let bastion = TestBastion::spawn(backend.ws_url()).await.expect("bastion");
+
+    let user_key =
+        PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519).expect("key");
+    let client_config = Arc::new(russh_client::Config::default());
+    let mut session = russh_client::connect(client_config, bastion.addr, AnyHostKey)
+        .await
+        .expect("client connect");
+    let auth = session
+        .authenticate_publickey(
+            "alice",
+            PrivateKeyWithHashAlg::new(Arc::new(user_key), None),
+        )
+        .await
+        .expect("authenticate_publickey");
+    assert!(auth.success(), "auth not accepted");
+
+    let channel = session
+        .channel_open_session()
+        .await
+        .expect("channel_open_session");
+    channel
+        .set_env(true, ENV_LATE_CLI_MODE, "1")
+        .await
+        .expect("late cli env accepted");
+    channel
+        .set_env(true, "TERM", "should-not-forward")
+        .await
+        .expect("unknown env success-ignored");
+    channel
+        .set_env(true, "TERM_PROGRAM", "iTerm.app")
+        .await
+        .expect("terminal hint env accepted");
+    channel
+        .request_pty(true, "xterm-256color", 100, 30, 0, 0, &[])
+        .await
+        .expect("request_pty");
+    channel.request_shell(true).await.expect("request_shell");
+
+    let _headers = backend.wait_for_handshake().await;
+    assert_eq!(
+        backend.next_control_frame("pty frame").await,
+        ControlFrame::Pty {
+            term: "xterm-256color".to_string(),
+            cols: 100,
+            rows: 30,
+        }
+    );
+    assert_eq!(
+        backend.next_control_frame("late cli env frame").await,
+        ControlFrame::Env {
+            name: ENV_LATE_CLI_MODE.to_string(),
+            value: "1".to_string(),
+        }
+    );
+    assert_eq!(
+        backend.next_control_frame("terminal env frame").await,
+        ControlFrame::Env {
+            name: "TERM_PROGRAM".to_string(),
+            value: "iTerm.app".to_string(),
+        }
+    );
+    assert_eq!(
+        backend.next_control_frame("shell_start frame").await,
+        ControlFrame::ShellStart
+    );
+
     bastion.shutdown();
 }
 
