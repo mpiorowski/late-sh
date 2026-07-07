@@ -161,8 +161,8 @@ originally shipped with:
   `round(10 · (max − soulpoints) / max)` favor (0..10 with depletion);
   enabled only when below max and affordable.
 - [x] **Favor tiers** (`case_question.php`): tier messaging at <25 / ≥25 /
-  ≥100 favor renders in the graveyard panel. The 25-favor haunt itself is
-  PvP-only and stays deferred to phase 4 (`HAUNT_FAVOR_THRESHOLD` is ready).
+  ≥100 favor renders in the graveyard panel. The 25-favor haunt itself
+  landed with phase 4's bounties+haunt slice (see that section).
 - [x] **Paid resurrection** (`case_resurrection.php` + `newday.php`
   `resurrection=true`): 100 favor (deducted at the moment of resurrection),
   an immediate extra new day — bank interest settles, specialty uses refresh,
@@ -496,10 +496,9 @@ online-roster path; the session stays authoritative for its own character
 
 ### Build order
 commentary ✓ → roster/HoF ✓ → gypsy ✓ (folded into the commentary slice — it
-is just a paid door onto the shade section) → PvP ✓ → bounties + haunt
-(specs source-audited 2026-07, ready to implement) → clans → mail(?) →
-gardens ✓ / veterans' rock ✓. Commentary first: five other features are just
-sections of it.
+is just a paid door onto the shade section) → PvP ✓ → bounties + haunt ✓ →
+clans → mail(?) → gardens ✓ / veterans' rock ✓. Commentary first: five
+other features are just sections of it.
 
 ### `commentary` — the one chat primitive — DONE
 
@@ -828,14 +827,14 @@ below are already fixed to match):
    expire after `expirecontent/10` = **18 days** (an admin-page sweep
    upstream; ours prunes on write, like commentary/news).
 
-- [ ] Table `greendragon_bounties` (migration 099 + a `late-core` model):
+- [x] Table `greendragon_bounties` (migration 099 + a `late-core` model):
   id, target user_id, setter user_id (nullable = system), amount, `set_at`
   (**activation delay**: insert stamps `now + e_rand(0, 14400)` seconds; a
   bounty is *matured* once `set_at <= now`), status open/closed, winner
   (nullable = the house), closed_at.
-- [ ] **Dag's table** (inn menu row, our NPC name original): the greeting
+- [x] **Dag's table** (inn menu row, our NPC name original): the greeting
   shows *your* open matured total; nav to the wanted list + set-a-bounty.
-- [ ] **Placing** (≤5/day via a daily blob counter reset in `roll_new_day`;
+- [x] **Placing** (≤5/day via a daily blob counter reset in `roll_new_day`;
   at the cap the form is refused outright): pick a target (talk-line
   subsequence search over the roster, >100 matches = "narrow it down",
   multiple = disambiguation pick), amount typed on the talk line
@@ -845,26 +844,50 @@ below are already fixed to match):
   200·targetLevel` (correction 3, `>` strict — exactly reaching the cap is
   allowed) → insert + charge. No placement news. Any qualifying target
   works: no level band vs the setter; online, offline, or dead alike.
-- [ ] **Wanted list**: open + matured rows aggregated per target; default
+- [x] **Wanted list**: open + matured rows aggregated per target; default
   sort level desc (ties amount desc), toggleable to amount desc; columns
   amount / level / name / location-or-Online / alive / last-seen off the
   roster snapshot (no sex column, matching the warrior list).
-- [ ] **Collecting**: inside `pvp_settle_victory`'s transaction, sweep the
+- [x] **Collecting**: inside `pvp_settle_victory`'s transaction, sweep the
   victim's open matured bounties: rows set by others close (winner = the
   attacker) and their sum lands on the attacker's gold **on top of** the
   normal PvP payout (correction 5 — not level-15-zeroed); rows the attacker
   set stay open (correction 2) with a "Dag keeps that share" log line.
   News item + a bounty line appended to the victim's report.
-- [ ] **Closure hooks**: the target's dragon kill (a svc call from the kill
+- [x] **Closure hooks**: the target's dragon kill (a svc call from the kill
   path) and character deletion close all open rows to the house
   (correction 6); prune closed rows older than 18 days on write.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **The broker's refusals surface as disabled rows at pick time** (yourself,
+  the level floor, the immunity test) instead of upstream's rejection after
+  finalize — the check set is identical, the timing one screen earlier. The
+  cap check keeps its upstream position (last, inside the placement).
+- **The cost is taken up front and refunded on a refusal** (the Five Sixes
+  pattern); upstream "leaves the coins on the table" — net effect identical.
+- The placement runs the cap check and insert in one transaction, so
+  concurrent setters can't jointly pass the cap (upstream has no guard;
+  strictly safer, same rules).
+- The wanted list drops the sex column (as the warrior list), pages at 15
+  rows, and breaks the gold sort's ties by level (upstream leaves them
+  unspecified); aggregation keys on the target id in SQL, not the display
+  name (upstream merges rows by name).
+- The daily counter is a blob field (`bounties_set_today`) reset in the
+  shared new-day effects — upstream's module pref, same reset timing (the
+  hook fires on paid resurrections too).
+- Amounts are typed on the talk line, digits only (upstream's free-text box
+  through `abs(int)`).
+- All broker prose is original; the NPC is ours ("Varn").
 
 ### Haunt (graveyard, needs the phase-1 favor economy)
 
 Sources: `lib/graveyard/case_haunt{,2,3}.php`, `case_question.php` (the
-nav gating), `newday.php:281` (the dock). **Spec audited line-by-line
-2026-07; implementation pending.** Source-audit corrections to what this
-section originally claimed (the specs below are already fixed to match):
+nav gating), `newday.php:281` (the dock). Spec audited line-by-line
+2026-07; **implemented 2026-07** (`Mode::Haunt` off the graveyard menu, the
+`haunt` svc transaction, the dock in the shared new-day effects).
+Source-audit corrections to what this section originally claimed (the specs
+below are already fixed to match):
 
 1. **There is no target filter beyond "not already haunted"**: any account
    matches the search — dead, brand-new, PvP-immune, online, any level,
@@ -881,23 +904,40 @@ section originally claimed (the specs below are already fixed to match):
    message naming the haunter, mark cleared. Upstream doesn't floor the
    decrement; ours saturates at 0 (unsigned field, documented deviation).
 
-- [ ] `Character.haunted_by: String` (serde default empty; stores the
+- [x] `Character.haunted_by: String` (serde default empty; stores the
   haunter's **name**, exactly as upstream's varchar).
-- [ ] **The favor menu** (the existing tier panel in the graveyard):
+- [x] **The favor menu** (the existing tier panel in the graveyard):
   "Haunt a foe (25 favor)" appears at ≥25 favor, alongside the
   resurrection row at ≥100 (`case_question.php`'s two tiers).
-- [ ] **Target pick**: talk-line subsequence search over the roster (cap
+- [x] **Target pick**: talk-line subsequence search over the roster (cap
   100, "narrow it down"); rows show name + level, sorted level then name
   (upstream `ORDER BY level,login`).
-- [ ] **The attempt** (a row-locked cross-player transaction, the PvP
+- [x] **The attempt** (a row-locked cross-player transaction, the PvP
   pattern — the "no active haunt" check must read the fresh blob):
   `haunted_by` non-empty ⇒ refuse, no charge; else deduct 25 favor (yours,
   locally), roll `e_rand(0, yourLevel) > e_rand(0, targetLevel)` (strict —
   ties fail); success writes `haunted_by = your name` + a report entry in
   the same transaction. News both ways (correction 3).
-- [ ] **The dock**: in the shared new-day effects (dawn AND the paid
+- [x] **The dock**: in the shared new-day effects (dawn AND the paid
   resurrection, correction 4): `haunted_by` non-empty ⇒ turns saturating
   −1, a log line naming the haunter, mark cleared.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **The dawn dock's message rides the report drain**: the load-path new day
+  rolls in `svc`, so the "X haunted your dreams" line is appended to
+  `pvp_reports` before the entry save and surfaces with the other sleep
+  reports; the paid resurrection (in-session) logs it directly off
+  `NewDayFx`. The success notification to the victim is a report too (the
+  PvP mail adaptation).
+- **The self-haunt quirk lands with upstream's own effect**: the mark is
+  written to your stored blob, and your live session's next save clobbers
+  it — exactly what upstream's end-of-request session save does. You're out
+  25 favor and the news item either way.
+- The turn dock saturates at 0 (upstream's `turns--` has no floor; our
+  field is unsigned).
+- All prose is original: the six fumble vignettes (`data::HAUNT_FUMBLES`),
+  the news lines, the warden's framing.
 
 ### Clans
 - Table `greendragon_clans`: id, name (5–50 chars, unique), tag (2–5

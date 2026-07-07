@@ -63,7 +63,7 @@ hub: [dragonprime.net](https://dragonprime.net/).
 
 ## Persistence
 
-`greendragon_characters` (migration `092`, model `late-core/src/models/greendragon_character.rs`) is one JSONB blob per user, exactly like `mud_characters` — the character shape evolves without new migrations. The service computes a UTC day-number to drive the once-per-day forest-turn/heal reset on load.
+`greendragon_characters` (migration `092`, model `late-core/src/models/greendragon_character.rs`) is one JSONB blob per user, exactly like `mud_characters` — the character shape evolves without new migrations. The service computes a UTC day-number to drive the once-per-day forest-turn/heal reset on load. Side tables: `greendragon_news` (096), `greendragon_settings` (097, the Five Sixes pot), `greendragon_commentary` (098), and `greendragon_bounties` (099 — one row per contract, `set_at` stamped up to 4h in the future as the maturity delay, closed rows pruned after 18 days).
 
 ## Integration points (mirror Lateania)
 
@@ -104,7 +104,7 @@ not memory. Each names the upstream file it matches.
 Everything we *have* now matches LoGD; what's below is **not built yet**. Documented so these stop surfacing as surprises.
 
 - **No dashboard activity feed** (`activity_game()` returns `None`) and **no chip/profile award** for slaying the dragon — `svc` holds the deps but the reward path isn't wired (needs a `reward_templates` seed migration like Lateania's `086`).
-- **Whole systems not built:** the King's tournament, clans, bounties, the graveyard haunt, and mail-as-a-mailbox — all still ahead in phase 4. The Dark Horse bartender's paid enemy-intel remains too (the roster it reads is in). PvP itself landed 2026-07 (the inn's who's-lodged list included); bounties and the haunt hang directly off it.
+- **Whole systems not built:** the King's tournament, clans, and mail-as-a-mailbox — the phase-4 tail. The Dark Horse bartender's paid enemy-intel remains too (the roster it reads is in). PvP landed 2026-07 (the inn's who's-lodged list included), and bounties + the haunt landed right behind it (2026-07): the inn's shadowed booth (wanted list, contracts with the 4h maturity delay, collection inside the PvP victory settlement) and the graveyard's 25-favor haunt (the cross-player mark, the next-dawn turn dock).
 - **Commentary leftovers**: clan-hall sections (with clans), new-post markers/pagination (single refreshed window for now), and the drinks module's drunken comment slurring.
 
 The phase-3 buildings are **in**: the daily news ("yesterday in Duskmere", migration 096), the stables and mercenary camp, the full inn (room, bribes + specialty switch, the potion shelf, the bard, drinks + drunkenness, the romance ladder through marriage/divorce), the forest outhouse, the restored Dark Horse Tavern (dice, the shared-pot Five Sixes over migration 097, stones), and the battle-end flavor + bandit purse-cut. Charm and the persistent-buff engine now have their consumers (romance, drinks, potions, mounts, sickness).
