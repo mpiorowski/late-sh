@@ -28,6 +28,24 @@ const SIDE_NARROW: u16 = 28;
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     let view = state.view();
 
+    if state.reset_elsewhere() {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "Lateania character reset from another session.",
+                    Style::default().fg(theme::AMBER_GLOW()),
+                )),
+                Line::from(Span::styled(
+                    "Press Esc to return to Games, then enter again to start over.",
+                    Style::default().fg(theme::TEXT_DIM()),
+                )),
+            ])
+            .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
+
     if !view.joined {
         frame.render_widget(
             Paragraph::new(vec![Line::from(Span::styled(
@@ -269,22 +287,21 @@ fn draw_log(frame: &mut Frame, area: Rect, view: &PlayerView) {
     }
 
     let context_lines = current_room_context(view, area.width as usize);
+    let recent_reserve = if area.height < 18 { 5 } else { 8 };
     let context_h = (context_lines.len() as u16)
-        .min(if area.height < 18 { 7 } else { 10 })
-        .min(area.height.saturating_sub(4));
-    let rows = Layout::vertical([Constraint::Length(context_h), Constraint::Min(1)]).split(area);
-    frame.render_widget(
-        Paragraph::new(
-            context_lines
-                .into_iter()
-                .take(context_h as usize)
-                .collect::<Vec<_>>(),
-        ),
-        rows[0],
-    );
+        .min(area.height.saturating_sub(recent_reserve + 1))
+        .max(1);
+    let rows = Layout::vertical([
+        Constraint::Length(context_h),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(area);
+    frame.render_widget(Paragraph::new(truncate_lines(context_lines, context_h)), rows[0]);
+    frame.render_widget(Paragraph::new(separator_line(rows[1].width as usize)), rows[1]);
 
-    let events = recent_log_tail(view, rows[1].width as usize, rows[1].height as usize);
-    frame.render_widget(Paragraph::new(events), rows[1]);
+    let events = recent_log_tail(view, rows[2].width as usize, rows[2].height as usize);
+    frame.render_widget(Paragraph::new(events), rows[2]);
 }
 
 fn draw_side(
@@ -1724,12 +1741,7 @@ fn recent_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'
         return Vec::new();
     }
 
-    let mut events: Vec<Line<'static>> = view
-        .log
-        .iter()
-        .filter(|line| line.kind != LogKind::Room)
-        .flat_map(|line| wrapped_log_line(line.kind, &line.text, width))
-        .collect();
+    let mut events = collapsed_recent_log_lines(view, width);
     if events.is_empty() {
         events.push(Line::from(Span::styled(
             "  no recent events",
@@ -1737,12 +1749,57 @@ fn recent_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'
         )));
     }
 
-    events.reverse();
     let event_h = height.saturating_sub(1);
     let mut lines = vec![section("Recent")];
     lines.extend(events.into_iter().take(event_h));
     lines.truncate(height);
     lines
+}
+
+fn collapsed_recent_log_lines(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut iter = view.log.iter().filter(|line| line.kind != LogKind::Room).rev();
+    while let Some(line) = iter.next() {
+        let mut repeats = 1;
+        while let Some(next) = iter.clone().next() {
+            if next.kind != line.kind || next.text != line.text {
+                break;
+            }
+            repeats += 1;
+            iter.next();
+        }
+        let text = if repeats > 1 {
+            format!("{} (x{repeats})", line.text)
+        } else {
+            line.text.clone()
+        };
+        lines.extend(wrapped_log_line(line.kind, &text, width));
+    }
+    lines
+}
+
+fn truncate_lines(mut lines: Vec<Line<'static>>, height: u16) -> Vec<Line<'static>> {
+    let height = height as usize;
+    if lines.len() <= height {
+        return lines;
+    }
+    lines.truncate(height);
+    if let Some(last) = lines.last_mut() {
+        *last = Line::from(Span::styled(
+            "  ...",
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+    }
+    lines
+}
+
+fn separator_line(width: usize) -> Line<'static> {
+    let line = if width > 3 {
+        format!(" {}", "-".repeat(width.saturating_sub(2)))
+    } else {
+        "-".repeat(width)
+    };
+    Line::from(Span::styled(line, Style::default().fg(theme::BORDER())))
 }
 
 fn current_room_context(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
@@ -1761,7 +1818,7 @@ fn current_room_context(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
             ),
         ]),
     ];
-    lines.extend(limited_wrap(&view.room_desc, width, 4));
+    lines.extend(wrap(&view.room_desc, width));
 
     let exits = if view.exits.is_empty() {
         "none".to_string()
@@ -1797,20 +1854,6 @@ fn current_room_context(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
             shop.shop_name.clone(),
             theme::SUCCESS(),
         ));
-    }
-    lines
-}
-
-fn limited_wrap(text: &str, width: usize, max_lines: usize) -> Vec<Line<'static>> {
-    let mut lines = wrap(text, width);
-    if lines.len() > max_lines {
-        lines.truncate(max_lines);
-        if let Some(last) = lines.last_mut() {
-            *last = Line::from(Span::styled(
-                "  ...",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ));
-        }
     }
     lines
 }

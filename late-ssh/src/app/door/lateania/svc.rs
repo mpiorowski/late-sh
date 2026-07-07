@@ -251,6 +251,7 @@ pub struct LateaniaService {
     persist_locks: Arc<StdMutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
     prepared_saves: Arc<StdMutex<HashMap<Uuid, (u64, SavedCharacter)>>>,
     character_resets: Arc<StdMutex<HashSet<Uuid>>>,
+    character_reset_versions: Arc<StdMutex<HashMap<Uuid, u64>>>,
 }
 
 // ---- Snapshot (what sessions render) -------------------------------------
@@ -434,6 +435,7 @@ pub struct MudSnapshot {
     pub room_id: Uuid,
     pub generation: u64,
     pub players: HashMap<Uuid, PlayerView>,
+    pub reset_versions: HashMap<Uuid, u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -605,6 +607,7 @@ impl LateaniaService {
             persist_locks: Arc::new(StdMutex::new(HashMap::new())),
             prepared_saves: Arc::new(StdMutex::new(HashMap::new())),
             character_resets: Arc::new(StdMutex::new(HashSet::new())),
+            character_reset_versions: Arc::new(StdMutex::new(HashMap::new())),
         };
         svc.load_world_state_task();
         svc.start_tick_loop();
@@ -803,6 +806,11 @@ impl LateaniaService {
 
     fn begin_character_reset(&self, user_id: Uuid) {
         self.character_resets.lock_recover().insert(user_id);
+        self.character_reset_versions
+            .lock_recover()
+            .entry(user_id)
+            .and_modify(|version| *version += 1)
+            .or_insert(1);
         let mut versions = self.persist_versions.lock_recover();
         versions
             .entry(user_id)
@@ -1313,7 +1321,9 @@ impl LateaniaService {
     }
 
     fn publish(&self, state: &WorldState) {
-        let _ = self.snapshot_tx.send(state.snapshot());
+        let mut snapshot = state.snapshot();
+        snapshot.reset_versions = self.character_reset_versions.lock_recover().clone();
+        let _ = self.snapshot_tx.send(snapshot);
     }
 }
 
@@ -5659,6 +5669,7 @@ impl WorldState {
             room_id: self.room_id,
             generation: self.generation,
             players,
+            reset_versions: HashMap::new(),
         }
     }
 }
