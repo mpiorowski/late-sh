@@ -498,9 +498,11 @@ online-roster path; the session stays authoritative for its own character
 commentary ✓ → roster/HoF ✓ → gypsy ✓ (folded into the commentary slice — it
 is just a paid door onto the shade section) → PvP ✓ → bounties + haunt ✓ →
 barman's enemy intel ✓ + rewards wiring ✓ (the two small leftovers, 2026-07)
-→ clans ✓ (2026-07) → mail(?) → gardens ✓ / veterans' rock ✓. Commentary
-first: five other features are just sections of it. Only the mail
-integration decision remains.
+→ clans ✓ (2026-07) → gardens ✓ / veterans' rock ✓ → bank transfers ✓ + the
+mail decision resolved ✓ (2026-07). Commentary first: five other features
+are just sections of it. **Phase 4 is complete**; what's left door-wide is
+the two commentary leftovers (new-post markers/pagination, drunken
+slurring).
 
 ### `commentary` — the one chat primitive — DONE
 
@@ -1128,12 +1130,75 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 - All prose is original: the registrar ("Maren", ours), the lobby, the
   hall, every notice and refusal line.
 
-### Mail — integration decision, not a build
+### Bank gold transfers — DONE
+
+Source: `bank.php` (`op=transfer`/`transfer2`/`transfer3`), `newday.php`
+(the counter resets). Found missing during the 2026-07 mail-decision prep —
+this checklist never listed it, yet `allowgoldtransfer` defaults **1**, so
+stock installs ship it. Audited line-by-line, then implemented 2026-07: the
+last stock multiplayer *feature*.
+
+- [x] **The window's gates** (`bank.php`): the nav shows at level ≥ 3
+  (`mintransferlev`) or any dragon kill; a negative balance is refused at
+  the window itself (upstream's in-debt teller line), not on the nav.
+- [x] **Recipient search** (transfer2): the interleaved-`%` subsequence
+  match, >100 hits = narrow it down, exact matches float first (upstream's
+  `ORDER BY login=... DESC`); ours runs on the roster snapshot through the
+  broker's talk-line flow.
+- [x] **The checks** (transfer3, upstream's order): the whole holding
+  (`gold + goldinbank < amt`, the balance signed), the sender's daily cap
+  (`amountouttoday + amt > level·25`, `maxtransferout`), the recipient's
+  per-transfer cap (`amt > theirLevel·25`, `transferperlevel` — upstream's
+  refusal *says* "per day" but the check is per transfer; kept 1=1), their
+  daily receive count (`transferredtoday >= 3`, `transferreceive`), the
+  worthwhile minimum (`amt < senderLevel`), and the self-transfer refusal.
+- [x] **The settle**: the draw is hand-first with the shortfall out of the
+  bank (upstream's negative-gold overflow branch); the sum lands in the
+  recipient's *bank*; `amount_out_today`/`transfers_received_today` book
+  both sides and reset unconditionally at newday (`newday.php:244`,
+  resurrection days included; neither is in `dragon.php`'s reset list, so
+  a mid-day dragon kill preserves both — same 1=1). The recipient's
+  systemmail becomes a `pvp_reports` line (the established mail
+  adaptation). No news item — transfers are private, like placements.
+- [x] **Cross-player write**: the recipient's half is the PvP shape — the
+  write gate, `SELECT ... FOR UPDATE`, fresh-blob re-checks (upstream's
+  per-transfer cap and receive count are finalize-time reads of the
+  accounts row too), then the deposit, the counter bump, and the clerk's
+  note in one transaction via `update_data_keep_updated`.
+
+Deliberate single-player/TUI adaptations (documented, not oversights):
+
+- **Name first, then the sum** (the broker's two-screen flow); upstream's
+  single form takes both, then confirms. The check set and order are
+  otherwise upstream's; the self-transfer surfaces as a disabled row at
+  pick time (the broker pattern) rather than a finalize refusal.
+- **The gold is drawn up front and refunded on a refusal** (the Five
+  Sixes/bounty pattern), each part back where it came from. The
+  recipient-side checks settle inside the transaction, so a stale roster
+  read can't overfill an account.
+- An in-flight settlement disables the transfer row (one runner at a
+  time); upstream's synchronous page can't race itself.
+- All prose is original; our banker is nameless (upstream's Elessa is
+  theirs).
+
+### Mail — integration decision — RESOLVED (2026-07): in-door reports only
 - Upstream: 50-unread inbox cap, 1024-char bodies, 14-day retention,
-  system mail from id 0. late.sh **already has DMs and notifications** —
-  default plan: map "systemmail" moments (PvP results, bounty payouts, clan
-  applications, haunts) onto the existing notification/DM systems instead of
-  building an in-door mailbox. Revisit only if in-door mail proves wanted.
+  system mail from id 0 — plus an **opt-in email ping** on new mail
+  (`lib/systemmail.php`, `emailonmail`/`systemmail` prefs), upstream's own
+  out-of-game notification.
+- **Decision: no in-door mailbox, and no out-of-door ping for now.** Every
+  stock systemmail moment in our scope already rides the in-blob
+  `pvp_reports` drain (PvP results, haunts, bounty lines, clan notices,
+  bank transfers); player-to-player mail maps onto late.sh's DMs, which
+  exist outside the door. The ping (the email analog) is **deferred
+  pending an app-wide integration discussion**: the site's notification
+  schema is mention-shaped (NOT-NULL actor/message/room FKs onto real chat
+  rows), no door holds a Chat/Notification service handle today, and the
+  session-local terminal notifier can't reach offline players — so a real
+  ping means new design (a bot-user DM à la the clubhouse bartender, or a
+  new notification kind), decided at the app level, not per-door.
+- The remaining upstream mail writers (bios, referrals, admin/su alerts,
+  donator points) belong to systems we don't ship.
 
 ### Gardens + the veterans' rock — DONE
 - Gardens: a commentary room with a 0% random-event chance (stock default)
@@ -1167,4 +1232,9 @@ next to the bounty-closure hook:
 
 - Donator lodge, referrals, translation/admin tooling, logdnet, holiday
   modules, `cities`/travel (add-on, not stock core), petitions/moderation UI.
+- **The "King's tournament" / jousting**: long carried here as "the phase-4
+  tail", but verified 2026-07 to be **absent from stock 1.1.2** — no
+  tournament module ships; the only trace is `source.php:85` hiding
+  `modules/tournament.php` from the view-source listing. A DragonPrime
+  add-on, off-limits like the rest.
 - Upstream prose, creature/master/NPC/drink/title *names* — always original.
