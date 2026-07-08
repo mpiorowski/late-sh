@@ -75,6 +75,7 @@ pub enum DailyEvent {
         match_id: Uuid,
         challenger_id: Uuid,
         target_user_id: Option<Uuid>,
+        target_username: Option<String>,
     },
     ChallengeClaimed {
         match_id: Uuid,
@@ -311,17 +312,21 @@ impl DailyService {
             bail!("you cannot challenge yourself");
         }
         let client = self.db.get().await?;
-        if let Some(target) = target_user_id {
-            User::get(&client, target)
+        let target_username = if let Some(target) = target_user_id {
+            let user = User::get(&client, target)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("challenged user not found"))?;
-        }
+            Some(user.username)
+        } else {
+            None
+        };
         self.ensure_entry_capacity(&client, user_id).await?;
         let row = DailyMatch::create_challenge(&client, user_id, target_user_id).await?;
         let _ = self.event_tx.send(DailyEvent::ChallengePosted {
             match_id: row.id,
             challenger_id: row.challenger_id,
             target_user_id: row.target_user_id,
+            target_username,
         });
         self.publish(&client).await?;
         Ok(row)
@@ -394,6 +399,15 @@ impl DailyService {
         if row.turn_user_id != Some(user_id) {
             bail!("not your turn");
         }
+        // Enforce the 24h clock on the move path itself, not only in the 60s
+        // sweeper: a move landing after flag fall must be rejected (and must
+        // not reset the deadline). The sweeper stays the forfeit executor.
+        if row
+            .turn_deadline_at
+            .is_some_and(|deadline| deadline <= Utc::now())
+        {
+            bail!("your time to move has expired");
+        }
         let mut state = DailyChessState::parse(&row.state)?;
         let board: Board = state
             .fen
@@ -413,6 +427,7 @@ impl DailyService {
         let label = rules::san_label(&board, mv);
         let mut board = board;
         board.play(mv);
+        let base_revision = state.revision as i64;
         state.revision = state.revision.saturating_add(1);
         state.fen = format!("{}", board);
         state.position_history.push(state.fen.clone());
@@ -444,7 +459,8 @@ impl DailyService {
         match outcome {
             Some((winner, result)) => {
                 let updated =
-                    DailyMatch::finish(&client, match_id, winner, result, &state_value).await?;
+                    DailyMatch::finish(&client, match_id, winner, result, &state_value, base_revision)
+                        .await?;
                 ensure!(updated == 1, "move was superseded, reload the match");
                 let _ = self.event_tx.send(DailyEvent::MovePlayed {
                     match_id,
@@ -478,29 +494,38 @@ impl DailyService {
 
     pub async fn resign(&self, user_id: Uuid, match_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        let row = DailyMatch::get(&client, match_id)
-            .await?
-            .filter(|row| row.status == DailyMatch::STATUS_ACTIVE)
-            .ok_or_else(|| anyhow::anyhow!("match is not active"))?;
-        let mut state = DailyChessState::parse(&row.state)?;
-        let resigning_color = state
-            .color_of(user_id)
-            .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
-        let winner = state.user_for_color(resigning_color.other());
-        state.revision = state.revision.saturating_add(1);
-        let state_value = serde_json::to_value(&state)?;
-        let updated = DailyMatch::finish(
-            &client,
-            match_id,
-            Some(winner),
-            DailyMatch::RESULT_RESIGN,
-            &state_value,
-        )
-        .await?;
-        ensure!(updated == 1, "match already finished");
-        self.finish_events(match_id, Some(winner), DailyMatch::RESULT_RESIGN);
-        self.publish(&client).await?;
-        Ok(())
+        // `finish` is revision-guarded, so a resign that raced the opponent's
+        // just-committed move sees 0 rows updated; reload the fresh state and
+        // retry rather than clobbering their move out of the history.
+        for _ in 0..8 {
+            let row = DailyMatch::get(&client, match_id)
+                .await?
+                .filter(|row| row.status == DailyMatch::STATUS_ACTIVE)
+                .ok_or_else(|| anyhow::anyhow!("match is not active"))?;
+            let mut state = DailyChessState::parse(&row.state)?;
+            let resigning_color = state
+                .color_of(user_id)
+                .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
+            let winner = state.user_for_color(resigning_color.other());
+            let base_revision = state.revision as i64;
+            state.revision = state.revision.saturating_add(1);
+            let state_value = serde_json::to_value(&state)?;
+            let updated = DailyMatch::finish(
+                &client,
+                match_id,
+                Some(winner),
+                DailyMatch::RESULT_RESIGN,
+                &state_value,
+                base_revision,
+            )
+            .await?;
+            if updated == 1 {
+                self.finish_events(match_id, Some(winner), DailyMatch::RESULT_RESIGN);
+                self.publish(&client).await?;
+                return Ok(());
+            }
+        }
+        bail!("resign kept racing the opponent's move, try again")
     }
 
     /// Forfeit every active match whose deadline passed. Durable by
@@ -550,9 +575,10 @@ impl DailyService {
         let chip_svc = self.chip_svc.clone();
         tokio::spawn(async move {
             match chip_svc
-                .credit_cooldown_reward_template(
+                .credit_per_event_reward_template(
                     winner,
                     DAILY_CHESS_WIN_REWARD_KEY,
+                    &match_id.to_string(),
                     DAILY_CHESS_WIN_LEDGER_REASON,
                 )
                 .await
@@ -561,8 +587,9 @@ impl DailyService {
                     if !payout.credited {
                         tracing::info!(
                             user_id = %winner,
+                            match_id = %match_id,
                             payout = payout.amount,
-                            "suppressed daily chess win chips due to payout cooldown"
+                            "daily chess win already paid for this match"
                         );
                     }
                 }

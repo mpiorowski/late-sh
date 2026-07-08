@@ -22,4 +22,4 @@ CREATE INDEX idx_daily_matches_turn_user
 INSERT INTO reward_templates
     (key, title, description, cadence, bucket, domain, difficulty, kind, params, target, reward_chips, weight, is_quest, claim_policy, cooldown_seconds)
 VALUES
-    ('daily_chess_win_payout', 'Win Daily Chess', 'Win a decisive daily chess match.', NULL, NULL, 'strategy', 'hard', 'game_win', '{"game":"daily_chess","payout_kind":"win"}'::jsonb, 1, 500, 100, false, 'cooldown', 3600);
+    ('daily_chess_win_payout', 'Win Daily Chess', 'Win a decisive daily chess match.', NULL, NULL, 'strategy', 'hard', 'game_win', '{"game":"daily_chess","payout_kind":"win"}'::jsonb, 1, 500, 100, false, 'per_event', NULL);

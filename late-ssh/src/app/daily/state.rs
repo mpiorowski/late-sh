@@ -51,9 +51,13 @@ pub struct DailyState {
     lobby_glow: bool,
     notifier: Notifier,
     /// Match ids whose current my-turn edge already notified. Seeded from the
-    /// login snapshot so connecting never notifies; the sidebar panel is the
-    /// on-login nudge.
+    /// first snapshot that arrives (see `notify_turn_edges`) so connecting
+    /// never notifies; the sidebar panel is the on-login nudge.
     turn_notified_match_ids: HashSet<Uuid>,
+    /// Whether `turn_notified_match_ids` has been seeded yet. False until the
+    /// first snapshot update, so a cold-start empty snapshot can't make the
+    /// first real snapshot notify for every my-turn match at once.
+    turn_notify_seeded: bool,
 
     pub board: Option<DailyBoardState>,
 }
@@ -137,12 +141,6 @@ impl DailyState {
             .iter()
             .map(|challenge| challenge.id)
             .collect();
-        let turn_notified_match_ids = snapshot
-            .active_matches
-            .iter()
-            .filter(|item| item.turn_user_id == Some(user_id))
-            .map(|item| item.id)
-            .collect();
         Self {
             user_id,
             svc,
@@ -155,7 +153,8 @@ impl DailyState {
             seen_open_ids,
             lobby_glow: false,
             notifier,
-            turn_notified_match_ids,
+            turn_notified_match_ids: HashSet::new(),
+            turn_notify_seeded: false,
             board: None,
         }
     }
@@ -199,9 +198,25 @@ impl DailyState {
     fn apply_event(&mut self, event: DailyEvent) -> Option<Banner> {
         match event {
             DailyEvent::Error { user_id, message } if user_id == self.user_id => {
+                // A rejected action (a refused optimistic move, an expired
+                // turn) leaves an open board desynced from the DB; reload it so
+                // the optimistic state is discarded and input works again.
+                if self.board.is_some() {
+                    self.request_board_reload();
+                }
                 // svc errors are lowercase; the banner keeps sentence case.
                 Some(Banner::error(&format!("Daily games: {message}")))
             }
+            DailyEvent::ChallengePosted {
+                challenger_id,
+                target_username,
+                ..
+            } if challenger_id == self.user_id => Some(match target_username {
+                Some(name) => {
+                    Banner::success(&format!("Daily challenge sent to @{name}"))
+                }
+                None => Banner::success("Daily challenge posted to the lobby"),
+            }),
             DailyEvent::MatchFinished {
                 match_id,
                 winner_user_id,
@@ -262,6 +277,14 @@ impl DailyState {
             .filter(|item| item.turn_user_id == Some(self.user_id))
             .map(|item| item.id)
             .collect();
+        // First snapshot only establishes the baseline: everything currently
+        // on this user's turn is treated as already notified, so login is
+        // silent even if the construction snapshot was the empty default.
+        if !self.turn_notify_seeded {
+            self.turn_notify_seeded = true;
+            self.turn_notified_match_ids = my_turn_ids.into_iter().collect();
+            return;
+        }
         for match_id in fresh_turn_edges(&mut self.turn_notified_match_ids, &my_turn_ids) {
             let opponent = self
                 .snapshot

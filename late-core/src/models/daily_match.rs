@@ -175,13 +175,18 @@ impl DailyMatch {
     }
 
     /// Finish an active match with a final state and result. `winner_user_id`
-    /// is NULL for draws.
+    /// is NULL for draws. Guarded on `expected_revision` (the stored revision
+    /// the caller loaded): if another writer advanced the match in the
+    /// meantime the stored revision no longer matches, the update touches 0
+    /// rows, and the caller reloads and retries against fresh state instead of
+    /// overwriting the concurrent move.
     pub async fn finish(
         client: &Client,
         match_id: Uuid,
         winner_user_id: Option<Uuid>,
         result: &str,
         state: &Value,
+        expected_revision: i64,
     ) -> Result<u64> {
         let updated = client
             .execute(
@@ -197,7 +202,7 @@ impl DailyMatch {
                      WHERE id = $1
                        AND status = $6
                        AND {}",
-                    Self::REVISION_GUARD_SQL
+                    Self::STORED_REVISION_EQ_SQL
                 ),
                 &[
                     &match_id,
@@ -206,6 +211,7 @@ impl DailyMatch {
                     &winner_user_id,
                     &result,
                     &Self::STATUS_ACTIVE,
+                    &expected_revision,
                 ],
             )
             .await?;
@@ -287,5 +293,21 @@ impl DailyMatch {
           END,
           0
         )
+    )";
+
+    /// Optimistic guard for `finish`: apply only when the stored
+    /// `state.revision` still equals the `$7` revision the caller loaded, so a
+    /// concurrent move (which advances the revision) makes the finish a no-op.
+    const STORED_REVISION_EQ_SQL: &'static str = "(
+        COALESCE(
+          CASE
+            WHEN state ? 'revision'
+             AND state->>'revision' ~ '^[0-9]+$'
+            THEN (state->>'revision')::bigint
+            ELSE 0
+          END,
+          0
+        )
+        = $7
     )";
 }

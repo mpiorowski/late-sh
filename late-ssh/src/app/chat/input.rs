@@ -207,14 +207,13 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         use crate::app::chat::state::DailyChallengeRequest;
         match request {
             DailyChallengeRequest::Modal => crate::app::input::open_daily_modal_globally(app),
+            // Success is surfaced from the resulting DailyEvent::ChallengePosted
+            // (and failures from DailyEvent::Error), so a rejected challenge
+            // (self, unknown user, over the entry cap) never flashes success.
             DailyChallengeRequest::Open => {
                 app.daily.post_open_challenge();
-                app.banner = Some(Banner::success("Daily challenge posted to the lobby"));
             }
             DailyChallengeRequest::Directed(username) => {
-                app.banner = Some(Banner::success(&format!(
-                    "Daily challenge sent to @{username}"
-                )));
                 app.daily.post_directed_challenge(&username);
             }
         }

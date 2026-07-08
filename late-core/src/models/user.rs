@@ -230,9 +230,14 @@ pub fn default_right_sidebar_components() -> Vec<RightSidebarComponentSetting> {
         .collect()
 }
 
-/// Drop duplicates and backfill any missing panels (at their default on/off
-/// state) at the end so the list always covers every component exactly once,
-/// preserving stored order.
+/// Drop duplicates and backfill any missing panels at the end so the list
+/// always covers every component exactly once, preserving stored order.
+///
+/// Missing panels are backfilled **enabled**, not at `default_enabled()`: a
+/// user with a stored list is an existing user whose effective state must not
+/// silently change when a new panel ships. `default_enabled()` (which ships
+/// Pet off) applies only to the no-stored-list path in
+/// `default_right_sidebar_components`, i.e. genuinely new users.
 pub fn normalize_right_sidebar_components(
     components: &[RightSidebarComponentSetting],
 ) -> Vec<RightSidebarComponentSetting> {
@@ -247,7 +252,7 @@ pub fn normalize_right_sidebar_components(
         if !result.iter().any(|s| s.component == component) {
             result.push(RightSidebarComponentSetting {
                 component,
-                enabled: component.default_enabled(),
+                enabled: true,
             });
         }
     }
@@ -1565,8 +1570,10 @@ mod tests {
         });
         let components = extract_right_sidebar_components(&settings);
         // Stored order kept for known entries, unknown dropped, missing
-        // (visualizer, pet, daily) backfilled at their default state at the
-        // end, in ALL order.
+        // (visualizer, pet, daily) backfilled ENABLED at the end in ALL order:
+        // an existing user's stored list predates newer panels, so they should
+        // appear rather than silently stay hidden (Pet ships off only for
+        // brand-new users with no stored list).
         assert_eq!(
             components,
             vec![
@@ -1584,7 +1591,7 @@ mod tests {
                 },
                 RightSidebarComponentSetting {
                     component: RightSidebarComponent::Pet,
-                    enabled: false,
+                    enabled: true,
                 },
                 RightSidebarComponentSetting {
                     component: RightSidebarComponent::Daily,
