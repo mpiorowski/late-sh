@@ -1272,6 +1272,164 @@ next to the bounty-closure hook:
   audit; the in-door counterparts (news, titles, dragon points) are the
   ported parts and unchanged.
 
+## Phase 5 — adversarial audit backlog (2026-07)
+
+A multi-agent sweep (2026-07) audited 13 of 19 planned surfaces before being
+stopped; its surviving findings are recorded below. The sweep is replaced by
+the **solo-audit flow**: one Fable session per step, full attention on one
+small part, fix at the end of the step, then reset context.
+
+### Solo-audit flow (read me first, future Fable)
+
+Per-step protocol — one step per session, nothing else:
+
+1. Pick the **first unchecked box** in the step queue below.
+2. Re-read "Target / provenance" at the top of this file. Ground rules:
+   `upstream-lotgd/` is the only source of truth (never memory);
+   `e_rand(a,b)` inclusive; PHP `round()` half-away-from-zero vs `(int)`
+   truncation; verify **comparison operators**, not just formula shapes;
+   shipped `getsetting` defaults only; this file's own claims are claims,
+   not facts. Deliberate deviations and the out-of-scope list are not
+   findings, but verify each deviation still behaves as its bullet says.
+3. For a **fix step**: re-trace every listed finding yourself (both sides,
+   the cited lines) before touching code — including the "verified" ones.
+   Refuted on re-trace ⇒ strike it with a note instead of fixing.
+   For an **audit step**: compare the system number by number, operator by
+   operator, both directions (upstream behavior we lack, port behavior
+   upstream lacks that isn't documented as ours).
+4. Apply the fixes. `cargo check --tests` is the verification; do not run
+   the test suite or commit (the user does both).
+5. Record the outcome here: check the box, strike or annotate the findings
+   handled, append any new findings to the list, correct any doc bullet the
+   work contradicted.
+6. Stop and tell the user the step is done so they can `/clear`.
+
+### Step queue
+
+Fix steps (already audited by the sweep; findings below):
+
+- [ ] **Fix: combat + specialties** — findings 2, 3, 9, 10, 11.
+- [ ] **Fix: dragon approach + flee** — finding 4.
+- [ ] **Fix: healer + bank access** — findings 5, 6.
+- [ ] **Fix: titles ladder** — finding 1 (needs ~22 new original title
+  names for the 0..31 ladder, or an explicit deliberate-deviation bullet).
+- [ ] **Fix: clans** — findings 8, 12.
+- [ ] **Fix: docs** — finding 7 + every PARITY bullet the fixes above
+  invalidate (healer "and at the healer", clan detail "joined", titles
+  thresholds, bank claims).
+
+Audit + fix steps (not reached by the sweep):
+
+- [ ] **Audit: the 8 forest events** — `events.rs` vs the stock forest-event
+  modules (fairy, findgem, findgold, glowingstream, goldmine, sethsong,
+  crazyaudrey, foilwench, cedrikspotions — establish which are forest hooks
+  and stock-enabled); trigger odds, effect formulas, once-per-day limits.
+- [ ] **Audit: masters + dragon + new day** — `train.php`, `dragon.php`,
+  `newday.php`: challenge gating, master stats/rewards, dragon fight,
+  kill resets (verify the documented dragon-point + gold-reset deviations),
+  new-day processing order.
+- [ ] **Audit: commentary + daily news** — `lib/commentary.php`, `news.php`
+  vs `commentary.rs`: windows, allowance, verbs, pagination, recentcomments
+  marker, slurring; news generation/retention/order.
+- [ ] **Audit: PvP + bounty board** — eligibility operators (bounty `<` vs
+  PvP `<=` off-by-one is deliberate — verify both), sleeper rules,
+  resolution, steal percentages, bounty costs/payouts vs `dag`.
+- [ ] **Audit: missing-feature sweep** — walk every player-reachable
+  `addnav()` in village/forest/inn/graveyard/shades + every module's
+  install default; list stock-on features with no port counterpart (this
+  sweep caught bank transfers last time). Reverse direction too.
+- [ ] **Audit: licensing sweep** — every player-visible string in the port
+  vs upstream prose/names; distinctive matches only, generic English is
+  at most a nit.
+
+### Findings (2026-07 sweep)
+
+"Verified" = independently re-traced by a second adversarial agent.
+Re-verify everything anyway before fixing (step 3 above).
+
+Verified:
+
+1. **Title ladder compressed 32 → 10 tiers** — `data.rs:811` vs installer
+   titles seed (`lib/installer/installer_sqlstatements.php:810-841`) +
+   `lib/titles.php:25-72` + `dragon.php:178,212`. Upstream promotes at
+   *every* dk 0..31; the port only at 0,1,2,3,4,5,7,10,15,20 — no promotion
+   at kills 6, 8-9, 11-14, 16-19, 21+. Tier count/thresholds are mechanics
+   under our own names-original/numbers-exact rule. Related: the port gates
+   the title news/log on `title != old_title` (`state.rs:3506,3520`) while
+   upstream fires it on every kill (`dragon.php:238-242`).
+2. **Skeleton Warrior +0.5 atk/def** — `specialty.rs:121-122` adds an outer
+   `.round()` upstream doesn't have (`specialtydarkarts.php:177-178` stores
+   floats ending in .5; the engine consumes them un-rounded). Fix: store
+   companion stats as f64 or halve-adjust; HP formula already matches.
+3. **Regen aura under-heals companions** — `combat.rs:503` truncating
+   `total_regen / 3` vs upstream `(int)round(regen/3)`
+   (`lib/battle-buffs.php:151`): 1 HP short at levels 2, 5, 8, 11, …
+4. **Dragon approach screen missing** — upstream `forest.php:38-52` offers
+   enter-the-cave vs run-away; declining costs 1 charm
+   (`lib/inn/inn_default.php:30-34`), and once inside there is **no** flee
+   (`dragon.php:254-258,295`, `fightnav(false)`). The port
+   (`state.rs:2956`) jumps straight into `Mode::Fight` with a free 1-in-3
+   flee row. Fix: add the approach screen (decline ⇒ −1 charm, floor 0)
+   and remove the flee row from the dragon fight.
+5. **Companion healing absent at the healer's hut** — upstream heals
+   companions at healer *and* merc camp (`healer.php:78-117`); the port
+   only at the merc camp. Formula already ported (`model.rs:2164`);
+   PARITY.md's "here and at the healer" claim is currently false.
+6. **Bank moves are all-or-max only** — `state.rs:3711-3749` hardcodes
+   deposit-all / withdraw-all / borrow-max; upstream `bank.php` takes a
+   typed amount for each (0/blank = all). The transfer window already has
+   `talk_input`, so the input shape exists. Undocumented asymmetry.
+7. **CONTEXT.md:57 stale stat formulas** — `max_hp`/`attack`/`defense`
+   summary omits `vitality_hp` and the race `1+level/5` adds that
+   `model.rs:1025-1043` applies.
+8. **Clan detail page columns** — `state.rs:6064-6080` renders Lv and drops
+   Join Date; upstream `lib/clan/detail.php:60-91` (and PARITY.md:1098's
+   own spec) is rank/name/DKs/joined.
+
+Single-trace (finder confident, no second agent yet):
+
+9. **Field-medic deals attack damage** — `combat.rs:460-469` lets every
+   living companion swing; upstream's heal-ability branch never applies
+   `damage_done` to the foe (riposte only, `lib/extended-battle.php:297-311`).
+   The port's medic is a heal+DPS unit upstream doesn't have.
+10. **Power-move bonus truncates its bounds** — `combat.rs:321-323` uses
+    `as i32` on `patkroll/4` and `/2`; upstream `e_rand` rounds its args
+    (`lib/battle-skills.php:113`, `lib/e_rand.php:12,14`). Port bonus is
+    biased ~1 low on nearly every power move.
+11. **Creature gold rows off by one** — `data.rs:90` L5 gold 198 (formula
+    says 199) and `data.rs:97` L6 gold 234 (formula says 233) vs
+    `creature_gold()` in `lib/creatures.php`. Transcription typos; all
+    other levels verified exact.
+12. **Clan succession notice lost** — `svc.rs:1944-1961` builds the
+    resignation-notice list from pre-promotion ranks; upstream
+    (`lib/clan/clan_withdraw.php:17-48`) promotes first then re-reads, so a
+    plain member inheriting leadership gets the mail there but not here.
+
+Nits (fix only if already in the file; none block parity):
+
+- Slumming nav shown at level 1 (`state.rs:6553` vs `lib/forest.php:15`);
+  mechanically identical at level 1, nav-visibility only.
+- HoF wealth percentile reuses the display fuzz instead of an independent
+  re-fuzz (`state.rs:6471` vs `hof.php:162`); same distribution, cosmetic.
+- Earth Fist drops upstream's `areadamage` flag — inert in our
+  single-target combat model.
+- Clan founding checks the fee before name/tag uniqueness
+  (`state.rs:5505-5519` vs `lib/clan/applicant_new.php:38-56`); refusal
+  message order only, but PARITY.md:1117 "upstream's order" overstates.
+- Healer-companion targeting picks most-wounded vs upstream's
+  first-other-then-self order (`state.rs:3108-3125`); reachable only with
+  medic + summoned skeleton.
+- `bell_rand` is a continuous inverse-normal approximation of upstream's
+  441-row percentile table; z deltas ≲0.002 never move truncated integer
+  damage. Consider a one-line disclosure in "Already 1=1".
+
+Clean under the sweep (audited, zero findings): Dark Horse (all three games
++ enemy intel), graveyard/favor/resurrection/haunt, outhouse/gypsy/gardens,
+stables, inn (room/bard/drinks/flirt/potions/drunkenness), races, roster +
+HoF, forest spawn/jitter/payouts, bank formulas + transfers, clans core
+(ranks/gates/succession/validation), specialties use-economy + the other
+11 skills, healer pricing, combat rolldamage core + tables.
+
 ## Out of scope (not stock / not portable)
 
 - Donator lodge, referrals, translation/admin tooling, logdnet, holiday
