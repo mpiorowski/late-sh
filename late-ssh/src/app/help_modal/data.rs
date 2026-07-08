@@ -827,7 +827,7 @@ fn overview_lines() -> Vec<String> {
         "  `                 cycle Dashboard / seated game rooms",
         "",
         "Hub",
-        "  Ctrl+G            open Shop, Leaderboard, Quests, Events",
+        "  Ctrl+G            open Quests, Shop, Leaderboard, Events",
         "  Tab / Shift+Tab   switch Hub tabs",
         "  1-4               jump to Hub tab",
         "  Shop              j/k select, [/] subtab, Enter buy with Late Chips",

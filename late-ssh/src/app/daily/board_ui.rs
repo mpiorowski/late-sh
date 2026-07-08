@@ -19,12 +19,12 @@ use crate::app::{
     files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
     games::chess_core::{
         board_ui::{self, BoardCtx, pick_tier},
-        types::{ChessColor, ChessPieceRenderMode},
+        types::{ChessColor, ChessPiece, ChessPieceKind, ChessPieceRenderMode, piece_glyph},
     },
 };
 
-const INFO_SIDEBAR_WIDTH: u16 = 30;
-const INFO_SIDEBAR_MIN_WIDTH: u16 = 96;
+const INFO_SIDEBAR_WIDTH: u16 = 24;
+const INFO_SIDEBAR_MIN_WIDTH: u16 = 92;
 
 pub(crate) fn draw(
     frame: &mut Frame,
@@ -61,34 +61,49 @@ pub(crate) fn draw(
         let cols =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(INFO_SIDEBAR_WIDTH)])
                 .split(area);
-        draw_info_rail(frame, cols[1], board, detail);
+        draw_info_rail(frame, cols[1], detail);
         cols[0]
     } else {
         area
     };
 
+    // Size the board to the space left after the four chrome rows (status,
+    // two player bars, key hints), then centre the whole stack vertically so
+    // the colour labels hug the board instead of floating at the screen edges.
+    const CHROME_ROWS: u16 = 4;
+    let tier = pick_tier(
+        content.width as usize,
+        content.height.saturating_sub(CHROME_ROWS) as usize,
+    );
+    let board_h = (tier.board_h() as u16).min(content.height.saturating_sub(CHROME_ROWS));
+    let stack_h = board_h + CHROME_ROWS;
+    let top_pad = content.height.saturating_sub(stack_h) / 2;
+
     let rows = Layout::vertical([
-        Constraint::Length(1), // status
-        Constraint::Length(1), // top player bar
-        Constraint::Min(6),    // board
-        Constraint::Length(1), // bottom player bar
-        Constraint::Length(1), // key hints
+        Constraint::Length(top_pad),
+        Constraint::Length(1),       // status
+        Constraint::Length(1),       // top player bar
+        Constraint::Length(board_h), // board
+        Constraint::Length(1),       // bottom player bar
+        Constraint::Length(1),       // key hints
+        Constraint::Min(0),
     ])
     .split(content);
+    let (status_row, top_bar, board_row, bottom_bar, hint_row) =
+        (rows[1], rows[2], rows[3], rows[4], rows[5]);
 
     let orientation = daily.board_orientation();
     let my_turn = detail.is_active() && detail.row.turn_user_id == Some(daily.user_id());
     let legal = daily.board_legal_targets();
-    let tier = pick_tier(rows[2].width as usize, rows[2].height as usize);
     let bar_width = (tier.board_w() as u16).min(content.width);
 
     frame.render_widget(
         Paragraph::new(status_line(daily, board, detail)).alignment(Alignment::Center),
-        rows[0],
+        status_row,
     );
     draw_player_bar(
         frame,
-        centered_x(rows[1], bar_width),
+        centered_x(top_bar, bar_width),
         board,
         detail,
         orientation.other(),
@@ -107,7 +122,7 @@ pub(crate) fn draw(
     };
     let board_area = board_ui::draw_board(
         frame,
-        rows[2],
+        board_row,
         tier,
         &detail.pieces,
         &board_ctx,
@@ -128,14 +143,14 @@ pub(crate) fn draw(
 
     draw_player_bar(
         frame,
-        centered_x(rows[3], bar_width),
+        centered_x(bottom_bar, bar_width),
         board,
         detail,
         orientation,
     );
     frame.render_widget(
         Paragraph::new(key_line(board, detail)).alignment(Alignment::Center),
-        rows[4],
+        hint_row,
     );
 }
 
@@ -304,15 +319,103 @@ fn draw_player_bar(
         ),
         Span::styled(name_for(board, user_id), Style::default().fg(theme::TEXT())),
     ];
-    if on_turn && let Some(deadline) = detail.row.turn_deadline_at {
+
+    // Pieces this colour has captured (its opponent's missing material), plus a
+    // running material lead on whichever side is ahead.
+    let captured = captured_by(&detail.pieces, color);
+    if !captured.is_empty() {
+        let glyphs: String = captured.iter().map(|kind| piece_glyph(*kind)).collect();
+        left.push(Span::raw("   "));
+        left.push(Span::styled(glyphs, Style::default().fg(theme::TEXT_FAINT())));
+    }
+    let advantage = material_advantage(&detail.pieces);
+    let own = if color == ChessColor::White {
+        advantage
+    } else {
+        -advantage
+    };
+    if own > 0 {
         left.push(Span::styled(
-            format!("   {}", format_deadline(deadline, Utc::now())),
+            format!("  +{own}"),
             Style::default()
-                .fg(theme::AMBER())
+                .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    frame.render_widget(Paragraph::new(Line::from(left)), rect);
+
+    // Right-align the running deadline on the mover's bar, like a chess clock.
+    let deadline = (on_turn)
+        .then(|| detail.row.turn_deadline_at)
+        .flatten()
+        .map(|at| format_deadline(at, Utc::now()));
+    let cols = Layout::horizontal([Constraint::Min(0), Constraint::Length(9)]).split(rect);
+    frame.render_widget(Paragraph::new(Line::from(left)), cols[0]);
+    if let Some(deadline) = deadline {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("{deadline} "),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .alignment(Alignment::Right),
+            cols[1],
+        );
+    }
+}
+
+// ── Material ───────────────────────────────────────────────────
+
+const START_COUNTS: [(ChessPieceKind, usize); 5] = [
+    (ChessPieceKind::Queen, 1),
+    (ChessPieceKind::Rook, 2),
+    (ChessPieceKind::Bishop, 2),
+    (ChessPieceKind::Knight, 2),
+    (ChessPieceKind::Pawn, 8),
+];
+
+fn count_pieces(pieces: &[Option<ChessPiece>; 64], color: ChessColor, kind: ChessPieceKind) -> usize {
+    pieces
+        .iter()
+        .filter(|piece| matches!(piece, Some(piece) if piece.color == color && piece.kind == kind))
+        .count()
+}
+
+/// Pieces the given colour has captured (its opponent's missing material),
+/// heaviest first.
+fn captured_by(pieces: &[Option<ChessPiece>; 64], by: ChessColor) -> Vec<ChessPieceKind> {
+    let victim = by.other();
+    let mut out = Vec::new();
+    for (kind, start) in START_COUNTS {
+        let remaining = count_pieces(pieces, victim, kind);
+        for _ in remaining..start {
+            out.push(kind);
+        }
+    }
+    out
+}
+
+fn piece_value(kind: ChessPieceKind) -> i32 {
+    match kind {
+        ChessPieceKind::Pawn => 1,
+        ChessPieceKind::Knight | ChessPieceKind::Bishop => 3,
+        ChessPieceKind::Rook => 5,
+        ChessPieceKind::Queen => 9,
+        ChessPieceKind::King => 0,
+    }
+}
+
+/// Positive when White is up material, negative when Black is.
+fn material_advantage(pieces: &[Option<ChessPiece>; 64]) -> i32 {
+    let white: i32 = captured_by(pieces, ChessColor::White)
+        .iter()
+        .map(|kind| piece_value(*kind))
+        .sum();
+    let black: i32 = captured_by(pieces, ChessColor::Black)
+        .iter()
+        .map(|kind| piece_value(*kind))
+        .sum();
+    white - black
 }
 
 fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static> {
@@ -349,12 +452,7 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
     Line::from(spans)
 }
 
-fn draw_info_rail(
-    frame: &mut Frame,
-    area: Rect,
-    board: &DailyBoardState,
-    detail: &DailyMatchDetail,
-) {
+fn draw_info_rail(frame: &mut Frame, area: Rect, detail: &DailyMatchDetail) {
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(Style::default().fg(theme::BORDER_DIM()));
@@ -367,52 +465,25 @@ fn draw_info_rail(
         height: inner.height,
     };
 
-    let label_value = |label: &str, value: String, color: Color| -> Line<'static> {
-        Line::from(vec![
-            Span::styled(
-                format!("{label:<9}"),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-            Span::styled(value, Style::default().fg(color)),
-        ])
-    };
-    let state_text = if detail.is_active() {
-        format!("{} to move", detail.turn.label())
-    } else {
-        detail.row.result.clone()
-    };
+    // The player bars and status line now carry names, deadline, turn and
+    // material, so the rail is just context plus the one thing that has
+    // nowhere else to live: the full move list.
     let mut lines = vec![
         Line::from(Span::styled(
-            "Correspondence chess, one move per day.".to_string(),
+            "Correspondence chess".to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),
         )),
-        Line::raw(""),
-        label_value(
-            "White",
-            name_for(board, detail.state.colors.white),
-            theme::TEXT_BRIGHT(),
-        ),
-        label_value(
-            "Black",
-            name_for(board, detail.state.colors.black),
-            theme::TEXT_BRIGHT(),
-        ),
-        label_value("Clock", "24h per move".to_string(), theme::AMBER()),
-        label_value(
-            "Deadline",
-            detail
-                .row
-                .turn_deadline_at
-                .map(|at| format_deadline(at, Utc::now()))
-                .unwrap_or_else(|| "--".to_string()),
-            theme::AMBER(),
-        ),
-        label_value("State", state_text, theme::SUCCESS()),
+        Line::from(Span::styled(
+            "one move per day".to_string(),
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        )),
         Line::raw(""),
         Line::from(Span::styled(
-            "Move list".to_string(),
+            "Moves".to_string(),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
