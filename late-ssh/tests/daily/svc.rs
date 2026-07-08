@@ -9,10 +9,7 @@ use uuid::Uuid;
 use super::helpers::new_test_db;
 
 async fn daily_service(test_db: &TestDb) -> DailyService {
-    DailyService::new(
-        test_db.db.clone(),
-        ChipService::new(test_db.db.clone()),
-    )
+    DailyService::new(test_db.db.clone(), ChipService::new(test_db.db.clone()))
 }
 
 fn chess_state(row: &DailyMatch) -> DailyChessState {
@@ -287,7 +284,10 @@ async fn stale_revision_writes_are_rejected() {
     let monotonic = DailyMatch::update_state(&client, claimed.id, &state, black, white, deadline)
         .await
         .expect("update state");
-    assert_eq!(monotonic, 1, "monotonic revision by the turn holder applies");
+    assert_eq!(
+        monotonic, 1,
+        "monotonic revision by the turn holder applies"
+    );
 }
 
 #[tokio::test]
@@ -360,7 +360,10 @@ async fn active_entry_cap_counts_challenges_and_matches() {
         .await
         .expect("claim");
     let still_over = svc.post_challenge(poster.id, None).await;
-    assert!(still_over.is_err(), "active matches must count toward the cap");
+    assert!(
+        still_over.is_err(),
+        "active matches must count toward the cap"
+    );
 
     // Cancelling an open challenge frees a slot.
     svc.cancel_challenge(poster.id, challenges[1].id)
@@ -374,7 +377,10 @@ async fn active_entry_cap_counts_challenges_and_matches() {
     let claim_cancelled = svc.claim_challenge(claimer.id, challenges[1].id).await;
     assert!(claim_cancelled.is_err(), "claimed a cancelled challenge");
     let foreign_cancel = svc.cancel_challenge(claimer.id, challenges[2].id).await;
-    assert!(foreign_cancel.is_err(), "cancelled someone else's challenge");
+    assert!(
+        foreign_cancel.is_err(),
+        "cancelled someone else's challenge"
+    );
 }
 
 #[tokio::test]

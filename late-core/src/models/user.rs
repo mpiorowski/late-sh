@@ -163,8 +163,13 @@ impl RightSidebarComponent {
     /// to backfill any panels missing from a stored list. Space cuts from the
     /// top, so the panels that matter most under shrink (daily, music) sit at
     /// the bottom.
-    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
-        [Self::Visualizer, Self::Pet, Self::Bonsai, Self::Daily, Self::Music];
+    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
+        Self::Visualizer,
+        Self::Pet,
+        Self::Bonsai,
+        Self::Daily,
+        Self::Music,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {

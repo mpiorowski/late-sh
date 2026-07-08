@@ -1072,6 +1072,7 @@ Then deploy the `late-ssh/src/app/door/lateania/svc.rs` fix that replaces/dedupe
 | **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 | **Directory** | 6 | Active | Profiles, Projects, and Pinstar tabs, switched with `[` / `]` or idle `h` / `l`. Profiles is the in-app work-profile browser/editor and its detail panel previews the public web profile sections (work fields, Settings Bio, late.fetch, Showcases); Projects is the Showcase browser/editor; Pinstar embeds the existing collaborative diagram browser/editor. |
 | _Lateania / NetHack / Green Dragon / Rebels / dopewars_ | — | Active | Live door-game screens, not top-level tabs. Launched only from the Games hub (page 3); `Esc` (Lateania) or quitting the game (Rebels/NetHack/dopewars, e.g. `Ctrl-C`) returns to the hub. Per-game behavior lives in each door's CONTEXT.md (`lateania/`, `greendragon/`, `nethack/`, `dopewars/`). |
+| _Daily Chess board_ | — | Active | Full-screen correspondence-chess board (`Screen::DailyMatch`), not a top-level tab. Entered only from the Daily Games modal (`g`); `Esc` returns to the modal. Lives in `late-ssh/src/app/daily/`. |
 
 ### Layout
 
@@ -1129,6 +1130,9 @@ Content invariants worth preserving when editing `data.rs`:
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
 | `w` | Global (not composing, active Arcade games override) | Open the Bonsai care modal |
+| `g` | Global (not composing; yields to chat message selection and active games) | Open the Daily Games modal (correspondence chess: lobby, challenges, matches) |
+| `j`/`k`, `Enter`, `c`, `C`, `x` | Daily Games modal | Move selection; open a match / claim a challenge (with confirm); post an open challenge; post a directed challenge (username prompt); cancel your own challenge |
+| arrows / `w/a/s/d`, `Space`/`Enter`, `r`, `p`, `Esc` | Daily Chess board | Move cursor; pick/play a move; resign (press twice); toggle piece graphics; back to the Daily Games modal |
 | `Ctrl+B` | Reserved global for admin/moderator sessions, except active Artboard editing | Open the Bonsai V2 care modal |
 | `w` | Bonsai modal | Water bonsai / replant dead tree, with a short watering animation |
 | `p` | Bonsai modal | Hard-prune: -100 growth, reroll shape, reset today's wrong-branch cuts |

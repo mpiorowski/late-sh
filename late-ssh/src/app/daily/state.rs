@@ -64,6 +64,8 @@ pub struct DailyBoardState {
     pub detail: Option<DailyMatchDetail>,
     pub load_error: Option<String>,
     load_rx: Option<oneshot::Receiver<Result<Option<DailyMatch>, String>>>,
+    /// A reload arrived while one was in flight; run another when it lands.
+    reload_pending: bool,
     /// Usernames captured from the snapshot when the board opened, so names
     /// survive the match leaving the active list on finish.
     pub names: HashMap<Uuid, String>,
@@ -255,9 +257,7 @@ impl DailyState {
             .snapshot
             .active_matches
             .iter()
-            .filter(|item| {
-                item.challenger_id == self.user_id || item.opponent_id == self.user_id
-            })
+            .filter(|item| item.challenger_id == self.user_id || item.opponent_id == self.user_id)
             .collect();
         matches.sort_by_key(|item| {
             (
@@ -395,6 +395,7 @@ impl DailyState {
             detail: None,
             load_error: None,
             load_rx: None,
+            reload_pending: false,
             names,
             board_geometry: Cell::new(None),
         });
@@ -410,8 +411,10 @@ impl DailyState {
             return;
         };
         if board.load_rx.is_some() {
+            board.reload_pending = true;
             return;
         }
+        board.reload_pending = false;
         let (tx, rx) = oneshot::channel();
         let svc = self.svc.clone();
         let match_id = board.match_id;
@@ -456,6 +459,13 @@ impl DailyState {
             Err(oneshot::error::TryRecvError::Closed) => {
                 board.load_rx = None;
             }
+        }
+        if self
+            .board
+            .as_ref()
+            .is_some_and(|board| board.load_rx.is_none() && board.reload_pending)
+        {
+            self.request_board_reload();
         }
     }
 

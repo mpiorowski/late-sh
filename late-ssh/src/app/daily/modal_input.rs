@@ -14,10 +14,14 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             handle_escape(app);
         }
-        ParsedInput::Arrow(b'B') | ParsedInput::Byte(b'j' | b'J') | ParsedInput::Char('j' | 'J') => {
+        ParsedInput::Arrow(b'B')
+        | ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J') => {
             app.daily.move_selection(1);
         }
-        ParsedInput::Arrow(b'A') | ParsedInput::Byte(b'k' | b'K') | ParsedInput::Char('k' | 'K') => {
+        ParsedInput::Arrow(b'A')
+        | ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K') => {
             app.daily.move_selection(-1);
         }
         ParsedInput::Byte(b'\r' | b'\n' | b' ') | ParsedInput::Char(' ') => {
@@ -54,6 +58,8 @@ pub(crate) fn handle_escape(app: &mut App) {
     if app.daily.confirm_claim.take().is_some() {
         return;
     }
+    // Everything visible in the modal has been seen; don't glow for it.
+    app.daily.mark_lobby_seen();
     app.show_daily_modal = false;
 }
 
@@ -80,7 +86,17 @@ fn activate_selection(app: &mut App) {
     };
     match action {
         Some(Action::OpenBoard(item)) => {
-            let return_screen = app.screen;
+            // Switching matches while a board is already open keeps the
+            // original return screen, so Esc never lands on a dead board.
+            let return_screen = if app.screen == Screen::DailyMatch {
+                app.daily
+                    .board
+                    .as_ref()
+                    .map(|board| board.return_screen)
+                    .unwrap_or(Screen::Dashboard)
+            } else {
+                app.screen
+            };
             app.daily.open_board(&item, return_screen);
             app.show_daily_modal = false;
             app.set_screen(Screen::DailyMatch);

@@ -35,7 +35,8 @@ pub(crate) fn draw(
 ) {
     let Some(board) = &daily.board else {
         frame.render_widget(
-            Paragraph::new("No daily match open — press Esc.").alignment(Alignment::Center),
+            Paragraph::new("No daily match open. Press Esc to go back.")
+                .alignment(Alignment::Center),
             area,
         );
         return;
@@ -60,7 +61,7 @@ pub(crate) fn draw(
         let cols =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(INFO_SIDEBAR_WIDTH)])
                 .split(area);
-        draw_info_rail(frame, cols[1], daily, board, detail);
+        draw_info_rail(frame, cols[1], board, detail);
         cols[0]
     } else {
         area
@@ -219,7 +220,7 @@ fn status_line(
     } else {
         let (heading, subtitle, color) = result_banner(daily, board, detail);
         spans.push(Span::styled(
-            format!("{heading} — {subtitle}"),
+            format!("{heading} · {subtitle}"),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
@@ -257,17 +258,20 @@ fn result_banner(
             ("Checkmate", winner_text(detail.row.winner_user_id), color)
         }
         DailyMatch::RESULT_DRAW => ("Draw", "game drawn".to_string(), theme::TEXT_MUTED()),
-        DailyMatch::RESULT_RESIGN => {
-            ("Resignation", winner_text(detail.row.winner_user_id), color)
-        }
+        DailyMatch::RESULT_RESIGN => ("Resignation", winner_text(detail.row.winner_user_id), color),
         DailyMatch::RESULT_TIMEOUT => (
             "Timeout",
-            format!("{} on the 24h clock", winner_text(detail.row.winner_user_id)),
+            format!(
+                "{} on the 24h clock",
+                winner_text(detail.row.winner_user_id)
+            ),
             color,
         ),
-        _ if detail.row.status == DailyMatch::STATUS_CANCELLED => {
-            ("Cancelled", "challenge withdrawn".to_string(), theme::TEXT_MUTED())
-        }
+        _ if detail.row.status == DailyMatch::STATUS_CANCELLED => (
+            "Cancelled",
+            "challenge withdrawn".to_string(),
+            theme::TEXT_MUTED(),
+        ),
         _ => ("Finished", winner_text(detail.row.winner_user_id), color),
     }
 }
@@ -298,15 +302,14 @@ fn draw_player_bar(
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            name_for(board, user_id),
-            Style::default().fg(theme::TEXT()),
-        ),
+        Span::styled(name_for(board, user_id), Style::default().fg(theme::TEXT())),
     ];
     if on_turn && let Some(deadline) = detail.row.turn_deadline_at {
         left.push(Span::styled(
             format!("   {}", format_deadline(deadline, Utc::now())),
-            Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(left)), rect);
@@ -349,7 +352,6 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
 fn draw_info_rail(
     frame: &mut Frame,
     area: Rect,
-    daily: &DailyState,
     board: &DailyBoardState,
     detail: &DailyMatchDetail,
 ) {
@@ -381,7 +383,7 @@ fn draw_info_rail(
     };
     let mut lines = vec![
         Line::from(Span::styled(
-            "Correspondence chess — one move per day.".to_string(),
+            "Correspondence chess, one move per day.".to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),
@@ -397,18 +399,14 @@ fn draw_info_rail(
             name_for(board, detail.state.colors.black),
             theme::TEXT_BRIGHT(),
         ),
-        label_value(
-            "Clock",
-            "24h per move".to_string(),
-            theme::AMBER(),
-        ),
+        label_value("Clock", "24h per move".to_string(), theme::AMBER()),
         label_value(
             "Deadline",
             detail
                 .row
                 .turn_deadline_at
                 .map(|at| format_deadline(at, Utc::now()))
-                .unwrap_or_else(|| "—".to_string()),
+                .unwrap_or_else(|| "--".to_string()),
             theme::AMBER(),
         ),
         label_value("State", state_text, theme::SUCCESS()),
@@ -420,7 +418,6 @@ fn draw_info_rail(
                 .add_modifier(Modifier::BOLD),
         )),
     ];
-    let _ = daily;
 
     let budget = (inner.height as usize).saturating_sub(lines.len());
     append_moves(&mut lines, detail, budget);
@@ -474,8 +471,8 @@ fn append_moves(lines: &mut Vec<Line<'static>>, detail: &DailyMatchDetail, budge
 }
 
 fn draw_overlay(frame: &mut Frame, board_area: Rect, heading: &str, subtitle: &str, color: Color) {
-    let width = (heading.chars().count().max(subtitle.chars().count()) as u16 + 8)
-        .min(board_area.width);
+    let width =
+        (heading.chars().count().max(subtitle.chars().count()) as u16 + 8).min(board_area.width);
     let height = 5.min(board_area.height);
     let overlay = Rect {
         x: board_area.x + board_area.width.saturating_sub(width) / 2,

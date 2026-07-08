@@ -66,7 +66,7 @@ fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
     lines.push(Line::raw(""));
     lines.push(section_line(width, "lobby"));
     if lobby.is_empty() {
-        lines.push(empty_line("no open challenges — post one with c"));
+        lines.push(empty_line("no open challenges · post one with c"));
     }
     for (idx, challenge) in lobby.iter().enumerate() {
         lines.push(challenge_line(
@@ -110,7 +110,7 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
     let deadline = item
         .turn_deadline_at
         .map(|at| format_deadline(at, Utc::now()))
-        .unwrap_or_else(|| "—".to_string());
+        .unwrap_or_else(|| "--".to_string());
 
     let mut spans = vec![marker_span(selected)];
     spans.push(Span::styled(
@@ -172,7 +172,11 @@ fn challenge_line(
     let mut spans = vec![marker_span(selected)];
     spans.push(Span::styled(
         format!("{poster:<16}"),
-        Style::default().fg(if mine { theme::TEXT_DIM() } else { theme::TEXT() }),
+        Style::default().fg(if mine {
+            theme::TEXT_DIM()
+        } else {
+            theme::TEXT()
+        }),
     ));
     match target {
         Some(target) => spans.push(Span::styled(

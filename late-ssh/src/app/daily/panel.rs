@@ -272,7 +272,10 @@ mod tests {
             }],
             0,
         );
-        let texts: Vec<String> = daily_panel_lines(21, &props).iter().map(line_text).collect();
+        let texts: Vec<String> = daily_panel_lines(21, &props)
+            .iter()
+            .map(line_text)
+            .collect();
         assert!(texts[1].starts_with("► mira"));
         assert!(texts[1].trim_end().ends_with("your turn"));
         assert_eq!(texts[2].trim_end(), "  ─");
@@ -285,7 +288,10 @@ mod tests {
     #[test]
     fn lobby_line_names_latest_challenger() {
         let props = props_with(Vec::new(), 2);
-        let texts: Vec<String> = daily_panel_lines(30, &props).iter().map(line_text).collect();
+        let texts: Vec<String> = daily_panel_lines(30, &props)
+            .iter()
+            .map(line_text)
+            .collect();
         assert_eq!(texts[5].trim_end(), "lobby: 2 open · c0ld");
     }
 }
