@@ -203,6 +203,22 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_ultimate_modal() {
         crate::app::ultimates::open_ultimate_modal(app);
     }
+    if let Some(request) = app.chat.take_requested_daily_challenge() {
+        use crate::app::chat::state::DailyChallengeRequest;
+        match request {
+            DailyChallengeRequest::Modal => crate::app::input::open_daily_modal_globally(app),
+            DailyChallengeRequest::Open => {
+                app.daily.post_open_challenge();
+                app.banner = Some(Banner::success("Daily challenge posted to the lobby"));
+            }
+            DailyChallengeRequest::Directed(username) => {
+                app.banner = Some(Banner::success(&format!(
+                    "Daily challenge sent to @{username}"
+                )));
+                app.daily.post_directed_challenge(&username);
+            }
+        }
+    }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }

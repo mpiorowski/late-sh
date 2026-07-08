@@ -59,6 +59,9 @@ pub enum Screen {
     Pinstar,
     WorldCup,
     Clubhouse,
+    /// Full-screen daily-match board. Entered only from the Daily Games
+    /// modal, absent from the Tab cycle; Esc returns to the modal.
+    DailyMatch,
 }
 
 impl Screen {
@@ -82,6 +85,7 @@ impl Screen {
             | Screen::Nethack
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
+            Screen::DailyMatch => Screen::Dashboard,
         }
     }
 
@@ -100,6 +104,7 @@ impl Screen {
             | Screen::Nethack
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
+            Screen::DailyMatch => Screen::Dashboard,
         }
     }
 }
@@ -126,6 +131,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Pinstar => "Directory",
         Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
+        Screen::DailyMatch => "Daily Chess",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -238,6 +244,12 @@ mod tests {
             assert_eq!(door.next(), Screen::Games);
             assert_eq!(door.prev(), Screen::Games);
         }
+    }
+
+    #[test]
+    fn daily_match_board_is_outside_the_tab_cycle_and_falls_back_home() {
+        assert_eq!(Screen::DailyMatch.next(), Screen::Dashboard);
+        assert_eq!(Screen::DailyMatch.prev(), Screen::Dashboard);
     }
 
     #[test]

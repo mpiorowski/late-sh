@@ -1,0 +1,648 @@
+use std::{cell::Cell, collections::HashMap, collections::HashSet, sync::Arc};
+
+use chrono::{DateTime, Utc};
+use cozy_chess::{BitBoard, Board};
+use late_core::models::daily_match::DailyMatch;
+use ratatui::layout::Rect;
+use tokio::sync::{broadcast, oneshot, watch};
+use uuid::Uuid;
+
+use crate::app::{
+    common::primitives::{Banner, Screen},
+    games::chess_core::{
+        board_ui::Tier,
+        cursor, rules,
+        types::{ChessColor, ChessMoveSpec, ChessPiece, ChessPieceRenderMode},
+    },
+};
+
+use super::svc::{
+    DAILY_MAX_ACTIVE_ENTRIES, DailyChallengeItem, DailyChessState, DailyEvent, DailyMatchItem,
+    DailyService, DailySnapshot,
+};
+
+/// One selectable row in the Daily Games modal: your matches first, then the
+/// open lobby.
+pub enum DailyModalEntry<'a> {
+    Match(&'a DailyMatchItem),
+    Challenge(&'a DailyChallengeItem),
+}
+
+/// Per-session daily-games UI state: the modal, the lobby glow, and the
+/// full-screen board. The system of record is `DailyService`'s snapshot;
+/// everything here is presentation plus the in-flight optimistic move.
+pub struct DailyState {
+    user_id: Uuid,
+    svc: DailyService,
+    snapshot_rx: watch::Receiver<Arc<DailySnapshot>>,
+    snapshot: Arc<DailySnapshot>,
+    event_rx: broadcast::Receiver<DailyEvent>,
+
+    /// Modal cursor over `modal_entry_count()` rows.
+    pub selected: usize,
+    /// Challenge awaiting claim confirmation (Enter pressed once).
+    pub confirm_claim: Option<Uuid>,
+    /// Username buffer while the directed-challenge prompt is open.
+    pub challenge_prompt: Option<String>,
+    /// Open-challenge ids already seen; anything newer glows the lobby line
+    /// until the modal is opened.
+    seen_open_ids: HashSet<Uuid>,
+    lobby_glow: bool,
+
+    pub board: Option<DailyBoardState>,
+}
+
+/// Full-screen correspondence board (`Screen::DailyMatch`).
+pub struct DailyBoardState {
+    pub match_id: Uuid,
+    /// Screen to restore when the board closes.
+    pub return_screen: Screen,
+    pub cursor: usize,
+    pub selected: Option<usize>,
+    pub piece_render_mode: ChessPieceRenderMode,
+    pub resign_confirm: bool,
+    pub detail: Option<DailyMatchDetail>,
+    pub load_error: Option<String>,
+    load_rx: Option<oneshot::Receiver<Result<Option<DailyMatch>, String>>>,
+    /// Usernames captured from the snapshot when the board opened, so names
+    /// survive the match leaving the active list on finish.
+    pub names: HashMap<Uuid, String>,
+    /// Last drawn board rect + tier, set during render and consumed by the
+    /// mouse hit test. Cleared before every board draw.
+    pub board_geometry: Cell<Option<(Rect, Tier)>>,
+}
+
+/// Canonical match detail derived from one `daily_matches` row.
+pub struct DailyMatchDetail {
+    pub row: DailyMatch,
+    pub state: DailyChessState,
+    pub pieces: [Option<ChessPiece>; 64],
+    pub legal_moves: Vec<ChessMoveSpec>,
+    pub turn: ChessColor,
+    pub in_check: bool,
+}
+
+impl DailyMatchDetail {
+    fn from_row(row: DailyMatch) -> Result<Self, String> {
+        let state = DailyChessState::parse(&row.state).map_err(|e| e.to_string())?;
+        let board: Board = state
+            .fen
+            .parse()
+            .map_err(|_| "corrupt daily match position".to_string())?;
+        let pieces = rules::board_pieces(&board);
+        let legal_moves = if row.status == DailyMatch::STATUS_ACTIVE {
+            rules::legal_moves(&board)
+        } else {
+            Vec::new()
+        };
+        let turn = rules::chess_color(board.side_to_move());
+        let in_check =
+            row.status == DailyMatch::STATUS_ACTIVE && board.checkers() != BitBoard::EMPTY;
+        Ok(Self {
+            row,
+            state,
+            pieces,
+            legal_moves,
+            turn,
+            in_check,
+        })
+    }
+
+    pub fn color_of(&self, user_id: Uuid) -> Option<ChessColor> {
+        self.state.color_of(user_id)
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.row.status == DailyMatch::STATUS_ACTIVE
+    }
+}
+
+impl DailyState {
+    pub fn new(svc: DailyService, user_id: Uuid) -> Self {
+        let snapshot_rx = svc.subscribe_snapshot();
+        let snapshot = snapshot_rx.borrow().clone();
+        let event_rx = svc.subscribe_events();
+        // Challenges that predate the session don't glow; only ones posted
+        // while connected count as news.
+        let seen_open_ids = snapshot
+            .open_challenges
+            .iter()
+            .map(|challenge| challenge.id)
+            .collect();
+        Self {
+            user_id,
+            svc,
+            snapshot_rx,
+            snapshot,
+            event_rx,
+            selected: 0,
+            confirm_claim: None,
+            challenge_prompt: None,
+            seen_open_ids,
+            lobby_glow: false,
+            board: None,
+        }
+    }
+
+    pub fn user_id(&self) -> Uuid {
+        self.user_id
+    }
+
+    pub fn lobby_glow(&self) -> bool {
+        self.lobby_glow
+    }
+
+    /// Drain the snapshot watch, the event feed, and any board load in
+    /// flight. Returns a banner for events targeted at this user.
+    pub fn tick(&mut self) -> Option<Banner> {
+        let mut banner = None;
+        if self.snapshot_rx.has_changed().unwrap_or(false) {
+            self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+            self.refresh_lobby_glow();
+            self.clamp_selection();
+        }
+        loop {
+            match self.event_rx.try_recv() {
+                Ok(event) => {
+                    if let Some(b) = self.apply_event(event) {
+                        banner = Some(b);
+                    }
+                }
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "daily event feed lagged");
+                }
+                Err(broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
+        self.poll_board_load();
+        banner
+    }
+
+    fn apply_event(&mut self, event: DailyEvent) -> Option<Banner> {
+        match event {
+            DailyEvent::Error { user_id, message } if user_id == self.user_id => {
+                // svc errors are lowercase; the banner keeps sentence case.
+                Some(Banner::error(&format!("Daily games: {message}")))
+            }
+            DailyEvent::MatchFinished {
+                match_id,
+                winner_user_id,
+                ..
+            } => {
+                if self.board.as_ref().is_some_and(|b| b.match_id == match_id) {
+                    self.request_board_reload();
+                }
+                (winner_user_id == Some(self.user_id))
+                    .then(|| Banner::success("Daily chess: you won the match"))
+            }
+            DailyEvent::MovePlayed { match_id, .. }
+            | DailyEvent::ChallengeClaimed { match_id, .. } => {
+                if self.board.as_ref().is_some_and(|b| b.match_id == match_id) {
+                    self.request_board_reload();
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn refresh_lobby_glow(&mut self) {
+        let open_ids: HashSet<Uuid> = self
+            .snapshot
+            .open_challenges
+            .iter()
+            .map(|challenge| challenge.id)
+            .collect();
+        // Own challenges never glow; mark them seen immediately.
+        let own_ids: Vec<Uuid> = self
+            .snapshot
+            .open_challenges
+            .iter()
+            .filter(|challenge| challenge.challenger_id == self.user_id)
+            .map(|challenge| challenge.id)
+            .collect();
+        self.seen_open_ids.extend(own_ids);
+        if self
+            .snapshot
+            .open_challenges
+            .iter()
+            .any(|challenge| !self.seen_open_ids.contains(&challenge.id))
+        {
+            self.lobby_glow = true;
+        }
+        // Drop ids that left the lobby so the set can't grow unbounded.
+        self.seen_open_ids.retain(|id| open_ids.contains(id));
+    }
+
+    /// Called when the modal opens: the lobby has been looked at.
+    pub fn mark_lobby_seen(&mut self) {
+        self.seen_open_ids = self
+            .snapshot
+            .open_challenges
+            .iter()
+            .map(|challenge| challenge.id)
+            .collect();
+        self.lobby_glow = false;
+        self.clamp_selection();
+    }
+
+    // ── Snapshot views ─────────────────────────────────────────
+
+    /// This user's active matches: your-turn first, then nearest deadline.
+    pub fn my_matches(&self) -> Vec<&DailyMatchItem> {
+        let mut matches: Vec<&DailyMatchItem> = self
+            .snapshot
+            .active_matches
+            .iter()
+            .filter(|item| {
+                item.challenger_id == self.user_id || item.opponent_id == self.user_id
+            })
+            .collect();
+        matches.sort_by_key(|item| {
+            (
+                item.turn_user_id != Some(self.user_id),
+                item.turn_deadline_at,
+                item.id,
+            )
+        });
+        matches
+    }
+
+    /// Every open challenge, oldest first (snapshot order).
+    pub fn lobby(&self) -> Vec<&DailyChallengeItem> {
+        self.snapshot.open_challenges.iter().collect()
+    }
+
+    /// Open challenges + active matches counted against the per-user cap.
+    pub fn entry_count(&self) -> usize {
+        let challenges = self
+            .snapshot
+            .open_challenges
+            .iter()
+            .filter(|challenge| challenge.challenger_id == self.user_id)
+            .count();
+        challenges + self.my_matches().len()
+    }
+
+    pub fn entry_cap(&self) -> usize {
+        DAILY_MAX_ACTIVE_ENTRIES as usize
+    }
+
+    pub fn opponent_of(&self, item: &DailyMatchItem) -> (Uuid, Option<String>) {
+        if item.challenger_id == self.user_id {
+            (item.opponent_id, item.opponent_username.clone())
+        } else {
+            (item.challenger_id, item.challenger_username.clone())
+        }
+    }
+
+    pub fn my_turn(&self, item: &DailyMatchItem) -> bool {
+        item.turn_user_id == Some(self.user_id)
+    }
+
+    // ── Modal navigation ───────────────────────────────────────
+
+    pub fn modal_entry_count(&self) -> usize {
+        self.my_matches().len() + self.lobby().len()
+    }
+
+    pub fn modal_entry_at(&self, index: usize) -> Option<DailyModalEntry<'_>> {
+        let matches = self.my_matches();
+        if index < matches.len() {
+            return Some(DailyModalEntry::Match(matches[index]));
+        }
+        self.lobby()
+            .get(index - matches.len())
+            .copied()
+            .map(DailyModalEntry::Challenge)
+    }
+
+    pub fn selected_entry(&self) -> Option<DailyModalEntry<'_>> {
+        self.modal_entry_at(self.selected)
+    }
+
+    pub fn move_selection(&mut self, delta: isize) {
+        let count = self.modal_entry_count();
+        if count == 0 {
+            self.selected = 0;
+            return;
+        }
+        let next = self.selected as isize + delta;
+        self.selected = next.clamp(0, count as isize - 1) as usize;
+        self.confirm_claim = None;
+    }
+
+    fn clamp_selection(&mut self) {
+        let count = self.modal_entry_count();
+        if count == 0 {
+            self.selected = 0;
+        } else {
+            self.selected = self.selected.min(count - 1);
+        }
+        if let Some(pending) = self.confirm_claim
+            && !self
+                .snapshot
+                .open_challenges
+                .iter()
+                .any(|challenge| challenge.id == pending)
+        {
+            self.confirm_claim = None;
+        }
+    }
+
+    // ── Modal actions ──────────────────────────────────────────
+
+    pub fn post_open_challenge(&self) {
+        self.svc.post_challenge_task(self.user_id, None);
+    }
+
+    pub fn post_directed_challenge(&self, username: &str) {
+        let username = username.trim().trim_start_matches('@').to_string();
+        if username.is_empty() {
+            return;
+        }
+        self.svc
+            .post_challenge_to_username_task(self.user_id, username);
+    }
+
+    pub fn claim_challenge(&mut self, match_id: Uuid) {
+        self.svc.claim_challenge_task(self.user_id, match_id);
+        self.confirm_claim = None;
+    }
+
+    pub fn cancel_challenge(&self, match_id: Uuid) {
+        self.svc.cancel_challenge_task(self.user_id, match_id);
+    }
+
+    // ── Board screen ───────────────────────────────────────────
+
+    pub fn open_board(&mut self, item: &DailyMatchItem, return_screen: Screen) {
+        let mut names = HashMap::new();
+        if let Some(name) = &item.challenger_username {
+            names.insert(item.challenger_id, name.clone());
+        }
+        if let Some(name) = &item.opponent_username {
+            names.insert(item.opponent_id, name.clone());
+        }
+        self.board = Some(DailyBoardState {
+            match_id: item.id,
+            return_screen,
+            cursor: 12,
+            selected: None,
+            piece_render_mode: ChessPieceRenderMode::Graphics,
+            resign_confirm: false,
+            detail: None,
+            load_error: None,
+            load_rx: None,
+            names,
+            board_geometry: Cell::new(None),
+        });
+        self.request_board_reload();
+    }
+
+    pub fn close_board(&mut self) {
+        self.board = None;
+    }
+
+    fn request_board_reload(&mut self) {
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        if board.load_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = oneshot::channel();
+        let svc = self.svc.clone();
+        let match_id = board.match_id;
+        tokio::spawn(async move {
+            let result = svc
+                .load_match(match_id)
+                .await
+                .map_err(|e| e.root_cause().to_string());
+            let _ = tx.send(result);
+        });
+        board.load_rx = Some(rx);
+    }
+
+    fn poll_board_load(&mut self) {
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        let Some(rx) = &mut board.load_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(Some(row))) => {
+                board.load_rx = None;
+                match DailyMatchDetail::from_row(row) {
+                    Ok(detail) => {
+                        board.detail = Some(detail);
+                        board.load_error = None;
+                        self.drop_stale_board_selection();
+                    }
+                    Err(message) => board.load_error = Some(message),
+                }
+            }
+            Ok(Ok(None)) => {
+                board.load_rx = None;
+                board.load_error = Some("match not found".to_string());
+            }
+            Ok(Err(message)) => {
+                board.load_rx = None;
+                board.load_error = Some(message);
+            }
+            Err(oneshot::error::TryRecvError::Empty) => {}
+            Err(oneshot::error::TryRecvError::Closed) => {
+                board.load_rx = None;
+            }
+        }
+    }
+
+    pub fn board_orientation(&self) -> ChessColor {
+        self.board
+            .as_ref()
+            .and_then(|board| board.detail.as_ref())
+            .and_then(|detail| detail.color_of(self.user_id))
+            .unwrap_or(ChessColor::White)
+    }
+
+    pub fn board_legal_targets(&self) -> Vec<usize> {
+        let Some(board) = &self.board else {
+            return Vec::new();
+        };
+        let Some(detail) = &board.detail else {
+            return Vec::new();
+        };
+        cursor::legal_targets(&detail.legal_moves, board.selected)
+    }
+
+    pub fn board_move_cursor(&mut self, dx: isize, dy: isize) {
+        let orientation = self.board_orientation();
+        if let Some(board) = &mut self.board {
+            board.cursor = cursor::move_cursor(board.cursor, orientation, dx, dy);
+            board.resign_confirm = false;
+        }
+    }
+
+    pub fn board_click_square(&mut self, index: usize) {
+        if index >= 64 {
+            return;
+        }
+        if let Some(board) = &mut self.board {
+            board.cursor = index;
+        }
+        self.board_select_or_move();
+    }
+
+    /// Space/Enter on the board: pick up a piece or play the move. The move
+    /// applies optimistically; the canonical row arrives on the next
+    /// `MovePlayed`/`MatchFinished` reload.
+    pub fn board_select_or_move(&mut self) {
+        let user_id = self.user_id;
+        let svc = self.svc.clone();
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        board.resign_confirm = false;
+        let Some(detail) = &mut board.detail else {
+            return;
+        };
+        if !detail.is_active()
+            || detail.row.turn_user_id != Some(user_id)
+            || detail.color_of(user_id) != Some(detail.turn)
+        {
+            return;
+        }
+
+        if let Some(from) = board.selected {
+            if from == board.cursor {
+                board.selected = None;
+                return;
+            }
+            let to = board.cursor;
+            if !detail
+                .legal_moves
+                .iter()
+                .any(|mv| mv.from == from && mv.to == to)
+            {
+                return;
+            }
+            Self::apply_optimistic_move(detail, from, to);
+            board.selected = None;
+            svc.play_move_task(user_id, board.match_id, from, to);
+            return;
+        }
+
+        let Some(piece) = detail.pieces.get(board.cursor).and_then(|piece| *piece) else {
+            return;
+        };
+        if Some(piece.color) == detail.color_of(user_id)
+            && detail.legal_moves.iter().any(|mv| mv.from == board.cursor)
+        {
+            board.selected = Some(board.cursor);
+        }
+    }
+
+    fn apply_optimistic_move(detail: &mut DailyMatchDetail, from: usize, to: usize) {
+        let Ok(board) = detail.state.fen.parse::<Board>() else {
+            return;
+        };
+        let Some(mv) = rules::legal_move_for(&board, from, to) else {
+            return;
+        };
+        let label = rules::san_label(&board, mv);
+        let mut board = board;
+        board.play(mv);
+        detail.state.fen = format!("{board}");
+        detail.state.move_history.push(super::svc::DailyMoveRecord {
+            from,
+            to,
+            label,
+            at: Utc::now(),
+        });
+        detail.pieces = rules::board_pieces(&board);
+        detail.turn = rules::chess_color(board.side_to_move());
+        detail.in_check = board.checkers().len() > 0;
+        // Opponent to move until the reload says otherwise; clearing the
+        // legal moves keeps the cursor from picking up their pieces.
+        detail.legal_moves.clear();
+        let next = detail.state.user_for_color(detail.turn);
+        detail.row.turn_user_id = Some(next);
+    }
+
+    pub fn board_resign(&mut self) {
+        let user_id = self.user_id;
+        let svc = self.svc.clone();
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        let active = board
+            .detail
+            .as_ref()
+            .is_some_and(DailyMatchDetail::is_active);
+        if !active {
+            board.resign_confirm = false;
+            return;
+        }
+        if board.resign_confirm {
+            board.resign_confirm = false;
+            svc.resign_task(user_id, board.match_id);
+        } else {
+            board.resign_confirm = true;
+        }
+    }
+
+    fn drop_stale_board_selection(&mut self) {
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        let Some(detail) = &board.detail else {
+            return;
+        };
+        if let Some(selected) = board.selected
+            && (!detail.is_active() || detail.legal_moves.iter().all(|mv| mv.from != selected))
+        {
+            board.selected = None;
+        }
+    }
+}
+
+/// Compact time-until-deadline: `2d 3h`, `23h 59m`, `41m`. Clamps at zero.
+pub fn format_deadline(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let secs = (deadline - now).num_seconds().max(0);
+    let days = secs / 86_400;
+    let hours = (secs % 86_400) / 3600;
+    let minutes = (secs % 3600) / 60;
+    if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{minutes}m")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn format_deadline_scales_units() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 8, 12, 0, 0).unwrap();
+        assert_eq!(
+            format_deadline(now + chrono::Duration::hours(50), now),
+            "2d 2h"
+        );
+        assert_eq!(
+            format_deadline(now + chrono::Duration::minutes(90), now),
+            "1h 30m"
+        );
+        assert_eq!(
+            format_deadline(now + chrono::Duration::minutes(41), now),
+            "41m"
+        );
+        assert_eq!(format_deadline(now - chrono::Duration::hours(1), now), "0m");
+    }
+}

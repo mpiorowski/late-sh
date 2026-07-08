@@ -264,6 +264,9 @@ impl App {
         if let Some(b) = self.tick_rooms() {
             self.banner = Some(b);
         }
+        if let Some(b) = self.daily.tick() {
+            self.banner = Some(b);
+        }
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
         }

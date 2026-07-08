@@ -137,7 +137,7 @@ impl DailyChessState {
         }
     }
 
-    fn parse(value: &Value) -> Result<Self> {
+    pub fn parse(value: &Value) -> Result<Self> {
         let state: Self =
             serde_json::from_value(value.clone()).context("corrupt daily match state")?;
         ensure!(
@@ -230,6 +230,36 @@ impl DailyService {
                 svc.send_error(user_id, &e);
             }
         });
+    }
+
+    /// Directed challenge addressed by username (the `/challenge @user` and
+    /// modal prompt path). Resolves against the DB so the target does not
+    /// need to be online.
+    pub fn post_challenge_to_username_task(&self, user_id: Uuid, username: String) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let client = svc.db.get().await?;
+                let target = User::find_by_username(&client, &username)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("no user named {username}"))?;
+                drop(client);
+                svc.post_challenge(user_id, Some(target.id)).await?;
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            if let Err(e) = result {
+                tracing::error!(error = ?e, %user_id, "failed to post directed daily challenge");
+                svc.send_error(user_id, &e);
+            }
+        });
+    }
+
+    /// Read one match row for the board screen. Snapshot items carry only
+    /// summaries; the board needs the full `state` JSON.
+    pub async fn load_match(&self, match_id: Uuid) -> Result<Option<DailyMatch>> {
+        let client = self.db.get().await?;
+        DailyMatch::get(&client, match_id).await
     }
 
     pub fn claim_challenge_task(&self, user_id: Uuid, match_id: Uuid) {

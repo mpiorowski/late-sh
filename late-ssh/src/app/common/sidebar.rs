@@ -39,6 +39,8 @@ const MUSIC_QUEUE_HEIGHT: u16 = 3;
 const BONSAI_MIN_HEIGHT: u16 = 16;
 // Cat: 3 art rows + 1 footer row.
 const CAT_HEIGHT: u16 = 4;
+// Daily games: fixed, stable chrome (see `daily/panel.rs`).
+const DAILY_HEIGHT: u16 = crate::app::daily::panel::DAILY_PANEL_HEIGHT;
 
 // The visible credit Nightride asked for; rendered as the last detail row
 // while the radio source is active.
@@ -87,6 +89,8 @@ pub(crate) struct SidebarProps<'a> {
     pub radio_now_playing: Option<&'a str>,
     /// AFK message from /brb; None = not AFK.
     pub afk: Option<&'a str>,
+    /// Daily correspondence games: my matches, lobby activity, glow.
+    pub daily: &'a crate::app::daily::state::DailyState,
 }
 
 pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
@@ -207,6 +211,9 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                     );
                 }
             }
+            RightSidebarComponent::Daily => {
+                crate::app::daily::panel::draw_daily_inline(frame, body, props.daily);
+            }
         }
     }
 }
@@ -220,6 +227,7 @@ fn component_height(component: RightSidebarComponent) -> u16 {
         RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
         RightSidebarComponent::Pet => CAT_HEIGHT,
         RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
+        RightSidebarComponent::Daily => DAILY_HEIGHT,
     }
 }
 

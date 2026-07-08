@@ -330,6 +330,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             chip_service.clone(),
             db.clone(),
         ),
+        daily_service: late_ssh::app::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
+        ),
         rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
@@ -480,6 +484,10 @@ fn make_app_with_chat_service_and_permissions(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
             chip_service.clone(),
             db.clone(),
+        ),
+        daily_service: late_ssh::app::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
         ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
@@ -643,6 +651,10 @@ pub fn make_app_with_paired_client(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
             chip_service.clone(),
             db.clone(),
+        ),
+        daily_service: late_ssh::app::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
         ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),

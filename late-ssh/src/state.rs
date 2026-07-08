@@ -123,6 +123,7 @@ pub struct State {
     pub chip_service: ChipService,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub daily_service: crate::app::daily::svc::DailyService,
     pub rooms_service: RoomsService,
     pub blackjack_table_manager: BlackjackTableManager,
     pub room_game_registry: RoomGameRegistry,

@@ -384,6 +384,7 @@ async fn main() -> anyhow::Result<()> {
         minesweeper_service,
         lateania_service,
         greendragon_service,
+        daily_service,
         bonsai_service,
         pet_service,
         nonogram_library,
