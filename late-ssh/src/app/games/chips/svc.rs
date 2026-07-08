@@ -127,6 +127,30 @@ impl ChipService {
         }))
     }
 
+    /// Charge `payer_id` for a bartender drink and apply the buzz to
+    /// `recipient_id` in one transaction. Returns None when the payer can't
+    /// cover the drink while keeping the chip floor.
+    pub async fn buy_drink_for(
+        &self,
+        payer_id: Uuid,
+        recipient_id: Uuid,
+        price: i64,
+        drink: &str,
+    ) -> anyhow::Result<Option<DrinkPurchase>> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let Some(chips) = UserChips::deduct_for_drink(&tx, payer_id, price, drink).await? else {
+            return Ok(None);
+        };
+        let drinks = UserDrinks::record_purchase(&tx, recipient_id, price).await?;
+        tx.commit().await?;
+        Ok(Some(DrinkPurchase {
+            balance: chips.balance,
+            drunk_points: drinks.drunk_points,
+            last_drink_at: drinks.last_drink_at,
+        }))
+    }
+
     /// Comp the newcomer's welcome pour: record the buzz with no chip debit
     /// (it's on the house) and hand back the fresh buzz so the clubhouse glow
     /// can light up immediately.

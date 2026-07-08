@@ -272,13 +272,20 @@ pub enum HauntLoad {
 pub enum TransferLoad {
     Loading,
     /// The gold is in their bank and the clerk's note in their reports.
-    Done { target: String },
+    Done {
+        target: String,
+    },
     /// They've taken the day's [`model::TRANSFERS_RECEIVED_PER_DAY`]
     /// transfers already (`transferreceive`).
-    TooManyToday { target: String },
+    TooManyToday {
+        target: String,
+    },
     /// The sum beats their per-transfer cap (`transferperlevel`), re-checked
     /// against the fresh blob's level.
-    OverCap { target: String, cap: u64 },
+    OverCap {
+        target: String,
+        cap: u64,
+    },
     /// The account vanished between the search and the settlement.
     Gone,
 }
