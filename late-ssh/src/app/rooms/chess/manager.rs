@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::publisher::ActivityPublisher,
-    games::chips::svc::ChipService,
+    games::{chess_core::types::ChessGameResult, chips::svc::ChipService},
     rooms::{
         backend::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
@@ -18,7 +18,7 @@ use crate::app::{
         chess::{
             create_modal::ChessCreateModal,
             settings::ChessTableSettings,
-            state::{ChessGameResult, ChessPhase, State},
+            state::{ChessPhase, State},
             svc::{self as chess_svc, CHESS_WIN_CHIP_PAYOUT, ChessService, ChessServiceContext},
         },
         svc::{GameKind, RoomListItem, RoomsService},

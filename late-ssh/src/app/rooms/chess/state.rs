@@ -1,46 +1,12 @@
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::app::games::chess_core::{
+    cursor,
+    types::{ChessColor, ChessPieceRenderMode},
+};
+
 use super::svc::{ChessService, ChessSnapshot};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ChessColor {
-    White,
-    Black,
-}
-
-impl ChessColor {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::White => "White",
-            Self::Black => "Black",
-        }
-    }
-
-    pub fn other(self) -> Self {
-        match self {
-            Self::White => Self::Black,
-            Self::Black => Self::White,
-        }
-    }
-
-    pub fn seat_index(self) -> usize {
-        match self {
-            Self::White => 0,
-            Self::Black => 1,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ChessPieceKind {
-    Pawn,
-    Knight,
-    Bishop,
-    Rook,
-    Queen,
-    King,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChessPhase {
@@ -48,35 +14,6 @@ pub enum ChessPhase {
     Ready,
     Active,
     Finished,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ChessGameResult {
-    Checkmate { winner: ChessColor },
-    Timeout { winner: ChessColor },
-    Resignation { winner: ChessColor },
-    Draw,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ChessMoveSpec {
-    pub from: usize,
-    pub to: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ChessMoveRecord {
-    pub from: usize,
-    pub to: usize,
-    pub label: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChessPieceRenderMode {
-    /// Hand-drawn ASCII silhouettes, universal fallback.
-    Ascii,
-    /// Full-resolution PNG via Kitty/iTerm2/Sixel terminal-image protocols.
-    Graphics,
 }
 
 pub struct State {
@@ -144,14 +81,7 @@ impl State {
     }
 
     pub fn legal_targets(&self) -> Vec<usize> {
-        let Some(selected) = self.selected else {
-            return Vec::new();
-        };
-        self.snapshot
-            .legal_moves
-            .iter()
-            .filter_map(|mv| (mv.from == selected).then_some(mv.to))
-            .collect()
+        cursor::legal_targets(&self.snapshot.legal_moves, self.selected)
     }
 
     pub fn seat_index(&self) -> Option<usize> {
@@ -254,15 +184,7 @@ impl State {
     }
 
     pub fn move_cursor(&mut self, dx: isize, dy: isize) {
-        let (dx, dy) = match self.orienting_color() {
-            ChessColor::White => (dx, dy),
-            ChessColor::Black => (-dx, -dy),
-        };
-        let row = self.cursor / 8;
-        let col = self.cursor % 8;
-        let next_row = (row as isize + dy).clamp(0, 7) as usize;
-        let next_col = (col as isize + dx).clamp(0, 7) as usize;
-        self.cursor = next_row * 8 + next_col;
+        self.cursor = cursor::move_cursor(self.cursor, self.orienting_color(), dx, dy);
     }
 
     pub fn orienting_color(&self) -> ChessColor {

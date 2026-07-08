@@ -30,7 +30,7 @@
 - `chess/settings.rs` stores one of three clock modes in room settings: `blitz`, `rapid`, or `daily`; missing/unknown persisted values fall back to the default rapid control.
 - `chess/svc.rs` is the authoritative in-memory timed Chess runtime backed by `cozy-chess` legal move generation.
 - `chess/state.rs` is the per-session Chess client wrapper with local cursor/selection state.
-- `chess/ui.rs` renders the cursor-first board, clocks, seats, and status.
+- `chess/ui.rs` renders the room chrome: player bars, clocks, status, info rail, and the finished overlay. Shared chess types, rules helpers, the board renderer, piece art, and cursor math live in `late-ssh/src/app/games/chess_core/` (see `app/games/CONTEXT.md`); `chess/ui.rs` calls `chess_core::board_ui::draw_board` with `room_id` as the image placement seed.
 - `poker/manager.rs` maps `GameRoom.id` to process-local `PokerService` instances.
 - `poker/svc.rs` is the authoritative in-memory Poker table runtime and owns the public/private snapshot split.
 - `poker/state.rs` is the per-session Poker client wrapper that drains both public table state and private hole-card state.
