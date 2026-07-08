@@ -893,7 +893,12 @@ impl GhostService {
                 drink,
                 price,
             } => {
-                self.pending_gift_drinks.lock_recover().insert(
+                let mut pending_gifts = self.pending_gift_drinks.lock_recover();
+                // Sweep offers no one confirmed before stashing this one, so the
+                // map can't accumulate abandoned tabs.
+                pending_gifts
+                    .retain(|_, gift| gift.created_at.elapsed() <= BARTENDER_GIFT_CONFIRM_TIMEOUT);
+                pending_gifts.insert(
                     PendingGiftDrinkKey {
                         payer_id: trigger_message.user_id,
                         room_id: trigger_message.room_id,
@@ -907,6 +912,7 @@ impl GhostService {
                         created_at: Instant::now(),
                     },
                 );
+                drop(pending_gifts);
                 format!(
                     "{patron} {drink} for @{recipient_handle}, {price} chips. reply @{bartender} confirm to put it on your tab.",
                     bartender = bartender.username
@@ -990,7 +996,7 @@ impl GhostService {
             let mut pending_gifts = self.pending_gift_drinks.lock_recover();
             match pending_gifts.remove(&key) {
                 Some(pending) if pending.created_at.elapsed() <= BARTENDER_GIFT_CONFIRM_TIMEOUT => {
-                    Some(pending)
+                    pending
                 }
                 Some(_) => {
                     return Ok(Some(format!(
@@ -1003,11 +1009,6 @@ impl GhostService {
                     )));
                 }
             }
-        };
-        let Some(pending) = pending else {
-            return Ok(Some(format!(
-                "{payer_mention} nothing on the bar waiting for confirmation."
-            )));
         };
 
         match self
