@@ -1,7 +1,9 @@
 # FRD: Daily Games (correspondence chess v1)
 
 Design doc for the daily-games system agreed in the 2026-07-08 discussion
-(UP.md step 1, scoped to v1). Status: draft for review, no code yet.
+(UP.md step 1, scoped to v1). Status: delivered, PRs 1-4 all landed
+(2026-07-08); kept as the design record. Living docs are
+`late-ssh/src/app/daily/CONTEXT.md` and root `CONTEXT.md`.
 
 ## Goal
 

@@ -14,6 +14,7 @@ use crate::app::{
         cursor, rules,
         types::{ChessColor, ChessMoveSpec, ChessPiece, ChessPieceRenderMode},
     },
+    notify::{Notification, Notifier},
 };
 
 use super::svc::{
@@ -48,6 +49,11 @@ pub struct DailyState {
     /// until the modal is opened.
     seen_open_ids: HashSet<Uuid>,
     lobby_glow: bool,
+    notifier: Notifier,
+    /// Match ids whose current my-turn edge already notified. Seeded from the
+    /// login snapshot so connecting never notifies; the sidebar panel is the
+    /// on-login nudge.
+    turn_notified_match_ids: HashSet<Uuid>,
 
     pub board: Option<DailyBoardState>,
 }
@@ -120,7 +126,7 @@ impl DailyMatchDetail {
 }
 
 impl DailyState {
-    pub fn new(svc: DailyService, user_id: Uuid) -> Self {
+    pub(crate) fn new(svc: DailyService, user_id: Uuid, notifier: Notifier) -> Self {
         let snapshot_rx = svc.subscribe_snapshot();
         let snapshot = snapshot_rx.borrow().clone();
         let event_rx = svc.subscribe_events();
@@ -130,6 +136,12 @@ impl DailyState {
             .open_challenges
             .iter()
             .map(|challenge| challenge.id)
+            .collect();
+        let turn_notified_match_ids = snapshot
+            .active_matches
+            .iter()
+            .filter(|item| item.turn_user_id == Some(user_id))
+            .map(|item| item.id)
             .collect();
         Self {
             user_id,
@@ -142,6 +154,8 @@ impl DailyState {
             challenge_prompt: None,
             seen_open_ids,
             lobby_glow: false,
+            notifier,
+            turn_notified_match_ids,
             board: None,
         }
     }
@@ -161,6 +175,7 @@ impl DailyState {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.refresh_lobby_glow();
+            self.notify_turn_edges();
             self.clamp_selection();
         }
         loop {
@@ -235,6 +250,28 @@ impl DailyState {
         }
         // Drop ids that left the lobby so the set can't grow unbounded.
         self.seen_open_ids.retain(|id| open_ids.contains(id));
+    }
+
+    /// Push one desktop notification per match that just became this user's
+    /// turn while connected.
+    fn notify_turn_edges(&mut self) {
+        let my_turn_ids: Vec<Uuid> = self
+            .snapshot
+            .active_matches
+            .iter()
+            .filter(|item| item.turn_user_id == Some(self.user_id))
+            .map(|item| item.id)
+            .collect();
+        for match_id in fresh_turn_edges(&mut self.turn_notified_match_ids, &my_turn_ids) {
+            let opponent = self
+                .snapshot
+                .active_matches
+                .iter()
+                .find(|item| item.id == match_id)
+                .and_then(|item| self.opponent_of(item).1)
+                .unwrap_or_else(|| "player".to_string());
+            self.notifier.push(Notification::daily_your_turn(&opponent));
+        }
     }
 
     /// Called when the modal opens: the lobby has been looked at.
@@ -618,6 +655,19 @@ impl DailyState {
     }
 }
 
+/// Update the notified set against the matches currently on this user's
+/// turn and return the ids that just appeared (the became-my-turn edges).
+/// Dropping ids whose turn passed back to the opponent means a later flip
+/// to this user notifies again.
+fn fresh_turn_edges(notified: &mut HashSet<Uuid>, my_turn_ids: &[Uuid]) -> Vec<Uuid> {
+    notified.retain(|id| my_turn_ids.contains(id));
+    my_turn_ids
+        .iter()
+        .copied()
+        .filter(|id| notified.insert(*id))
+        .collect()
+}
+
 /// Compact time-until-deadline: `2d 3h`, `23h 59m`, `41m`. Clamps at zero.
 pub fn format_deadline(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let secs = (deadline - now).num_seconds().max(0);
@@ -654,5 +704,24 @@ mod tests {
             "41m"
         );
         assert_eq!(format_deadline(now - chrono::Duration::hours(1), now), "0m");
+    }
+
+    #[test]
+    fn fresh_turn_edges_notifies_each_became_my_turn_edge_once() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let mut notified = HashSet::from([a]);
+
+        // Already-notified id stays quiet; a new my-turn match is an edge.
+        assert_eq!(fresh_turn_edges(&mut notified, &[a, b]), vec![b]);
+        assert_eq!(fresh_turn_edges(&mut notified, &[a, b]), Vec::<Uuid>::new());
+
+        // Turn passes to the opponent and comes back: a fresh edge.
+        assert_eq!(fresh_turn_edges(&mut notified, &[b]), Vec::<Uuid>::new());
+        assert_eq!(fresh_turn_edges(&mut notified, &[a, b]), vec![a]);
+
+        // Finished matches fall out of the set.
+        assert_eq!(fresh_turn_edges(&mut notified, &[]), Vec::<Uuid>::new());
+        assert!(notified.is_empty());
     }
 }

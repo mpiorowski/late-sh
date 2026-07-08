@@ -3,7 +3,7 @@
 ## Metadata
 - Scope: `late-ssh/src/app/games`
 - Last updated: 2026-07-08
-- Purpose: shared game-domain primitives and services used across game surfaces (Arcade, Rooms, and the upcoming Daily correspondence domain).
+- Purpose: shared game-domain primitives and services used across game surfaces (Arcade, Rooms, and the Daily correspondence domain in `app/daily`).
 
 ## Source Map
 - `mod.rs` declares shared game modules only.

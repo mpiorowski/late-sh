@@ -1187,7 +1187,11 @@ impl App {
             dopewars_port: config.dopewars_port,
             dopewars_secret: config.dopewars_secret,
             repaint_signal: None,
-            daily: crate::app::daily::state::DailyState::new(config.daily_service, config.user_id),
+            daily: crate::app::daily::state::DailyState::new(
+                config.daily_service,
+                config.user_id,
+                notifier.clone(),
+            ),
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,

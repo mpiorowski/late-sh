@@ -1,10 +1,10 @@
 use serde_json::{Value, json};
 
-pub const TIME_CONTROL_OPTIONS: [ChessTimeControl; 3] = [
-    ChessTimeControl::Blitz,
-    ChessTimeControl::Rapid,
-    ChessTimeControl::Daily,
-];
+/// Time controls offered when creating a table. Daily is intentionally
+/// absent: correspondence chess lives in the daily-games domain
+/// (`app/daily`), not in live tables.
+pub const TIME_CONTROL_OPTIONS: [ChessTimeControl; 2] =
+    [ChessTimeControl::Blitz, ChessTimeControl::Rapid];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ChessTimeControl {
@@ -61,11 +61,15 @@ impl ChessTimeControl {
         }
     }
 
+    /// Parses every variant, not just `TIME_CONTROL_OPTIONS`: existing
+    /// daily table rows must keep deserializing until the last one is gone.
     pub fn from_id(value: &str) -> Option<Self> {
-        TIME_CONTROL_OPTIONS
-            .iter()
-            .copied()
-            .find(|option| option.id() == value)
+        match value {
+            "blitz" => Some(Self::Blitz),
+            "rapid" => Some(Self::Rapid),
+            "daily" => Some(Self::Daily),
+            _ => None,
+        }
     }
 }
 
@@ -101,6 +105,15 @@ mod tests {
             time_control: ChessTimeControl::Daily,
         };
         assert_eq!(ChessTableSettings::from_json(&settings.to_json()), settings);
+    }
+
+    #[test]
+    fn daily_is_not_offered_for_new_tables_but_still_parses() {
+        assert!(!TIME_CONTROL_OPTIONS.contains(&ChessTimeControl::Daily));
+        assert_eq!(
+            ChessTimeControl::from_id("daily"),
+            Some(ChessTimeControl::Daily)
+        );
     }
 
     #[test]
