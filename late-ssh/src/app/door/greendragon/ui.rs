@@ -351,8 +351,23 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         };
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(intro, dim)));
+        let page_no = state.commentary_page_no();
+        if page_no > 0 {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "You leaf back through older talk ({page_no} page{} deep).",
+                    if page_no == 1 { "" } else { "s" }
+                ),
+                dim,
+            )));
+        }
+        let seen_day = state.comments_seen_day();
         match state.commentary_page() {
             None => lines.push(Line::from(Span::styled("You lean in to listen...", dim))),
+            Some([]) if page_no > 0 => lines.push(Line::from(Span::styled(
+                "The talk goes no further back than this.",
+                dim,
+            ))),
             Some([]) => lines.push(Line::from(Span::styled(
                 "It is quiet. No one has spoken here in an age.",
                 dim,
@@ -364,10 +379,17 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
                     } else {
                         Style::default().fg(theme::TEXT())
                     };
-                    lines.push(Line::from(Span::styled(
-                        commentary::compose_line(&item.name, &item.body),
-                        style,
-                    )));
+                    let composed = commentary::compose_line(&item.name, &item.body);
+                    // The new-post marker (upstream's `new.gif` on rows past
+                    // the reader's `recentcomments` watermark).
+                    if item.day >= seen_day {
+                        lines.push(Line::from(vec![
+                            Span::styled("• ", Style::default().fg(theme::TEXT_BRIGHT())),
+                            Span::styled(composed, style),
+                        ]));
+                    } else {
+                        lines.push(Line::from(Span::styled(composed, style)));
+                    }
                 }
             }
         }

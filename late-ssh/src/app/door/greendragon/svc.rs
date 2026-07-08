@@ -68,12 +68,16 @@ pub enum NewsLoad {
 pub enum CommentaryLoad {
     Loading,
     Ready {
-        /// The room's newest lines, newest first. Empty means a quiet room
-        /// (or a failed read — the table doesn't distinguish).
+        /// The requested window's lines, newest first. Empty means a quiet
+        /// room, a page past the end, or a failed read.
         lines: Arc<Vec<CommentLine>>,
         /// A post was dropped as an exact repeat of the section's newest
         /// line by the same speaker (upstream's double-post check).
         double_post: bool,
+        /// The "first unseen" jump target (0 = no jump offered): the page
+        /// the reader's oldest-unseen rows sit on, per upstream's
+        /// `round(count/limit + 0.5) - 1`.
+        first_unseen_page: usize,
     },
 }
 
@@ -699,15 +703,19 @@ async fn promote_to_leader_tx(
     Ok(Some(c.titled_name()))
 }
 
-/// Fetch a section's newest `limit` rows, stamping each with whether it was
-/// posted on the current UTC day (which feeds the daily post allowance).
+/// Fetch one display window of a section (page 0 = the newest rows),
+/// stamping each row with whether it was posted on the current UTC day
+/// (which feeds the daily post allowance) and its day-number (the new-post
+/// marker compares it against the reader's watermark).
 async fn read_commentary(
     client: &tokio_postgres::Client,
     section: &str,
     limit: usize,
+    page: usize,
 ) -> Vec<CommentLine> {
     let today = today();
-    match GreenDragonCommentary::latest(client, section, limit as i64).await {
+    let offset = (page * limit) as i64;
+    match GreenDragonCommentary::latest(client, section, limit as i64, offset).await {
         Ok(rows) => rows
             .into_iter()
             .map(|r| CommentLine {
@@ -715,6 +723,7 @@ async fn read_commentary(
                 name: r.name,
                 body: r.body,
                 today: r.day == today,
+                day: r.day,
             })
             .collect(),
         Err(e) => {
@@ -722,6 +731,23 @@ async fn read_commentary(
             Vec::new()
         }
     }
+}
+
+/// The "first unseen" jump target (`lib/commentary.php`'s
+/// `round(count/limit + 0.5) - 1`, PHP half-away rounding): the page index
+/// to leaf back to when the unseen rows spill past one window; 0 means no
+/// jump is offered.
+async fn first_unseen_page(
+    client: &tokio_postgres::Client,
+    section: &str,
+    seen_day: i64,
+    limit: usize,
+) -> usize {
+    let unseen = GreenDragonCommentary::count_since_day(client, section, seen_day)
+        .await
+        .unwrap_or(0);
+    let val = (unseen as f64 / limit as f64 + 0.5).round() as i64 - 1;
+    val.max(0) as usize
 }
 
 impl GreenDragonService {
@@ -894,20 +920,26 @@ impl GreenDragonService {
         &self,
         section: String,
         limit: usize,
+        page: usize,
+        seen_day: i64,
     ) -> watch::Receiver<CommentaryLoad> {
         let (tx, rx) = watch::channel(CommentaryLoad::Loading);
         let inner = self.inner.clone();
         tokio::spawn(async move {
-            let lines = match inner.db.get().await {
-                Ok(client) => read_commentary(&client, &section, limit).await,
+            let (lines, first_unseen) = match inner.db.get().await {
+                Ok(client) => (
+                    read_commentary(&client, &section, limit, page).await,
+                    first_unseen_page(&client, &section, seen_day, limit).await,
+                ),
                 Err(e) => {
                     tracing::warn!("greendragon db get failed on commentary read: {e}");
-                    Vec::new()
+                    (Vec::new(), 0)
                 }
             };
             let _ = tx.send(CommentaryLoad::Ready {
                 lines: Arc::new(lines),
                 double_post: false,
+                first_unseen_page: first_unseen,
             });
         });
         rx
@@ -921,6 +953,7 @@ impl GreenDragonService {
         &self,
         section: String,
         limit: usize,
+        seen_day: i64,
         user_id: Uuid,
         name: String,
         body: String,
@@ -928,9 +961,9 @@ impl GreenDragonService {
         let (tx, rx) = watch::channel(CommentaryLoad::Loading);
         let inner = self.inner.clone();
         tokio::spawn(async move {
-            let (lines, double_post) = match inner.db.get().await {
+            let (lines, double_post, first_unseen) = match inner.db.get().await {
                 Ok(client) => {
-                    let newest = GreenDragonCommentary::latest(&client, &section, 1)
+                    let newest = GreenDragonCommentary::latest(&client, &section, 1, 0)
                         .await
                         .unwrap_or_default();
                     let double_post = newest
@@ -952,16 +985,23 @@ impl GreenDragonService {
                             tracing::warn!("greendragon commentary prune failed: {e}");
                         }
                     }
-                    (read_commentary(&client, &section, limit).await, double_post)
+                    (
+                        // Posting always lands back on the newest window
+                        // (upstream's redirect drops the comscroll param).
+                        read_commentary(&client, &section, limit, 0).await,
+                        double_post,
+                        first_unseen_page(&client, &section, seen_day, limit).await,
+                    )
                 }
                 Err(e) => {
                     tracing::warn!("greendragon db get failed on commentary write: {e}");
-                    (Vec::new(), false)
+                    (Vec::new(), false, 0)
                 }
             };
             let _ = tx.send(CommentaryLoad::Ready {
                 lines: Arc::new(lines),
                 double_post,
+                first_unseen_page: first_unseen,
             });
         });
         rx

@@ -355,7 +355,7 @@ romance NPCs is "your partner", and bard outcome 15. Field
   if drunkenness > 66 ⇒ −1 turn; drunkenness and hard-drink count reset to 0
   daily either way; death/dragon kill also zero drunkenness. **Sober-up**:
   each forest search multiplies drunkenness by 0.9 (round). Comment slurring
-  is a phase-4 chat concern.
+  landed with phase 4's commentary leftovers (see that section).
 - **Romance** (upstream lovers module; our two partner NPCs original; partner
   = opposite style). Once/day (`flirted_today`). Flirt ladder — success test
   `e_rand(charm, T) >= T` (guaranteed at charm ≥ T):
@@ -499,10 +499,10 @@ commentary ✓ → roster/HoF ✓ → gypsy ✓ (folded into the commentary slic
 is just a paid door onto the shade section) → PvP ✓ → bounties + haunt ✓ →
 barman's enemy intel ✓ + rewards wiring ✓ (the two small leftovers, 2026-07)
 → clans ✓ (2026-07) → gardens ✓ / veterans' rock ✓ → bank transfers ✓ + the
-mail decision resolved ✓ (2026-07). Commentary first: five other features
-are just sections of it. **Phase 4 is complete**; what's left door-wide is
-the two commentary leftovers (new-post markers/pagination, drunken
-slurring).
+mail decision resolved ✓ (2026-07) → the commentary leftovers ✓ (pagination
++ new-post markers, drunken slurring — 2026-07). Commentary first: five
+other features are just sections of it. **Phase 4 is complete and the
+checklist is empty**: the port is feature-complete against stock 1.1.2.
 
 ### `commentary` — the one chat primitive — DONE
 
@@ -554,11 +554,57 @@ claimed (specs below already fixed):
 - [x] **The gypsy tent** (`gypsy.php`): pay `level * 20` gold per visit to
   project into the shade section. That's the whole building.
 
-Deliberate single-player/TUI adaptations (documented, not oversights):
+**Pagination + new-post markers landed 2026-07** (the long-deferred
+leftover, source-audited first):
 
-- One display window per room, refreshed on demand; no `comscroll`
-  pagination, "first unseen" links, or new-post markers (upstream's
-  `recentcomments`).
+- **Pages** (`comscroll`): page 0 is the newest window, each page one
+  window older (`ORDER BY commentid DESC LIMIT com*limit, limit`). The
+  menu mirrors upstream's nav row: *older* opens off a full window
+  (upstream shows Previous when `rowcount >= limit`), *newer* off a
+  scrolled-back page, and *refresh always lands on page 0* (upstream's
+  link drops the comscroll param — Refresh and "Last Page" share a URL).
+  The `cid`/`lastcommentid` incremental re-fetch is a web caching artifact;
+  skipped.
+- **The watermark** (`recentcomments`): `newday.php:254` sets
+  `recentcomments = lasthit` then `lasthit = now`, and both fire on paid
+  resurrections too — so "new" means *posted since your previous dawn*.
+  Ours: `comments_seen_before_day` on the blob, advanced from `last_day`
+  (exactly upstream's `lasthit` at the blob's day granularity — the one
+  deviation: ≤1 day coarser, erring toward marking more as new). Rows with
+  `day >= watermark` render with a bright marker (upstream's `new.gif`,
+  `postdate >= recentcomments` — the `>=` kept).
+- **First unseen** jump: page `round(count/limit + 0.5) - 1` (PHP
+  half-away rounding, the exact-multiple overshoot quirk included), shown
+  when > 0 and not already open. The count uses the marker's `>=` (upstream
+  counts strict `>` — an instant apart there, a day apart at our
+  granularity, so the jump follows the marker set).
+- **The allowance still counts the loaded window** (upstream's `counttoday`
+  loop runs over the displayed buffer): paging back to a window without
+  your posts frees the speak row even while the newest window is full of
+  you — upstream's own quirk, ported by construction.
+
+**Drunken slurring landed 2026-07** (`modules/drinks/dohook.php` +
+`drunkenize.php`, the other leftover):
+
+- The hook fires exactly where upstream's `modulehook("commentary")` sits —
+  after nothing, before the 45-char run-breaking and verb baking — so a
+  slurred line can outgrow the 200-char typing budget, as upstream's
+  server-side slur does.
+- Above 50 drunkenness the verb gains "drunkenly" — which then bakes even
+  in "says" rooms (the `!= "says"` test trips on "drunkenly says"), 1=1.
+- `drunkenize` 1=1: until replacements reach `drunkenness/500` of the
+  original length, 9-in-10 doubles the *first* occurrence of a random slur
+  letter (case-matched, skipped inside a `*hic*`; repeated picks compound
+  at the same spot — "aa" → "aaa", upstream's quirk) and 1-in-10 inserts
+  `*hic*` at a random spot with the five sequential stagger-shifts;
+  adjacent hics collapse to `*hic*hic*` after. Emotes skip, sober lines
+  skip, the slur is baked into the stored row (permanent, as upstream).
+- Omitted: the backtick color-code skip (no color codes in our bodies) and
+  the `noslur` player pref (no per-player prefs; everyone slurs).
+
+Remaining deliberate single-player/TUI adaptations (documented, not
+oversights):
+
 - Speaker names are the bare character name snapshotted at post time — no
   DK-title prefix (upstream's `accounts.name` carries the title). The clan
   `<TAG>` prefix landed with clans, snapshotted into the name the same way.
@@ -566,8 +612,6 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
   upstream's `::` variant differs only in marker length.
 - No GM `/game` inserts or moderation tools; system lines are reserved for
   future writers (haunts, bounties).
-- Drunken comment slurring (the drinks module's `commentary` hook) stays
-  deferred with the drinks note in phase 3.
 
 ### Online roster + Hall of Fame — DONE
 

@@ -410,6 +410,11 @@ pub struct State {
     commentary_rx: Option<tokio::sync::watch::Receiver<CommentaryLoad>>,
     /// The loaded commentary window for the open room, newest first.
     commentary_lines: Option<std::sync::Arc<Vec<CommentLine>>>,
+    /// The open room's page (upstream's `comscroll`): 0 is the newest
+    /// window, each page up one window older.
+    commentary_page_no: usize,
+    /// The "first unseen" jump target from the last load (0 = no jump).
+    commentary_first_unseen: usize,
     /// The talk line being typed, while composing a commentary post (or a
     /// warrior-list name search). `Some` routes all key bytes into the
     /// buffer instead of the menu.
@@ -553,6 +558,8 @@ impl State {
             fivesix_rx: None,
             commentary_rx: None,
             commentary_lines: None,
+            commentary_page_no: 0,
+            commentary_first_unseen: 0,
             talk_input: None,
             roster_rx: None,
             roster: None,
@@ -756,7 +763,15 @@ impl State {
             Mode::TavernBartender => self.tavern_bartender_menu(),
             Mode::IntelTarget => self.intel_target_menu(),
             Mode::IntelSheet => self.intel_sheet_menu(),
-            Mode::Commentary(room) => commentary_menu(room, self.commentary_posts_left()),
+            Mode::Commentary(room) => commentary_menu(
+                room,
+                self.commentary_posts_left(),
+                self.commentary_lines
+                    .as_ref()
+                    .is_some_and(|l| l.len() >= room.display_limit()),
+                self.commentary_page_no,
+                self.commentary_first_unseen,
+            ),
             Mode::WarriorList => {
                 warrior_list_menu(self.roster_page_view.as_ref(), c.clan_id.is_some())
             }
@@ -1446,15 +1461,25 @@ impl State {
 
     // --- commentary (the shared chat rooms) ----------------------------------
 
-    /// Open a commentary room and kick off its page load.
+    /// Open a commentary room on its newest window and kick off the load.
     fn open_commentary(&mut self, room: CommentRoom) {
-        self.commentary_lines = None;
+        self.commentary_first_unseen = 0;
         self.talk_input = None;
-        self.commentary_rx = Some(
-            self.svc
-                .load_commentary(room.section(), room.display_limit()),
-        );
+        self.load_commentary_page(room, 0);
         self.goto(Mode::Commentary(room));
+    }
+
+    /// (Re)load one window of the open room (upstream's `comscroll` pages:
+    /// 0 = the newest, each page one window older).
+    fn load_commentary_page(&mut self, room: CommentRoom, page: usize) {
+        self.commentary_page_no = page;
+        self.commentary_lines = None;
+        self.commentary_rx = Some(self.svc.load_commentary(
+            room.section(),
+            room.display_limit(),
+            page,
+            self.comments_seen_day(),
+        ));
     }
 
     /// Drain a finished commentary load (or post round-trip) into the view.
@@ -1463,11 +1488,16 @@ impl State {
             return;
         };
         let ready = match &*rx.borrow_and_update() {
-            CommentaryLoad::Ready { lines, double_post } => Some((lines.clone(), *double_post)),
+            CommentaryLoad::Ready {
+                lines,
+                double_post,
+                first_unseen_page,
+            } => Some((lines.clone(), *double_post, *first_unseen_page)),
             CommentaryLoad::Loading => None,
         };
-        if let Some((lines, double_post)) = ready {
+        if let Some((lines, double_post, first_unseen)) = ready {
             self.commentary_lines = Some(lines);
+            self.commentary_first_unseen = first_unseen;
             self.commentary_rx = None;
             if double_post {
                 self.push_log("You have already said exactly that. The room lets it pass.".into());
@@ -1479,6 +1509,8 @@ impl State {
     fn leave_commentary(&mut self, room: CommentRoom) {
         self.commentary_rx = None;
         self.commentary_lines = None;
+        self.commentary_page_no = 0;
+        self.commentary_first_unseen = 0;
         self.talk_input = None;
         match room {
             CommentRoom::Inn => self.goto(Mode::Inn),
@@ -1528,7 +1560,8 @@ impl State {
         Some(commentary::posts_left(lines, self.user_id, room))
     }
 
-    /// Handle an open room's rows: speak, listen afresh, leave.
+    /// Handle an open room's rows: speak, leaf through the pages (upstream's
+    /// First Unseen / Previous / Refresh / Next nav), or leave.
     fn select_commentary(&mut self, room: CommentRoom) -> Selection {
         match self.cursor {
             0 => {
@@ -1536,7 +1569,10 @@ impl State {
                     self.talk_input = Some(String::new());
                 }
             }
-            1 => self.open_commentary(room),
+            1 => self.load_commentary_page(room, self.commentary_page_no + 1),
+            2 => self.load_commentary_page(room, self.commentary_page_no.saturating_sub(1)),
+            3 => self.load_commentary_page(room, self.commentary_first_unseen),
+            4 => self.load_commentary_page(room, 0),
             _ => self.leave_commentary(room),
         }
         Selection::Stay
@@ -1545,6 +1581,20 @@ impl State {
     /// The loaded commentary window, newest first (`None` while loading).
     pub fn commentary_page(&self) -> Option<&[CommentLine]> {
         self.commentary_lines.as_deref().map(Vec::as_slice)
+    }
+
+    /// The open room's page number (0 = the newest window), for the panel.
+    pub fn commentary_page_no(&self) -> usize {
+        self.commentary_page_no
+    }
+
+    /// The reader's new-post watermark (upstream `recentcomments`): comments
+    /// from this UTC day-number on render marked.
+    pub fn comments_seen_day(&self) -> i64 {
+        self.character
+            .as_ref()
+            .map(|c| c.comments_seen_before_day)
+            .unwrap_or(0)
     }
 
     /// Whether a talk line is being composed: all key bytes go to the buffer.
@@ -1668,7 +1718,21 @@ impl State {
         let Some(raw) = self.talk_input.take() else {
             return;
         };
-        match commentary::prepare_post(&raw, &self.room_verb(room)) {
+        // The drinks module's commentary hook fires first (upstream's
+        // modulehook order): a drunk line slurs, and past 50 drunkenness the
+        // venue verb gains "drunkenly" before it bakes.
+        let drunk = self
+            .character
+            .as_ref()
+            .map(|c| c.drunkenness)
+            .unwrap_or_default();
+        let (raw, verb) = commentary::apply_drunkenness(
+            &raw,
+            &self.room_verb(room),
+            drunk,
+            &mut rand::thread_rng(),
+        );
+        match commentary::prepare_post(&raw, &verb) {
             Some(body) => {
                 // The speaker as every comment area shows them: the clan tag
                 // before the bare name for real members (upstream's live
@@ -1678,9 +1742,13 @@ impl State {
                     .as_ref()
                     .map(|c| c.commentary_name())
                     .unwrap_or_default();
+                // Posting rejoins the newest window (upstream's redirect
+                // drops the comscroll param).
+                self.commentary_page_no = 0;
                 self.commentary_rx = Some(self.svc.post_commentary(
                     room.section(),
                     room.display_limit(),
+                    self.comments_seen_day(),
                     self.user_id,
                     name,
                     body,
@@ -6423,7 +6491,13 @@ fn build_hof_page(
 /// carries the venue flavor and, when close to the limit, the posts left
 /// (upstream surfaces the count under 3); it disables while the page (which
 /// the allowance is counted off) is still loading.
-fn commentary_menu(room: CommentRoom, posts_left: Option<usize>) -> Vec<(String, bool)> {
+fn commentary_menu(
+    room: CommentRoom,
+    posts_left: Option<usize>,
+    window_full: bool,
+    page: usize,
+    first_unseen: usize,
+) -> Vec<(String, bool)> {
     let prompt = match room {
         CommentRoom::Village => "Speak up",
         CommentRoom::Inn => "Join the table talk",
@@ -6450,8 +6524,18 @@ fn commentary_menu(room: CommentRoom, posts_left: Option<usize>) -> Vec<(String,
         CommentRoom::ClanHall(_) => "Back to the hall",
         _ => "Back to the village square",
     };
+    // The pager mirrors upstream's nav row: Previous (older) shows off a
+    // full window, Next (newer) off a scrolled-back page, First Unseen when
+    // the jump target is a real page, and Refresh always lands on page 0
+    // (upstream's link drops the comscroll param).
     vec![
         speak,
+        ("Leaf back to older voices".into(), window_full),
+        ("Leaf forward to newer voices".into(), page > 0),
+        (
+            "Turn to the first unseen page".into(),
+            first_unseen > 0 && first_unseen != page,
+        ),
         ("Listen for new voices".into(), true),
         (back.into(), true),
     ]
@@ -7357,25 +7441,44 @@ mod tests {
     #[test]
     fn commentary_menu_gates_the_speak_row_on_the_allowance() {
         // Loading: nothing to count against, so speaking waits.
-        let rows = commentary_menu(CommentRoom::Village, None);
-        assert_eq!(rows.len(), 3);
+        let rows = commentary_menu(CommentRoom::Village, None, false, 0, 0);
+        assert_eq!(rows.len(), 6);
         assert!(!rows[0].1);
-        assert!(rows[1].1); // refresh
-        assert!(rows[2].1); // leave
+        assert!(rows[4].1); // refresh
+        assert!(rows[5].1); // leave
 
         // Plenty left: a plain prompt.
-        let rows = commentary_menu(CommentRoom::Village, Some(13));
+        let rows = commentary_menu(CommentRoom::Village, Some(13), false, 0, 0);
         assert!(rows[0].1);
         assert!(!rows[0].0.contains("left today"));
 
         // Running low surfaces the count (upstream shows it under 3).
-        let rows = commentary_menu(CommentRoom::Village, Some(2));
+        let rows = commentary_menu(CommentRoom::Village, Some(2), false, 0, 0);
         assert!(rows[0].0.contains("2 left today"));
         assert!(rows[0].1);
 
         // Exhausted: the row closes.
-        let rows = commentary_menu(CommentRoom::DarkHorse, Some(0));
+        let rows = commentary_menu(CommentRoom::DarkHorse, Some(0), false, 0, 0);
         assert!(!rows[0].1);
+    }
+
+    #[test]
+    fn commentary_menu_pages_like_upstreams_nav_row() {
+        // A full newest window: only "older" opens (upstream shows Previous
+        // when the window fills; Next and First Unseen stay dark).
+        let rows = commentary_menu(CommentRoom::Village, Some(13), true, 0, 0);
+        assert!(rows[1].1); // older
+        assert!(!rows[2].1); // newer
+        assert!(!rows[3].1); // first unseen
+
+        // Scrolled back: "newer" opens; the unseen jump lights up when its
+        // target is a different page.
+        let rows = commentary_menu(CommentRoom::Village, Some(13), true, 2, 1);
+        assert!(rows[1].1);
+        assert!(rows[2].1);
+        assert!(rows[3].1);
+        let rows = commentary_menu(CommentRoom::Village, Some(13), true, 1, 1);
+        assert!(!rows[3].1); // already on the unseen page
     }
 
     #[test]

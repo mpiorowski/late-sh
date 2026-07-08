@@ -11,6 +11,7 @@
 //! the body at post time (`:verb, "..."`), so a lament posted in the
 //! graveyard still "despairs" when read through the gypsy's trance.
 
+use rand::Rng;
 use uuid::Uuid;
 
 /// One comment as loaded for a room view (newest first from `svc`).
@@ -25,6 +26,9 @@ pub struct CommentLine {
     pub body: String,
     /// Whether the comment was posted today (feeds the post allowance).
     pub today: bool,
+    /// The UTC day-number it was posted (feeds the new-post marker: on or
+    /// after the reader's watermark renders marked).
+    pub day: i64,
 }
 
 /// A commentary room: a section of the shared table plus its venue dressing.
@@ -165,6 +169,120 @@ fn is_emote(body: &str) -> bool {
     body.starts_with(':') || body.starts_with("/me")
 }
 
+/// The drinks module's commentary hook (`modules/drinks/dohook.php`), fired
+/// exactly where upstream's `modulehook("commentary")` sits — before the
+/// run-breaking and verb baking of [`prepare_post`]: above 50 drunkenness
+/// the venue verb gains "drunkenly" (which also turns a "says" room's post
+/// into a baked emote, as upstream's `!= "says"` test then trips), and any
+/// non-emote line is slurred while drunk at all. Returns `(line, verb)`.
+pub fn apply_drunkenness(
+    raw: &str,
+    verb: &str,
+    drunkenness: u32,
+    rng: &mut impl Rng,
+) -> (String, String) {
+    let verb = if drunkenness > 50 {
+        format!("drunkenly {verb}")
+    } else {
+        verb.to_string()
+    };
+    let line = raw.trim();
+    let body = if drunkenness > 0 && !line.is_empty() && !is_emote(line) {
+        drunkenize(line, drunkenness, rng)
+    } else {
+        line.to_string()
+    };
+    (body, verb)
+}
+
+/// The letter → slur table (`drunkenize.php`), byte-for-byte.
+const SLURS: [(u8, &str); 16] = [
+    (b'a', "aa"),
+    (b'e', "ee"),
+    (b'f', "ff"),
+    (b'h', "hh"),
+    (b'i', "iy"),
+    (b'l', "ll"),
+    (b'm', "mm"),
+    (b'n', "nn"),
+    (b'o', "oo"),
+    (b'r', "rr"),
+    (b's', "sss"),
+    (b'u', "oo"),
+    (b'v', "vv"),
+    (b'w', "ww"),
+    (b'y', "yy"),
+    (b'z', "zz"),
+];
+
+/// Whether a `*hic*` sits at `i` or starts up to four bytes before it.
+fn near_hic(s: &[u8], i: usize) -> bool {
+    (0..5).any(|back| {
+        let at = i.saturating_sub(back);
+        s.len() >= at + 5 && &s[at..at + 5] == b"*hic*"
+    })
+}
+
+/// Slur a drunk line (`drinks_drunkenize`, ported 1=1): until the
+/// replacement count reaches `drunkenness/500` of the original length,
+/// either (9-in-10) double the *first* occurrence of a random slur letter —
+/// case-matched, skipped when it sits inside a `*hic*` — or (1-in-10) drop
+/// a `*hic*` at a random spot, nudged forward out of an existing one by
+/// upstream's five stagger checks. Repeated picks of the same letter compound
+/// at the first occurrence ("aa" → "aaa"), exactly the upstream quirk.
+/// Adjacent hics collapse to `*hic*hic*` afterward. (Upstream's backtick
+/// color-code skip and its `noslur` player pref have no analog here: bodies
+/// carry no color codes and we ship no per-player prefs.)
+pub fn drunkenize(line: &str, drunkenness: u32, rng: &mut impl Rng) -> String {
+    let base_len = line.len().max(1);
+    let mut s: Vec<u8> = line.as_bytes().to_vec();
+    let mut replacements: usize = 0;
+    // PHP: while (replacements/strlen(straight) < level/500).
+    while replacements * 500 < drunkenness as usize * base_len {
+        if rng.gen_range(0..=9) != 0 {
+            let (letter, slur) = SLURS[rng.gen_range(0..SLURS.len())];
+            if let Some(x) = s.iter().position(|b| b.to_ascii_lowercase() == letter)
+                && !near_hic(&s, x)
+            {
+                let rep = if s[x] != letter {
+                    slur.to_uppercase()
+                } else {
+                    slur.to_string()
+                };
+                s.splice(x..=x, rep.into_bytes());
+                replacements += 1;
+            }
+        } else {
+            let mut x = rng.gen_range(0..=s.len());
+            let hic_at = |s: &[u8], at: usize| s.len() >= at + 5 && &s[at..at + 5] == b"*hic*";
+            // Upstream's five sequential shifts, each reading the moved x.
+            if hic_at(&s, x) {
+                x += 5;
+            }
+            if hic_at(&s, x.saturating_sub(1)) {
+                x += 4;
+            }
+            if hic_at(&s, x.saturating_sub(2)) {
+                x += 3;
+            }
+            if hic_at(&s, x.saturating_sub(3)) {
+                x += 2;
+            }
+            if hic_at(&s, x.saturating_sub(4)) {
+                x += 1;
+            }
+            let x = x.min(s.len());
+            s.splice(x..x, *b"*hic*");
+            replacements += 1;
+        }
+    }
+    let mut out = String::from_utf8_lossy(&s).into_owned();
+    while out.contains("*hic**hic*") {
+        out = out.replace("*hic**hic*", "*hic*hic*");
+    }
+    out
+}
+
 /// Insert a space after any 45-character unbroken run (upstream's
 /// `([^\s]{45})([^\s])` → `$1 $2`, applied left to right).
 fn break_long_runs(s: &str) -> String {
@@ -212,6 +330,7 @@ mod tests {
             name: "Tester".into(),
             body: "hello".into(),
             today,
+            day: 0,
         }
     }
 
@@ -307,6 +426,41 @@ mod tests {
         assert_eq!(posts_left(&flood, me, hall), usize::MAX);
         assert_eq!(posts_left(&flood, me, CommentRoom::Waiting), 0);
         assert_eq!(posts_left(&[], me, CommentRoom::Waiting), posts_allowed(25));
+    }
+
+    #[test]
+    fn sober_lines_pass_the_drinks_hook_untouched() {
+        let mut rng = rand::thread_rng();
+        let (body, verb) = apply_drunkenness("a round for the house", "says", 0, &mut rng);
+        assert_eq!(body, "a round for the house");
+        assert_eq!(verb, "says");
+    }
+
+    #[test]
+    fn drunk_lines_slur_and_the_verb_turns_drunkenly_past_fifty() {
+        let mut rng = rand::thread_rng();
+        let (body, verb) = apply_drunkenness("a round for the house", "says", 60, &mut rng);
+        // Past 50 the verb gains "drunkenly" (which then bakes, since it no
+        // longer equals "says"), and the line itself slurs.
+        assert_eq!(verb, "drunkenly says");
+        assert_ne!(body, "a round for the house");
+        // Emotes keep their line even blind drunk (upstream skips the
+        // markers); only the verb carries the state.
+        let (body, verb) = apply_drunkenness(":falls off the stool", "says", 100, &mut rng);
+        assert_eq!(body, ":falls off the stool");
+        assert_eq!(verb, "drunkenly says");
+    }
+
+    #[test]
+    fn drunkenize_grows_the_line_and_collapses_adjacent_hics() {
+        let mut rng = rand::thread_rng();
+        for _ in 0..50 {
+            let out = drunkenize("well met stranger", 100, &mut rng);
+            // Every replacement lengthens (a doubled letter or a *hic*)...
+            assert!(out.len() > "well met stranger".len());
+            // ...and back-to-back hics collapse (upstream's cleanup loop).
+            assert!(!out.contains("*hic**hic*"));
+        }
     }
 
     #[test]

@@ -473,6 +473,12 @@ pub struct Character {
     /// Bounty contracts placed today (max [`BOUNTIES_PER_DAY`]; upstream
     /// keeps this as a dag module pref, reset by its newday hook).
     pub bounties_set_today: u32,
+    /// The new-post watermark (upstream `recentcomments`): comments from
+    /// this UTC day-number on render marked in every talk room. Advanced at
+    /// each new day to the *previous* dawn's day — `newday.php` sets
+    /// `recentcomments = lasthit` then `lasthit = now`, and `last_day` is
+    /// exactly that `lasthit` at the blob's day granularity.
+    pub comments_seen_before_day: i64,
     /// Gold sent away through the bank today (`amountouttoday`), capped at
     /// `level * MAX_TRANSFER_OUT_PER_LEVEL`.
     pub amount_out_today: u64,
@@ -939,6 +945,7 @@ impl Default for Character {
             used_outhouse_today: false,
             fivesix_plays_today: 0,
             bounties_set_today: 0,
+            comments_seen_before_day: 0,
             amount_out_today: 0,
             transfers_received_today: 0,
             // Seeded like grave fights: the skipped first-login new day would
@@ -1105,6 +1112,10 @@ impl Character {
         // increments both regardless of the `resurrection` flag).
         self.age += 1;
         self.resurrections += 1;
+        // The watermark line runs on the resurrection day too (`newday.php`
+        // line 254 is unconditional); at day granularity the morning's dawn
+        // and the resurrection share `last_day`.
+        self.comments_seen_before_day = self.last_day;
         self.apply_new_day_interest(interest_percent);
         // The race's `newday` hook fires on the resurrection day too
         // (`newday.php` runs `modulehook("newday")` regardless of the flag),
@@ -1692,6 +1703,9 @@ impl Character {
         if today <= self.last_day {
             return None;
         }
+        // The new-post watermark rolls forward to the previous dawn's day
+        // (`newday.php`: `recentcomments = lasthit`, `lasthit = now`).
+        self.comments_seen_before_day = self.last_day;
         self.last_day = today;
         // The run grows a day older, and a dead character greeting the dawn
         // counts a revival (`newday.php`: `age++` unconditionally,
@@ -2504,6 +2518,18 @@ mod tests {
         // overflow), and the split comes back for a refund.
         assert_eq!(c.draw_for_transfer(50), 40);
         assert_eq!((c.gold, c.gold_in_bank), (0, 60));
+    }
+
+    #[test]
+    fn the_new_post_watermark_trails_one_dawn_behind() {
+        // `newday.php`: `recentcomments = lasthit` then `lasthit = now` —
+        // "new" means posted since your PREVIOUS dawn, whenever that was.
+        let mut c = Character::new("hero", 10);
+        assert_eq!(c.comments_seen_before_day, 0);
+        c.roll_new_day(12, 0, 0, &mut rand::thread_rng()).unwrap();
+        assert_eq!(c.comments_seen_before_day, 10);
+        c.roll_new_day(15, 0, 0, &mut rand::thread_rng()).unwrap();
+        assert_eq!(c.comments_seen_before_day, 12);
     }
 
     #[test]

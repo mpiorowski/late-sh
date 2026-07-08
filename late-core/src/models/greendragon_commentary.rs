@@ -54,9 +54,15 @@ impl GreenDragonCommentary {
         Ok(())
     }
 
-    /// The newest `limit` comments in a section, newest first (upstream's
-    /// `ORDER BY commentid DESC LIMIT n` display window).
-    pub async fn latest(client: &Client, section: &str, limit: i64) -> Result<Vec<CommentaryRow>> {
+    /// One display window of a section, newest first: page 0 is the newest
+    /// `limit` rows, page N starts `N * limit` rows back (upstream's
+    /// `ORDER BY commentid DESC LIMIT (com*limit), limit` comscroll pages).
+    pub async fn latest(
+        client: &Client,
+        section: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<CommentaryRow>> {
         let rows = client
             .query(
                 "SELECT user_id, name, body,
@@ -64,8 +70,8 @@ impl GreenDragonCommentary {
                  FROM greendragon_commentary
                  WHERE section = $1
                  ORDER BY created DESC, id DESC
-                 LIMIT $2",
-                &[&section, &limit],
+                 LIMIT $2 OFFSET $3",
+                &[&section, &limit, &offset],
             )
             .await?;
         Ok(rows
@@ -77,6 +83,23 @@ impl GreenDragonCommentary {
                 day: r.get("day"),
             })
             .collect())
+    }
+
+    /// How many of a section's comments were posted on or after the given
+    /// UTC day-number — the "first unseen" jump's numerator (upstream counts
+    /// `postdate > recentcomments`; ours compares at the blob's day
+    /// granularity and uses the marker's own `>=` so the jump lands on
+    /// exactly the set that renders new).
+    pub async fn count_since_day(client: &Client, section: &str, day: i64) -> Result<i64> {
+        let row = client
+            .query_one(
+                "SELECT count(*) FROM greendragon_commentary
+                 WHERE section = $1
+                   AND floor(extract(epoch FROM created) / 86400)::bigint >= $2",
+                &[&section, &day],
+            )
+            .await?;
+        Ok(row.get(0))
     }
 
     /// Reap comments older than the retention window.
