@@ -3,7 +3,7 @@ use std::{io::Cursor, sync::LazyLock};
 use image::{ExtendedColorType, ImageEncoder, RgbaImage, codecs::png::PngEncoder};
 
 use crate::app::files::terminal_image::TerminalImageData;
-use crate::app::rooms::chess::state::{ChessColor, ChessPieceKind};
+use crate::app::games::chess_core::types::{ChessColor, ChessPieceKind};
 
 #[derive(Clone, Copy)]
 pub enum GraphicsTier {

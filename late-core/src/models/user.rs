@@ -145,7 +145,7 @@ impl RightSidebarMode {
 
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
-pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 4;
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 5;
 
 /// A right-sidebar panel the user can reorder and toggle. The clock is not
 /// listed here — it is always pinned at the top of the sidebar.
@@ -155,13 +155,21 @@ pub enum RightSidebarComponent {
     Music,
     Pet,
     Bonsai,
+    Daily,
 }
 
 impl RightSidebarComponent {
     /// Default order, top to bottom. Used when a user has no stored list and
-    /// to backfill any panels missing from a stored list.
-    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
-        [Self::Visualizer, Self::Music, Self::Pet, Self::Bonsai];
+    /// to backfill any panels missing from a stored list. Space cuts from the
+    /// top, so the panels that matter most under shrink (daily, music) sit at
+    /// the bottom.
+    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
+        Self::Visualizer,
+        Self::Pet,
+        Self::Bonsai,
+        Self::Daily,
+        Self::Music,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -169,6 +177,7 @@ impl RightSidebarComponent {
             Self::Music => "music",
             Self::Pet => "pet",
             Self::Bonsai => "bonsai",
+            Self::Daily => "daily",
         }
     }
 
@@ -178,6 +187,7 @@ impl RightSidebarComponent {
             "music" => Some(Self::Music),
             "pet" => Some(Self::Pet),
             "bonsai" => Some(Self::Bonsai),
+            "daily" => Some(Self::Daily),
             _ => None,
         }
     }
@@ -188,7 +198,15 @@ impl RightSidebarComponent {
             Self::Music => "Audio playback",
             Self::Pet => "Pet companion",
             Self::Bonsai => "Bonsai",
+            Self::Daily => "Daily Games",
         }
+    }
+
+    /// Whether the panel starts enabled for users without a stored setting.
+    /// Pet ships off by default (it stays available in settings); everything
+    /// else is on.
+    pub fn default_enabled(self) -> bool {
+        !matches!(self, Self::Pet)
     }
 }
 
@@ -200,19 +218,26 @@ pub struct RightSidebarComponentSetting {
     pub enabled: bool,
 }
 
-/// Default component list: every panel, in default order, all enabled.
+/// Default component list: every panel, in default order, at its default
+/// on/off state.
 pub fn default_right_sidebar_components() -> Vec<RightSidebarComponentSetting> {
     RightSidebarComponent::ALL
         .into_iter()
         .map(|component| RightSidebarComponentSetting {
             component,
-            enabled: true,
+            enabled: component.default_enabled(),
         })
         .collect()
 }
 
-/// Drop duplicates and backfill any missing panels (enabled) at the end so the
-/// list always covers every component exactly once, preserving stored order.
+/// Drop duplicates and backfill any missing panels at the end so the list
+/// always covers every component exactly once, preserving stored order.
+///
+/// Missing panels are backfilled **enabled**, not at `default_enabled()`: a
+/// user with a stored list is an existing user whose effective state must not
+/// silently change when a new panel ships. `default_enabled()` (which ships
+/// Pet off) applies only to the no-stored-list path in
+/// `default_right_sidebar_components`, i.e. genuinely new users.
 pub fn normalize_right_sidebar_components(
     components: &[RightSidebarComponentSetting],
 ) -> Vec<RightSidebarComponentSetting> {
@@ -1517,12 +1542,21 @@ mod tests {
     }
 
     #[test]
-    fn extract_right_sidebar_components_defaults_to_all_enabled() {
+    fn extract_right_sidebar_components_defaults_to_all_at_default_state() {
         let settings = json!({});
         assert_eq!(
             extract_right_sidebar_components(&settings),
             default_right_sidebar_components()
         );
+        // Pet ships disabled by default; the rest ship enabled.
+        for setting in default_right_sidebar_components() {
+            assert_eq!(
+                setting.enabled,
+                setting.component != RightSidebarComponent::Pet,
+                "{:?}",
+                setting.component
+            );
+        }
     }
 
     #[test]
@@ -1536,7 +1570,10 @@ mod tests {
         });
         let components = extract_right_sidebar_components(&settings);
         // Stored order kept for known entries, unknown dropped, missing
-        // (visualizer, pet) backfilled enabled at the end.
+        // (visualizer, pet, daily) backfilled ENABLED at the end in ALL order:
+        // an existing user's stored list predates newer panels, so they should
+        // appear rather than silently stay hidden (Pet ships off only for
+        // brand-new users with no stored list).
         assert_eq!(
             components,
             vec![
@@ -1554,6 +1591,10 @@ mod tests {
                 },
                 RightSidebarComponentSetting {
                     component: RightSidebarComponent::Pet,
+                    enabled: true,
+                },
+                RightSidebarComponentSetting {
+                    component: RightSidebarComponent::Daily,
                     enabled: true,
                 },
             ]

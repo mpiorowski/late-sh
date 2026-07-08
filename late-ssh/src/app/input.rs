@@ -886,6 +886,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_daily_modal {
+        crate::app::daily::modal_input::handle_input(app, event);
+        return;
+    }
+
     // Picker intercepts all input when open (ESC is handled via dispatch_escape).
     if app.icon_picker_open {
         handle_icon_picker_input(app, event);
@@ -1587,6 +1592,15 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return false;
     }
 
+    if ctx.screen == Screen::DailyMatch {
+        // Full-screen daily board: forward everything to the board handler,
+        // except let the global `?` guide through like the door games.
+        if door_games_allows_global_help(event) {
+            return false;
+        }
+        return crate::app::daily::board_input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         match event {
             ParsedInput::Byte(byte) => {
@@ -2237,6 +2251,10 @@ fn dispatch_escape(app: &mut App) {
         app.show_cat_modal = false;
         return;
     }
+    if app.show_daily_modal {
+        crate::app::daily::modal_input::handle_escape(app);
+        return;
+    }
     if app.icon_picker_open {
         close_icon_picker(app);
         return;
@@ -2319,6 +2337,12 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         dispatch_screen_key(app, ctx.screen, 0x1B);
+        return;
+    }
+    // Esc from the daily board drops back to the Daily Games modal on the
+    // screen it was opened from.
+    if ctx.screen == Screen::DailyMatch {
+        crate::app::daily::board_input::close_board(app);
         return;
     }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
@@ -2913,6 +2937,7 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_quit_confirm
         || app.show_bonsai_modal
         || app.show_cat_modal
+        || app.show_daily_modal
         || app.login_announcements_visible()
         || app.icon_picker_open
 }
@@ -3139,6 +3164,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Walk-mode arrows are consumed in handle_dedicated_screen_input;
         // composing-mode arrows are swallowed by the shared composer gate.
         Screen::Clubhouse => false,
+        // Daily board arrows are consumed in handle_dedicated_screen_input.
+        Screen::DailyMatch => false,
     }
 }
 
@@ -3242,6 +3269,7 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
+    app.show_daily_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -3264,6 +3292,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
+    app.show_daily_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_quit_confirm = false;
@@ -3286,6 +3315,7 @@ fn open_hub_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
+    app.show_daily_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -3339,6 +3369,7 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
+    app.show_daily_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -3348,6 +3379,29 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
     app.show_bonsai_v2_modal = true;
+}
+
+pub(crate) fn open_daily_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
+    app.pet_state.cancel_play();
+    app.show_cat_modal = false;
+    app.show_settings = false;
+    app.show_quit_confirm = false;
+    close_icon_picker(app);
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.daily.mark_lobby_seen();
+    app.show_daily_modal = true;
 }
 
 fn room_join_suffix_index(byte: u8) -> Option<usize> {
@@ -3657,8 +3711,24 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 app.show_hub_modal = false;
                 app.show_quit_confirm = false;
                 app.show_bonsai_v2_modal = false;
+                app.show_daily_modal = false;
                 app.show_bonsai_modal = true;
             }
+            true
+        }
+        // `g` opens Daily Games, but chat message selection owns `g` for
+        // "jump to reply / clear selection" — yield while a message is
+        // selected (same carve-out as the `?` guide shortcut).
+        b'g' | b'G'
+            if !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && !ctx.showcase_composing
+                && !ctx.work_composing
+                && !(matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
+                    && app.chat.selected_message_id.is_some()) =>
+        {
+            open_daily_modal_globally(app);
             true
         }
         b'c' | b'C' if cat_launcher_available(app, ctx) => {
@@ -3675,6 +3745,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 app.show_quit_confirm = false;
                 app.show_bonsai_modal = false;
                 app.show_bonsai_v2_modal = false;
+                app.show_daily_modal = false;
                 app.pet_state.cancel_play();
                 app.show_cat_modal = false;
                 app.hub_state.open(crate::app::hub::state::HubTab::Shop);
@@ -3689,6 +3760,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_settings = false;
             app.show_hub_modal = false;
             app.show_quit_confirm = false;
+            app.show_daily_modal = false;
             app.show_cat_modal = true;
             true
         }
@@ -3824,6 +3896,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Clubhouse => {
             // Clubhouse keys are handled in handle_dedicated_screen_input
             // (walking, chat routing, interactions); no-op here.
+        }
+        Screen::DailyMatch => {
+            // Daily board keys are handled in handle_dedicated_screen_input.
         }
     }
 }

@@ -455,6 +455,7 @@ pub struct ChatState {
     requested_settings_modal: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
+    requested_daily_challenge: Option<DailyChallengeRequest>,
     requested_icon_picker: bool,
     requested_petname: Option<PetnameRequest>,
     requested_open_profile: Option<(Uuid, String)>,
@@ -627,6 +628,7 @@ impl ChatState {
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
+            requested_daily_challenge: None,
             requested_icon_picker: false,
             requested_petname: None,
             requested_open_profile: None,
@@ -899,6 +901,10 @@ impl ChatState {
 
     pub fn take_requested_ultimate_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_ultimate_modal)
+    }
+
+    pub(crate) fn take_requested_daily_challenge(&mut self) -> Option<DailyChallengeRequest> {
+        self.requested_daily_challenge.take()
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -1881,6 +1887,17 @@ impl ChatState {
             self.clear_composer_after_submit();
             self.requested_icon_picker = true;
             return None;
+        }
+
+        if let Some(parsed) = parse_challenge_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                Some(request) => {
+                    self.requested_daily_challenge = Some(request);
+                    return None;
+                }
+                None => return Some(Banner::error("Usage: /challenge [@user] [chess]")),
+            }
         }
 
         if body.trim() == "/poll" {
@@ -4349,6 +4366,46 @@ pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
         username: username.to_string(),
         amount,
         message,
+    })
+}
+
+/// A `/challenge` request drained by `handle_post_submit_requests` (the
+/// composer has no `DailyService` handle of its own).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DailyChallengeRequest {
+    /// Bare `/challenge`: open the Daily Games modal.
+    Modal,
+    /// `/challenge chess`: post an open-lobby challenge.
+    Open,
+    /// `/challenge @user [chess]`: post a directed challenge.
+    Directed(String),
+}
+
+/// `Some(Some(request))` on a valid `/challenge` line, `Some(None)` on a
+/// malformed one (usage banner), `None` when it isn't `/challenge` at all.
+fn parse_challenge_command(input: &str) -> Option<Option<DailyChallengeRequest>> {
+    let trimmed = input.trim();
+    if trimmed == "/challenge" {
+        return Some(Some(DailyChallengeRequest::Modal));
+    }
+    let rest = trimmed.strip_prefix("/challenge ")?;
+    let mut tokens = rest.split_whitespace();
+    let first = tokens.next()?;
+    if first.eq_ignore_ascii_case("chess") {
+        return Some(match tokens.next() {
+            None => Some(DailyChallengeRequest::Open),
+            Some(_) => None,
+        });
+    }
+    let Some(username) = first.strip_prefix('@').filter(|name| !name.is_empty()) else {
+        return Some(None);
+    };
+    Some(match tokens.next() {
+        None => Some(DailyChallengeRequest::Directed(username.to_string())),
+        Some(game) if game.eq_ignore_ascii_case("chess") && tokens.next().is_none() => {
+            Some(DailyChallengeRequest::Directed(username.to_string()))
+        }
+        Some(_) => None,
     })
 }
 

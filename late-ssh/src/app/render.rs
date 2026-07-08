@@ -237,6 +237,8 @@ struct DrawContext<'a> {
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_cat_modal: bool,
+    show_daily_modal: bool,
+    daily: &'a crate::app::daily::state::DailyState,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
@@ -810,6 +812,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_cat_modal
+            || self.show_daily_modal
             || login_announcements_visible
             || self.show_help
             || self.show_ultimate_modal
@@ -828,6 +831,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_cat_modal
+            || self.show_daily_modal
             || login_announcements_visible
             || self.show_help
             || self.show_ultimate_modal
@@ -956,6 +960,8 @@ impl App {
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_cat_modal: self.show_cat_modal,
+                        show_daily_modal: self.show_daily_modal,
+                        daily: &self.daily,
                         login_announcements: if login_announcements_visible {
                             self.login_announcements.as_ref()
                         } else {
@@ -1357,6 +1363,13 @@ impl App {
                     composer: ctx.clubhouse_composer.take(),
                 },
             ),
+            Screen::DailyMatch => crate::app::daily::board_ui::draw(
+                frame,
+                content_area,
+                ctx.daily,
+                ctx.terminal_image_protocol,
+                terminal_images,
+            ),
         }
 
         if let Some(sidebar_area) = sidebar_area {
@@ -1384,6 +1397,7 @@ impl App {
                     selected_radio_station: ctx.selected_radio_station,
                     radio_now_playing: ctx.radio_now_playing,
                     afk: ctx.afk,
+                    daily: ctx.daily,
                 },
             );
         }
@@ -1496,6 +1510,10 @@ impl App {
             crate::app::pet::modal_ui::draw(frame, ctx.cat);
         }
 
+        if ctx.show_daily_modal {
+            crate::app::daily::modal_ui::draw(frame, inner, ctx.daily);
+        }
+
         if let Some(modal) = ctx.login_announcements {
             announcements::draw(frame, inner, modal);
         }
@@ -1594,7 +1612,8 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             spans.push(Span::raw(" "));
         }
         // While a door game is open the user is "inside" the Games hub, so keep
-        // the Games tab lit rather than leaving no tab highlighted.
+        // the Games tab lit rather than leaving no tab highlighted. The daily
+        // board is a Home-surface feature, so Home stays lit there.
         let active = *tab_screen == screen
             || (*tab_screen == Screen::Games
                 && matches!(
@@ -1604,7 +1623,8 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                         | Screen::Nethack
                         | Screen::Dopewars
                         | Screen::GreenDragon
-                ));
+                ))
+            || (*tab_screen == Screen::Dashboard && screen == Screen::DailyMatch);
         let style = if active {
             Style::default()
                 .fg(theme::BG_SELECTION())
@@ -1630,6 +1650,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Pinstar => "Directory",
         Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
+        Screen::DailyMatch => "Daily Chess",
     };
     spans.push(Span::styled(
         " | ",

@@ -222,6 +222,7 @@ pub struct SessionConfig {
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub daily_service: crate::app::daily::svc::DailyService,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
     pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
@@ -353,6 +354,7 @@ pub struct App {
     pub(crate) show_poll_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_bonsai_v2_modal: bool,
+    pub(crate) show_daily_modal: bool,
     pub(crate) show_ultimate_modal: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
@@ -533,6 +535,8 @@ pub struct App {
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
     pub(crate) repaint_signal: Option<std::sync::Arc<crate::render_signal::RenderSignal>>,
+    /// Daily correspondence games: sidebar panel, modal, and board state.
+    pub(crate) daily: crate::app::daily::state::DailyState,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
     pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     pub(crate) rooms_selected_index: usize,
@@ -673,6 +677,7 @@ impl App {
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
         self.show_bonsai_v2_modal = false;
+        self.show_daily_modal = false;
         self.show_cat_modal = false;
         // Real sessions land in the clubhouse; the integration suite predates
         // that and drives flows from Home, so tests start there.
@@ -693,6 +698,7 @@ impl App {
             && !self.show_poll_modal
             && !self.show_bonsai_modal
             && !self.show_bonsai_v2_modal
+            && !self.show_daily_modal
             && !self.show_ultimate_modal
             && !self.show_cat_modal
             && !self.icon_picker_open
@@ -1036,6 +1042,7 @@ impl App {
             show_poll_modal: false,
             show_bonsai_modal: false,
             show_bonsai_v2_modal: false,
+            show_daily_modal: false,
             show_ultimate_modal: false,
             login_announcements: config.initial_announcements,
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -1180,6 +1187,11 @@ impl App {
             dopewars_port: config.dopewars_port,
             dopewars_secret: config.dopewars_secret,
             repaint_signal: None,
+            daily: crate::app::daily::state::DailyState::new(
+                config.daily_service,
+                config.user_id,
+                notifier.clone(),
+            ),
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,
@@ -1643,6 +1655,11 @@ impl App {
 
         if self.screen == Screen::Pinstar {
             self.leave_pinstar();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::DailyMatch && screen != Screen::DailyMatch {
+            self.daily.close_board();
             self.force_full_repaint();
         }
 

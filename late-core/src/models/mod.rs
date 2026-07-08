@@ -16,6 +16,7 @@ pub mod chat_room;
 pub mod chat_room_member;
 pub mod chat_slow_mode;
 pub mod chips;
+pub mod daily_match;
 pub mod drinks;
 pub mod game_payout;
 pub mod game_room;

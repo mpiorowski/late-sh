@@ -259,6 +259,7 @@ User commands:
 - `/active` opens an overlay from in-memory `active_users`, including repeated-session counts.
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
+- `/challenge [@user] [chess]` routes to daily correspondence chess: bare `/challenge` opens the Daily Games modal, `/challenge chess` posts an open-lobby challenge, `/challenge @user [chess]` posts a directed one. Parsed in `submit_composer`, drained via `take_requested_daily_challenge` in `handle_post_submit_requests` (the composer holds no `DailyService`).
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/icons` opens the icon picker (same as `Ctrl+]`).
