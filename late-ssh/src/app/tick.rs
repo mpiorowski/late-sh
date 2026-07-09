@@ -643,6 +643,12 @@ impl App {
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
             self.aquarium_state
                 .set_hungry(self.shop_state.aquarium_hungry());
+            // Buying the Aquarium opens it, the same as /aquarium would, so the
+            // purchase lands on something visible instead of an unchanged screen.
+            if shop_tick.aquarium_unlocked && !self.show_aquarium_tray {
+                self.show_aquarium_tray = true;
+                self.persist_show_aquarium_tray();
+            }
             if !self.shop_state.entitlements().has_aquarium() {
                 self.show_aquarium_tray = false;
             }

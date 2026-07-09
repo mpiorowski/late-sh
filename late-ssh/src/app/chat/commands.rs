@@ -113,7 +113,7 @@ const COMMANDS: &[Command] = &[
     global("members", "room members"),
     global("paste-image", "upload image from CLI clipboard"),
     global("pet", "toggle the pet strip"),
-    global("petname", "name your cat"),
+    global("petname", "name your pet"),
     global("poll", "start room poll"),
     global("private", "new private room"),
     global("profile", "view user profile"),

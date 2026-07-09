@@ -741,9 +741,9 @@ fn consumable_use_hint(item: &ShopCatalogItem) -> &'static str {
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "Enter activates it immediately"
     } else if item.sku == AQUARIUM_FOOD_SKU {
-        "Ctrl+Q opens the tray; Ctrl+F feeds while the tray is open"
+        "/aquarium opens the tray; /aquarium feed spends one"
     } else if item.sku == PET_FOOD_SKU {
-        "press c for your pet, then t to use one"
+        "/feed spends one and sends the pet strolling"
     } else {
         "Enter buys one"
     }

@@ -51,6 +51,10 @@ pub struct PendingRoomEffect {
 pub struct ShopTick {
     pub banner: Option<Banner>,
     pub snapshot_changed: bool,
+    /// The Aquarium entitlement went from absent to present on a snapshot that
+    /// was already loaded, so this is a fresh purchase rather than the first
+    /// snapshot arriving for an owner who bought it in an earlier session.
+    pub aquarium_unlocked: bool,
 }
 
 impl ShopState {
@@ -76,11 +80,15 @@ impl ShopState {
     }
 
     pub fn tick(&mut self) -> ShopTick {
+        let was_loaded = self.is_loaded();
+        let had_aquarium = self.entitlements().has_aquarium();
         let mut snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
         if snapshot_changed {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.clamp_selection();
         }
+        let aquarium_unlocked =
+            was_loaded && !had_aquarium && self.entitlements().has_aquarium();
         if self.prune_expired_effects(Utc::now()) {
             snapshot_changed = true;
         }
@@ -100,6 +108,7 @@ impl ShopState {
         ShopTick {
             banner,
             snapshot_changed,
+            aquarium_unlocked,
         }
     }
 
