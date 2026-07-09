@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use late_core::db::Db;
-use late_core::models::marketplace::{ConsumableUseStatus, consume_pet_food_treat};
+use late_core::models::marketplace::{ConsumableUseStatus, consume_pet_food};
 use late_core::models::pet::PetCompanion;
 use uuid::Uuid;
 
@@ -20,18 +20,27 @@ impl PetService {
         PetCompanion::ensure(&client, user_id).await
     }
 
+    /// One transaction spends a pet food and stamps `last_fed`, so a
+    /// double-click cannot spend two meals for one stamp.
     pub fn feed_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.feed(user_id).await {
-                tracing::error!(error = ?e, "failed to feed cat");
+            match svc.feed(user_id).await {
+                Ok(ConsumableUseStatus::Used) => {}
+                Ok(status) => {
+                    tracing::warn!(?status, user_id = %user_id, "pet was not fed");
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "failed to feed pet");
+                }
             }
         });
     }
 
-    async fn feed(&self, user_id: Uuid) -> Result<()> {
-        let client = self.db.get().await?;
-        PetCompanion::touch_fed(&client, user_id).await
+    async fn feed(&self, user_id: Uuid) -> Result<ConsumableUseStatus> {
+        let mut client = self.db.get().await?;
+        let result = consume_pet_food(&mut client, user_id).await?;
+        Ok(result.status)
     }
 
     pub fn water_task(&self, user_id: Uuid) {
@@ -46,27 +55,6 @@ impl PetService {
     async fn water(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         PetCompanion::touch_watered(&client, user_id).await
-    }
-
-    pub fn use_pet_food_task(&self, user_id: Uuid) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            match svc.use_pet_food(user_id).await {
-                Ok(ConsumableUseStatus::Used) => {}
-                Ok(status) => {
-                    tracing::warn!(?status, user_id = %user_id, "pet food was not consumed");
-                }
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to use pet food");
-                }
-            }
-        });
-    }
-
-    async fn use_pet_food(&self, user_id: Uuid) -> Result<ConsumableUseStatus> {
-        let mut client = self.db.get().await?;
-        let result = consume_pet_food_treat(&mut client, user_id).await?;
-        Ok(result.status)
     }
 
     pub fn record_care_completed_task(&self, user_id: Uuid, care_date: NaiveDate) {

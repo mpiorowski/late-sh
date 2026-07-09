@@ -199,7 +199,7 @@ pub(crate) enum AquariumCommand {
 }
 
 /// A pet action requested from the composer (`/pet` toggles the strip;
-/// `/feed`, `/water`, `/treat` are care). `App` owns the pet state and
+/// `/feed` and `/water` are care). `App` owns the pet state and
 /// entitlements, so the composer just records the intent and `App` carries
 /// it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,7 +207,6 @@ pub(crate) enum PetCommand {
     Toggle,
     Feed,
     Water,
-    Treat,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -490,7 +489,7 @@ pub struct ChatState {
     requested_voice_command: Option<VoiceCommand>,
     /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
     requested_aquarium_command: Option<AquariumCommand>,
-    /// Set by /feed, /water, /treat; consumed by `App` (which owns the pet).
+    /// Set by /pet, /feed, /water; consumed by `App` (which owns the pet).
     requested_pet_command: Option<PetCommand>,
     requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).
@@ -2018,7 +2017,6 @@ impl ChatState {
             "/pet" => Some(PetCommand::Toggle),
             "/feed" => Some(PetCommand::Feed),
             "/water" => Some(PetCommand::Water),
-            "/treat" => Some(PetCommand::Treat),
             _ => None,
         } {
             self.clear_composer_after_submit();

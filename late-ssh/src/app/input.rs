@@ -2719,10 +2719,10 @@ fn handle_mouse_scroll_over_screen(
     true
 }
 
-/// Left-clicks on the pet strip's render-recorded targets: the food bowl
-/// feeds, the water bowl waters, the pet itself gets the treat. The rects
-/// are only set on frames where the strip drew, so this is a no-op wherever
-/// the strip is hidden.
+/// Left-clicks on the pet strip's render-recorded targets: the food bowl and
+/// the pet itself both feed, the water bowl waters. The rects are only set on
+/// frames where the strip drew, so this is a no-op wherever the strip is
+/// hidden.
 fn handle_pet_strip_click(app: &mut App, x: u16, y: u16) -> bool {
     // The strip renders under the global modals; don't let clicks on a
     // modal that happens to overlap it fall through to the pet.
@@ -2744,7 +2744,7 @@ fn handle_pet_strip_click(app: &mut App, x: u16, y: u16) -> bool {
     if let Some(rect) = app.last_pet_strip_pet_rect.get()
         && rect_contains(rect, x, y)
     {
-        pet_treat_globally(app);
+        pet_feed_globally(app);
         return true;
     }
     false
@@ -3360,8 +3360,8 @@ pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
     ));
 }
 
-/// Shared entitlement gate for the pet actions (/feed, /water, /treat and
-/// the pet-strip clicks). Shows the shop nudge and returns false when the
+/// Shared entitlement gate for the pet actions (/feed, /water and the
+/// pet-strip clicks). Shows the shop nudge and returns false when the
 /// pet companion is not unlocked.
 fn pet_available_or_nudge(app: &mut App) -> bool {
     if app.shop_state.entitlements().has_pet_companion() {
@@ -3386,22 +3386,22 @@ pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
     }));
 }
 
+/// A meal costs one pet food, so an empty pantry opens the Shop rather than
+/// leaving the user staring at a `?` bowl. The strip carries the message in
+/// every case; the modal is the nudge for the one case they can act on.
 pub(crate) fn pet_feed_globally(app: &mut App) {
-    if pet_available_or_nudge(app) {
-        app.pet_state.feed();
+    if !pet_available_or_nudge(app) {
+        return;
+    }
+    let outcome = app.pet_state.feed(app.shop_state.pet_food_quantity());
+    if outcome == crate::app::pet::state::FeedOutcome::OutOfFood {
+        open_hub_modal_globally(app);
     }
 }
 
 pub(crate) fn pet_water_globally(app: &mut App) {
     if pet_available_or_nudge(app) {
         app.pet_state.water();
-    }
-}
-
-pub(crate) fn pet_treat_globally(app: &mut App) {
-    if pet_available_or_nudge(app) {
-        app.pet_state
-            .pet_with_food(app.shop_state.pet_food_quantity());
     }
 }
 

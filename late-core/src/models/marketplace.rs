@@ -716,7 +716,10 @@ pub async fn adjust_aquarium_fish_active_by_sku(
     }))
 }
 
-pub async fn consume_pet_food_treat(
+/// Spend one pet food to feed the companion, at most once per UTC day. The
+/// inventory decrement and the `last_fed` stamp share a transaction so a
+/// racing second click is rejected rather than charged.
+pub async fn consume_pet_food(
     client: &mut Client,
     user_id: Uuid,
 ) -> Result<ConsumableUseResult> {
@@ -787,17 +790,17 @@ pub async fn consume_pet_food_treat(
     let companion_row = tx
         .query_one(
             "SELECT COALESCE(
-                    last_treated >= (date_trunc('day', current_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),
+                    last_fed >= (date_trunc('day', current_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),
                     false
-                ) AS treated_today
+                ) AS fed_today
              FROM pet_companions
              WHERE user_id = $1
              FOR UPDATE",
             &[&user_id],
         )
         .await?;
-    let treated_today = companion_row.get::<_, bool>("treated_today");
-    if treated_today {
+    let fed_today = companion_row.get::<_, bool>("fed_today");
+    if fed_today {
         tx.commit().await?;
         return Ok(ConsumableUseResult {
             status: ConsumableUseStatus::DailyLimitReached,
@@ -817,7 +820,7 @@ pub async fn consume_pet_food_treat(
     .await?;
     tx.execute(
         "UPDATE pet_companions
-         SET last_treated = current_timestamp, updated = current_timestamp
+         SET last_fed = current_timestamp, updated = current_timestamp
          WHERE user_id = $1",
         &[&user_id],
     )

@@ -495,6 +495,7 @@ impl App {
             chat_view: chat::ui::DashboardChatView {
                 pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetStripView {
                     state: &self.pet_state,
+                    pet_food_quantity: self.shop_state.pet_food_quantity(),
                     pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
                     food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
                     water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),

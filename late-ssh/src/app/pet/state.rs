@@ -69,26 +69,16 @@ const FOOD_DUE_PENALTY: i16 = 25;
 const FOOD_OVERDUE_PENALTY: i16 = 55;
 const WATER_DUE_PENALTY: i16 = 10;
 const WATER_OVERDUE_PENALTY: i16 = 25;
+/// Care score at or below which the pet reads `Sad` regardless of which need
+/// is missing. Overdue food alone (45) clears this bar; so does any pair of
+/// overdue needs.
+const SAD_CARE_SCORE: u8 = 50;
 
 const PET_ROAM_DURATION_SECS: i64 = 30 * 60;
 
 impl PetNeeds {
     pub fn all_required_done(self) -> bool {
         self.food == PetNeedStatus::Done && self.water == PetNeedStatus::Done
-    }
-
-    pub fn missing_count(self) -> usize {
-        [self.food, self.water]
-            .into_iter()
-            .filter(|status| status.is_missing())
-            .count()
-    }
-
-    pub fn overdue_count(self) -> usize {
-        [self.food, self.water]
-            .into_iter()
-            .filter(|status| status.is_overdue())
-            .count()
     }
 
     pub fn care_score(self) -> u8 {
@@ -98,13 +88,21 @@ impl PetNeeds {
     }
 }
 
+/// Outcome of a feed attempt, so the caller can send an out-of-food user to
+/// the Shop while the strip carries the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedOutcome {
+    Fed,
+    OutOfFood,
+    AlreadyFedToday,
+}
+
 pub struct PetState {
     pub user_id: Uuid,
     pub svc: PetService,
 
     pub last_fed: Option<DateTime<Utc>>,
     pub last_watered: Option<DateTime<Utc>>,
-    pub last_treated: Option<DateTime<Utc>>,
     pub care_streak_days: i32,
     pub care_streak_date: Option<NaiveDate>,
 
@@ -135,7 +133,6 @@ impl PetState {
             svc,
             last_fed: companion.last_fed,
             last_watered: companion.last_watered,
-            last_treated: companion.last_treated,
             care_streak_days: companion.care_streak_days,
             care_streak_date: companion.care_streak_date,
             name: companion.name,
@@ -218,46 +215,43 @@ impl PetState {
             .is_some_and(|roam_until| roam_until > Utc::now())
     }
 
-    pub fn treated_today(&self) -> bool {
-        treated_on(self.last_treated, Utc::now().date_naive())
+    pub fn fed_today(&self) -> bool {
+        fed_on(self.last_fed, Utc::now().date_naive())
     }
 
-    pub fn feed(&mut self) {
+    /// A meal costs one pet food from the Shop inventory and sends the pet off
+    /// on a full-screen stroll. Capped at one meal per UTC day, so a bowl that
+    /// is already full cannot be spun into an endless roam.
+    pub fn feed(&mut self, pet_food_quantity: i32) -> FeedOutcome {
         let now = Utc::now();
+        if fed_on(self.last_fed, now.date_naive()) {
+            self.set_feedback("already fed today");
+            return FeedOutcome::AlreadyFedToday;
+        }
+        if pet_food_quantity <= 0 {
+            self.set_feedback("buy pet food first");
+            return FeedOutcome::OutOfFood;
+        }
+
         self.last_fed = Some(now);
-        self.action_feedback = Some("fed!");
-        self.feedback_ticks = FEEDBACK_TICKS;
+        self.roam_until = Some(now + Duration::seconds(PET_ROAM_DURATION_SECS));
+        self.set_feedback("fed! strolling");
         self.svc.feed_task(self.user_id);
         self.record_care_completion_if_ready(now);
+        FeedOutcome::Fed
     }
 
     pub fn water(&mut self) {
         let now = Utc::now();
         self.last_watered = Some(now);
-        self.action_feedback = Some("watered!");
-        self.feedback_ticks = FEEDBACK_TICKS;
+        self.set_feedback("watered!");
         self.svc.water_task(self.user_id);
         self.record_care_completion_if_ready(now);
     }
 
-    pub fn pet_with_food(&mut self, pet_food_quantity: i32) {
-        if pet_food_quantity <= 0 {
-            self.action_feedback = Some("buy pet food first");
-            self.feedback_ticks = FEEDBACK_TICKS;
-            return;
-        }
-        let now = Utc::now();
-        if treated_on(self.last_treated, now.date_naive()) {
-            self.action_feedback = Some("already had a treat today");
-            self.feedback_ticks = FEEDBACK_TICKS;
-            return;
-        }
-
-        self.last_treated = Some(now);
-        self.roam_until = Some(now + Duration::seconds(PET_ROAM_DURATION_SECS));
-        self.action_feedback = Some("treat! strolling");
+    fn set_feedback(&mut self, feedback: &'static str) {
+        self.action_feedback = Some(feedback);
         self.feedback_ticks = FEEDBACK_TICKS;
-        self.svc.use_pet_food_task(self.user_id);
     }
 
     fn needs_on(&self, today: NaiveDate) -> PetNeeds {
@@ -280,14 +274,16 @@ impl PetState {
     }
 }
 
+/// Mood is a straight walk down the needs, worst first. With only two needs
+/// left the care score already subsumes every "how many are overdue" test:
+/// nothing below `SAD_CARE_SCORE` survives to the per-need checks, and
+/// nothing above it has both needs met unless it is fully cared for.
 fn mood_for_state(
     needs: PetNeeds,
     care_streak_days: i32,
     care_streak_date: Option<NaiveDate>,
     today: NaiveDate,
 ) -> PetMood {
-    let score = needs.care_score();
-
     if needs.all_required_done()
         && care_streak_date == Some(today)
         && care_streak_days >= HAPPY_CARE_STREAK_DAYS
@@ -295,10 +291,7 @@ fn mood_for_state(
         return PetMood::Happy;
     }
 
-    if score < 50
-        || needs.overdue_count() >= 2
-        || (needs.food.is_overdue() && needs.missing_count() >= 2)
-    {
+    if needs.care_score() < SAD_CARE_SCORE {
         return PetMood::Sad;
     }
 
@@ -306,19 +299,11 @@ fn mood_for_state(
         return PetMood::Hungry;
     }
 
-    if needs.water.is_overdue() {
-        return PetMood::Thirsty;
-    }
-
-    if score >= 70 {
-        return PetMood::Content;
-    }
-
     if needs.water.is_missing() {
         return PetMood::Thirsty;
     }
 
-    PetMood::Sad
+    PetMood::Content
 }
 
 fn need_penalty(status: PetNeedStatus, due: i16, overdue: i16) -> i16 {
@@ -342,7 +327,7 @@ fn days_since(last: Option<DateTime<Utc>>, today: NaiveDate) -> Option<i64> {
     last.map(|time| (today - time.date_naive()).num_days().max(0))
 }
 
-fn treated_on(last: Option<DateTime<Utc>>, today: NaiveDate) -> bool {
+fn fed_on(last: Option<DateTime<Utc>>, today: NaiveDate) -> bool {
     last.is_some_and(|time| time.date_naive() == today)
 }
 
@@ -417,6 +402,7 @@ mod tests {
             PetMood::Content
         );
 
+        // A due water bowl reads thirsty, matching the amber bowl beside it.
         assert_eq!(
             mood_for_state(
                 PetNeeds {
@@ -427,7 +413,7 @@ mod tests {
                 Some(today),
                 today,
             ),
-            PetMood::Content
+            PetMood::Thirsty
         );
         assert_eq!(
             mood_for_state(
@@ -452,6 +438,32 @@ mod tests {
                 today,
             ),
             PetMood::Hungry
+        );
+        // Score 50 sits exactly on the sad bar, so food still leads.
+        assert_eq!(
+            mood_for_state(
+                PetNeeds {
+                    food: PetNeedStatus::Due,
+                    water: PetNeedStatus::Overdue,
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
+            PetMood::Hungry
+        );
+        // Overdue food alone (45) is sad on the score, with water fully done.
+        assert_eq!(
+            mood_for_state(
+                PetNeeds {
+                    food: PetNeedStatus::Overdue,
+                    ..cared
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
+            PetMood::Sad
         );
         assert_eq!(
             mood_for_state(

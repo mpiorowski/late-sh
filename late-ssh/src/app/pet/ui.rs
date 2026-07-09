@@ -18,10 +18,13 @@ use crate::app::common::theme;
 pub const PET_STRIP_HEIGHT: u16 = 3;
 
 /// Pet strip inputs threaded through the chat render views. The rect slots
-/// receive this frame's clickable targets (pet = treat, bowls = feed/water)
-/// so mouse hit-testing in `app::input` can route clicks.
+/// receive this frame's clickable targets (pet and food bowl both feed, water
+/// bowl waters) so mouse hit-testing in `app::input` can route clicks.
 pub struct PetStripView<'a> {
     pub state: &'a PetState,
+    /// Pet food left in the Shop inventory. A meal costs one, so at zero the
+    /// food bowl asks the user to restock instead of showing an empty dish.
+    pub pet_food_quantity: i32,
     pub pet_rect_slot: Option<&'a Cell<Option<Rect>>>,
     pub food_bowl_rect_slot: Option<&'a Cell<Option<Rect>>>,
     pub water_bowl_rect_slot: Option<&'a Cell<Option<Rect>>>,
@@ -34,7 +37,7 @@ const BOWLS_ZONE_WIDTH: u16 = BOWL_WIDTH + 1 + BOWL_WIDTH + 1;
 /// Three-row strip above the composer: the pet wanders the left zone while
 /// the food and water bowls sit pinned on the right. The bowls double as
 /// status (a full bowl is done, an empty amber/red one is due) and as the
-/// click targets for feeding/watering; clicking the pet gives the treat.
+/// click targets for feeding/watering; clicking the pet feeds it too.
 pub fn draw_pet_strip(frame: &mut Frame, area: Rect, view: &PetStripView<'_>) {
     if area.height < PET_STRIP_HEIGHT || area.width < BOWLS_ZONE_WIDTH + 12 {
         return;
@@ -62,8 +65,13 @@ pub fn draw_pet_strip(frame: &mut Frame, area: Rect, view: &PetStripView<'_>) {
         slot.set(pet_rect);
     }
 
-    draw_bowl(frame, food_area, '*', "/feed", needs.food);
-    draw_bowl(frame, water_area, '~', "/water", needs.water);
+    // Only nag about an empty pantry on a day the pet can still eat. Once fed,
+    // the meal is spent until tomorrow and the amber label would be a false
+    // alarm. Feeding also forces the bowl to `Done`, so a `?` never coexists
+    // with a full dish.
+    let needs_restock = view.pet_food_quantity <= 0 && !state.fed_today();
+    draw_bowl(frame, food_area, '*', "/feed", needs.food, needs_restock);
+    draw_bowl(frame, water_area, '~', "/water", needs.water, false);
     if let Some(slot) = view.food_bowl_rect_slot {
         slot.set(Some(food_area));
     }
@@ -71,7 +79,7 @@ pub fn draw_pet_strip(frame: &mut Frame, area: Rect, view: &PetStripView<'_>) {
         slot.set(Some(water_area));
     }
 
-    // Action feedback ("fed!", "treat! strolling", "buy pet food first")
+    // Action feedback ("watered!", "fed! strolling", "buy pet food first")
     // sits right-aligned on the strip's bottom row, next to the bowls.
     if let Some(feedback) = state.action_feedback {
         let row = Rect {
@@ -93,8 +101,8 @@ pub fn draw_pet_strip(frame: &mut Frame, area: Rect, view: &PetStripView<'_>) {
 }
 
 /// The pet's three art rows inside `zone`, wandering horizontally. Returns
-/// the pet's on-screen rect (the treat click target), or `None` while it is
-/// off strolling through the whole app via the roaming overlay.
+/// the pet's on-screen rect (a second feed click target), or `None` while it
+/// is off strolling through the whole app via the roaming overlay.
 fn draw_wandering_pet(frame: &mut Frame, zone: Rect, state: &PetState) -> Option<Rect> {
     if state.roaming_active() {
         frame.render_widget(
@@ -162,22 +170,29 @@ fn draw_wandering_pet(frame: &mut Frame, zone: Rect, state: &PetState) -> Option
 }
 
 /// Three-row bowl: fill + base + slash-command label. The bowl carries the
-/// status on its own: a full green bowl is done, an empty amber/red one
-/// still needs care.
+/// status on its own: a full green bowl is done, an empty amber/red one still
+/// needs care. `needs_restock` is the food bowl's out-of-pantry state, where
+/// the dish shows `?` rather than an empty bowl because there is nothing to
+/// pour until the Shop restocks. Water is never gated, so it passes `false`.
 fn draw_bowl(
     frame: &mut Frame,
     area: Rect,
     fill: char,
     label: &'static str,
     status: PetNeedStatus,
+    needs_restock: bool,
 ) {
     let color = status_color(status);
-    let inside = if status == PetNeedStatus::Done {
-        fill.to_string().repeat(7)
-    } else {
-        " ".repeat(7)
+    let inside = match (status, needs_restock) {
+        (PetNeedStatus::Done, _) => fill.to_string().repeat(7),
+        (_, false) => " ".repeat(7),
+        (_, true) => "   ?   ".to_string(),
     };
-    let label_style = if status.is_missing() {
+    let label_style = if needs_restock {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::ITALIC)
+    } else if status.is_missing() {
         Style::default().fg(color).add_modifier(Modifier::ITALIC)
     } else {
         Style::default()
