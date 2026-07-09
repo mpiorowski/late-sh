@@ -133,7 +133,7 @@ fn render_size_warning(frame: &mut Frame<'_>, area: Rect, min_height: u16) {
         Line::from("Aquarium reef mode needs more rows."),
         Line::from(format!("Minimum rows: {min_height}")),
         Line::from(format!("Current rows: {}", area.height)),
-        Line::from("Resize the terminal, or press Ctrl+Q to hide."),
+        Line::from("Resize the terminal, or /aquarium to hide."),
     ])
     .style(Style::new().fg(theme::TEXT_MUTED()));
     frame.render_widget(message, area);

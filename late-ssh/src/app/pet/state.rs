@@ -54,10 +54,6 @@ impl PetNeedStatus {
     pub fn is_missing(self) -> bool {
         self != PetNeedStatus::Done
     }
-
-    pub fn is_overdue(self) -> bool {
-        self == PetNeedStatus::Overdue
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

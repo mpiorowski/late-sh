@@ -265,15 +265,20 @@ impl AquariumState {
                         entity.animation_tick_for(def, self.tick),
                         entity.phase,
                     );
+                    // Tank motion never lets art touch the last water row
+                    // (see `tick_bounded`), so the hungry rest row keeps the
+                    // same -1.
+                    let tank_rest_y =
+                        (bounds.height.saturating_sub(variant.height).max(1) - 1) as i32;
                     if self.hungry {
-                        nudge_hungry_entity_down(entity, bounds.height, variant);
+                        nudge_hungry_entity_down(entity, tank_rest_y);
                         if !self.tick.is_multiple_of(HUNGRY_MOTION_DIVISOR) {
                             continue;
                         }
                     }
                     entity.tick_bounded(def, bounds, variant, self.tick, &mut rng);
                     if self.hungry {
-                        nudge_hungry_entity_down(entity, bounds.height, variant);
+                        nudge_hungry_entity_down(entity, tank_rest_y);
                     }
                 }
             }
@@ -341,13 +346,15 @@ fn scaled_initial_count(count: usize, scale: f64) -> usize {
     }
 }
 
-fn nudge_hungry_entity_down(entity: &mut Entity, area_height: u16, variant: &Variant) {
-    let bottom = area_height.saturating_sub(variant.height).saturating_sub(1) as i32;
-    if entity.y < bottom {
+/// Sink a hungry creature one row per step until it rests at `rest_y` (the
+/// lowest row its art can occupy without touching the floor/tank edge).
+fn nudge_hungry_entity_down(entity: &mut Entity, rest_y: i32) {
+    let rest_y = rest_y.max(0);
+    if entity.y < rest_y {
         entity.y += 1;
         entity.dy = 1;
     } else {
-        entity.y = bottom.max(0);
+        entity.y = rest_y;
         entity.dy = 0;
         entity.activity = ActivityState::Idle;
     }
@@ -421,7 +428,8 @@ fn tick_reef(
             entity.phase,
         );
         if hungry {
-            nudge_hungry_entity_down(entity, band.bottom.max(0) as u16, motion_variant);
+            let rest_y = band.floor_y_for(motion_variant).unwrap_or(band.top);
+            nudge_hungry_entity_down(entity, rest_y);
             if !tick.is_multiple_of(HUNGRY_MOTION_DIVISOR) {
                 continue;
             }
@@ -452,7 +460,8 @@ fn tick_reef(
             entity.y = clamped_y;
         }
         if hungry {
-            nudge_hungry_entity_down(entity, band.bottom.max(0) as u16, variant);
+            let rest_y = band.floor_y_for(variant).unwrap_or(band.top);
+            nudge_hungry_entity_down(entity, rest_y);
         }
 
         if entity_exited(entity, variant, bounds) {
