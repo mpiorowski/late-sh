@@ -175,7 +175,21 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     i += 1;
 
     for (idx, component) in visible.iter().enumerate() {
-        draw_horizontal_rule(frame, inset(layout[i]));
+        // Each panel's separator rule doubles as its section title
+        // (`── lobby ────`), so panels don't spend a body row on a name.
+        // The lobby label glows while it's the viewer's turn in any match.
+        let rule_active = *component == RightSidebarComponent::Daily
+            && props
+                .daily
+                .my_matches()
+                .iter()
+                .any(|item| props.daily.my_turn(item));
+        draw_panel_rule(
+            frame,
+            inset(layout[i]),
+            panel_rule_label(*component),
+            rule_active,
+        );
         i += 1;
         if idx == last && !activity_visible {
             i += 1; // skip the spacer that drops the last body to the bottom
@@ -356,14 +370,42 @@ fn draw_time_top(frame: &mut Frame, area: Rect, clock_text: &str, afk: Option<&s
     frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
 }
 
-fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
+/// Section name rendered into each panel's separator rule. Keeps panel
+/// bodies free of title rows: the divider IS the title.
+fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
+    match component {
+        RightSidebarComponent::Visualizer => "visualizer",
+        RightSidebarComponent::Music => "music",
+        RightSidebarComponent::Activity => "activity",
+        RightSidebarComponent::Bonsai => "bonsai",
+        RightSidebarComponent::Daily => "lobby",
+    }
+}
+
+/// `── label ────` separator-with-title above each panel. `active` swaps the
+/// label to bold amber for attention (the lobby's your-turn glow).
+fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let line = Line::from(Span::styled(
-        "─".repeat(area.width as usize),
-        Style::default().fg(theme::BORDER_DIM()),
-    ));
+    let label_style = if active {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme::AMBER_DIM())
+            .add_modifier(Modifier::ITALIC)
+    };
+    let width = area.width as usize;
+    let used = 3 + label.chars().count() + 1;
+    let trail = width.saturating_sub(used).max(1);
+    let line = Line::from(vec![
+        Span::styled("── ".to_string(), Style::default().fg(theme::BORDER_DIM())),
+        Span::styled(label.to_string(), label_style),
+        Span::raw(" "),
+        Span::styled("─".repeat(trail), Style::default().fg(theme::BORDER_DIM())),
+    ]);
     frame.render_widget(Paragraph::new(line), area);
 }
 

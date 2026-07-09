@@ -15,8 +15,10 @@ use crate::app::common::theme;
 
 use super::state::DailyState;
 
-/// Title + four match slots + status line (open count + entries) + key hints.
-pub(crate) const DAILY_PANEL_HEIGHT: u16 = 7;
+/// Four match slots + status line (open count + entries) + key hints. The
+/// panel has no title row of its own: the sidebar's labeled separator rule
+/// (`── lobby ────`, glowing on your-turn) is the title.
+pub(crate) const DAILY_PANEL_HEIGHT: u16 = 6;
 const MATCH_SLOTS: usize = 4;
 
 /// Inputs for the panel, bundled so the pure line builder is easy to drive
@@ -64,9 +66,6 @@ pub(crate) fn draw_daily_inline(frame: &mut Frame, area: Rect, state: &DailyStat
 
 fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(DAILY_PANEL_HEIGHT as usize);
-    let any_my_turn = props.matches.iter().any(|row| row.my_turn);
-    lines.push(title_line(width, any_my_turn));
-
     for slot in 0..MATCH_SLOTS {
         match props.matches.get(slot) {
             Some(row) => lines.push(match_line(width, row)),
@@ -77,40 +76,6 @@ fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> 
     lines.push(status_line(width, props));
     lines.push(hints_line());
     lines
-}
-
-/// `▌ lobby ────`, amber only while it's your turn in any match; lobby
-/// activity glows on the status line instead.
-fn title_line(width: u16, active: bool) -> Line<'static> {
-    let (bar_style, label_style) = if active {
-        (
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        (
-            Style::default().fg(theme::BORDER_DIM()),
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        )
-    };
-    let label = "lobby";
-    let used = 2 + label.chars().count() + 2;
-    let dash_count = (width as usize).saturating_sub(used).max(1);
-    Line::from(vec![
-        Span::styled("▌ ", bar_style),
-        Span::styled(label.to_string(), label_style),
-        Span::raw("  "),
-        Span::styled(
-            "─".repeat(dash_count),
-            Style::default().fg(theme::BORDER_DIM()),
-        ),
-    ])
 }
 
 /// `► mira        your turn` / `  c0ld          waiting`.
@@ -270,12 +235,12 @@ mod tests {
             .iter()
             .map(line_text)
             .collect();
-        assert!(texts[1].starts_with("► mira"));
-        assert!(texts[1].trim_end().ends_with("your turn"));
+        assert!(texts[0].starts_with("► mira"));
+        assert!(texts[0].trim_end().ends_with("your turn"));
+        assert_eq!(texts[1].trim_end(), "  ─");
         assert_eq!(texts[2].trim_end(), "  ─");
         assert_eq!(texts[3].trim_end(), "  ─");
-        assert_eq!(texts[4].trim_end(), "  ─");
-        assert_eq!(texts[5].trim_end(), "0 open · 1/4");
+        assert_eq!(texts[4].trim_end(), "0 open · 1/4");
     }
 
     #[test]
@@ -285,6 +250,6 @@ mod tests {
             .iter()
             .map(line_text)
             .collect();
-        assert_eq!(texts[5].trim_end(), "2 open · 1/4");
+        assert_eq!(texts[4].trim_end(), "2 open · 1/4");
     }
 }

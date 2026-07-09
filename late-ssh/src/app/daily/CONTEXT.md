@@ -44,7 +44,7 @@ Non-goals for v1 (deferred by decision, 2026-07-08): wagers/escrow, spectating, 
 | `mod.rs` | Declarations only. |
 | `svc.rs` | `DailyService`: process-global singleton like `RoomsService`. Snapshot `watch` + event `broadcast`, fire-and-forget mutating tasks, the deadline sweeper, chip payout on finish. Owns `DailyChessState` (the persisted `state` JSON shape) and the snapshot item types. |
 | `state.rs` | Per-session `DailyState`: snapshot/event drains (`tick`), lobby glow, modal cursor/confirm/prompt state, the full-screen board state (`DailyBoardState` + optimistic move), your-turn notification edges, `format_deadline`. |
-| `panel.rs` | Right-sidebar panel: passive, fixed `DAILY_PANEL_HEIGHT = 7`, stable chrome (dash slots when empty). Pure `DailyPanelProps` line builder for tests. |
+| `panel.rs` | Right-sidebar panel: passive, fixed `DAILY_PANEL_HEIGHT = 6`, stable chrome (dash slots when empty), no title row of its own. Pure `DailyPanelProps` line builder for tests. |
 | `modal_input.rs` / `modal_ui.rs` | The Lobby modal: one scrollable list (your matches, then the lobby), claim confirm, directed-challenge username prompt, footer actions. |
 | `board_input.rs` / `board_ui.rs` | Full-screen match view over `chess_core::board_ui` + `cursor`: players/colors frame, move list, deadline, result banner, mouse hit test via render-recorded geometry. |
 
@@ -84,8 +84,9 @@ Cross-module touchpoints (outside this folder):
 ## 4. UI Surfaces [VOLATILE]
 
 ### Sidebar panel (`panel.rs`)
-- Fixed 7 rows: `▌ lobby` title, four match slots (your-turn rows glow and sort first, then nearest deadline), one status line (`N open · entries/cap`), key hints (`ctrl+q · /challenge`). Slots render dashes when empty; the panel never changes height between states (stable-chrome rule).
-- Attention is split across two signals: the title glows ONLY while it's your turn in any match; the status line's open count glows while there are open challenges unseen since the modal was last opened (the liquidity signal). Own challenges never glow. `seen_open_ids` is seeded at session start so pre-existing challenges don't glow on login.
+- Fixed 6 rows: four match slots (your-turn rows glow and sort first, then nearest deadline), one status line (`N open · entries/cap`), key hints (`ctrl+q · /challenge`). Slots render dashes when empty; the panel never changes height between states (stable-chrome rule).
+- The panel has no title row: the sidebar's labeled separator rule (`── lobby ────`, built in `app/common/sidebar.rs::draw_panel_rule`) is the title. Every sidebar panel's rule is labeled this way; the lobby's label is the only one with an active state.
+- Attention is split across two signals: the rule label glows ONLY while it's your turn in any match (the sidebar computes this from `DailyState::my_matches`/`my_turn`); the status line's open count glows while there are open challenges unseen since the modal was last opened (the liquidity signal). Own challenges never glow. `seen_open_ids` is seeded at session start so pre-existing challenges don't glow on login.
 
 ### Lobby modal (`modal_*`)
 - Opened by reserved global `Ctrl+Q` only (works anywhere, including while composing; pressed again it closes the modal). The old bare `g` binding is removed. Opening calls `mark_lobby_seen`.
@@ -116,7 +117,7 @@ Cross-module touchpoints (outside this folder):
 - Deadlines stay DB timestamps. Do not introduce in-process timers for correspondence deadlines; the rooms-chess `sleep_until` clock approach explicitly does not survive restarts and this domain must.
 - The entry cap (`DAILY_MAX_ACTIVE_ENTRIES`, 4) counts open challenges posted plus active matches played, enforced server-side on post AND claim. It must not exceed the panel's `MATCH_SLOTS` (4), or active matches become invisible in the sidebar.
 - `state.revision` only increases; superseded writes must fail loudly ("move was superseded, reload the match"), not last-write-win.
-- Panel height is constant (7 rows); empty slots render dashes. Never collapse or grow the panel between states.
+- Panel height is constant (6 rows); empty slots render dashes. Never collapse or grow the panel between states.
 - Chess time control `daily` no longer appears in `rooms/chess` `TIME_CONTROL_OPTIONS` for new tables; the `ChessTimeControl::Daily` variant and its `from_id` parsing must survive until the last legacy daily table row is gone.
 - v1 publishes no `ActivityEvent` and posts nothing to chat.
 
