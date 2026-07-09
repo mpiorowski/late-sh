@@ -914,7 +914,7 @@ impl GhostService {
                 );
                 drop(pending_gifts);
                 format!(
-                    "{patron} {drink} for @{recipient_handle}, {price} chips. reply @{bartender} confirm to put it on your tab.",
+                    "{patron} {drink} for @{recipient_handle}, {price} chips. reply '@{bartender} confirm' to put it on your tab.",
                     bartender = bartender.username
                 )
             }

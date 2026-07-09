@@ -93,12 +93,14 @@ const fn room(command: RoomScopedCommand) -> Command {
 /// so registry order does not affect the autocomplete display.
 const COMMANDS: &[Command] = &[
     global("active", "list active users"),
+    global("aquarium", "toggle aquarium (/aquarium feed to feed)"),
     global("binds", "chat guide"),
     global("brb", "go AFK and mute audio"),
     global("challenge", "post daily chess challenge"),
     global("coffee", "post coffee cup"),
     global("dm", "open DM"),
     global("exit", "quit confirm"),
+    global("feed", "feed your pet"),
     global("friend", "mark user"),
     global("friends", "list friends"),
     global("gift", "send chips"),
@@ -118,9 +120,11 @@ const COMMANDS: &[Command] = &[
     global("roll", "roll dice (e.g. /roll 3d6)"),
     global("settings", "open settings"),
     global("tea", "post tea cup"),
+    global("treat", "give your pet a treat"),
     global("unfriend", "unmark user"),
     global("unignore", "unmute user"),
     global("upload", "upload image from url"),
+    global("water", "water your pet"),
     room(RoomScopedCommand::Sheet),
 ];
 

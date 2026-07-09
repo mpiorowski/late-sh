@@ -272,6 +272,8 @@ const TEXT_BRIGHTNESS_ADJUSTMENT_KEY: &str = "text_brightness_adjustment";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
+const SHOW_AQUARIUM_TRAY_KEY: &str = "show_aquarium_tray";
+const SHOW_PET_STRIP_KEY: &str = "show_pet_strip";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
@@ -701,6 +703,23 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&AUDIO_SOURCE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Persist whether the aquarium tray is open so it survives reconnects.
+    pub async fn set_show_aquarium_tray(client: &Client, user_id: Uuid, shown: bool) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::bool),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&SHOW_AQUARIUM_TRAY_KEY, &shown, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1207,6 +1226,24 @@ pub fn extract_land_on_home(settings: &Value) -> bool {
         .get(LAND_ON_HOME_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// Whether the aquarium tray was open when the user last toggled it;
+/// defaults to false so the tray starts closed for everyone else.
+pub fn extract_show_aquarium_tray(settings: &Value) -> bool {
+    settings
+        .get(SHOW_AQUARIUM_TRAY_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Tweak: show the pet strip above the chat composer (pet owners only);
+/// defaults to true so the companion appears as soon as it is unlocked.
+pub fn extract_show_pet_strip(settings: &Value) -> bool {
+    settings
+        .get(SHOW_PET_STRIP_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 /// True once the user has finished (or skipped) the clubhouse first-visit

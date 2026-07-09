@@ -48,20 +48,6 @@ impl PetService {
         PetCompanion::touch_watered(&client, user_id).await
     }
 
-    pub fn play_task(&self, user_id: Uuid) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.play(user_id).await {
-                tracing::error!(error = ?e, "failed to play with cat");
-            }
-        });
-    }
-
-    async fn play(&self, user_id: Uuid) -> Result<()> {
-        let client = self.db.get().await?;
-        PetCompanion::touch_played(&client, user_id).await
-    }
-
     pub fn use_pet_food_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {

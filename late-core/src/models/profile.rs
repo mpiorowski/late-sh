@@ -10,8 +10,8 @@ use super::user::{
     extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
     extract_keep_composer_focused, extract_land_on_home, extract_langs, extract_notify_bell,
     extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
-    extract_right_sidebar_components, extract_right_sidebar_mode,
-    extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_flag_fallback,
+    extract_show_pet_strip, extract_show_right_sidebar, extract_show_room_list_sidebar,
     extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
     extract_theme_id, extract_timezone, normalize_right_sidebar_components,
     normalize_text_brightness_adjustment,
@@ -53,6 +53,8 @@ pub struct Profile {
     pub land_on_home: bool,
     /// Tweak: show text labels instead of flag emoji in the shop Flags tab.
     pub show_flag_fallback: bool,
+    /// Tweak: show the pet strip above the chat composer (pet owners only).
+    pub show_pet_strip: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, or `None` if unset.
@@ -92,6 +94,7 @@ impl Default for Profile {
             start_with_music_muted: false,
             land_on_home: false,
             show_flag_fallback: false,
+            show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
         }
@@ -123,6 +126,7 @@ pub struct ProfileParams {
     pub start_with_music_muted: bool,
     pub land_on_home: bool,
     pub show_flag_fallback: bool,
+    pub show_pet_strip: bool,
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
     pub birthday: Option<String>,
@@ -277,10 +281,11 @@ impl Profile {
                          'keep_composer_focused', $22::bool,
                          'start_with_music_muted', $23::bool,
                          'show_flag_fallback', $24::bool,
-                         'land_on_home', $25::bool
+                         'land_on_home', $25::bool,
+                         'show_pet_strip', $26::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $26
+                 WHERE id = $27
                  RETURNING *",
                 &[
                     &params.username,
@@ -308,6 +313,7 @@ impl Profile {
                     &params.start_with_music_muted,
                     &params.show_flag_fallback,
                     &params.land_on_home,
+                    &params.show_pet_strip,
                     &user_id,
                 ],
             )
@@ -342,6 +348,7 @@ impl Profile {
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
             land_on_home: extract_land_on_home(&user.settings),
             show_flag_fallback: extract_show_flag_fallback(&user.settings),
+            show_pet_strip: extract_show_pet_strip(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
             birthday: extract_birthday(&user.settings),
         }

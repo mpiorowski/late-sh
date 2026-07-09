@@ -212,9 +212,7 @@ impl DailyState {
                 target_username,
                 ..
             } if challenger_id == self.user_id => Some(match target_username {
-                Some(name) => {
-                    Banner::success(&format!("Daily challenge sent to @{name}"))
-                }
+                Some(name) => Banner::success(&format!("Daily challenge sent to @{name}")),
                 None => Banner::success("Daily challenge posted to the lobby"),
             }),
             DailyEvent::MatchFinished {

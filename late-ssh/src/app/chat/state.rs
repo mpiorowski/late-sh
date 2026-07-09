@@ -189,6 +189,25 @@ pub(crate) enum VoiceCommand {
     Mute,
 }
 
+/// An aquarium control requested from the composer (`/aquarium`,
+/// `/aquarium feed`). `App` owns the tray state and entitlements, so the
+/// composer just records the intent and `App` carries it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AquariumCommand {
+    Toggle,
+    Feed,
+}
+
+/// A pet-care action requested from the composer (`/feed`, `/water`,
+/// `/treat`). `App` owns the pet state and entitlements, so the composer
+/// just records the intent and `App` carries it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PetCommand {
+    Feed,
+    Water,
+    Treat,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
@@ -467,6 +486,10 @@ pub struct ChatState {
     /// Set by /voice or /mute in a voice-enabled room; consumed by `App`
     /// (which owns the paired-CLI voice controls).
     requested_voice_command: Option<VoiceCommand>,
+    /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
+    requested_aquarium_command: Option<AquariumCommand>,
+    /// Set by /feed, /water, /treat; consumed by `App` (which owns the pet).
+    requested_pet_command: Option<PetCommand>,
     requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).
     requested_brb: Option<String>,
@@ -635,6 +658,8 @@ impl ChatState {
             requested_open_sheet: None,
             requested_quit: false,
             requested_voice_command: None,
+            requested_aquarium_command: None,
+            requested_pet_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
@@ -949,6 +974,14 @@ impl ChatState {
 
     pub(crate) fn take_requested_voice_command(&mut self) -> Option<VoiceCommand> {
         self.requested_voice_command.take()
+    }
+
+    pub(crate) fn take_requested_aquarium_command(&mut self) -> Option<AquariumCommand> {
+        self.requested_aquarium_command.take()
+    }
+
+    pub(crate) fn take_requested_pet_command(&mut self) -> Option<PetCommand> {
+        self.requested_pet_command.take()
     }
 
     pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
@@ -1966,6 +1999,27 @@ impl ChatState {
         } {
             self.clear_composer_after_submit();
             self.requested_voice_command = Some(command);
+            return None;
+        }
+
+        if let Some(command) = match body.trim() {
+            "/aquarium" | "/aq" => Some(AquariumCommand::Toggle),
+            "/aquarium feed" | "/aq feed" => Some(AquariumCommand::Feed),
+            _ => None,
+        } {
+            self.clear_composer_after_submit();
+            self.requested_aquarium_command = Some(command);
+            return None;
+        }
+
+        if let Some(command) = match body.trim() {
+            "/feed" => Some(PetCommand::Feed),
+            "/water" => Some(PetCommand::Water),
+            "/treat" => Some(PetCommand::Treat),
+            _ => None,
+        } {
+            self.clear_composer_after_submit();
+            self.requested_pet_command = Some(command);
             return None;
         }
 
@@ -4144,6 +4198,17 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         if feeds_available {
             order.push(RoomSlot::Feeds);
         }
+    }
+
+    // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
+    if let Some((room, _)) = rooms.iter().find(|(r, _)| {
+        is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some("voice")
+    }) && pushed_rooms.insert(room.id)
+        && !core_collapsed
+    {
+        order.push(RoomSlot::Room(room.id));
+    }
+    if !core_collapsed {
         // Discover ("browse rooms") lives at the bottom of Core.
         order.push(RoomSlot::Discover);
     }
@@ -4154,6 +4219,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         if is_chat_list_room(room)
             && room.kind != "dm"
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+            && room.slug.as_deref() != Some("voice")
             && pushed_rooms.insert(room.id)
             && !channels_collapsed
         {

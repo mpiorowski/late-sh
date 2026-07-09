@@ -196,7 +196,7 @@ Room navigation:
 ## 7. Home Shell And Embedded Chat
 
 There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
-- If `chat.selected_room_id` is `#lounge` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: optional top activity/quest/shop strip, pinned row when present, then lounge chat. Pinned messages have priority and render whenever present; when vertical space is tight, the top strip hides before chat.
+- If `chat.selected_room_id` is `#lounge` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: pinned row when present, then lounge chat. Pinned messages render whenever present; when vertical space is tight, the pinned strip hides before chat drops below its minimum.
 - If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
 - On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
 
@@ -208,7 +208,7 @@ Room favorites:
 - Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
 Home hot-room shortcuts:
-- The room top boxes render up to four recent multiplayer seat joins from `dashboard::ui::recent_dashboard_rooms(..., 4)`. They are always visible for #lounge and optional on other Home rooms through the Settings "Activity boxes" row.
+- The top activity/multiplayer/quest strip was removed; the online count + activity feed moved to the right sidebar's Activity panel (`app/activity/panel.rs`). `dashboard::ui::recent_dashboard_rooms(..., 4)` survives only for the recent-room jump keys.
 - `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.
@@ -259,6 +259,8 @@ User commands:
 - `/active` opens an overlay from in-memory `active_users`, including repeated-session counts.
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
+- `/aquarium` (alias `/aq`) toggles the Shop-unlocked aquarium top tray; `/aquarium feed` feeds it. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
+- `/feed`, `/water`, `/treat` care for the Pet Companion (same strip actions as clicking the bowls/pet). Parsed in `submit_composer`, drained via `take_requested_pet_command`.
 - `/challenge [@user] [chess]` routes to daily correspondence chess: bare `/challenge` opens the Daily Games modal, `/challenge chess` posts an open-lobby challenge, `/challenge @user [chess]` posts a directed one. Parsed in `submit_composer`, drained via `take_requested_daily_challenge` in `handle_post_submit_requests` (the composer holds no `DailyService`).
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.

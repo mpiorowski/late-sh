@@ -55,6 +55,9 @@ fn is_bot_author(username: &str) -> bool {
 // ── Dashboard chat card ─────────────────────────────────────
 
 pub struct DashboardChatView<'a> {
+    /// When present, the 3-row pet strip renders between the messages and
+    /// the composer (pet entitlement + tweak resolved by the caller).
+    pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
@@ -523,13 +526,25 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
 }
 
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
+    let (messages, _, composer) = split_chat_pet_strip_and_composer(area, composer_height, 0);
+    (messages, composer)
+}
+
+/// Vertical layout for a chat surface: messages fill, then a 1-row gap, then
+/// an optional pet strip (0 rows when absent) directly above the composer.
+fn split_chat_pet_strip_and_composer(
+    area: Rect,
+    composer_height: u16,
+    pet_strip_height: u16,
+) -> (Rect, Rect, Rect) {
     let layout = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(CHAT_COMPOSER_GAP_HEIGHT),
+        Constraint::Length(pet_strip_height),
         Constraint::Length(composer_height),
     ])
     .split(area);
-    (layout[0], layout[2])
+    (layout[0], layout[2], layout[3])
 }
 
 fn draw_room_page_effects(frame: &mut Frame, area: Rect, effects: &[ActiveChatRoomEffect]) {
@@ -967,7 +982,16 @@ pub fn draw_dashboard_chat_card(
         ));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
-    let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let pet_strip_height = if view.pet_strip.is_some() {
+        crate::app::pet::ui::PET_STRIP_HEIGHT
+    } else {
+        0
+    };
+    let (mut messages_area, pet_strip_area, composer_area) =
+        split_chat_pet_strip_and_composer(area, composer_height, pet_strip_height);
+    if let Some(pet_strip) = &view.pet_strip {
+        crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
+    }
     if let Some(voice_channel_id) = view.voice_channel_id {
         let voice_view = crate::app::voice::ui::VoiceRoomView {
             snapshot: view.voice_snapshot,
@@ -2222,6 +2246,9 @@ pub(crate) fn draw_mention_autocomplete(
 // ── Main chat screen ────────────────────────────────────────
 
 pub struct ChatRenderInput<'a> {
+    /// When present, the 3-row pet strip renders between the messages and
+    /// the composer (pet entitlement + tweak resolved by the caller).
+    pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
     pub feeds_selected: bool,
     pub feeds_processing: bool,
     pub feeds_unread_count: i64,
@@ -3684,8 +3711,16 @@ pub fn draw_chat_center(
     }
 
     let selection_mode = chat_selection_mode(&view, area);
-    let (messages_area, composer_area) =
-        split_chat_and_composer(area, selection_mode.composer_height());
+    let pet_strip_height = if view.pet_strip.is_some() {
+        crate::app::pet::ui::PET_STRIP_HEIGHT
+    } else {
+        0
+    };
+    let (messages_area, pet_strip_area, composer_area) =
+        split_chat_pet_strip_and_composer(area, selection_mode.composer_height(), pet_strip_height);
+    if let Some(pet_strip) = &view.pet_strip {
+        crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
+    }
 
     draw_selected_content(frame, messages_area, composer_area, view, terminal_images);
 }
@@ -4348,6 +4383,7 @@ mod tests {
         static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
 
         ChatRenderInput {
+            pet_strip: None,
             feeds_selected: false,
             feeds_processing: false,
             feeds_unread_count: 0,

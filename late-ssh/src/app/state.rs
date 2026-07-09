@@ -102,7 +102,7 @@ const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
 
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
     let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
-    crate::app::hub::aquarium::ui::bottom_tray_area(app_inner)
+    crate::app::hub::aquarium::ui::top_tray_area(app_inner)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +293,8 @@ pub struct SessionConfig {
     pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
     /// True once this user finished (or skipped) the clubhouse tutorial.
     pub clubhouse_tutorial_done: bool,
+    /// Whether the aquarium tray was open when the user last toggled it.
+    pub show_aquarium_tray: bool,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
@@ -413,16 +415,21 @@ pub struct App {
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub(super) activity: VecDeque<ActivityEvent>,
-    /// Mouse-wheel scroll offset for the Home top-strip Activity panel. `0`
-    /// keeps the newest event at the top (default); larger values scroll
-    /// back through older events. Capped at `activity.len()` each frame so
+    /// Mouse-wheel scroll offset for the sidebar Activity panel. `0` keeps
+    /// the newest event at the top (default); larger values scroll back
+    /// through older events. Capped at `activity.len()` each frame so
     /// trimming the buffer can't strand the user past the end.
     pub(crate) dashboard_activity_scroll: u16,
-    /// Last-rendered rect for the Home top-strip Activity panel. Set by
-    /// `dashboard::ui::draw_box_activity` during draw, consumed by mouse
-    /// wheel hit-testing in `app::input`. Reset to `None` at the top of
-    /// every frame so a layout change can't leave a stale target behind.
+    /// Last-rendered rect for the sidebar Activity panel. Set by
+    /// `activity::panel::draw_activity_inline` during draw, consumed by
+    /// mouse wheel hit-testing in `app::input`. Reset to `None` at the top
+    /// of every frame so a layout change can't leave a stale target behind.
     pub(crate) last_dashboard_activity_rect: std::cell::Cell<Option<Rect>>,
+    /// Pet-strip click targets from the last frame: the pet itself (treat),
+    /// the food bowl (feed), and the water bowl (water). Reset each frame.
+    pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_pet_strip_food_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_pet_strip_water_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -482,7 +489,6 @@ pub struct App {
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
-    pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
@@ -678,7 +684,6 @@ impl App {
         self.show_bonsai_modal = false;
         self.show_bonsai_v2_modal = false;
         self.show_daily_modal = false;
-        self.show_cat_modal = false;
         // Real sessions land in the clubhouse; the integration suite predates
         // that and drives flows from Home, so tests start there.
         self.screen = Screen::Dashboard;
@@ -700,7 +705,6 @@ impl App {
             && !self.show_bonsai_v2_modal
             && !self.show_daily_modal
             && !self.show_ultimate_modal
-            && !self.show_cat_modal
             && !self.icon_picker_open
             && !self.room_search_modal_state.is_open()
             && !self.booth_modal_state.is_open()
@@ -1036,7 +1040,7 @@ impl App {
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
-            show_aquarium_tray: false,
+            show_aquarium_tray: config.show_aquarium_tray,
             show_profile_modal: false,
             show_sheet_modal: false,
             show_poll_modal: false,
@@ -1090,6 +1094,9 @@ impl App {
             activity,
             dashboard_activity_scroll: 0,
             last_dashboard_activity_rect: std::cell::Cell::new(None),
+            last_pet_strip_pet_rect: std::cell::Cell::new(None),
+            last_pet_strip_food_rect: std::cell::Cell::new(None),
+            last_pet_strip_water_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -1150,7 +1157,6 @@ impl App {
             bonsai_v2_state,
             bonsai_v2_activity_ticks_remaining: 0,
             pet_state,
-            show_cat_modal: false,
             quest_state,
             shop_state,
             hub_admin_state,
@@ -1571,8 +1577,6 @@ impl App {
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
             self.show_bonsai_v2_modal = false;
-            self.pet_state.cancel_play();
-            self.show_cat_modal = false;
         }
         self.hub_state.ensure_visible_tab(self.is_admin);
     }
@@ -1920,6 +1924,13 @@ impl App {
         self.profile_state
             .service()
             .set_clubhouse_tutorial_done(self.user_id);
+    }
+
+    /// Persist the aquarium tray's open/closed state (fire-and-forget).
+    pub(crate) fn persist_show_aquarium_tray(&self) {
+        self.profile_state
+            .service()
+            .set_show_aquarium_tray(self.user_id, self.show_aquarium_tray);
     }
 
     /// Open the profile modal for a user, closing the sheet modal that shares

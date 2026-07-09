@@ -199,7 +199,6 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         ),
         enable_background_color: profile.enable_background_color,
         text_brightness_adjustment: profile.text_brightness_adjustment,
-        show_dashboard_header: profile.show_dashboard_header,
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_components: profile.right_sidebar_components.clone(),
@@ -208,6 +207,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         start_with_music_muted: profile.start_with_music_muted,
         land_on_home: profile.land_on_home,
         show_flag_fallback: profile.show_flag_fallback,
+        show_pet_strip: profile.show_pet_strip,
         favorite_room_ids: profile.favorite_room_ids.clone(),
         birthday: profile.birthday.clone(),
     }

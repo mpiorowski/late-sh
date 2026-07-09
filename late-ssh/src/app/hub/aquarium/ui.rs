@@ -15,19 +15,16 @@ use super::{
     world::ReefWorld,
 };
 
-const BOTTOM_TRAY_HEIGHT: u16 = 15;
+// Sized to fit the tallest creature (Big Bert, 9 art rows) plus the 1-row
+// surface and floor with a spare row of water.
+const TOP_TRAY_HEIGHT: u16 = 12;
 
-pub(crate) fn bottom_tray_area(area: Rect) -> Rect {
-    let height = BOTTOM_TRAY_HEIGHT.min(area.height);
-    Rect::new(
-        area.x,
-        area.bottom().saturating_sub(height),
-        area.width,
-        height,
-    )
+pub(crate) fn top_tray_area(area: Rect) -> Rect {
+    let height = TOP_TRAY_HEIGHT.min(area.height);
+    Rect::new(area.x, area.y, area.width, height)
 }
 
-pub fn draw_bottom_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
+pub fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -61,7 +58,7 @@ fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_stat
                 tank_state.width, tank_state.height
             )),
             Line::from(format!("Current size: {}x{}", area.width, area.height)),
-            Line::from("Resize the terminal, or press Ctrl+Q to hide."),
+            Line::from("Resize the terminal, or /aquarium to hide."),
         ])
         .style(Style::new().fg(theme::TEXT_MUTED()));
         frame.render_widget(message, area);

@@ -458,9 +458,15 @@ impl DailyService {
         let state_value = serde_json::to_value(&state)?;
         match outcome {
             Some((winner, result)) => {
-                let updated =
-                    DailyMatch::finish(&client, match_id, winner, result, &state_value, base_revision)
-                        .await?;
+                let updated = DailyMatch::finish(
+                    &client,
+                    match_id,
+                    winner,
+                    result,
+                    &state_value,
+                    base_revision,
+                )
+                .await?;
                 ensure!(updated == 1, "move was superseded, reload the match");
                 let _ = self.event_tx.send(DailyEvent::MovePlayed {
                     match_id,

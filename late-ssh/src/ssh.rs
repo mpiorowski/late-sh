@@ -925,6 +925,7 @@ impl russh::server::Handler for ClientHandler {
             clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
                 &user.settings,
             ),
+            show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),

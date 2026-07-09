@@ -76,6 +76,13 @@ happened inside late.sh.
 - Sidebar layout cleanup to make room — layout discussion pending (what
   stays: clock, music; what competes: visualizer, pet, bonsai, new Today
   card; experimentation welcome, e.g. pet moved to chat input area).
+- 2026-07-09 landed: top activity strip removed; online count + activity
+  feed became a flexible right-sidebar Activity panel (default order:
+  visualizer, audio, daily, activity, bonsai); pet left the sidebar for a
+  3-row strip above the chat composer (bowls + /feed /water /treat, care
+  modal and play mini-game removed); aquarium became a persistent 12-row
+  top tray on /aquarium (Ctrl+Q/Ctrl+F freed); hub reordered to Quests,
+  Shop, Leaderboard, Events with Chat first inside Shop.
 
 ### 4. Chips: real reasons to spend
 Benchmark everything against the drink (100-1000 chips, hours of visible

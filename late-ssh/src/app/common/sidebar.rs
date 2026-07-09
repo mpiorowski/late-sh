@@ -9,6 +9,8 @@ use ratatui::{
 };
 
 use super::theme;
+use crate::app::activity::event::ActivityEvent;
+use crate::app::activity::panel::{ACTIVITY_PANEL_MIN_HEIGHT, ActivityPanelProps};
 use crate::app::audio::{
     client_state::ClientAudioState,
     stations,
@@ -17,7 +19,6 @@ use crate::app::audio::{
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai_v2::state::BonsaiV2State;
-use crate::app::pet::state::PetState;
 use late_core::models::user::{
     AudioSource, IcecastStream, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
 };
@@ -37,8 +38,6 @@ const MUSIC_DETAIL_HEIGHT: u16 = 6;
 const MUSIC_QUEUE_HEIGHT: u16 = 3;
 // Bonsai is kept fixed when shown.
 const BONSAI_MIN_HEIGHT: u16 = 16;
-// Cat: 3 art rows + 1 footer row.
-const CAT_HEIGHT: u16 = 4;
 // Daily games: fixed, stable chrome (see `daily/panel.rs`).
 const DAILY_HEIGHT: u16 = crate::app::daily::panel::DAILY_PANEL_HEIGHT;
 
@@ -56,8 +55,6 @@ pub(crate) struct SidebarProps<'a> {
     pub bonsai: &'a BonsaiState,
     pub bonsai_v2: &'a BonsaiV2State,
     pub use_bonsai_v2: bool,
-    pub cat: &'a PetState,
-    pub pet_available: bool,
     pub audio_beat: f32,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
@@ -91,6 +88,19 @@ pub(crate) struct SidebarProps<'a> {
     pub afk: Option<&'a str>,
     /// Daily correspondence games: my matches, lobby activity, glow.
     pub daily: &'a crate::app::daily::state::DailyState,
+    /// Rolling feed of recent activity events for the Activity panel.
+    pub activity_events: &'a std::collections::VecDeque<ActivityEvent>,
+    /// Humans currently connected (bots excluded), for the Activity header.
+    pub online_count: usize,
+    /// Connected friends, compacted into the Activity panel's friends row.
+    pub active_friend_names: &'a [String],
+    /// Mouse-wheel scroll offset into the activity feed (0 = newest).
+    pub activity_scroll: u16,
+    /// Free-running frame counter for the Activity panel's marquee rows.
+    pub marquee_tick: usize,
+    /// Receives the Activity panel's rendered rect each frame so mouse-wheel
+    /// hit-testing in `app::input` can route scroll events to it.
+    pub activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
@@ -114,25 +124,32 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // Responsiveness: the clock is pinned at the top, then enabled panels
     // render in the user's chosen order. When space runs short we cut from the
     // top of the list (the first/topmost panel goes first), keeping the run of
-    // bottom panels that fits. Every panel renders at its full height or not at
-    // all; any leftover rows collect just above the final panel, which sticks
-    // to the bottom of the rail.
+    // bottom panels that fits. Every panel renders at its full height or not
+    // at all. Leftover rows go to the Activity panel (the one flexible panel)
+    // when it is visible; otherwise they collect just above the final panel,
+    // which sticks to the bottom of the rail.
     let visible = visible_components(props.components, area.height);
+    let activity_visible = visible.contains(&RightSidebarComponent::Activity);
 
     // Vertical real estate, top to bottom: time, then each visible panel
-    // (rule + body at its fixed height). For the final panel the flexible
-    // spacer sits between its rule and its body, so the rule stays in the
-    // natural flow under the panel above while the body sticks to the bottom
-    // of the rail. Every panel renders at its full height or not at all —
-    // nothing is clipped.
+    // (rule + body at its fixed height; Activity's body is a Min so it
+    // absorbs the slack). Without a visible Activity panel, the flexible
+    // spacer sits between the final panel's rule and body, so the rule stays
+    // in the natural flow under the panel above while the body sticks to the
+    // bottom of the rail. Every panel renders at its full height or not at
+    // all — nothing is clipped.
     let last = visible.len().saturating_sub(1);
     let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
     for (idx, component) in visible.iter().enumerate() {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-        if idx == last {
+        if idx == last && !activity_visible {
             constraints.push(Constraint::Fill(1)); // drop the last body to the bottom
         }
-        constraints.push(Constraint::Length(component_height(*component)));
+        constraints.push(if *component == RightSidebarComponent::Activity {
+            Constraint::Min(component_height(*component))
+        } else {
+            Constraint::Length(component_height(*component))
+        });
     }
     if visible.is_empty() {
         constraints.push(Constraint::Fill(1));
@@ -159,7 +176,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     for (idx, component) in visible.iter().enumerate() {
         draw_horizontal_rule(frame, inset(layout[i]));
         i += 1;
-        if idx == last {
+        if idx == last && !activity_visible {
             i += 1; // skip the spacer that drops the last body to the bottom
         }
         let body = inset(layout[i]);
@@ -187,12 +204,19 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                     },
                 );
             }
-            RightSidebarComponent::Pet => {
-                if props.pet_available {
-                    crate::app::pet::ui::draw_cat_inline(frame, body, props.cat);
-                } else {
-                    draw_cat_locked(frame, body);
-                }
+            RightSidebarComponent::Activity => {
+                crate::app::activity::panel::draw_activity_inline(
+                    frame,
+                    body,
+                    &ActivityPanelProps {
+                        events: props.activity_events,
+                        online_count: props.online_count,
+                        active_friend_names: props.active_friend_names,
+                        scroll: props.activity_scroll,
+                        marquee_tick: props.marquee_tick,
+                    },
+                    props.activity_rect_slot,
+                );
             }
             RightSidebarComponent::Bonsai => {
                 if props.use_bonsai_v2 {
@@ -218,14 +242,15 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     }
 }
 
-/// Fixed rows a panel needs to render (excluding its rule). A panel shows at
-/// this full height or not at all; the music stage in particular is never
-/// clipped to a partial viewport.
+/// Rows a panel needs to render (excluding its rule). A panel shows at this
+/// full height or not at all; the music stage in particular is never clipped
+/// to a partial viewport. Activity is the exception in the other direction:
+/// this is its minimum, and it grows into whatever the rail has left over.
 fn component_height(component: RightSidebarComponent) -> u16 {
     match component {
         RightSidebarComponent::Visualizer => VISUALIZER_HEIGHT,
         RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
-        RightSidebarComponent::Pet => CAT_HEIGHT,
+        RightSidebarComponent::Activity => ACTIVITY_PANEL_MIN_HEIGHT,
         RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
         RightSidebarComponent::Daily => DAILY_HEIGHT,
     }
@@ -258,53 +283,6 @@ fn visible_components(
     // Restore top-to-bottom render order.
     visible.reverse();
     visible
-}
-
-fn draw_cat_locked(frame: &mut Frame, area: Rect) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-
-    let top = Rect {
-        x: area.x,
-        y: area.y + area.height.saturating_sub(2) / 2,
-        width: area.width,
-        height: 1,
-    };
-    let bottom = Rect {
-        x: area.x,
-        y: top.y.saturating_add(1),
-        width: area.width,
-        height: 1,
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "cat locked",
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        )))
-        .centered(),
-        top,
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "CTRL-G",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " for shop",
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]))
-        .centered(),
-        bottom,
-    );
 }
 
 /// Top-of-rail time. Centered, `⊙` glyph in dim amber, optional timezone
@@ -1182,7 +1160,7 @@ mod tests {
             on(RightSidebarComponent::Bonsai),
             on(RightSidebarComponent::Music),
             on(RightSidebarComponent::Visualizer),
-            on(RightSidebarComponent::Pet),
+            on(RightSidebarComponent::Activity),
         ];
         // Tall enough for everything: order is preserved exactly.
         assert_eq!(
@@ -1191,7 +1169,7 @@ mod tests {
                 RightSidebarComponent::Bonsai,
                 RightSidebarComponent::Music,
                 RightSidebarComponent::Visualizer,
-                RightSidebarComponent::Pet,
+                RightSidebarComponent::Activity,
             ]
         );
     }
@@ -1201,7 +1179,7 @@ mod tests {
         let components = [
             off(RightSidebarComponent::Visualizer),
             on(RightSidebarComponent::Music),
-            off(RightSidebarComponent::Pet),
+            off(RightSidebarComponent::Activity),
             on(RightSidebarComponent::Bonsai),
         ];
         assert_eq!(

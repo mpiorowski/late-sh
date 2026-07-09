@@ -100,7 +100,7 @@ pub enum TweakRow {
     TextBrightness,
     RightSidebar,
     RoomListSidebar,
-    LoungeInfo,
+    PetStrip,
     // Compose / Music / Display / Startup groups.
     ComposerKeepFocused,
     StartWithMusicMuted,
@@ -114,7 +114,7 @@ impl TweakRow {
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
-        TweakRow::LoungeInfo,
+        TweakRow::PetStrip,
         TweakRow::ComposerKeepFocused,
         TweakRow::StartWithMusicMuted,
         TweakRow::FlagFallback,
@@ -748,8 +748,8 @@ impl SettingsModalState {
             TweakRow::RoomListSidebar => {
                 self.draft.show_room_list_sidebar ^= true;
             }
-            TweakRow::LoungeInfo => {
-                self.draft.show_dashboard_header ^= true;
+            TweakRow::PetStrip => {
+                self.draft.show_pet_strip ^= true;
             }
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
@@ -1881,7 +1881,6 @@ impl SettingsModalState {
                 ),
                 enable_background_color: self.draft.enable_background_color,
                 text_brightness_adjustment: self.draft.text_brightness_adjustment,
-                show_dashboard_header: self.draft.show_dashboard_header,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 right_sidebar_mode: self.draft.right_sidebar_mode,
                 right_sidebar_components: self.draft.right_sidebar_components.clone(),
@@ -1890,6 +1889,7 @@ impl SettingsModalState {
                 start_with_music_muted: self.draft.start_with_music_muted,
                 land_on_home: self.draft.land_on_home,
                 show_flag_fallback: self.draft.show_flag_fallback,
+                show_pet_strip: self.draft.show_pet_strip,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),
             },

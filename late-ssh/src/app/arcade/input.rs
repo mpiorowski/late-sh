@@ -295,8 +295,9 @@ fn arcade_content_area(app: &App) -> Rect {
     };
 
     let app_inner = if app.show_aquarium_tray && app.shop_state.entitlements().has_aquarium() {
-        let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+        let tray = crate::app::hub::aquarium::ui::top_tray_area(inner);
         Rect {
+            y: inner.y.saturating_add(tray.height),
             height: inner.height.saturating_sub(tray.height),
             ..inner
         }

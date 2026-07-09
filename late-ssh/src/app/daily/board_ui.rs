@@ -326,7 +326,10 @@ fn draw_player_bar(
     if !captured.is_empty() {
         let glyphs: String = captured.iter().map(|kind| piece_glyph(*kind)).collect();
         left.push(Span::raw("   "));
-        left.push(Span::styled(glyphs, Style::default().fg(theme::TEXT_FAINT())));
+        left.push(Span::styled(
+            glyphs,
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
     }
     let advantage = material_advantage(&detail.pieces);
     let own = if color == ChessColor::White {
@@ -374,7 +377,11 @@ const START_COUNTS: [(ChessPieceKind, usize); 5] = [
     (ChessPieceKind::Pawn, 8),
 ];
 
-fn count_pieces(pieces: &[Option<ChessPiece>; 64], color: ChessColor, kind: ChessPieceKind) -> usize {
+fn count_pieces(
+    pieces: &[Option<ChessPiece>; 64],
+    color: ChessColor,
+    kind: ChessPieceKind,
+) -> usize {
     pieces
         .iter()
         .filter(|piece| matches!(piece, Some(piece) if piece.color == color && piece.kind == kind))

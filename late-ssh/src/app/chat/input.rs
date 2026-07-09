@@ -144,8 +144,6 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.show_quit_confirm = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
@@ -187,6 +185,29 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             crate::app::chat::state::VoiceCommand::Mute => app.voice_toggle_muted(),
         };
         app.banner = Some(banner);
+    }
+    if let Some(command) = app.chat.take_requested_aquarium_command() {
+        match command {
+            crate::app::chat::state::AquariumCommand::Toggle => {
+                crate::app::input::toggle_aquarium_tray_globally(app);
+            }
+            crate::app::chat::state::AquariumCommand::Feed => {
+                crate::app::input::feed_aquarium_globally(app);
+            }
+        }
+    }
+    if let Some(command) = app.chat.take_requested_pet_command() {
+        match command {
+            crate::app::chat::state::PetCommand::Feed => {
+                crate::app::input::pet_feed_globally(app);
+            }
+            crate::app::chat::state::PetCommand::Water => {
+                crate::app::input::pet_water_globally(app);
+            }
+            crate::app::chat::state::PetCommand::Treat => {
+                crate::app::input::pet_treat_globally(app);
+            }
+        }
     }
     if let Some(topic) = app.chat.take_requested_help_topic() {
         open_help_modal(app, topic);

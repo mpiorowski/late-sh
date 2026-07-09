@@ -609,7 +609,8 @@ fn rooms_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let mut inner = Block::default().borders(Borders::ALL).inner(area);
     if app.show_aquarium_tray && app.shop_state.entitlements().has_aquarium() {
-        let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+        let tray = crate::app::hub::aquarium::ui::top_tray_area(inner);
+        inner.y = inner.y.saturating_add(tray.height);
         inner.height = inner.height.saturating_sub(tray.height);
     }
 
