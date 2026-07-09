@@ -1938,6 +1938,7 @@ fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
     let hints = [
         ("Settings", ctrl_hint("O", use_caret)),
         ("Hub", ctrl_hint("G", use_caret)),
+        ("Lobby", ctrl_hint("Q", use_caret)),
         ("Guide", "?"),
     ];
 
@@ -1959,8 +1960,10 @@ fn ctrl_hint(key: &'static str, use_caret: bool) -> &'static str {
     match (use_caret, key) {
         (true, "O") => "^O",
         (true, "G") => "^G",
+        (true, "Q") => "^Q",
         (false, "O") => "Ctrl+O",
         (false, "G") => "Ctrl+G",
+        (false, "Q") => "Ctrl+Q",
         _ => key,
     }
 }

@@ -3790,21 +3790,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        // `g` opens Daily Games, but chat message selection owns `g` for
-        // "jump to reply / clear selection" — yield while a message is
-        // selected (same carve-out as the `?` guide shortcut).
-        b'g' | b'G'
-            if !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing
-                && !ctx.showcase_composing
-                && !ctx.work_composing
-                && !(matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
-                    && app.chat.selected_message_id.is_some()) =>
-        {
-            open_daily_modal_globally(app);
-            true
-        }
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);

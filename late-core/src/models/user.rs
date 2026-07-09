@@ -198,7 +198,7 @@ impl RightSidebarComponent {
             Self::Music => "Audio playback",
             Self::Activity => "Activity",
             Self::Bonsai => "Bonsai",
-            Self::Daily => "Daily Games",
+            Self::Daily => "Lobby",
         }
     }
 

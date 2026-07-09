@@ -20,7 +20,9 @@ use crate::app::games::{
     chips::svc::ChipService,
 };
 
-pub const DAILY_MAX_ACTIVE_ENTRIES: i64 = 5;
+// 4 matches the sidebar panel's match slots exactly, so every active entry
+// is always visible there — no overflow handling.
+pub const DAILY_MAX_ACTIVE_ENTRIES: i64 = 4;
 pub const DAILY_MOVE_HOURS: i64 = 24;
 pub const DAILY_CHESS_WIN_CHIP_PAYOUT: i64 = 500;
 const DAILY_CHESS_WIN_LEDGER_REASON: &str = "daily_chess_win";

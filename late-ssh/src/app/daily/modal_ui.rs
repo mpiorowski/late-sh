@@ -1,5 +1,6 @@
-//! Daily Games modal: your matches + the open lobby in one scrollable list.
-//! All daily-games interaction happens here; the sidebar panel is passive.
+//! Lobby modal (daily games): your matches + the open lobby in one
+//! scrollable list. All daily-games interaction happens here; the sidebar
+//! panel is passive.
 
 use chrono::Utc;
 use ratatui::{
@@ -40,7 +41,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, daily: &DailyState) {
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Daily Games ")
+        .title(" Lobby ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())

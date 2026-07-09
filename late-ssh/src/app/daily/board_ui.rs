@@ -453,7 +453,7 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
             "pieces ascii"
         },
     );
-    hint(&mut spans, "Esc", "back to daily games");
+    hint(&mut spans, "Esc", "back to lobby");
     if let Some(last) = spans.last_mut() {
         let trimmed = last.content.trim_end().to_string();
         *last = Span::styled(trimmed, Style::default().fg(theme::TEXT_DIM()));

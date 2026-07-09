@@ -51,7 +51,7 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 | `late-ssh/src/app/artboard/CONTEXT.md` | Shared ASCII Artboard, dartboard code, editor input/rendering, canvas persistence, provenance, gallery snapshots, archives, or artboard bans. | Artboard lifecycle, live `dartboard_local` server, per-session editor state, active/view/archive input routing, swatches/glyph picker, provenance, persistence/archive rollovers, gallery contract, tests, and fragile layout/provenance areas. |
 | `late-ssh/src/app/arcade/CONTEXT.md` | The Arcade screen, single-player games, high scores, daily puzzles, nonogram assets, Arcade rewards, or adding a new Arcade game. | Arcade lifecycle, lobby/navigation, per-game source shape, persistence/service patterns, high-score and daily puzzle categories, chip reward hooks, leaderboard integration, nonogram runtime assets, controls, and Arcade test guidance. |
 | `late-ssh/src/app/games/CONTEXT.md` | Shared game primitives used by both Arcade and Rooms, especially cards, Late Chips, or the `chess_core` chess kernel. | Boundaries for shared card rendering, chip services, and the room-agnostic chess rules/board renderer; use this for common primitives only, not Arcade or Rooms runtime/UI ownership. |
-| `late-ssh/src/app/daily/CONTEXT.md` | Daily correspondence games: the open-challenge lobby, daily chess matches, the `g` Daily Games modal, the sidebar Daily panel, the full-screen daily board, move deadlines/forfeits, `/challenge`, or the `daily_matches` table. | Daily domain context: `DailyService` snapshot/events/sweeper, single-table challenge+match persistence with revision guard, the three UI surfaces, your-turn desktop notify, v1 scope boundaries, and future hooks (wagers, spectating, announcements). |
+| `late-ssh/src/app/daily/CONTEXT.md` | Daily correspondence games: the open-challenge lobby, daily chess matches, the `Ctrl+Q` Lobby modal, the sidebar Lobby panel, the full-screen daily board, move deadlines/forfeits, `/challenge`, or the `daily_matches` table. | Daily domain context: `DailyService` snapshot/events/sweeper, single-table challenge+match persistence with revision guard, the three UI surfaces, your-turn desktop notify, v1 scope boundaries, and future hooks (wagers, spectating, announcements). |
 | `late-ssh/src/app/clubhouse/CONTEXT.md` | The Late Lounge tavern (screen `0`): the shared multiplayer lobby, seating/walkers, speech bubbles, emotes, door ambience, the first-visit tutorial, or the generated floor plan. | Clubhouse module map, the process-global `SharedLobby` contract (single-replica!), bubble/composer chat surface, tutorial persistence, and map-generator gotchas. |
 
 Routing rules for future LLM agents:
@@ -1074,7 +1074,7 @@ Then deploy the `late-ssh/src/app/door/lateania/svc.rs` fix that replaces/dedupe
 | **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 | **Directory** | 6 | Active | Profiles, Projects, and Pinstar tabs, switched with `[` / `]` or idle `h` / `l`. Profiles is the in-app work-profile browser/editor and its detail panel previews the public web profile sections (work fields, Settings Bio, late.fetch, Showcases); Projects is the Showcase browser/editor; Pinstar embeds the existing collaborative diagram browser/editor. |
 | _Lateania / NetHack / Green Dragon / Rebels / dopewars_ | — | Active | Live door-game screens, not top-level tabs. Launched only from the Games hub (page 3); `Esc` (Lateania) or quitting the game (Rebels/NetHack/dopewars, e.g. `Ctrl-C`) returns to the hub. Per-game behavior lives in each door's CONTEXT.md (`lateania/`, `greendragon/`, `nethack/`, `dopewars/`). |
-| _Daily Chess board_ | — | Active | Full-screen correspondence-chess board (`Screen::DailyMatch`), not a top-level tab. Entered only from the Daily Games modal (`g`); `Esc` returns to the modal. Lives in `late-ssh/src/app/daily/`. |
+| _Daily Chess board_ | — | Active | Full-screen correspondence-chess board (`Screen::DailyMatch`), not a top-level tab. Entered only from the Lobby modal (`Ctrl+Q`); `Esc` returns to the modal. Lives in `late-ssh/src/app/daily/`. |
 
 ### Layout
 
@@ -1101,7 +1101,7 @@ One global overlay owns general app help plus the former Pair, terminal FAQ, and
 - Module: `late-ssh/src/app/help_modal/`.
 - State flag on `App`: `show_help` paired with `help_modal_state`.
 - Opening: global `?` in `app/input.rs`; `/binds` opens Chat, `/music` opens Music, Bonsai `?` opens Bonsai. `Ctrl+R` and `Ctrl+L` are no longer global help keybindings.
-- Outer frame: `app/render.rs::app_frame_help_hint_title()` advertises `Settings Ctrl+O`, `Hub Ctrl+G`, and `Guide ?`; the aquarium moved to the `/aquarium` composer command.
+- Outer frame: `app/render.rs::app_frame_help_hint_title()` advertises `Settings Ctrl+O`, `Hub Ctrl+G`, `Lobby Ctrl+Q`, and `Guide ?`; the aquarium moved to the `/aquarium` composer command.
 - Topics include Pair, Overview, Chat, Social, Directory, Music, News, Arcade, Tables, Lateania, Copy, Links, Images, Selection, Notifications, CLI YouTube, Economy, Bonsai, Settings, Architecture.
 - Footer keys: `Tab/S+Tab` switch topics, `j/k`/arrows scroll, `Esc/q/?` close.
 
@@ -1132,9 +1132,8 @@ Content invariants worth preserving when editing `data.rs`:
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
 | `w` | Global (not composing, active Arcade games override) | Open the Bonsai care modal |
-| `g` | Global (not composing; yields to chat message selection and active games) | Open the Daily Games modal (correspondence chess: lobby, challenges, matches) |
-| `j`/`k`, `Enter`, `c`, `C`, `x` | Daily Games modal | Move selection; open a match / claim a challenge (with confirm); post an open challenge; post a directed challenge (username prompt); cancel your own challenge |
-| arrows / `w/a/s/d`, `Space`/`Enter`, `r`, `p`, `Esc` | Daily Chess board | Move cursor; pick/play a move; resign (press twice); toggle piece graphics; back to the Daily Games modal |
+| `j`/`k`, `Enter`, `c`, `C`, `x` | Lobby modal | Move selection; open a match / claim a challenge (with confirm); post an open challenge; post a directed challenge (username prompt); cancel your own challenge |
+| arrows / `w/a/s/d`, `Space`/`Enter`, `r`, `p`, `Esc` | Daily Chess board | Move cursor; pick/play a move; resign (press twice); toggle piece graphics; back to the Lobby modal |
 | `Ctrl+B` | Reserved global for admin/moderator sessions, except active Artboard editing | Open the Bonsai V2 care modal |
 | `w` | Bonsai modal | Water bonsai / replant dead tree, with a short watering animation |
 | `p` | Bonsai modal | Hard-prune: -100 growth, reroll shape, reset today's wrong-branch cuts |
@@ -1161,7 +1160,7 @@ Content invariants worth preserving when editing `data.rs`:
 | Chat keys | Home / Rooms embedded chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
 | `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+G` | Reserved global, except active Artboard editing | Open Hub on the Shop tab |
-| `Ctrl+Q` | Reserved global, except active Artboard editing | Toggle the Daily Games modal from anywhere |
+| `Ctrl+Q` | Reserved global, except active Artboard editing | Toggle the Lobby modal (daily correspondence games) from anywhere; the only key for it (bare `g` is unbound) |
 | `Tab` / `Shift+Tab` | Settings modal | Switch tabs: Settings, Bio, Themes, RSS, Account, and hidden Special when available |
 | `↑` / `↓` / `j` / `k` | Settings modal | Move within the active tab. Settings rows include Username, IDE, Terminal, OS, Langs, Theme, Background, Text Brightness, Right sidebar, Room list, Pet companion strip, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
