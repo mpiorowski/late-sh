@@ -1228,13 +1228,15 @@ pub fn extract_land_on_home(settings: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether the aquarium tray was open when the user last toggled it;
-/// defaults to false so the tray starts closed for everyone else.
+/// Whether the aquarium tray was open when the user last toggled it; defaults
+/// to true so the tray appears as soon as the Aquarium is unlocked, the same
+/// way `show_pet_strip` reveals the companion. Rendering is gated on the
+/// entitlement, so this stays inert for everyone who does not own one.
 pub fn extract_show_aquarium_tray(settings: &Value) -> bool {
     settings
         .get(SHOW_AQUARIUM_TRAY_KEY)
         .and_then(Value::as_bool)
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 /// Tweak: show the pet strip above the chat composer (pet owners only);
