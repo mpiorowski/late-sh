@@ -68,8 +68,10 @@ pub(crate) fn draw(
     };
 
     // Size the board to the space left after the four chrome rows (status,
-    // two player bars, key hints), then centre the whole stack vertically so
-    // the colour labels hug the board instead of floating at the screen edges.
+    // two player bars, key hints). The status and player bars ride with the
+    // board so the colour labels hug it, and the centring keeps that group
+    // mid-screen. Only the key hints break away: they pin to the last row, out
+    // of the way of the board, with the slack absorbed between the two.
     const CHROME_ROWS: u16 = 4;
     let tier = pick_tier(
         content.width as usize,
@@ -85,12 +87,12 @@ pub(crate) fn draw(
         Constraint::Length(1),       // top player bar
         Constraint::Length(board_h), // board
         Constraint::Length(1),       // bottom player bar
+        Constraint::Min(0),          // slack, pushing the hints to the floor
         Constraint::Length(1),       // key hints
-        Constraint::Min(0),
     ])
     .split(content);
     let (status_row, top_bar, board_row, bottom_bar, hint_row) =
-        (rows[1], rows[2], rows[3], rows[4], rows[5]);
+        (rows[1], rows[2], rows[3], rows[4], rows[6]);
 
     let orientation = daily.board_orientation();
     let my_turn = detail.is_active() && detail.row.turn_user_id == Some(daily.user_id());

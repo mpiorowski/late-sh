@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/daily` (correspondence-game service, sidebar panel, modal, full-screen board) plus its persistence in `late-core/src/models/daily_match.rs` and migration `102_create_daily_matches.sql`. Design doc: `devdocs/FRD-DAILY.md`.
 - Domain: async-first correspondence matches between two fixed players. Chess only in v1: post a challenge, walk away, play one move whenever you're around, 24h per move.
 - Primary audience: LLM agents changing daily-game rules, the lobby/challenge flow, the sidebar panel, the modal, the board screen, or deadline/forfeit behavior.
-- Last updated: 2026-07-08 (initial version, written with PR 4 of the FRD delivery plan: your-turn desktop notify + Tables daily-time-control removal).
+- Last updated: 2026-07-09 (board screen: key hints pinned to the bottom row, player bars stay hugging the board).
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with UI copy, keybindings, or v1 scope decisions.
@@ -93,6 +93,7 @@ Cross-module touchpoints (outside this folder):
 
 ### Board screen (`board_*`)
 - `Screen::DailyMatch`, outside the Tab cycle, entered only from the modal; `q`/`Esc` restores the return screen and reopens the modal (one keypress per hop across matches).
+- Vertical layout: the status line and the two player bars ride with the board as one centred group, so the colour/name labels always hug the board edges. The key-hint row is the exception and pins to the last row of the content column, with a `Min(0)` slack row absorbing the gap. Board sizing still reserves all four chrome rows (`CHROME_ROWS`), so pinning the hints does not change the tier the board picks.
 - Loads the full row on open and on every `MovePlayed`/`ChallengeClaimed`/`MatchFinished` for the open match id (reload coalescing via `reload_pending`). Usernames are captured at open so names survive the match leaving the active snapshot on finish.
 - Move flow mirrors table chess: cursor + Space/Enter or mouse click, promotion defaults to queen, `r` resign (press twice), `p` toggles piece graphics. The optimistic move applies locally and reconciles on the next reload; legal moves are cleared until then so the cursor can't pick up opponent pieces.
 - Piece-graphics image ids seed from `match_id` (the `placement_seed` param of `chess_core::board_ui`).
