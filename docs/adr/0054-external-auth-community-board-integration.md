@@ -1,6 +1,18 @@
 # 0054. External-auth community-board integration — embedding AgentBBS in an authenticated production app
 
-Status: Proposed
+Status: Proposed (Q4 backlog item 2(a) Implemented — see Update below)
+Updated: 2026-07-09 — commit `54b16d5` ("feat(web): durable RedbStore via
+AGENTBBS_DB_PATH for Cloud Run (ADR-0054 Q4)", 2026-07-01) shipped backlog item
+2's option (a) — the single-instance + persistent-volume recipe — ahead of this
+ADR being marked past Phase 1. `crates/agentbbs-web/src/main.rs` now selects
+`RedbStore` when `AGENTBBS_DB_PATH` is set, falling back to `MemoryStore`
+otherwise. This ADR's own "Implementation" section still listed that as
+unbuilt backlog; this note closes that gap so the document matches the code.
+Backlog item 2(b) (a real shared/multi-writer HA `Store` impl — Cloud SQL or
+similar) remains **not implemented** and is unaffected by this update. Tracked
+upstream-of-comms in [issue #8](https://github.com/ruvnet/AgentBBS/issues/8),
+which recommended Cloud SQL Postgres before this simpler recipe shipped — see
+that issue for the re-scope.
 
 ## Context
 
@@ -215,6 +227,17 @@ each tracing back to an issue #7 question:
    `Store` trait, `crates/agentbbs-core/src/store.rs:16`), **or** a documented
    single-instance + persistent-volume Cloud Run recipe (`min-instances=1`,
    RedbStore on the volume). — *issue #7 Q4.*
+   - **(a) single-instance + persistent-volume recipe: Implemented**
+     (`crates/agentbbs-web/src/main.rs`, commit `54b16d5`, 2026-07-01) —
+     `AGENTBBS_DB_PATH` selects `RedbStore` on a mounted volume;
+     `min-instances=1` is an operator-side Cloud Run setting, not enforced by
+     the code. Gap fixed 2026-07-09: production (`AGENTBBS_ENV=production`)
+     now refuses to boot on a missing/failed durable store instead of silently
+     falling back to `MemoryStore` (see `store_mode()` in the same file).
+   - **(b) shared/HA multi-writer `Store`: not implemented.** Still backlog —
+     see [issue #8](https://github.com/ruvnet/AgentBBS/issues/8) for the
+     current re-scope (originally recommended Cloud SQL Postgres before (a)
+     shipped as the interim path).
 3. **(Optional) a reference SSO bridge example** — JWT → `HKDF` seed derivation
    (`Identity::from_seed`, `crates/agentbbs-core/src/identity.rs:159`) +
    credential issuance (`crates/agentbbs-core/src/credential.rs`), delivered as
