@@ -3318,7 +3318,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
-fn open_hub_modal_globally(app: &mut App) {
+fn open_hub_modal_globally(app: &mut App, tab: crate::app::hub::state::HubTab) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3335,7 +3335,7 @@ fn open_hub_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+    app.hub_state.open(tab);
     app.show_hub_modal = true;
 }
 
@@ -3345,7 +3345,7 @@ pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "Unlock Aquarium in Hub Shop",
         ));
-        open_hub_modal_globally(app);
+        open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
         return;
     }
     app.show_aquarium_tray = !app.show_aquarium_tray;
@@ -3371,7 +3371,7 @@ fn pet_available_or_nudge(app: &mut App) -> bool {
     app.banner = Some(crate::app::common::primitives::Banner::error(
         "Unlock Pet Companion in Hub Shop",
     ));
-    open_hub_modal_globally(app);
+    open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
     false
 }
 
@@ -3396,7 +3396,7 @@ pub(crate) fn pet_feed_globally(app: &mut App) {
     }
     let outcome = app.pet_state.feed(app.shop_state.pet_food_quantity());
     if outcome == crate::app::pet::state::FeedOutcome::OutOfFood {
-        open_hub_modal_globally(app);
+        open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
     }
 }
 
@@ -3542,7 +3542,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         CTRL_G => {
-            open_hub_modal_globally(app);
+            open_hub_modal_globally(app, crate::app::hub::state::HubTab::Dailies);
             true
         }
         CTRL_Q => {
