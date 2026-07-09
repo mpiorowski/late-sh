@@ -25,7 +25,7 @@ use late_core::models::user::{
 
 const TIME_HEIGHT: u16 = 1;
 const RULE_HEIGHT: u16 = 1;
-const VISUALIZER_HEIGHT: u16 = 6;
+const VISUALIZER_HEIGHT: u16 = 4;
 // Full music stage: volume rows (2) + three dock entries (title +
 // now-playing, 6) + labeled rule (1) + detail area (6) + keybind footer
 // (1). Constant for ALL active sources — chrome must not move between
@@ -36,8 +36,9 @@ const MUSIC_STAGE_HEIGHT: u16 = 16;
 // Nightride attribution row).
 const MUSIC_DETAIL_HEIGHT: u16 = 6;
 const MUSIC_QUEUE_HEIGHT: u16 = 3;
-// Bonsai is kept fixed when shown.
-const BONSAI_MIN_HEIGHT: u16 = 16;
+// Bonsai is kept fixed when shown; the preview renderer scales the tree to
+// whatever height it gets.
+const BONSAI_MIN_HEIGHT: u16 = 10;
 // Daily games: fixed, stable chrome (see `daily/panel.rs`).
 const DAILY_HEIGHT: u16 = crate::app::daily::panel::DAILY_PANEL_HEIGHT;
 
@@ -122,10 +123,10 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     };
 
     // Responsiveness: the clock is pinned at the top, then enabled panels
-    // render in the user's chosen order. When space runs short we cut from the
-    // top of the list (the first/topmost panel goes first), keeping the run of
-    // bottom panels that fits. Every panel renders at its full height or not
-    // at all. Leftover rows go to the Activity panel (the one flexible panel)
+    // render in the user's chosen order. When space runs short panels are
+    // dropped by `shrink_priority` (ambience first, music stage last), not
+    // by list position. Every panel renders at its full height or not at
+    // all. Leftover rows go to the Activity panel (the one flexible panel)
     // when it is visible; otherwise they collect just above the final panel,
     // which sticks to the bottom of the rail.
     let visible = visible_components(props.components, area.height);
@@ -201,6 +202,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                         youtube_source_count: props.youtube_source_count,
                         icecast_source_count: props.icecast_source_count,
                         radio_source_count: props.radio_source_count,
+                        marquee_tick: props.marquee_tick,
                     },
                 );
             }
@@ -256,33 +258,52 @@ fn component_height(component: RightSidebarComponent) -> u16 {
     }
 }
 
+/// How eagerly a panel is dropped when the rail runs out of rows: higher
+/// drops first. Deliberately independent of display order — reordering the
+/// sidebar changes where panels sit, not which ones survive a short
+/// terminal. Ambience (visualizer, bonsai) goes first; the music stage is
+/// the last panel standing.
+fn shrink_priority(component: RightSidebarComponent) -> u8 {
+    match component {
+        RightSidebarComponent::Visualizer => 4, // first to go
+        RightSidebarComponent::Bonsai => 3,
+        RightSidebarComponent::Daily => 2,
+        RightSidebarComponent::Activity => 1,
+        RightSidebarComponent::Music => 0, // last panel standing
+    }
+}
+
 /// Pick which enabled panels fit, in render order, given the available height.
-/// Cuts from the top: we keep the longest run of bottom panels that fits,
-/// dropping the topmost panels first (so e.g. the visualizer goes before the
-/// music stage when it sits above it).
+/// Panels are kept most-important-first (`shrink_priority`); a panel that
+/// doesn't fit is skipped rather than ending the walk, so one tall panel
+/// can't shadow a short one that would still fit.
 fn visible_components(
     components: &[RightSidebarComponentSetting],
     height: u16,
 ) -> Vec<RightSidebarComponent> {
     let mut remaining = height.saturating_sub(TIME_HEIGHT);
-    let mut visible = Vec::new();
-    // Walk bottom to top, keeping panels until one doesn't fit; everything
-    // above that point is cut.
-    for setting in components.iter().rev() {
-        if !setting.enabled {
-            continue;
-        }
-        let need = RULE_HEIGHT + component_height(setting.component);
+    let enabled: Vec<RightSidebarComponent> = components
+        .iter()
+        .filter(|setting| setting.enabled)
+        .map(|setting| setting.component)
+        .collect();
+
+    let mut by_priority = enabled.clone();
+    by_priority.sort_by_key(|component| shrink_priority(*component));
+    let mut keep = Vec::new();
+    for component in by_priority {
+        let need = RULE_HEIGHT + component_height(component);
         if need <= remaining {
-            visible.push(setting.component);
             remaining -= need;
-        } else {
-            break;
+            keep.push(component);
         }
     }
-    // Restore top-to-bottom render order.
-    visible.reverse();
-    visible
+
+    // Survivors render in the user's display order.
+    enabled
+        .into_iter()
+        .filter(|component| keep.contains(component))
+        .collect()
 }
 
 /// Top-of-rail time. Centered, `⊙` glyph in dim amber, optional timezone
@@ -359,6 +380,9 @@ struct MusicStageProps<'a> {
     youtube_source_count: usize,
     icecast_source_count: usize,
     radio_source_count: usize,
+    /// Free-running frame counter driving the marquee on now-playing rows
+    /// too long for the rail (same clock as the Activity panel's rows).
+    marquee_tick: usize,
 }
 
 /// Music stage: fixed dock + fixed detail area. Rows 0-1 volume, rows 2-7
@@ -405,6 +429,7 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
         width,
         Some(&youtube_track_text(props.queue)),
         source == AudioSource::Youtube,
+        props.marquee_tick,
     ));
     lines.push(stage_title_line(
         width,
@@ -417,6 +442,7 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
         width,
         Some(props.radio_now_playing.unwrap_or(station_name)),
         source == AudioSource::Radio,
+        props.marquee_tick,
     ));
     lines.push(stage_title_line(
         width,
@@ -428,12 +454,13 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
         width,
         props.now_playing.map(icecast_track_text).as_deref(),
         source == AudioSource::Icecast,
+        props.marquee_tick,
     ));
 
     lines.push(labeled_rule_line(width, source_label(source)));
 
     let mut detail = match source {
-        AudioSource::Youtube => youtube_detail_lines(width, props.queue),
+        AudioSource::Youtube => youtube_detail_lines(width, props.queue, props.marquee_tick),
         AudioSource::Icecast => {
             icecast_detail_lines(width, props.now_playing, props.selected_stream)
         }
@@ -460,8 +487,9 @@ fn source_label(source: AudioSource) -> &'static str {
 }
 
 /// Dock now-playing row. The active source's track brightens; inactive
-/// stays dim. `None` renders the icecast `no signal` placeholder.
-fn dock_track_line(width: u16, track: Option<&str>, active: bool) -> Line<'static> {
+/// stays dim. `None` renders the icecast `no signal` placeholder. Tracks
+/// longer than the rail scroll (marquee) so the full name stays readable.
+fn dock_track_line(width: u16, track: Option<&str>, active: bool, tick: usize) -> Line<'static> {
     match track {
         Some(text) => {
             let style = if active {
@@ -471,7 +499,10 @@ fn dock_track_line(width: u16, track: Option<&str>, active: bool) -> Line<'stati
             } else {
                 Style::default().fg(theme::TEXT_DIM())
             };
-            Line::from(Span::styled(truncate_chars(text, width as usize), style))
+            Line::from(Span::styled(
+                crate::app::common::marquee::marquee_text(text, width as usize, tick),
+                style,
+            ))
         }
         None => Line::from(Span::styled(
             "no signal",
@@ -635,7 +666,7 @@ fn keybind_row_line(width: u16, groups: &[(&str, &str)]) -> Line<'static> {
 /// YouTube detail rows (≤ 5; caller pads): progress/elapsed, skip meter or
 /// blank, `next ⌄`, then up to `MUSIC_QUEUE_HEIGHT` queue rows or
 /// `· fallback next`. With nothing submitted, the fallback-stream hints.
-fn youtube_detail_lines(width: u16, queue: &QueueSnapshot) -> Vec<Line<'static>> {
+fn youtube_detail_lines(width: u16, queue: &QueueSnapshot, tick: usize) -> Vec<Line<'static>> {
     let width = width as usize;
     let mut lines = Vec::with_capacity(MUSIC_DETAIL_HEIGHT as usize);
 
@@ -685,7 +716,7 @@ fn youtube_detail_lines(width: u16, queue: &QueueSnapshot) -> Vec<Line<'static>>
                 .take(MUSIC_QUEUE_HEIGHT as usize)
                 .enumerate()
             {
-                lines.push(queue_next_line(idx, item, width));
+                lines.push(queue_next_line(idx, item, width, tick));
             }
         }
     } else {
@@ -911,8 +942,9 @@ fn skip_meter_spans(progress: &super::super::audio::svc::SkipProgress) -> Vec<Sp
 }
 
 /// One entry in the YouTube "next" list. Number, title, then a dim score
-/// right-aligned: `+N` (positive), `-N` (negative), `·` (zero).
-fn queue_next_line(idx: usize, item: &QueueItemView, width: usize) -> Line<'static> {
+/// right-aligned: `+N` (positive), `-N` (negative), `·` (zero). Long titles
+/// scroll (marquee) inside their budget.
+fn queue_next_line(idx: usize, item: &QueueItemView, width: usize, tick: usize) -> Line<'static> {
     let n_text = format!("{}  ", idx + 1);
     let title = item
         .title
@@ -938,7 +970,7 @@ fn queue_next_line(idx: usize, item: &QueueItemView, width: usize) -> Line<'stat
     let prefix_w = n_text.chars().count();
     let score_w = score_text.chars().count();
     let title_budget = width.saturating_sub(prefix_w + score_w + 2);
-    let title_text = truncate_chars(&title, title_budget);
+    let title_text = crate::app::common::marquee::marquee_text(&title, title_budget, tick);
     let pad = title_budget.saturating_sub(title_text.chars().count());
 
     Line::from(vec![
@@ -1029,6 +1061,7 @@ mod tests {
                 youtube_source_count: 3,
                 icecast_source_count: 9,
                 radio_source_count: 1,
+                marquee_tick: 0,
             },
         )
     }
@@ -1134,6 +1167,7 @@ mod tests {
                 youtube_source_count: 3,
                 icecast_source_count: 9,
                 radio_source_count: 1,
+                marquee_tick: 0,
             },
         );
         let texts: Vec<String> = lines.iter().map(line_text).collect();
@@ -1189,17 +1223,33 @@ mod tests {
     }
 
     #[test]
-    fn visible_components_cuts_from_the_top() {
-        // Order: bonsai (16), visualizer (6), music (16). With room for
-        // time + visualizer + music but not bonsai, the topmost panel (bonsai)
-        // is cut while the panels below it are kept.
+    fn visible_components_drops_by_priority_not_position() {
+        // Music sits at the TOP of the display order. With room for only one
+        // panel, music survives (lowest shrink priority) even though the old
+        // cut-from-the-top rule would have dropped it first.
         let components = [
+            on(RightSidebarComponent::Music),
             on(RightSidebarComponent::Bonsai),
+        ];
+        let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + 1;
+        assert_eq!(
+            visible_components(&components, height),
+            vec![RightSidebarComponent::Music]
+        );
+    }
+
+    #[test]
+    fn visible_components_skips_unfit_panel_without_stopping() {
+        // Bonsai (10) doesn't fit but the visualizer (4) below the cut still
+        // does: the walk skips bonsai instead of ending, so lower-priority
+        // panels that fit are kept.
+        let components = [
             on(RightSidebarComponent::Visualizer),
             on(RightSidebarComponent::Music),
+            on(RightSidebarComponent::Bonsai),
         ];
         let height =
-            TIME_HEIGHT + RULE_HEIGHT + VISUALIZER_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + 1;
+            TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + RULE_HEIGHT + VISUALIZER_HEIGHT;
         assert_eq!(
             visible_components(&components, height),
             vec![

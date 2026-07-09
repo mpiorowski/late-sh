@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/daily` (correspondence-game service, sidebar panel, modal, full-screen board) plus its persistence in `late-core/src/models/daily_match.rs` and migration `102_create_daily_matches.sql`. Design doc: `devdocs/FRD-DAILY.md`.
 - Domain: async-first correspondence matches between two fixed players. Chess only in v1: post a challenge, walk away, play one move whenever you're around, 24h per move.
 - Primary audience: LLM agents changing daily-game rules, the lobby/challenge flow, the sidebar panel, the modal, the board screen, or deadline/forfeit behavior.
-- Last updated: 2026-07-09 (board screen: key hints pinned to the bottom row, player bars stay hugging the board).
+- Last updated: 2026-07-09 (modal grew to near-fullscreen; reserved global `Ctrl+Q` toggles it from anywhere).
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with UI copy, keybindings, or v1 scope decisions.
@@ -56,7 +56,7 @@ Cross-module touchpoints (outside this folder):
 - `main.rs`: constructs `DailyService`, runs `refresh_task()` + `start_sweeper_task()` once per process.
 - `app/state.rs`: `App::daily` (`DailyState`), `show_daily_modal`, `SessionConfig::daily_service`; `DailyState::new` receives a cloned `notify::Notifier`.
 - `app/tick.rs`: `self.daily.tick()` returns targeted error/win banners.
-- `app/input.rs`: `g` (not composing) opens the modal (marks lobby seen first); modal input routes to `modal_input.rs`; `Screen::DailyMatch` routes to `board_input.rs`.
+- `app/input.rs`: `g` (not composing) opens the modal (marks lobby seen first); reserved global `Ctrl+Q` toggles it from anywhere; modal input routes to `modal_input.rs`; `Screen::DailyMatch` routes to `board_input.rs`.
 - `app/render.rs`: modal + board dispatch, sidebar props population.
 - `app/common/primitives.rs`: `Screen::DailyMatch` (outside the Tab cycle, like door games).
 - `app/common/sidebar.rs`: `DAILY_HEIGHT`, render arm, `SidebarProps.daily`.
@@ -87,7 +87,8 @@ Cross-module touchpoints (outside this folder):
 - The lobby line is the liquidity engine: other people's open challenges glow when new since the modal was last opened. Own challenges never glow. `seen_open_ids` is seeded at session start so pre-existing challenges don't glow on login.
 
 ### Daily Games modal (`modal_*`)
-- Opened by global `g` (not composing; yields to chat message selection and active games) and from the panel hint. Opening calls `mark_lobby_seen`.
+- Opened by global `g` (not composing; yields to chat message selection and active games), by reserved global `Ctrl+Q` (works anywhere, including while composing; pressed again it closes the modal), and from the panel hint. Opening calls `mark_lobby_seen`.
+- Near-fullscreen: sized from the terminal minus a margin (8 cols / 4 rows), capped at 100x40 so lines stay readable on large terminals. The daily surface is a primary destination, not a peek.
 - One scrollable list, `j`/`k`: your matches (Enter opens the board), then every open challenge (Enter claims with a confirm second-press; `x` cancels your own). `c` posts an open challenge, `C` opens the directed-challenge username prompt, `Esc`/`q` closes (prompt and confirm consume the first Esc).
 - Composer command `/challenge @user chess` / `/challenge chess` posts through the same task path via chat state's `DailyChallengeRequest` handoff.
 

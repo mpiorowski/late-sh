@@ -24,6 +24,7 @@ use vte::{Params, Parser, Perform};
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
 const CTRL_O: u8 = 0x0F;
+const CTRL_Q: u8 = 0x11;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
 
@@ -3542,6 +3543,16 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         }
         CTRL_G => {
             open_hub_modal_globally(app);
+            true
+        }
+        CTRL_Q => {
+            // Toggle: the daily surface is built for fast in-and-out, so the
+            // same chord that opens it closes it.
+            if app.show_daily_modal {
+                app.show_daily_modal = false;
+            } else {
+                open_daily_modal_globally(app);
+            }
             true
         }
         _ => false,

@@ -19,11 +19,24 @@ use crate::app::{
     games::chess_core::types::ChessColor,
 };
 
-const MODAL_WIDTH: u16 = 72;
-const MODAL_HEIGHT: u16 = 26;
+// Near-fullscreen: daily games are a primary destination, not a peek. A
+// margin keeps the screen behind visible so it still reads as a modal; caps
+// keep line lengths sane on very large terminals.
+const MODAL_MAX_WIDTH: u16 = 100;
+const MODAL_MAX_HEIGHT: u16 = 40;
+const MODAL_H_MARGIN: u16 = 8;
+const MODAL_V_MARGIN: u16 = 4;
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, daily: &DailyState) {
-    let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
+    let width = area
+        .width
+        .saturating_sub(MODAL_H_MARGIN)
+        .min(MODAL_MAX_WIDTH);
+    let height = area
+        .height
+        .saturating_sub(MODAL_V_MARGIN)
+        .min(MODAL_MAX_HEIGHT);
+    let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
