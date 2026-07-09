@@ -317,7 +317,7 @@ impl Perform for VtCollector {
     }
 
     fn hook(&mut self, _: &Params, intermediates: &[u8], ignore: bool, action: char) {
-        if !ignore && intermediates == [b'>'] && action == '|' {
+        if !ignore && intermediates == *b">" && action == '|' {
             self.xtversion = Some(Vec::new());
         }
     }
@@ -423,7 +423,7 @@ impl Perform for VtCollector {
             // DA1 reply (CSI ? Ps;... c) from the startup probe. The `?`
             // private marker lands in `intermediates`, which also keeps DA2
             // (`CSI > ... c`) replies from matching here.
-            'c' if intermediates == [b'?'] => {
+            'c' if intermediates == *b"?" => {
                 self.events.push(ParsedInput::DeviceAttributes(params));
             }
             'I' if intermediates.is_empty() => {
@@ -432,7 +432,7 @@ impl Perform for VtCollector {
             'O' if intermediates.is_empty() => {
                 self.events.push(ParsedInput::FocusLost);
             }
-            'M' | 'm' if intermediates == [b'<'] && params.len() >= 3 => {
+            'M' | 'm' if intermediates == *b"<" && params.len() >= 3 => {
                 let raw = p0.unwrap_or_default();
                 let x = params.get(1).copied().unwrap_or(0);
                 let y = params.get(2).copied().unwrap_or(0);

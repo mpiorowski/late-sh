@@ -973,7 +973,7 @@ async fn api_post(
         ));
     }
     let handle = if req.handle.trim().is_empty() {
-        format!("you-{}", &session.chars().take(4).collect::<String>())
+        format!("you-{}", session.chars().take(4).collect::<String>())
     } else {
         req.handle.clone()
     };

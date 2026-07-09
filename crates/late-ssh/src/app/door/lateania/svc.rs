@@ -6461,7 +6461,7 @@ mod tests {
         assert!(
             s.mobs
                 .get(&mob_id)
-                .map_or(true, |m| m.hp <= before - pet_dealt),
+                .is_none_or(|m| m.hp <= before - pet_dealt),
             "the mob's hp reflects the companion's bite",
         );
     }
