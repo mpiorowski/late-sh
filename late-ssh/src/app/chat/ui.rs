@@ -2190,7 +2190,24 @@ pub(crate) fn draw_mention_autocomplete(
     let visible = visible_count as u16;
     let first_prefix = matches.first().map(|m| m.prefix).unwrap_or("@");
     let is_commands = first_prefix == "/";
-    let width = if is_commands { 52 } else { 26 }.min(anchor.width);
+    // Commands carry descriptions, so size the popup to the longest visible
+    // row (selection marker + padded name column + description) instead of a
+    // fixed width that clips long descriptions.
+    let width = if is_commands {
+        let content = matches
+            .iter()
+            .map(|m| {
+                let name_width = m.prefix.len() + m.name.len();
+                let pad = 16usize.saturating_sub(name_width).max(2);
+                3 + name_width + pad + m.description.map_or(0, str::len)
+            })
+            .max()
+            .unwrap_or(50);
+        content as u16 + 3 // borders + right pad
+    } else {
+        26
+    }
+    .min(anchor.width);
     let height = visible + 2; // borders
     let x = anchor.x + 1;
     let y = anchor.y.saturating_sub(height);
@@ -3487,6 +3504,15 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         if view.feeds_available {
             push_slot(RoomSlot::Feeds, &mut push_row);
         }
+        // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
+        if let Some((room, _)) = view.chat_rooms.iter().find(|(r, _)| {
+            is_chat_list_room(r)
+                && r.permanent
+                && r.slug.as_deref() == Some("voice")
+                && !favorite_ids.contains(&r.id)
+        }) {
+            push_slot(RoomSlot::Room(room.id), &mut push_row);
+        }
         // Discover ("+ browse rooms") is the last entry in Core.
         push_slot(RoomSlot::Discover, &mut push_row);
     }
@@ -3498,6 +3524,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             is_chat_list_room(r)
                 && r.kind != "dm"
                 && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
+                && r.slug.as_deref() != Some("voice")
                 && !favorite_ids.contains(&r.id)
         })
         .collect();

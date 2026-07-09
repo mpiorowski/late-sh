@@ -3349,6 +3349,15 @@ pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
     }
     app.show_aquarium_tray = !app.show_aquarium_tray;
     app.persist_show_aquarium_tray();
+    // The tray only renders in the Lounge, so the toggle needs feedback
+    // when typed from anywhere else.
+    app.banner = Some(crate::app::common::primitives::Banner::success(
+        if app.show_aquarium_tray {
+            "Aquarium open in the Lounge"
+        } else {
+            "Aquarium hidden (/aquarium to reopen)"
+        },
+    ));
 }
 
 /// Shared entitlement gate for the pet actions (/feed, /water, /treat and
@@ -3363,6 +3372,18 @@ fn pet_available_or_nudge(app: &mut App) -> bool {
     ));
     open_hub_modal_globally(app);
     false
+}
+
+pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
+    if !pet_available_or_nudge(app) {
+        return;
+    }
+    let shown = app.profile_state.toggle_show_pet_strip();
+    app.banner = Some(crate::app::common::primitives::Banner::success(if shown {
+        "Pet strip shown"
+    } else {
+        "Pet strip hidden (/pet to bring it back)"
+    }));
 }
 
 pub(crate) fn pet_feed_globally(app: &mut App) {

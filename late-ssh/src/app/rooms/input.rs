@@ -607,13 +607,7 @@ fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
 
 fn rooms_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
-    let mut inner = Block::default().borders(Borders::ALL).inner(area);
-    if app.show_aquarium_tray && app.shop_state.entitlements().has_aquarium() {
-        let tray = crate::app::hub::aquarium::ui::top_tray_area(inner);
-        inner.y = inner.y.saturating_add(tray.height);
-        inner.height = inner.height.saturating_sub(tray.height);
-    }
-
+    let inner = Block::default().borders(Borders::ALL).inner(area);
     let profile = app.profile_state.profile();
     if crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, app.screen) {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]

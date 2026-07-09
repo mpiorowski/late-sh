@@ -15,13 +15,25 @@ use super::{
     world::ReefWorld,
 };
 
-// Sized to fit the tallest creature (Big Bert, 9 art rows) plus the 1-row
-// surface and floor with a spare row of water.
-const TOP_TRAY_HEIGHT: u16 = 12;
+// Sized to exactly fit the tallest creature (Big Bert, 9 art rows) plus the
+// 1-row surface and floor.
+const TOP_TRAY_HEIGHT: u16 = 11;
 
 pub(crate) fn top_tray_area(area: Rect) -> Rect {
     let height = TOP_TRAY_HEIGHT.min(area.height);
     Rect::new(area.x, area.y, area.width, height)
+}
+
+/// Split `area` into the top aquarium tray and the remaining content below.
+pub(crate) fn carve_top_tray(area: Rect) -> (Rect, Rect) {
+    let tray = top_tray_area(area);
+    let rest = Rect::new(
+        area.x,
+        area.y + tray.height,
+        area.width,
+        area.height.saturating_sub(tray.height),
+    );
+    (tray, rest)
 }
 
 pub fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {

@@ -198,11 +198,13 @@ pub(crate) enum AquariumCommand {
     Feed,
 }
 
-/// A pet-care action requested from the composer (`/feed`, `/water`,
-/// `/treat`). `App` owns the pet state and entitlements, so the composer
-/// just records the intent and `App` carries it out.
+/// A pet action requested from the composer (`/pet` toggles the strip;
+/// `/feed`, `/water`, `/treat` are care). `App` owns the pet state and
+/// entitlements, so the composer just records the intent and `App` carries
+/// it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PetCommand {
+    Toggle,
     Feed,
     Water,
     Treat,
@@ -2013,6 +2015,7 @@ impl ChatState {
         }
 
         if let Some(command) = match body.trim() {
+            "/pet" => Some(PetCommand::Toggle),
             "/feed" => Some(PetCommand::Feed),
             "/water" => Some(PetCommand::Water),
             "/treat" => Some(PetCommand::Treat),
@@ -4201,9 +4204,10 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
 
     // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
-    if let Some((room, _)) = rooms.iter().find(|(r, _)| {
-        is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some("voice")
-    }) && pushed_rooms.insert(room.id)
+    if let Some((room, _)) = rooms
+        .iter()
+        .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some("voice"))
+        && pushed_rooms.insert(room.id)
         && !core_collapsed
     {
         order.push(RoomSlot::Room(room.id));

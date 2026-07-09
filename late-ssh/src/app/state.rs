@@ -100,9 +100,17 @@ pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
 
+/// Bounds for the aquarium simulation. The tray renders inside the chat
+/// column, so mirror the default Home layout: frame borders (2) plus the
+/// room rail and right sidebar (24 each).
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
-    let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
-    crate::app::hub::aquarium::ui::top_tray_area(app_inner)
+    let chat_column = Rect::new(
+        1,
+        1,
+        cols.saturating_sub(2 + 24 + 24).max(20),
+        rows.saturating_sub(2),
+    );
+    crate::app::hub::aquarium::ui::top_tray_area(chat_column)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -294,24 +294,13 @@ fn arcade_content_area(app: &App) -> Rect {
         height: area.height.saturating_sub(2),
     };
 
-    let app_inner = if app.show_aquarium_tray && app.shop_state.entitlements().has_aquarium() {
-        let tray = crate::app::hub::aquarium::ui::top_tray_area(inner);
+    if right_sidebar_visible(app) {
         Rect {
-            y: inner.y.saturating_add(tray.height),
-            height: inner.height.saturating_sub(tray.height),
+            width: inner.width.saturating_sub(24),
             ..inner
         }
     } else {
         inner
-    };
-
-    if right_sidebar_visible(app) {
-        Rect {
-            width: app_inner.width.saturating_sub(24),
-            ..app_inner
-        }
-    } else {
-        app_inner
     }
 }
 

@@ -90,6 +90,15 @@ impl ProfileState {
         true
     }
 
+    /// Toggle the pet companion strip (the /pet command; same setting as the
+    /// "Pet companion strip" tweak in settings). Persists and returns the new
+    /// visibility.
+    pub fn toggle_show_pet_strip(&mut self) -> bool {
+        self.profile.show_pet_strip = !self.profile.show_pet_strip;
+        self.save_profile();
+        self.profile.show_pet_strip
+    }
+
     /// Advance both sidebars through the 4-state layout cycle (the Home `\`
     /// key): both on -> left off -> right off -> both off -> both on. `left`
     /// is the room-list sidebar, `right` the info sidebar (its mode is kept in

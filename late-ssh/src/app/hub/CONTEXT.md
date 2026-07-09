@@ -56,7 +56,7 @@ Hub opens on Quests. Tab order and jump keys are `1 Quests`, `2 Shop`, `3 Leader
 
 ## Aquarium
 
-Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips, lives in the Companions Shop category, and unlocks Aquarium ownership/use. The Aquarium Shop category is fish-only and browseable before unlock so users can preview fish, but fish purchases and active-count changes are blocked until the Aquarium feature is owned. The `/aquarium` composer command (alias `/aq`) toggles the owned user's full-width 12-row top tray across screens and the open/closed state persists in user settings (`show_aquarium_tray`); locked users are sent to Hub Shop with a banner. `/aquarium feed` replaces the old `Ctrl+F` feed chord.
+Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips, lives in the Companions Shop category, and unlocks Aquarium ownership/use. The Aquarium Shop category is fish-only and browseable before unlock so users can preview fish, but fish purchases and active-count changes are blocked until the Aquarium feature is owned. The `/aquarium` composer command (alias `/aq`) toggles the owned user's 11-row tray, rendered only in the Home Lounge view where it is carved from the top of the lounge chat column (sidebars and other screens are untouched); the open/closed state persists in user settings (`show_aquarium_tray`); locked users are sent to Hub Shop with a banner. `/aquarium feed` replaces the old `Ctrl+F` feed chord.
 
 The runtime is ambient-only for now:
 - Fish ownership and active counts persist through `marketplace_items` / `user_purchases`.

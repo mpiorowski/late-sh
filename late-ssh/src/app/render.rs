@@ -620,12 +620,9 @@ impl App {
             None
         };
         let chat_view = chat::ui::ChatRenderInput {
-            pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetStripView {
-                state: &self.pet_state,
-                pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
-                food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
-                water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
-            }),
+            // The pet lives in the Lounge only (DashboardChatView above);
+            // every other room and tab renders without the strip.
+            pet_strip: None,
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
             feeds_unread_count: self.chat.feeds.unread_count(),
@@ -793,7 +790,6 @@ impl App {
             || self.show_quit_confirm
             || self.show_mod_modal
             || self.show_hub_modal
-            || self.show_aquarium_tray
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
@@ -811,7 +807,6 @@ impl App {
         let suppress_new_sixel = self.show_settings
             || self.show_mod_modal
             || self.show_hub_modal
-            || self.show_aquarium_tray
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
@@ -1136,28 +1131,19 @@ impl App {
         frame.render_widget(block, area);
         frame.render_widget(Clear, inner);
 
-        let (app_inner, aquarium_tray_area) =
-            if ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium() {
-                let tray = crate::app::hub::aquarium::ui::top_tray_area(inner);
-                (
-                    Rect::new(
-                        inner.x,
-                        inner.y + tray.height,
-                        inner.width,
-                        inner.height.saturating_sub(tray.height),
-                    ),
-                    Some(tray),
-                )
-            } else {
-                (inner, None)
-            };
+        // The aquarium tray lives inside the Lounge chat view only: it is
+        // carved from the top of the lounge's center column and competes
+        // with the chat for space. Every other screen keeps its full area.
+        let aquarium_tray_enabled =
+            ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium();
+        let mut aquarium_tray_area = None;
 
         let (content_area, sidebar_area) = if ctx.show_right_sidebar {
             let main_layout =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(app_inner);
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
             (main_layout[0], Some(main_layout[1]))
         } else {
-            (app_inner, None)
+            (inner, None)
         };
         let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         match screen {
@@ -1172,6 +1158,13 @@ impl App {
                     (Some(split[0]), split[1])
                 } else {
                     (None, content_area)
+                };
+                let center_area = if aquarium_tray_enabled && ctx.home_selected {
+                    let (tray, rest) = crate::app::hub::aquarium::ui::carve_top_tray(center_area);
+                    aquarium_tray_area = Some(tray);
+                    rest
+                } else {
+                    center_area
                 };
 
                 if let Some(rail_area) = rail_area {
@@ -1418,9 +1411,9 @@ impl App {
             };
             // leading space (1) + icon (2) + message + border padding (4)
             let msg_w = (banner.message.len() as u16) + 7;
-            let toast_w = msg_w.max(20).min(app_inner.width);
-            let toast_x = app_inner.x + app_inner.width.saturating_sub(toast_w);
-            let toast_area = Rect::new(toast_x, app_inner.y, toast_w, 3);
+            let toast_w = msg_w.max(20).min(inner.width);
+            let toast_x = inner.x + inner.width.saturating_sub(toast_w);
+            let toast_area = Rect::new(toast_x, inner.y, toast_w, 3);
             frame.render_widget(Clear, toast_area);
             let notif_block = Block::default()
                 .borders(Borders::ALL)
@@ -1430,7 +1423,7 @@ impl App {
             draw_banner(frame, notif_inner, &banner);
         }
 
-        crate::app::pet::ui::draw_roaming_pet(frame, app_inner, ctx.cat);
+        crate::app::pet::ui::draw_roaming_pet(frame, inner, ctx.cat);
 
         if ctx.show_settings {
             settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
@@ -1551,7 +1544,6 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_quit_confirm
         || ctx.show_mod_modal
         || ctx.show_hub_modal
-        || ctx.show_aquarium_tray
         || ctx.show_profile_modal
         || ctx.show_poll_modal
         || ctx.show_bonsai_modal
