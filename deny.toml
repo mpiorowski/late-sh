@@ -65,6 +65,29 @@ ignore = [
   # have not yet migrated. No active CVE. Follow-up: bump reqwest + hyper-rustls
   # when their next minors land.
   'RUSTSEC-2024-0436',
+
+  # Real CVE — unbounded namespace-declaration allocation (memory-exhaustion
+  # DoS) in quick-xml's NsReader, exploitable by a remote attacker feeding
+  # crafted untrusted XML (the advisory's own example: an RPKI relying-party
+  # parsing attacker-controlled snapshot.xml over the network). quick-xml
+  # 0.39.4 is pulled transitively: wayland-scanner 0.31.10 (pinned to
+  # quick-xml ^0.39, no newer release exists yet) -> wayland-client ->
+  # wl-clipboard-rs -> arboard -> late-cli. wayland-scanner's own use of
+  # quick-xml is build-time code generation over the Wayland protocol XML
+  # files bundled in the crate itself, not runtime parsing of untrusted
+  # network input — the vulnerable NsReader path this advisory describes is
+  # not reachable through this dependency chain. No patched wayland-scanner
+  # exists yet (checked 2026-07-09); follow-up PR when one ships
+  # quick-xml >=0.41.
+  'RUSTSEC-2026-0195',
+
+  # Same quick-xml 0.39.4 / wayland-scanner chain as RUSTSEC-2026-0195 above,
+  # same reachability argument: a second, independent quick-xml advisory
+  # (O(N^2) duplicate-attribute-name check, a CPU-exhaustion DoS on untrusted
+  # XML with many attributes on one tag) that is likewise only reachable by
+  # code parsing untrusted runtime XML — not wayland-scanner's build-time
+  # codegen over its own bundled protocol files.
+  'RUSTSEC-2026-0194',
 ]
 
 # ---------------------------------------------------------------------------
