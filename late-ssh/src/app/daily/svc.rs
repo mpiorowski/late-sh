@@ -525,7 +525,7 @@ impl DailyService {
         match outcome {
             Some((winner, result)) => {
                 let updated = DailyMatch::finish(
-                    &client,
+                    client,
                     match_id,
                     winner,
                     result,
@@ -544,7 +544,7 @@ impl DailyService {
             None => {
                 let next_turn = state.user_for_color(mover_color.other());
                 let updated = DailyMatch::update_state(
-                    &client,
+                    client,
                     match_id,
                     &state_value,
                     user_id,

@@ -98,8 +98,7 @@ pub(crate) fn draw(
     };
 
     frame.render_widget(
-        Paragraph::new(status_line(daily, board, detail, battleship))
-            .alignment(Alignment::Center),
+        Paragraph::new(status_line(daily, board, detail, battleship)).alignment(Alignment::Center),
         status_row,
     );
     draw_player_bar(
@@ -133,7 +132,11 @@ pub(crate) fn draw(
             fleet_grid_lines(state, me),
         ),
         None => (
-            spectate_waters_lines(state, top_side, name_for(board, state.side(top_side).user_id)),
+            spectate_waters_lines(
+                state,
+                top_side,
+                name_for(board, state.side(top_side).user_id),
+            ),
             spectate_waters_lines(
                 state,
                 bottom_side,
@@ -352,7 +355,7 @@ fn grid_title(title: &str) -> Line<'static> {
 /// Alternating cell background — the checkerboard is what makes the grid
 /// readable at a glance without drawing actual rules.
 fn checker(row: usize, col: usize) -> Style {
-    if (row + col) % 2 == 0 {
+    if (row + col).is_multiple_of(2) {
         Style::default().bg(theme::BG_HIGHLIGHT())
     } else {
         Style::default()
@@ -518,7 +521,7 @@ fn draw_player_bar(
         ),
     ];
     let deadline = on_turn
-        .then(|| detail.row.turn_deadline_at)
+        .then_some(detail.row.turn_deadline_at)
         .flatten()
         .map(|at| format_deadline(at, Utc::now()));
     let cols = Layout::horizontal([Constraint::Min(0), Constraint::Length(9)]).split(rect);

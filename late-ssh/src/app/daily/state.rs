@@ -467,9 +467,7 @@ impl DailyState {
             .snapshot
             .active_matches
             .iter()
-            .filter(|item| {
-                item.challenger_id != self.user_id && item.opponent_id != self.user_id
-            })
+            .filter(|item| item.challenger_id != self.user_id && item.opponent_id != self.user_id)
             .collect();
         matches.sort_by_key(|item| (item.turn_deadline_at, item.id));
         matches
@@ -649,8 +647,7 @@ impl DailyState {
             names.insert(item.opponent_id, name.clone());
         }
         // You're a spectator unless you're one of the two players.
-        let spectating =
-            item.challenger_id != self.user_id && item.opponent_id != self.user_id;
+        let spectating = item.challenger_id != self.user_id && item.opponent_id != self.user_id;
         self.board = Some(DailyBoardState {
             match_id: item.id,
             spectating,
@@ -951,7 +948,7 @@ impl DailyState {
         });
         chess.pieces = rules::board_pieces(&board);
         chess.turn = rules::chess_color(board.side_to_move());
-        chess.in_check = board.checkers().len() > 0;
+        chess.in_check = !board.checkers().is_empty();
         // Opponent to move until the reload says otherwise; clearing the
         // legal moves keeps the cursor from picking up their pieces.
         chess.legal_moves.clear();

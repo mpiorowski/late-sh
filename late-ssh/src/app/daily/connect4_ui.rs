@@ -180,8 +180,8 @@ fn board_lines(
     let mut lines = vec![header_line(cursor), indicator_line(cursor)];
     for row in (0..connect4::ROWS).rev() {
         let mut spans = vec![row_label(row, landing == Some(row))];
-        for col in 0..connect4::COLS {
-            let span = match grid[row][col] {
+        for (col, cell) in grid[row].iter().enumerate() {
+            let span = match *cell {
                 Some(disc) if winning.contains(&(row, col)) => {
                     // The line that ended it: dark discs on solid tiles.
                     Span::styled(
@@ -221,7 +221,7 @@ fn board_lines(
 /// Alternating cell background — the checkerboard is what makes the grid
 /// readable at a glance without drawing actual rules.
 fn checker(row: usize, col: usize) -> Style {
-    if (row + col) % 2 == 0 {
+    if (row + col).is_multiple_of(2) {
         Style::default().bg(theme::BG_HIGHLIGHT())
     } else {
         Style::default()
@@ -404,7 +404,7 @@ fn draw_player_bar(
         Span::styled(name, Style::default().fg(theme::TEXT())),
     ];
     let deadline = on_turn
-        .then(|| detail.row.turn_deadline_at)
+        .then_some(detail.row.turn_deadline_at)
         .flatten()
         .map(|at| format_deadline(at, Utc::now()));
     let cols = Layout::horizontal([Constraint::Min(0), Constraint::Length(9)]).split(rect);

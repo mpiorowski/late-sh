@@ -275,22 +275,30 @@ async fn stale_revision_writes_are_rejected() {
     // the row is already at 1. Dropped by the compare-and-swap even though it
     // is now black's turn.
     state["revision"] = serde_json::json!(2);
-    let superseded = DailyMatch::update_state(&client, claimed.id, &state, black, white, deadline, 0)
-        .await
-        .expect("update state");
-    assert_eq!(superseded, 0, "expected revision 0 over stored 1 must not apply");
+    let superseded =
+        DailyMatch::update_state(&client, claimed.id, &state, black, white, deadline, 0)
+            .await
+            .expect("update state");
+    assert_eq!(
+        superseded, 0,
+        "expected revision 0 over stored 1 must not apply"
+    );
 
     // A duplicate in-flight write by the off-turn player is dropped even with
     // the matching expected revision.
-    let wrong_turn = DailyMatch::update_state(&client, claimed.id, &state, white, black, deadline, 1)
-        .await
-        .expect("update state");
+    let wrong_turn =
+        DailyMatch::update_state(&client, claimed.id, &state, white, black, deadline, 1)
+            .await
+            .expect("update state");
     assert_eq!(wrong_turn, 0, "write by the off-turn player must not apply");
 
     let fresh = DailyMatch::update_state(&client, claimed.id, &state, black, white, deadline, 1)
         .await
         .expect("update state");
-    assert_eq!(fresh, 1, "matching expected revision by the turn holder applies");
+    assert_eq!(
+        fresh, 1,
+        "matching expected revision by the turn holder applies"
+    );
 }
 
 /// Regression: a battleship hit keeps `turn_user_id` on the shooter, so the
@@ -324,15 +332,17 @@ async fn same_revision_writes_that_keep_the_turn_are_serialized() {
     // Both writers loaded `base` and both keep the turn on the shooter, as a
     // hit does.
     state["revision"] = serde_json::json!(base + 1);
-    let first =
-        DailyMatch::update_state(&client, claimed.id, &state, shooter, shooter, deadline, base)
-            .await
-            .expect("update state");
+    let first = DailyMatch::update_state(
+        &client, claimed.id, &state, shooter, shooter, deadline, base,
+    )
+    .await
+    .expect("update state");
     assert_eq!(first, 1, "the first hit applies");
-    let second =
-        DailyMatch::update_state(&client, claimed.id, &state, shooter, shooter, deadline, base)
-            .await
-            .expect("update state");
+    let second = DailyMatch::update_state(
+        &client, claimed.id, &state, shooter, shooter, deadline, base,
+    )
+    .await
+    .expect("update state");
     assert_eq!(
         second, 0,
         "a second write from the same base revision must be superseded, not last-write-wins"

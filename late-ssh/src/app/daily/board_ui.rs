@@ -380,7 +380,7 @@ fn draw_player_bar(
 
     // Right-align the running deadline on the mover's bar, like a chess clock.
     let deadline = (on_turn)
-        .then(|| detail.row.turn_deadline_at)
+        .then_some(detail.row.turn_deadline_at)
         .flatten()
         .map(|at| format_deadline(at, Utc::now()));
     let cols = Layout::horizontal([Constraint::Min(0), Constraint::Length(9)]).split(rect);

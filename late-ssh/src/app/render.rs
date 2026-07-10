@@ -2175,7 +2175,10 @@ mod tests {
         let combined = status_hud_title(Some(1_500), 2, Some(" mic #lounge [muted] "))
             .expect("balance + voice + mentions should render");
         let text: String = combined.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, " 1500 chips | mic #lounge [muted] | 2 unread mentions ");
+        assert_eq!(
+            text,
+            " 1500 chips | mic #lounge [muted] | 2 unread mentions "
+        );
     }
 
     #[test]
