@@ -14,6 +14,7 @@ pub const ASTERION_DAILY_ESCAPE_REWARD_KEY: &str = "asterion_daily_escape";
 pub const CHESS_WIN_REWARD_KEY: &str = "chess_win_payout";
 pub const DAILY_BATTLESHIP_WIN_REWARD_KEY: &str = "daily_battleship_win_payout";
 pub const DAILY_CHESS_WIN_REWARD_KEY: &str = "daily_chess_win_payout";
+pub const DAILY_CONNECT4_WIN_REWARD_KEY: &str = "daily_connect4_win_payout";
 pub const LATEANIA_ARCHDEMON_REWARD_KEY: &str = "lateania_archdemon_defeat";
 pub const LATEANIA_FRONTIER_KING_REWARD_KEY: &str = "lateania_frontier_king_defeat";
 pub const GREENDRAGON_DRAGON_REWARD_KEY: &str = "greendragon_dragon_slain";

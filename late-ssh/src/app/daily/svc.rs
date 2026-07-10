@@ -20,7 +20,7 @@ use crate::app::games::{
     chips::svc::ChipService,
 };
 
-use super::{battleship::DailyBattleshipState, games::DailyGame};
+use super::{battleship::DailyBattleshipState, connect4::DailyConnect4State, games::DailyGame};
 
 // 4 matches the sidebar panel's match slots exactly, so every active entry
 // is always visible there — no overflow handling.
@@ -394,6 +394,12 @@ impl DailyService {
                 };
                 (serde_json::to_value(state)?, first)
             }
+            DailyGame::ConnectFour => {
+                // `new` flips the coin for who's red, and red drops first.
+                let state = DailyConnect4State::new(challenge.challenger_id, user_id);
+                let first = state.red;
+                (serde_json::to_value(state)?, first)
+            }
         };
         let claimed = DailyMatch::claim(
             &client,
@@ -454,6 +460,8 @@ impl DailyService {
             DailyGame::Chess => self.play_chess_move(&client, row, user_id, from, to).await,
             // A battleship "move" is one square; `to` carries the target cell.
             DailyGame::Battleship => self.play_battleship_shot(&client, row, user_id, to).await,
+            // A connect-four "move" is one column; `to` carries it.
+            DailyGame::ConnectFour => self.play_connect4_drop(&client, row, user_id, to).await,
         }
     }
 
@@ -621,6 +629,78 @@ impl DailyService {
                 by_user_id: user_id,
                 label,
             });
+        }
+        self.publish(client).await?;
+        Ok(())
+    }
+
+    /// One disc into `column`. The turn always passes (no fire-again);
+    /// connecting four finishes the match, filling the board draws it.
+    async fn play_connect4_drop(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        user_id: Uuid,
+        column: usize,
+    ) -> Result<()> {
+        let match_id = row.id;
+        let mut state = DailyConnect4State::parse(&row.state)?;
+        let disc = state
+            .disc_of(user_id)
+            .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
+        // The prelude checked `next_turn`; the drop history is the deeper
+        // truth, so a disagreement must fail loudly, not corrupt it.
+        ensure!(state.turn() == disc, "not your turn");
+        let base_revision = state.revision as i64;
+        state.revision = state.revision.saturating_add(1);
+        let outcome = state.apply_drop(column)?;
+        let label = outcome.label(column);
+        let state_value = serde_json::to_value(&state)?;
+
+        let finished = if outcome.connected {
+            Some((Some(user_id), DailyMatch::RESULT_FOUR_IN_A_ROW))
+        } else if outcome.draw {
+            Some((None, DailyMatch::RESULT_DRAW))
+        } else {
+            None
+        };
+        match finished {
+            Some((winner, result)) => {
+                let updated = DailyMatch::finish(
+                    client,
+                    match_id,
+                    winner,
+                    result,
+                    &state_value,
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+                self.finish_events(match_id, DailyGame::ConnectFour, winner, result);
+            }
+            None => {
+                let next_turn = state.user_of(disc.other());
+                let updated = DailyMatch::update_state(
+                    client,
+                    match_id,
+                    &state_value,
+                    user_id,
+                    next_turn,
+                    Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+            }
         }
         self.publish(client).await?;
         Ok(())
@@ -836,6 +916,17 @@ impl DailyService {
                             state
                                 .as_ref()
                                 .map(DailyBattleshipState::shot_count)
+                                .unwrap_or(0),
+                        )
+                    }
+                    DailyGame::ConnectFour => {
+                        let state = DailyConnect4State::parse(&row.state).ok();
+                        (
+                            None,
+                            None,
+                            state
+                                .as_ref()
+                                .map(DailyConnect4State::move_count)
                                 .unwrap_or(0),
                         )
                     }

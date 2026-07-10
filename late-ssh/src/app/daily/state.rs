@@ -19,6 +19,7 @@ use crate::app::{
 
 use super::{
     battleship::DailyBattleshipState,
+    connect4::DailyConnect4State,
     games::DailyGame,
     svc::{
         DAILY_MAX_ACTIVE_ENTRIES, DailyChallengeItem, DailyChessState, DailyEvent, DailyMatchItem,
@@ -120,6 +121,18 @@ pub struct DailyMatchDetail {
 pub enum DailyGameDetail {
     Chess(ChessDetail),
     Battleship(BattleshipDetail),
+    Connect4(Connect4Detail),
+}
+
+impl DailyGameDetail {
+    /// Back to the roster enum, for dispatch that must stay exhaustive.
+    pub fn kind(&self) -> DailyGame {
+        match self {
+            Self::Chess(_) => DailyGame::Chess,
+            Self::Battleship(_) => DailyGame::Battleship,
+            Self::Connect4(_) => DailyGame::ConnectFour,
+        }
+    }
 }
 
 pub struct ChessDetail {
@@ -135,6 +148,13 @@ pub struct BattleshipDetail {
     /// A shot left this session and hasn't come back via reload yet; blocks
     /// firing again until the canonical row lands.
     pub shot_in_flight: bool,
+}
+
+pub struct Connect4Detail {
+    pub state: DailyConnect4State,
+    /// A drop left this session and hasn't come back via reload yet; blocks
+    /// dropping again until the canonical row lands.
+    pub drop_in_flight: bool,
 }
 
 impl ChessDetail {
@@ -171,6 +191,10 @@ impl DailyMatchDetail {
                 state: DailyBattleshipState::parse(&row.state).map_err(|e| e.to_string())?,
                 shot_in_flight: false,
             }),
+            Some(DailyGame::ConnectFour) => DailyGameDetail::Connect4(Connect4Detail {
+                state: DailyConnect4State::parse(&row.state).map_err(|e| e.to_string())?,
+                drop_in_flight: false,
+            }),
             None => return Err(format!("unknown daily game: {}", row.game_kind)),
         };
         Ok(Self { row, game })
@@ -193,6 +217,13 @@ impl DailyMatchDetail {
     pub fn battleship(&self) -> Option<&BattleshipDetail> {
         match &self.game {
             DailyGameDetail::Battleship(battleship) => Some(battleship),
+            _ => None,
+        }
+    }
+
+    pub fn connect4(&self) -> Option<&Connect4Detail> {
+        match &self.game {
+            DailyGameDetail::Connect4(connect4) => Some(connect4),
             _ => None,
         }
     }
@@ -599,6 +630,8 @@ impl DailyState {
             cursor: match item.game {
                 DailyGame::Chess => 12,
                 DailyGame::Battleship => 44,
+                // The connect4 cursor is a column, not a cell.
+                DailyGame::ConnectFour => 3,
             },
             selected: None,
             piece_render_mode: ChessPieceRenderMode::Graphics,
@@ -714,6 +747,12 @@ impl DailyState {
                 let max = super::battleship::GRID as isize - 1;
                 board.cursor = (row.clamp(0, max) * (max + 1) + col.clamp(0, max)) as usize;
             }
+            Some(DailyGameDetail::Connect4(_)) => {
+                // One-dimensional: the cursor slides along the columns and
+                // gravity does the rest.
+                let max = super::connect4::COLS as isize - 1;
+                board.cursor = (board.cursor as isize + dx).clamp(0, max) as usize;
+            }
             _ => {
                 board.cursor = cursor::move_cursor(board.cursor, orientation, dx, dy);
             }
@@ -730,7 +769,8 @@ impl DailyState {
         self.board_select_or_move();
     }
 
-    /// Mouse on the battleship target grid: aim at the cell and fire.
+    /// Mouse on the battleship target grid (a cell) or the connect4 board
+    /// (a column): aim there and play.
     pub fn board_click_target(&mut self, cell: usize) {
         if cell >= super::battleship::CELLS {
             return;
@@ -742,8 +782,9 @@ impl DailyState {
     }
 
     /// Space/Enter on the board. Chess: pick up a piece or play the move.
-    /// Battleship: fire at the cursor. Both apply optimistically; the
-    /// canonical row arrives on the next `MovePlayed`/`MatchFinished` reload.
+    /// Battleship: fire at the cursor. Connect4: drop into the cursor column.
+    /// All apply optimistically; the canonical row arrives on the next
+    /// `MovePlayed`/`MatchFinished` reload.
     pub fn board_select_or_move(&mut self) {
         let user_id = self.user_id;
         let svc = self.svc.clone();
@@ -757,12 +798,12 @@ impl DailyState {
         if !detail.is_active() || detail.row.turn_user_id != Some(user_id) {
             return;
         }
-        // Read the game kind first: the per-game handlers need `board` whole.
-        let is_battleship = matches!(detail.game, DailyGameDetail::Battleship(_));
-        if is_battleship {
-            Self::battleship_fire(board, user_id, &svc);
-        } else {
-            Self::chess_select_or_move(board, user_id, &svc);
+        // Copy the game kind out first: the per-game handlers need `board`
+        // whole, and matching the roster enum keeps this exhaustive.
+        match detail.game.kind() {
+            DailyGame::Chess => Self::chess_select_or_move(board, user_id, &svc),
+            DailyGame::Battleship => Self::battleship_fire(board, user_id, &svc),
+            DailyGame::ConnectFour => Self::connect4_drop(board, user_id, &svc),
         }
     }
 
@@ -829,6 +870,34 @@ impl DailyState {
             detail.row.turn_user_id = Some(battleship.state.side(opponent).user_id);
         }
         svc.play_move_task(user_id, board.match_id, cell, cell);
+    }
+
+    /// Drop into the cursor column. The drop applies optimistically (nothing
+    /// is hidden in connect4, so the landing spot is known locally);
+    /// `drop_in_flight` blocks a second disc until the reload reconciles.
+    fn connect4_drop(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let row_turn = detail.row.turn_user_id;
+        let DailyGameDetail::Connect4(connect4) = &mut detail.game else {
+            return;
+        };
+        if connect4.drop_in_flight || row_turn != Some(user_id) {
+            return;
+        }
+        let Some(disc) = connect4.state.disc_of(user_id) else {
+            return;
+        };
+        if connect4.state.turn() != disc {
+            return;
+        }
+        let column = board.cursor;
+        if connect4.state.apply_drop(column).is_err() {
+            return; // full column — a silent no-op, like an illegal chess move
+        }
+        connect4.drop_in_flight = true;
+        // The turn always passes; wins and draws wait for the reload.
+        detail.row.turn_user_id = Some(connect4.state.user_of(disc.other()));
+        svc.play_move_task(user_id, board.match_id, column, column);
     }
 
     fn apply_optimistic_move(detail: &mut DailyMatchDetail, from: usize, to: usize) {

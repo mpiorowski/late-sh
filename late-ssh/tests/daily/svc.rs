@@ -3,6 +3,7 @@ use late_core::{
     test_utils::{TestDb, create_test_user},
 };
 use late_ssh::app::daily::battleship::DailyBattleshipState;
+use late_ssh::app::daily::connect4::DailyConnect4State;
 use late_ssh::app::daily::games::DailyGame;
 use late_ssh::app::daily::svc::{DAILY_MAX_ACTIVE_ENTRIES, DailyChessState, DailyService};
 use late_ssh::app::games::chips::svc::ChipService;
@@ -548,4 +549,161 @@ async fn battleship_resign_finishes_for_the_other_player() {
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
     assert_eq!(row.result, DailyMatch::RESULT_RESIGN);
     assert_eq!(row.winner_user_id, Some(opponent.id));
+}
+
+fn connect4_state(row: &DailyMatch) -> DailyConnect4State {
+    DailyConnect4State::parse(&row.state).expect("parse daily connect4 state")
+}
+
+#[tokio::test]
+async fn connect4_turns_alternate_and_connecting_four_pays() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-c4-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-c4-opponent").await;
+    let svc = daily_service(&test_db).await;
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::ConnectFour, None)
+        .await
+        .expect("post connect4 challenge");
+    assert_eq!(challenge.game_kind, DailyMatch::GAME_KIND_CONNECTFOUR);
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim connect4 challenge");
+
+    // The claim-time coin flip picked who's red, and red is on the clock.
+    let state = connect4_state(&claimed);
+    let (red, yellow) = (state.red, state.yellow);
+    assert!([challenger.id, opponent.id].contains(&red));
+    assert_ne!(red, yellow);
+    assert_eq!(claimed.turn_user_id, Some(red));
+
+    // Out of turn and off the board are rejected.
+    let out_of_turn = svc.play_move(yellow, claimed.id, 0, 0).await;
+    assert!(out_of_turn.is_err(), "yellow dropped out of turn");
+    let off_board = svc.play_move(red, claimed.id, 7, 7).await;
+    assert!(off_board.is_err(), "dropped off the board");
+
+    // Unlike battleship, the turn always passes.
+    svc.play_move(red, claimed.id, 0, 0)
+        .await
+        .expect("red opens");
+    let client = test_db.db.get().await.expect("db client");
+    let row = DailyMatch::get(&client, claimed.id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    assert_eq!(row.turn_user_id, Some(yellow), "a drop must pass the turn");
+
+    // Fill column a (alternating discs, so no line), then one more bounces.
+    for _ in 0..5 {
+        let row = DailyMatch::get(&client, claimed.id)
+            .await
+            .expect("load match")
+            .expect("match exists");
+        let mover = row.turn_user_id.expect("someone on the clock");
+        svc.play_move(mover, claimed.id, 0, 0)
+            .await
+            .expect("fill column a");
+    }
+    let full = svc.play_move(red, claimed.id, 0, 0).await;
+    assert!(full.is_err(), "dropped into a full column");
+
+    // Red stacks column b while yellow answers in c: a vertical four.
+    for _ in 0..3 {
+        svc.play_move(red, claimed.id, 1, 1)
+            .await
+            .expect("red stacks b");
+        svc.play_move(yellow, claimed.id, 2, 2)
+            .await
+            .expect("yellow answers in c");
+    }
+    svc.play_move(red, claimed.id, 1, 1)
+        .await
+        .expect("red connects four");
+
+    let row = DailyMatch::get(&client, claimed.id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
+    assert_eq!(row.result, DailyMatch::RESULT_FOUR_IN_A_ROW);
+    assert_eq!(row.winner_user_id, Some(red));
+    assert_eq!(row.turn_user_id, None);
+    assert_eq!(row.turn_deadline_at, None);
+    let state = connect4_state(&row);
+    assert_eq!(state.winning_line().expect("a line ended it").len(), 4);
+
+    // The 400-chip connect4 payout lands through its own seeded template;
+    // the credit is spawned, so poll briefly.
+    let mut credited = None;
+    for _ in 0..100 {
+        let rows = client
+            .query(
+                "SELECT delta FROM chip_ledger
+                 WHERE user_id = $1 AND reason = 'daily_connect4_win'",
+                &[&red],
+            )
+            .await
+            .expect("ledger rows");
+        if let Some(row) = rows.first() {
+            credited = Some(row.get::<_, i64>("delta"));
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(credited, Some(400), "winner never received the win payout");
+}
+
+#[tokio::test]
+async fn connect4_full_board_draws_and_pays_nobody() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-c4-drawer").await;
+    let opponent = create_test_user(&test_db.db, "daily-c4-drawee").await;
+    let svc = daily_service(&test_db).await;
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::ConnectFour, None)
+        .await
+        .expect("post connect4 challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim connect4 challenge");
+    let client = test_db.db.get().await.expect("db client");
+
+    // Cycling every column paints a checkerboard: nothing ever connects, so
+    // drop 42 fills the board into a draw.
+    for column in (0..7).cycle().take(42) {
+        let row = DailyMatch::get(&client, claimed.id)
+            .await
+            .expect("load match")
+            .expect("match exists");
+        let mover = row.turn_user_id.expect("still someone's turn");
+        svc.play_move(mover, claimed.id, column, column)
+            .await
+            .expect("drop");
+    }
+
+    let row = DailyMatch::get(&client, claimed.id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
+    assert_eq!(row.result, DailyMatch::RESULT_DRAW);
+    assert_eq!(row.winner_user_id, None);
+    assert_eq!(connect4_state(&row).move_count(), 42);
+
+    // A draw pays nobody: give the (absent) credit task a moment, then look.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let rows = client
+        .query(
+            "SELECT 1 FROM chip_ledger
+             WHERE reason = 'daily_connect4_win' AND (user_id = $1 OR user_id = $2)",
+            &[&challenger.id, &opponent.id],
+        )
+        .await
+        .expect("ledger rows");
+    assert!(rows.is_empty(), "a drawn match paid a winner");
 }

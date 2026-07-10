@@ -139,6 +139,7 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
             )
         }
         DailyGame::Battleship => format!("{} shots", item.move_count),
+        DailyGame::ConnectFour => format!("{} drops", item.move_count),
     };
 
     let mut spans = vec![marker_span(selected)];

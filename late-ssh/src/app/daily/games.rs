@@ -6,24 +6,28 @@
 
 use late_core::models::{
     daily_match::DailyMatch,
-    reward::{DAILY_BATTLESHIP_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY},
+    reward::{
+        DAILY_BATTLESHIP_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY, DAILY_CONNECT4_WIN_REWARD_KEY,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DailyGame {
     Chess,
     Battleship,
+    ConnectFour,
 }
 
 impl DailyGame {
     /// Roster order: pickers, help copy, and usage strings follow it.
-    pub const ALL: [Self; 2] = [Self::Chess, Self::Battleship];
+    pub const ALL: [Self; 3] = [Self::Chess, Self::Battleship, Self::ConnectFour];
 
     /// The persisted `daily_matches.game_kind` value.
     pub const fn kind(self) -> &'static str {
         match self {
             Self::Chess => DailyMatch::GAME_KIND_CHESS,
             Self::Battleship => DailyMatch::GAME_KIND_BATTLESHIP,
+            Self::ConnectFour => DailyMatch::GAME_KIND_CONNECTFOUR,
         }
     }
 
@@ -32,6 +36,7 @@ impl DailyGame {
         match self {
             Self::Chess => "chess",
             Self::Battleship => "battleship",
+            Self::ConnectFour => "connect4",
         }
     }
 
@@ -41,6 +46,7 @@ impl DailyGame {
         match self {
             Self::Chess => 500,
             Self::Battleship => 300,
+            Self::ConnectFour => 400,
         }
     }
 
@@ -48,6 +54,7 @@ impl DailyGame {
         match self {
             Self::Chess => DAILY_CHESS_WIN_REWARD_KEY,
             Self::Battleship => DAILY_BATTLESHIP_WIN_REWARD_KEY,
+            Self::ConnectFour => DAILY_CONNECT4_WIN_REWARD_KEY,
         }
     }
 
@@ -55,6 +62,7 @@ impl DailyGame {
         match self {
             Self::Chess => "daily_chess_win",
             Self::Battleship => "daily_battleship_win",
+            Self::ConnectFour => "daily_connect4_win",
         }
     }
 
@@ -63,6 +71,7 @@ impl DailyGame {
         match self {
             Self::Chess => "one move per day",
             Self::Battleship => "one salvo per day · a hit fires again",
+            Self::ConnectFour => "one drop per day · four in a row wins",
         }
     }
 
@@ -77,7 +86,7 @@ impl DailyGame {
             .find(|game| game.label().eq_ignore_ascii_case(label))
     }
 
-    /// `chess|battleship` — for usage banners and help copy.
+    /// Every label joined with `|` — for usage banners and help copy.
     pub fn usage_labels() -> String {
         Self::ALL
             .into_iter()
@@ -106,6 +115,6 @@ mod tests {
 
     #[test]
     fn usage_lists_every_game() {
-        assert_eq!(DailyGame::usage_labels(), "chess|battleship");
+        assert_eq!(DailyGame::usage_labels(), "chess|battleship|connect4");
     }
 }

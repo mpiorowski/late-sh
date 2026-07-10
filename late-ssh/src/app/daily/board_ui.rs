@@ -1,7 +1,8 @@
 //! Full-screen daily-match board (`Screen::DailyMatch`). Shared chrome
 //! (loading, result banners, key hints) plus per-game rendering: chess wraps
 //! the shared `chess_core` renderer here, battleship draws its two grids in
-//! `battleship_ui`. Entered only from the Daily Games modal.
+//! `battleship_ui`, connect4 its board in `connect4_ui`. Entered only from
+//! the Daily Games modal.
 
 use chrono::Utc;
 use late_core::models::daily_match::DailyMatch;
@@ -65,6 +66,10 @@ pub(crate) fn draw(
         DailyGameDetail::Chess(chess) => chess,
         DailyGameDetail::Battleship(battleship) => {
             super::battleship_ui::draw(frame, area, daily, board, detail, battleship);
+            return;
+        }
+        DailyGameDetail::Connect4(connect4) => {
+            super::connect4_ui::draw(frame, area, daily, board, detail, connect4);
             return;
         }
     };
@@ -295,6 +300,11 @@ pub(super) fn result_banner(
         DailyMatch::RESULT_FLEET_SUNK => {
             ("Fleet sunk", winner_text(detail.row.winner_user_id), color)
         }
+        DailyMatch::RESULT_FOUR_IN_A_ROW => (
+            "Four in a row",
+            winner_text(detail.row.winner_user_id),
+            color,
+        ),
         DailyMatch::RESULT_TIMEOUT => (
             "Timeout",
             format!(

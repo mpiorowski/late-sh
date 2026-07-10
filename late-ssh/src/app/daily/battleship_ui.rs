@@ -24,8 +24,10 @@ use crate::app::{
 
 /// title + column header + 10 rows + fleet summary.
 const GRID_ROWS: u16 = 13;
-/// row labels (3) + 10 cells of width 2.
-const GRID_WIDTH: u16 = 3 + (battleship::GRID as u16) * 2;
+/// Terminal columns per board cell; the mouse hit-test divides by this.
+pub(crate) const CELL_W: u16 = 3;
+/// row labels (3) + 10 cells.
+const GRID_WIDTH: u16 = 3 + (battleship::GRID as u16) * CELL_W;
 const GRID_GAP: u16 = 6;
 const GRIDS_WIDTH: u16 = GRID_WIDTH * 2 + GRID_GAP;
 /// status + two player bars + key hints around the grids.
@@ -134,7 +136,7 @@ pub(crate) fn draw(
     board.target_geometry.set(Some(Rect {
         x: target_rect.x + 3,
         y: target_rect.y + 2,
-        width: (battleship::GRID as u16) * 2,
+        width: (battleship::GRID as u16) * CELL_W,
         height: battleship::GRID as u16,
     }));
 
@@ -166,7 +168,7 @@ pub(crate) fn draw(
 
 const INFO_RAIL_WIDTH: u16 = 24;
 /// Breathing room required around the grids before the rail appears.
-const INFO_RAIL_MIN_EXTRA: u16 = 16;
+const INFO_RAIL_MIN_EXTRA: u16 = 8;
 
 /// Their waters: your shots, the cursor, and (once the match ends) whatever
 /// survived of their fleet.
@@ -177,9 +179,11 @@ fn target_grid_lines(
     finished: bool,
 ) -> Vec<Line<'static>> {
     let them = DailyBattleshipState::opponent_index(me);
-    let mut lines = vec![grid_title("their waters"), header_line()];
+    let hot_col = cursor.map(|cell| cell % battleship::GRID);
+    let hot_row = cursor.map(|cell| cell / battleship::GRID);
+    let mut lines = vec![grid_title("their waters"), header_line(hot_col)];
     for row in 0..battleship::GRID {
-        let mut spans = vec![row_label(row)];
+        let mut spans = vec![row_label(row, hot_row == Some(row))];
         for col in 0..battleship::GRID {
             let cell = row * battleship::GRID + col;
             let shot = state
@@ -192,24 +196,41 @@ fn target_grid_lines(
                 .ships
                 .iter()
                 .any(|ship| ship.cells.contains(&(cell as u8)));
-            let (glyph, mut style) = match shot {
-                Some(Shot { hit: true, .. }) => (
-                    "✕ ",
-                    Style::default()
-                        .fg(theme::ERROR())
+            let hit = matches!(shot, Some(Shot { hit: true, .. }));
+            let (full, mid, style) = match shot {
+                // A solid red tile with a dark cross — readable from across
+                // the room, unlike a lone red mark on black.
+                Some(Shot { hit: true, .. }) => (" X ", 'X', hit_style()),
+                Some(Shot { hit: false, .. }) => (
+                    " x ",
+                    'x',
+                    checker(row, col)
+                        .fg(theme::TEXT_MUTED())
                         .add_modifier(Modifier::BOLD),
                 ),
-                Some(Shot { hit: false, .. }) => ("◦ ", Style::default().fg(theme::TEXT_FAINT())),
                 None if finished && enemy_ship => {
                     // The reveal: ships you never found.
-                    ("░░", Style::default().fg(theme::TEXT_MUTED()))
+                    ("░░░", '░', checker(row, col).fg(theme::TEXT_MUTED()))
                 }
-                None => ("· ", Style::default().fg(theme::BORDER_DIM())),
+                None => (" · ", '·', checker(row, col).fg(theme::BORDER_DIM())),
             };
             if cursor == Some(cell) {
-                style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+                let bracket = Style::default()
+                    .fg(theme::AMBER())
+                    .bg(theme::BG_SELECTION())
+                    .add_modifier(Modifier::BOLD);
+                let mut mid_style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+                if hit {
+                    // The hit tile's dark-on-red inverts to red-on-selection
+                    // under the cursor so the cross stays legible.
+                    mid_style = mid_style.fg(theme::ERROR());
+                }
+                spans.push(Span::styled("[", bracket));
+                spans.push(Span::styled(mid.to_string(), mid_style));
+                spans.push(Span::styled("]", bracket));
+            } else {
+                spans.push(Span::styled(full.to_string(), style));
             }
-            spans.push(Span::styled(glyph.to_string(), style));
         }
         lines.push(Line::from(spans));
     }
@@ -224,9 +245,9 @@ fn target_grid_lines(
 /// Your fleet: ships, the hits they've taken, and their misses around them.
 fn fleet_grid_lines(state: &DailyBattleshipState, me: usize) -> Vec<Line<'static>> {
     let them = DailyBattleshipState::opponent_index(me);
-    let mut lines = vec![grid_title("your fleet"), header_line()];
+    let mut lines = vec![grid_title("your fleet"), header_line(None)];
     for row in 0..battleship::GRID {
-        let mut spans = vec![row_label(row)];
+        let mut spans = vec![row_label(row, false)];
         for col in 0..battleship::GRID {
             let cell = row * battleship::GRID + col;
             let shot = state
@@ -240,15 +261,15 @@ fn fleet_grid_lines(state: &DailyBattleshipState, me: usize) -> Vec<Line<'static
                 .iter()
                 .any(|ship| ship.cells.contains(&(cell as u8)));
             let (glyph, style) = match (my_ship, shot) {
-                (true, Some(Shot { hit: true, .. })) => (
-                    "✕✕",
-                    Style::default()
-                        .fg(theme::ERROR())
+                (true, Some(Shot { hit: true, .. })) => (" X ", hit_style()),
+                (true, _) => ("███", Style::default().fg(theme::TEXT_DIM())),
+                (false, Some(_)) => (
+                    " x ",
+                    checker(row, col)
+                        .fg(theme::TEXT_MUTED())
                         .add_modifier(Modifier::BOLD),
                 ),
-                (true, _) => ("██", Style::default().fg(theme::TEXT_DIM())),
-                (false, Some(_)) => ("◦ ", Style::default().fg(theme::TEXT_FAINT())),
-                (false, None) => ("· ", Style::default().fg(theme::BORDER_DIM())),
+                (false, None) => (" · ", checker(row, col).fg(theme::BORDER_DIM())),
             };
             spans.push(Span::styled(glyph.to_string(), style));
         }
@@ -272,23 +293,50 @@ fn grid_title(title: &str) -> Line<'static> {
     ))
 }
 
-fn header_line() -> Line<'static> {
-    let mut header = String::from("   ");
-    for col in 0..battleship::GRID {
-        header.push((b'A' + col as u8) as char);
-        header.push(' ');
+/// Alternating cell background — the checkerboard is what makes the grid
+/// readable at a glance without drawing actual rules.
+fn checker(row: usize, col: usize) -> Style {
+    if (row + col) % 2 == 0 {
+        Style::default().bg(theme::BG_HIGHLIGHT())
+    } else {
+        Style::default()
     }
-    Line::from(Span::styled(
-        header,
-        Style::default().fg(theme::TEXT_FAINT()),
-    ))
 }
 
-fn row_label(row: usize) -> Span<'static> {
-    Span::styled(
-        format!("{:>2} ", row + 1),
-        Style::default().fg(theme::TEXT_FAINT()),
-    )
+/// A hit: dark cross on a solid error-colored tile.
+fn hit_style() -> Style {
+    Style::default()
+        .fg(theme::BG_CANVAS())
+        .bg(theme::ERROR())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// `hot_col` lights up the cursor's column letter as a crosshair.
+fn header_line(hot_col: Option<usize>) -> Line<'static> {
+    let mut spans = vec![Span::raw("   ")];
+    for col in 0..battleship::GRID {
+        let letter = (b'A' + col as u8) as char;
+        let style = if hot_col == Some(col) {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_FAINT())
+        };
+        spans.push(Span::styled(format!(" {letter} "), style));
+    }
+    Line::from(spans)
+}
+
+fn row_label(row: usize, hot: bool) -> Span<'static> {
+    let style = if hot {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    Span::styled(format!("{:>2} ", row + 1), style)
 }
 
 fn summary_line(text: String) -> Line<'static> {
@@ -526,9 +574,9 @@ fn draw_info_rail(
                 name_for(board, state.side(side).user_id)
             };
             let (mark, mark_color) = if shot.hit {
-                ("✕", theme::ERROR())
+                ("X", theme::ERROR())
             } else {
-                ("◦", theme::TEXT_FAINT())
+                ("x", theme::TEXT_MUTED())
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("{who:<9}"), Style::default().fg(theme::TEXT())),

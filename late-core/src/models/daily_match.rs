@@ -33,9 +33,11 @@ impl DailyMatch {
     pub const RESULT_RESIGN: &'static str = "resign";
     pub const RESULT_TIMEOUT: &'static str = "timeout";
     pub const RESULT_FLEET_SUNK: &'static str = "fleet_sunk";
+    pub const RESULT_FOUR_IN_A_ROW: &'static str = "four_in_a_row";
 
     pub const GAME_KIND_CHESS: &'static str = "chess";
     pub const GAME_KIND_BATTLESHIP: &'static str = "battleship";
+    pub const GAME_KIND_CONNECTFOUR: &'static str = "connect4";
 
     /// Open challenges posted by the user plus active matches they play in.
     pub async fn count_active_entries(client: &Client, user_id: Uuid) -> Result<i64> {
