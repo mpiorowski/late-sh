@@ -45,6 +45,9 @@ pub enum Panel {
     /// The appearance/bio builder: pick a field with the cursor, `Enter` cycles
     /// its option forward and `x` cycles back.
     Appearance,
+    /// The waystone fast-travel menu: pick a destination and `Enter` to step
+    /// through to it.
+    Portal,
 }
 
 pub struct State {
@@ -218,6 +221,7 @@ impl State {
             Panel::Follow => self.view().occupants.len(),
             Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
+            Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
             Panel::Appearance => self.view().appearance.len(),
             _ => 0,
         }
@@ -429,9 +433,22 @@ impl State {
                     }
                 }
             }
+            Panel::Portal => {
+                if let Some(portal) = self.view().portal
+                    && let Some((_, room, _)) = portal.entries.get(self.cursor)
+                {
+                    self.svc.travel_task(self.user_id, *room);
+                    self.panel = Panel::Room;
+                }
+            }
             Panel::Appearance => self.cycle_appearance(1),
             _ => {}
         }
+    }
+
+    /// Open the waystone fast-travel menu (only meaningful on a portal).
+    pub fn open_portal(&mut self) {
+        self.toggle_panel(Panel::Portal);
     }
 
     /// Cycle the highlighted appearance field forward (+1) or back (-1).

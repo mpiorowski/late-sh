@@ -336,6 +336,7 @@ fn draw_side(
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
         Panel::Stable => stable_panel(view, state.cursor()),
         Panel::Housing => housing_panel(view, state.cursor()),
+        Panel::Portal => portal_panel(view, state.cursor()),
         Panel::Appearance => (appearance_panel(view, state.cursor()), None),
     };
     let off = scroll_offset(
@@ -1543,6 +1544,66 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
     (lines, sel_line)
 }
 
+fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+    let Some(portal) = &view.portal else {
+        return (
+            vec![Line::from(Span::styled(
+                "No waystone here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
+    };
+    let mut sel_line = None;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "The Ways",
+            Style::default()
+                .fg(theme::MENTION())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "Step through to any waystone you know of.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+    ];
+    // Villages come first in the destination list, then the islands.
+    let village_count = super::archipelago::VILLAGES.len();
+    for (i, (label, _room, here)) in portal.entries.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        if i == village_count {
+            lines.push(Line::from(Span::styled(
+                "  — the Shattered Archipelago —",
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
+        }
+        let marker = if selected { ">" } else { " " };
+        let suffix = if *here { "  (here)" } else { "" };
+        let style = if *here {
+            Style::default().fg(theme::TEXT_DIM())
+        } else if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker} {label}{suffix}"),
+            style,
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter travel"));
+    lines.push(hint("y", "close"));
+    (lines, sel_line)
+}
+
 fn housing_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(housing) = &view.housing else {
         return (
@@ -1748,6 +1809,9 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     }
     if view.housing.is_some() {
         lines.push(hint("n", "housing ledger"));
+    }
+    if view.portal.is_some() {
+        lines.push(hint("y", "the ways (portal)"));
     }
     lines.push(hint("Esc", "leave"));
     lines

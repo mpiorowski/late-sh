@@ -438,6 +438,13 @@ pub struct HousingView {
     pub entries: Vec<HousingEntryView>,
 }
 
+/// The waystone fast-travel menu, present when standing on a portal.
+#[derive(Clone, Debug)]
+pub struct PortalView {
+    /// Each destination: `(label, room id, is_here)`.
+    pub entries: Vec<(String, RoomId, bool)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ShopView {
     pub npc_name: String,
@@ -498,6 +505,8 @@ pub struct PlayerView {
     pub stable: Option<StableView>,
     /// The housing ledger, present at the clerk or inside a home you own.
     pub housing: Option<HousingView>,
+    /// The waystone fast-travel menu, present when standing on a portal.
+    pub portal: Option<PortalView>,
     /// The composed character bio (from the appearance choices).
     pub bio: String,
     /// The appearance/bio builder rows: (field label, chosen option).
@@ -578,6 +587,7 @@ impl PlayerView {
             pet: None,
             stable: None,
             housing: None,
+            portal: None,
             bio: String::new(),
             appearance: Vec::new(),
             log: Vec::new(),
@@ -1187,6 +1197,11 @@ impl LateaniaService {
     /// Batch-sell loose inventory at a merchant (see `SellBatch`).
     pub fn sell_batch_task(&self, user_id: Uuid, kind: SellBatch) {
         self.mutate(user_id, move |s| s.sell_batch(user_id, kind));
+    }
+
+    /// Step through a waystone portal to another landing.
+    pub fn travel_task(&self, user_id: Uuid, dest: RoomId) {
+        self.mutate(user_id, move |s| s.travel(user_id, dest));
     }
 
     pub fn delete_character_task(&self, user_id: Uuid) {
@@ -3134,8 +3149,59 @@ impl WorldState {
                 LogKind::System,
                 "Press n to open the housing ledger: buy a deed here, or furnish a home you own from inside it.".to_string(),
             );
+        } else if feat.kind == FeatureKind::Portal {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Press y to open the ways: step through to any village or island you know of."
+                    .to_string(),
+            );
         }
         self.dirty = true;
+    }
+
+    /// Step through a waystone to another. Only works when the player stands on a
+    /// portal, is out of combat, and the destination is a real portal landing.
+    fn travel(&mut self, user_id: Uuid, dest: RoomId) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if p.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't step through while fighting.".to_string(),
+            );
+            return;
+        }
+        let on_portal = features_at(p.room)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Portal);
+        if !on_portal {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "There is no waystone here to step through.".to_string(),
+            );
+            return;
+        }
+        let valid = super::archipelago::portal_destinations()
+            .iter()
+            .any(|(_, r)| *r == dest);
+        if !valid || dest == p.room {
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.previous_room = Some(p.room);
+            p.room = dest;
+            p.visited.insert(dest);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Travel,
+            "The waystone takes you in a breath of blue light...".to_string(),
+        );
+        self.describe_room(user_id);
     }
 
     fn board_quest_available(&self, p: &PlayerState, q: &BoardQuest) -> bool {
@@ -5708,6 +5774,17 @@ impl WorldState {
                 None
             };
 
+            // The waystone menu is present whenever the room holds a portal.
+            let portal = features_at(player.room)
+                .iter()
+                .any(|f| f.kind == FeatureKind::Portal)
+                .then(|| PortalView {
+                    entries: super::archipelago::portal_destinations()
+                        .into_iter()
+                        .map(|(label, room)| (label.to_string(), room, room == player.room))
+                        .collect(),
+                });
+
             let xp_into = player.xp - xp_for_level(player.level);
             let xp_next = if player.level >= Class::MAX_LEVEL {
                 0
@@ -5799,6 +5876,7 @@ impl WorldState {
                     pet,
                     stable,
                     housing,
+                    portal,
                     bio: appearance::compose_bio(&player.appearance),
                     appearance: (0..appearance::N_FIELDS)
                         .map(|i| {
@@ -6767,6 +6845,37 @@ mod tests {
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, before - 80);
         assert!(p.inventory.contains(&1001));
+    }
+
+    #[test]
+    fn waystone_travel_teleports_between_portals() {
+        use super::super::archipelago::{island_entrance, village_room};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Room 1 (Embergate square) has the town waystone.
+        assert_eq!(s.players[&uid(1)].room, 1);
+        s.travel(uid(1), village_room(0));
+        assert_eq!(
+            s.players[&uid(1)].room,
+            village_room(0),
+            "steps through to Lantern Cove"
+        );
+        // From a village waystone, hop to an island landing.
+        s.travel(uid(1), island_entrance(3));
+        assert_eq!(s.players[&uid(1)].room, island_entrance(3));
+    }
+
+    #[test]
+    fn travel_needs_a_waystone_and_a_real_destination() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Walk to a plain room with no portal, then try to travel: refused.
+        s.move_player(uid(1), Dir::North); // the Gilded Flagon (room 2), no portal
+        let here = s.players[&uid(1)].room;
+        s.travel(uid(1), super::super::archipelago::village_room(0));
+        assert_eq!(s.players[&uid(1)].room, here, "no waystone, no travel");
     }
 
     #[test]

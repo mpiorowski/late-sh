@@ -19,6 +19,7 @@
 // the planned full design target remains 200.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::OnceLock;
 
 use super::damage::{DamageProfile, DamageType};
 
@@ -372,6 +373,9 @@ pub enum FeatureKind {
     Stable,
     /// A housing clerk: examine it to buy a deed and furnish a home.
     Housing,
+    /// A waystone portal: examine it to open the fast-travel network (villages
+    /// and the isles of the Shattered Archipelago).
+    Portal,
 }
 
 impl FeatureKind {
@@ -386,6 +390,7 @@ impl FeatureKind {
             Self::Board => "board",
             Self::Stable => "stable",
             Self::Housing => "clerk",
+            Self::Portal => "portal",
         }
     }
 }
@@ -589,7 +594,58 @@ pub const FEATURES: &[Feature] = &[
 ];
 
 pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
-    FEATURES.iter().filter(|f| f.room == room).collect()
+    FEATURES
+        .iter()
+        .chain(waystone_features().iter())
+        .filter(|f| f.room == room)
+        .collect()
+}
+
+const PORTAL_DESC: &str = "A ring of standing waystones hums with a soft blue light, the air \
+    inside it rippling like a heat-haze over water. Step through and it will carry you in a \
+    breath to any other waystone you know of - the far villages, or the drowned isles of the \
+    Shattered Archipelago. Examine it to open the ways.";
+
+/// Portal (and, for the villages, fountain) features for the runtime-generated
+/// fast-travel network - the Embergate waystone, the villages, and every island
+/// landing. Built once and leaked into a `'static` so they read like any other
+/// authored feature.
+fn waystone_features() -> &'static [Feature] {
+    static F: OnceLock<Vec<Feature>> = OnceLock::new();
+    F.get_or_init(|| {
+        let mut v = Vec::new();
+        // The mainland gateway into the network sits in Embergate's square.
+        v.push(feat(
+            1,
+            "the town waystone",
+            FeatureKind::Portal,
+            PORTAL_DESC,
+        ));
+        for i in 0..super::archipelago::VILLAGES.len() {
+            let room = super::archipelago::village_room(i);
+            v.push(feat(
+                room,
+                "the village waystone",
+                FeatureKind::Portal,
+                PORTAL_DESC,
+            ));
+            v.push(feat(
+                room,
+                "the village fountain",
+                FeatureKind::Fountain,
+                FOUNTAIN_DESC,
+            ));
+        }
+        for i in 0..super::archipelago::ISLAND_COUNT {
+            v.push(feat(
+                super::archipelago::island_entrance(i),
+                "the island waystone",
+                FeatureKind::Portal,
+                PORTAL_DESC,
+            ));
+        }
+        v
+    })
 }
 
 /// A small benefit a Boon creature confers while you share its room.
@@ -2587,6 +2643,12 @@ pub fn seed_world() -> World {
     // homes are safe. Ownership and furnishings are runtime side-state.
     extend_housing(&mut rooms);
 
+    // Append the Shattered Archipelago: safe portal-linked villages (rooms 8000+)
+    // and a thousand rooms of maze/cavern islands (rooms 20000+), each with a
+    // boss. Reached by waystone portals, not by walking (see `svc.rs`).
+    extend_villages(&mut rooms);
+    extend_archipelago(&mut rooms, &mut spawns, &mut behaviors);
+
     tune_spawn_balance(&mut spawns);
 
     World {
@@ -2594,6 +2656,237 @@ pub fn seed_world() -> World {
         spawns,
         start_room: 1,
         behaviors,
+    }
+}
+
+// ---- The Shattered Archipelago: villages + island isles (rooms 8000/20000+) --
+
+/// Build the safe portal villages (rooms 8000+). Each is a single flavourful
+/// haven with a waystone (and a fountain, via `waystone_features`); they are
+/// reached only by portal, so they carry no directional exits.
+fn extend_villages(rooms: &mut HashMap<RoomId, Room>) {
+    for (i, (name, blurb)) in super::archipelago::VILLAGES.iter().enumerate() {
+        let id = super::archipelago::village_room(i);
+        rooms.insert(
+            id,
+            Room {
+                id,
+                name,
+                desc: blurb,
+                zone: name,
+                safe: true,
+                exits: HashMap::new(),
+            },
+        );
+    }
+}
+
+/// Build the twenty islands (rooms 20000+). Each island is carved as a braided
+/// maze or an organic cavern - never a grid - with its own scenery and a named
+/// boss in the deepest room. Islands are independent (reached by portal), so
+/// each landing is always safe.
+/// Archipelago mobs live above the Reaches so they ride the same balance
+/// multipliers (their authored base stats sit on that curve). Clear of the
+/// Reaches' actual ids.
+const ARCH_SPAWN_ID_START: u32 = 970_000;
+
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_archipelago(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    use super::archipelago::{ARCH_H, ARCH_SEED, ARCH_W, ISLANDS, island_entrance};
+    let (w, h) = (ARCH_W, ARCH_H);
+    let n = w * h;
+    let mut spawn_id: u32 = ARCH_SPAWN_ID_START;
+
+    for (isle, &(iname, adj, ground, feature, creature, mob_names, boss)) in
+        ISLANDS.iter().enumerate()
+    {
+        let ibase = island_entrance(isle);
+        let tier = (isle + 14) as i32; // the isles sit at and beyond the Reaches
+        let mut rng = MazeRng::new(ARCH_SEED ^ (isle as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Every third island is an organic cavern; the rest are braided mazes. A
+        // cavern that comes out too sparse falls back to a maze so none is empty.
+        let cavern_floor = if isle % 3 == 2 {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 20).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut ev = Vec::new();
+                    if !reachable[c] {
+                        return ev;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, ev: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                ev.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut ev);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut ev);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut ev);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut ev);
+                    ev
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut ev = Vec::new();
+                    if !reachable[c] {
+                        return ev;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            ev.push((DIRS[d], nb));
+                        }
+                    }
+                    ev
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = leak(iname.to_string());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = ibase + cell as RoomId;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, ibase + *nb as RoomId))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                leak(format!("{iname} - the Waystone Landing"))
+            } else if is_boss {
+                leak(format!("{iname} - the Wild Heart"))
+            } else {
+                leak(format!("{iname} - {}", FRONTIER_PLACES[cell % 10]))
+            };
+            let desc: &'static str =
+                leak(frontier_desc(adj, ground, feature, creature, cell as u32));
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    safe: is_entrance, // every landing is a safe haven with a portal
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            let (mob_name, behavior, boss_mob, hp, dmg) = if is_boss {
+                (
+                    boss,
+                    MobBehavior::Brute,
+                    true,
+                    1500 + tier * 240,
+                    66 + tier * 6,
+                )
+            } else if degree == 1 {
+                (
+                    mob_names[0],
+                    MobBehavior::Ambusher,
+                    false,
+                    860 + tier * 62 + depth * 6,
+                    58 + tier * 4 + depth,
+                )
+            } else if degree >= 3 {
+                (
+                    mob_names[1],
+                    if rng.chance(50) {
+                        MobBehavior::PackHunter
+                    } else {
+                        MobBehavior::Summoner
+                    },
+                    false,
+                    940 + tier * 72 + depth * 6,
+                    60 + tier * 5 + depth,
+                )
+            } else {
+                if rng.chance(35) {
+                    continue;
+                }
+                let behavior = match rng.below(4) {
+                    0 => MobBehavior::Wanderer,
+                    1 => MobBehavior::Patroller,
+                    2 => MobBehavior::Hunter,
+                    _ => MobBehavior::Caster(DamageType::Frost),
+                };
+                (
+                    mob_names[2],
+                    behavior,
+                    false,
+                    860 + tier * 62 + depth * 6,
+                    58 + tier * 4 + depth,
+                )
+            };
+            let profile = match behavior {
+                MobBehavior::Caster(school) => DamageProfile::new(school, None, None),
+                _ => DamageProfile::new(DamageType::Physical, None, None),
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp: if boss_mob {
+                    760 + tier * 92
+                } else {
+                    210 + tier * 40 + depth * 5
+                },
+                respawn_secs: if boss_mob { 600 } else { 90 },
+                loot: super::items::reaches_loot(isle),
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
     }
 }
 
@@ -7125,10 +7418,22 @@ mod tests {
             (750..=1000).contains(&reaches),
             "the Sundered Reaches should be ~900 rooms, got {reaches}"
         );
-        // No stray rooms outside the six known groups.
+        // The Shattered Archipelago: portal villages + maze/cavern islands.
+        use super::super::archipelago as arch;
+        let villages = count_in(arch::VILLAGE_BASE, arch::VILLAGE_BASE + 1000);
+        assert_eq!(villages, arch::VILLAGES.len(), "one room per village");
+        let islands = count_in(
+            arch::ARCH_BASE,
+            arch::ARCH_BASE + arch::ISLAND_COUNT as RoomId * arch::ARCH_STRIDE,
+        );
+        assert!(
+            (750..=1000).contains(&islands),
+            "the archipelago should be ~900 rooms, got {islands}"
+        );
+        // No stray rooms outside the known groups.
         assert_eq!(
             world.rooms.len(),
-            original + catacombs + thornwood + caverns + housing + reaches,
+            original + catacombs + thornwood + caverns + housing + reaches + villages + islands,
             "every room should belong to a known region"
         );
         for spawn in &world.spawns {
@@ -7481,11 +7786,49 @@ mod tests {
                     stack.push(*target);
                 }
             }
+            // A waystone portal connects to the whole fast-travel network, so
+            // the portal villages and island landings are reachable even though
+            // they have no directional exit into them.
+            if features_at(id)
+                .iter()
+                .any(|f| f.kind == FeatureKind::Portal)
+            {
+                for (_, dest) in super::super::archipelago::portal_destinations() {
+                    stack.push(dest);
+                }
+            }
         }
         assert_eq!(
             seen.len(),
             world.rooms.len(),
             "some rooms are unreachable from the start room"
+        );
+    }
+
+    #[test]
+    fn the_archipelago_is_mazes_and_caverns_with_a_boss_per_isle() {
+        use super::super::archipelago as arch;
+        let world = seed_world();
+        // Every island has a named boss (a boss mob homed inside its block).
+        for i in 0..arch::ISLAND_COUNT {
+            let base = arch::island_entrance(i);
+            let end = base + arch::ARCH_STRIDE;
+            let has_boss = world
+                .spawns
+                .iter()
+                .any(|sp| sp.boss && (base..end).contains(&sp.home));
+            assert!(has_boss, "island {i} should have a boss");
+        }
+        // Not grids: the isles wind into dead-ends and vary in branching.
+        let rooms: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| arch::is_archipelago_room(r.id))
+            .collect();
+        let dead_ends = rooms.iter().filter(|r| r.exits.len() == 1).count();
+        assert!(
+            dead_ends >= 15,
+            "islands should wind into dead-ends, not be square blocks (got {dead_ends})"
         );
     }
 

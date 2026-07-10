@@ -103,6 +103,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Follow
             | Panel::Stable
             | Panel::Housing
+            | Panel::Portal
             | Panel::Appearance
             | Panel::Abilities
     );
@@ -183,6 +184,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             // The housing ledger opens at the clerk or inside a home you own.
             if view.housing.is_some() {
                 state.toggle_panel(Panel::Housing);
+            }
+            InputAction::Handled
+        }
+        b'y' | b'Y' => {
+            // The waystone menu opens when standing on a portal.
+            if view.portal.is_some() {
+                state.open_portal();
             }
             InputAction::Handled
         }
