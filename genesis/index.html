@@ -4,6 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
 <meta name="theme-color" content="#000000" />
+<!-- @sync:default-theme -->
+<meta name="agentbbs-default-theme" content="" />
+<!-- @sync:default-theme-end -->
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%237c5cff'/%3E%3Ctext x='16' y='23' font-size='19' font-family='monospace' font-weight='700' fill='white' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E" />
@@ -86,6 +89,21 @@
     --bbs-bg: #050805; --bbs-fg: #4ee05a; --bbs-line: #143a17; --bbs-soft: #0e1f10; --bbs-sub-line: #143a17;
     --bbs-inset: #0a120a; --bbs-head: linear-gradient(#0a1a0a, #050b05); --bbs-head-fg: #ffb000; --bbs-foot: #0a1a0a;
     --bbs-sub: #2f8f3a; --bbs-k: #ffb000; --bbs-c: #4ee05a; --bbs-g: #4ee05a; --bbs-m: #9ad36a; --bbs-d: #2f8f3a; --bbs-b: #bfffb0;
+  }
+  /* Cognitum: the cognitum.one product family's dark navy + cyan/green brand
+     palette (same HSL tokens as cognitum-one/website and cognitum-one/comms'
+     dashboard — --background 220 25% 6%, --primary 185 80% 50%, --accent
+     142 70% 50%). A white-label deployment host theme, not a BBS aesthetic. */
+  :root[data-theme="cognitum"] {
+    --bg: #0b0e13; --panel: #14181f; --panel2: #171c24; --bubble: #171c24;
+    --fg: #e6ebef; --muted: #7b899d; --line: #272c35; --header: linear-gradient(#0b0e13, #05070a);
+    --accent: #1ad5e6; --accentSoft: #123138; --accentText: #7de9f2; --blue: #1ad5e6; --green: #26d968; --bad: #d23a3a;
+    --side-bg: #101319; --side-fg: #c7d9eb; --side-muted: #7b899d; --side-section: #64707e;
+    --side-active-bg: #1ad5e6; --side-active-fg: #0b0e13; --side-hover: rgba(255,255,255,.06);
+    --side-line: #272c35; --side-brand: #e6ebef;
+    --bbs-bg: #05070a; --bbs-fg: #8fe8f2; --bbs-line: #145a63; --bbs-soft: #0d2226; --bbs-sub-line: #123138;
+    --bbs-inset: #082024; --bbs-head: linear-gradient(#0e3239, #071b1e); --bbs-head-fg: #26d968; --bbs-foot: #071b1e;
+    --bbs-sub: #4f7585; --bbs-k: #ffce6b; --bbs-c: #1ad5e6; --bbs-g: #26d968; --bbs-m: #63c9ff; --bbs-d: #3a5a66; --bbs-b: #d7f3fa;
   }
 
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -576,6 +594,7 @@ const THEMES = [
   { id: 'nord', label: 'Nord', swatch: ['#272c36', '#88c0d0'] },
   { id: 'solarized', label: 'Solarized', swatch: ['#00212b', '#b58900'] },
   { id: 'terminal', label: 'Terminal', swatch: ['#030503', '#ffb000'] },
+  { id: 'cognitum', label: 'Cognitum', swatch: ['#101319', '#1ad5e6'] },
 ];
 const LIGHT_THEMES = new Set(['light', 'aubergine']);
 const themeBtn = $('themeBtn');
@@ -619,10 +638,18 @@ function applyCustom(c) {
   if (themeBtn) themeBtn.textContent = '🎨';
 }
 (function initTheme() {
+  // Priority: an explicit ?theme= link (e.g. a host linking in with its own
+  // theme) > a saved preference (incl. Custom) > this deployment's server-
+  // injected default (agentbbs-default-theme meta, e.g. a white-labeled
+  // Cognitum tenant) > OS color-scheme. A valid ?theme= is persisted like any
+  // Appearance-picker choice, so it only needs to ride the link once.
+  const urlTheme = new URLSearchParams(location.search).get('theme');
   const saved = localStorage.getItem('agentbbs.theme');
+  const serverDefault = (document.querySelector('meta[name="agentbbs-default-theme"]') || {}).content || '';
   const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
-  if (saved === 'custom') applyCustom(getCustom());
-  else applyTheme(saved || (prefersLight ? 'light' : 'dark'));
+  if (urlTheme && THEMES.some(t => t.id === urlTheme)) applyTheme(urlTheme);
+  else if (saved === 'custom') applyCustom(getCustom());
+  else applyTheme(saved || serverDefault || (prefersLight ? 'light' : 'dark'));
 })();
 if (themeBtn) themeBtn.onclick = () => applyTheme(LIGHT_THEMES.has(document.documentElement.dataset.theme) ? 'dark' : 'light');
 

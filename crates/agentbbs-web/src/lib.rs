@@ -491,13 +491,43 @@ pub fn router(state: Arc<AppState>) -> Router {
 const CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; \
 script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'";
 
+/// Theme ids the client-side registry accepts (kept in sync with genesis/
+/// index.html's `THEMES` array, ADR-0024) — validated so a malformed
+/// `AGENTBBS_DEFAULT_THEME` can't inject arbitrary content into the served
+/// HTML's meta tag.
+const KNOWN_THEMES: &[&str] = &[
+    "dark",
+    "light",
+    "aubergine",
+    "nord",
+    "solarized",
+    "terminal",
+    "cognitum",
+];
+
+/// Deployments (e.g. a white-labeled multi-tenant host) can set this to make
+/// the UI open in that theme by default, without touching every link that
+/// points at the instance. `initTheme()` in the client still lets a visitor's
+/// own saved preference or a `?theme=` override win over this default.
 async fn index() -> impl IntoResponse {
+    let html = include_str!("../assets/index.html");
+    let body = match std::env::var("AGENTBBS_DEFAULT_THEME")
+        .ok()
+        .filter(|t| KNOWN_THEMES.contains(&t.as_str()))
+    {
+        Some(theme) => html.replacen(
+            r#"<meta name="agentbbs-default-theme" content="" />"#,
+            &format!(r#"<meta name="agentbbs-default-theme" content="{theme}" />"#),
+            1,
+        ),
+        None => html.to_string(),
+    };
     (
         [
             ("content-security-policy", CSP),
             ("x-content-type-options", "nosniff"),
         ],
-        Html(include_str!("../assets/index.html")),
+        Html(body),
     )
 }
 
@@ -2868,6 +2898,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ADR-0024 follow-on: a deployment (e.g. a white-labeled multi-tenant
+    // host) sets AGENTBBS_DEFAULT_THEME so every visitor's first load opens
+    // already themed, without needing a `?theme=` on every link — and an
+    // unset or garbage value must never be able to break the meta tag's HTML
+    // (e.g. inject an attribute-breaking quote). Both cases live in one test
+    // (rather than two `#[tokio::test]`s) because they'd otherwise race on
+    // the same process-global env var when Rust runs tests concurrently.
+    #[tokio::test]
+    async fn index_injects_default_theme_only_when_known() {
+        async fn served_body() -> String {
+            let app = router(AppState::in_memory());
+            let resp = app
+                .oneshot(Request::get("/").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            String::from_utf8(
+                axum::body::to_bytes(resp.into_body(), usize::MAX)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap()
+        }
+
+        std::env::set_var("AGENTBBS_DEFAULT_THEME", "cognitum");
+        let body = served_body().await;
+        assert!(body.contains(r#"<meta name="agentbbs-default-theme" content="cognitum" />"#));
+
+        std::env::set_var("AGENTBBS_DEFAULT_THEME", "\"><script>bad</script>");
+        let body = served_body().await;
+        assert!(body.contains(r#"<meta name="agentbbs-default-theme" content="" />"#));
+        assert!(!body.contains("<script>bad</script>"));
+
+        std::env::remove_var("AGENTBBS_DEFAULT_THEME");
+        let body = served_body().await;
+        assert!(body.contains(r#"<meta name="agentbbs-default-theme" content="" />"#));
     }
 
     // Issue #4 / ADR-0034: provider-agnostic LLM gateway config + payload.

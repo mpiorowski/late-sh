@@ -115,6 +115,19 @@ guard + E2E suite:
   a message) showing cryptographic provenance — handle, full Ed25519 author key,
   board, timestamp, `verified`, and signature — fitting the signed-message model.
   This resolves the "right rail is informational only" note below.
+- **A seventh theme (`cognitum`) + a per-deployment default.** A downstream
+  product (`cognitum-one/comms`, a multi-tenant SaaS wrapper) needed its
+  tenants' AgentBBS instances to open already branded, not just themeable by a
+  visitor after the fact — exactly the registry extension point this ADR calls
+  out ("add a CSS block + a registry line for a new theme"). `cognitum` ships
+  as a normal `THEMES` entry + `--bbs-*` block. Separately, `initTheme()` now
+  resolves a default in this priority: a `?theme=` link > the visitor's saved
+  preference (incl. Custom) > this deployment's server-injected default > OS
+  color-scheme. The default comes from a `<meta name="agentbbs-default-theme">`
+  tag that `agentbbs-web`'s `index()` handler fills in from `AGENTBBS_DEFAULT_THEME`
+  (validated against the known theme ids so a bad env var can't break the tag),
+  left empty for `genesis`'s own static demo. A visitor's own Appearance-picker
+  choice still overrides it — this only changes what a fresh browser sees.
 
 ## Consequences
 
