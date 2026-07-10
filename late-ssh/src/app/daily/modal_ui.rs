@@ -14,6 +14,7 @@ use ratatui::{
 use crate::app::{
     common::theme,
     daily::{
+        games::DailyGame,
         state::{DailyState, format_deadline},
         svc::{DailyChallengeItem, DailyMatchItem},
     },
@@ -115,16 +116,26 @@ fn selected_line_index(daily: &DailyState, match_count: usize) -> usize {
 fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line<'static> {
     let (_, opponent) = daily.opponent_of(item);
     let opponent = opponent.unwrap_or_else(|| "player".to_string());
-    let color = if item.white_id == Some(daily.user_id()) {
-        ChessColor::White
-    } else {
-        ChessColor::Black
-    };
     let my_turn = daily.my_turn(item);
     let deadline = item
         .turn_deadline_at
         .map(|at| format_deadline(at, Utc::now()))
         .unwrap_or_else(|| "--".to_string());
+    let progress = match item.game {
+        DailyGame::Chess => {
+            let color = if item.white_id == Some(daily.user_id()) {
+                ChessColor::White
+            } else {
+                ChessColor::Black
+            };
+            format!(
+                "{} · {} moves",
+                color.label().to_lowercase(),
+                item.move_count
+            )
+        }
+        DailyGame::Battleship => format!("{} shots", item.move_count),
+    };
 
     let mut spans = vec![marker_span(selected)];
     spans.push(Span::styled(
@@ -136,11 +147,11 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
         }),
     ));
     spans.push(Span::styled(
-        format!("{:<6}", color.label().to_lowercase()),
+        format!("{:<12}", item.game.label()),
         Style::default().fg(theme::TEXT_DIM()),
     ));
     spans.push(Span::styled(
-        format!("{:>3} moves   ", item.move_count),
+        format!("{progress:<18}"),
         Style::default().fg(theme::TEXT_DIM()),
     ));
     if my_turn {
@@ -192,16 +203,24 @@ fn challenge_line(
             theme::TEXT()
         }),
     ));
+    spans.push(Span::styled(
+        format!("{:<12}", challenge.game.label()),
+        Style::default().fg(theme::TEXT()),
+    ));
     match target {
         Some(target) => spans.push(Span::styled(
-            format!("challenges {target}"),
+            format!("{:<18}", format!("challenges {target}")),
             Style::default().fg(theme::AMBER_DIM()),
         )),
         None => spans.push(Span::styled(
-            "open challenge".to_string(),
+            format!("{:<18}", "open challenge"),
             Style::default().fg(theme::TEXT_DIM()),
         )),
     }
+    spans.push(Span::styled(
+        format!("{} chips to the winner", challenge.game.win_payout()),
+        Style::default().fg(theme::AMBER_DIM()),
+    ));
     if mine {
         spans.push(Span::styled(
             "   yours · x cancel",
@@ -214,21 +233,8 @@ fn challenge_line(
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, daily: &DailyState) {
-    let line = if let Some(buffer) = &daily.challenge_prompt {
-        Line::from(vec![
-            Span::styled(
-                "challenge @",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(buffer.clone(), Style::default().fg(theme::TEXT_BRIGHT())),
-            Span::styled("█", Style::default().fg(theme::AMBER_GLOW())),
-            Span::styled(
-                "   enter send · esc back",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ),
-        ])
+    let line = if let Some(draft) = &daily.challenge_draft {
+        draft_line(draft)
     } else if daily.confirm_claim.is_some() {
         Line::from(Span::styled(
             "claim this challenge and start the match? enter confirm · esc back",
@@ -249,6 +255,57 @@ fn draw_status(frame: &mut Frame, area: Rect, daily: &DailyState) {
         .centered()
     };
     frame.render_widget(Paragraph::new(line), area);
+}
+
+/// The challenge composer: a horizontal game picker with the prize inline,
+/// plus the username buffer for directed drafts.
+fn draft_line(draft: &crate::app::daily::state::ChallengeDraft) -> Line<'static> {
+    let mut spans = Vec::new();
+    match &draft.target {
+        Some(buffer) => {
+            spans.push(Span::styled(
+                "challenge @",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                buffer.clone(),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ));
+            spans.push(Span::styled("█", Style::default().fg(theme::AMBER_GLOW())));
+            spans.push(Span::raw("   "));
+        }
+        None => {
+            spans.push(Span::styled(
+                "open challenge   ",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+    for game in DailyGame::ALL {
+        if game == draft.game {
+            spans.push(Span::styled(
+                format!("[{} · {} chips]", game.label(), game.win_payout()),
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                format!(" {} · {} ", game.label(), game.win_payout()),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ));
+        }
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::styled(
+        "  tab game · enter post · esc back",
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    Line::from(spans)
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, daily: &DailyState) {

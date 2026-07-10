@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use cozy_chess::{Board, GameStatus};
 use late_core::{
     db::Db,
-    models::{daily_match::DailyMatch, reward::DAILY_CHESS_WIN_REWARD_KEY, user::User},
+    models::{daily_match::DailyMatch, user::User},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,12 +20,12 @@ use crate::app::games::{
     chips::svc::ChipService,
 };
 
+use super::{battleship::DailyBattleshipState, games::DailyGame};
+
 // 4 matches the sidebar panel's match slots exactly, so every active entry
 // is always visible there — no overflow handling.
 pub const DAILY_MAX_ACTIVE_ENTRIES: i64 = 4;
 pub const DAILY_MOVE_HOURS: i64 = 24;
-pub const DAILY_CHESS_WIN_CHIP_PAYOUT: i64 = 500;
-const DAILY_CHESS_WIN_LEDGER_REASON: &str = "daily_chess_win";
 const DAILY_STATE_VERSION: u8 = 1;
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -50,6 +50,7 @@ pub struct DailySnapshot {
 #[derive(Clone, Debug)]
 pub struct DailyChallengeItem {
     pub id: Uuid,
+    pub game: DailyGame,
     pub created: DateTime<Utc>,
     pub challenger_id: Uuid,
     pub challenger_username: Option<String>,
@@ -60,14 +61,17 @@ pub struct DailyChallengeItem {
 #[derive(Clone, Debug)]
 pub struct DailyMatchItem {
     pub id: Uuid,
+    pub game: DailyGame,
     pub challenger_id: Uuid,
     pub challenger_username: Option<String>,
     pub opponent_id: Uuid,
     pub opponent_username: Option<String>,
+    /// Chess only; `None` for games without colors.
     pub white_id: Option<Uuid>,
     pub black_id: Option<Uuid>,
     pub turn_user_id: Option<Uuid>,
     pub turn_deadline_at: Option<DateTime<Utc>>,
+    /// Chess moves or battleship shots — "how far along is this match".
     pub move_count: usize,
 }
 
@@ -75,6 +79,7 @@ pub struct DailyMatchItem {
 pub enum DailyEvent {
     ChallengePosted {
         match_id: Uuid,
+        game: DailyGame,
         challenger_id: Uuid,
         target_user_id: Option<Uuid>,
         target_username: Option<String>,
@@ -91,6 +96,7 @@ pub enum DailyEvent {
     },
     MatchFinished {
         match_id: Uuid,
+        game: DailyGame,
         winner_user_id: Option<Uuid>,
         result: String,
     },
@@ -225,10 +231,15 @@ impl DailyService {
         });
     }
 
-    pub fn post_challenge_task(&self, user_id: Uuid, target_user_id: Option<Uuid>) {
+    pub fn post_challenge_task(
+        &self,
+        user_id: Uuid,
+        game: DailyGame,
+        target_user_id: Option<Uuid>,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.post_challenge(user_id, target_user_id).await {
+            if let Err(e) = svc.post_challenge(user_id, game, target_user_id).await {
                 tracing::error!(error = ?e, %user_id, "failed to post daily challenge");
                 svc.send_error(user_id, &e);
             }
@@ -238,7 +249,12 @@ impl DailyService {
     /// Directed challenge addressed by username (the `/challenge @user` and
     /// modal prompt path). Resolves against the DB so the target does not
     /// need to be online.
-    pub fn post_challenge_to_username_task(&self, user_id: Uuid, username: String) {
+    pub fn post_challenge_to_username_task(
+        &self,
+        user_id: Uuid,
+        game: DailyGame,
+        username: String,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
             let result = async {
@@ -247,7 +263,7 @@ impl DailyService {
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("no user named {username}"))?;
                 drop(client);
-                svc.post_challenge(user_id, Some(target.id)).await?;
+                svc.post_challenge(user_id, game, Some(target.id)).await?;
                 Ok::<_, anyhow::Error>(())
             }
             .await;
@@ -308,6 +324,7 @@ impl DailyService {
     pub async fn post_challenge(
         &self,
         user_id: Uuid,
+        game: DailyGame,
         target_user_id: Option<Uuid>,
     ) -> Result<DailyMatch> {
         if target_user_id == Some(user_id) {
@@ -323,9 +340,11 @@ impl DailyService {
             None
         };
         self.ensure_entry_capacity(&client, user_id).await?;
-        let row = DailyMatch::create_challenge(&client, user_id, target_user_id).await?;
+        let row =
+            DailyMatch::create_challenge(&client, game.kind(), user_id, target_user_id).await?;
         let _ = self.event_tx.send(DailyEvent::ChallengePosted {
             match_id: row.id,
+            game,
             challenger_id: row.challenger_id,
             target_user_id: row.target_user_id,
             target_username,
@@ -350,18 +369,37 @@ impl DailyService {
         {
             bail!("this challenge is directed at someone else");
         }
-        let (white, black) = if rand::random::<bool>() {
-            (challenge.challenger_id, user_id)
-        } else {
-            (user_id, challenge.challenger_id)
+        let game = DailyGame::from_kind(&challenge.game_kind)
+            .ok_or_else(|| anyhow::anyhow!("unknown daily game: {}", challenge.game_kind))?;
+        // Fair-start coin flip per game: chess randomizes colors (White
+        // moves first), battleship randomizes who fires first.
+        let (state_value, first_turn_user) = match game {
+            DailyGame::Chess => {
+                let (white, black) = if rand::random::<bool>() {
+                    (challenge.challenger_id, user_id)
+                } else {
+                    (user_id, challenge.challenger_id)
+                };
+                (
+                    serde_json::to_value(DailyChessState::new(white, black))?,
+                    white,
+                )
+            }
+            DailyGame::Battleship => {
+                let state = DailyBattleshipState::new(challenge.challenger_id, user_id);
+                let first = if rand::random::<bool>() {
+                    challenge.challenger_id
+                } else {
+                    user_id
+                };
+                (serde_json::to_value(state)?, first)
+            }
         };
-        let state = DailyChessState::new(white, black);
-        let state_value = serde_json::to_value(&state)?;
         let claimed = DailyMatch::claim(
             &client,
             match_id,
             user_id,
-            white,
+            first_turn_user,
             Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
             &state_value,
         )
@@ -410,6 +448,24 @@ impl DailyService {
         {
             bail!("your time to move has expired");
         }
+        let game = DailyGame::from_kind(&row.game_kind)
+            .ok_or_else(|| anyhow::anyhow!("unknown daily game: {}", row.game_kind))?;
+        match game {
+            DailyGame::Chess => self.play_chess_move(&client, row, user_id, from, to).await,
+            // A battleship "move" is one square; `to` carries the target cell.
+            DailyGame::Battleship => self.play_battleship_shot(&client, row, user_id, to).await,
+        }
+    }
+
+    async fn play_chess_move(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        user_id: Uuid,
+        from: usize,
+        to: usize,
+    ) -> Result<()> {
+        let match_id = row.id;
         let mut state = DailyChessState::parse(&row.state)?;
         let board: Board = state
             .fen
@@ -475,7 +531,7 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(match_id, winner, result);
+                self.finish_events(match_id, DailyGame::Chess, winner, result);
             }
             None => {
                 let next_turn = state.user_for_color(mover_color.other());
@@ -496,10 +552,83 @@ impl DailyService {
                 });
             }
         }
-        self.publish(&client).await?;
+        self.publish(client).await?;
         Ok(())
     }
 
+    /// One shot at `cell`. A hit keeps the turn (classic battleship); a miss
+    /// passes it. Either way the 24h deadline resets, and sinking the last
+    /// ship finishes the match.
+    async fn play_battleship_shot(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        user_id: Uuid,
+        cell: usize,
+    ) -> Result<()> {
+        let match_id = row.id;
+        let mut state = DailyBattleshipState::parse(&row.state)?;
+        let shooter = state
+            .side_index_of(user_id)
+            .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
+        let base_revision = state.revision as i64;
+        state.revision = state.revision.saturating_add(1);
+        let outcome = state.apply_shot(shooter, cell, Utc::now())?;
+        let label = outcome.label(cell);
+        let state_value = serde_json::to_value(&state)?;
+
+        if outcome.fleet_sunk {
+            let updated = DailyMatch::finish(
+                client,
+                match_id,
+                Some(user_id),
+                DailyMatch::RESULT_FLEET_SUNK,
+                &state_value,
+                base_revision,
+            )
+            .await?;
+            ensure!(updated == 1, "move was superseded, reload the match");
+            let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                match_id,
+                by_user_id: user_id,
+                label,
+            });
+            self.finish_events(
+                match_id,
+                DailyGame::Battleship,
+                Some(user_id),
+                DailyMatch::RESULT_FLEET_SUNK,
+            );
+        } else {
+            let next_turn = if outcome.hit {
+                user_id
+            } else {
+                let opponent = DailyBattleshipState::opponent_index(shooter);
+                state.side(opponent).user_id
+            };
+            let updated = DailyMatch::update_state(
+                client,
+                match_id,
+                &state_value,
+                user_id,
+                next_turn,
+                Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+            )
+            .await?;
+            ensure!(updated == 1, "move was superseded, reload the match");
+            let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                match_id,
+                by_user_id: user_id,
+                label,
+            });
+        }
+        self.publish(client).await?;
+        Ok(())
+    }
+
+    /// Game-agnostic: the winner is simply the other player on the row, and
+    /// the revision bump happens on the raw state JSON, so resign never needs
+    /// to know which game it is quitting.
     pub async fn resign(&self, user_id: Uuid, match_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         // `finish` is revision-guarded, so a resign that raced the opponent's
@@ -510,14 +639,24 @@ impl DailyService {
                 .await?
                 .filter(|row| row.status == DailyMatch::STATUS_ACTIVE)
                 .ok_or_else(|| anyhow::anyhow!("match is not active"))?;
-            let mut state = DailyChessState::parse(&row.state)?;
-            let resigning_color = state
-                .color_of(user_id)
-                .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
-            let winner = state.user_for_color(resigning_color.other());
-            let base_revision = state.revision as i64;
-            state.revision = state.revision.saturating_add(1);
-            let state_value = serde_json::to_value(&state)?;
+            let game = DailyGame::from_kind(&row.game_kind)
+                .ok_or_else(|| anyhow::anyhow!("unknown daily game: {}", row.game_kind))?;
+            let winner = if row.challenger_id == user_id {
+                row.opponent_id
+            } else if row.opponent_id == Some(user_id) {
+                Some(row.challenger_id)
+            } else {
+                bail!("you are not playing in this match");
+            };
+            let winner = winner.ok_or_else(|| anyhow::anyhow!("match has no opponent yet"))?;
+            let mut state_value = row.state.clone();
+            let base_revision = state_value
+                .get("revision")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            if let Some(object) = state_value.as_object_mut() {
+                object.insert("revision".to_string(), Value::from(base_revision + 1));
+            }
             let updated = DailyMatch::finish(
                 &client,
                 match_id,
@@ -528,7 +667,7 @@ impl DailyService {
             )
             .await?;
             if updated == 1 {
-                self.finish_events(match_id, Some(winner), DailyMatch::RESULT_RESIGN);
+                self.finish_events(match_id, game, Some(winner), DailyMatch::RESULT_RESIGN);
                 self.publish(&client).await?;
                 return Ok(());
             }
@@ -543,7 +682,15 @@ impl DailyService {
         let forfeited = DailyMatch::forfeit_expired(&client).await?;
         for row in &forfeited {
             tracing::info!(match_id = %row.id, "daily match forfeited on move deadline");
-            self.finish_events(row.id, row.winner_user_id, DailyMatch::RESULT_TIMEOUT);
+            let Some(game) = DailyGame::from_kind(&row.game_kind) else {
+                tracing::error!(
+                    match_id = %row.id,
+                    game_kind = row.game_kind,
+                    "forfeited daily match has unknown game kind, skipping payout"
+                );
+                continue;
+            };
+            self.finish_events(row.id, game, row.winner_user_id, DailyMatch::RESULT_TIMEOUT);
         }
         if !forfeited.is_empty() {
             self.publish(&client).await?;
@@ -571,9 +718,16 @@ impl DailyService {
         Ok(())
     }
 
-    fn finish_events(&self, match_id: Uuid, winner_user_id: Option<Uuid>, result: &str) {
+    fn finish_events(
+        &self,
+        match_id: Uuid,
+        game: DailyGame,
+        winner_user_id: Option<Uuid>,
+        result: &str,
+    ) {
         let _ = self.event_tx.send(DailyEvent::MatchFinished {
             match_id,
+            game,
             winner_user_id,
             result: result.to_string(),
         });
@@ -585,9 +739,9 @@ impl DailyService {
             match chip_svc
                 .credit_per_event_reward_template(
                     winner,
-                    DAILY_CHESS_WIN_REWARD_KEY,
+                    game.reward_key(),
                     &match_id.to_string(),
-                    DAILY_CHESS_WIN_LEDGER_REASON,
+                    game.ledger_reason(),
                 )
                 .await
             {
@@ -596,8 +750,9 @@ impl DailyService {
                         tracing::info!(
                             user_id = %winner,
                             match_id = %match_id,
+                            game = game.label(),
                             payout = payout.amount,
-                            "daily chess win already paid for this match"
+                            "daily win already paid for this match"
                         );
                     }
                 }
@@ -605,7 +760,8 @@ impl DailyService {
                     tracing::error!(
                         ?error,
                         user_id = %winner,
-                        "failed to credit daily chess win chips"
+                        game = game.label(),
+                        "failed to credit daily win chips"
                     );
                 }
             }
@@ -636,38 +792,66 @@ impl DailyService {
         user_ids.dedup();
         let usernames = User::list_usernames_by_ids(client, &user_ids).await?;
 
+        // Rows whose game kind this build doesn't know (from a newer deploy)
+        // stay in the DB untouched but are hidden from the snapshot.
         let open_challenges = open
             .into_iter()
-            .map(|row| DailyChallengeItem {
-                id: row.id,
-                created: row.created,
-                challenger_id: row.challenger_id,
-                challenger_username: usernames.get(&row.challenger_id).cloned(),
-                target_user_id: row.target_user_id,
-                target_username: row
-                    .target_user_id
-                    .and_then(|id| usernames.get(&id).cloned()),
+            .filter_map(|row| {
+                let game = DailyGame::from_kind(&row.game_kind)?;
+                Some(DailyChallengeItem {
+                    id: row.id,
+                    game,
+                    created: row.created,
+                    challenger_id: row.challenger_id,
+                    challenger_username: usernames.get(&row.challenger_id).cloned(),
+                    target_user_id: row.target_user_id,
+                    target_username: row
+                        .target_user_id
+                        .and_then(|id| usernames.get(&id).cloned()),
+                })
             })
             .collect();
         let active_matches = active
             .into_iter()
             .filter_map(|row| {
                 let opponent_id = row.opponent_id?;
-                let state = DailyChessState::parse(&row.state).ok();
+                let game = DailyGame::from_kind(&row.game_kind)?;
+                let (white_id, black_id, move_count) = match game {
+                    DailyGame::Chess => {
+                        let state = DailyChessState::parse(&row.state).ok();
+                        (
+                            state.as_ref().map(|state| state.colors.white),
+                            state.as_ref().map(|state| state.colors.black),
+                            state
+                                .as_ref()
+                                .map(|state| state.move_history.len())
+                                .unwrap_or(0),
+                        )
+                    }
+                    DailyGame::Battleship => {
+                        let state = DailyBattleshipState::parse(&row.state).ok();
+                        (
+                            None,
+                            None,
+                            state
+                                .as_ref()
+                                .map(DailyBattleshipState::shot_count)
+                                .unwrap_or(0),
+                        )
+                    }
+                };
                 Some(DailyMatchItem {
                     id: row.id,
+                    game,
                     challenger_id: row.challenger_id,
                     challenger_username: usernames.get(&row.challenger_id).cloned(),
                     opponent_id,
                     opponent_username: usernames.get(&opponent_id).cloned(),
-                    white_id: state.as_ref().map(|state| state.colors.white),
-                    black_id: state.as_ref().map(|state| state.colors.black),
+                    white_id,
+                    black_id,
                     turn_user_id: row.turn_user_id,
                     turn_deadline_at: row.turn_deadline_at,
-                    move_count: state
-                        .as_ref()
-                        .map(|state| state.move_history.len())
-                        .unwrap_or(0),
+                    move_count,
                 })
             })
             .collect();

@@ -1,0 +1,519 @@
+//! Full-screen daily battleship board: your shots on their waters (left,
+//! where the cursor lives) and your own fleet taking fire (right). Shares
+//! the daily board chrome — status line, player bars, pinned key hints,
+//! result overlay — with the chess renderer in `board_ui`.
+
+use chrono::Utc;
+use ratatui::{
+    Frame,
+    layout::{Alignment, Constraint, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+};
+use uuid::Uuid;
+
+use crate::app::{
+    common::theme,
+    daily::{
+        battleship::{self, DailyBattleshipState, Shot},
+        board_ui::{draw_center_message, draw_overlay, name_for, result_banner},
+        state::{BattleshipDetail, DailyBoardState, DailyMatchDetail, DailyState, format_deadline},
+    },
+};
+
+/// title + column header + 10 rows + fleet summary.
+const GRID_ROWS: u16 = 13;
+/// row labels (3) + 10 cells of width 2.
+const GRID_WIDTH: u16 = 3 + (battleship::GRID as u16) * 2;
+const GRID_GAP: u16 = 6;
+const GRIDS_WIDTH: u16 = GRID_WIDTH * 2 + GRID_GAP;
+/// status + two player bars + key hints around the grids.
+const CHROME_ROWS: u16 = 4;
+
+pub(crate) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    daily: &DailyState,
+    board: &DailyBoardState,
+    detail: &DailyMatchDetail,
+    battleship: &BattleshipDetail,
+) {
+    if area.width < GRIDS_WIDTH || area.height < GRID_ROWS + CHROME_ROWS {
+        draw_center_message(frame, area, "The board needs more room.");
+        return;
+    }
+    let state = &battleship.state;
+    let Some(me) = state.side_index_of(daily.user_id()) else {
+        draw_center_message(frame, area, "You are not playing in this match.");
+        return;
+    };
+    let them = DailyBattleshipState::opponent_index(me);
+
+    // Same shape as the chess board: the salvo rail splits off the right
+    // edge when there is room, everything else centres in what remains.
+    let show_rail = area.width >= GRIDS_WIDTH + INFO_RAIL_WIDTH + INFO_RAIL_MIN_EXTRA;
+    let content = if show_rail {
+        let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(INFO_RAIL_WIDTH)])
+            .split(area);
+        draw_info_rail(frame, cols[1], board, state, me);
+        cols[0]
+    } else {
+        area
+    };
+    let area = content;
+
+    let stack_h = GRID_ROWS + CHROME_ROWS;
+    let top_pad = area.height.saturating_sub(stack_h) / 2;
+    let rows = Layout::vertical([
+        Constraint::Length(top_pad),
+        Constraint::Length(1),         // status
+        Constraint::Length(1),         // opponent bar
+        Constraint::Length(GRID_ROWS), // the two grids
+        Constraint::Length(1),         // own bar
+        Constraint::Min(0),            // slack, pushing the hints to the floor
+        Constraint::Length(1),         // key hints
+    ])
+    .split(area);
+    let (status_row, top_bar, grids_row, bottom_bar, hint_row) =
+        (rows[1], rows[2], rows[3], rows[4], rows[6]);
+
+    let finished = !detail.is_active();
+    let my_turn = detail.is_active()
+        && detail.row.turn_user_id == Some(daily.user_id())
+        && !battleship.shot_in_flight;
+
+    frame.render_widget(
+        Paragraph::new(status_line(daily, board, detail, battleship, me))
+            .alignment(Alignment::Center),
+        status_row,
+    );
+    draw_player_bar(frame, top_bar, daily, board, detail, battleship, them);
+
+    let grids_x = grids_row.x + grids_row.width.saturating_sub(GRIDS_WIDTH) / 2;
+    let target_rect = Rect {
+        x: grids_x,
+        y: grids_row.y,
+        width: GRID_WIDTH,
+        height: GRID_ROWS,
+    };
+    let fleet_rect = Rect {
+        x: grids_x + GRID_WIDTH + GRID_GAP,
+        y: grids_row.y,
+        width: GRID_WIDTH,
+        height: GRID_ROWS,
+    };
+    frame.render_widget(
+        Paragraph::new(target_grid_lines(
+            state,
+            me,
+            my_turn.then_some(board.cursor),
+            finished,
+        )),
+        target_rect,
+    );
+    frame.render_widget(Paragraph::new(fleet_grid_lines(state, me)), fleet_rect);
+    // Cells begin after the title + header rows and the row labels.
+    board.target_geometry.set(Some(Rect {
+        x: target_rect.x + 3,
+        y: target_rect.y + 2,
+        width: (battleship::GRID as u16) * 2,
+        height: battleship::GRID as u16,
+    }));
+
+    draw_player_bar(frame, bottom_bar, daily, board, detail, battleship, me);
+    frame.render_widget(
+        Paragraph::new(key_line(detail)).alignment(Alignment::Center),
+        hint_row,
+    );
+
+    if finished {
+        let overlay_rect = Rect {
+            x: grids_x,
+            y: grids_row.y,
+            width: GRIDS_WIDTH.min(area.width),
+            height: GRID_ROWS,
+        };
+        let (heading, subtitle, color) = result_banner(daily, board, detail);
+        draw_overlay(frame, overlay_rect, heading, &subtitle, color);
+    }
+}
+
+const INFO_RAIL_WIDTH: u16 = 24;
+/// Breathing room required around the grids before the rail appears.
+const INFO_RAIL_MIN_EXTRA: u16 = 16;
+
+/// Their waters: your shots, the cursor, and (once the match ends) whatever
+/// survived of their fleet.
+fn target_grid_lines(
+    state: &DailyBattleshipState,
+    me: usize,
+    cursor: Option<usize>,
+    finished: bool,
+) -> Vec<Line<'static>> {
+    let them = DailyBattleshipState::opponent_index(me);
+    let mut lines = vec![grid_title("their waters"), header_line()];
+    for row in 0..battleship::GRID {
+        let mut spans = vec![row_label(row)];
+        for col in 0..battleship::GRID {
+            let cell = row * battleship::GRID + col;
+            let shot = state
+                .side(me)
+                .shots
+                .iter()
+                .find(|shot| shot.cell as usize == cell);
+            let enemy_ship = state
+                .side(them)
+                .ships
+                .iter()
+                .any(|ship| ship.cells.contains(&(cell as u8)));
+            let (glyph, mut style) = match shot {
+                Some(Shot { hit: true, .. }) => (
+                    "✕ ",
+                    Style::default()
+                        .fg(theme::ERROR())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Some(Shot { hit: false, .. }) => ("◦ ", Style::default().fg(theme::TEXT_FAINT())),
+                None if finished && enemy_ship => {
+                    // The reveal: ships you never found.
+                    ("░░", Style::default().fg(theme::TEXT_MUTED()))
+                }
+                None => ("· ", Style::default().fg(theme::BORDER_DIM())),
+            };
+            if cursor == Some(cell) {
+                style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+            }
+            spans.push(Span::styled(glyph.to_string(), style));
+        }
+        lines.push(Line::from(spans));
+    }
+    let sunk = battleship::FLEET_LENGTHS.len() - state.ships_afloat_against(me);
+    lines.push(summary_line(format!(
+        "sunk {sunk}/{}",
+        battleship::FLEET_LENGTHS.len()
+    )));
+    lines
+}
+
+/// Your fleet: ships, the hits they've taken, and their misses around them.
+fn fleet_grid_lines(state: &DailyBattleshipState, me: usize) -> Vec<Line<'static>> {
+    let them = DailyBattleshipState::opponent_index(me);
+    let mut lines = vec![grid_title("your fleet"), header_line()];
+    for row in 0..battleship::GRID {
+        let mut spans = vec![row_label(row)];
+        for col in 0..battleship::GRID {
+            let cell = row * battleship::GRID + col;
+            let shot = state
+                .side(them)
+                .shots
+                .iter()
+                .find(|shot| shot.cell as usize == cell);
+            let my_ship = state
+                .side(me)
+                .ships
+                .iter()
+                .any(|ship| ship.cells.contains(&(cell as u8)));
+            let (glyph, style) = match (my_ship, shot) {
+                (true, Some(Shot { hit: true, .. })) => (
+                    "✕✕",
+                    Style::default()
+                        .fg(theme::ERROR())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                (true, _) => ("██", Style::default().fg(theme::TEXT_DIM())),
+                (false, Some(_)) => ("◦ ", Style::default().fg(theme::TEXT_FAINT())),
+                (false, None) => ("· ", Style::default().fg(theme::BORDER_DIM())),
+            };
+            spans.push(Span::styled(glyph.to_string(), style));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(summary_line(format!(
+        "afloat {}/{}",
+        state.ships_afloat_against(them),
+        battleship::FLEET_LENGTHS.len()
+    )));
+    lines
+}
+
+fn grid_title(title: &str) -> Line<'static> {
+    let pad = (GRID_WIDTH as usize).saturating_sub(title.chars().count()) / 2;
+    Line::from(Span::styled(
+        format!("{}{title}", " ".repeat(pad)),
+        Style::default()
+            .fg(theme::AMBER_DIM())
+            .add_modifier(Modifier::ITALIC),
+    ))
+}
+
+fn header_line() -> Line<'static> {
+    let mut header = String::from("   ");
+    for col in 0..battleship::GRID {
+        header.push((b'A' + col as u8) as char);
+        header.push(' ');
+    }
+    Line::from(Span::styled(
+        header,
+        Style::default().fg(theme::TEXT_FAINT()),
+    ))
+}
+
+fn row_label(row: usize) -> Span<'static> {
+    Span::styled(
+        format!("{:>2} ", row + 1),
+        Style::default().fg(theme::TEXT_FAINT()),
+    )
+}
+
+fn summary_line(text: String) -> Line<'static> {
+    let pad = (GRID_WIDTH as usize).saturating_sub(text.chars().count()) / 2;
+    Line::from(Span::styled(
+        format!("{}{text}", " ".repeat(pad)),
+        Style::default().fg(theme::TEXT_FAINT()),
+    ))
+}
+
+fn status_line(
+    daily: &DailyState,
+    board: &DailyBoardState,
+    detail: &DailyMatchDetail,
+    battleship: &BattleshipDetail,
+    me: usize,
+) -> Line<'static> {
+    if board.resign_confirm {
+        return Line::from(Span::styled(
+            "Resign this match? Press r again to confirm.",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let mut spans = Vec::new();
+    if detail.is_active() {
+        if battleship.shot_in_flight {
+            spans.push(Span::styled(
+                "Shot away…",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else if detail.row.turn_user_id == Some(daily.user_id()) {
+            spans.push(Span::styled(
+                "Your shot",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                format!(
+                    "Waiting for {}",
+                    name_for(board, detail.row.turn_user_id.unwrap_or(Uuid::nil()))
+                ),
+                Style::default()
+                    .fg(theme::TEXT_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        if let Some(deadline) = detail.row.turn_deadline_at {
+            spans.push(Span::styled(
+                format!("   {} on the clock", format_deadline(deadline, Utc::now())),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    } else {
+        let (heading, subtitle, color) = result_banner(daily, board, detail);
+        spans.push(Span::styled(
+            format!("{heading} · {subtitle}"),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some((by, shot)) = last_salvo(&battleship.state) {
+        let who = if by == me {
+            "you".to_string()
+        } else {
+            name_for(board, battleship.state.side(by).user_id)
+        };
+        spans.push(Span::styled(
+            format!(
+                "   last {who} {} {}",
+                battleship::cell_label(shot.cell as usize),
+                if shot.hit { "hit" } else { "miss" }
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// `● mira   3/5 afloat`, with the running deadline on the mover's bar.
+fn draw_player_bar(
+    frame: &mut Frame,
+    rect: Rect,
+    daily: &DailyState,
+    board: &DailyBoardState,
+    detail: &DailyMatchDetail,
+    battleship: &BattleshipDetail,
+    side: usize,
+) {
+    if rect.height == 0 {
+        return;
+    }
+    let state = &battleship.state;
+    let user_id = state.side(side).user_id;
+    let on_turn = detail.is_active() && detail.row.turn_user_id == Some(user_id);
+    let dot_color = if on_turn {
+        theme::AMBER_GLOW()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    let name = if user_id == daily.user_id() {
+        "you".to_string()
+    } else {
+        name_for(board, user_id)
+    };
+    let afloat = state.ships_afloat_against(DailyBattleshipState::opponent_index(side));
+    let left = vec![
+        Span::raw("  "),
+        Span::styled("\u{25CF} ", Style::default().fg(dot_color)),
+        Span::styled(
+            name,
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("   {afloat}/{} afloat", battleship::FLEET_LENGTHS.len()),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ];
+    let deadline = on_turn
+        .then(|| detail.row.turn_deadline_at)
+        .flatten()
+        .map(|at| format_deadline(at, Utc::now()));
+    let cols = Layout::horizontal([Constraint::Min(0), Constraint::Length(9)]).split(rect);
+    frame.render_widget(Paragraph::new(Line::from(left)), cols[0]);
+    if let Some(deadline) = deadline {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("{deadline} "),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .alignment(Alignment::Right),
+            cols[1],
+        );
+    }
+}
+
+fn key_line(detail: &DailyMatchDetail) -> Line<'static> {
+    let mut spans = Vec::new();
+    let hint = |spans: &mut Vec<Span<'static>>, key: &str, desc: &str| {
+        spans.push(Span::styled(
+            key.to_string(),
+            Style::default().fg(theme::AMBER()),
+        ));
+        spans.push(Span::styled(
+            format!(" {desc}   "),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    };
+    if detail.is_active() {
+        hint(&mut spans, "arrows/wasd", "aim");
+        hint(&mut spans, "Space/Enter", "fire");
+        hint(&mut spans, "r", "resign");
+    }
+    hint(&mut spans, "Esc", "back to lobby");
+    if let Some(last) = spans.last_mut() {
+        let trimmed = last.content.trim_end().to_string();
+        *last = Span::styled(trimmed, Style::default().fg(theme::TEXT_DIM()));
+    }
+    Line::from(spans)
+}
+
+/// Most recent shot across both sides.
+fn last_salvo(state: &DailyBattleshipState) -> Option<(usize, &Shot)> {
+    [0usize, 1]
+        .into_iter()
+        .filter_map(|side| state.side(side).shots.last().map(|shot| (side, shot)))
+        .max_by_key(|(_, shot)| shot.at)
+}
+
+/// Salvo history rail: every shot from both sides, newest at the bottom,
+/// same slot the chess move list occupies.
+fn draw_info_rail(
+    frame: &mut Frame,
+    area: Rect,
+    board: &DailyBoardState,
+    state: &DailyBattleshipState,
+    me: usize,
+) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Correspondence battleship".to_string(),
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .add_modifier(Modifier::ITALIC),
+        )),
+        Line::from(Span::styled(
+            "a hit fires again".to_string(),
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        )),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Salvos".to_string(),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+
+    let mut salvos: Vec<(usize, &Shot)> = (0..2)
+        .flat_map(|side| state.side(side).shots.iter().map(move |shot| (side, shot)))
+        .collect();
+    salvos.sort_by_key(|(_, shot)| shot.at);
+
+    let budget = (area.height as usize).saturating_sub(lines.len());
+    if salvos.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "no shots yet",
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        )));
+    } else {
+        if salvos.len() > budget && budget > 0 {
+            lines.push(Line::from(Span::styled(
+                "  \u{22EE}",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )));
+            let skip = salvos.len() - (budget - 1);
+            salvos.drain(..skip);
+        }
+        for (side, shot) in salvos {
+            let who = if side == me {
+                "you".to_string()
+            } else {
+                name_for(board, state.side(side).user_id)
+            };
+            let (mark, mark_color) = if shot.hit {
+                ("✕", theme::ERROR())
+            } else {
+                ("◦", theme::TEXT_FAINT())
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{who:<9}"), Style::default().fg(theme::TEXT())),
+                Span::styled(
+                    format!("{:<4}", battleship::cell_label(shot.cell as usize)),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+                Span::styled(mark.to_string(), Style::default().fg(mark_color)),
+            ]));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}

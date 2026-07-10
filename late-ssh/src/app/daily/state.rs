@@ -17,9 +17,13 @@ use crate::app::{
     notify::{Notification, Notifier},
 };
 
-use super::svc::{
-    DAILY_MAX_ACTIVE_ENTRIES, DailyChallengeItem, DailyChessState, DailyEvent, DailyMatchItem,
-    DailyService, DailySnapshot,
+use super::{
+    battleship::DailyBattleshipState,
+    games::DailyGame,
+    svc::{
+        DAILY_MAX_ACTIVE_ENTRIES, DailyChallengeItem, DailyChessState, DailyEvent, DailyMatchItem,
+        DailyService, DailySnapshot,
+    },
 };
 
 /// One selectable row in the Daily Games modal: your matches first, then the
@@ -27,6 +31,15 @@ use super::svc::{
 pub enum DailyModalEntry<'a> {
     Match(&'a DailyMatchItem),
     Challenge(&'a DailyChallengeItem),
+}
+
+/// A challenge being composed in the modal: pick a game (and a username for
+/// directed challenges), see the prize, post.
+pub struct ChallengeDraft {
+    pub game: DailyGame,
+    /// `None` posts to the open lobby; `Some` holds the directed-challenge
+    /// username buffer.
+    pub target: Option<String>,
 }
 
 /// Per-session daily-games UI state: the modal, the lobby glow, and the
@@ -43,8 +56,8 @@ pub struct DailyState {
     pub selected: usize,
     /// Challenge awaiting claim confirmation (Enter pressed once).
     pub confirm_claim: Option<Uuid>,
-    /// Username buffer while the directed-challenge prompt is open.
-    pub challenge_prompt: Option<String>,
+    /// Challenge being composed (game picker + optional username prompt).
+    pub challenge_draft: Option<ChallengeDraft>,
     /// Open-challenge ids already seen; anything newer glows the lobby line
     /// until the modal is opened.
     seen_open_ids: HashSet<Uuid>,
@@ -79,14 +92,27 @@ pub struct DailyBoardState {
     /// Usernames captured from the snapshot when the board opened, so names
     /// survive the match leaving the active list on finish.
     pub names: HashMap<Uuid, String>,
-    /// Last drawn board rect + tier, set during render and consumed by the
-    /// mouse hit test. Cleared before every board draw.
+    /// Last drawn chess board rect + tier, set during render and consumed by
+    /// the mouse hit test. Cleared before every board draw.
     pub board_geometry: Cell<Option<(Rect, Tier)>>,
+    /// Last drawn battleship target-grid rect (cells only, no labels), same
+    /// render-recorded contract as `board_geometry`.
+    pub target_geometry: Cell<Option<Rect>>,
 }
 
-/// Canonical match detail derived from one `daily_matches` row.
+/// Canonical match detail derived from one `daily_matches` row: the row
+/// plus the parsed, per-game view of its state JSON.
 pub struct DailyMatchDetail {
     pub row: DailyMatch,
+    pub game: DailyGameDetail,
+}
+
+pub enum DailyGameDetail {
+    Chess(ChessDetail),
+    Battleship(BattleshipDetail),
+}
+
+pub struct ChessDetail {
     pub state: DailyChessState,
     pub pieces: [Option<ChessPiece>; 64],
     pub legal_moves: Vec<ChessMoveSpec>,
@@ -94,8 +120,15 @@ pub struct DailyMatchDetail {
     pub in_check: bool,
 }
 
-impl DailyMatchDetail {
-    fn from_row(row: DailyMatch) -> Result<Self, String> {
+pub struct BattleshipDetail {
+    pub state: DailyBattleshipState,
+    /// A shot left this session and hasn't come back via reload yet; blocks
+    /// firing again until the canonical row lands.
+    pub shot_in_flight: bool,
+}
+
+impl ChessDetail {
+    fn from_row(row: &DailyMatch) -> Result<Self, String> {
         let state = DailyChessState::parse(&row.state).map_err(|e| e.to_string())?;
         let board: Board = state
             .fen
@@ -111,7 +144,6 @@ impl DailyMatchDetail {
         let in_check =
             row.status == DailyMatch::STATUS_ACTIVE && board.checkers() != BitBoard::EMPTY;
         Ok(Self {
-            row,
             state,
             pieces,
             legal_moves,
@@ -119,9 +151,44 @@ impl DailyMatchDetail {
             in_check,
         })
     }
+}
+
+impl DailyMatchDetail {
+    fn from_row(row: DailyMatch) -> Result<Self, String> {
+        let game = match DailyGame::from_kind(&row.game_kind) {
+            Some(DailyGame::Chess) => DailyGameDetail::Chess(ChessDetail::from_row(&row)?),
+            Some(DailyGame::Battleship) => DailyGameDetail::Battleship(BattleshipDetail {
+                state: DailyBattleshipState::parse(&row.state).map_err(|e| e.to_string())?,
+                shot_in_flight: false,
+            }),
+            None => return Err(format!("unknown daily game: {}", row.game_kind)),
+        };
+        Ok(Self { row, game })
+    }
+
+    pub fn chess(&self) -> Option<&ChessDetail> {
+        match &self.game {
+            DailyGameDetail::Chess(chess) => Some(chess),
+            _ => None,
+        }
+    }
+
+    fn chess_mut(&mut self) -> Option<&mut ChessDetail> {
+        match &mut self.game {
+            DailyGameDetail::Chess(chess) => Some(chess),
+            _ => None,
+        }
+    }
+
+    pub fn battleship(&self) -> Option<&BattleshipDetail> {
+        match &self.game {
+            DailyGameDetail::Battleship(battleship) => Some(battleship),
+            _ => None,
+        }
+    }
 
     pub fn color_of(&self, user_id: Uuid) -> Option<ChessColor> {
-        self.state.color_of(user_id)
+        self.chess().and_then(|chess| chess.state.color_of(user_id))
     }
 
     pub fn is_active(&self) -> bool {
@@ -149,7 +216,7 @@ impl DailyState {
             event_rx,
             selected: 0,
             confirm_claim: None,
-            challenge_prompt: None,
+            challenge_draft: None,
             seen_open_ids,
             lobby_glow: false,
             notifier,
@@ -208,23 +275,35 @@ impl DailyState {
                 Some(Banner::error(&format!("Daily games: {message}")))
             }
             DailyEvent::ChallengePosted {
+                game,
                 challenger_id,
                 target_username,
                 ..
             } if challenger_id == self.user_id => Some(match target_username {
-                Some(name) => Banner::success(&format!("Daily challenge sent to @{name}")),
-                None => Banner::success("Daily challenge posted to the lobby"),
+                Some(name) => {
+                    Banner::success(&format!("Daily {} challenge sent to @{name}", game.label()))
+                }
+                None => Banner::success(&format!(
+                    "Daily {} challenge posted to the lobby",
+                    game.label()
+                )),
             }),
             DailyEvent::MatchFinished {
                 match_id,
+                game,
                 winner_user_id,
                 ..
             } => {
                 if self.board.as_ref().is_some_and(|b| b.match_id == match_id) {
                     self.request_board_reload();
                 }
-                (winner_user_id == Some(self.user_id))
-                    .then(|| Banner::success("Daily chess: you won the match"))
+                (winner_user_id == Some(self.user_id)).then(|| {
+                    Banner::success(&format!(
+                        "Daily {}: you won the match (+{} chips)",
+                        game.label(),
+                        game.win_payout()
+                    ))
+                })
             }
             DailyEvent::MovePlayed { match_id, .. }
             | DailyEvent::ChallengeClaimed { match_id, .. } => {
@@ -284,14 +363,17 @@ impl DailyState {
             return;
         }
         for match_id in fresh_turn_edges(&mut self.turn_notified_match_ids, &my_turn_ids) {
-            let opponent = self
+            let item = self
                 .snapshot
                 .active_matches
                 .iter()
-                .find(|item| item.id == match_id)
+                .find(|item| item.id == match_id);
+            let opponent = item
                 .and_then(|item| self.opponent_of(item).1)
                 .unwrap_or_else(|| "player".to_string());
-            self.notifier.push(Notification::daily_your_turn(&opponent));
+            let game = item.map(|item| item.game.label()).unwrap_or("games");
+            self.notifier
+                .push(Notification::daily_your_turn(game, &opponent));
         }
     }
 
@@ -411,17 +493,54 @@ impl DailyState {
 
     // ── Modal actions ──────────────────────────────────────────
 
-    pub fn post_open_challenge(&self) {
-        self.svc.post_challenge_task(self.user_id, None);
+    pub fn post_open_challenge(&self, game: DailyGame) {
+        self.svc.post_challenge_task(self.user_id, game, None);
     }
 
-    pub fn post_directed_challenge(&self, username: &str) {
+    pub fn post_directed_challenge(&self, username: &str, game: DailyGame) {
         let username = username.trim().trim_start_matches('@').to_string();
         if username.is_empty() {
             return;
         }
         self.svc
-            .post_challenge_to_username_task(self.user_id, username);
+            .post_challenge_to_username_task(self.user_id, game, username);
+    }
+
+    /// `c` / `C` in the modal: start composing a challenge. The draft owns
+    /// the game picker; directed drafts add a username buffer.
+    pub fn begin_challenge_draft(&mut self, directed: bool) {
+        self.confirm_claim = None;
+        self.challenge_draft = Some(ChallengeDraft {
+            game: DailyGame::ALL[0],
+            target: directed.then(String::new),
+        });
+    }
+
+    pub fn cycle_draft_game(&mut self, forward: bool) {
+        if let Some(draft) = &mut self.challenge_draft {
+            draft.game = draft.game.cycled(forward);
+        }
+    }
+
+    /// Enter on a draft: post it. An empty directed username is a no-op so a
+    /// stray Enter can't fire a challenge at nobody.
+    pub fn submit_challenge_draft(&mut self) {
+        let Some(draft) = self.challenge_draft.take() else {
+            return;
+        };
+        match draft.target {
+            None => self.post_open_challenge(draft.game),
+            Some(username) => {
+                if username.trim().trim_start_matches('@').is_empty() {
+                    self.challenge_draft = Some(ChallengeDraft {
+                        game: draft.game,
+                        target: Some(username),
+                    });
+                    return;
+                }
+                self.post_directed_challenge(&username, draft.game);
+            }
+        }
     }
 
     pub fn claim_challenge(&mut self, match_id: Uuid) {
@@ -446,7 +565,11 @@ impl DailyState {
         self.board = Some(DailyBoardState {
             match_id: item.id,
             return_screen,
-            cursor: 12,
+            // Start the cursor mid-board for each game's grid.
+            cursor: match item.game {
+                DailyGame::Chess => 12,
+                DailyGame::Battleship => 44,
+            },
             selected: None,
             piece_render_mode: ChessPieceRenderMode::Graphics,
             resign_confirm: false,
@@ -456,6 +579,7 @@ impl DailyState {
             reload_pending: false,
             names,
             board_geometry: Cell::new(None),
+            target_geometry: Cell::new(None),
         });
         self.request_board_reload();
     }
@@ -539,17 +663,30 @@ impl DailyState {
         let Some(board) = &self.board else {
             return Vec::new();
         };
-        let Some(detail) = &board.detail else {
+        let Some(chess) = board.detail.as_ref().and_then(DailyMatchDetail::chess) else {
             return Vec::new();
         };
-        cursor::legal_targets(&detail.legal_moves, board.selected)
+        cursor::legal_targets(&chess.legal_moves, board.selected)
     }
 
     pub fn board_move_cursor(&mut self, dx: isize, dy: isize) {
         let orientation = self.board_orientation();
-        if let Some(board) = &mut self.board {
-            board.cursor = cursor::move_cursor(board.cursor, orientation, dx, dy);
-            board.resign_confirm = false;
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        board.resign_confirm = false;
+        match board.detail.as_ref().map(|detail| &detail.game) {
+            Some(DailyGameDetail::Battleship(_)) => {
+                // Target grid: row 0 is drawn at the top, so "up" (dy=1)
+                // moves toward row 0. No orientation flip.
+                let col = (board.cursor % super::battleship::GRID) as isize + dx;
+                let row = (board.cursor / super::battleship::GRID) as isize - dy;
+                let max = super::battleship::GRID as isize - 1;
+                board.cursor = (row.clamp(0, max) * (max + 1) + col.clamp(0, max)) as usize;
+            }
+            _ => {
+                board.cursor = cursor::move_cursor(board.cursor, orientation, dx, dy);
+            }
         }
     }
 
@@ -563,9 +700,20 @@ impl DailyState {
         self.board_select_or_move();
     }
 
-    /// Space/Enter on the board: pick up a piece or play the move. The move
-    /// applies optimistically; the canonical row arrives on the next
-    /// `MovePlayed`/`MatchFinished` reload.
+    /// Mouse on the battleship target grid: aim at the cell and fire.
+    pub fn board_click_target(&mut self, cell: usize) {
+        if cell >= super::battleship::CELLS {
+            return;
+        }
+        if let Some(board) = &mut self.board {
+            board.cursor = cell;
+        }
+        self.board_select_or_move();
+    }
+
+    /// Space/Enter on the board. Chess: pick up a piece or play the move.
+    /// Battleship: fire at the cursor. Both apply optimistically; the
+    /// canonical row arrives on the next `MovePlayed`/`MatchFinished` reload.
     pub fn board_select_or_move(&mut self) {
         let user_id = self.user_id;
         let svc = self.svc.clone();
@@ -573,23 +721,36 @@ impl DailyState {
             return;
         };
         board.resign_confirm = false;
-        let Some(detail) = &mut board.detail else {
+        let Some(detail) = &board.detail else {
             return;
         };
-        if !detail.is_active()
-            || detail.row.turn_user_id != Some(user_id)
-            || detail.color_of(user_id) != Some(detail.turn)
-        {
+        if !detail.is_active() || detail.row.turn_user_id != Some(user_id) {
             return;
         }
+        // Read the game kind first: the per-game handlers need `board` whole.
+        let is_battleship = matches!(detail.game, DailyGameDetail::Battleship(_));
+        if is_battleship {
+            Self::battleship_fire(board, user_id, &svc);
+        } else {
+            Self::chess_select_or_move(board, user_id, &svc);
+        }
+    }
 
+    fn chess_select_or_move(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        if detail.color_of(user_id) != detail.chess().map(|chess| chess.turn) {
+            return;
+        }
+        let Some(chess) = detail.chess_mut() else {
+            return;
+        };
         if let Some(from) = board.selected {
             if from == board.cursor {
                 board.selected = None;
                 return;
             }
             let to = board.cursor;
-            if !detail
+            if !chess
                 .legal_moves
                 .iter()
                 .any(|mv| mv.from == from && mv.to == to)
@@ -602,18 +763,49 @@ impl DailyState {
             return;
         }
 
-        let Some(piece) = detail.pieces.get(board.cursor).and_then(|piece| *piece) else {
+        let Some(piece) = chess.pieces.get(board.cursor).and_then(|piece| *piece) else {
             return;
         };
-        if Some(piece.color) == detail.color_of(user_id)
-            && detail.legal_moves.iter().any(|mv| mv.from == board.cursor)
+        let my_color = chess.state.color_of(user_id);
+        if Some(piece.color) == my_color
+            && chess.legal_moves.iter().any(|mv| mv.from == board.cursor)
         {
             board.selected = Some(board.cursor);
         }
     }
 
+    /// Fire at the cursor cell. The shot applies optimistically (both fleets
+    /// live in session memory, so hit/miss is known locally); `shot_in_flight`
+    /// blocks a second salvo until the reload reconciles.
+    fn battleship_fire(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let row_turn = detail.row.turn_user_id;
+        let DailyGameDetail::Battleship(battleship) = &mut detail.game else {
+            return;
+        };
+        if battleship.shot_in_flight || row_turn != Some(user_id) {
+            return;
+        }
+        let Some(shooter) = battleship.state.side_index_of(user_id) else {
+            return;
+        };
+        let cell = board.cursor;
+        let Ok(outcome) = battleship.state.apply_shot(shooter, cell, Utc::now()) else {
+            return; // already fired there — a silent no-op, like an illegal chess move
+        };
+        battleship.shot_in_flight = true;
+        if !outcome.hit {
+            let opponent = DailyBattleshipState::opponent_index(shooter);
+            detail.row.turn_user_id = Some(battleship.state.side(opponent).user_id);
+        }
+        svc.play_move_task(user_id, board.match_id, cell, cell);
+    }
+
     fn apply_optimistic_move(detail: &mut DailyMatchDetail, from: usize, to: usize) {
-        let Ok(board) = detail.state.fen.parse::<Board>() else {
+        let Some(chess) = detail.chess_mut() else {
+            return;
+        };
+        let Ok(board) = chess.state.fen.parse::<Board>() else {
             return;
         };
         let Some(mv) = rules::legal_move_for(&board, from, to) else {
@@ -622,20 +814,20 @@ impl DailyState {
         let label = rules::san_label(&board, mv);
         let mut board = board;
         board.play(mv);
-        detail.state.fen = format!("{board}");
-        detail.state.move_history.push(super::svc::DailyMoveRecord {
+        chess.state.fen = format!("{board}");
+        chess.state.move_history.push(super::svc::DailyMoveRecord {
             from,
             to,
             label,
             at: Utc::now(),
         });
-        detail.pieces = rules::board_pieces(&board);
-        detail.turn = rules::chess_color(board.side_to_move());
-        detail.in_check = board.checkers().len() > 0;
+        chess.pieces = rules::board_pieces(&board);
+        chess.turn = rules::chess_color(board.side_to_move());
+        chess.in_check = board.checkers().len() > 0;
         // Opponent to move until the reload says otherwise; clearing the
         // legal moves keeps the cursor from picking up their pieces.
-        detail.legal_moves.clear();
-        let next = detail.state.user_for_color(detail.turn);
+        chess.legal_moves.clear();
+        let next = chess.state.user_for_color(chess.turn);
         detail.row.turn_user_id = Some(next);
     }
 
@@ -668,8 +860,13 @@ impl DailyState {
         let Some(detail) = &board.detail else {
             return;
         };
+        let selectable = |from: usize| {
+            detail
+                .chess()
+                .is_some_and(|chess| chess.legal_moves.iter().any(|mv| mv.from == from))
+        };
         if let Some(selected) = board.selected
-            && (!detail.is_active() || detail.legal_moves.iter().all(|mv| mv.from != selected))
+            && (!detail.is_active() || !selectable(selected))
         {
             board.selected = None;
         }

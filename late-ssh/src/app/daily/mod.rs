@@ -1,5 +1,8 @@
+pub mod battleship;
+pub mod battleship_ui;
 pub mod board_input;
 pub mod board_ui;
+pub mod games;
 pub mod modal_input;
 pub mod modal_ui;
 pub mod panel;

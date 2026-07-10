@@ -59,13 +59,27 @@ fn handle_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
     let Some(board) = &app.daily.board else {
         return false;
     };
+    // Mouse coordinates are 1-based; the frame buffer is 0-based.
+    let x = mouse.x.saturating_sub(1);
+    let y = mouse.y.saturating_sub(1);
+
+    // Battleship: hit-test the render-recorded target grid (cells are 2
+    // columns wide).
+    if let Some(grid) = board.target_geometry.get() {
+        if x < grid.x || y < grid.y || x >= grid.x + grid.width || y >= grid.y + grid.height {
+            return false;
+        }
+        let col = ((x - grid.x) / 2) as usize;
+        let row = (y - grid.y) as usize;
+        app.daily
+            .board_click_target(row * crate::app::daily::battleship::GRID + col);
+        return true;
+    }
+
     let Some((board_area, tier)) = board.board_geometry.get() else {
         return false;
     };
     let orientation = app.daily.board_orientation();
-    // Mouse coordinates are 1-based; the frame buffer is 0-based.
-    let x = mouse.x.saturating_sub(1);
-    let y = mouse.y.saturating_sub(1);
     let Some(index) = board_ui::square_at(board_area, tier, orientation, x, y) else {
         return false;
     };

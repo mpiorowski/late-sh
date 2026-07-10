@@ -32,8 +32,10 @@ impl DailyMatch {
     pub const RESULT_DRAW: &'static str = "draw";
     pub const RESULT_RESIGN: &'static str = "resign";
     pub const RESULT_TIMEOUT: &'static str = "timeout";
+    pub const RESULT_FLEET_SUNK: &'static str = "fleet_sunk";
 
     pub const GAME_KIND_CHESS: &'static str = "chess";
+    pub const GAME_KIND_BATTLESHIP: &'static str = "battleship";
 
     /// Open challenges posted by the user plus active matches they play in.
     pub async fn count_active_entries(client: &Client, user_id: Uuid) -> Result<i64> {
@@ -52,6 +54,7 @@ impl DailyMatch {
 
     pub async fn create_challenge(
         client: &Client,
+        game_kind: &str,
         challenger_id: Uuid,
         target_user_id: Option<Uuid>,
     ) -> Result<Self> {
@@ -61,7 +64,7 @@ impl DailyMatch {
                  VALUES ($1, $2, $3, $4)
                  RETURNING *",
                 &[
-                    &Self::GAME_KIND_CHESS,
+                    &game_kind,
                     &Self::STATUS_OPEN,
                     &challenger_id,
                     &target_user_id,

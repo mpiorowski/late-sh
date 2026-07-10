@@ -1618,7 +1618,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Pinstar => "Directory",
         Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
-        Screen::DailyMatch => "Daily Chess",
+        Screen::DailyMatch => "Daily Match",
     };
     spans.push(Span::styled(
         " | ",

@@ -1,6 +1,7 @@
-//! Full-screen daily-match board (`Screen::DailyMatch`). A minimal frame
-//! around the shared `chess_core` renderer: status, players, board, move
-//! list, result banner. Entered only from the Daily Games modal.
+//! Full-screen daily-match board (`Screen::DailyMatch`). Shared chrome
+//! (loading, result banners, key hints) plus per-game rendering: chess wraps
+//! the shared `chess_core` renderer here, battleship draws its two grids in
+//! `battleship_ui`. Entered only from the Daily Games modal.
 
 use chrono::Utc;
 use late_core::models::daily_match::DailyMatch;
@@ -15,7 +16,10 @@ use uuid::Uuid;
 
 use crate::app::{
     common::theme,
-    daily::state::{DailyBoardState, DailyMatchDetail, DailyState, format_deadline},
+    daily::state::{
+        ChessDetail, DailyBoardState, DailyGameDetail, DailyMatchDetail, DailyState,
+        format_deadline,
+    },
     files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
     games::chess_core::{
         board_ui::{self, BoardCtx, pick_tier},
@@ -42,6 +46,7 @@ pub(crate) fn draw(
         return;
     };
     board.board_geometry.set(None);
+    board.target_geometry.set(None);
 
     if let Some(error) = &board.load_error {
         draw_center_message(frame, area, &format!("Failed to load match: {error}"));
@@ -56,12 +61,20 @@ pub(crate) fn draw(
         return;
     }
 
+    let chess = match &detail.game {
+        DailyGameDetail::Chess(chess) => chess,
+        DailyGameDetail::Battleship(battleship) => {
+            super::battleship_ui::draw(frame, area, daily, board, detail, battleship);
+            return;
+        }
+    };
+
     let show_sidebar = area.width >= INFO_SIDEBAR_MIN_WIDTH;
     let content = if show_sidebar {
         let cols =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(INFO_SIDEBAR_WIDTH)])
                 .split(area);
-        draw_info_rail(frame, cols[1], detail);
+        draw_info_rail(frame, cols[1], chess);
         cols[0]
     } else {
         area
@@ -100,7 +113,7 @@ pub(crate) fn draw(
     let bar_width = (tier.board_w() as u16).min(content.width);
 
     frame.render_widget(
-        Paragraph::new(status_line(daily, board, detail)).alignment(Alignment::Center),
+        Paragraph::new(status_line(daily, board, detail, chess)).alignment(Alignment::Center),
         status_row,
     );
     draw_player_bar(
@@ -108,6 +121,7 @@ pub(crate) fn draw(
         centered_x(top_bar, bar_width),
         board,
         detail,
+        chess,
         orientation.other(),
     );
 
@@ -116,17 +130,17 @@ pub(crate) fn draw(
         orientation,
         cursor: my_turn.then_some(board.cursor),
         selected: board.selected,
-        last: detail.state.last_move().map(|mv| (mv.from, mv.to)),
-        check_sq: detail
+        last: chess.state.last_move().map(|mv| (mv.from, mv.to)),
+        check_sq: chess
             .in_check
-            .then(|| board_ui::king_square(&detail.pieces, detail.turn))
+            .then(|| board_ui::king_square(&chess.pieces, chess.turn))
             .flatten(),
     };
     let board_area = board_ui::draw_board(
         frame,
         board_row,
         tier,
-        &detail.pieces,
+        &chess.pieces,
         &board_ctx,
         &legal,
         board.match_id,
@@ -148,6 +162,7 @@ pub(crate) fn draw(
         centered_x(bottom_bar, bar_width),
         board,
         detail,
+        chess,
         orientation,
     );
     frame.render_widget(
@@ -156,7 +171,7 @@ pub(crate) fn draw(
     );
 }
 
-fn draw_center_message(frame: &mut Frame, area: Rect, message: &str) {
+pub(super) fn draw_center_message(frame: &mut Frame, area: Rect, message: &str) {
     let rows = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(1),
@@ -186,6 +201,7 @@ fn status_line(
     daily: &DailyState,
     board: &DailyBoardState,
     detail: &DailyMatchDetail,
+    chess: &ChessDetail,
 ) -> Line<'static> {
     if board.resign_confirm {
         return Line::from(Span::styled(
@@ -226,7 +242,7 @@ fn status_line(
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
-        if detail.in_check {
+        if chess.in_check {
             spans.push(Span::styled(
                 "   check",
                 Style::default()
@@ -241,7 +257,7 @@ fn status_line(
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
-    if let Some(mv) = detail.state.move_history.last() {
+    if let Some(mv) = chess.state.move_history.last() {
         spans.push(Span::styled(
             format!("   last {}", mv.label),
             Style::default().fg(theme::TEXT_DIM()),
@@ -250,7 +266,7 @@ fn status_line(
     Line::from(spans)
 }
 
-fn result_banner(
+pub(super) fn result_banner(
     daily: &DailyState,
     board: &DailyBoardState,
     detail: &DailyMatchDetail,
@@ -276,6 +292,9 @@ fn result_banner(
         }
         DailyMatch::RESULT_DRAW => ("Draw", "game drawn".to_string(), theme::TEXT_MUTED()),
         DailyMatch::RESULT_RESIGN => ("Resignation", winner_text(detail.row.winner_user_id), color),
+        DailyMatch::RESULT_FLEET_SUNK => {
+            ("Fleet sunk", winner_text(detail.row.winner_user_id), color)
+        }
         DailyMatch::RESULT_TIMEOUT => (
             "Timeout",
             format!(
@@ -298,13 +317,14 @@ fn draw_player_bar(
     rect: Rect,
     board: &DailyBoardState,
     detail: &DailyMatchDetail,
+    chess: &ChessDetail,
     color: ChessColor,
 ) {
     if rect.height == 0 {
         return;
     }
-    let user_id = detail.state.user_for_color(color);
-    let on_turn = detail.is_active() && detail.turn == color;
+    let user_id = chess.state.user_for_color(color);
+    let on_turn = detail.is_active() && chess.turn == color;
     let dot_color = if on_turn {
         theme::AMBER_GLOW()
     } else {
@@ -324,7 +344,7 @@ fn draw_player_bar(
 
     // Pieces this colour has captured (its opponent's missing material), plus a
     // running material lead on whichever side is ahead.
-    let captured = captured_by(&detail.pieces, color);
+    let captured = captured_by(&chess.pieces, color);
     if !captured.is_empty() {
         let glyphs: String = captured.iter().map(|kind| piece_glyph(*kind)).collect();
         left.push(Span::raw("   "));
@@ -333,7 +353,7 @@ fn draw_player_bar(
             Style::default().fg(theme::TEXT_FAINT()),
         ));
     }
-    let advantage = material_advantage(&detail.pieces);
+    let advantage = material_advantage(&chess.pieces);
     let own = if color == ChessColor::White {
         advantage
     } else {
@@ -461,7 +481,7 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
     Line::from(spans)
 }
 
-fn draw_info_rail(frame: &mut Frame, area: Rect, detail: &DailyMatchDetail) {
+fn draw_info_rail(frame: &mut Frame, area: Rect, chess: &ChessDetail) {
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(Style::default().fg(theme::BORDER_DIM()));
@@ -500,15 +520,15 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, detail: &DailyMatchDetail) {
     ];
 
     let budget = (inner.height as usize).saturating_sub(lines.len());
-    append_moves(&mut lines, detail, budget);
+    append_moves(&mut lines, chess, budget);
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn append_moves(lines: &mut Vec<Line<'static>>, detail: &DailyMatchDetail, budget: usize) {
+fn append_moves(lines: &mut Vec<Line<'static>>, chess: &ChessDetail, budget: usize) {
     if budget == 0 {
         return;
     }
-    let history = &detail.state.move_history;
+    let history = &chess.state.move_history;
     if history.is_empty() {
         lines.push(Line::from(Span::styled(
             "no moves yet",
@@ -550,7 +570,13 @@ fn append_moves(lines: &mut Vec<Line<'static>>, detail: &DailyMatchDetail, budge
     }
 }
 
-fn draw_overlay(frame: &mut Frame, board_area: Rect, heading: &str, subtitle: &str, color: Color) {
+pub(super) fn draw_overlay(
+    frame: &mut Frame,
+    board_area: Rect,
+    heading: &str,
+    subtitle: &str,
+    color: Color,
+) {
     let width =
         (heading.chars().count().max(subtitle.chars().count()) as u16 + 8).min(board_area.width);
     let height = 5.min(board_area.height);
@@ -585,7 +611,7 @@ fn draw_overlay(frame: &mut Frame, board_area: Rect, heading: &str, subtitle: &s
     );
 }
 
-fn name_for(board: &DailyBoardState, user_id: Uuid) -> String {
+pub(super) fn name_for(board: &DailyBoardState, user_id: Uuid) -> String {
     board
         .names
         .get(&user_id)
