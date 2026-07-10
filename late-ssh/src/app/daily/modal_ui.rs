@@ -260,15 +260,17 @@ fn draw_status(frame: &mut Frame, area: Rect, daily: &DailyState) {
 }
 
 // The challenge picker overlay: a small modal over the Lobby list, one row
-// per roster game with its prize, so the roster can grow without fighting
-// the status line for width. Directed drafts swap to a username step.
-const DRAFT_WIDTH: u16 = 40;
+// per roster game with its prize. The height follows the roster, so new
+// games grow the box instead of fighting the status line for width.
+// Directed drafts swap to a username step.
+const DRAFT_WIDTH: u16 = 48;
 
 fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
+    // A leading blank row + the body + a blank row before the key hints.
     let body_rows = if draft.username.is_some() {
-        4
+        5
     } else {
-        DailyGame::ALL.len() as u16 + 2
+        DailyGame::ALL.len() as u16 + 3
     };
     let width = DRAFT_WIDTH.min(popup.width);
     let height = (body_rows + 2).min(popup.height);
@@ -292,12 +294,13 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut lines: Vec<Line<'static>> = vec![Line::raw("")];
     match &draft.username {
         None => {
             for (idx, game) in DailyGame::ALL.into_iter().enumerate() {
                 let selected = idx == draft.selected;
                 lines.push(Line::from(vec![
+                    Span::raw(" "),
                     marker_span(selected),
                     Span::styled(
                         format!("{:<14}", game.label()),
@@ -320,6 +323,7 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
             lines.push(Line::raw(""));
             let post = if draft.directed { " next" } else { " post" };
             lines.push(Line::from(vec![
+                Span::raw(" "),
                 key("j/k"),
                 text(" choose"),
                 gap(),
@@ -333,7 +337,7 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
         Some(buffer) => {
             lines.push(Line::from(Span::styled(
                 format!(
-                    "  {} · {} chips to the winner",
+                    "   {} · {} chips to the winner",
                     draft.game().label(),
                     draft.game().win_payout()
                 ),
@@ -341,7 +345,7 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
             )));
             lines.push(Line::raw(""));
             lines.push(Line::from(vec![
-                Span::raw("  "),
+                Span::raw("   "),
                 Span::styled(
                     "@",
                     Style::default()
@@ -352,6 +356,7 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
                 Span::styled("█", Style::default().fg(theme::AMBER_GLOW())),
             ]));
             lines.push(Line::from(vec![
+                Span::raw(" "),
                 key("enter"),
                 text(" send"),
                 gap(),
