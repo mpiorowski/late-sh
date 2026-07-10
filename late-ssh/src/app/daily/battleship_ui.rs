@@ -83,14 +83,31 @@ pub(crate) fn draw(
         && detail.row.turn_user_id == Some(daily.user_id())
         && !battleship.shot_in_flight;
 
+    let grids_x = grids_row.x + grids_row.width.saturating_sub(GRIDS_WIDTH) / 2;
+    // Player bars hug the grids block, not the screen edges — the same
+    // centred-stack rule as the chess board's `centered_x` bars.
+    let over_grids = |row: Rect| Rect {
+        x: grids_x,
+        y: row.y,
+        width: GRIDS_WIDTH.min(row.width),
+        height: row.height,
+    };
+
     frame.render_widget(
         Paragraph::new(status_line(daily, board, detail, battleship, me))
             .alignment(Alignment::Center),
         status_row,
     );
-    draw_player_bar(frame, top_bar, daily, board, detail, battleship, them);
+    draw_player_bar(
+        frame,
+        over_grids(top_bar),
+        daily,
+        board,
+        detail,
+        battleship,
+        them,
+    );
 
-    let grids_x = grids_row.x + grids_row.width.saturating_sub(GRIDS_WIDTH) / 2;
     let target_rect = Rect {
         x: grids_x,
         y: grids_row.y,
@@ -121,7 +138,15 @@ pub(crate) fn draw(
         height: battleship::GRID as u16,
     }));
 
-    draw_player_bar(frame, bottom_bar, daily, board, detail, battleship, me);
+    draw_player_bar(
+        frame,
+        over_grids(bottom_bar),
+        daily,
+        board,
+        detail,
+        battleship,
+        me,
+    );
     frame.render_widget(
         Paragraph::new(key_line(detail)).alignment(Alignment::Center),
         hint_row,

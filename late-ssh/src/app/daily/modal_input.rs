@@ -51,7 +51,8 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 }
 
 pub(crate) fn handle_escape(app: &mut App) {
-    if app.daily.challenge_draft.take().is_some() {
+    if app.daily.challenge_draft.is_some() {
+        app.daily.draft_back();
         return;
     }
     if app.daily.confirm_claim.take().is_some() {
@@ -110,32 +111,45 @@ fn activate_selection(app: &mut App) {
     }
 }
 
-/// Keys while composing a challenge: Tab / ←/→ cycle the game, Enter posts,
-/// Esc cancels, and everything printable edits the directed username buffer.
+/// Keys on the challenge picker overlay. The picker step navigates the game
+/// list; the directed username step owns printable input (so `j`/`k` type,
+/// they don't scroll). Esc steps back, Enter advances/posts.
 fn handle_draft_input(app: &mut App, event: ParsedInput) {
+    let username_stage = app
+        .daily
+        .challenge_draft
+        .as_ref()
+        .is_some_and(|draft| draft.username.is_some());
     match event {
         ParsedInput::Byte(0x1B) => {
-            app.daily.challenge_draft = None;
+            app.daily.draft_back();
         }
         ParsedInput::Byte(b'\r' | b'\n') => {
-            app.daily.submit_challenge_draft();
+            app.daily.draft_advance();
         }
-        ParsedInput::Byte(b'\t') | ParsedInput::Arrow(b'C') => {
-            app.daily.cycle_draft_game(true);
-        }
-        ParsedInput::Arrow(b'D') => {
-            app.daily.cycle_draft_game(false);
-        }
-        ParsedInput::Byte(0x7F | 0x08) => {
-            if let Some(buffer) = draft_username_buffer(app) {
-                buffer.pop();
+        _ if username_stage => match event {
+            ParsedInput::Byte(0x7F | 0x08) => {
+                if let Some(buffer) = draft_username_buffer(app) {
+                    buffer.pop();
+                }
             }
+            ParsedInput::Byte(byte) if byte.is_ascii_graphic() => {
+                push_prompt_char(app, byte as char);
+            }
+            ParsedInput::Char(ch) if !ch.is_control() => {
+                push_prompt_char(app, ch);
+            }
+            _ => {}
+        },
+        ParsedInput::Arrow(b'B')
+        | ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J') => {
+            app.daily.draft_move_selection(1);
         }
-        ParsedInput::Byte(byte) if byte.is_ascii_graphic() => {
-            push_prompt_char(app, byte as char);
-        }
-        ParsedInput::Char(ch) if !ch.is_control() => {
-            push_prompt_char(app, ch);
+        ParsedInput::Arrow(b'A')
+        | ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K') => {
+            app.daily.draft_move_selection(-1);
         }
         _ => {}
     }
@@ -145,7 +159,7 @@ fn draft_username_buffer(app: &mut App) -> Option<&mut String> {
     app.daily
         .challenge_draft
         .as_mut()
-        .and_then(|draft| draft.target.as_mut())
+        .and_then(|draft| draft.username.as_mut())
 }
 
 fn push_prompt_char(app: &mut App, ch: char) {

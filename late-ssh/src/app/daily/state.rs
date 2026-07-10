@@ -33,13 +33,23 @@ pub enum DailyModalEntry<'a> {
     Challenge(&'a DailyChallengeItem),
 }
 
-/// A challenge being composed in the modal: pick a game (and a username for
-/// directed challenges), see the prize, post.
+/// A challenge being composed: a small picker overlay on the Lobby modal.
+/// Step one picks the game from the roster (one row per game, prize shown);
+/// directed challenges add a username step. A vertical list scales to any
+/// roster size where an inline one-row picker would not.
 pub struct ChallengeDraft {
-    pub game: DailyGame,
-    /// `None` posts to the open lobby; `Some` holds the directed-challenge
-    /// username buffer.
-    pub target: Option<String>,
+    /// Picker cursor into `DailyGame::ALL`.
+    pub selected: usize,
+    /// Directed challenges ask for a username after the game is picked.
+    pub directed: bool,
+    /// `Some` once the game is chosen and the username prompt is active.
+    pub username: Option<String>,
+}
+
+impl ChallengeDraft {
+    pub fn game(&self) -> DailyGame {
+        DailyGame::ALL[self.selected.min(DailyGame::ALL.len() - 1)]
+    }
 }
 
 /// Per-session daily-games UI state: the modal, the lobby glow, and the
@@ -506,40 +516,60 @@ impl DailyState {
             .post_challenge_to_username_task(self.user_id, game, username);
     }
 
-    /// `c` / `C` in the modal: start composing a challenge. The draft owns
-    /// the game picker; directed drafts add a username buffer.
+    /// `c` / `C` in the modal: open the challenge picker overlay.
     pub fn begin_challenge_draft(&mut self, directed: bool) {
         self.confirm_claim = None;
         self.challenge_draft = Some(ChallengeDraft {
-            game: DailyGame::ALL[0],
-            target: directed.then(String::new),
+            selected: 0,
+            directed,
+            username: None,
         });
     }
 
-    pub fn cycle_draft_game(&mut self, forward: bool) {
-        if let Some(draft) = &mut self.challenge_draft {
-            draft.game = draft.game.cycled(forward);
+    /// Move the picker cursor; ignored while the username prompt is active.
+    pub fn draft_move_selection(&mut self, delta: isize) {
+        if let Some(draft) = &mut self.challenge_draft
+            && draft.username.is_none()
+        {
+            let max = DailyGame::ALL.len() as isize - 1;
+            draft.selected = (draft.selected as isize + delta).clamp(0, max) as usize;
         }
     }
 
-    /// Enter on a draft: post it. An empty directed username is a no-op so a
+    /// Enter on the draft: post an open challenge, advance a directed draft
+    /// to its username step, or send it. An empty username is a no-op so a
     /// stray Enter can't fire a challenge at nobody.
-    pub fn submit_challenge_draft(&mut self) {
-        let Some(draft) = self.challenge_draft.take() else {
+    pub fn draft_advance(&mut self) {
+        let Some(draft) = &mut self.challenge_draft else {
             return;
         };
-        match draft.target {
-            None => self.post_open_challenge(draft.game),
+        match &draft.username {
+            None if draft.directed => draft.username = Some(String::new()),
+            None => {
+                let game = draft.game();
+                self.challenge_draft = None;
+                self.post_open_challenge(game);
+            }
             Some(username) => {
                 if username.trim().trim_start_matches('@').is_empty() {
-                    self.challenge_draft = Some(ChallengeDraft {
-                        game: draft.game,
-                        target: Some(username),
-                    });
                     return;
                 }
-                self.post_directed_challenge(&username, draft.game);
+                let game = draft.game();
+                let username = username.clone();
+                self.challenge_draft = None;
+                self.post_directed_challenge(&username, game);
             }
+        }
+    }
+
+    /// Esc on the draft: the username step falls back to the picker, the
+    /// picker closes the draft.
+    pub fn draft_back(&mut self) {
+        let Some(draft) = &mut self.challenge_draft else {
+            return;
+        };
+        if draft.username.take().is_none() {
+            self.challenge_draft = None;
         }
     }
 

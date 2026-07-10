@@ -77,14 +77,6 @@ impl DailyGame {
             .find(|game| game.label().eq_ignore_ascii_case(label))
     }
 
-    /// Next game in roster order, wrapping — drives the challenge picker.
-    pub fn cycled(self, forward: bool) -> Self {
-        let len = Self::ALL.len() as isize;
-        let at = Self::ALL.iter().position(|game| *game == self).unwrap_or(0) as isize;
-        let step = if forward { 1 } else { -1 };
-        Self::ALL[((at + step).rem_euclid(len)) as usize]
-    }
-
     /// `chess|battleship` — for usage banners and help copy.
     pub fn usage_labels() -> String {
         Self::ALL
@@ -110,13 +102,6 @@ mod tests {
             DailyGame::from_label("BATTLESHIP"),
             Some(DailyGame::Battleship)
         );
-    }
-
-    #[test]
-    fn cycled_walks_the_roster_both_ways() {
-        assert_eq!(DailyGame::Chess.cycled(true), DailyGame::Battleship);
-        assert_eq!(DailyGame::Battleship.cycled(true), DailyGame::Chess);
-        assert_eq!(DailyGame::Chess.cycled(false), DailyGame::Battleship);
     }
 
     #[test]

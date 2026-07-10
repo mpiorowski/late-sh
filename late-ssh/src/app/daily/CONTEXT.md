@@ -101,7 +101,7 @@ Cross-module touchpoints (outside this folder):
 - Opened by reserved global `Ctrl+Q` only (works anywhere, including while composing; pressed again it closes the modal). The old bare `g` binding is removed. Opening calls `mark_lobby_seen`.
 - Near-fullscreen: sized from the terminal minus a margin (8 cols / 4 rows), capped at 100x40 so lines stay readable on large terminals. The daily surface is a primary destination, not a peek.
 - One scrollable list, `j`/`k`: your matches (Enter opens the board), then every open challenge (Enter claims with a confirm second-press; `x` cancels your own). Rows show the game and its chip prize.
-- `c` / `C` open a challenge draft in the status line: Tab or ←/→ cycles the roster (selected game bracketed with its prize), directed drafts (`C`) type the username on the same line, Enter posts, `Esc` cancels (draft and confirm consume the first Esc).
+- `c` / `C` open the challenge picker: a small centered overlay on the modal with one row per roster game and its prize (`j`/`k` + Enter), so the roster scales without fighting the status line for width. Directed drafts (`C`) add a username step after the game is picked; `Esc` steps back (username → picker → closed), and confirm consumes its own first Esc.
 - Composer command `/challenge [@user] [chess|battleship]` posts through the same task path via chat state's `DailyChallengeRequest` handoff (game defaults to chess when omitted).
 
 ### Board screen (`board_*`, `battleship_ui.rs`)
