@@ -1126,6 +1126,14 @@ fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
     )
 }
 
+/// Activates the chat consumable bought in this transaction. Returns whether
+/// every active user's snapshot must be reloaded, which a room effect always
+/// needs: it is projected into every viewer's snapshot, not only the buyer's.
+///
+/// Every chat consumable has to be room-targeted. `shop_consumable_effects` can
+/// physically hold user-scoped rows, but nothing projects them into a snapshot,
+/// so a user-scoped item would take the chips and do nothing anyone could see.
+/// Fail the purchase transaction rather than charge for a no-op.
 async fn activate_chat_consumable_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
@@ -1152,35 +1160,24 @@ async fn activate_chat_consumable_in_tx(
         .get("duration_secs")
         .and_then(|value| value.as_i64())
         .unwrap_or(1);
-    let requires_room = item.payload.get("target").and_then(|value| value.as_str()) == Some("room");
-
-    if requires_room {
-        let Some(room_id) = room_id else {
-            bail!("room-targeted consumable {} requires a room", item.sku);
-        };
-        ShopConsumableEffect::activate_room_effect_in_tx(
-            tx,
-            user_id,
-            room_id,
-            effect_kind,
-            &item.sku,
-            duration_secs,
-            item.payload.clone(),
-        )
-        .await?;
-        Ok(true)
-    } else {
-        ShopConsumableEffect::activate_user_effect_in_tx(
-            tx,
-            user_id,
-            effect_kind,
-            &item.sku,
-            duration_secs,
-            item.payload.clone(),
-        )
-        .await?;
-        Ok(false)
+    if item.payload.get("target").and_then(|value| value.as_str()) != Some("room") {
+        bail!("chat consumable {} must target a room", item.sku);
     }
+    let Some(room_id) = room_id else {
+        bail!("room-targeted consumable {} requires a room", item.sku);
+    };
+
+    ShopConsumableEffect::activate_room_effect_in_tx(
+        tx,
+        user_id,
+        room_id,
+        effect_kind,
+        &item.sku,
+        duration_secs,
+        item.payload.clone(),
+    )
+    .await?;
+    Ok(true)
 }
 
 async fn has_reached_daily_purchase_limit(

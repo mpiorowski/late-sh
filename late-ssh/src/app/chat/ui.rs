@@ -89,7 +89,6 @@ pub struct DashboardChatView<'a> {
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
-    pub bot_username_color_active: bool,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
@@ -1037,7 +1036,6 @@ pub fn draw_dashboard_chat_card(
                 bonsai_glyphs: view.bonsai_glyphs,
                 chat_badges: view.chat_badges,
                 profile_award_badges: view.profile_award_badges,
-                bot_username_color_active: view.bot_username_color_active,
                 message_reactions: view.message_reactions,
                 inline_images: view.inline_images,
                 unread_marker: view.unread_marker,
@@ -1119,7 +1117,6 @@ struct ChatRowsContext<'a> {
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     chat_badges: &'a HashMap<Uuid, String>,
     profile_award_badges: &'a HashMap<Uuid, String>,
-    bot_username_color_active: bool,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     unread_marker: Option<DateTime<Utc>>,
@@ -1239,7 +1236,6 @@ fn chat_rows_fingerprint(
     width.hash(&mut hasher);
     ctx.current_user_id.hash(&mut hasher);
     ctx.show_flag_fallback.hash(&mut hasher);
-    ctx.bot_username_color_active.hash(&mut hasher);
     ctx.unread_marker.hash(&mut hasher);
     theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
@@ -1363,10 +1359,6 @@ fn ensure_chat_rows_cache(
         } else if is_friend {
             Style::default()
                 .fg(theme::BADGE_GOLD())
-                .add_modifier(Modifier::BOLD)
-        } else if is_bot && ctx.bot_username_color_active {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD)
         } else if is_bot {
             Style::default().fg(theme::BOT())
@@ -2318,7 +2310,6 @@ pub struct ChatRenderInput<'a> {
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
-    pub bot_username_color_active: bool,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -2510,7 +2501,6 @@ pub fn draw_embedded_room_chat(
             bonsai_glyphs: view.bonsai_glyphs,
             chat_badges: view.chat_badges,
             profile_award_badges: view.profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: view.message_reactions,
             inline_images: view.inline_images,
             unread_marker: view.unread_marker,
@@ -3849,7 +3839,6 @@ fn draw_selected_content(
                     bonsai_glyphs: view.bonsai_glyphs,
                     chat_badges: view.chat_badges,
                     profile_award_badges: view.profile_award_badges,
-                    bot_username_color_active: view.bot_username_color_active,
                     message_reactions: view.message_reactions,
                     inline_images: view.inline_images,
                     unread_marker: view.room_unread_markers.get(&room.id).copied().flatten(),
@@ -4180,7 +4169,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
             unread_marker: None,
@@ -4238,7 +4226,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
             unread_marker: None,
@@ -4254,7 +4241,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
             unread_marker: None,
@@ -4307,7 +4293,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
             unread_marker: None,
@@ -4476,7 +4461,6 @@ mod tests {
             chat_badges,
             profile_award_badges,
             drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
-            bot_username_color_active: false,
             news_composer,
             news_composing: false,
             news_processing: false,

@@ -38,8 +38,6 @@ pub struct ShopSnapshot {
     pub items: Vec<ShopCatalogItem>,
     pub entitlements: ShopEntitlements,
     pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
-    pub bot_username_color_active: bool,
-    pub bot_username_color_ends_at: Option<DateTime<Utc>>,
     pub aquarium_hungry: bool,
 }
 
@@ -519,13 +517,6 @@ impl ShopService {
                     ends_at: effect.ends_at,
                 });
         }
-        let bot_username_color_ends_at = ShopConsumableEffect::active_user_effect_ends_at(
-            &client,
-            user_id,
-            "bot_username_color",
-        )
-        .await?;
-        let bot_username_color_active = bot_username_color_ends_at.is_some();
         let aquarium_hungry = aquarium_is_hungry(&client, user_id).await?;
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
@@ -621,8 +612,6 @@ impl ShopService {
             items: catalog,
             entitlements: ShopEntitlements::from_owned_skus(owned_skus),
             active_room_effects,
-            bot_username_color_active,
-            bot_username_color_ends_at,
             aquarium_hungry,
         })
     }
