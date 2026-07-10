@@ -141,9 +141,12 @@ impl DailyMatch {
 
     /// Persist a played move: new state, turn flipped to `next_turn_user_id`,
     /// a fresh deadline. Applies only while active, only while it is still
-    /// `by_user_id`'s turn (so a duplicate in-flight move can't double-apply),
-    /// and only when the stored state revision is not ahead of the incoming
-    /// one (same monotonic guard as `GameRoom::update_runtime_state`).
+    /// `by_user_id`'s turn, and only when the stored state revision still
+    /// equals the `expected_revision` the caller loaded. The exact-equality
+    /// guard matches `finish`: a battleship hit keeps the turn on the shooter,
+    /// so the turn guard alone can't reject a duplicate same-revision write —
+    /// only the compare-and-swap makes a superseded move fail loudly instead
+    /// of last-write-wins.
     pub async fn update_state(
         client: &Client,
         match_id: Uuid,
@@ -151,6 +154,7 @@ impl DailyMatch {
         by_user_id: Uuid,
         next_turn_user_id: Uuid,
         turn_deadline_at: DateTime<Utc>,
+        expected_revision: i64,
     ) -> Result<u64> {
         let updated = client
             .execute(
@@ -164,7 +168,7 @@ impl DailyMatch {
                        AND status = $6
                        AND turn_user_id = $3
                        AND {}",
-                    Self::REVISION_GUARD_SQL
+                    Self::STORED_REVISION_EQ_SQL
                 ),
                 &[
                     &match_id,
@@ -173,6 +177,7 @@ impl DailyMatch {
                     &next_turn_user_id,
                     &turn_deadline_at,
                     &Self::STATUS_ACTIVE,
+                    &expected_revision,
                 ],
             )
             .await?;
@@ -276,33 +281,10 @@ impl DailyMatch {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Monotonic revision guard shared by the mutating state writes: apply
-    /// only when the stored `state.revision` is <= the incoming `$2` state's.
-    const REVISION_GUARD_SQL: &'static str = "(
-        COALESCE(
-          CASE
-            WHEN state ? 'revision'
-             AND state->>'revision' ~ '^[0-9]+$'
-            THEN (state->>'revision')::bigint
-            ELSE 0
-          END,
-          0
-        )
-        <=
-        COALESCE(
-          CASE
-            WHEN ($2::jsonb) ? 'revision'
-             AND ($2::jsonb)->>'revision' ~ '^[0-9]+$'
-            THEN (($2::jsonb)->>'revision')::bigint
-            ELSE 0
-          END,
-          0
-        )
-    )";
-
-    /// Optimistic guard for `finish`: apply only when the stored
-    /// `state.revision` still equals the `$7` revision the caller loaded, so a
-    /// concurrent move (which advances the revision) makes the finish a no-op.
+    /// Optimistic compare-and-swap guard shared by `update_state` and
+    /// `finish`: apply only when the stored `state.revision` still equals the
+    /// `$7` revision the caller loaded, so a concurrent move (which advances
+    /// the revision) makes the write a no-op instead of clobbering it.
     const STORED_REVISION_EQ_SQL: &'static str = "(
         COALESCE(
           CASE

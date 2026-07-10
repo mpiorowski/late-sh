@@ -263,33 +263,79 @@ async fn stale_revision_writes_are_rejected() {
 
     let client = test_db.db.get().await.expect("db client");
     let mut state = claimed.state.clone();
-    state["revision"] = serde_json::json!(5);
-    let applied = DailyMatch::update_state(&client, claimed.id, &state, white, black, deadline)
+    // Stored revision starts at 0; a write by the turn holder that expects 0
+    // applies and advances the row to revision 1 (turn passes to black).
+    state["revision"] = serde_json::json!(1);
+    let applied = DailyMatch::update_state(&client, claimed.id, &state, white, black, deadline, 0)
         .await
         .expect("update state");
-    assert_eq!(applied, 1, "revision 5 over 0 must apply");
+    assert_eq!(applied, 1, "matching expected revision by white applies");
 
-    // A stale write (revision 4 over stored 5) is dropped.
-    state["revision"] = serde_json::json!(4);
-    let stale = DailyMatch::update_state(&client, claimed.id, &state, black, white, deadline)
+    // A superseded write: a writer that loaded at revision 0 (expects 0) but
+    // the row is already at 1. Dropped by the compare-and-swap even though it
+    // is now black's turn.
+    state["revision"] = serde_json::json!(2);
+    let superseded = DailyMatch::update_state(&client, claimed.id, &state, black, white, deadline, 0)
         .await
         .expect("update state");
-    assert_eq!(stale, 0, "stale revision must not apply");
+    assert_eq!(superseded, 0, "expected revision 0 over stored 1 must not apply");
 
-    // It is no longer white's turn, so a duplicate in-flight write by white
-    // is dropped even with a fresh revision.
-    state["revision"] = serde_json::json!(6);
-    let wrong_turn = DailyMatch::update_state(&client, claimed.id, &state, white, black, deadline)
+    // A duplicate in-flight write by the off-turn player is dropped even with
+    // the matching expected revision.
+    let wrong_turn = DailyMatch::update_state(&client, claimed.id, &state, white, black, deadline, 1)
         .await
         .expect("update state");
     assert_eq!(wrong_turn, 0, "write by the off-turn player must not apply");
 
-    let monotonic = DailyMatch::update_state(&client, claimed.id, &state, black, white, deadline)
+    let fresh = DailyMatch::update_state(&client, claimed.id, &state, black, white, deadline, 1)
         .await
         .expect("update state");
+    assert_eq!(fresh, 1, "matching expected revision by the turn holder applies");
+}
+
+/// Regression: a battleship hit keeps `turn_user_id` on the shooter, so the
+/// turn guard alone cannot reject a duplicate. Two shots loaded at the same
+/// base revision must not both apply — the second is a superseded write, not
+/// last-write-wins. (Under the old `stored <= incoming` guard the second write
+/// slipped through because the turn never changed.)
+#[tokio::test]
+async fn same_revision_writes_that_keep_the_turn_are_serialized() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-cas-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-cas-opponent").await;
+    let svc = daily_service(&test_db).await;
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::Battleship, None)
+        .await
+        .expect("post challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim challenge");
+    let shooter = claimed
+        .turn_user_id
+        .expect("an active match has a player on the clock");
+    let deadline = chrono::Utc::now() + chrono::Duration::hours(24);
+    let client = test_db.db.get().await.expect("db client");
+
+    let mut state = claimed.state.clone();
+    let base = state["revision"].as_i64().unwrap_or(0);
+    // Both writers loaded `base` and both keep the turn on the shooter, as a
+    // hit does.
+    state["revision"] = serde_json::json!(base + 1);
+    let first =
+        DailyMatch::update_state(&client, claimed.id, &state, shooter, shooter, deadline, base)
+            .await
+            .expect("update state");
+    assert_eq!(first, 1, "the first hit applies");
+    let second =
+        DailyMatch::update_state(&client, claimed.id, &state, shooter, shooter, deadline, base)
+            .await
+            .expect("update state");
     assert_eq!(
-        monotonic, 1,
-        "monotonic revision by the turn holder applies"
+        second, 0,
+        "a second write from the same base revision must be superseded, not last-write-wins"
     );
 }
 

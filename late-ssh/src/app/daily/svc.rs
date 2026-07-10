@@ -550,6 +550,7 @@ impl DailyService {
                     user_id,
                     next_turn,
                     Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+                    base_revision,
                 )
                 .await?;
                 ensure!(updated == 1, "move was superseded, reload the match");
@@ -621,6 +622,7 @@ impl DailyService {
                 user_id,
                 next_turn,
                 Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+                base_revision,
             )
             .await?;
             ensure!(updated == 1, "move was superseded, reload the match");
@@ -692,6 +694,7 @@ impl DailyService {
                     user_id,
                     next_turn,
                     Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+                    base_revision,
                 )
                 .await?;
                 ensure!(updated == 1, "move was superseded, reload the match");
