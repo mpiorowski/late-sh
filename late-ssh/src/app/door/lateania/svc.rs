@@ -3906,6 +3906,13 @@ impl WorldState {
             p.hp = p.max_hp();
             p.resource = p.max_resource;
         }
+        // Level-up is a moment: lead with a bold banner, then the per-level
+        // detail. Full heal + resource already applied above.
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("★═══ LEVEL UP! You are now level {new_level}. ═══★"),
+        );
         // Every level is a real reward: announce the concrete stat gains, any
         // ability learned, and the named milestone at every fifth level.
         let res_label = class.resource().label();
@@ -3936,7 +3943,24 @@ impl WorldState {
                 self.log_to(
                     user_id,
                     LogKind::Loot,
-                    format!("  Milestone - {name}! Hard-won growth toughens you (permanent +HP)."),
+                    format!(
+                        "  ✦ Milestone - {name}! Hard-won growth toughens you (permanent +HP)."
+                    ),
+                );
+                // Milestones are a big deal: the whole world hears of it.
+                self.log_all(format!(
+                    "A hero rises: an adventurer has reached the rank of {name}."
+                ));
+            }
+            if lvl == Class::MAX_LEVEL {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    "  ⚔ You have reached the pinnacle - level 50, the height of your calling. Few ever stand here.".to_string(),
+                );
+                self.log_all(
+                    "The bells of Embergate ring: an adventurer has reached level 50, the pinnacle of their calling!"
+                        .to_string(),
                 );
             }
         }

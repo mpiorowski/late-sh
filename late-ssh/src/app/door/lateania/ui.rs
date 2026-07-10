@@ -2228,8 +2228,33 @@ fn is_actionable_feature(kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit, inventory_item_tag, meter, score_dots};
+    use super::{compare_span, fit, inventory_item_tag, meter, score_dots, scroll_offset};
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn scroll_offset_keeps_the_selection_visible_in_a_long_list() {
+        // A 40-row list in a 10-tall window: the highlighted row must always land
+        // inside the visible window [off, off+height) so nothing you're on scrolls
+        // off-screen (the bug: titles/inventory ran off the bottom).
+        let (total, height) = (40usize, 10usize);
+        let mut off = 0;
+        for sel in 0..total {
+            off = scroll_offset(off, total, Some(sel), height);
+            assert!(
+                sel >= off && sel < off + height,
+                "row {sel} fell outside window [{off}, {})",
+                off + height
+            );
+            assert!(off <= total - height, "offset never overscrolls");
+        }
+    }
+
+    #[test]
+    fn compare_span_colours_upgrades_and_downgrades() {
+        assert!(compare_span(None).is_none());
+        assert!(compare_span(Some(18)).is_some(), "an upgrade shows a tag");
+        assert!(compare_span(Some(-12)).is_some(), "a downgrade shows a tag");
+    }
 
     #[test]
     fn score_dots_scale_from_empty_to_full() {
