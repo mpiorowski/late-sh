@@ -30,7 +30,7 @@ The compiler cannot demand everything. Grep-hunt these seams too: the result str
 
 ## 1. Summary [STABLE]
 
-A daily match is a relationship between two people, not a place. Daily matches deliberately do NOT live in `game_rooms`: no seats, no ready-up, no AFK timers, no embedded chat room, no live actor per match. What is shared with table chess is the chess itself, through `app/games/chess_core`; battleship rules live entirely in this domain.
+A daily match is a relationship between two people, not a place. Daily matches deliberately do NOT live in `game_rooms`: no seats, no ready-up, no AFK timers, no embedded chat room, no live actor per match. What is shared with table chess is the chess itself, through `app/games/chess_core`; battleship and connect four rules live entirely in this domain.
 
 Core shape:
 - **A roster of games, one enum.** `games.rs::DailyGame` (chess, battleship, connect four) owns every per-game fact: `daily_matches.game_kind` string, label, win payout, reward key, ledger reason. Challenge posting picks a game (modal draft picker or `/challenge [@user] [chess|battleship|connect4]`); everything downstream dispatches on it. See §0 for the add-a-game checklist.
@@ -75,7 +75,7 @@ Cross-module touchpoints (outside this folder):
 - `app/common/primitives.rs`: `Screen::DailyMatch` (outside the Tab cycle, like door games).
 - `app/common/sidebar.rs`: `DAILY_HEIGHT`, render arm, `SidebarProps.daily`.
 - `late-core/src/models/user.rs`: `RightSidebarComponent::Daily` (key `daily`, label `Lobby`), default order `[Visualizer, Music, Daily, Activity, Bonsai]`, `normalize_right_sidebar_components` backfills missing panels for existing users.
-- `app/chat/state.rs` + `app/chat/input.rs`: composer `/challenge [@user] [chess|battleship]` parses to a `DailyChallengeRequest` (carrying the `DailyGame`) which chat input hands to `DailyState` post methods.
+- `app/chat/state.rs` + `app/chat/input.rs`: composer `/challenge [@user] [chess|battleship|connect4]` parses to a `DailyChallengeRequest` (carrying the `DailyGame`) which chat input hands to `DailyState` post methods.
 - `app/notify/mod.rs`: `Notification::daily_your_turn(game_label, opponent)` (`Kind::GameEvents`).
 - `app/help_modal/data.rs`: `Ctrl+Q` + `/challenge` help entries.
 - `app/render.rs`: `app_frame_help_hint_title` advertises `Lobby Ctrl+Q` in the outer frame footer.
@@ -109,7 +109,7 @@ Cross-module touchpoints (outside this folder):
 - `c` / `C` open the challenge picker: a small centered overlay on the modal with one row per roster game and its prize (`j`/`k` + Enter), so the roster scales without fighting the status line for width. Directed drafts (`C`) add a username step after the game is picked; `Esc` steps back (username → picker → closed), and confirm consumes its own first Esc.
 - Composer command `/challenge [@user] [chess|battleship|connect4]` posts through the same task path via chat state's `DailyChallengeRequest` handoff (game defaults to chess when omitted).
 
-### Board screen (`board_*`, `battleship_ui.rs`)
+### Board screen (`board_*`, `battleship_ui.rs`, `connect4_ui.rs`)
 - `Screen::DailyMatch`, outside the Tab cycle, entered only from the modal; `q`/`Esc` restores the return screen and reopens the modal (one keypress per hop across matches). Renders whichever game the match is; the screen title is "Daily Match".
 - Connect four layout: one centred grid (header letters, a `▼` indicator over the cursor column, ghost `◌` at the landing cell, drop count under the board), player bars showing disc colors, and a drop-history rail when wide enough. `arrows/wasd` slide the column cursor (the cursor IS a column index), `Space`/`Enter` drops (optimistic, `drop_in_flight` blocks a double drop until the reload), mouse drops via `target_geometry` (click maps to a column). The winning four render as solid tiles under the result overlay.
 - Battleship layout: "their waters" target grid (left, cursor + fired shots; unfound enemy ships revealed as `░░` when the match ends) beside "your fleet" (right, ships + incoming fire), per-grid sunk/afloat summaries, player bars with afloat counts, and a salvo-history rail when wide enough. `arrows/wasd` aim, `Space`/`Enter` fires (optimistic, `shot_in_flight` blocks a double salvo until the reload), `r` resign, mouse fires via the render-recorded `target_geometry`.
