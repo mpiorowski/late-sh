@@ -459,6 +459,13 @@ impl State {
             }
         }
     }
+
+    /// Batch-sell from the inventory panel (all / common / non-upgrades).
+    pub fn sell_batch(&mut self, kind: super::svc::SellBatch) {
+        if self.ensure_player_present() {
+            self.svc.sell_batch_task(self.user_id, kind);
+        }
+    }
 }
 
 impl Drop for State {

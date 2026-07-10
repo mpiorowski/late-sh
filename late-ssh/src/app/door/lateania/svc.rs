@@ -345,6 +345,22 @@ pub struct InvView {
     pub sell_price: i64,
     /// Compact stat summary for the panel, e.g. "+8 atk" or "heal 30".
     pub stats: String,
+    /// Gear vs. what's worn in its slot: percent power change (positive = an
+    /// upgrade, shown green; negative = worse, red). None for non-gear or the
+    /// item already equipped.
+    pub compare_pct: Option<i32>,
+}
+
+/// A batch-sell request at a merchant. Consumables and equipped gear are never
+/// touched; only loose inventory is sold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SellBatch {
+    /// Every loose piece of gear and every valuable.
+    All,
+    /// Only common-rarity gear (plus valuables).
+    Common,
+    /// Gear that wouldn't improve the character (not an upgrade), plus valuables.
+    NonUpgrades,
 }
 
 /// One shop listing.
@@ -357,6 +373,8 @@ pub struct ShopEntryView {
     pub affordable: bool,
     /// Compact stat summary for the panel, e.g. "+8 atk".
     pub stats: String,
+    /// Percent power change vs. what's worn in the item's slot (see InvView).
+    pub compare_pct: Option<i32>,
 }
 
 /// The player's live companion, for the room/character panels.
@@ -1166,6 +1184,11 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.sell(user_id, item_id));
     }
 
+    /// Batch-sell loose inventory at a merchant (see `SellBatch`).
+    pub fn sell_batch_task(&self, user_id: Uuid, kind: SellBatch) {
+        self.mutate(user_id, move |s| s.sell_batch(user_id, kind));
+    }
+
     pub fn delete_character_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -1447,6 +1470,33 @@ impl PlayerState {
             }
         }
         (attack, hp, armor)
+    }
+
+    /// Compare a piece of gear against what is worn in its slot, as a percent
+    /// power change (positive = upgrade). `None` for non-gear, an unslotted item,
+    /// or the very item already equipped in that slot.
+    fn compare_gear(&self, it: &super::items::Item) -> Option<i32> {
+        let slot = it.slot()?;
+        if self.equipped.get(&slot) == Some(&it.id) {
+            return None; // this is the equipped item itself
+        }
+        let worn_power = self
+            .equipped
+            .get(&slot)
+            .and_then(|id| item(*id))
+            .map(|w| w.power())
+            .unwrap_or(0);
+        let new_power = it.power();
+        if worn_power == 0 {
+            // Nothing worn: any positive-power gear is a straight gain.
+            return (new_power > 0).then_some(100);
+        }
+        Some((new_power - worn_power) * 100 / worn_power.max(1))
+    }
+
+    /// Whether a piece of gear would improve the character over what is worn.
+    fn is_upgrade(&self, it: &super::items::Item) -> bool {
+        self.compare_gear(it).is_some_and(|pct| pct > 0)
     }
 
     /// The chosen archetype's tuning percentages, or all-zero if none is picked.
@@ -4092,6 +4142,72 @@ impl WorldState {
         );
     }
 
+    /// Which kind of batch-sell was requested.
+    fn sell_batch(&mut self, user_id: Uuid, kind: SellBatch) {
+        if shop_at(self.players.get(&user_id).map(|p| p.room).unwrap_or(0)).is_none() {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You need a merchant to sell.".to_string(),
+            );
+            return;
+        }
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        // Decide which pack items to sell. Equipped gear and consumables are
+        // always kept; the batch only touches loose inventory.
+        let doomed: Vec<u32> = p
+            .inventory
+            .iter()
+            .copied()
+            .filter(|id| {
+                let Some(it) = item(*id) else { return false };
+                match it.kind {
+                    ItemKind::Consumable { .. } => false, // never dump potions
+                    ItemKind::Valuable => true,           // pure sell-fodder, always goes
+                    ItemKind::Equipment(_) => match kind {
+                        SellBatch::All => true,
+                        SellBatch::Common => it.rarity == super::items::Rarity::Common,
+                        // "won't improve the character": not an upgrade over worn gear.
+                        SellBatch::NonUpgrades => !p.is_upgrade(it),
+                    },
+                }
+            })
+            .collect();
+        if doomed.is_empty() {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Nothing to sell that way.".to_string(),
+            );
+            return;
+        }
+        let mut count = 0;
+        let mut total = 0;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            for id in &doomed {
+                if let Some(pos) = p.inventory.iter().position(|i| i == id) {
+                    p.inventory.remove(pos);
+                    let price = item(*id).map(|it| it.sell_price()).unwrap_or(1);
+                    p.gold += price;
+                    total += price;
+                    count += 1;
+                }
+            }
+        }
+        let what = match kind {
+            SellBatch::All => "loose gear and valuables",
+            SellBatch::Common => "common items",
+            SellBatch::NonUpgrades => "items that wouldn't improve you",
+        };
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You sell {count} {what} for {total}g."),
+        );
+    }
+
     // ---- Tick -----------------------------------------------------------
 
     fn tick(&mut self) -> TickOutput {
@@ -5456,6 +5572,7 @@ impl WorldState {
                     equipped: false,
                     sell_price: it.sell_price(),
                     stats: it.stat_summary(),
+                    compare_pct: player.compare_gear(it),
                 })
                 .chain(
                     player
@@ -5470,6 +5587,7 @@ impl WorldState {
                             equipped: true,
                             sell_price: it.sell_price(),
                             stats: it.stat_summary(),
+                            compare_pct: None,
                         }),
                 )
                 .collect();
@@ -5489,6 +5607,7 @@ impl WorldState {
                         price: it.price,
                         affordable: player.gold >= it.price,
                         stats: it.stat_summary(),
+                        compare_pct: player.compare_gear(it),
                     })
                     .collect(),
             });
@@ -6624,6 +6743,47 @@ mod tests {
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, before - 80);
         assert!(p.inventory.contains(&1001));
+    }
+
+    #[test]
+    fn class_cannot_be_changed_once_chosen() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // A second choice must be ignored - no re-classing mid-adventure.
+        s.choose_class(uid(1), Class::Mage);
+        assert_eq!(
+            s.players[&uid(1)].class,
+            Some(Class::Warrior),
+            "class is locked in once chosen"
+        );
+    }
+
+    #[test]
+    fn sell_batch_dumps_junk_but_keeps_upgrades_and_potions() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.move_player(uid(1), Dir::East); // to the smithy (room 3), a merchant
+        assert_eq!(s.players[&uid(1)].room, 3);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.equipped.clear();
+            // A weak weapon worn, a stronger one loose (an upgrade to keep), a
+            // weaker one loose (junk), and a potion (must survive).
+            p.equipped.insert(Slot::Weapon, 1001); // Iron Longsword
+            p.inventory = vec![1004, 1000, 1300]; // strong wpn, weak wpn, potion
+            p.gold = 0;
+        }
+        s.sell_batch(uid(1), SellBatch::NonUpgrades);
+        let p = &s.players[&uid(1)];
+        assert!(p.inventory.contains(&1300), "keeps the potion");
+        assert!(!p.inventory.contains(&1000), "sells the weaker weapon");
+        assert!(
+            p.inventory.contains(&1004) || p.equipped.values().any(|v| *v == 1004),
+            "keeps the upgrade weapon"
+        );
+        assert!(p.gold > 0, "selling junk earns gold");
     }
 
     #[test]

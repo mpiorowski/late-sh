@@ -1333,18 +1333,41 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
         let spans = vec![Span::styled(format!("{marker} {}{}", it.name, tag), style)];
         if !it.stats.is_empty() {
             lines.push(Line::from(spans));
-            lines.push(Line::from(Span::styled(
+            let mut stat_spans = vec![Span::styled(
                 format!("    {}", it.stats),
                 Style::default().fg(theme::TEXT_DIM()),
-            )));
+            )];
+            if let Some(cmp) = compare_span(it.compare_pct) {
+                stat_spans.push(cmp);
+            }
+            lines.push(Line::from(stat_spans));
             continue;
         }
         lines.push(Line::from(spans));
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter equip/use"));
-    lines.push(hint("x", "sell (at a shop)  t close"));
+    lines.push(hint("x", "sell one (at a shop)"));
+    lines.push(hint("A/C/J", "sell all / commons / non-upgrades"));
+    lines.push(hint("t", "close"));
     (lines, sel_line)
+}
+
+/// A small coloured " ▲+18%" / " ▼-12%" tag comparing gear to what's worn: green
+/// for an upgrade, red for worse, faint for a sidegrade. None renders nothing.
+fn compare_span(compare_pct: Option<i32>) -> Option<Span<'static>> {
+    let pct = compare_pct?;
+    let (arrow, color) = if pct > 0 {
+        ('\u{25B2}', theme::SUCCESS())
+    } else if pct < 0 {
+        ('\u{25BC}', theme::ERROR())
+    } else {
+        ('=', theme::TEXT_DIM())
+    };
+    Some(Span::styled(
+        format!("  {arrow}{pct:+}%"),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))
 }
 
 fn inventory_item_tag(equipped: bool, slot: Option<&str>) -> String {
@@ -1410,13 +1433,17 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<u
         let mut spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
         if !e.stats.is_empty() {
             lines.push(Line::from(spans));
-            lines.push(Line::from(vec![
+            let mut stat_spans = vec![
                 Span::styled(
                     format!("    {}", e.stats),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
                 Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
-            ]));
+            ];
+            if let Some(cmp) = compare_span(e.compare_pct) {
+                stat_spans.push(cmp);
+            }
+            lines.push(Line::from(stat_spans));
             continue;
         }
         spans.push(Span::styled(

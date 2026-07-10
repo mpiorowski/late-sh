@@ -128,6 +128,29 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         return InputAction::Handled;
     }
 
+    // Batch-sell shortcuts, only inside the Inventory panel (so they don't shadow
+    // the global meanings of A/C/J elsewhere): A = sell all loose gear, C = sell
+    // commons, J = sell junk (anything that wouldn't improve you). All keep your
+    // potions and equipped gear, and need a merchant present.
+    if panel == Panel::Inventory {
+        use super::svc::SellBatch;
+        match byte {
+            b'A' => {
+                state.sell_batch(SellBatch::All);
+                return InputAction::Handled;
+            }
+            b'C' => {
+                state.sell_batch(SellBatch::Common);
+                return InputAction::Handled;
+            }
+            b'J' | b'j' => {
+                state.sell_batch(SellBatch::NonUpgrades);
+                return InputAction::Handled;
+            }
+            _ => {}
+        }
+    }
+
     match byte {
         // Panels.
         b'c' | b'C' => {
