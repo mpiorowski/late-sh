@@ -73,6 +73,8 @@ fn activate_selection(app: &mut App) {
     }
     let action = match app.daily.selected_entry() {
         Some(DailyModalEntry::Match(item)) => Some(Action::OpenBoard(item.clone())),
+        // Watching someone else's game opens the same board, read-only.
+        Some(DailyModalEntry::Spectate(item)) => Some(Action::OpenBoard(item.clone())),
         Some(DailyModalEntry::Challenge(challenge)) => {
             if challenge.challenger_id == app.daily.user_id() {
                 None

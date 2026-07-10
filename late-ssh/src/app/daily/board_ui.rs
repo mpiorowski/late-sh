@@ -469,7 +469,12 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
             Style::default().fg(theme::TEXT_DIM()),
         ));
     };
-    if detail.is_active() {
+    if board.spectating {
+        spans.push(Span::styled(
+            "watching   ".to_string(),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    } else if detail.is_active() {
         hint(&mut spans, "arrows/wasd", "move cursor");
         hint(&mut spans, "Space/Enter", "pick / play");
         hint(&mut spans, "r", "resign");

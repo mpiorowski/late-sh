@@ -28,10 +28,11 @@ use super::{
 };
 
 /// One selectable row in the Daily Games modal: your matches first, then the
-/// open lobby.
+/// open lobby, then other people's live games you can watch.
 pub enum DailyModalEntry<'a> {
     Match(&'a DailyMatchItem),
     Challenge(&'a DailyChallengeItem),
+    Spectate(&'a DailyMatchItem),
 }
 
 /// A challenge being composed: a small picker overlay on the Lobby modal.
@@ -89,6 +90,9 @@ pub struct DailyState {
 /// Full-screen correspondence board (`Screen::DailyMatch`).
 pub struct DailyBoardState {
     pub match_id: Uuid,
+    /// You aren't a player in this match: the board is read-only. No cursor,
+    /// no move/resign input, hints say "watching".
+    pub spectating: bool,
     /// Screen to restore when the board closes.
     pub return_screen: Screen,
     pub cursor: usize,
@@ -455,6 +459,22 @@ impl DailyState {
         self.snapshot.open_challenges.iter().collect()
     }
 
+    /// Active matches you're not playing in and may watch read-only, nearest
+    /// deadline first. Battleship spectators see only the public hit/miss
+    /// record, never the fleets (see `battleship_ui`).
+    pub fn live_games(&self) -> Vec<&DailyMatchItem> {
+        let mut matches: Vec<&DailyMatchItem> = self
+            .snapshot
+            .active_matches
+            .iter()
+            .filter(|item| {
+                item.challenger_id != self.user_id && item.opponent_id != self.user_id
+            })
+            .collect();
+        matches.sort_by_key(|item| (item.turn_deadline_at, item.id));
+        matches
+    }
+
     /// Open challenges + active matches counted against the per-user cap.
     pub fn entry_count(&self) -> usize {
         let challenges = self
@@ -485,7 +505,7 @@ impl DailyState {
     // ── Modal navigation ───────────────────────────────────────
 
     pub fn modal_entry_count(&self) -> usize {
-        self.my_matches().len() + self.lobby().len()
+        self.my_matches().len() + self.lobby().len() + self.live_games().len()
     }
 
     pub fn modal_entry_at(&self, index: usize) -> Option<DailyModalEntry<'_>> {
@@ -493,10 +513,15 @@ impl DailyState {
         if index < matches.len() {
             return Some(DailyModalEntry::Match(matches[index]));
         }
-        self.lobby()
-            .get(index - matches.len())
+        let index = index - matches.len();
+        let lobby = self.lobby();
+        if index < lobby.len() {
+            return Some(DailyModalEntry::Challenge(lobby[index]));
+        }
+        self.live_games()
+            .get(index - lobby.len())
             .copied()
-            .map(DailyModalEntry::Challenge)
+            .map(DailyModalEntry::Spectate)
     }
 
     pub fn selected_entry(&self) -> Option<DailyModalEntry<'_>> {
@@ -623,8 +648,12 @@ impl DailyState {
         if let Some(name) = &item.opponent_username {
             names.insert(item.opponent_id, name.clone());
         }
+        // You're a spectator unless you're one of the two players.
+        let spectating =
+            item.challenger_id != self.user_id && item.opponent_id != self.user_id;
         self.board = Some(DailyBoardState {
             match_id: item.id,
+            spectating,
             return_screen,
             // Start the cursor mid-board for each game's grid.
             cursor: match item.game {
@@ -936,6 +965,10 @@ impl DailyState {
         let Some(board) = &mut self.board else {
             return;
         };
+        // A spectator has nothing to resign; the service would reject it too.
+        if board.spectating {
+            return;
+        }
         let active = board
             .detail
             .as_ref()

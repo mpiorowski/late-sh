@@ -48,10 +48,10 @@ pub(crate) fn draw(
         return;
     }
     let state = &connect4.state;
-    let Some(my_disc) = state.disc_of(daily.user_id()) else {
-        draw_center_message(frame, area, "You are not playing in this match.");
-        return;
-    };
+    // Spectators aren't a player; default them to red's perspective (red on
+    // the bottom bar). Connect four hides nothing, so the view is complete
+    // and the ghost preview never draws (a spectator's cursor stays off).
+    let my_disc = state.disc_of(daily.user_id()).unwrap_or(Disc::Red);
 
     // Same shape as the other boards: the drop rail splits off the right
     // edge when there is room, everything else centres in what remains.
@@ -143,7 +143,7 @@ pub(crate) fn draw(
         my_disc,
     );
     frame.render_widget(
-        Paragraph::new(key_line(detail)).alignment(Alignment::Center),
+        Paragraph::new(key_line(board, detail)).alignment(Alignment::Center),
         hint_row,
     );
 
@@ -423,7 +423,7 @@ fn draw_player_bar(
     }
 }
 
-fn key_line(detail: &DailyMatchDetail) -> Line<'static> {
+fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static> {
     let mut spans = Vec::new();
     let hint = |spans: &mut Vec<Span<'static>>, key: &str, desc: &str| {
         spans.push(Span::styled(
@@ -435,7 +435,12 @@ fn key_line(detail: &DailyMatchDetail) -> Line<'static> {
             Style::default().fg(theme::TEXT_DIM()),
         ));
     };
-    if detail.is_active() {
+    if board.spectating {
+        spans.push(Span::styled(
+            "watching   ".to_string(),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    } else if detail.is_active() {
         hint(&mut spans, "arrows/wasd", "choose column");
         hint(&mut spans, "Space/Enter", "drop");
         hint(&mut spans, "r", "resign");

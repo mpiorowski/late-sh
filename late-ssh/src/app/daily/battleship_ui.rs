@@ -46,11 +46,13 @@ pub(crate) fn draw(
         return;
     }
     let state = &battleship.state;
-    let Some(me) = state.side_index_of(daily.user_id()) else {
-        draw_center_message(frame, area, "You are not playing in this match.");
-        return;
+    // A spectator isn't a player: they watch a ships-hidden view of both
+    // players' waters (`top_side` / `bottom_side`), never a fleet.
+    let me = state.side_index_of(daily.user_id());
+    let (top_side, bottom_side) = match me {
+        Some(me) => (DailyBattleshipState::opponent_index(me), me),
+        None => (1, 0),
     };
-    let them = DailyBattleshipState::opponent_index(me);
 
     // Same shape as the chess board: the salvo rail splits off the right
     // edge when there is room, everything else centres in what remains.
@@ -58,7 +60,7 @@ pub(crate) fn draw(
     let content = if show_rail {
         let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(INFO_RAIL_WIDTH)])
             .split(area);
-        draw_info_rail(frame, cols[1], board, state, me);
+        draw_info_rail(frame, cols[1], daily, board, state);
         cols[0]
     } else {
         area
@@ -96,7 +98,7 @@ pub(crate) fn draw(
     };
 
     frame.render_widget(
-        Paragraph::new(status_line(daily, board, detail, battleship, me))
+        Paragraph::new(status_line(daily, board, detail, battleship))
             .alignment(Alignment::Center),
         status_row,
     );
@@ -107,7 +109,7 @@ pub(crate) fn draw(
         board,
         detail,
         battleship,
-        them,
+        top_side,
     );
 
     let target_rect = Rect {
@@ -122,23 +124,35 @@ pub(crate) fn draw(
         width: GRID_WIDTH,
         height: GRID_ROWS,
     };
-    frame.render_widget(
-        Paragraph::new(target_grid_lines(
-            state,
-            me,
-            my_turn.then_some(board.cursor),
-            finished,
-        )),
-        target_rect,
-    );
-    frame.render_widget(Paragraph::new(fleet_grid_lines(state, me)), fleet_rect);
-    // Cells begin after the title + header rows and the row labels.
-    board.target_geometry.set(Some(Rect {
-        x: target_rect.x + 3,
-        y: target_rect.y + 2,
-        width: (battleship::GRID as u16) * CELL_W,
-        height: battleship::GRID as u16,
-    }));
+    // A player sees their shots on the enemy (left) beside their own fleet
+    // taking fire (right). A spectator sees both players' waters charted by
+    // hits and misses only — the fleets stay hidden.
+    let (left_lines, right_lines) = match me {
+        Some(me) => (
+            target_grid_lines(state, me, my_turn.then_some(board.cursor), finished),
+            fleet_grid_lines(state, me),
+        ),
+        None => (
+            spectate_waters_lines(state, top_side, name_for(board, state.side(top_side).user_id)),
+            spectate_waters_lines(
+                state,
+                bottom_side,
+                name_for(board, state.side(bottom_side).user_id),
+            ),
+        ),
+    };
+    frame.render_widget(Paragraph::new(left_lines), target_rect);
+    frame.render_widget(Paragraph::new(right_lines), fleet_rect);
+    // Cells begin after the title + header rows and the row labels. Only a
+    // player clicks to fire; a spectator's cursor never resolves.
+    if me.is_some() {
+        board.target_geometry.set(Some(Rect {
+            x: target_rect.x + 3,
+            y: target_rect.y + 2,
+            width: (battleship::GRID as u16) * CELL_W,
+            height: battleship::GRID as u16,
+        }));
+    }
 
     draw_player_bar(
         frame,
@@ -147,10 +161,10 @@ pub(crate) fn draw(
         board,
         detail,
         battleship,
-        me,
+        bottom_side,
     );
     frame.render_widget(
-        Paragraph::new(key_line(detail)).alignment(Alignment::Center),
+        Paragraph::new(key_line(board, detail)).alignment(Alignment::Center),
         hint_row,
     );
 
@@ -283,6 +297,48 @@ fn fleet_grid_lines(state: &DailyBattleshipState, me: usize) -> Vec<Line<'static
     lines
 }
 
+/// A player's waters as their opponent has charted them: hit and miss marks
+/// only, never the ships. This is exactly the public salvo record, so a
+/// spectator learns nothing the shooter doesn't already know — the fleets
+/// stay hidden even after the match ends.
+fn spectate_waters_lines(
+    state: &DailyBattleshipState,
+    defender: usize,
+    title: String,
+) -> Vec<Line<'static>> {
+    let attacker = DailyBattleshipState::opponent_index(defender);
+    let mut lines = vec![grid_title(&title), header_line(None)];
+    for row in 0..battleship::GRID {
+        let mut spans = vec![row_label(row, false)];
+        for col in 0..battleship::GRID {
+            let cell = row * battleship::GRID + col;
+            let shot = state
+                .side(attacker)
+                .shots
+                .iter()
+                .find(|shot| shot.cell as usize == cell);
+            let (glyph, style) = match shot {
+                Some(Shot { hit: true, .. }) => (" X ", hit_style()),
+                Some(Shot { hit: false, .. }) => (
+                    " x ",
+                    checker(row, col)
+                        .fg(theme::TEXT_MUTED())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                None => (" · ", checker(row, col).fg(theme::BORDER_DIM())),
+            };
+            spans.push(Span::styled(glyph.to_string(), style));
+        }
+        lines.push(Line::from(spans));
+    }
+    let sunk = battleship::FLEET_LENGTHS.len() - state.ships_afloat_against(attacker);
+    lines.push(summary_line(format!(
+        "sunk {sunk}/{}",
+        battleship::FLEET_LENGTHS.len()
+    )));
+    lines
+}
+
 fn grid_title(title: &str) -> Line<'static> {
     let pad = (GRID_WIDTH as usize).saturating_sub(title.chars().count()) / 2;
     Line::from(Span::styled(
@@ -352,7 +408,6 @@ fn status_line(
     board: &DailyBoardState,
     detail: &DailyMatchDetail,
     battleship: &BattleshipDetail,
-    me: usize,
 ) -> Line<'static> {
     if board.resign_confirm {
         return Line::from(Span::styled(
@@ -403,10 +458,11 @@ fn status_line(
         ));
     }
     if let Some((by, shot)) = last_salvo(&battleship.state) {
-        let who = if by == me {
+        let shooter = battleship.state.side(by).user_id;
+        let who = if shooter == daily.user_id() {
             "you".to_string()
         } else {
-            name_for(board, battleship.state.side(by).user_id)
+            name_for(board, shooter)
         };
         spans.push(Span::styled(
             format!(
@@ -481,7 +537,7 @@ fn draw_player_bar(
     }
 }
 
-fn key_line(detail: &DailyMatchDetail) -> Line<'static> {
+fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static> {
     let mut spans = Vec::new();
     let hint = |spans: &mut Vec<Span<'static>>, key: &str, desc: &str| {
         spans.push(Span::styled(
@@ -493,7 +549,12 @@ fn key_line(detail: &DailyMatchDetail) -> Line<'static> {
             Style::default().fg(theme::TEXT_DIM()),
         ));
     };
-    if detail.is_active() {
+    if board.spectating {
+        spans.push(Span::styled(
+            "watching · fleets hidden   ".to_string(),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    } else if detail.is_active() {
         hint(&mut spans, "arrows/wasd", "aim");
         hint(&mut spans, "Space/Enter", "fire");
         hint(&mut spans, "r", "resign");
@@ -519,9 +580,9 @@ fn last_salvo(state: &DailyBattleshipState) -> Option<(usize, &Shot)> {
 fn draw_info_rail(
     frame: &mut Frame,
     area: Rect,
+    daily: &DailyState,
     board: &DailyBoardState,
     state: &DailyBattleshipState,
-    me: usize,
 ) {
     let mut lines = vec![
         Line::from(Span::styled(
@@ -568,10 +629,11 @@ fn draw_info_rail(
             salvos.drain(..skip);
         }
         for (side, shot) in salvos {
-            let who = if side == me {
+            let shooter = state.side(side).user_id;
+            let who = if shooter == daily.user_id() {
                 "you".to_string()
             } else {
-                name_for(board, state.side(side).user_id)
+                name_for(board, shooter)
             };
             let (mark, mark_color) = if shot.hit {
                 ("X", theme::ERROR())
