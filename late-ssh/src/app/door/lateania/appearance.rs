@@ -20,6 +20,10 @@ pub const FIELDS: &[(&str, &[&str])] = &[
             "willowy",
             "heavyset",
             "unremarkable",
+            "rangy",
+            "barrel-chested",
+            "slight",
+            "iron-hard",
         ],
     ),
     (
@@ -33,6 +37,10 @@ pub const FIELDS: &[(&str, &[&str])] = &[
             "raven-dark",
             "fire-red",
             "sun-bleached",
+            "ash-blond",
+            "salt-and-pepper",
+            "tightly curled",
+            "topknotted",
         ],
     ),
     (
@@ -46,6 +54,10 @@ pub const FIELDS: &[(&str, &[&str])] = &[
             "mismatched",
             "storm-dark",
             "glass-green",
+            "coal-black",
+            "hazel",
+            "ice-pale",
+            "gold-flecked",
         ],
     ),
     (
@@ -59,6 +71,10 @@ pub const FIELDS: &[(&str, &[&str])] = &[
             "haunted",
             "bold",
             "quiet",
+            "weary",
+            "sly",
+            "gentle",
+            "dangerous",
         ],
     ),
     (
@@ -72,6 +88,44 @@ pub const FIELDS: &[(&str, &[&str])] = &[
             "from far over the sea",
             "of no fixed home",
             "raised in the Sundered Reaches",
+            "of the fishing villages",
+            "born on the road",
+            "from a drowned island",
+            "of forgotten stock",
+        ],
+    ),
+    (
+        "Mark",
+        &[
+            "unmarked",
+            "a long jaw-scar",
+            "a burned hand",
+            "a faded tattoo",
+            "a broken nose",
+            "a missing finger",
+            "a braided beard",
+            "a raider's brand",
+            "a lucky charm at the throat",
+            "a limp from an old wound",
+            "war-paint half worn off",
+            "a clan-mark on the cheek",
+        ],
+    ),
+    (
+        "Manner",
+        &[
+            "says little",
+            "laughs too loud",
+            "hums old tunes",
+            "never sits still",
+            "weighs every word",
+            "quick to anger",
+            "unfailingly polite",
+            "always joking",
+            "watches the doors",
+            "speaks in proverbs",
+            "cool under fire",
+            "kind to strangers",
         ],
     ),
 ];
@@ -97,13 +151,22 @@ pub fn option(i: usize, idx: u8) -> &'static str {
 
 /// Compose the bio sentence from a full set of selections.
 pub fn compose_bio(sel: &[u8; N_FIELDS]) -> String {
+    let mark = option(5, sel[5]);
+    // "unmarked" (index 0) reads oddly in a sentence; drop that clause.
+    let mark_clause = if sel[5] == 0 {
+        String::new()
+    } else {
+        format!(" bearing {mark},")
+    };
     format!(
-        "A {build}, {origin} adventurer, {hair} of hair and {eyes} of eye, of a {bearing} bearing.",
+        "A {build}, {origin} adventurer, {hair} of hair and {eyes} of eye,{mark} of a {bearing} bearing who {manner}.",
         build = option(0, sel[0]),
         hair = option(1, sel[1]),
         eyes = option(2, sel[2]),
         bearing = option(3, sel[3]),
         origin = option(4, sel[4]),
+        mark = mark_clause,
+        manner = option(6, sel[6]),
     )
 }
 
@@ -113,13 +176,18 @@ mod tests {
 
     #[test]
     fn every_field_has_options_and_composes() {
-        assert_eq!(N_FIELDS, 5);
+        assert_eq!(N_FIELDS, 7);
         for (i, field) in FIELDS.iter().enumerate() {
             assert!(option_count(i) >= 2, "{} has choices", field_label(i));
             // Out-of-range indices clamp rather than panic.
             assert_eq!(option(i, 250), field.1[field.1.len() - 1]);
         }
-        let bio = compose_bio(&[1, 2, 3, 4, 5]);
+        let bio = compose_bio(&[1, 2, 3, 4, 5, 2, 3]);
         assert!(bio.contains("broad-shouldered") && bio.contains("from far over the sea"));
+        assert!(bio.contains("a burned hand") && bio.contains("never sits still"));
+        // An "unmarked" character drops the mark clause cleanly.
+        let plain = compose_bio(&[0, 0, 0, 0, 0, 0, 0]);
+        assert!(!plain.contains("unmarked"), "no dangling 'unmarked' clause");
+        assert!(plain.contains("says little"), "manner still reads");
     }
 }
