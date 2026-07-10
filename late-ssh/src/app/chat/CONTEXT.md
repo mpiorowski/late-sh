@@ -289,7 +289,7 @@ User commands:
 - `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.
 
 Admin commands:
-- `/create-room #room` creates/promotes a permanent auto-join room and bulk-adds existing users.
+- `/create-room #room` creates a permanent auto-join room and bulk-adds existing users. It is idempotent on rooms that are already permanent, but it refuses to promote an existing non-permanent public room: promotion would bulk-add every user to a room nobody can leave, and a mistyped slug must not be able to do that to a user-created `/public` room.
 - `/delete-room #room` deletes a permanent room.
 - `/fill-room #room` bulk-adds all users to an existing public room and flips `auto_join=true`; private rooms cannot be filled.
 

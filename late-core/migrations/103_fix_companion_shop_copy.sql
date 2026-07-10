@@ -14,7 +14,7 @@ SET description = 'Buy one meal for your cat or dog. Use /feed, or click the foo
 WHERE sku = 'pet_food';
 
 UPDATE marketplace_items
-SET description = 'Unlock the ambient bottom aquarium and its fish catalog. Use /aquarium, or /aq, to show or hide the tray.',
+SET description = 'Unlock the ambient Lounge aquarium tray and its fish catalog. Use /aquarium, or /aq, to show or hide the tray.',
     updated = current_timestamp
 WHERE sku = 'aquarium';
 

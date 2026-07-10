@@ -106,7 +106,7 @@ pub fn draw_dashboard(
 
 const MAX_PINNED_HEIGHT: u16 = 6;
 const CHAT_RULE_HEIGHT: u16 = 1;
-const MIN_CHAT_HEIGHT_WITH_LOUNGE: u16 = 10;
+pub(crate) const MIN_CHAT_HEIGHT_WITH_LOUNGE: u16 = 10;
 const PINNED_GLYPH: &str = "● ";
 
 /// Rows the pinned strip gets, or 0 when there are no pins or the chat area

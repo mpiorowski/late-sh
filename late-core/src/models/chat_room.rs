@@ -468,34 +468,29 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    /// Create or promote a permanent public room. Permanent rooms are
-    /// auto-joined by all users on connect and cannot be left. If a room with
-    /// this slug already exists (e.g. created earlier via `/public`), it is
-    /// promoted in place (`auto_join`/`permanent` set true) instead of
-    /// erroring.
+    /// Create a permanent public room. Permanent rooms are auto-joined by all
+    /// users on connect and cannot be left. Re-running this on a room that is
+    /// already permanent is a no-op, so the caller can retry safely; an
+    /// existing *non*-permanent room is left alone and the call fails, because
+    /// promoting it would bulk-add every user to an unleaveable room with no
+    /// undo — a mistyped slug must not do that.
     pub async fn ensure_permanent(client: &Client, slug: &str) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 
         let existing = client
             .query_opt(
-                "SELECT id
+                "SELECT *
                  FROM chat_rooms
                  WHERE slug = $1 AND kind = 'topic' AND visibility = 'public'",
                 &[&slug],
             )
             .await?;
         if let Some(existing) = existing {
-            let id: Uuid = existing.get("id");
-            let row = client
-                .query_one(
-                    "UPDATE chat_rooms
-                     SET auto_join = true, permanent = true
-                     WHERE id = $1
-                     RETURNING *",
-                    &[&id],
-                )
-                .await?;
-            return Ok(Self::from(row));
+            let room = Self::from(existing);
+            if !room.permanent {
+                bail!("room #{slug} already exists and is not permanent");
+            }
+            return Ok(room);
         }
 
         let row = client

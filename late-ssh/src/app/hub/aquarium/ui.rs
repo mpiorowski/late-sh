@@ -25,7 +25,13 @@ pub(crate) fn top_tray_area(area: Rect) -> Rect {
 }
 
 /// Split `area` into the top aquarium tray and the remaining content below.
-pub(crate) fn carve_top_tray(area: Rect) -> (Rect, Rect) {
+/// Returns no tray when the lounge below would drop under its minimum: the
+/// tray is only reachable through the `/aquarium` composer command, so a tray
+/// that eats the composer would lock the user out of hiding it again.
+pub(crate) fn carve_top_tray(area: Rect) -> (Option<Rect>, Rect) {
+    if area.height < TOP_TRAY_HEIGHT + crate::app::dashboard::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE {
+        return (None, area);
+    }
     let tray = top_tray_area(area);
     let rest = Rect::new(
         area.x,
@@ -33,7 +39,7 @@ pub(crate) fn carve_top_tray(area: Rect) -> (Rect, Rect) {
         area.width,
         area.height.saturating_sub(tray.height),
     );
-    (tray, rest)
+    (Some(tray), rest)
 }
 
 pub fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
@@ -480,4 +486,39 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         width.min(area.width),
         height.min(area.height),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::dashboard::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE;
+
+    const TALL_ENOUGH: u16 = TOP_TRAY_HEIGHT + MIN_CHAT_HEIGHT_WITH_LOUNGE;
+
+    #[test]
+    fn carves_a_full_height_tray_when_the_lounge_still_fits() {
+        let (tray, rest) = carve_top_tray(Rect::new(0, 0, 80, TALL_ENOUGH));
+        let tray = tray.expect("tray fits");
+        assert_eq!(tray.height, TOP_TRAY_HEIGHT);
+        assert_eq!(rest.y, tray.bottom());
+        assert_eq!(rest.height, MIN_CHAT_HEIGHT_WITH_LOUNGE);
+    }
+
+    #[test]
+    fn skips_the_tray_rather_than_squeezing_the_lounge_below_its_minimum() {
+        // One row short: the composer must survive, since `/aquarium` typed
+        // into it is the only way back out of the tray.
+        let area = Rect::new(0, 0, 80, TALL_ENOUGH - 1);
+        let (tray, rest) = carve_top_tray(area);
+        assert!(tray.is_none());
+        assert_eq!(rest, area);
+    }
+
+    #[test]
+    fn skips_the_tray_on_a_terminal_too_short_to_hold_it() {
+        let area = Rect::new(0, 0, 80, TOP_TRAY_HEIGHT - 1);
+        let (tray, rest) = carve_top_tray(area);
+        assert!(tray.is_none());
+        assert_eq!(rest, area);
+    }
 }

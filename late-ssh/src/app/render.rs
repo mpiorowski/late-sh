@@ -1162,7 +1162,7 @@ impl App {
                 };
                 let center_area = if aquarium_tray_enabled && ctx.home_selected {
                     let (tray, rest) = crate::app::hub::aquarium::ui::carve_top_tray(center_area);
-                    aquarium_tray_area = Some(tray);
+                    aquarium_tray_area = tray;
                     rest
                 } else {
                     center_area
