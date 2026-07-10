@@ -26,7 +26,6 @@ use std::sync::OnceLock;
 pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
-        Constraint::Length(1), // balance
         Constraint::Length(1), // breathing
         Constraint::Length(1), // categories
         Constraint::Length(1), // breathing
@@ -36,10 +35,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str)
     .split(area);
 
     frame.render_widget(Paragraph::new(section_heading("Shop")), sections[0]);
-    frame.render_widget(Paragraph::new(balance_line(state.balance())), sections[1]);
-    draw_categories(frame, sections[3], state);
-    draw_body(frame, sections[5], state, pet_species);
-    draw_footer(frame, sections[6], state, pet_species);
+    draw_categories(frame, sections[2], state);
+    draw_body(frame, sections[4], state, pet_species);
+    draw_footer(frame, sections[5], state, pet_species);
     if let Some(pending) = state.pending_room_effect() {
         draw_room_effect_confirm(frame, area, pending);
     }
@@ -792,23 +790,6 @@ fn pad_display_width(value: &str, width: usize) -> String {
     let display_width = UnicodeWidthStr::width(value);
     let padding = width.saturating_sub(display_width);
     format!("{value}{}", " ".repeat(padding))
-}
-
-fn balance_line(balance: i64) -> Line<'static> {
-    Line::from(vec![
-        Span::raw("  "),
-        Span::styled("balance ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled(
-            format!("{balance} chips"),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "  /  shop items use Late Chips",
-            Style::default().fg(theme::TEXT_FAINT()),
-        ),
-    ])
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

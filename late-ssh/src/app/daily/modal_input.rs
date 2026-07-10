@@ -4,9 +4,9 @@ use crate::app::input::ParsedInput;
 use crate::app::state::App;
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
-    // Directed-challenge prompt owns the keyboard while open.
-    if app.daily.challenge_prompt.is_some() {
-        handle_prompt_input(app, event);
+    // A challenge draft owns the keyboard while open.
+    if app.daily.challenge_draft.is_some() {
+        handle_draft_input(app, event);
         return;
     }
 
@@ -28,11 +28,10 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
             activate_selection(app);
         }
         ParsedInput::Byte(b'c') | ParsedInput::Char('c') => {
-            app.daily.post_open_challenge();
+            app.daily.begin_challenge_draft(false);
         }
         ParsedInput::Byte(b'C') | ParsedInput::Char('C') => {
-            app.daily.confirm_claim = None;
-            app.daily.challenge_prompt = Some(String::new());
+            app.daily.begin_challenge_draft(true);
         }
         ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
             let own = match app.daily.selected_entry() {
@@ -52,7 +51,8 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 }
 
 pub(crate) fn handle_escape(app: &mut App) {
-    if app.daily.challenge_prompt.take().is_some() {
+    if app.daily.challenge_draft.is_some() {
+        app.daily.draft_back();
         return;
     }
     if app.daily.confirm_claim.take().is_some() {
@@ -73,6 +73,8 @@ fn activate_selection(app: &mut App) {
     }
     let action = match app.daily.selected_entry() {
         Some(DailyModalEntry::Match(item)) => Some(Action::OpenBoard(item.clone())),
+        // Watching someone else's game opens the same board, read-only.
+        Some(DailyModalEntry::Spectate(item)) => Some(Action::OpenBoard(item.clone())),
         Some(DailyModalEntry::Challenge(challenge)) => {
             if challenge.challenger_id == app.daily.user_id() {
                 None
@@ -111,34 +113,60 @@ fn activate_selection(app: &mut App) {
     }
 }
 
-fn handle_prompt_input(app: &mut App, event: ParsedInput) {
+/// Keys on the challenge picker overlay. The picker step navigates the game
+/// list; the directed username step owns printable input (so `j`/`k` type,
+/// they don't scroll). Esc steps back, Enter advances/posts.
+fn handle_draft_input(app: &mut App, event: ParsedInput) {
+    let username_stage = app
+        .daily
+        .challenge_draft
+        .as_ref()
+        .is_some_and(|draft| draft.username.is_some());
     match event {
         ParsedInput::Byte(0x1B) => {
-            app.daily.challenge_prompt = None;
+            app.daily.draft_back();
         }
         ParsedInput::Byte(b'\r' | b'\n') => {
-            if let Some(buffer) = app.daily.challenge_prompt.take() {
-                app.daily.post_directed_challenge(&buffer);
+            app.daily.draft_advance();
+        }
+        _ if username_stage => match event {
+            ParsedInput::Byte(0x7F | 0x08) => {
+                if let Some(buffer) = draft_username_buffer(app) {
+                    buffer.pop();
+                }
             }
-        }
-        ParsedInput::Byte(0x7F | 0x08) => {
-            if let Some(buffer) = &mut app.daily.challenge_prompt {
-                buffer.pop();
+            ParsedInput::Byte(byte) if byte.is_ascii_graphic() => {
+                push_prompt_char(app, byte as char);
             }
+            ParsedInput::Char(ch) if !ch.is_control() => {
+                push_prompt_char(app, ch);
+            }
+            _ => {}
+        },
+        ParsedInput::Arrow(b'B')
+        | ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J') => {
+            app.daily.draft_move_selection(1);
         }
-        ParsedInput::Byte(byte) if byte.is_ascii_graphic() => {
-            push_prompt_char(app, byte as char);
-        }
-        ParsedInput::Char(ch) if !ch.is_control() => {
-            push_prompt_char(app, ch);
+        ParsedInput::Arrow(b'A')
+        | ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K') => {
+            app.daily.draft_move_selection(-1);
         }
         _ => {}
     }
 }
 
+fn draft_username_buffer(app: &mut App) -> Option<&mut String> {
+    app.daily
+        .challenge_draft
+        .as_mut()
+        .and_then(|draft| draft.username.as_mut())
+}
+
 fn push_prompt_char(app: &mut App, ch: char) {
     const MAX_USERNAME_PROMPT: usize = 32;
-    if let Some(buffer) = &mut app.daily.challenge_prompt
+    if let Some(buffer) = draft_username_buffer(app)
         && buffer.chars().count() < MAX_USERNAME_PROMPT
     {
         buffer.push(ch);

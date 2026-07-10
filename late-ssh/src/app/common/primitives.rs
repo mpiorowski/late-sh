@@ -131,7 +131,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Pinstar => "Directory",
         Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
-        Screen::DailyMatch => "Daily Chess",
+        Screen::DailyMatch => "Daily Match",
     };
 
     let current_line = Paragraph::new(Line::from(vec![

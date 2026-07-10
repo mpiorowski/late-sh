@@ -14,7 +14,8 @@ use ratatui::{
 use crate::app::{
     common::theme,
     daily::{
-        state::{DailyState, format_deadline},
+        games::DailyGame,
+        state::{ChallengeDraft, DailyState, format_deadline},
         svc::{DailyChallengeItem, DailyMatchItem},
     },
     games::chess_core::types::ChessColor,
@@ -62,11 +63,16 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, daily: &DailyState) {
     draw_list(frame, layout[0], daily);
     draw_status(frame, layout[1], daily);
     draw_footer(frame, layout[2], daily);
+
+    if let Some(draft) = &daily.challenge_draft {
+        draw_draft_overlay(frame, popup, draft);
+    }
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
     let matches = daily.my_matches();
     let lobby = daily.lobby();
+    let live = daily.live_games();
     let width = area.width as usize;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -89,11 +95,22 @@ fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
             daily.selected == matches.len() + idx,
         ));
     }
+    // Other people's games in progress: watch-only, header hidden when none.
+    if !live.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section_line(width, "live games"));
+        for (idx, item) in live.iter().enumerate() {
+            lines.push(spectate_line(
+                item,
+                daily.selected == matches.len() + lobby.len() + idx,
+            ));
+        }
+    }
 
     // Keep the selected row in view on small terminals: scroll whole lines.
     let budget = area.height as usize;
     if lines.len() > budget {
-        let selected_line = selected_line_index(daily, matches.len());
+        let selected_line = selected_line_index(daily, matches.len(), lobby.len());
         let skip = selected_line.saturating_sub(budget.saturating_sub(1));
         lines.drain(..skip);
         lines.truncate(budget);
@@ -102,29 +119,47 @@ fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
 }
 
 /// Line index of the selected entry inside the built list (headers offset).
-fn selected_line_index(daily: &DailyState, match_count: usize) -> usize {
+fn selected_line_index(daily: &DailyState, match_count: usize, lobby_count: usize) -> usize {
     if daily.selected < match_count {
-        1 + daily.selected
-    } else {
-        // matches header + rows (or empty row) + blank + lobby header
-        let match_rows = match_count.max(1);
-        1 + match_rows + 2 + (daily.selected - match_count)
+        return 1 + daily.selected;
     }
+    // matches header + rows (or empty row) + blank + lobby header
+    let match_rows = match_count.max(1);
+    let lobby_base = 1 + match_rows + 2;
+    let after_matches = daily.selected - match_count;
+    if after_matches < lobby_count {
+        return lobby_base + after_matches;
+    }
+    // lobby rows (or empty row) + blank + live-games header
+    let lobby_rows = lobby_count.max(1);
+    let live_base = lobby_base + lobby_rows + 2;
+    live_base + (after_matches - lobby_count)
 }
 
 fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line<'static> {
     let (_, opponent) = daily.opponent_of(item);
     let opponent = opponent.unwrap_or_else(|| "player".to_string());
-    let color = if item.white_id == Some(daily.user_id()) {
-        ChessColor::White
-    } else {
-        ChessColor::Black
-    };
     let my_turn = daily.my_turn(item);
     let deadline = item
         .turn_deadline_at
         .map(|at| format_deadline(at, Utc::now()))
         .unwrap_or_else(|| "--".to_string());
+    let progress = match item.game {
+        DailyGame::Chess => {
+            let color = if item.white_id == Some(daily.user_id()) {
+                ChessColor::White
+            } else {
+                ChessColor::Black
+            };
+            format!(
+                "{} · {} moves",
+                color.label().to_lowercase(),
+                item.move_count
+            )
+        }
+        DailyGame::Battleship => format!("{} shots", item.move_count),
+        DailyGame::ConnectFour => format!("{} drops", item.move_count),
+    };
 
     let mut spans = vec![marker_span(selected)];
     spans.push(Span::styled(
@@ -136,11 +171,11 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
         }),
     ));
     spans.push(Span::styled(
-        format!("{:<6}", color.label().to_lowercase()),
+        format!("{:<12}", item.game.label()),
         Style::default().fg(theme::TEXT_DIM()),
     ));
     spans.push(Span::styled(
-        format!("{:>3} moves   ", item.move_count),
+        format!("{progress:<18}"),
         Style::default().fg(theme::TEXT_DIM()),
     ));
     if my_turn {
@@ -192,16 +227,24 @@ fn challenge_line(
             theme::TEXT()
         }),
     ));
+    spans.push(Span::styled(
+        format!("{:<12}", challenge.game.label()),
+        Style::default().fg(theme::TEXT()),
+    ));
     match target {
         Some(target) => spans.push(Span::styled(
-            format!("challenges {target}"),
+            format!("{:<18}", format!("challenges {target}")),
             Style::default().fg(theme::AMBER_DIM()),
         )),
         None => spans.push(Span::styled(
-            "open challenge".to_string(),
+            format!("{:<18}", "open challenge"),
             Style::default().fg(theme::TEXT_DIM()),
         )),
     }
+    spans.push(Span::styled(
+        format!("{} chips to the winner", challenge.game.win_payout()),
+        Style::default().fg(theme::AMBER_DIM()),
+    ));
     if mine {
         spans.push(Span::styled(
             "   yours · x cancel",
@@ -213,23 +256,54 @@ fn challenge_line(
     Line::from(spans)
 }
 
+/// A game in progress between two other people: neutral third-party view,
+/// no "you", no deadline pressure — just who's playing and whose move it is.
+fn spectate_line(item: &DailyMatchItem, selected: bool) -> Line<'static> {
+    let challenger = item
+        .challenger_username
+        .clone()
+        .unwrap_or_else(|| "player".to_string());
+    let opponent = item
+        .opponent_username
+        .clone()
+        .unwrap_or_else(|| "player".to_string());
+    let progress = match item.game {
+        DailyGame::Chess => format!("{} moves", item.move_count),
+        DailyGame::Battleship => format!("{} shots", item.move_count),
+        DailyGame::ConnectFour => format!("{} drops", item.move_count),
+    };
+    let to_move = match item.turn_user_id {
+        Some(id) if id == item.challenger_id => format!("{challenger} to move"),
+        Some(id) if id == item.opponent_id => format!("{opponent} to move"),
+        _ => "in progress".to_string(),
+    };
+    let deadline = item
+        .turn_deadline_at
+        .map(|at| format!(" · {}", format_deadline(at, Utc::now())))
+        .unwrap_or_default();
+
+    let mut spans = vec![marker_span(selected)];
+    spans.push(Span::styled(
+        format!("{:<16}", format!("{challenger} v {opponent}")),
+        Style::default().fg(theme::TEXT()),
+    ));
+    spans.push(Span::styled(
+        format!("{:<12}", item.game.label()),
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    spans.push(Span::styled(
+        format!("{progress:<18}"),
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    spans.push(Span::styled(
+        format!("{to_move}{deadline}"),
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    Line::from(spans)
+}
+
 fn draw_status(frame: &mut Frame, area: Rect, daily: &DailyState) {
-    let line = if let Some(buffer) = &daily.challenge_prompt {
-        Line::from(vec![
-            Span::styled(
-                "challenge @",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(buffer.clone(), Style::default().fg(theme::TEXT_BRIGHT())),
-            Span::styled("█", Style::default().fg(theme::AMBER_GLOW())),
-            Span::styled(
-                "   enter send · esc back",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ),
-        ])
-    } else if daily.confirm_claim.is_some() {
+    let line = if daily.confirm_claim.is_some() {
         Line::from(Span::styled(
             "claim this challenge and start the match? enter confirm · esc back",
             Style::default()
@@ -249,6 +323,115 @@ fn draw_status(frame: &mut Frame, area: Rect, daily: &DailyState) {
         .centered()
     };
     frame.render_widget(Paragraph::new(line), area);
+}
+
+// The challenge picker overlay: a small modal over the Lobby list, one row
+// per roster game with its prize. The height follows the roster, so new
+// games grow the box instead of fighting the status line for width.
+// Directed drafts swap to a username step.
+const DRAFT_WIDTH: u16 = 48;
+
+fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
+    // A leading blank row + the body + a blank row before the key hints.
+    let body_rows = if draft.username.is_some() {
+        5
+    } else {
+        DailyGame::ALL.len() as u16 + 3
+    };
+    let width = DRAFT_WIDTH.min(popup.width);
+    let height = (body_rows + 2).min(popup.height);
+    let rect = centered_rect(width, height, popup);
+    frame.render_widget(Clear, rect);
+
+    let title = if draft.username.is_some() {
+        " challenge a player "
+    } else {
+        " new challenge "
+    };
+    let block = Block::default()
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    let mut lines: Vec<Line<'static>> = vec![Line::raw("")];
+    match &draft.username {
+        None => {
+            for (idx, game) in DailyGame::ALL.into_iter().enumerate() {
+                let selected = idx == draft.selected;
+                lines.push(Line::from(vec![
+                    Span::raw(" "),
+                    marker_span(selected),
+                    Span::styled(
+                        format!("{:<14}", game.label()),
+                        Style::default().fg(if selected {
+                            theme::TEXT_BRIGHT()
+                        } else {
+                            theme::TEXT()
+                        }),
+                    ),
+                    Span::styled(
+                        format!("{:>4} chips to the winner", game.win_payout()),
+                        Style::default().fg(if selected {
+                            theme::AMBER_DIM()
+                        } else {
+                            theme::TEXT_FAINT()
+                        }),
+                    ),
+                ]));
+            }
+            lines.push(Line::raw(""));
+            let post = if draft.directed { " next" } else { " post" };
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                key("j/k"),
+                text(" choose"),
+                gap(),
+                key("enter"),
+                text(post),
+                gap(),
+                key("esc"),
+                text(" back"),
+            ]));
+        }
+        Some(buffer) => {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "   {} · {} chips to the winner",
+                    draft.game().label(),
+                    draft.game().win_payout()
+                ),
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
+            lines.push(Line::raw(""));
+            lines.push(Line::from(vec![
+                Span::raw("   "),
+                Span::styled(
+                    "@",
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(buffer.clone(), Style::default().fg(theme::TEXT_BRIGHT())),
+                Span::styled("█", Style::default().fg(theme::AMBER_GLOW())),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                key("enter"),
+                text(" send"),
+                gap(),
+                key("esc"),
+                text(" back"),
+            ]));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, daily: &DailyState) {

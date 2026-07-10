@@ -322,7 +322,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /members           list users in this room",
         "  /list              list public rooms",
         "  /poll              start a Home room poll with 2-3 options",
-        "  /challenge [@user] daily chess challenge: open lobby, or directed",
+        "  /challenge [@user] daily challenge (chess, battleship): lobby or directed",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",
@@ -1377,7 +1377,7 @@ mod tests {
         let context = bot_app_context();
         assert!(context.contains("## Economy\n"));
         assert!(context.contains("Monthly Top Chips counts net chip delta."));
-        assert!(context.contains("Lateris, 2048, and Snake record run scores."));
+        assert!(context.contains("Lateris, 2048, Snake, and Traffic record run scores."));
         assert!(context.contains("Blackjack form: name, pace, stake."));
         assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
     }
