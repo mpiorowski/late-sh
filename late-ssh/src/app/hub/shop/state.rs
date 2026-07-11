@@ -531,7 +531,7 @@ mod tests {
     fn select_category_by_index_switches_and_resets_selection() {
         let mut state = make_state();
         assert_eq!(state.selected_category_index(), 0);
-        assert_eq!(state.selected_category(), ShopCategory::Companions);
+        assert_eq!(state.selected_category(), ShopCategory::Chat);
 
         state.selected_index = 5;
         state.select_category_by_index(2);

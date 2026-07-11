@@ -198,7 +198,7 @@ mod tests {
         let ranked_names = names(&ranked);
         assert_eq!(
             ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "brb", "coffee"]
+            vec!["active", "aquarium", "binds", "brb"]
         );
         let mut sorted = ranked_names.clone();
         sorted.sort_unstable();

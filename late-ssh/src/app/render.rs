@@ -2208,7 +2208,10 @@ mod tests {
     #[test]
     fn help_hint_title_lists_guide_last() {
         let help = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
-        assert_eq!(line_text(&help), " Settings Ctrl+O · Hub Ctrl+G · Guide ? ");
+        assert_eq!(
+            line_text(&help),
+            " Settings Ctrl+O · Hub Ctrl+G · Lobby Ctrl+Q · Guide ? "
+        );
     }
 
     #[test]
@@ -2216,8 +2219,14 @@ mod tests {
         let dotted = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
         let spaced = app_frame_help_hint_title(HelpHintStyle::SpacedCtrl);
         let caret = app_frame_help_hint_title(HelpHintStyle::SpacedCaret);
-        assert_eq!(line_text(&spaced), " Settings Ctrl+O  Hub Ctrl+G  Guide ? ");
-        assert_eq!(line_text(&caret), " Settings ^O  Hub ^G  Guide ? ");
+        assert_eq!(
+            line_text(&spaced),
+            " Settings Ctrl+O  Hub Ctrl+G  Lobby Ctrl+Q  Guide ? "
+        );
+        assert_eq!(
+            line_text(&caret),
+            " Settings ^O  Hub ^G  Lobby ^Q  Guide ? "
+        );
 
         let (help, sponsor) = app_frame_bottom_titles((line_width(&dotted) + 2) as u16);
         assert_eq!(line_text(&help), line_text(&dotted));

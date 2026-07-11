@@ -729,9 +729,15 @@ async fn connect4_full_board_draws_and_pays_nobody() {
         .expect("claim connect4 challenge");
     let client = test_db.db.get().await.expect("db client");
 
-    // Cycling every column paints a checkerboard: nothing ever connects, so
-    // drop 42 fills the board into a draw.
-    for column in (0..7).cycle().take(42) {
+    // A concrete drop order that fills all 42 cells without ever connecting
+    // four. Column-cycling can't: with 7 columns the disc colors form a
+    // checkerboard whose `\` diagonals are monochrome, so Red connects on the
+    // main diagonal long before the board fills.
+    let draw_order = [
+        4, 5, 4, 2, 3, 1, 3, 0, 2, 3, 3, 4, 2, 2, 2, 3, 0, 3, 2, 1, 4, 5, 1, 4, 5, 6, 0, 6, 4, 5,
+        5, 0, 0, 1, 0, 1, 5, 1, 6, 6, 6, 6,
+    ];
+    for column in draw_order {
         let row = DailyMatch::get(&client, claimed.id)
             .await
             .expect("load match")

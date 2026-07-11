@@ -321,12 +321,20 @@ mod tests {
         assert!(off.unwrap_err().to_string().contains("off the board"));
     }
 
+    /// A concrete drop order that fills all 42 cells without ever connecting
+    /// four. Column-cycling can't do this: with 7 columns the disc colors fall
+    /// into a checkerboard whose `\` diagonals are monochrome, so Red connects
+    /// on the main diagonal long before the board fills. This order was found by
+    /// searching for a sequence where no drop ever completes a line.
+    const DRAW_ORDER: [usize; CELLS] = [
+        4, 5, 4, 2, 3, 1, 3, 0, 2, 3, 3, 4, 2, 2, 2, 3, 0, 3, 2, 1, 4, 5, 1, 4, 5, 6, 0, 6, 4, 5,
+        5, 0, 0, 1, 0, 1, 5, 1, 6, 6, 6, 6,
+    ];
+
     #[test]
-    fn cycling_every_column_fills_the_board_to_a_draw() {
-        // Column-cycling paints a checkerboard: no two neighbors match, so
-        // nothing ever connects and drop 42 is a draw.
+    fn filling_every_cell_without_a_line_is_a_draw() {
         let mut state = fresh();
-        for (index, column) in (0..COLS).cycle().take(CELLS).enumerate() {
+        for (index, column) in DRAW_ORDER.into_iter().enumerate() {
             let outcome = state.apply_drop(column).unwrap();
             assert!(!outcome.connected);
             assert_eq!(outcome.draw, index == CELLS - 1);
