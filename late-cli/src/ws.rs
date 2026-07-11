@@ -147,14 +147,6 @@ impl WebviewPlaybackController {
             return Ok(());
         }
 
-        let exe = match std::env::current_exe() {
-            Ok(exe) => exe,
-            Err(err) => {
-                warn!(error = %err, "failed to locate current late executable for webview helper");
-                self.record_helper_start_failure();
-                return Ok(());
-            }
-        };
         let helper_stderr = match webview_helper_stderr() {
             Ok(stderr) => stderr,
             Err(err) => {
@@ -176,9 +168,28 @@ impl WebviewPlaybackController {
                 );
             }
         }
-        let mut command = Command::new(exe);
+        // Windows/macOS run the webview in-process via the `webview-pair`
+        // subcommand. Everywhere else it is the standalone `late-webview`
+        // binary, so `late` itself never links WebKitGTK/GTK — a missing
+        // webview stack must degrade to "no embedded YouTube", never to
+        // "late does not start".
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let mut command = {
+            let exe = match std::env::current_exe() {
+                Ok(exe) => exe,
+                Err(err) => {
+                    warn!(error = %err, "failed to locate current late executable for webview helper");
+                    self.record_helper_start_failure();
+                    return Ok(());
+                }
+            };
+            let mut command = Command::new(exe);
+            command.arg("webview-pair");
+            command
+        };
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let mut command = Command::new(webview_helper_program());
         command
-            .arg("webview-pair")
             .env("LATE_API_BASE_URL", &self.api_base_url)
             // The helper is an undecorated media surface, not an accessibility
             // target. Opting out avoids host AT-SPI bridge crashes from stale
@@ -202,6 +213,16 @@ impl WebviewPlaybackController {
 
         let child = match command.spawn() {
             Ok(child) => child,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                warn!(
+                    error = %err,
+                    "late-webview helper binary not found; embedded YouTube playback is \
+                     unavailable (reinstall the CLI or set LATE_WEBVIEW_BIN); radio, icecast, \
+                     and browser-paired YouTube still work"
+                );
+                self.record_helper_start_failure();
+                return Ok(());
+            }
             Err(err) => {
                 warn!(error = %err, "failed to spawn embedded YouTube webview helper");
                 self.record_helper_start_failure();
@@ -340,6 +361,26 @@ impl WebviewPlaybackController {
         let _ = child.wait();
         info!("stopped embedded YouTube webview helper");
     }
+}
+
+/// Resolve the standalone `late-webview` helper binary on platforms where
+/// the webview is not compiled into `late`: explicit `LATE_WEBVIEW_BIN`
+/// override, then a sibling of the current executable (the installer places
+/// both binaries in the same directory), then a bare name for `$PATH`.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub(super) fn webview_helper_program() -> PathBuf {
+    if let Some(path) = nonempty_os_env("LATE_WEBVIEW_BIN") {
+        return PathBuf::from(path);
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join("late-webview");
+        if sibling.is_file() {
+            return sibling;
+        }
+    }
+    PathBuf::from("late-webview")
 }
 
 #[cfg(unix)]

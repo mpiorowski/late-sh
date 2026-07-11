@@ -145,7 +145,7 @@ pub async fn flush_server_snapshot(
     shared_provenance: &SharedArtboardProvenance,
 ) -> anyhow::Result<()> {
     let (canvas, provenance) = {
-        let _guard = persistence_lock().lock_recover();
+        let _guard = persistence_lock().lock().await;
         (
             server.canvas_snapshot(),
             clone_shared_provenance(shared_provenance),
@@ -162,7 +162,7 @@ pub async fn restore_live_artboard(
     provenance: ArtboardProvenance,
 ) -> anyhow::Result<()> {
     {
-        let _guard = persistence_lock().lock_recover();
+        let _guard = persistence_lock().lock().await;
         let mut shared = shared_provenance.lock_recover();
         *shared = provenance.clone();
         drop(shared);
@@ -177,11 +177,11 @@ pub async fn restore_live_artboard(
     save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &canvas, &provenance).await
 }
 
-pub fn live_artboard_snapshot(
+pub async fn live_artboard_snapshot(
     server: &ServerHandle,
     shared_provenance: &SharedArtboardProvenance,
 ) -> PersistedArtboard {
-    let _guard = persistence_lock().lock_recover();
+    let _guard = persistence_lock().lock().await;
     PersistedArtboard {
         canvas: server.canvas_snapshot(),
         provenance: clone_shared_provenance(shared_provenance),
@@ -421,7 +421,7 @@ fn flush_dirty_canvas(
     runtime: &tokio::runtime::Handle,
 ) -> bool {
     let (canvas, provenance, version) = {
-        let _guard = persistence_lock().lock_recover();
+        let _guard = persistence_lock().blocking_lock();
         let mut state = persist_state.lock_recover();
         if !state.dirty {
             return false;
@@ -455,9 +455,14 @@ fn flush_dirty_canvas(
     persist_state.lock_recover().dirty
 }
 
-fn persistence_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+// Serializes main-board persistence against live restores/flushes. This is a
+// tokio mutex because the persist thread holds it across a DB write via
+// `Handle::block_on`: a std mutex there deadlocks current-thread runtimes
+// (the runtime thread parks in `lock()` and stops driving the IO that the
+// persist thread's write is waiting on).
+fn persistence_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn persist_canvas(
@@ -477,16 +482,16 @@ fn persist_canvas(
             .context("failed to get db client for artboard save")
     })?;
 
-    let _guard = persistence_lock().lock_recover();
-    if persist_state.lock_recover().version != version {
-        return Ok(false);
-    }
     runtime.block_on(async {
+        let _guard = persistence_lock().lock().await;
+        if persist_state.lock_recover().version != version {
+            return Ok(false);
+        }
         Snapshot::upsert(&client, Snapshot::MAIN_BOARD_KEY, canvas, provenance)
             .await
-            .context("failed to upsert artboard snapshot")
-    })?;
-    Ok(true)
+            .context("failed to upsert artboard snapshot")?;
+        Ok(true)
+    })
 }
 
 async fn save_canvas_snapshot_for_key(

@@ -2,6 +2,7 @@
 //! (arrows/wasd + Space/Enter, `r` resign, `p` piece graphics); clicks map
 //! through the geometry the last render recorded.
 
+use crate::app::daily::games::DailyGame;
 use crate::app::games::chess_core::{board_ui, types::ChessPieceRenderMode};
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 use crate::app::state::App;
@@ -59,13 +60,35 @@ fn handle_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
     let Some(board) = &app.daily.board else {
         return false;
     };
+    // Mouse coordinates are 1-based; the frame buffer is 0-based.
+    let x = mouse.x.saturating_sub(1);
+    let y = mouse.y.saturating_sub(1);
+
+    // Battleship / connect4: hit-test the render-recorded target grid.
+    // Battleship clicks resolve to a cell, connect4 clicks to a column.
+    if let Some(grid) = board.target_geometry.get() {
+        if x < grid.x || y < grid.y || x >= grid.x + grid.width || y >= grid.y + grid.height {
+            return false;
+        }
+        let target = match board.detail.as_ref().map(|detail| detail.game.kind()) {
+            Some(DailyGame::Battleship) => {
+                let col = ((x - grid.x) / crate::app::daily::battleship_ui::CELL_W) as usize;
+                let row = (y - grid.y) as usize;
+                row * crate::app::daily::battleship::GRID + col
+            }
+            Some(DailyGame::ConnectFour) => {
+                ((x - grid.x) / crate::app::daily::connect4_ui::CELL_W) as usize
+            }
+            _ => return false,
+        };
+        app.daily.board_click_target(target);
+        return true;
+    }
+
     let Some((board_area, tier)) = board.board_geometry.get() else {
         return false;
     };
     let orientation = app.daily.board_orientation();
-    // Mouse coordinates are 1-based; the frame buffer is 0-based.
-    let x = mouse.x.saturating_sub(1);
-    let y = mouse.y.saturating_sub(1);
     let Some(index) = board_ui::square_at(board_area, tier, orientation, x, y) else {
         return false;
     };

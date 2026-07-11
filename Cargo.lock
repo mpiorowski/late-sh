@@ -3713,6 +3713,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.2",
  "image",
+ "late-webview",
  "livekit",
  "nix 0.29.0",
  "rand_core 0.6.4",
@@ -3725,13 +3726,10 @@ dependencies = [
  "serde_json",
  "shlex 1.3.0",
  "symphonia",
- "tao",
  "tokio",
  "tokio-tungstenite 0.28.0",
  "tracing",
  "tracing-subscriber",
- "webkit2gtk",
- "wry",
 ]
 
 [[package]]
@@ -3883,6 +3881,24 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "late-webview"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tao",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tracing",
+ "tracing-subscriber",
+ "webkit2gtk",
+ "wry",
 ]
 
 [[package]]

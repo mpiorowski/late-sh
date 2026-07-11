@@ -2076,10 +2076,11 @@ impl App {
     /// because the CLI gates its Icecast decoder on the received source.
     pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
         use late_core::models::user::AudioSource;
+        // Dock order in the sidebar music stage: radio → youtube → icecast.
         let next = match self.paired_browser_source {
-            AudioSource::Icecast => AudioSource::Youtube,
-            AudioSource::Youtube => AudioSource::Radio,
-            AudioSource::Radio => AudioSource::Icecast,
+            AudioSource::Radio => AudioSource::Youtube,
+            AudioSource::Youtube => AudioSource::Icecast,
+            AudioSource::Icecast => AudioSource::Radio,
         };
         self.paired_browser_source = next;
         if let Some(active_users) = &self.active_users

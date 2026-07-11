@@ -231,11 +231,11 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             // Success is surfaced from the resulting DailyEvent::ChallengePosted
             // (and failures from DailyEvent::Error), so a rejected challenge
             // (self, unknown user, over the entry cap) never flashes success.
-            DailyChallengeRequest::Open => {
-                app.daily.post_open_challenge();
+            DailyChallengeRequest::Open(game) => {
+                app.daily.post_open_challenge(game);
             }
-            DailyChallengeRequest::Directed(username) => {
-                app.daily.post_directed_challenge(&username);
+            DailyChallengeRequest::Directed(username, game) => {
+                app.daily.post_directed_challenge(&username, game);
             }
         }
     }

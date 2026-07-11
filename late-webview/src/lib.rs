@@ -2,12 +2,18 @@
 //!
 //! See late-ssh/src/app/audio/CONTEXT.md §17.
 //!
-//! The webview is owned by the CLI: it never opens its own WebSocket.
-//! Rust pushes commands (LoadVideo, SourceChanged, Shutdown) into the JS
-//! bridge via tao's user-event mechanism; JS posts player state back through
-//! wry's IPC handler. See `commands.rs` for the payload shapes and
-//! `pair.rs` for the WS-relay task used by `late webview-pair`, which reads
-//! the session token from stdin.
+//! On Linux this crate ships as the standalone `late-webview` helper binary
+//! so the `late` binary never links WebKitGTK/GTK: a host without the
+//! webview libraries must still be able to run `late` itself. On
+//! Windows/macOS the `late` binary embeds this crate as a library and runs
+//! the relay in-process (`late webview-pair`), because the system webview
+//! carries no load-time dependency risk there.
+//!
+//! The webview page never opens its own WebSocket. Rust pushes commands
+//! (LoadVideo, SourceChanged, Shutdown) into the JS bridge via tao's
+//! user-event mechanism; JS posts player state back through wry's IPC
+//! handler. See `commands.rs` for the payload shapes and `pair.rs` for the
+//! WS-relay task, which reads the session token from stdin.
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -36,6 +42,36 @@ pub mod commands;
 pub mod pair;
 
 pub use commands::{WebviewCommand, WebviewEvent};
+
+/// Platform tag sent in the pair-WS `client_state`. Mirrors the label the
+/// parent CLI reports for its own client state.
+pub const fn client_platform_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "android")]
+    {
+        "android"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux"
+    }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "android",
+        target_os = "linux"
+    )))]
+    {
+        "unknown"
+    }
+}
 
 const PAGE_HTML: &str = include_str!("page.html");
 const WEBVIEW_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";

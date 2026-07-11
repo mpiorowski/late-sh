@@ -6,6 +6,7 @@ members = [
     "late-nethack",
     "late-ssh",
     "late-web",
+    "late-webview",
 ]
 resolver = "2"
 

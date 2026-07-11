@@ -719,10 +719,7 @@ pub async fn adjust_aquarium_fish_active_by_sku(
 /// Spend one pet food to feed the companion, at most once per UTC day. The
 /// inventory decrement and the `last_fed` stamp share a transaction so a
 /// racing second click is rejected rather than charged.
-pub async fn consume_pet_food(
-    client: &mut Client,
-    user_id: Uuid,
-) -> Result<ConsumableUseResult> {
+pub async fn consume_pet_food(client: &mut Client, user_id: Uuid) -> Result<ConsumableUseResult> {
     let tx = client.transaction().await?;
     let Some(item_row) = tx
         .query_opt(

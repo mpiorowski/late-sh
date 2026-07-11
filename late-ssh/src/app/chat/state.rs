@@ -1930,7 +1930,12 @@ impl ChatState {
                     self.requested_daily_challenge = Some(request);
                     return None;
                 }
-                None => return Some(Banner::error("Usage: /challenge [@user] [chess]")),
+                None => {
+                    return Some(Banner::error(&format!(
+                        "Usage: /challenge [@user] [{}]",
+                        crate::app::daily::games::DailyGame::usage_labels()
+                    )));
+                }
             }
         }
 
@@ -4443,15 +4448,19 @@ pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
 pub(crate) enum DailyChallengeRequest {
     /// Bare `/challenge`: open the Daily Games modal.
     Modal,
-    /// `/challenge chess`: post an open-lobby challenge.
-    Open,
-    /// `/challenge @user [chess]`: post a directed challenge.
-    Directed(String),
+    /// `/challenge <game>`: post an open-lobby challenge.
+    Open(crate::app::daily::games::DailyGame),
+    /// `/challenge @user [game]`: post a directed challenge.
+    Directed(String, crate::app::daily::games::DailyGame),
 }
 
 /// `Some(Some(request))` on a valid `/challenge` line, `Some(None)` on a
 /// malformed one (usage banner), `None` when it isn't `/challenge` at all.
+/// Game names come from the daily roster (`chess`, `battleship`, ...);
+/// omitting one on a directed challenge defaults to the roster's first game.
 fn parse_challenge_command(input: &str) -> Option<Option<DailyChallengeRequest>> {
+    use crate::app::daily::games::DailyGame;
+
     let trimmed = input.trim();
     if trimmed == "/challenge" {
         return Some(Some(DailyChallengeRequest::Modal));
@@ -4459,9 +4468,9 @@ fn parse_challenge_command(input: &str) -> Option<Option<DailyChallengeRequest>>
     let rest = trimmed.strip_prefix("/challenge ")?;
     let mut tokens = rest.split_whitespace();
     let first = tokens.next()?;
-    if first.eq_ignore_ascii_case("chess") {
+    if let Some(game) = DailyGame::from_label(first) {
         return Some(match tokens.next() {
-            None => Some(DailyChallengeRequest::Open),
+            None => Some(DailyChallengeRequest::Open(game)),
             Some(_) => None,
         });
     }
@@ -4469,11 +4478,16 @@ fn parse_challenge_command(input: &str) -> Option<Option<DailyChallengeRequest>>
         return Some(None);
     };
     Some(match tokens.next() {
-        None => Some(DailyChallengeRequest::Directed(username.to_string())),
-        Some(game) if game.eq_ignore_ascii_case("chess") && tokens.next().is_none() => {
-            Some(DailyChallengeRequest::Directed(username.to_string()))
-        }
-        Some(_) => None,
+        None => Some(DailyChallengeRequest::Directed(
+            username.to_string(),
+            DailyGame::ALL[0],
+        )),
+        Some(game_token) => match DailyGame::from_label(game_token) {
+            Some(game) if tokens.next().is_none() => {
+                Some(DailyChallengeRequest::Directed(username.to_string(), game))
+            }
+            _ => None,
+        },
     })
 }
 

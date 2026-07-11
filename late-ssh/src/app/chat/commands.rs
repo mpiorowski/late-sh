@@ -96,7 +96,7 @@ const COMMANDS: &[Command] = &[
     global("aquarium", "toggle aquarium (/aquarium feed to feed)"),
     global("binds", "chat guide"),
     global("brb", "go AFK and mute audio"),
-    global("challenge", "post daily chess challenge"),
+    global("challenge", "post daily challenge (chess, battleship)"),
     global("coffee", "post coffee cup"),
     global("dm", "open DM"),
     global("exit", "quit confirm"),
@@ -198,7 +198,7 @@ mod tests {
         let ranked_names = names(&ranked);
         assert_eq!(
             ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "brb", "coffee"]
+            vec!["active", "aquarium", "binds", "brb"]
         );
         let mut sorted = ranked_names.clone();
         sorted.sort_unstable();

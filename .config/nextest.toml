@@ -1,3 +1,7 @@
+[profile.default]
+# kill any test still running after 5 minutes (SLOW warnings start at 60s)
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 [test-groups]
 late-ssh-db = { max-threads = 8 }
 
