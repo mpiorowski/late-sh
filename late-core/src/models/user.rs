@@ -15,9 +15,11 @@ use super::profile_award::PROFILE_AWARD_RANK_LIMIT;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioSource {
-    #[default]
     Icecast,
     Youtube,
+    /// Nightride FM direct streams. The default for users who never picked
+    /// a source, so fresh `late` sessions land on the radio.
+    #[default]
     Radio,
 }
 
@@ -33,8 +35,8 @@ impl AudioSource {
     pub fn from_settings_str(value: &str) -> Self {
         match value {
             "youtube" => Self::Youtube,
-            "radio" => Self::Radio,
-            _ => Self::Icecast,
+            "icecast" => Self::Icecast,
+            _ => Self::Radio,
         }
     }
 }

@@ -64,11 +64,12 @@ pub(crate) struct SidebarProps<'a> {
     /// Count of users whose saved audio source is YouTube. Rendered as the
     /// YouTube block's title-bar tag; connection shape is ignored.
     pub youtube_source_count: usize,
-    /// Count of users whose saved audio source is Icecast/default. Rendered
-    /// as the Icecast block's title-bar tag.
+    /// Count of users whose saved audio source is Icecast. Rendered as the
+    /// Icecast block's title-bar tag.
     pub icecast_source_count: usize,
-    /// Count of users whose saved audio source is the direct radio preset.
-    /// Rendered as the radio block's title-bar tag.
+    /// Count of users whose saved audio source is the direct radio preset
+    /// (the default for users who never picked one). Rendered as the radio
+    /// block's title-bar tag.
     pub radio_source_count: usize,
     /// Per-user paired-browser audio source preference (mirrors
     /// `users.settings.audio_source`, cycled by v+x). Picks which source
@@ -428,10 +429,11 @@ struct MusicStageProps<'a> {
 }
 
 /// Music stage: fixed dock + fixed detail area. Rows 0-1 volume, rows 2-7
-/// a three-source dock in order youtube → radio → icecast (title bar +
-/// now-playing line per source), row 8 a labeled rule naming the active
-/// source, rows 9-13 the active source's controls padded to a constant
-/// height, row 14 the keybind footer.
+/// a three-source dock in order radio → youtube → icecast (title bar +
+/// now-playing line per source; radio leads because it is the default
+/// source for new users), row 8 a labeled rule naming the active source,
+/// rows 9-13 the active source's controls padded to a constant height,
+/// row 14 the keybind footer.
 ///
 /// Two product rules (user requirements):
 /// - Every source ALWAYS shows its now-playing line, even when inactive.
@@ -444,7 +446,7 @@ struct MusicStageProps<'a> {
 /// The active source follows the saved preference alone, not whether a
 /// client is currently paired — the sidebar reflects it from the first
 /// frame, before the browser has finished pairing. `v+x` cycles sources
-/// in dock order (youtube → radio → icecast), so the amber `▌` accent
+/// in dock order (radio → youtube → icecast), so the amber `▌` accent
 /// walks down the dock as the user cycles.
 fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
     if area.width == 0 || area.height == 0 {
@@ -463,18 +465,6 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
 
     lines.push(stage_title_line(
         width,
-        "youtube",
-        Some(&props.youtube_source_count.to_string()),
-        source == AudioSource::Youtube,
-    ));
-    lines.push(dock_track_line(
-        width,
-        Some(&youtube_track_text(props.queue)),
-        source == AudioSource::Youtube,
-        props.marquee_tick,
-    ));
-    lines.push(stage_title_line(
-        width,
         "radio",
         Some(&props.radio_source_count.to_string()),
         source == AudioSource::Radio,
@@ -484,6 +474,18 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
         width,
         Some(props.radio_now_playing.unwrap_or(station_name)),
         source == AudioSource::Radio,
+        props.marquee_tick,
+    ));
+    lines.push(stage_title_line(
+        width,
+        "youtube",
+        Some(&props.youtube_source_count.to_string()),
+        source == AudioSource::Youtube,
+    ));
+    lines.push(dock_track_line(
+        width,
+        Some(&youtube_track_text(props.queue)),
+        source == AudioSource::Youtube,
         props.marquee_tick,
     ));
     lines.push(stage_title_line(
@@ -1124,8 +1126,8 @@ mod tests {
             let lines = stage_lines(source);
             let texts: Vec<String> = lines.iter().map(line_text).collect();
             assert_eq!(texts.len(), MUSIC_STAGE_HEIGHT as usize, "{source:?}");
-            assert!(texts[2].starts_with("▌ youtube"), "{source:?}");
-            assert!(texts[4].starts_with("▌ radio"), "{source:?}");
+            assert!(texts[2].starts_with("▌ radio"), "{source:?}");
+            assert!(texts[4].starts_with("▌ youtube"), "{source:?}");
             assert!(texts[6].starts_with("▌ icecast"), "{source:?}");
             assert!(texts[8].starts_with("── "), "{source:?}");
             assert!(texts[8].contains(source_label(source)), "{source:?}");
@@ -1137,8 +1139,8 @@ mod tests {
     fn music_stage_dock_rows_always_show_now_playing() {
         for source in ALL_SOURCES {
             let texts: Vec<String> = stage_lines(source).iter().map(line_text).collect();
-            assert_eq!(texts[3], "fallback stream", "{source:?}");
-            assert_eq!(texts[5], "chillsynth", "{source:?}");
+            assert_eq!(texts[3], "chillsynth", "{source:?}");
+            assert_eq!(texts[5], "fallback stream", "{source:?}");
             assert_eq!(texts[7], "no signal", "{source:?}");
         }
     }
@@ -1147,8 +1149,8 @@ mod tests {
     fn music_stage_dock_rows_keep_listener_counts() {
         for source in ALL_SOURCES {
             let texts: Vec<String> = stage_lines(source).iter().map(line_text).collect();
-            assert!(texts[2].trim_end().ends_with('3'), "{source:?}");
-            assert!(texts[4].trim_end().ends_with('1'), "{source:?}");
+            assert!(texts[2].trim_end().ends_with('1'), "{source:?}");
+            assert!(texts[4].trim_end().ends_with('3'), "{source:?}");
             assert!(texts[6].trim_end().ends_with('9'), "{source:?}");
         }
     }
@@ -1190,7 +1192,7 @@ mod tests {
         assert!(texts[13].trim_end().ends_with("v5"));
         assert!(texts[14].contains("nightride.fm"));
         // The selected station also names the radio dock row.
-        assert_eq!(texts[5], "datawave");
+        assert_eq!(texts[3], "datawave");
     }
 
     #[test]
@@ -1213,7 +1215,7 @@ mod tests {
             },
         );
         let texts: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(texts[5], "An Artist - A Track");
+        assert_eq!(texts[3], "An Artist - A Track");
     }
 
     fn on(component: RightSidebarComponent) -> RightSidebarComponentSetting {
