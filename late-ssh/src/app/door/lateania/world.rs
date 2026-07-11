@@ -180,6 +180,83 @@ pub struct World {
     pub behaviors: HashMap<u32, MobBehavior>,
 }
 
+/// One region's exploration line in the world atlas.
+#[derive(Clone, Copy, Debug)]
+pub struct RegionProgress {
+    pub name: &'static str,
+    /// A short danger/kind tag, e.g. "safe", "wilds", "endgame", "sea".
+    pub tier: &'static str,
+    /// How to reach it, e.g. "the roads", "portal".
+    pub note: &'static str,
+    /// Rooms in the region that currently exist.
+    pub total: usize,
+    /// Of those, how many the player has set foot in.
+    pub explored: usize,
+    /// Named bosses lairing in the region (where the great loot is).
+    pub bosses: usize,
+}
+
+/// The world's major regions for the atlas, each `(name, id-lo, id-hi, tier,
+/// how-to-reach)`. Ranges match the id blocks the generators use; the atlas
+/// counts real rooms and visited rooms within each, so it stays correct as
+/// regions grow. Ordered roughly by the journey outward.
+const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
+    (
+        "Embergate & the King's Road",
+        1,
+        600,
+        "safe / low",
+        "your home",
+    ),
+    ("The Overworld & Capitals", 600, 2000, "wilds", "the roads"),
+    ("City Districts", 3000, 3100, "safe", "off the capitals"),
+    (
+        "The Sunken Catacombs",
+        5000,
+        5200,
+        "endgame",
+        "off Tasmania",
+    ),
+    ("Thornwood Hollows", 5200, 5400, "endgame", "off Melvanala"),
+    (
+        "The Drowned Caverns",
+        5400,
+        5600,
+        "endgame",
+        "off Matlatesh",
+    ),
+    (
+        "Hearthward Close",
+        super::housing::HOUSING_BASE,
+        super::housing::HOUSING_BASE + 1000,
+        "safe / home",
+        "off Market Row",
+    ),
+    ("The Frontier", 2000, 3000, "brutal", "the sealed stair"),
+    (
+        "The Sundered Reaches",
+        10_000,
+        11_000,
+        "brutal",
+        "the Matlatesh sea-gate",
+    ),
+    (
+        "Portal Villages",
+        super::archipelago::VILLAGE_BASE,
+        super::archipelago::VILLAGE_BASE + 1000,
+        "safe",
+        "portal",
+    ),
+    (
+        "The Shattered Archipelago",
+        super::archipelago::ARCH_BASE,
+        super::archipelago::ARCH_BASE
+            + super::archipelago::ISLAND_COUNT as RoomId * super::archipelago::ARCH_STRIDE,
+        "deadly",
+        "portal",
+    ),
+];
+
 impl World {
     /// The behavior assigned to a spawn id, defaulting to `Sentinel`.
     pub fn behavior_of(&self, spawn_id: u32) -> MobBehavior {
@@ -190,6 +267,33 @@ impl World {
 impl World {
     pub fn room(&self, id: RoomId) -> Option<&Room> {
         self.rooms.get(&id)
+    }
+
+    /// The whole-world atlas: exploration progress for every major region. For
+    /// each region it reports how many of its rooms you've set foot in versus how
+    /// many exist, how many named bosses lair there (where the great loot is),
+    /// and a danger tier. A region you've never entered reads as undiscovered.
+    pub fn region_progress(&self, visited: &HashSet<RoomId>) -> Vec<RegionProgress> {
+        REGIONS
+            .iter()
+            .map(|&(name, lo, hi, tier, note)| {
+                let total = self.rooms.keys().filter(|id| (lo..hi).contains(id)).count();
+                let explored = visited.iter().filter(|id| (lo..hi).contains(id)).count();
+                let bosses = self
+                    .spawns
+                    .iter()
+                    .filter(|s| s.boss && (lo..hi).contains(&s.home))
+                    .count();
+                RegionProgress {
+                    name,
+                    tier,
+                    note,
+                    total,
+                    explored: explored.min(total),
+                    bosses,
+                }
+            })
+            .collect()
     }
 
     /// Build an overhead minimap centred on `current`, spanning `hr` rooms east
@@ -7802,6 +7906,38 @@ mod tests {
             seen.len(),
             world.rooms.len(),
             "some rooms are unreachable from the start room"
+        );
+    }
+
+    #[test]
+    fn world_atlas_tracks_exploration_and_bosses_per_region() {
+        let world = seed_world();
+        // A blank explorer: nothing mapped, but every region reports real totals.
+        let none = HashSet::new();
+        let fresh = world.region_progress(&none);
+        assert!(!fresh.is_empty(), "the atlas has regions");
+        assert!(
+            fresh.iter().all(|r| r.explored == 0),
+            "an unexplored world reads as zero everywhere"
+        );
+        assert!(
+            fresh.iter().all(|r| r.total > 0),
+            "every atlas region contains rooms"
+        );
+        assert!(
+            fresh.iter().filter(|r| r.bosses > 0).count() >= 4,
+            "several regions lair bosses (where the loot is)"
+        );
+        // Visiting a couple of rooms lights up exactly their region's progress.
+        let visited: HashSet<RoomId> = HashSet::from([1u32, 2u32]);
+        let seen = world.region_progress(&visited);
+        let home = seen
+            .iter()
+            .find(|r| r.name.starts_with("Embergate"))
+            .expect("Embergate region exists");
+        assert_eq!(
+            home.explored, 2,
+            "the two visited rooms are counted at home"
         );
     }
 

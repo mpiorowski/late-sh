@@ -48,6 +48,9 @@ pub enum Panel {
     /// The waystone fast-travel menu: pick a destination and `Enter` to step
     /// through to it.
     Portal,
+    /// The whole-world atlas: exploration progress per region (read-only,
+    /// scrollable with `[` / `]`). Toggled with `m`.
+    Map,
 }
 
 pub struct State {

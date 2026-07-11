@@ -338,6 +338,7 @@ fn draw_side(
         Panel::Housing => housing_panel(view, state.cursor()),
         Panel::Portal => portal_panel(view, state.cursor()),
         Panel::Appearance => (appearance_panel(view, state.cursor()), None),
+        Panel::Map => (atlas_panel(view), None),
     };
     let off = scroll_offset(
         state.list_scroll(),
@@ -1544,6 +1545,80 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
     (lines, sel_line)
 }
 
+/// The whole-world atlas: one row per major region with an exploration meter
+/// (where you've been vs. what's unexplored), a boss/loot count, and a danger
+/// tier. A region you've never entered reads as undiscovered.
+fn atlas_panel(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(
+        "World Atlas",
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    ))];
+
+    let total: usize = view.atlas.iter().map(|r| r.total).sum();
+    let explored: usize = view.atlas.iter().map(|r| r.explored).sum();
+    let pct = explored
+        .checked_mul(100)
+        .and_then(|n| n.checked_div(total))
+        .unwrap_or(0);
+    lines.push(Line::from(Span::styled(
+        format!("  {explored}/{total} rooms mapped ({pct}%)"),
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::raw(""));
+
+    for r in &view.atlas {
+        let discovered = r.explored > 0;
+        let name_color = if !discovered {
+            theme::TEXT_FAINT()
+        } else if r.explored >= r.total {
+            theme::SUCCESS()
+        } else {
+            theme::TEXT_BRIGHT()
+        };
+        // Region name + a boss/loot marker (◆ where the great loot lairs).
+        let mut head = vec![Span::styled(
+            format!("  {}", r.name),
+            Style::default().fg(name_color).add_modifier(Modifier::BOLD),
+        )];
+        if r.bosses > 0 {
+            head.push(Span::styled(
+                format!("  \u{25C6}{}", r.bosses),
+                Style::default().fg(theme::BADGE_GOLD()),
+            ));
+        }
+        lines.push(Line::from(head));
+
+        if discovered {
+            let bar = meter(r.explored as i32, r.total.max(1) as i32, 12);
+            let bar_color = if r.explored >= r.total {
+                theme::SUCCESS()
+            } else {
+                theme::AMBER()
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("    {bar} "), Style::default().fg(bar_color)),
+                Span::styled(
+                    format!("{}/{} · {}", r.explored, r.total, r.tier),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("    unexplored · reach via {}", r.note),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "  \u{25C6}=bosses (loot)  [ ] scroll  m close",
+        Style::default().fg(theme::TEXT_FAINT()),
+    )));
+    lines
+}
+
 fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(portal) = &view.portal else {
         return (
@@ -1813,6 +1888,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     if view.portal.is_some() {
         lines.push(hint("y", "the ways (portal)"));
     }
+    lines.push(hint("m", "world atlas"));
     lines.push(hint("Esc", "leave"));
     lines
 }

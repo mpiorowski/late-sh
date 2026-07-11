@@ -55,8 +55,9 @@ use super::persist::{
 use super::pets::{Pet, pet_species_by_key};
 use super::stats::AbilityScores;
 use super::world::{
-    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RoomId, World,
-    critter_index, critters_at, features_at, frontier_entrance_room, is_frontier_room, seed_world,
+    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RegionProgress, RoomId,
+    World, critter_index, critters_at, features_at, frontier_entrance_room, is_frontier_room,
+    seed_world,
 };
 
 /// World heartbeat. One combat round resolves per tick.
@@ -536,6 +537,8 @@ pub struct PlayerView {
     pub features: Vec<FeatureView>,
     /// Overhead map of the explored neighbourhood around the player.
     pub minimap: MiniMap,
+    /// The whole-world atlas: exploration progress per major region (Map panel).
+    pub atlas: Vec<RegionProgress>,
     /// The world clock phase, e.g. "dawn"/"day"/"dusk"/"night".
     pub time_of_day: &'static str,
     /// The current weather, e.g. "clear"/"rain"/"fog"/"storm".
@@ -604,6 +607,7 @@ impl PlayerView {
             resurrection_cap: 0,
             features: Vec::new(),
             minimap: MiniMap::default(),
+            atlas: Vec::new(),
             time_of_day: "day",
             weather: "clear",
             escort: None,
@@ -5803,6 +5807,7 @@ impl WorldState {
             let minimap =
                 self.world
                     .minimap(player.room, player.previous_room, &player.visited, 3, 2);
+            let atlas = self.world.region_progress(&player.visited);
             let mut quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
                 .filter_map(|z| {
                     super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
@@ -5900,6 +5905,7 @@ impl WorldState {
                     resurrection_cap: player.resurrection_cap,
                     features,
                     minimap,
+                    atlas,
                     time_of_day,
                     weather,
                     escort: player

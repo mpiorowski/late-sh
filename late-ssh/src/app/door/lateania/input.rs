@@ -194,6 +194,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
+        b'm' | b'M' => {
+            // Toggle the whole-world atlas.
+            state.toggle_panel(Panel::Map);
+            InputAction::Handled
+        }
         b'o' | b'O' => {
             // Open the Examine list (the "look at things" panel) and refresh the
             // room description in the log.
