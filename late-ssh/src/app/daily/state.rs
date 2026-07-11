@@ -22,14 +22,16 @@ use super::{
     connect4::DailyConnect4State,
     games::DailyGame,
     svc::{
-        DAILY_MAX_ACTIVE_ENTRIES, DailyChallengeItem, DailyChessState, DailyEvent, DailyMatchItem,
-        DailyService, DailySnapshot,
+        DAILY_MAX_ACTIVE_ENTRIES, DailyChallengeItem, DailyChessState, DailyEvent,
+        DailyFinishedItem, DailyMatchItem, DailyService, DailySnapshot,
     },
 };
 
-/// One selectable row in the Daily Games modal: your matches first, then the
-/// open lobby, then other people's live games you can watch.
+/// One selectable row in the Daily Games modal: unseen results first, then
+/// your matches, then the open lobby, then other people's live games you can
+/// watch.
 pub enum DailyModalEntry<'a> {
+    Finished(&'a DailyFinishedItem),
     Match(&'a DailyMatchItem),
     Challenge(&'a DailyChallengeItem),
     Spectate(&'a DailyMatchItem),
@@ -336,19 +338,37 @@ impl DailyState {
             DailyEvent::MatchFinished {
                 match_id,
                 game,
+                challenger_id,
+                opponent_id,
                 winner_user_id,
-                ..
+                result,
             } => {
                 if self.board.as_ref().is_some_and(|b| b.match_id == match_id) {
                     self.request_board_reload();
                 }
-                (winner_user_id == Some(self.user_id)).then(|| {
-                    Banner::success(&format!(
+                let playing = challenger_id == self.user_id || opponent_id == Some(self.user_id);
+                if winner_user_id == Some(self.user_id) {
+                    Some(Banner::success(&format!(
                         "Daily {}: you won the match (+{} chips)",
                         game.label(),
                         game.win_payout()
-                    ))
-                })
+                    )))
+                } else if playing && winner_user_id.is_some() {
+                    // Losers get told too; the lingering result row in the
+                    // lobby is the durable copy of this news.
+                    Some(Banner::info(&format!(
+                        "Daily {}: you lost the match ({})",
+                        game.label(),
+                        result_phrase(&result)
+                    )))
+                } else if playing {
+                    Some(Banner::info(&format!(
+                        "Daily {}: match ended in a draw",
+                        game.label()
+                    )))
+                } else {
+                    None
+                }
             }
             DailyEvent::MovePlayed { match_id, .. }
             | DailyEvent::ChallengeClaimed { match_id, .. } => {
@@ -459,6 +479,21 @@ impl DailyState {
         self.snapshot.open_challenges.iter().collect()
     }
 
+    /// Finished matches whose result this user hasn't acknowledged yet,
+    /// newest finish first (snapshot order). They don't count against the
+    /// entry cap; opening the board and leaving (or `x` in the modal)
+    /// dismisses them.
+    pub fn my_finished(&self) -> Vec<&DailyFinishedItem> {
+        self.snapshot
+            .finished_matches
+            .iter()
+            .filter(|item| {
+                (item.challenger_id == self.user_id && !item.challenger_seen)
+                    || (item.opponent_id == self.user_id && !item.opponent_seen)
+            })
+            .collect()
+    }
+
     /// Active matches you're not playing in and may watch read-only, nearest
     /// deadline first. Battleship spectators see only the public hit/miss
     /// record, never the fleets (see `battleship_ui`).
@@ -503,10 +538,18 @@ impl DailyState {
     // ── Modal navigation ───────────────────────────────────────
 
     pub fn modal_entry_count(&self) -> usize {
-        self.my_matches().len() + self.lobby().len() + self.live_games().len()
+        self.my_finished().len()
+            + self.my_matches().len()
+            + self.lobby().len()
+            + self.live_games().len()
     }
 
     pub fn modal_entry_at(&self, index: usize) -> Option<DailyModalEntry<'_>> {
+        let finished = self.my_finished();
+        if index < finished.len() {
+            return Some(DailyModalEntry::Finished(finished[index]));
+        }
+        let index = index - finished.len();
         let matches = self.my_matches();
         if index < matches.len() {
             return Some(DailyModalEntry::Match(matches[index]));
@@ -648,12 +691,39 @@ impl DailyState {
         }
         // You're a spectator unless you're one of the two players.
         let spectating = item.challenger_id != self.user_id && item.opponent_id != self.user_id;
+        self.open_board_inner(item.id, item.game, names, spectating, return_screen);
+    }
+
+    /// Open the board for an unseen finished match (a result row in the
+    /// modal). Always one of your own matches, so never spectating.
+    pub fn open_finished_board(&mut self, item: &DailyFinishedItem, return_screen: Screen) {
+        let mut names = HashMap::new();
+        if let Some(name) = &item.challenger_username {
+            names.insert(item.challenger_id, name.clone());
+        }
+        if let Some(name) = &item.opponent_username {
+            names.insert(item.opponent_id, name.clone());
+        }
+        self.open_board_inner(item.id, item.game, names, false, return_screen);
+    }
+
+    fn open_board_inner(
+        &mut self,
+        match_id: Uuid,
+        game: DailyGame,
+        names: HashMap<Uuid, String>,
+        spectating: bool,
+        return_screen: Screen,
+    ) {
+        // Hopping straight from one board to another replaces `self.board`
+        // without a close; the old board still counts as looked-at.
+        self.ack_finished_result();
         self.board = Some(DailyBoardState {
-            match_id: item.id,
+            match_id,
             spectating,
             return_screen,
             // Start the cursor mid-board for each game's grid.
-            cursor: match item.game {
+            cursor: match game {
                 DailyGame::Chess => 12,
                 DailyGame::Battleship => 44,
                 // The connect4 cursor is a column, not a cell.
@@ -674,7 +744,33 @@ impl DailyState {
     }
 
     pub fn close_board(&mut self) {
+        self.ack_finished_result();
         self.board = None;
+    }
+
+    /// Leaving a finished match's board acknowledges its result: the row
+    /// stops lingering in the lobby and the panel. Deliberately conservative:
+    /// if the final reload never landed (detail missing or still showing
+    /// active), the result was never actually seen, so the row stays.
+    fn ack_finished_result(&self) {
+        let Some(board) = &self.board else {
+            return;
+        };
+        if board.spectating {
+            return;
+        }
+        let finished = board
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.row.status == DailyMatch::STATUS_FINISHED);
+        if finished {
+            self.svc.mark_result_seen_task(self.user_id, board.match_id);
+        }
+    }
+
+    /// `x` on a result row: acknowledge without opening the board.
+    pub fn dismiss_finished(&self, match_id: Uuid) {
+        self.svc.mark_result_seen_task(self.user_id, match_id);
     }
 
     fn request_board_reload(&mut self) {
@@ -861,9 +957,14 @@ impl DailyState {
             // Not a legal destination for the current selection: if it's
             // another piece of ours, switch the selection to it instead of
             // silently ignoring the click.
-            let reselect = chess.pieces.get(to).and_then(|piece| *piece).is_some_and(
-                |piece| Some(piece.color) == my_color && chess.legal_moves.iter().any(|mv| mv.from == to),
-            );
+            let reselect = chess
+                .pieces
+                .get(to)
+                .and_then(|piece| *piece)
+                .is_some_and(|piece| {
+                    Some(piece.color) == my_color
+                        && chess.legal_moves.iter().any(|mv| mv.from == to)
+                });
             board.selected = if reselect { Some(to) } else { None };
             return;
         }
@@ -1020,6 +1121,20 @@ fn fresh_turn_edges(notified: &mut HashSet<Uuid>, my_turn_ids: &[Uuid]) -> Vec<U
         .copied()
         .filter(|id| notified.insert(*id))
         .collect()
+}
+
+/// Human phrase for a `daily_matches.result` string, for result rows and
+/// banners. Falls back to "finished" for results this build doesn't know.
+pub fn result_phrase(result: &str) -> &'static str {
+    match result {
+        DailyMatch::RESULT_CHECKMATE => "checkmate",
+        DailyMatch::RESULT_DRAW => "draw",
+        DailyMatch::RESULT_RESIGN => "resignation",
+        DailyMatch::RESULT_TIMEOUT => "timeout",
+        DailyMatch::RESULT_FLEET_SUNK => "fleet sunk",
+        DailyMatch::RESULT_FOUR_IN_A_ROW => "four in a row",
+        _ => "finished",
+    }
 }
 
 /// Compact time-until-deadline: `2d 3h`, `23h 59m`, `41m`. Clamps at zero.

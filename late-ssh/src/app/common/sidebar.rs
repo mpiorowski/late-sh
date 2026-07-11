@@ -178,13 +178,15 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     for (idx, component) in visible.iter().enumerate() {
         // Each panel's separator rule doubles as its section title
         // (`── lobby ────`), so panels don't spend a body row on a name.
-        // The lobby label glows while it's the viewer's turn in any match.
+        // The lobby label glows while it's the viewer's turn in any match or
+        // a finished match's result is waiting to be acknowledged.
         let rule_active = *component == RightSidebarComponent::Daily
-            && props
+            && (props
                 .daily
                 .my_matches()
                 .iter()
-                .any(|item| props.daily.my_turn(item));
+                .any(|item| props.daily.my_turn(item))
+                || !props.daily.my_finished().is_empty());
         draw_panel_rule(
             frame,
             inset(layout[i]),

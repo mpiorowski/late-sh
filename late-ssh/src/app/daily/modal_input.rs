@@ -34,16 +34,24 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
             app.daily.begin_challenge_draft(true);
         }
         ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
-            let own = match app.daily.selected_entry() {
+            enum Dismiss {
+                Cancel(uuid::Uuid),
+                AckResult(uuid::Uuid),
+            }
+            let action = match app.daily.selected_entry() {
                 Some(DailyModalEntry::Challenge(challenge))
                     if challenge.challenger_id == app.daily.user_id() =>
                 {
-                    Some(challenge.id)
+                    Some(Dismiss::Cancel(challenge.id))
                 }
+                // Acknowledge a result without opening the board.
+                Some(DailyModalEntry::Finished(item)) => Some(Dismiss::AckResult(item.id)),
                 _ => None,
             };
-            if let Some(match_id) = own {
-                app.daily.cancel_challenge(match_id);
+            match action {
+                Some(Dismiss::Cancel(match_id)) => app.daily.cancel_challenge(match_id),
+                Some(Dismiss::AckResult(match_id)) => app.daily.dismiss_finished(match_id),
+                None => {}
             }
         }
         _ => {}
@@ -68,6 +76,7 @@ pub(crate) fn handle_escape(app: &mut App) {
 fn activate_selection(app: &mut App) {
     enum Action {
         OpenBoard(crate::app::daily::svc::DailyMatchItem),
+        OpenFinished(crate::app::daily::svc::DailyFinishedItem),
         ConfirmClaim(uuid::Uuid),
         Claim(uuid::Uuid),
     }
@@ -75,6 +84,9 @@ fn activate_selection(app: &mut App) {
         Some(DailyModalEntry::Match(item)) => Some(Action::OpenBoard(item.clone())),
         // Watching someone else's game opens the same board, read-only.
         Some(DailyModalEntry::Spectate(item)) => Some(Action::OpenBoard(item.clone())),
+        // Reviewing an unseen result: read-only too (the match is over), and
+        // leaving the board acknowledges it.
+        Some(DailyModalEntry::Finished(item)) => Some(Action::OpenFinished(item.clone())),
         Some(DailyModalEntry::Challenge(challenge)) => {
             if challenge.challenger_id == app.daily.user_id() {
                 None
@@ -86,20 +98,25 @@ fn activate_selection(app: &mut App) {
         }
         None => None,
     };
+    // Switching matches while a board is already open keeps the
+    // original return screen, so Esc never lands on a dead board.
+    let return_screen = if app.screen == Screen::DailyMatch {
+        app.daily
+            .board
+            .as_ref()
+            .map(|board| board.return_screen)
+            .unwrap_or(Screen::Dashboard)
+    } else {
+        app.screen
+    };
     match action {
         Some(Action::OpenBoard(item)) => {
-            // Switching matches while a board is already open keeps the
-            // original return screen, so Esc never lands on a dead board.
-            let return_screen = if app.screen == Screen::DailyMatch {
-                app.daily
-                    .board
-                    .as_ref()
-                    .map(|board| board.return_screen)
-                    .unwrap_or(Screen::Dashboard)
-            } else {
-                app.screen
-            };
             app.daily.open_board(&item, return_screen);
+            app.show_daily_modal = false;
+            app.set_screen(Screen::DailyMatch);
+        }
+        Some(Action::OpenFinished(item)) => {
+            app.daily.open_finished_board(&item, return_screen);
             app.show_daily_modal = false;
             app.set_screen(Screen::DailyMatch);
         }

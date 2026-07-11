@@ -4358,6 +4358,15 @@ pub fn DRUNK_LABEL_BG(level: u8) -> Option<Color> {
     Some(blend_toward(anchor, BG_CANVAS(), toward_canvas))
 }
 
+/// Background tint for the Sudoku cells that share the selected cell's number.
+/// A warm anchor blended heavily toward the active canvas so the "same number"
+/// highlight reads as a quiet wash on dark themes and a pale one on light
+/// themes. Derived, so no per-palette field is needed.
+#[allow(non_snake_case)]
+pub fn SUDOKU_SAME_NUM_BG() -> Color {
+    blend_toward(Color::Rgb(210, 180, 90), BG_CANVAS(), 0.72)
+}
+
 /// Linear blend `t` of the way from `a` to `b` (0.0 = `a`, 1.0 = `b`).
 /// Falls back to `a` for non-RGB colors (the palette backgrounds are RGB).
 fn blend_toward(a: Color, b: Color, t: f32) -> Color {

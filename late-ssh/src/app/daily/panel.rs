@@ -13,7 +13,7 @@ use ratatui::{
 
 use crate::app::common::theme;
 
-use super::state::DailyState;
+use super::{state::DailyState, svc::DailyOutcome};
 
 /// Four match slots + status line (open count + entries) + key hints. The
 /// panel has no title row of its own: the sidebar's labeled separator rule
@@ -24,7 +24,9 @@ const MATCH_SLOTS: usize = 4;
 /// Inputs for the panel, bundled so the pure line builder is easy to drive
 /// from tests.
 pub(crate) struct DailyPanelProps {
-    /// Sorted my-matches rows: your-turn first, then nearest deadline.
+    /// Slot rows in display order: your-turn first, then unseen results,
+    /// then waiting. Unseen results may transiently push waiting rows past
+    /// the four slots; they clear as soon as the player looks.
     pub matches: Vec<DailyPanelMatchRow>,
     pub open_count: usize,
     pub lobby_glow: bool,
@@ -34,24 +36,57 @@ pub(crate) struct DailyPanelProps {
 
 pub(crate) struct DailyPanelMatchRow {
     pub opponent: String,
-    pub my_turn: bool,
+    pub status: DailyPanelRowStatus,
+}
+
+/// What a slot row is telling the player. Won/Lost/Draw rows are unseen
+/// results lingering until acknowledged in the modal.
+pub(crate) enum DailyPanelRowStatus {
+    YourTurn,
+    Waiting,
+    Won,
+    Lost,
+    Draw,
 }
 
 pub(crate) fn draw_daily_inline(frame: &mut Frame, area: Rect, state: &DailyState) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let matches = state
-        .my_matches()
+    let my_matches = state.my_matches();
+    let (turn_rows, waiting_rows): (Vec<_>, Vec<_>) =
+        my_matches.iter().partition(|item| state.my_turn(item));
+    let match_row = |item: &&crate::app::daily::svc::DailyMatchItem, status| DailyPanelMatchRow {
+        opponent: state
+            .opponent_of(item)
+            .1
+            .unwrap_or_else(|| "player".to_string()),
+        status,
+    };
+    // Actionable beats news beats waiting: your-turn rows, then unseen
+    // results, then matches waiting on the opponent.
+    let mut matches: Vec<DailyPanelMatchRow> = turn_rows
         .iter()
-        .map(|item| DailyPanelMatchRow {
-            opponent: state
-                .opponent_of(item)
+        .map(|item| match_row(item, DailyPanelRowStatus::YourTurn))
+        .collect();
+    matches.extend(state.my_finished().into_iter().map(|item| {
+        DailyPanelMatchRow {
+            opponent: item
+                .opponent_of(state.user_id())
                 .1
                 .unwrap_or_else(|| "player".to_string()),
-            my_turn: state.my_turn(item),
-        })
-        .collect();
+            status: match item.outcome_for(state.user_id()) {
+                DailyOutcome::Won => DailyPanelRowStatus::Won,
+                DailyOutcome::Lost => DailyPanelRowStatus::Lost,
+                DailyOutcome::Draw => DailyPanelRowStatus::Draw,
+            },
+        }
+    }));
+    matches.extend(
+        waiting_rows
+            .iter()
+            .map(|item| match_row(item, DailyPanelRowStatus::Waiting)),
+    );
     let lobby = state.lobby();
     let props = DailyPanelProps {
         matches,
@@ -78,31 +113,39 @@ fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> 
     lines
 }
 
-/// `► mira        your turn` / `  c0ld          waiting`.
+/// `► mira        your turn` / `  c0ld          waiting` / `► kal   you won`.
 fn match_line(width: u16, row: &DailyPanelMatchRow) -> Line<'static> {
-    let (marker, marker_style, name_style, status, status_style) = if row.my_turn {
-        (
-            "► ",
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-            "your turn",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        (
-            "  ",
-            Style::default().fg(theme::TEXT_FAINT()),
-            Style::default().fg(theme::TEXT_DIM()),
-            "waiting",
-            Style::default().fg(theme::TEXT_FAINT()),
-        )
+    // Everything but "waiting" is an attention row: glowing marker, bright
+    // bold name, accent-colored status.
+    let (marker_color, status, status_color) = match row.status {
+        DailyPanelRowStatus::YourTurn => (theme::AMBER_GLOW(), "your turn", theme::AMBER()),
+        DailyPanelRowStatus::Won => (theme::SUCCESS(), "you won", theme::SUCCESS()),
+        DailyPanelRowStatus::Lost => (theme::ERROR(), "you lost", theme::ERROR()),
+        DailyPanelRowStatus::Draw => (theme::AMBER(), "draw", theme::AMBER()),
+        DailyPanelRowStatus::Waiting => (theme::TEXT_FAINT(), "waiting", theme::TEXT_FAINT()),
     };
+    let (marker, marker_style, name_style, status_style) =
+        if matches!(row.status, DailyPanelRowStatus::Waiting) {
+            (
+                "  ",
+                Style::default().fg(marker_color),
+                Style::default().fg(theme::TEXT_DIM()),
+                Style::default().fg(status_color),
+            )
+        } else {
+            (
+                "► ",
+                Style::default()
+                    .fg(marker_color)
+                    .add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            )
+        };
     let status_w = status.chars().count();
     let name_budget = (width as usize).saturating_sub(2 + status_w + 1);
     let name = truncate_chars(&row.opponent, name_budget);
@@ -211,7 +254,11 @@ mod tests {
             (0..6)
                 .map(|i| DailyPanelMatchRow {
                     opponent: format!("player{i}"),
-                    my_turn: i == 0,
+                    status: if i == 0 {
+                        DailyPanelRowStatus::YourTurn
+                    } else {
+                        DailyPanelRowStatus::Waiting
+                    },
                 })
                 .collect(),
             3,
@@ -227,7 +274,7 @@ mod tests {
         let props = props_with(
             vec![DailyPanelMatchRow {
                 opponent: "mira".to_string(),
-                my_turn: true,
+                status: DailyPanelRowStatus::YourTurn,
             }],
             0,
         );
@@ -241,6 +288,37 @@ mod tests {
         assert_eq!(texts[2].trim_end(), "  ─");
         assert_eq!(texts[3].trim_end(), "  ─");
         assert_eq!(texts[4].trim_end(), "0 open · 1/4");
+    }
+
+    #[test]
+    fn outcome_rows_announce_results() {
+        let props = props_with(
+            vec![
+                DailyPanelMatchRow {
+                    opponent: "mira".to_string(),
+                    status: DailyPanelRowStatus::Won,
+                },
+                DailyPanelMatchRow {
+                    opponent: "c0ld".to_string(),
+                    status: DailyPanelRowStatus::Lost,
+                },
+                DailyPanelMatchRow {
+                    opponent: "kal".to_string(),
+                    status: DailyPanelRowStatus::Draw,
+                },
+            ],
+            0,
+        );
+        let texts: Vec<String> = daily_panel_lines(21, &props)
+            .iter()
+            .map(line_text)
+            .collect();
+        assert!(texts[0].starts_with("► mira"));
+        assert!(texts[0].trim_end().ends_with("you won"));
+        assert!(texts[1].starts_with("► c0ld"));
+        assert!(texts[1].trim_end().ends_with("you lost"));
+        assert!(texts[2].starts_with("► kal"));
+        assert!(texts[2].trim_end().ends_with("draw"));
     }
 
     #[test]

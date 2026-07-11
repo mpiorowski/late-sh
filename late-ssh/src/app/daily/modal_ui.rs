@@ -15,8 +15,8 @@ use crate::app::{
     common::theme,
     daily::{
         games::DailyGame,
-        state::{ChallengeDraft, DailyState, format_deadline},
-        svc::{DailyChallengeItem, DailyMatchItem},
+        state::{ChallengeDraft, DailyState, format_deadline, result_phrase},
+        svc::{DailyChallengeItem, DailyFinishedItem, DailyMatchItem, DailyOutcome},
     },
     games::chess_core::types::ChessColor,
 };
@@ -70,6 +70,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, daily: &DailyState) {
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
+    let finished = daily.my_finished();
     let matches = daily.my_matches();
     let lobby = daily.lobby();
     let live = daily.live_games();
@@ -77,22 +78,31 @@ fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(section_line(width, "your matches"));
-    if matches.is_empty() {
+    if finished.is_empty() && matches.is_empty() {
         lines.push(empty_line("no active matches"));
     }
+    // Unseen results first: transient news rows that clear once looked at.
+    for (idx, item) in finished.iter().enumerate() {
+        lines.push(finished_line(daily, item, daily.selected == idx));
+    }
     for (idx, item) in matches.iter().enumerate() {
-        lines.push(match_line(daily, item, daily.selected == idx));
+        lines.push(match_line(
+            daily,
+            item,
+            daily.selected == finished.len() + idx,
+        ));
     }
     lines.push(Line::raw(""));
     lines.push(section_line(width, "lobby"));
     if lobby.is_empty() {
         lines.push(empty_line("no open challenges · post one with c"));
     }
+    let lobby_base = finished.len() + matches.len();
     for (idx, challenge) in lobby.iter().enumerate() {
         lines.push(challenge_line(
             daily,
             challenge,
-            daily.selected == matches.len() + idx,
+            daily.selected == lobby_base + idx,
         ));
     }
     // Other people's games in progress: watch-only, header hidden when none.
@@ -102,7 +112,7 @@ fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
         for (idx, item) in live.iter().enumerate() {
             lines.push(spectate_line(
                 item,
-                daily.selected == matches.len() + lobby.len() + idx,
+                daily.selected == lobby_base + lobby.len() + idx,
             ));
         }
     }
@@ -110,7 +120,7 @@ fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
     // Keep the selected row in view on small terminals: scroll whole lines.
     let budget = area.height as usize;
     if lines.len() > budget {
-        let selected_line = selected_line_index(daily, matches.len(), lobby.len());
+        let selected_line = selected_line_index(daily, lobby_base, lobby.len());
         let skip = selected_line.saturating_sub(budget.saturating_sub(1));
         lines.drain(..skip);
         lines.truncate(budget);
@@ -119,21 +129,23 @@ fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
 }
 
 /// Line index of the selected entry inside the built list (headers offset).
-fn selected_line_index(daily: &DailyState, match_count: usize, lobby_count: usize) -> usize {
-    if daily.selected < match_count {
+/// `mine_count` is the "your matches" section's row count: unseen results
+/// plus active matches.
+fn selected_line_index(daily: &DailyState, mine_count: usize, lobby_count: usize) -> usize {
+    if daily.selected < mine_count {
         return 1 + daily.selected;
     }
-    // matches header + rows (or empty row) + blank + lobby header
-    let match_rows = match_count.max(1);
-    let lobby_base = 1 + match_rows + 2;
-    let after_matches = daily.selected - match_count;
-    if after_matches < lobby_count {
-        return lobby_base + after_matches;
+    // section header + rows (or empty row) + blank + lobby header
+    let mine_rows = mine_count.max(1);
+    let lobby_base = 1 + mine_rows + 2;
+    let after_mine = daily.selected - mine_count;
+    if after_mine < lobby_count {
+        return lobby_base + after_mine;
     }
     // lobby rows (or empty row) + blank + live-games header
     let lobby_rows = lobby_count.max(1);
     let live_base = lobby_base + lobby_rows + 2;
-    live_base + (after_matches - lobby_count)
+    live_base + (after_mine - lobby_count)
 }
 
 fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line<'static> {
@@ -191,6 +203,51 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
             Style::default().fg(theme::TEXT_FAINT()),
         ));
     }
+    Line::from(spans)
+}
+
+/// An unseen result: who you played, how it ended, how to clear it. Lingers
+/// until acknowledged (enter the board and leave, or `x`).
+fn finished_line(daily: &DailyState, item: &DailyFinishedItem, selected: bool) -> Line<'static> {
+    let (_, opponent) = item.opponent_of(daily.user_id());
+    let opponent = opponent.unwrap_or_else(|| "player".to_string());
+    let (outcome, style) = match item.outcome_for(daily.user_id()) {
+        DailyOutcome::Won => (
+            format!("you won · {}", result_phrase(&item.result)),
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ),
+        DailyOutcome::Lost => (
+            format!("you lost · {}", result_phrase(&item.result)),
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        ),
+        DailyOutcome::Draw => (
+            "draw".to_string(),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+    };
+
+    let mut spans = vec![marker_span(selected)];
+    spans.push(Span::styled(
+        format!("{opponent:<16}"),
+        Style::default().fg(theme::TEXT_BRIGHT()),
+    ));
+    spans.push(Span::styled(
+        format!("{:<12}", item.game.label()),
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    spans.push(Span::styled(format!("{outcome:<18}"), style));
+    spans.push(Span::styled(
+        "enter view · x dismiss",
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    ));
     Line::from(spans)
 }
 
@@ -449,14 +506,20 @@ fn draw_footer(frame: &mut Frame, area: Rect, daily: &DailyState) {
         text(" directed"),
         gap(),
     ];
-    if matches!(
-        daily.selected_entry(),
+    match daily.selected_entry() {
         Some(crate::app::daily::state::DailyModalEntry::Challenge(challenge))
-            if challenge.challenger_id == daily.user_id()
-    ) {
-        spans.push(key("x"));
-        spans.push(text(" cancel"));
-        spans.push(gap());
+            if challenge.challenger_id == daily.user_id() =>
+        {
+            spans.push(key("x"));
+            spans.push(text(" cancel"));
+            spans.push(gap());
+        }
+        Some(crate::app::daily::state::DailyModalEntry::Finished(_)) => {
+            spans.push(key("x"));
+            spans.push(text(" dismiss"));
+            spans.push(gap());
+        }
+        _ => {}
     }
     spans.push(key("esc"));
     spans.push(text(" close"));

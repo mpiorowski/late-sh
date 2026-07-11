@@ -5,7 +5,9 @@ use late_core::{
 use late_ssh::app::daily::battleship::DailyBattleshipState;
 use late_ssh::app::daily::connect4::DailyConnect4State;
 use late_ssh::app::daily::games::DailyGame;
-use late_ssh::app::daily::svc::{DAILY_MAX_ACTIVE_ENTRIES, DailyChessState, DailyService};
+use late_ssh::app::daily::svc::{
+    DAILY_MAX_ACTIVE_ENTRIES, DailyChessState, DailyOutcome, DailyService,
+};
 use late_ssh::app::games::chips::svc::ChipService;
 use uuid::Uuid;
 
@@ -768,4 +770,65 @@ async fn connect4_full_board_draws_and_pays_nobody() {
         .await
         .expect("ledger rows");
     assert!(rows.is_empty(), "a drawn match paid a winner");
+}
+
+#[tokio::test]
+async fn finished_results_linger_until_each_player_acks() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-seen-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-seen-opponent").await;
+    let stranger = create_test_user(&test_db.db, "daily-seen-stranger").await;
+    let svc = daily_service(&test_db).await;
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .await
+        .expect("post challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim challenge");
+    let (white, black) = white_black(&claimed);
+    svc.resign(black, claimed.id).await.expect("black resigns");
+
+    // The finished match enters the snapshot unseen by both players.
+    let snapshot = svc.subscribe_snapshot().borrow().clone();
+    assert_eq!(snapshot.active_matches.len(), 0);
+    assert_eq!(snapshot.finished_matches.len(), 1);
+    let item = &snapshot.finished_matches[0];
+    assert_eq!(item.id, claimed.id);
+    assert!(!item.challenger_seen && !item.opponent_seen);
+    assert_eq!(item.outcome_for(white), DailyOutcome::Won);
+    assert_eq!(item.outcome_for(black), DailyOutcome::Lost);
+
+    // A non-player ack touches nothing.
+    let client = test_db.db.get().await.expect("db client");
+    let touched = DailyMatch::mark_result_seen(&client, claimed.id, stranger.id)
+        .await
+        .expect("stranger ack");
+    assert_eq!(touched, 0, "a non-player must not ack a result");
+
+    // One player's ack keeps the row for the other player.
+    svc.mark_result_seen(black, claimed.id)
+        .await
+        .expect("loser acks");
+    let snapshot = svc.subscribe_snapshot().borrow().clone();
+    assert_eq!(snapshot.finished_matches.len(), 1);
+    let item = &snapshot.finished_matches[0];
+    let black_is_challenger = claimed.challenger_id == black;
+    assert_eq!(item.challenger_seen, black_is_challenger);
+    assert_eq!(item.opponent_seen, !black_is_challenger);
+
+    // A repeat ack is a no-op at the row level.
+    let touched = DailyMatch::mark_result_seen(&client, claimed.id, black)
+        .await
+        .expect("repeat ack");
+    assert_eq!(touched, 0, "a repeat ack must touch 0 rows");
+
+    // The second player's ack clears the row from the snapshot.
+    svc.mark_result_seen(white, claimed.id)
+        .await
+        .expect("winner acks");
+    let snapshot = svc.subscribe_snapshot().borrow().clone();
+    assert!(snapshot.finished_matches.is_empty());
 }

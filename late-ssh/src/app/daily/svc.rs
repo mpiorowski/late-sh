@@ -45,6 +45,10 @@ pub struct DailyService {
 pub struct DailySnapshot {
     pub open_challenges: Vec<DailyChallengeItem>,
     pub active_matches: Vec<DailyMatchItem>,
+    /// Finished matches at least one player hasn't acknowledged; each player
+    /// sees their own unseen results until they open the board or dismiss
+    /// the row. Newest finish first.
+    pub finished_matches: Vec<DailyFinishedItem>,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +80,49 @@ pub struct DailyMatchItem {
 }
 
 #[derive(Clone, Debug)]
+pub struct DailyFinishedItem {
+    pub id: Uuid,
+    pub game: DailyGame,
+    pub challenger_id: Uuid,
+    pub challenger_username: Option<String>,
+    pub opponent_id: Uuid,
+    pub opponent_username: Option<String>,
+    /// `None` for draws.
+    pub winner_user_id: Option<Uuid>,
+    pub result: String,
+    pub finished_at: DateTime<Utc>,
+    pub challenger_seen: bool,
+    pub opponent_seen: bool,
+}
+
+/// A finished match's outcome from one player's perspective.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DailyOutcome {
+    Won,
+    Lost,
+    Draw,
+}
+
+impl DailyFinishedItem {
+    /// The other player from `user_id`'s perspective.
+    pub fn opponent_of(&self, user_id: Uuid) -> (Uuid, Option<String>) {
+        if self.challenger_id == user_id {
+            (self.opponent_id, self.opponent_username.clone())
+        } else {
+            (self.challenger_id, self.challenger_username.clone())
+        }
+    }
+
+    pub fn outcome_for(&self, user_id: Uuid) -> DailyOutcome {
+        match self.winner_user_id {
+            Some(winner) if winner == user_id => DailyOutcome::Won,
+            Some(_) => DailyOutcome::Lost,
+            None => DailyOutcome::Draw,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum DailyEvent {
     ChallengePosted {
         match_id: Uuid,
@@ -97,6 +144,8 @@ pub enum DailyEvent {
     MatchFinished {
         match_id: Uuid,
         game: DailyGame,
+        challenger_id: Uuid,
+        opponent_id: Option<Uuid>,
         winner_user_id: Option<Uuid>,
         result: String,
     },
@@ -309,6 +358,28 @@ impl DailyService {
                 svc.send_error(user_id, &e);
             }
         });
+    }
+
+    /// Acknowledge a finished match's result (board closed or row dismissed).
+    /// Fire-and-forget and silent: failing to ack just leaves the row
+    /// lingering, which is safe, so no user-facing error.
+    pub fn mark_result_seen_task(&self, user_id: Uuid, match_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.mark_result_seen(user_id, match_id).await {
+                tracing::error!(error = ?e, %user_id, %match_id, "failed to mark daily result seen");
+            }
+        });
+    }
+
+    pub async fn mark_result_seen(&self, user_id: Uuid, match_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let updated = DailyMatch::mark_result_seen(&client, match_id, user_id).await?;
+        // A repeat ack touches 0 rows; nothing changed, nothing to publish.
+        if updated > 0 {
+            self.publish(&client).await?;
+        }
+        Ok(())
     }
 
     pub fn resign_task(&self, user_id: Uuid, match_id: Uuid) {
@@ -539,7 +610,14 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(match_id, DailyGame::Chess, winner, result);
+                self.finish_events(
+                    match_id,
+                    DailyGame::Chess,
+                    row.challenger_id,
+                    row.opponent_id,
+                    winner,
+                    result,
+                );
             }
             None => {
                 let next_turn = state.user_for_color(mover_color.other());
@@ -605,6 +683,8 @@ impl DailyService {
             self.finish_events(
                 match_id,
                 DailyGame::Battleship,
+                row.challenger_id,
+                row.opponent_id,
                 Some(user_id),
                 DailyMatch::RESULT_FLEET_SUNK,
             );
@@ -683,7 +763,14 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(match_id, DailyGame::ConnectFour, winner, result);
+                self.finish_events(
+                    match_id,
+                    DailyGame::ConnectFour,
+                    row.challenger_id,
+                    row.opponent_id,
+                    winner,
+                    result,
+                );
             }
             None => {
                 let next_turn = state.user_of(disc.other());
@@ -750,7 +837,14 @@ impl DailyService {
             )
             .await?;
             if updated == 1 {
-                self.finish_events(match_id, game, Some(winner), DailyMatch::RESULT_RESIGN);
+                self.finish_events(
+                    match_id,
+                    game,
+                    row.challenger_id,
+                    row.opponent_id,
+                    Some(winner),
+                    DailyMatch::RESULT_RESIGN,
+                );
                 self.publish(&client).await?;
                 return Ok(());
             }
@@ -773,7 +867,14 @@ impl DailyService {
                 );
                 continue;
             };
-            self.finish_events(row.id, game, row.winner_user_id, DailyMatch::RESULT_TIMEOUT);
+            self.finish_events(
+                row.id,
+                game,
+                row.challenger_id,
+                row.opponent_id,
+                row.winner_user_id,
+                DailyMatch::RESULT_TIMEOUT,
+            );
         }
         if !forfeited.is_empty() {
             self.publish(&client).await?;
@@ -805,12 +906,16 @@ impl DailyService {
         &self,
         match_id: Uuid,
         game: DailyGame,
+        challenger_id: Uuid,
+        opponent_id: Option<Uuid>,
         winner_user_id: Option<Uuid>,
         result: &str,
     ) {
         let _ = self.event_tx.send(DailyEvent::MatchFinished {
             match_id,
             game,
+            challenger_id,
+            opponent_id,
             winner_user_id,
             result: result.to_string(),
         });
@@ -861,12 +966,14 @@ impl DailyService {
     async fn publish(&self, client: &tokio_postgres::Client) -> Result<()> {
         let open = DailyMatch::list_open(client).await?;
         let active = DailyMatch::list_active(client).await?;
+        let finished = DailyMatch::list_finished_unseen(client).await?;
         let mut user_ids: Vec<Uuid> = open
             .iter()
             .flat_map(|row| [Some(row.challenger_id), row.target_user_id])
             .chain(
                 active
                     .iter()
+                    .chain(finished.iter())
                     .flat_map(|row| [Some(row.challenger_id), row.opponent_id]),
             )
             .flatten()
@@ -949,9 +1056,32 @@ impl DailyService {
                 })
             })
             .collect();
+        let finished_matches = finished
+            .into_iter()
+            .filter_map(|row| {
+                let opponent_id = row.opponent_id?;
+                let game = DailyGame::from_kind(&row.game_kind)?;
+                Some(DailyFinishedItem {
+                    id: row.id,
+                    game,
+                    challenger_id: row.challenger_id,
+                    challenger_username: usernames.get(&row.challenger_id).cloned(),
+                    opponent_id,
+                    opponent_username: usernames.get(&opponent_id).cloned(),
+                    winner_user_id: row.winner_user_id,
+                    result: row.result,
+                    // `finish`/`forfeit_expired` were the last writers, so
+                    // `updated` is the finish time.
+                    finished_at: row.updated,
+                    challenger_seen: row.challenger_result_seen_at.is_some(),
+                    opponent_seen: row.opponent_result_seen_at.is_some(),
+                })
+            })
+            .collect();
         let _ = self.snapshot_tx.send(Arc::new(DailySnapshot {
             open_challenges,
             active_matches,
+            finished_matches,
         }));
         Ok(())
     }

@@ -271,11 +271,11 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     let is_conflict = !is_fixed && cell_has_duplicate(&state.grid, row, col);
     let has_notes = value == 0 && state.notes[row][col] != 0;
 
-    // Relationship to the selected cell drives the background highlighting.
+    // Cells sharing the selected cell's number light up so you can scan for
+    // placements; row/column/box peers are intentionally left alone to keep the
+    // board calm.
     let (cr, cc) = state.cursor;
     let sel_val = state.grid[cr][cc];
-    let same_box = row / 3 == cr / 3 && col / 3 == cc / 3;
-    let is_peer = !is_selected && (row == cr || col == cc || same_box);
     let is_same_num = !is_selected && value != 0 && value == sel_val;
 
     // Foreground: colour each digit by its value; givens are a calmer shade,
@@ -298,8 +298,8 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
             .add_modifier(Modifier::BOLD)
     };
 
-    // Background: selected cell strongest, then all cells sharing its number,
-    // then its row/column/box peers - the modern-sudoku "light up the board" feel.
+    // Background: selected cell strongest, then all cells sharing its number -
+    // the modern-sudoku "light up the board" feel.
     if is_selected {
         style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
         if value == 0 {
@@ -307,10 +307,8 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
         }
     } else if is_same_num {
         style = style
-            .bg(Color::Rgb(60, 52, 28))
+            .bg(theme::SUDOKU_SAME_NUM_BG())
             .add_modifier(Modifier::BOLD);
-    } else if is_peer {
-        style = style.bg(Color::Rgb(26, 28, 38));
     }
 
     Span::styled(

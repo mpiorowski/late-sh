@@ -19,6 +19,8 @@ crate::model! {
         pub winner_user_id: Option<Uuid>,
         pub result: String,
         pub state: Value,
+        pub challenger_result_seen_at: Option<DateTime<Utc>>,
+        pub opponent_result_seen_at: Option<DateTime<Utc>>,
     }
 }
 
@@ -279,6 +281,51 @@ impl DailyMatch {
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// Finished matches at least one player hasn't acknowledged yet. The
+    /// 30-day window bounds the snapshot when a player never comes back;
+    /// `updated` is the finish time (`mark_result_seen` deliberately doesn't
+    /// touch it), so old rows age out instead of pinning the list forever.
+    pub async fn list_finished_unseen(client: &Client) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT * FROM daily_matches
+                 WHERE status = 'finished'
+                   AND (challenger_result_seen_at IS NULL
+                        OR (opponent_id IS NOT NULL AND opponent_result_seen_at IS NULL))
+                   AND updated > current_timestamp - INTERVAL '30 days'
+                 ORDER BY updated DESC, id ASC",
+                &[],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// One player acknowledges a finished match's result. Touches only the
+    /// caller's own seen column, and only while it is still NULL, so a repeat
+    /// ack updates 0 rows and the caller can skip republishing. `updated`
+    /// stays the finish timestamp (see `list_finished_unseen`).
+    pub async fn mark_result_seen(client: &Client, match_id: Uuid, user_id: Uuid) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE daily_matches
+                 SET challenger_result_seen_at = CASE
+                         WHEN challenger_id = $2 THEN current_timestamp
+                         ELSE challenger_result_seen_at
+                     END,
+                     opponent_result_seen_at = CASE
+                         WHEN opponent_id = $2 THEN current_timestamp
+                         ELSE opponent_result_seen_at
+                     END
+                 WHERE id = $1
+                   AND status = $3
+                   AND ((challenger_id = $2 AND challenger_result_seen_at IS NULL)
+                        OR (opponent_id = $2 AND opponent_result_seen_at IS NULL))",
+                &[&match_id, &user_id, &Self::STATUS_FINISHED],
+            )
+            .await?;
+        Ok(updated)
     }
 
     /// Optimistic compare-and-swap guard shared by `update_state` and
