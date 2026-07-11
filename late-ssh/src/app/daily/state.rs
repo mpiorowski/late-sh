@@ -841,29 +841,36 @@ impl DailyState {
         let Some(chess) = detail.chess_mut() else {
             return;
         };
+        let my_color = chess.state.color_of(user_id);
         if let Some(from) = board.selected {
             if from == board.cursor {
                 board.selected = None;
                 return;
             }
             let to = board.cursor;
-            if !chess
+            if chess
                 .legal_moves
                 .iter()
                 .any(|mv| mv.from == from && mv.to == to)
             {
+                Self::apply_optimistic_move(detail, from, to);
+                board.selected = None;
+                svc.play_move_task(user_id, board.match_id, from, to);
                 return;
             }
-            Self::apply_optimistic_move(detail, from, to);
-            board.selected = None;
-            svc.play_move_task(user_id, board.match_id, from, to);
+            // Not a legal destination for the current selection: if it's
+            // another piece of ours, switch the selection to it instead of
+            // silently ignoring the click.
+            let reselect = chess.pieces.get(to).and_then(|piece| *piece).is_some_and(
+                |piece| Some(piece.color) == my_color && chess.legal_moves.iter().any(|mv| mv.from == to),
+            );
+            board.selected = if reselect { Some(to) } else { None };
             return;
         }
 
         let Some(piece) = chess.pieces.get(board.cursor).and_then(|piece| *piece) else {
             return;
         };
-        let my_color = chess.state.color_of(user_id);
         if Some(piece.color) == my_color
             && chess.legal_moves.iter().any(|mv| mv.from == board.cursor)
         {
