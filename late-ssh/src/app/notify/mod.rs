@@ -79,6 +79,14 @@ impl Notification {
         }
     }
 
+    pub(crate) fn daily_your_turn(game: &str, opponent: &str) -> Self {
+        Self {
+            kind: Kind::GameEvents,
+            title: format!("Daily {game}: your turn"),
+            body: format!("@{opponent} is waiting on your move"),
+        }
+    }
+
     pub(crate) fn poll_started(question: &str) -> Self {
         Self {
             kind: Kind::GameEvents,

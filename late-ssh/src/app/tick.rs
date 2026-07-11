@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
+use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC};
 use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::event::ActivityKind;
 use crate::app::activity::filter::ActivityFilter;
@@ -287,6 +287,9 @@ impl App {
                 GAME_SELECTION_SNAKE => {
                     self.snake_state.tick();
                 }
+                GAME_SELECTION_TRAFFIC => {
+                    self.traffic_state.tick();
+                }
                 selection if crate::app::arcade::input::is_nes_selection(selection) => {
                     self.nes_cabinet_state.tick();
                 }
@@ -297,6 +300,9 @@ impl App {
             active_room_game.tick();
         }
         if let Some(b) = self.tick_rooms() {
+            self.banner = Some(b);
+        }
+        if let Some(b) = self.daily.tick() {
             self.banner = Some(b);
         }
         if let Some(state) = self.dartboard_state.as_mut() {
@@ -675,9 +681,6 @@ impl App {
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
             self.aquarium_state
                 .set_hungry(self.shop_state.aquarium_hungry());
-            if !self.shop_state.entitlements().has_aquarium() {
-                self.show_aquarium_tray = false;
-            }
             if !self.shop_state.dynamic_bonsai_enabled() {
                 self.show_bonsai_v2_modal = false;
             }

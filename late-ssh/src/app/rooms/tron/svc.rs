@@ -32,9 +32,9 @@ const MAX_GAP_MOVES: u8 = 6;
 const PICKUP_GAP_MOVES: u8 = 3;
 const TRON_WIN_LEDGER_REASON: &str = "tron_win";
 pub const TRON_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
-pub const TRON_TWO_PLAYER_WIN_CHIPS: i64 = 50;
-pub const TRON_THREE_PLAYER_WIN_CHIPS: i64 = 75;
-pub const TRON_FOUR_PLAYER_WIN_CHIPS: i64 = 100;
+pub const TRON_TWO_PLAYER_WIN_CHIPS: i64 = 100;
+pub const TRON_THREE_PLAYER_WIN_CHIPS: i64 = 150;
+pub const TRON_FOUR_PLAYER_WIN_CHIPS: i64 = 200;
 const TRON_PLAYED_MIN_TICKS: u32 = 30;
 
 #[derive(Clone)]

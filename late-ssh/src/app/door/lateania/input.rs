@@ -15,7 +15,7 @@
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory). List panels auto-scroll to
 //     follow the cursor; [ / ] scroll the cursor-less text panels.
-//   - Esc leaves the world for the Lateania landing page.
+//   - Esc leaves the world for the Games hub.
 //
 // A full typed command prompt needs an input-capture mode; deferred.
 

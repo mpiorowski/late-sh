@@ -55,6 +55,9 @@ fn is_bot_author(username: &str) -> bool {
 // ── Dashboard chat card ─────────────────────────────────────
 
 pub struct DashboardChatView<'a> {
+    /// When present, the 3-row pet strip renders between the messages and
+    /// the composer (pet entitlement + tweak resolved by the caller).
+    pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
@@ -86,7 +89,6 @@ pub struct DashboardChatView<'a> {
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
-    pub bot_username_color_active: bool,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
@@ -523,13 +525,25 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
 }
 
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
+    let (messages, _, composer) = split_chat_pet_strip_and_composer(area, composer_height, 0);
+    (messages, composer)
+}
+
+/// Vertical layout for a chat surface: messages fill, then a 1-row gap, then
+/// an optional pet strip (0 rows when absent) directly above the composer.
+fn split_chat_pet_strip_and_composer(
+    area: Rect,
+    composer_height: u16,
+    pet_strip_height: u16,
+) -> (Rect, Rect, Rect) {
     let layout = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(CHAT_COMPOSER_GAP_HEIGHT),
+        Constraint::Length(pet_strip_height),
         Constraint::Length(composer_height),
     ])
     .split(area);
-    (layout[0], layout[2])
+    (layout[0], layout[2], layout[3])
 }
 
 fn draw_room_page_effects(frame: &mut Frame, area: Rect, effects: &[ActiveChatRoomEffect]) {
@@ -967,7 +981,16 @@ pub fn draw_dashboard_chat_card(
         ));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
-    let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let pet_strip_height = if view.pet_strip.is_some() {
+        crate::app::pet::ui::PET_STRIP_HEIGHT
+    } else {
+        0
+    };
+    let (mut messages_area, pet_strip_area, composer_area) =
+        split_chat_pet_strip_and_composer(area, composer_height, pet_strip_height);
+    if let Some(pet_strip) = &view.pet_strip {
+        crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
+    }
     if let Some(voice_channel_id) = view.voice_channel_id {
         let voice_view = crate::app::voice::ui::VoiceRoomView {
             snapshot: view.voice_snapshot,
@@ -1013,7 +1036,6 @@ pub fn draw_dashboard_chat_card(
                 bonsai_glyphs: view.bonsai_glyphs,
                 chat_badges: view.chat_badges,
                 profile_award_badges: view.profile_award_badges,
-                bot_username_color_active: view.bot_username_color_active,
                 message_reactions: view.message_reactions,
                 inline_images: view.inline_images,
                 unread_marker: view.unread_marker,
@@ -1095,7 +1117,6 @@ struct ChatRowsContext<'a> {
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     chat_badges: &'a HashMap<Uuid, String>,
     profile_award_badges: &'a HashMap<Uuid, String>,
-    bot_username_color_active: bool,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     unread_marker: Option<DateTime<Utc>>,
@@ -1215,7 +1236,6 @@ fn chat_rows_fingerprint(
     width.hash(&mut hasher);
     ctx.current_user_id.hash(&mut hasher);
     ctx.show_flag_fallback.hash(&mut hasher);
-    ctx.bot_username_color_active.hash(&mut hasher);
     ctx.unread_marker.hash(&mut hasher);
     theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
@@ -1339,10 +1359,6 @@ fn ensure_chat_rows_cache(
         } else if is_friend {
             Style::default()
                 .fg(theme::BADGE_GOLD())
-                .add_modifier(Modifier::BOLD)
-        } else if is_bot && ctx.bot_username_color_active {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD)
         } else if is_bot {
             Style::default().fg(theme::BOT())
@@ -2166,7 +2182,24 @@ pub(crate) fn draw_mention_autocomplete(
     let visible = visible_count as u16;
     let first_prefix = matches.first().map(|m| m.prefix).unwrap_or("@");
     let is_commands = first_prefix == "/";
-    let width = if is_commands { 52 } else { 26 }.min(anchor.width);
+    // Commands carry descriptions, so size the popup to the longest visible
+    // row (selection marker + padded name column + description) instead of a
+    // fixed width that clips long descriptions.
+    let width = if is_commands {
+        let content = matches
+            .iter()
+            .map(|m| {
+                let name_width = m.prefix.len() + m.name.len();
+                let pad = 16usize.saturating_sub(name_width).max(2);
+                3 + name_width + pad + m.description.map_or(0, str::len)
+            })
+            .max()
+            .unwrap_or(50);
+        content as u16 + 3 // borders + right pad
+    } else {
+        26
+    }
+    .min(anchor.width);
     let height = visible + 2; // borders
     let x = anchor.x + 1;
     let y = anchor.y.saturating_sub(height);
@@ -2222,6 +2255,9 @@ pub(crate) fn draw_mention_autocomplete(
 // ── Main chat screen ────────────────────────────────────────
 
 pub struct ChatRenderInput<'a> {
+    /// When present, the 3-row pet strip renders between the messages and
+    /// the composer (pet entitlement + tweak resolved by the caller).
+    pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
     pub feeds_selected: bool,
     pub feeds_processing: bool,
     pub feeds_unread_count: i64,
@@ -2274,7 +2310,6 @@ pub struct ChatRenderInput<'a> {
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
-    pub bot_username_color_active: bool,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -2466,7 +2501,6 @@ pub fn draw_embedded_room_chat(
             bonsai_glyphs: view.bonsai_glyphs,
             chat_badges: view.chat_badges,
             profile_award_badges: view.profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: view.message_reactions,
             inline_images: view.inline_images,
             unread_marker: view.unread_marker,
@@ -3460,6 +3494,15 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         if view.feeds_available {
             push_slot(RoomSlot::Feeds, &mut push_row);
         }
+        // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
+        if let Some((room, _)) = view.chat_rooms.iter().find(|(r, _)| {
+            is_chat_list_room(r)
+                && r.permanent
+                && r.slug.as_deref() == Some("voice")
+                && !favorite_ids.contains(&r.id)
+        }) {
+            push_slot(RoomSlot::Room(room.id), &mut push_row);
+        }
         // Discover ("+ browse rooms") is the last entry in Core.
         push_slot(RoomSlot::Discover, &mut push_row);
     }
@@ -3471,6 +3514,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             is_chat_list_room(r)
                 && r.kind != "dm"
                 && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
+                && r.slug.as_deref() != Some("voice")
                 && !favorite_ids.contains(&r.id)
         })
         .collect();
@@ -3684,8 +3728,16 @@ pub fn draw_chat_center(
     }
 
     let selection_mode = chat_selection_mode(&view, area);
-    let (messages_area, composer_area) =
-        split_chat_and_composer(area, selection_mode.composer_height());
+    let pet_strip_height = if view.pet_strip.is_some() {
+        crate::app::pet::ui::PET_STRIP_HEIGHT
+    } else {
+        0
+    };
+    let (messages_area, pet_strip_area, composer_area) =
+        split_chat_pet_strip_and_composer(area, selection_mode.composer_height(), pet_strip_height);
+    if let Some(pet_strip) = &view.pet_strip {
+        crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
+    }
 
     draw_selected_content(frame, messages_area, composer_area, view, terminal_images);
 }
@@ -3787,7 +3839,6 @@ fn draw_selected_content(
                     bonsai_glyphs: view.bonsai_glyphs,
                     chat_badges: view.chat_badges,
                     profile_award_badges: view.profile_award_badges,
-                    bot_username_color_active: view.bot_username_color_active,
                     message_reactions: view.message_reactions,
                     inline_images: view.inline_images,
                     unread_marker: view.room_unread_markers.get(&room.id).copied().flatten(),
@@ -4118,7 +4169,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
             unread_marker: None,
@@ -4176,7 +4226,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
             unread_marker: None,
@@ -4192,7 +4241,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
             unread_marker: None,
@@ -4245,7 +4293,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
-            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
             unread_marker: None,
@@ -4348,6 +4395,7 @@ mod tests {
         static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
 
         ChatRenderInput {
+            pet_strip: None,
             feeds_selected: false,
             feeds_processing: false,
             feeds_unread_count: 0,
@@ -4413,7 +4461,6 @@ mod tests {
             chat_badges,
             profile_award_badges,
             drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
-            bot_username_color_active: false,
             news_composer,
             news_composing: false,
             news_processing: false,

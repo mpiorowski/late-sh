@@ -9,6 +9,8 @@ use ratatui::{
 };
 
 use super::theme;
+use crate::app::activity::event::ActivityEvent;
+use crate::app::activity::panel::{ACTIVITY_PANEL_MIN_HEIGHT, ActivityPanelProps};
 use crate::app::audio::{
     client_state::ClientAudioState,
     stations,
@@ -17,14 +19,13 @@ use crate::app::audio::{
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai_v2::state::BonsaiV2State;
-use crate::app::pet::state::PetState;
 use late_core::models::user::{
     AudioSource, IcecastStream, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
 };
 
 const TIME_HEIGHT: u16 = 1;
 const RULE_HEIGHT: u16 = 1;
-const VISUALIZER_HEIGHT: u16 = 6;
+const VISUALIZER_HEIGHT: u16 = 4;
 // Full music stage: volume rows (2) + three dock entries (title +
 // now-playing, 6) + labeled rule (1) + detail area (6) + keybind footer
 // (1). Constant for ALL active sources — chrome must not move between
@@ -35,10 +36,11 @@ const MUSIC_STAGE_HEIGHT: u16 = 16;
 // Nightride attribution row).
 const MUSIC_DETAIL_HEIGHT: u16 = 6;
 const MUSIC_QUEUE_HEIGHT: u16 = 3;
-// Bonsai is kept fixed when shown.
-const BONSAI_MIN_HEIGHT: u16 = 16;
-// Cat: 3 art rows + 1 footer row.
-const CAT_HEIGHT: u16 = 4;
+// Bonsai is kept fixed when shown; the preview renderer scales the tree to
+// whatever height it gets.
+const BONSAI_MIN_HEIGHT: u16 = 10;
+// Daily games: fixed, stable chrome (see `daily/panel.rs`).
+const DAILY_HEIGHT: u16 = crate::app::daily::panel::DAILY_PANEL_HEIGHT;
 
 // The visible credit Nightride asked for; rendered as the last detail row
 // while the radio source is active.
@@ -54,8 +56,6 @@ pub(crate) struct SidebarProps<'a> {
     pub bonsai: &'a BonsaiState,
     pub bonsai_v2: &'a BonsaiV2State,
     pub use_bonsai_v2: bool,
-    pub cat: &'a PetState,
-    pub pet_available: bool,
     pub audio_beat: f32,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
@@ -64,11 +64,12 @@ pub(crate) struct SidebarProps<'a> {
     /// Count of users whose saved audio source is YouTube. Rendered as the
     /// YouTube block's title-bar tag; connection shape is ignored.
     pub youtube_source_count: usize,
-    /// Count of users whose saved audio source is Icecast/default. Rendered
-    /// as the Icecast block's title-bar tag.
+    /// Count of users whose saved audio source is Icecast. Rendered as the
+    /// Icecast block's title-bar tag.
     pub icecast_source_count: usize,
-    /// Count of users whose saved audio source is the direct radio preset.
-    /// Rendered as the radio block's title-bar tag.
+    /// Count of users whose saved audio source is the direct radio preset
+    /// (the default for users who never picked one). Rendered as the radio
+    /// block's title-bar tag.
     pub radio_source_count: usize,
     /// Per-user paired-browser audio source preference (mirrors
     /// `users.settings.audio_source`, cycled by v+x). Picks which source
@@ -87,6 +88,21 @@ pub(crate) struct SidebarProps<'a> {
     pub radio_now_playing: Option<&'a str>,
     /// AFK message from /brb; None = not AFK.
     pub afk: Option<&'a str>,
+    /// Daily correspondence games: my matches, lobby activity, glow.
+    pub daily: &'a crate::app::daily::state::DailyState,
+    /// Rolling feed of recent activity events for the Activity panel.
+    pub activity_events: &'a std::collections::VecDeque<ActivityEvent>,
+    /// Humans currently connected (bots excluded), for the Activity header.
+    pub online_count: usize,
+    /// Connected friends, compacted into the Activity panel's friends row.
+    pub active_friend_names: &'a [String],
+    /// Mouse-wheel scroll offset into the activity feed (0 = newest).
+    pub activity_scroll: u16,
+    /// Free-running frame counter for the Activity panel's marquee rows.
+    pub marquee_tick: usize,
+    /// Receives the Activity panel's rendered rect each frame so mouse-wheel
+    /// hit-testing in `app::input` can route scroll events to it.
+    pub activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
@@ -108,27 +124,34 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     };
 
     // Responsiveness: the clock is pinned at the top, then enabled panels
-    // render in the user's chosen order. When space runs short we cut from the
-    // top of the list (the first/topmost panel goes first), keeping the run of
-    // bottom panels that fits. Every panel renders at its full height or not at
-    // all; any leftover rows collect just above the final panel, which sticks
-    // to the bottom of the rail.
+    // render in the user's chosen order. When space runs short panels are
+    // dropped by `shrink_priority` (ambience first, music stage last), not
+    // by list position. Every panel renders at its full height or not at
+    // all. Leftover rows go to the Activity panel (the one flexible panel)
+    // when it is visible; otherwise they collect just above the final panel,
+    // which sticks to the bottom of the rail.
     let visible = visible_components(props.components, area.height);
+    let activity_visible = visible.contains(&RightSidebarComponent::Activity);
 
     // Vertical real estate, top to bottom: time, then each visible panel
-    // (rule + body at its fixed height). For the final panel the flexible
-    // spacer sits between its rule and its body, so the rule stays in the
-    // natural flow under the panel above while the body sticks to the bottom
-    // of the rail. Every panel renders at its full height or not at all —
-    // nothing is clipped.
+    // (rule + body at its fixed height; Activity's body is a Min so it
+    // absorbs the slack). Without a visible Activity panel, the flexible
+    // spacer sits between the final panel's rule and body, so the rule stays
+    // in the natural flow under the panel above while the body sticks to the
+    // bottom of the rail. Every panel renders at its full height or not at
+    // all — nothing is clipped.
     let last = visible.len().saturating_sub(1);
     let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
     for (idx, component) in visible.iter().enumerate() {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-        if idx == last {
+        if idx == last && !activity_visible {
             constraints.push(Constraint::Fill(1)); // drop the last body to the bottom
         }
-        constraints.push(Constraint::Length(component_height(*component)));
+        constraints.push(if *component == RightSidebarComponent::Activity {
+            Constraint::Min(component_height(*component))
+        } else {
+            Constraint::Length(component_height(*component))
+        });
     }
     if visible.is_empty() {
         constraints.push(Constraint::Fill(1));
@@ -153,9 +176,25 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     i += 1;
 
     for (idx, component) in visible.iter().enumerate() {
-        draw_horizontal_rule(frame, inset(layout[i]));
+        // Each panel's separator rule doubles as its section title
+        // (`── lobby ────`), so panels don't spend a body row on a name.
+        // The lobby label glows while it's the viewer's turn in any match or
+        // a finished match's result is waiting to be acknowledged.
+        let rule_active = *component == RightSidebarComponent::Daily
+            && (props
+                .daily
+                .my_matches()
+                .iter()
+                .any(|item| props.daily.my_turn(item))
+                || !props.daily.my_finished().is_empty());
+        draw_panel_rule(
+            frame,
+            inset(layout[i]),
+            panel_rule_label(*component),
+            rule_active,
+        );
         i += 1;
-        if idx == last {
+        if idx == last && !activity_visible {
             i += 1; // skip the spacer that drops the last body to the bottom
         }
         let body = inset(layout[i]);
@@ -180,15 +219,23 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                         youtube_source_count: props.youtube_source_count,
                         icecast_source_count: props.icecast_source_count,
                         radio_source_count: props.radio_source_count,
+                        marquee_tick: props.marquee_tick,
                     },
                 );
             }
-            RightSidebarComponent::Pet => {
-                if props.pet_available {
-                    crate::app::pet::ui::draw_cat_inline(frame, body, props.cat);
-                } else {
-                    draw_cat_locked(frame, body);
-                }
+            RightSidebarComponent::Activity => {
+                crate::app::activity::panel::draw_activity_inline(
+                    frame,
+                    body,
+                    &ActivityPanelProps {
+                        events: props.activity_events,
+                        online_count: props.online_count,
+                        active_friend_names: props.active_friend_names,
+                        scroll: props.activity_scroll,
+                        marquee_tick: props.marquee_tick,
+                    },
+                    props.activity_rect_slot,
+                );
             }
             RightSidebarComponent::Bonsai => {
                 if props.use_bonsai_v2 {
@@ -207,96 +254,73 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                     );
                 }
             }
+            RightSidebarComponent::Daily => {
+                crate::app::daily::panel::draw_daily_inline(frame, body, props.daily);
+            }
         }
     }
 }
 
-/// Fixed rows a panel needs to render (excluding its rule). A panel shows at
-/// this full height or not at all; the music stage in particular is never
-/// clipped to a partial viewport.
+/// Rows a panel needs to render (excluding its rule). A panel shows at this
+/// full height or not at all; the music stage in particular is never clipped
+/// to a partial viewport. Activity is the exception in the other direction:
+/// this is its minimum, and it grows into whatever the rail has left over.
 fn component_height(component: RightSidebarComponent) -> u16 {
     match component {
         RightSidebarComponent::Visualizer => VISUALIZER_HEIGHT,
         RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
-        RightSidebarComponent::Pet => CAT_HEIGHT,
+        RightSidebarComponent::Activity => ACTIVITY_PANEL_MIN_HEIGHT,
         RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
+        RightSidebarComponent::Daily => DAILY_HEIGHT,
+    }
+}
+
+/// How eagerly a panel is dropped when the rail runs out of rows: higher
+/// drops first. Deliberately independent of display order — reordering the
+/// sidebar changes where panels sit, not which ones survive a short
+/// terminal. Ambience (visualizer, bonsai) goes first; the music stage is
+/// the last panel standing.
+fn shrink_priority(component: RightSidebarComponent) -> u8 {
+    match component {
+        RightSidebarComponent::Visualizer => 4, // first to go
+        RightSidebarComponent::Bonsai => 3,
+        RightSidebarComponent::Daily => 2,
+        RightSidebarComponent::Activity => 1,
+        RightSidebarComponent::Music => 0, // last panel standing
     }
 }
 
 /// Pick which enabled panels fit, in render order, given the available height.
-/// Cuts from the top: we keep the longest run of bottom panels that fits,
-/// dropping the topmost panels first (so e.g. the visualizer goes before the
-/// music stage when it sits above it).
+/// Panels are kept most-important-first (`shrink_priority`); a panel that
+/// doesn't fit is skipped rather than ending the walk, so one tall panel
+/// can't shadow a short one that would still fit.
 fn visible_components(
     components: &[RightSidebarComponentSetting],
     height: u16,
 ) -> Vec<RightSidebarComponent> {
     let mut remaining = height.saturating_sub(TIME_HEIGHT);
-    let mut visible = Vec::new();
-    // Walk bottom to top, keeping panels until one doesn't fit; everything
-    // above that point is cut.
-    for setting in components.iter().rev() {
-        if !setting.enabled {
-            continue;
-        }
-        let need = RULE_HEIGHT + component_height(setting.component);
+    let enabled: Vec<RightSidebarComponent> = components
+        .iter()
+        .filter(|setting| setting.enabled)
+        .map(|setting| setting.component)
+        .collect();
+
+    let mut by_priority = enabled.clone();
+    by_priority.sort_by_key(|component| shrink_priority(*component));
+    let mut keep = Vec::new();
+    for component in by_priority {
+        let need = RULE_HEIGHT + component_height(component);
         if need <= remaining {
-            visible.push(setting.component);
             remaining -= need;
-        } else {
-            break;
+            keep.push(component);
         }
     }
-    // Restore top-to-bottom render order.
-    visible.reverse();
-    visible
-}
 
-fn draw_cat_locked(frame: &mut Frame, area: Rect) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-
-    let top = Rect {
-        x: area.x,
-        y: area.y + area.height.saturating_sub(2) / 2,
-        width: area.width,
-        height: 1,
-    };
-    let bottom = Rect {
-        x: area.x,
-        y: top.y.saturating_add(1),
-        width: area.width,
-        height: 1,
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "cat locked",
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        )))
-        .centered(),
-        top,
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "CTRL-G",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " for shop",
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]))
-        .centered(),
-        bottom,
-    );
+    // Survivors render in the user's display order.
+    enabled
+        .into_iter()
+        .filter(|component| keep.contains(component))
+        .collect()
 }
 
 /// Top-of-rail time. Centered, `⊙` glyph in dim amber, optional timezone
@@ -349,14 +373,42 @@ fn draw_time_top(frame: &mut Frame, area: Rect, clock_text: &str, afk: Option<&s
     frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
 }
 
-fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
+/// Section name rendered into each panel's separator rule. Keeps panel
+/// bodies free of title rows: the divider IS the title.
+fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
+    match component {
+        RightSidebarComponent::Visualizer => "visualizer",
+        RightSidebarComponent::Music => "music",
+        RightSidebarComponent::Activity => "activity",
+        RightSidebarComponent::Bonsai => "bonsai",
+        RightSidebarComponent::Daily => "lobby",
+    }
+}
+
+/// `── label ────` separator-with-title above each panel. `active` swaps the
+/// label to bold amber for attention (the lobby's your-turn glow).
+fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let line = Line::from(Span::styled(
-        "─".repeat(area.width as usize),
-        Style::default().fg(theme::BORDER_DIM()),
-    ));
+    let label_style = if active {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme::AMBER_DIM())
+            .add_modifier(Modifier::ITALIC)
+    };
+    let width = area.width as usize;
+    let used = 3 + label.chars().count() + 1;
+    let trail = width.saturating_sub(used).max(1);
+    let line = Line::from(vec![
+        Span::styled("── ".to_string(), Style::default().fg(theme::BORDER_DIM())),
+        Span::styled(label.to_string(), label_style),
+        Span::raw(" "),
+        Span::styled("─".repeat(trail), Style::default().fg(theme::BORDER_DIM())),
+    ]);
     frame.render_widget(Paragraph::new(line), area);
 }
 
@@ -373,13 +425,17 @@ struct MusicStageProps<'a> {
     youtube_source_count: usize,
     icecast_source_count: usize,
     radio_source_count: usize,
+    /// Free-running frame counter driving the marquee on now-playing rows
+    /// too long for the rail (same clock as the Activity panel's rows).
+    marquee_tick: usize,
 }
 
 /// Music stage: fixed dock + fixed detail area. Rows 0-1 volume, rows 2-7
-/// a three-source dock in order youtube → radio → icecast (title bar +
-/// now-playing line per source), row 8 a labeled rule naming the active
-/// source, rows 9-13 the active source's controls padded to a constant
-/// height, row 14 the keybind footer.
+/// a three-source dock in order radio → youtube → icecast (title bar +
+/// now-playing line per source; radio leads because it is the default
+/// source for new users), row 8 a labeled rule naming the active source,
+/// rows 9-13 the active source's controls padded to a constant height,
+/// row 14 the keybind footer.
 ///
 /// Two product rules (user requirements):
 /// - Every source ALWAYS shows its now-playing line, even when inactive.
@@ -392,7 +448,7 @@ struct MusicStageProps<'a> {
 /// The active source follows the saved preference alone, not whether a
 /// client is currently paired — the sidebar reflects it from the first
 /// frame, before the browser has finished pairing. `v+x` cycles sources
-/// in dock order (youtube → radio → icecast), so the amber `▌` accent
+/// in dock order (radio → youtube → icecast), so the amber `▌` accent
 /// walks down the dock as the user cycles.
 fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
     if area.width == 0 || area.height == 0 {
@@ -411,17 +467,6 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
 
     lines.push(stage_title_line(
         width,
-        "youtube",
-        Some(&props.youtube_source_count.to_string()),
-        source == AudioSource::Youtube,
-    ));
-    lines.push(dock_track_line(
-        width,
-        Some(&youtube_track_text(props.queue)),
-        source == AudioSource::Youtube,
-    ));
-    lines.push(stage_title_line(
-        width,
         "radio",
         Some(&props.radio_source_count.to_string()),
         source == AudioSource::Radio,
@@ -431,6 +476,19 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
         width,
         Some(props.radio_now_playing.unwrap_or(station_name)),
         source == AudioSource::Radio,
+        props.marquee_tick,
+    ));
+    lines.push(stage_title_line(
+        width,
+        "youtube",
+        Some(&props.youtube_source_count.to_string()),
+        source == AudioSource::Youtube,
+    ));
+    lines.push(dock_track_line(
+        width,
+        Some(&youtube_track_text(props.queue)),
+        source == AudioSource::Youtube,
+        props.marquee_tick,
     ));
     lines.push(stage_title_line(
         width,
@@ -442,12 +500,13 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
         width,
         props.now_playing.map(icecast_track_text).as_deref(),
         source == AudioSource::Icecast,
+        props.marquee_tick,
     ));
 
     lines.push(labeled_rule_line(width, source_label(source)));
 
     let mut detail = match source {
-        AudioSource::Youtube => youtube_detail_lines(width, props.queue),
+        AudioSource::Youtube => youtube_detail_lines(width, props.queue, props.marquee_tick),
         AudioSource::Icecast => {
             icecast_detail_lines(width, props.now_playing, props.selected_stream)
         }
@@ -474,8 +533,9 @@ fn source_label(source: AudioSource) -> &'static str {
 }
 
 /// Dock now-playing row. The active source's track brightens; inactive
-/// stays dim. `None` renders the icecast `no signal` placeholder.
-fn dock_track_line(width: u16, track: Option<&str>, active: bool) -> Line<'static> {
+/// stays dim. `None` renders the icecast `no signal` placeholder. Tracks
+/// longer than the rail scroll (marquee) so the full name stays readable.
+fn dock_track_line(width: u16, track: Option<&str>, active: bool, tick: usize) -> Line<'static> {
     match track {
         Some(text) => {
             let style = if active {
@@ -485,7 +545,10 @@ fn dock_track_line(width: u16, track: Option<&str>, active: bool) -> Line<'stati
             } else {
                 Style::default().fg(theme::TEXT_DIM())
             };
-            Line::from(Span::styled(truncate_chars(text, width as usize), style))
+            Line::from(Span::styled(
+                crate::app::common::marquee::marquee_text(text, width as usize, tick),
+                style,
+            ))
         }
         None => Line::from(Span::styled(
             "no signal",
@@ -649,7 +712,7 @@ fn keybind_row_line(width: u16, groups: &[(&str, &str)]) -> Line<'static> {
 /// YouTube detail rows (≤ 5; caller pads): progress/elapsed, skip meter or
 /// blank, `next ⌄`, then up to `MUSIC_QUEUE_HEIGHT` queue rows or
 /// `· fallback next`. With nothing submitted, the fallback-stream hints.
-fn youtube_detail_lines(width: u16, queue: &QueueSnapshot) -> Vec<Line<'static>> {
+fn youtube_detail_lines(width: u16, queue: &QueueSnapshot, tick: usize) -> Vec<Line<'static>> {
     let width = width as usize;
     let mut lines = Vec::with_capacity(MUSIC_DETAIL_HEIGHT as usize);
 
@@ -699,7 +762,7 @@ fn youtube_detail_lines(width: u16, queue: &QueueSnapshot) -> Vec<Line<'static>>
                 .take(MUSIC_QUEUE_HEIGHT as usize)
                 .enumerate()
             {
-                lines.push(queue_next_line(idx, item, width));
+                lines.push(queue_next_line(idx, item, width, tick));
             }
         }
     } else {
@@ -925,8 +988,9 @@ fn skip_meter_spans(progress: &super::super::audio::svc::SkipProgress) -> Vec<Sp
 }
 
 /// One entry in the YouTube "next" list. Number, title, then a dim score
-/// right-aligned: `+N` (positive), `-N` (negative), `·` (zero).
-fn queue_next_line(idx: usize, item: &QueueItemView, width: usize) -> Line<'static> {
+/// right-aligned: `+N` (positive), `-N` (negative), `·` (zero). Long titles
+/// scroll (marquee) inside their budget.
+fn queue_next_line(idx: usize, item: &QueueItemView, width: usize, tick: usize) -> Line<'static> {
     let n_text = format!("{}  ", idx + 1);
     let title = item
         .title
@@ -952,7 +1016,7 @@ fn queue_next_line(idx: usize, item: &QueueItemView, width: usize) -> Line<'stat
     let prefix_w = n_text.chars().count();
     let score_w = score_text.chars().count();
     let title_budget = width.saturating_sub(prefix_w + score_w + 2);
-    let title_text = truncate_chars(&title, title_budget);
+    let title_text = crate::app::common::marquee::marquee_text(&title, title_budget, tick);
     let pad = title_budget.saturating_sub(title_text.chars().count());
 
     Line::from(vec![
@@ -1043,6 +1107,7 @@ mod tests {
                 youtube_source_count: 3,
                 icecast_source_count: 9,
                 radio_source_count: 1,
+                marquee_tick: 0,
             },
         )
     }
@@ -1063,8 +1128,8 @@ mod tests {
             let lines = stage_lines(source);
             let texts: Vec<String> = lines.iter().map(line_text).collect();
             assert_eq!(texts.len(), MUSIC_STAGE_HEIGHT as usize, "{source:?}");
-            assert!(texts[2].starts_with("▌ youtube"), "{source:?}");
-            assert!(texts[4].starts_with("▌ radio"), "{source:?}");
+            assert!(texts[2].starts_with("▌ radio"), "{source:?}");
+            assert!(texts[4].starts_with("▌ youtube"), "{source:?}");
             assert!(texts[6].starts_with("▌ icecast"), "{source:?}");
             assert!(texts[8].starts_with("── "), "{source:?}");
             assert!(texts[8].contains(source_label(source)), "{source:?}");
@@ -1076,8 +1141,8 @@ mod tests {
     fn music_stage_dock_rows_always_show_now_playing() {
         for source in ALL_SOURCES {
             let texts: Vec<String> = stage_lines(source).iter().map(line_text).collect();
-            assert_eq!(texts[3], "fallback stream", "{source:?}");
-            assert_eq!(texts[5], "chillsynth", "{source:?}");
+            assert_eq!(texts[3], "chillsynth", "{source:?}");
+            assert_eq!(texts[5], "fallback stream", "{source:?}");
             assert_eq!(texts[7], "no signal", "{source:?}");
         }
     }
@@ -1086,8 +1151,8 @@ mod tests {
     fn music_stage_dock_rows_keep_listener_counts() {
         for source in ALL_SOURCES {
             let texts: Vec<String> = stage_lines(source).iter().map(line_text).collect();
-            assert!(texts[2].trim_end().ends_with('3'), "{source:?}");
-            assert!(texts[4].trim_end().ends_with('1'), "{source:?}");
+            assert!(texts[2].trim_end().ends_with('1'), "{source:?}");
+            assert!(texts[4].trim_end().ends_with('3'), "{source:?}");
             assert!(texts[6].trim_end().ends_with('9'), "{source:?}");
         }
     }
@@ -1129,7 +1194,7 @@ mod tests {
         assert!(texts[13].trim_end().ends_with("v5"));
         assert!(texts[14].contains("nightride.fm"));
         // The selected station also names the radio dock row.
-        assert_eq!(texts[5], "datawave");
+        assert_eq!(texts[3], "datawave");
     }
 
     #[test]
@@ -1148,10 +1213,11 @@ mod tests {
                 youtube_source_count: 3,
                 icecast_source_count: 9,
                 radio_source_count: 1,
+                marquee_tick: 0,
             },
         );
         let texts: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(texts[5], "An Artist - A Track");
+        assert_eq!(texts[3], "An Artist - A Track");
     }
 
     fn on(component: RightSidebarComponent) -> RightSidebarComponentSetting {
@@ -1174,7 +1240,7 @@ mod tests {
             on(RightSidebarComponent::Bonsai),
             on(RightSidebarComponent::Music),
             on(RightSidebarComponent::Visualizer),
-            on(RightSidebarComponent::Pet),
+            on(RightSidebarComponent::Activity),
         ];
         // Tall enough for everything: order is preserved exactly.
         assert_eq!(
@@ -1183,7 +1249,7 @@ mod tests {
                 RightSidebarComponent::Bonsai,
                 RightSidebarComponent::Music,
                 RightSidebarComponent::Visualizer,
-                RightSidebarComponent::Pet,
+                RightSidebarComponent::Activity,
             ]
         );
     }
@@ -1193,7 +1259,7 @@ mod tests {
         let components = [
             off(RightSidebarComponent::Visualizer),
             on(RightSidebarComponent::Music),
-            off(RightSidebarComponent::Pet),
+            off(RightSidebarComponent::Activity),
             on(RightSidebarComponent::Bonsai),
         ];
         assert_eq!(
@@ -1203,17 +1269,33 @@ mod tests {
     }
 
     #[test]
-    fn visible_components_cuts_from_the_top() {
-        // Order: bonsai (16), visualizer (6), music (16). With room for
-        // time + visualizer + music but not bonsai, the topmost panel (bonsai)
-        // is cut while the panels below it are kept.
+    fn visible_components_drops_by_priority_not_position() {
+        // Music sits at the TOP of the display order. With room for only one
+        // panel, music survives (lowest shrink priority) even though the old
+        // cut-from-the-top rule would have dropped it first.
         let components = [
+            on(RightSidebarComponent::Music),
             on(RightSidebarComponent::Bonsai),
+        ];
+        let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + 1;
+        assert_eq!(
+            visible_components(&components, height),
+            vec![RightSidebarComponent::Music]
+        );
+    }
+
+    #[test]
+    fn visible_components_skips_unfit_panel_without_stopping() {
+        // Bonsai (10) doesn't fit but the visualizer (4) below the cut still
+        // does: the walk skips bonsai instead of ending, so lower-priority
+        // panels that fit are kept.
+        let components = [
             on(RightSidebarComponent::Visualizer),
             on(RightSidebarComponent::Music),
+            on(RightSidebarComponent::Bonsai),
         ];
         let height =
-            TIME_HEIGHT + RULE_HEIGHT + VISUALIZER_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + 1;
+            TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + RULE_HEIGHT + VISUALIZER_HEIGHT;
         assert_eq!(
             visible_components(&components, height),
             vec![

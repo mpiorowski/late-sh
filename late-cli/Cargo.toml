@@ -33,17 +33,16 @@ shlex.workspace = true
 symphonia = { workspace = true, features = ["mp3"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 
-# Embedded webview for CLI-side YouTube (see late-ssh/src/app/audio/CONTEXT.md §17).
-# Linux requires WebKitGTK 4.1 dev/runtime packages plus GStreamer plugins
-# including gst-plugins-good (`autoaudiosink`) for media playback.
-wry = "0.55"
-tao = "0.34"
-
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["term", "process", "signal", "fs"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+# Embedded webview for CLI-side YouTube (see late-ssh/src/app/audio/CONTEXT.md §17).
+# In-process on Windows/macOS only, where the system webview has no load-time
+# dependency risk. On Linux the CLI spawns the standalone `late-webview`
+# helper binary instead, so `late` itself must never link WebKitGTK/GTK —
+# a host without the webview stack still has to run the CLI.
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+late-webview = { path = "../late-webview" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 arboard.workspace = true

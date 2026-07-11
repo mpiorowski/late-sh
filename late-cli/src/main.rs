@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use std::{
     env,
-    io::BufRead,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
@@ -18,7 +17,6 @@ mod raw_mode;
 mod ssh;
 mod update;
 mod voice;
-mod webview;
 mod ws;
 
 use audio::{AudioRuntime, audio_startup_hint};
@@ -123,14 +121,19 @@ fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+// Windows/macOS run the webview in-process: the system webview
+// (WebView2/WKWebView) carries no load-time dependency risk, so `late`
+// stays a single binary there.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn run_webview_spike_subcommand(args: &[String]) -> Result<()> {
     let video_id = args
         .first()
         .context("usage: late webview-spike <video_id>")?;
     let _ = init_logging(true)?;
-    webview::run_spike(video_id)
+    late_webview::run_spike(video_id)
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
     if !args.is_empty() {
         anyhow::bail!("usage: late webview-pair (token is read from stdin)");
@@ -139,7 +142,7 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
     let api_base_url =
         env::var("LATE_API_BASE_URL").unwrap_or_else(|_| config::DEFAULT_API_BASE_URL.to_string());
     let _ = init_logging(true)?;
-    webview::run_relay(None, move |proxy, ipc_rx| {
+    late_webview::run_relay(None, move |proxy, ipc_rx| {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -147,19 +150,22 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
             Ok(rt) => rt,
             Err(err) => {
                 error!(error = %err, "failed to build webview pair runtime");
-                let _ = proxy.send_event(webview::WebviewCommand::Shutdown);
+                let _ = proxy.send_event(late_webview::WebviewCommand::Shutdown);
                 return;
             }
         };
         rt.block_on(async move {
-            if let Err(err) = webview::pair::run(&api_base_url, &token, proxy, ipc_rx).await {
+            if let Err(err) = late_webview::pair::run(&api_base_url, &token, proxy, ipc_rx).await {
                 error!(error = %err, "webview pair task ended with error");
             }
         });
     })
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn read_webview_pair_token_from_stdin() -> Result<String> {
+    use std::io::BufRead;
+
     let mut token = String::new();
     std::io::stdin()
         .lock()
@@ -173,6 +179,44 @@ fn read_webview_pair_token_from_stdin() -> Result<String> {
         anyhow::bail!("webview pair token was invalid");
     }
     Ok(token)
+}
+
+// Everywhere else `late` never links the webview stack; these subcommands
+// forward to the standalone `late-webview` helper binary (token/stdin and
+// LATE_API_BASE_URL pass through inherited stdio/env).
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn run_webview_spike_subcommand(args: &[String]) -> Result<()> {
+    let video_id = args
+        .first()
+        .context("usage: late webview-spike <video_id>")?;
+    forward_to_webview_helper(&["spike", video_id])
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
+    if !args.is_empty() {
+        anyhow::bail!("usage: late webview-pair (token is read from stdin)");
+    }
+    forward_to_webview_helper(&[])
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn forward_to_webview_helper(args: &[&str]) -> Result<()> {
+    let program = ws::webview_helper_program();
+    let status = std::process::Command::new(&program)
+        .args(args)
+        .status()
+        .with_context(|| {
+            format!(
+                "failed to run the webview helper at {} — is late-webview installed \
+                 next to late? (set LATE_WEBVIEW_BIN to override)",
+                program.display()
+            )
+        })?;
+    if !status.success() {
+        anyhow::bail!("webview helper exited with {status}");
+    }
+    Ok(())
 }
 
 async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBuf>) -> Result<()> {

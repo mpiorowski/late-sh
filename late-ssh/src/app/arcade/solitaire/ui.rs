@@ -40,7 +40,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         keys: keys_line(vec![
             ("h/j/k/l", "move"),
             ("Space", "select/place"),
-            ("a", "auto"),
+            ("a/f", "auto"),
             ("u", "undo"),
             ("d/p/n", "new"),
             ("[ ]", "draw"),

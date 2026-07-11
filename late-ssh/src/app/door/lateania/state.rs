@@ -63,6 +63,8 @@ pub struct State {
     joined: bool,
     join_pending: bool,
     join_requested_at: Instant,
+    reset_version: u64,
+    reset_elsewhere: bool,
 }
 
 impl State {
@@ -71,6 +73,11 @@ impl State {
         let join_requested_at = Instant::now();
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
+        let reset_version = snapshot
+            .reset_versions
+            .get(&user_id)
+            .copied()
+            .unwrap_or_default();
         let state = Self {
             user_id,
             session_id,
@@ -83,6 +90,8 @@ impl State {
             joined: true,
             join_pending: true,
             join_requested_at,
+            reset_version,
+            reset_elsewhere: false,
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -91,6 +100,19 @@ impl State {
     pub fn tick(&mut self) {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+        }
+        let reset_version = self
+            .snapshot
+            .reset_versions
+            .get(&self.user_id)
+            .copied()
+            .unwrap_or_default();
+        if reset_version > self.reset_version {
+            self.reset_version = reset_version;
+            self.joined = false;
+            self.join_pending = false;
+            self.reset_elsewhere = true;
+            return;
         }
         if self.snapshot.players.contains_key(&self.user_id) {
             self.join_pending = false;
@@ -125,6 +147,10 @@ impl State {
             .get(&self.user_id)
             .cloned()
             .unwrap_or_else(empty_player_view)
+    }
+
+    pub fn reset_elsewhere(&self) -> bool {
+        self.reset_elsewhere
     }
 
     pub fn player_count(&self) -> usize {

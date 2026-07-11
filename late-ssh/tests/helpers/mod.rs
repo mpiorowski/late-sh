@@ -18,6 +18,7 @@ use late_ssh::app::arcade::snake::svc::SnakeService;
 use late_ssh::app::arcade::solitaire::svc::SolitaireService;
 use late_ssh::app::arcade::sudoku::svc::SudokuService;
 use late_ssh::app::arcade::tetris::svc::LaterisService;
+use late_ssh::app::arcade::traffic::svc::TrafficService;
 use late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
@@ -249,6 +250,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = LaterisService::new(db.clone());
     let snake_service = SnakeService::new(db.clone());
+    let traffic_service = TrafficService::new(db.clone());
     let le_word_service = LeWordService::new(db.clone(), activity_tx.clone());
     let rubiks_cube_service = RubiksCubeService::new(db.clone(), activity_tx.clone());
     let chip_service = ChipService::new(db.clone());
@@ -308,6 +310,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         twenty_forty_eight_service,
         tetris_service,
         snake_service,
+        traffic_service,
         le_word_service,
         rubiks_cube_service,
         sudoku_service,
@@ -327,6 +330,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             activity_publisher.clone(),
             chip_service.clone(),
             db.clone(),
+        ),
+        daily_service: late_ssh::app::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
         ),
         rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
@@ -441,10 +448,13 @@ fn make_app_with_chat_service_and_permissions(
         initial_2048_high_score: None,
         tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
+        traffic_service: TrafficService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
+        initial_traffic_track_scores: Vec::new(),
+        initial_traffic_high_score: None,
         le_word_service: LeWordService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         rubiks_cube_service: RubiksCubeService::new(db.clone(), activity_tx.clone()),
         initial_le_word_daily_word: None,
@@ -475,6 +485,10 @@ fn make_app_with_chat_service_and_permissions(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
             chip_service.clone(),
             db.clone(),
+        ),
+        daily_service: late_ssh::app::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
         ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
@@ -531,6 +545,7 @@ fn make_app_with_chat_service_and_permissions(
         ai_service: None,
         clubhouse_lobby: None,
         clubhouse_tutorial_done: true,
+        show_aquarium_tray: false,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
         activity_feed_rx: None,
@@ -602,10 +617,13 @@ pub fn make_app_with_paired_client(
         initial_2048_high_score: None,
         tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
+        traffic_service: TrafficService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
+        initial_traffic_track_scores: Vec::new(),
+        initial_traffic_high_score: None,
         le_word_service: LeWordService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         rubiks_cube_service: RubiksCubeService::new(db.clone(), activity_tx.clone()),
         initial_le_word_daily_word: None,
@@ -636,6 +654,10 @@ pub fn make_app_with_paired_client(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
             chip_service.clone(),
             db.clone(),
+        ),
+        daily_service: late_ssh::app::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
         ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
@@ -692,6 +714,7 @@ pub fn make_app_with_paired_client(
         ai_service: None,
         clubhouse_lobby: None,
         clubhouse_tutorial_done: true,
+        show_aquarium_tray: false,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
         activity_feed_rx: None,

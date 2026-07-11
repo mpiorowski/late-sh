@@ -207,7 +207,7 @@ INSTANCE2_OVERRIDES = \
   LATE_LIVEKIT_RTC_TCP_PORT=7884 \
   LATE_LIVEKIT_RTC_UDP_PORT=7885
 
-CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web
+CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview
 CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 CHECK_INSTANCE ?= late-check
 CHECK_PG_HOST_PORT ?= 55433

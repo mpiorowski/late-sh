@@ -6,13 +6,11 @@
 //! **Licensing.** The effect mechanics (gold/gem ranges, roll tables, heal/turn
 //! deltas) are transcribed 1=1 from those modules — pure numbers, uncopyrightable
 //! — exactly like the creature stat blocks in [`super::data`]. All prose here is
-//! **original to late.sh**; no module text is copied. Two events are adapted
-//! rather than ported verbatim because we lack the systems they depend on:
-//!   - `glowingstream` rolls 1..=10; cases 8..=10 fall through to a plain full
-//!     heal (the module's `default:`), kept as-is.
-//!   - `darkhorse` is mostly PvP enemy-intel, a dice gambling minigame, and a
-//!     shared comment board — none of which exist single-player. It's reduced to
-//!     a roadside rest (a drink that restores health). The trim is deliberate.
+//! **original to late.sh**; no module text is copied. One adaptation:
+//! `glowingstream` rolls 1..=10 and cases 8..=10 fall through to a plain full
+//! heal (the module's `default:`), kept as-is. `darkhorse` opens the real
+//! tavern room (the gambler's three games, `state`'s `Mode::Tavern`); its
+//! PvP enemy-intel and comment board wait for the multiplayer phase.
 
 use rand::Rng;
 
@@ -35,7 +33,8 @@ pub enum ForestEvent {
     PettingZoo,
     /// Foilwench, who trades a gem for specialty training (`foilwench`).
     Foilwench,
-    /// The Dark Horse Tavern: a place to rest (`darkhorse`, reduced).
+    /// The Dark Horse Tavern (`darkhorse`): accepting opens the real room —
+    /// the gambler's games — via the state machine, not this resolver.
     Tavern,
 }
 
@@ -174,9 +173,9 @@ impl ForestEvent {
                 title: self.title(),
                 intro: vec![
                     "A mist rolls in, and when it clears a log tavern stands before you, smoke curling from its chimney.",
-                    "It's quiet inside, a good place to sit a while and let your wounds close.",
+                    "Through the shutters you catch lamplight, laughter, and the unmistakable rattle of dice.",
                 ],
-                choice: Some(("Stop in for a drink", "Move on")),
+                choice: Some(("Step inside", "Move on")),
             },
         }
     }
@@ -251,16 +250,31 @@ impl ForestEvent {
                     "A rich pocket! You haul out {gold} gold and {gems} gem(s), losing a forest fight to the labor."
                 )]
             }
-            // 19..=20: greed brings the roof down. Upstream still credits 10%
-            // experience ("you learned about mining") and leaves gold/gems be.
+            // 19..=20: greed brings the roof down. The race decides whether it
+            // kills (`raceminedeath`, rolled `e_rand(1,100) < chance`: 90
+            // default, 5 for the Deepfolk). Death still credits 10% experience
+            // ("you learned about mining") and leaves gold/gems be; a lucky
+            // escape shakes you too badly to fight again today (`turns = 0`).
             _ => {
-                let learned = (ch.experience as f64 * 0.1).round() as u64;
-                ch.experience = ch.experience.saturating_add(learned);
-                ch.alive = false;
-                ch.hitpoints = 0;
-                vec![format!(
-                    "You spot a huge gem and swing too hard. The roof comes down in a roar of dust. In your last moments you grasp what went wrong (+{learned} experience), and that is the end of you."
-                )]
+                if rng.gen_range(1..=100) < ch.race.mine_death_percent() {
+                    let learned = (ch.experience as f64 * 0.1).round() as u64;
+                    ch.experience = ch.experience.saturating_add(learned);
+                    ch.alive = false;
+                    ch.hitpoints = 0;
+                    vec![format!(
+                        "You spot a huge gem and swing too hard. The roof comes down in a roar of dust. In your last moments you grasp what went wrong (+{learned} experience), and that is the end of you."
+                    )]
+                } else {
+                    ch.turns = 0;
+                    let escape = if ch.race == super::model::Race::Deepfolk {
+                        "You spot a huge gem and swing too hard. The roof comes down in a roar of dust, but your people were born under stone: you read the groan of the timbers and roll clear."
+                    } else {
+                        "You spot a huge gem and swing too hard. The roof comes down in a roar of dust, and by sheer luck you stumble clear of the fall."
+                    };
+                    vec![format!(
+                        "{escape} The close call leaves you too shaken to face anything else today (all forest fights lost)."
+                    )]
+                }
             }
         }
     }
@@ -400,14 +414,13 @@ impl ForestEvent {
         }
     }
 
-    fn resolve_tavern(self, accepted: bool, ch: &mut Character) -> Vec<String> {
+    fn resolve_tavern(self, accepted: bool, _ch: &mut Character) -> Vec<String> {
+        // Accepting never reaches this resolver: the state machine intercepts
+        // it and opens the tavern room (`Mode::Tavern`) instead.
         if !accepted {
-            return vec!["You leave the strange tavern to its quiet and walk on.".into()];
+            return vec!["You leave the strange tavern to its noise and walk on.".into()];
         }
-        // Reduced from darkhorse: just the rest. A drink and a sit-down close your
-        // wounds. (No PvP intel / dice / comment board single-player.)
-        ch.hitpoints = ch.max_hitpoints();
-        vec!["The toothless barkeep pours you something strong. You drink, you rest, and your wounds close over. Back to full health.".into()]
+        Vec::new()
     }
 }
 
@@ -489,6 +502,45 @@ mod tests {
         ForestEvent::GlowingStream.resolve(false, &mut c, &mut rng);
         assert_eq!(c.hitpoints, before.hitpoints);
         assert!(c.alive);
+    }
+
+    #[test]
+    fn goldmine_cave_in_spares_the_deepfolk() {
+        use super::super::model::Race;
+        // Sweep seeds until each race hits the cave-in arm (roll 19..=20) and
+        // compare fates: default races nearly always die, Deepfolk nearly
+        // always walk. A survived cave-in always zeroes the day's turns.
+        let mut default_deaths = 0;
+        let mut deepfolk_deaths = 0;
+        let mut cave_ins = 0;
+        for seed in 0..4000 {
+            let mut c = hero(7);
+            c.turns = 5;
+            ForestEvent::GoldMine.resolve(true, &mut c, &mut StdRng::seed_from_u64(seed));
+            // The cave-in arm is the only outcome that kills or zeroes turns.
+            if !c.alive || c.turns == 0 {
+                cave_ins += 1;
+                default_deaths += u32::from(!c.alive);
+                if c.alive {
+                    assert_eq!(c.turns, 0); // the escape costs the day
+                }
+                let mut d = hero(7);
+                d.race = Race::Deepfolk;
+                d.turns = 5;
+                ForestEvent::GoldMine.resolve(true, &mut d, &mut StdRng::seed_from_u64(seed));
+                deepfolk_deaths += u32::from(!d.alive);
+            }
+        }
+        assert!(cave_ins > 20, "expected many cave-ins, got {cave_ins}");
+        // 90% vs 5% death chance (upstream raceminedeath defaults).
+        assert!(
+            default_deaths * 2 > cave_ins,
+            "default races should mostly die"
+        );
+        assert!(
+            deepfolk_deaths * 4 < cave_ins,
+            "deepfolk should rarely die: {deepfolk_deaths}/{cave_ins}"
+        );
     }
 
     #[test]

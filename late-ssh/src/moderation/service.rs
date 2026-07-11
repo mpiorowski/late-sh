@@ -30,8 +30,8 @@ use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
     ArtboardAction, ArtboardCurateSource, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand,
-    RoleAction, RoomModAction, ServerUserAction, VoiceAction, mod_help_lines, normalize_mod_slug,
-    parse_mod_command, strip_user_prefix,
+    RoleAction, RoomModAction, ServerUserAction, SlowListScope, SlowScope, VoiceAction,
+    mod_help_lines, normalize_mod_slug, parse_mod_command, strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -66,7 +66,7 @@ struct RoomModRequest {
 }
 
 struct SlowModeRequest {
-    slug: String,
+    scope: SlowScope,
     username: String,
     interval_secs: i32,
     expires_in: Option<chrono::Duration>,
@@ -139,7 +139,7 @@ impl ModerationService {
             ModCommand::User { username } => self.user_detail(permissions, &username).await,
             ModCommand::RoomInfo { slug } => self.room_detail(permissions, &slug).await,
             ModCommand::Bans { scope, page } => self.list_bans(permissions, scope, page).await,
-            ModCommand::Slows { slug, page } => self.list_slows(permissions, slug, page).await,
+            ModCommand::Slows { scope, page } => self.list_slows(permissions, scope, page).await,
             ModCommand::Audit { page } => self.list_audit(permissions, page).await,
             ModCommand::ArtboardSnapshots { page } => {
                 self.list_artboard_snapshots(permissions, page).await
@@ -196,7 +196,7 @@ impl ModerationService {
                 .await
             }
             ModCommand::Slow {
-                slug,
+                scope,
                 username,
                 interval_secs,
                 expires_in,
@@ -206,7 +206,7 @@ impl ModerationService {
                     actor_user_id,
                     permissions,
                     SlowModeRequest {
-                        slug,
+                        scope,
                         username,
                         interval_secs,
                         expires_in,
@@ -216,11 +216,11 @@ impl ModerationService {
                 .await
             }
             ModCommand::Unslow {
-                slug,
+                scope,
                 username,
                 reason,
             } => {
-                self.unslow_user(actor_user_id, permissions, &slug, &username, reason)
+                self.unslow_user(actor_user_id, permissions, scope, &username, reason)
                     .await
             }
             ModCommand::Artboard {
@@ -432,14 +432,14 @@ impl ModerationService {
     async fn list_slows(
         &self,
         permissions: Permissions,
-        slug: Option<String>,
+        scope: SlowListScope,
         page: i64,
     ) -> Result<Vec<String>> {
         ensure_mod_surface(permissions)?;
         let client = self.db.get().await?;
         let offset = page_offset(page);
-        match slug {
-            Some(slug) => {
+        match scope {
+            SlowListScope::Room { slug } => {
                 let room = find_room_by_mod_slug(&client, &slug).await?;
                 let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
                 let items = ChatSlowMode::active_for_room_with_usernames_page(
@@ -455,7 +455,20 @@ impl ModerationService {
                     items.iter().map(format_chat_slow_mode_item).collect(),
                 ))
             }
-            None => {
+            SlowListScope::Server => {
+                let items = ChatSlowMode::active_server_with_usernames_page(
+                    &client,
+                    LIST_PAGE_SIZE,
+                    offset,
+                )
+                .await?;
+                Ok(single_section(
+                    &format!("active server slow modes (page {page})"),
+                    "no active server slow modes",
+                    items.iter().map(format_chat_slow_mode_item).collect(),
+                ))
+            }
+            SlowListScope::All => {
                 let items =
                     ChatSlowMode::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset)
                         .await?;
@@ -811,34 +824,56 @@ impl ModerationService {
         request: SlowModeRequest,
     ) -> Result<Vec<String>> {
         let mut client = self.db.get().await?;
-        let room = find_room_by_mod_slug(&client, &request.slug).await?;
+        let room = match &request.scope {
+            SlowScope::Room { slug } => Some(find_room_by_mod_slug(&client, slug).await?),
+            SlowScope::Server => None,
+        };
         let target = find_user_by_mod_name(&client, &request.username).await?;
         ensure_not_self(actor_user_id, target.id)?;
         ensure_can(permissions, Caps::BAN_FROM_ROOM, tier_for_user(&target))?;
         let expires_at = request.expires_in.map(|duration| Utc::now() + duration);
         let expires_at_metadata = expires_at.as_ref().map(|value| value.to_rfc3339());
-        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let scope_label = slow_scope_label(room.as_ref());
         let tx = client.transaction().await?;
-        ChatSlowMode::activate(
-            &tx,
-            room.id,
-            target.id,
-            actor_user_id,
-            request.interval_secs,
-            &request.reason,
-            expires_at,
-        )
-        .await?;
+        match &room {
+            Some(room) => {
+                ChatSlowMode::activate(
+                    &tx,
+                    room.id,
+                    target.id,
+                    actor_user_id,
+                    request.interval_secs,
+                    &request.reason,
+                    expires_at,
+                )
+                .await?;
+            }
+            None => {
+                ChatSlowMode::activate_server(
+                    &tx,
+                    target.id,
+                    actor_user_id,
+                    request.interval_secs,
+                    &request.reason,
+                    expires_at,
+                )
+                .await?;
+            }
+        }
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(false),
             actor_user_id,
-            "room_slow",
+            if room.is_some() {
+                "room_slow"
+            } else {
+                "server_slow"
+            },
             "user",
             Some(target.id),
             json!({
-                "room_id": room.id,
-                "room_slug": room.slug,
+                "room_id": room.as_ref().map(|room| room.id),
+                "room_slug": room.as_ref().and_then(|room| room.slug.clone()),
                 "interval_secs": request.interval_secs,
                 "expires_at": expires_at_metadata,
                 "reason": request.reason
@@ -856,7 +891,7 @@ impl ModerationService {
             .notify_toast(
                 target.id,
                 format!(
-                    "Slow mode in #{room_slug}: one message every {}. {}.",
+                    "Slow mode in {scope_label}: one message every {}. {}.",
                     format_seconds(request.interval_secs as u64),
                     if expires_at.is_some() {
                         format!("Expires in {duration_text}")
@@ -866,20 +901,23 @@ impl ModerationService {
                 ),
             )
             .await;
-        let _ = self.event_tx.send(ModerationEvent::RoomSlowModeChanged {
-            actor_user_id,
-            target_user_id: target.id,
-            room_id: room.id,
-            room_slug: room_slug.clone(),
-            interval_secs: Some(request.interval_secs),
-            expires_at,
-            reason: request.reason,
-            notified_sessions,
-        });
+        if let Some(room) = &room {
+            let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+            let _ = self.event_tx.send(ModerationEvent::RoomSlowModeChanged {
+                actor_user_id,
+                target_user_id: target.id,
+                room_id: room.id,
+                room_slug,
+                interval_secs: Some(request.interval_secs),
+                expires_at,
+                reason: request.reason.clone(),
+                notified_sessions,
+            });
+        }
         Ok(vec![format!(
-            "slowed @{} in #{}: one message every {} for {}",
+            "slowed @{} in {}: one message every {} for {}",
             target.username,
-            room_slug,
+            scope_label,
             format_seconds(request.interval_secs as u64),
             duration_text
         )])
@@ -889,46 +927,67 @@ impl ModerationService {
         &self,
         actor_user_id: Uuid,
         permissions: Permissions,
-        slug: &str,
+        scope: SlowScope,
         username: &str,
         reason: String,
     ) -> Result<Vec<String>> {
         let mut client = self.db.get().await?;
-        let room = find_room_by_mod_slug(&client, slug).await?;
+        let room = match &scope {
+            SlowScope::Room { slug } => Some(find_room_by_mod_slug(&client, slug).await?),
+            SlowScope::Server => None,
+        };
         let target = find_user_by_mod_name(&client, username).await?;
         ensure_not_self(actor_user_id, target.id)?;
         ensure_can(permissions, Caps::UNBAN_FROM_ROOM, tier_for_user(&target))?;
-        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let scope_label = slow_scope_label(room.as_ref());
         let tx = client.transaction().await?;
-        ChatSlowMode::delete_for_room_and_user(&tx, room.id, target.id).await?;
+        match &room {
+            Some(room) => {
+                ChatSlowMode::delete_for_room_and_user(&tx, room.id, target.id).await?;
+            }
+            None => {
+                ChatSlowMode::delete_server_for_user(&tx, target.id).await?;
+            }
+        }
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(false),
             actor_user_id,
-            "room_unslow",
+            if room.is_some() {
+                "room_unslow"
+            } else {
+                "server_unslow"
+            },
             "user",
             Some(target.id),
-            json!({ "room_id": room.id, "room_slug": room.slug, "reason": reason }),
+            json!({
+                "room_id": room.as_ref().map(|room| room.id),
+                "room_slug": room.as_ref().and_then(|room| room.slug.clone()),
+                "reason": reason
+            }),
         )
         .await?;
         tx.commit().await?;
         let notified_sessions = self
             .effects
-            .notify_toast(target.id, format!("Slow mode lifted in #{room_slug}."))
+            .notify_toast(target.id, format!("Slow mode lifted in {scope_label}."))
             .await;
-        let _ = self.event_tx.send(ModerationEvent::RoomSlowModeChanged {
-            actor_user_id,
-            target_user_id: target.id,
-            room_id: room.id,
-            room_slug: room_slug.clone(),
-            interval_secs: None,
-            expires_at: None,
-            reason,
-            notified_sessions,
-        });
+        if let Some(room) = &room {
+            let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+            let _ = self.event_tx.send(ModerationEvent::RoomSlowModeChanged {
+                actor_user_id,
+                target_user_id: target.id,
+                room_id: room.id,
+                room_slug,
+                interval_secs: None,
+                expires_at: None,
+                reason: reason.clone(),
+                notified_sessions,
+            });
+        }
         Ok(vec![format!(
-            "removed slow mode for @{} in #{}",
-            target.username, room_slug
+            "removed slow mode for @{} in {}",
+            target.username, scope_label
         )])
     }
 
@@ -1646,7 +1705,8 @@ fn format_chat_slow_mode_item(item: &ChatSlowModeListItem) -> String {
         .room_slug
         .as_deref()
         .map(|slug| format!("#{slug}"))
-        .unwrap_or_else(|| item.slow_mode.room_id.to_string());
+        .or_else(|| item.slow_mode.room_id.map(|id| id.to_string()))
+        .unwrap_or_else(|| "server".to_string());
     let target = item
         .target_username
         .as_deref()
@@ -1663,6 +1723,16 @@ fn format_chat_slow_mode_item(item: &ChatSlowModeListItem) -> String {
         format_expires_at(item.slow_mode.expires_at),
         format_reason(&item.slow_mode.reason)
     )
+}
+
+fn slow_scope_label(room: Option<&ChatRoom>) -> String {
+    room.map(|room| {
+        format!(
+            "#{}",
+            room.slug.clone().unwrap_or_else(|| room.kind.clone())
+        )
+    })
+    .unwrap_or_else(|| "server".to_string())
 }
 
 fn format_audit_log_item(item: &ModerationAuditLogListItem) -> String {

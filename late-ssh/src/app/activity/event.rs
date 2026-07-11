@@ -59,6 +59,7 @@ pub enum ActivityGame {
     Asterion,
     Blackjack,
     Chess,
+    GreenDragon,
     LeWord,
     Minesweeper,
     Mud,
@@ -74,6 +75,7 @@ pub enum ActivityGame {
     TwentyFortyEight,
     Tron,
     Snake,
+    Traffic,
 }
 
 impl ActivityGame {
@@ -82,6 +84,7 @@ impl ActivityGame {
             Self::Asterion => "asterion",
             Self::Blackjack => "blackjack",
             Self::Chess => "chess",
+            Self::GreenDragon => "greendragon",
             Self::LeWord => "le_word",
             Self::Minesweeper => "minesweeper",
             Self::Mud => "mud",
@@ -97,6 +100,7 @@ impl ActivityGame {
             Self::TwentyFortyEight => "2048",
             Self::Tron => "tron",
             Self::Snake => "snake",
+            Self::Traffic => "traffic",
         }
     }
 
@@ -105,6 +109,7 @@ impl ActivityGame {
             Self::Asterion => "Asterion",
             Self::Blackjack => "Blackjack",
             Self::Chess => "Chess",
+            Self::GreenDragon => "Green Dragon",
             Self::LeWord => "Le Word",
             Self::Minesweeper => "Minesweeper",
             Self::Mud => "Lateania",
@@ -120,6 +125,7 @@ impl ActivityGame {
             Self::TwentyFortyEight => "2048",
             Self::Tron => "Tron",
             Self::Snake => "Snake",
+            Self::Traffic => "Traffic",
         }
     }
 }
@@ -174,6 +180,7 @@ impl ActivityEvent {
             ActivityGame::Asterion => "escaped the Asterion maze",
             ActivityGame::Blackjack => "won Blackjack hand",
             ActivityGame::Chess => "won Chess game",
+            ActivityGame::GreenDragon => "prevailed in the Green Dragon",
             ActivityGame::LeWord => "solved Le Word",
             ActivityGame::Minesweeper => "cleared Minesweeper",
             ActivityGame::Mud => "triumphed in Lateania",
@@ -189,6 +196,7 @@ impl ActivityEvent {
             ActivityGame::TwentyFortyEight => "won 2048",
             ActivityGame::Tron => "won Tron round",
             ActivityGame::Snake => "won Snake",
+            ActivityGame::Traffic => "finished a Traffic track",
         };
         let action = match detail.as_deref() {
             Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),

@@ -20,6 +20,7 @@ mod inner {
             ActivityGame::Asterion => "asterion",
             ActivityGame::Blackjack => "blackjack",
             ActivityGame::Chess => "chess",
+            ActivityGame::GreenDragon => "greendragon",
             ActivityGame::LeWord => "le_word",
             ActivityGame::Minesweeper => "minesweeper",
             ActivityGame::Mud => "mud",
@@ -35,6 +36,7 @@ mod inner {
             ActivityGame::TwentyFortyEight => "2048",
             ActivityGame::Tron => "tron",
             ActivityGame::Snake => "snake",
+            ActivityGame::Traffic => "traffic",
         }
     }
 

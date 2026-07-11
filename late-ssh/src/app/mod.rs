@@ -9,6 +9,7 @@ pub(crate) mod bonsai_v2;
 pub mod chat;
 pub mod clubhouse;
 pub mod common;
+pub mod daily;
 pub mod dashboard;
 pub(crate) mod directory;
 pub mod door;

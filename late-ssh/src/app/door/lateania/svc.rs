@@ -251,6 +251,7 @@ pub struct LateaniaService {
     persist_locks: Arc<StdMutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
     prepared_saves: Arc<StdMutex<HashMap<Uuid, (u64, SavedCharacter)>>>,
     character_resets: Arc<StdMutex<HashSet<Uuid>>>,
+    character_reset_versions: Arc<StdMutex<HashMap<Uuid, u64>>>,
 }
 
 // ---- Snapshot (what sessions render) -------------------------------------
@@ -434,6 +435,7 @@ pub struct MudSnapshot {
     pub room_id: Uuid,
     pub generation: u64,
     pub players: HashMap<Uuid, PlayerView>,
+    pub reset_versions: HashMap<Uuid, u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -605,6 +607,7 @@ impl LateaniaService {
             persist_locks: Arc::new(StdMutex::new(HashMap::new())),
             prepared_saves: Arc::new(StdMutex::new(HashMap::new())),
             character_resets: Arc::new(StdMutex::new(HashSet::new())),
+            character_reset_versions: Arc::new(StdMutex::new(HashMap::new())),
         };
         svc.load_world_state_task();
         svc.start_tick_loop();
@@ -803,6 +806,11 @@ impl LateaniaService {
 
     fn begin_character_reset(&self, user_id: Uuid) {
         self.character_resets.lock_recover().insert(user_id);
+        self.character_reset_versions
+            .lock_recover()
+            .entry(user_id)
+            .and_modify(|version| *version += 1)
+            .or_insert(1);
         let mut versions = self.persist_versions.lock_recover();
         versions
             .entry(user_id)
@@ -1313,7 +1321,9 @@ impl LateaniaService {
     }
 
     fn publish(&self, state: &WorldState) {
-        let _ = self.snapshot_tx.send(state.snapshot());
+        let mut snapshot = state.snapshot();
+        snapshot.reset_versions = self.character_reset_versions.lock_recover().clone();
+        let _ = self.snapshot_tx.send(snapshot);
     }
 }
 
@@ -1817,6 +1827,7 @@ struct WorldState {
 }
 
 const LOG_CAP: usize = 60;
+const SAVED_HOUSE_FURNITURE_LIMIT: usize = 512;
 const TEMPLE_ROOM: RoomId = 4;
 /// How long a hunted game critter stays gone before it wanders back.
 const GAME_RESPAWN: Duration = Duration::from_secs(40);
@@ -2169,15 +2180,7 @@ impl WorldState {
         if let Some(plot) = saved.owned_plot.map(|p| p as usize) {
             if plot < housing::TIERS.len() {
                 self.plot_owner.insert(plot, user_id);
-                for (room, key) in &saved.house_furniture {
-                    if plot_of_room(*room) == Some(plot) {
-                        if let Some(furn) = furniture_by_key(key) {
-                            self.house_furniture.entry(*room).or_default().push(furn);
-                        } else {
-                            tracing::warn!(%user_id, key, "dropping saved furniture with unknown key");
-                        }
-                    }
-                }
+                self.restore_saved_house_furniture(user_id, plot, &saved.house_furniture);
             } else {
                 tracing::warn!(
                     %user_id,
@@ -2235,19 +2238,7 @@ impl WorldState {
             owned_plot: self.owned_plot(user_id).map(|plot| plot as u32),
             house_furniture: self
                 .owned_plot(user_id)
-                .map(|plot| {
-                    let base = housing::plot_base(plot);
-                    let end = base + housing::TIERS[plot].rooms() as RoomId;
-                    (base..end)
-                        .flat_map(|room| {
-                            self.house_furniture
-                                .get(&room)
-                                .into_iter()
-                                .flatten()
-                                .map(move |f| (room, f.key.to_string()))
-                        })
-                        .collect()
-                })
+                .map(|plot| self.saved_house_furniture_for_plot(user_id, plot))
                 .unwrap_or_default(),
             appearance: p.appearance.to_vec(),
         }))
@@ -2258,6 +2249,73 @@ impl WorldState {
             .keys()
             .filter_map(|uid| self.export_saved(*uid).map(|s| (*uid, s)))
             .collect()
+    }
+
+    fn restore_saved_house_furniture(
+        &mut self,
+        user_id: Uuid,
+        plot: usize,
+        saved_furniture: &[(RoomId, String)],
+    ) {
+        let base = housing::plot_base(plot);
+        let end = base + housing::TIERS[plot].rooms() as RoomId;
+        for room in base..end {
+            self.house_furniture.remove(&room);
+        }
+
+        let mut seen = HashSet::new();
+        let mut restored = 0usize;
+        for (room, key) in saved_furniture {
+            if plot_of_room(*room) != Some(plot) {
+                continue;
+            }
+            if !seen.insert((*room, key.clone())) {
+                continue;
+            }
+            if restored >= SAVED_HOUSE_FURNITURE_LIMIT {
+                tracing::warn!(
+                    %user_id,
+                    plot,
+                    limit = SAVED_HOUSE_FURNITURE_LIMIT,
+                    "dropping excess saved house furniture"
+                );
+                break;
+            }
+            if let Some(furn) = furniture_by_key(key) {
+                self.house_furniture.entry(*room).or_default().push(furn);
+                restored += 1;
+            } else {
+                tracing::warn!(%user_id, key, "dropping saved furniture with unknown key");
+            }
+        }
+    }
+
+    fn saved_house_furniture_for_plot(&self, user_id: Uuid, plot: usize) -> Vec<(RoomId, String)> {
+        let base = housing::plot_base(plot);
+        let end = base + housing::TIERS[plot].rooms() as RoomId;
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for room in base..end {
+            let Some(furniture) = self.house_furniture.get(&room) else {
+                continue;
+            };
+            for furn in furniture {
+                if !seen.insert((room, furn.key)) {
+                    continue;
+                }
+                if out.len() >= SAVED_HOUSE_FURNITURE_LIMIT {
+                    tracing::warn!(
+                        %user_id,
+                        plot,
+                        limit = SAVED_HOUSE_FURNITURE_LIMIT,
+                        "dropping excess house furniture during save"
+                    );
+                    return out;
+                }
+                out.push((room, furn.key.to_string()));
+            }
+        }
+        out
     }
 
     fn export_world_saved(&self) -> SavedWorld {
@@ -5659,6 +5717,7 @@ impl WorldState {
             room_id: self.room_id,
             generation: self.generation,
             players,
+            reset_versions: HashMap::new(),
         }
     }
 }
@@ -6706,6 +6765,40 @@ mod tests {
             s.house_furniture.get(&hut).map(|v| v.len()),
             Some(1),
             "a visitor cannot place furniture in someone else's home"
+        );
+    }
+
+    #[test]
+    fn saved_house_furniture_is_replaced_and_deduped_on_load() {
+        use super::super::housing::{HOUSING_BASE, plot_base};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = HOUSING_BASE;
+        s.players.get_mut(&uid(1)).unwrap().gold = 50_000;
+        s.buy_deed(uid(1), 0);
+        let hut = plot_base(0);
+        s.players.get_mut(&uid(1)).unwrap().room = hut;
+        s.buy_furniture(uid(1), "oak_stool");
+
+        let mut saved = s.export_saved(uid(1)).expect("character is saveable");
+        saved.house_furniture.push((hut, "oak_stool".to_string()));
+
+        s.hydrate(uid(1), &saved);
+        s.hydrate(uid(1), &saved);
+
+        assert_eq!(
+            s.house_furniture.get(&hut).map(|v| v.len()),
+            Some(1),
+            "loading the same save must not append duplicate furniture"
+        );
+        assert_eq!(
+            s.export_saved(uid(1))
+                .expect("character is saveable")
+                .house_furniture
+                .len(),
+            1,
+            "exported save must stay deduped"
         );
     }
 

@@ -93,11 +93,14 @@ const fn room(command: RoomScopedCommand) -> Command {
 /// so registry order does not affect the autocomplete display.
 const COMMANDS: &[Command] = &[
     global("active", "list active users"),
+    global("aquarium", "toggle aquarium (/aquarium feed to feed)"),
     global("binds", "chat guide"),
     global("brb", "go AFK and mute audio"),
+    global("challenge", "post daily challenge (chess, battleship)"),
     global("coffee", "post coffee cup"),
     global("dm", "open DM"),
     global("exit", "quit confirm"),
+    global("feed", "feed your pet with pet food"),
     global("friend", "mark user"),
     global("friends", "list friends"),
     global("gift", "send chips"),
@@ -109,7 +112,8 @@ const COMMANDS: &[Command] = &[
     global("me", "send action"),
     global("members", "room members"),
     global("paste-image", "upload image from CLI clipboard"),
-    global("petname", "name your cat"),
+    global("pet", "toggle the pet strip"),
+    global("petname", "name your pet"),
     global("poll", "start room poll"),
     global("private", "new private room"),
     global("profile", "view user profile"),
@@ -122,6 +126,7 @@ const COMMANDS: &[Command] = &[
     global("unfriend", "unmark user"),
     global("unignore", "unmute user"),
     global("upload", "upload image from url"),
+    global("water", "water your pet"),
     room(RoomScopedCommand::Sheet),
 ];
 
@@ -196,7 +201,7 @@ mod tests {
         let ranked_names = names(&ranked);
         assert_eq!(
             ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "brb", "coffee"]
+            vec!["active", "aquarium", "binds", "brb"]
         );
         let mut sorted = ranked_names.clone();
         sorted.sort_unstable();

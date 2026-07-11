@@ -105,9 +105,10 @@ fn leaderboard_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Score Games",
             body: vec![
-                "Lateris, 2048, and Snake record run scores.".to_string(),
+                "Lateris, 2048, Snake, and Traffic record run scores.".to_string(),
                 "Monthly boards use scores recorded this month.".to_string(),
                 "All-time boards use each user's saved best score.".to_string(),
+                "Traffic's saved best is the sum of your per-track bests.".to_string(),
             ],
         },
         GuideSection {
@@ -129,7 +130,7 @@ fn arcade_sections() -> Vec<GuideSection> {
                 "The Arcade mixes daily puzzle runs, daily challenges, and endless score chases."
                     .to_string(),
                 "Open The Arcade with 2.".to_string(),
-                "High-score games: 2048, Lateris, Snake.".to_string(),
+                "High-score games: 2048, Lateris, Snake, Traffic.".to_string(),
                 "Daily games: Rubik's Cube, Sudoku, Nonograms, Minesweeper, Solitaire, Le Word."
                     .to_string(),
                 "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
@@ -165,6 +166,22 @@ fn arcade_sections() -> Vec<GuideSection> {
             body: vec![
                 "hjkl, WASD, or arrows steer.".to_string(),
                 "p pauses; r/n restarts.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Traffic",
+            body: vec![
+                "Top-down driving: pick a track, then drive as far as you can through traffic without crashing out."
+                    .to_string(),
+                "Six tracks: Batin, Route 66, Eurotrip, The Realm, Cosmic Highway, Chaos Highway."
+                    .to_string(),
+                "Picker: j/k or arrows choose a track; Enter or Space starts it.".to_string(),
+                "w/W or up arrow accelerates; s/S or down arrow brakes.".to_string(),
+                "a/d or left/right arrow changes lane.".to_string(),
+                "Space is the handbrake.".to_string(),
+                "p pauses; r restarts the current track; t returns to the track picker.".to_string(),
+                "Each track keeps your best score; the leaderboard total is the sum of your per-track bests."
+                    .to_string(),
             ],
         },
         GuideSection {

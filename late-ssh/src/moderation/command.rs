@@ -16,7 +16,7 @@ pub(crate) enum ModCommand {
         page: i64,
     },
     Slows {
-        slug: Option<String>,
+        scope: SlowListScope,
         page: i64,
     },
     Audit {
@@ -46,14 +46,14 @@ pub(crate) enum ModCommand {
         reason: String,
     },
     Slow {
-        slug: String,
+        scope: SlowScope,
         username: String,
         interval_secs: i32,
         expires_in: Option<chrono::Duration>,
         reason: String,
     },
     Unslow {
-        slug: String,
+        scope: SlowScope,
         username: String,
         reason: String,
     },
@@ -104,6 +104,19 @@ pub(crate) enum BanListScope {
     Room { slug: String },
     Artboard,
     Audio,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SlowListScope {
+    All,
+    Server,
+    Room { slug: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SlowScope {
+    Server,
+    Room { slug: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -390,7 +403,7 @@ fn parse_bans_mod_command(parts: &[&str]) -> Result<ModCommand> {
 fn parse_slows_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
         return Ok(ModCommand::Slows {
-            slug: None,
+            scope: SlowListScope::All,
             page: DEFAULT_PAGE,
         });
     };
@@ -399,23 +412,38 @@ fn parse_slows_mod_command(parts: &[&str]) -> Result<ModCommand> {
         if parts.len() > 1 {
             anyhow::bail!("usage: view slows [#roomname] [pagenumber]");
         }
-        return Ok(ModCommand::Slows { slug: None, page });
-    }
-
-    if first.starts_with('#') {
-        if parts.len() > 2 {
-            anyhow::bail!("usage: view slows [#roomname] [pagenumber]");
-        }
         return Ok(ModCommand::Slows {
-            slug: Some(required_room_target(
-                first,
-                "usage: view slows [#roomname] [pagenumber]",
-            )?),
-            page: optional_page(parts.get(1).copied())?,
+            scope: SlowListScope::All,
+            page,
         });
     }
 
-    anyhow::bail!("usage: view slows [#roomname] [pagenumber]")
+    match first {
+        "server" => {
+            if parts.len() > 2 {
+                anyhow::bail!("usage: view slows [server|#roomname] [pagenumber]");
+            }
+            Ok(ModCommand::Slows {
+                scope: SlowListScope::Server,
+                page: optional_page(parts.get(1).copied())?,
+            })
+        }
+        _ if first.starts_with('#') => {
+            if parts.len() > 2 {
+                anyhow::bail!("usage: view slows [server|#roomname] [pagenumber]");
+            }
+            Ok(ModCommand::Slows {
+                scope: SlowListScope::Room {
+                    slug: required_room_target(
+                        first,
+                        "usage: view slows [server|#roomname] [pagenumber]",
+                    )?,
+                },
+                page: optional_page(parts.get(1).copied())?,
+            })
+        }
+        _ => anyhow::bail!("usage: view slows [server|#roomname] [pagenumber]"),
+    }
 }
 
 fn parse_audit_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -578,11 +606,12 @@ fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
 }
 
 fn parse_slow_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: slow #roomname @name <interval> <duration|permanent> [reason...]";
+    const USAGE: &str =
+        "usage: slow <server|#roomname> @name <interval> <duration|permanent> [reason...]";
     let Some(target) = parts.first().copied() else {
         anyhow::bail!(USAGE);
     };
-    let slug = required_room_target(target, USAGE)?;
+    let scope = required_slow_scope(target, USAGE)?;
     let username = required_username(parts.get(1).copied(), USAGE)?;
     let interval_secs = required_slow_interval(parts.get(2).copied(), USAGE)?;
     let Some(expiry) = parts.get(3).copied() else {
@@ -598,7 +627,7 @@ fn parse_slow_mod_command(parts: &[&str]) -> Result<ModCommand> {
     };
     let reason = parts.get(reason_start..).unwrap_or_default().join(" ");
     Ok(ModCommand::Slow {
-        slug,
+        scope,
         username,
         interval_secs,
         expires_in,
@@ -607,15 +636,27 @@ fn parse_slow_mod_command(parts: &[&str]) -> Result<ModCommand> {
 }
 
 fn parse_unslow_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: unslow #roomname @name [reason...]";
+    const USAGE: &str = "usage: unslow <server|#roomname> @name [reason...]";
     let Some(target) = parts.first().copied() else {
         anyhow::bail!(USAGE);
     };
     Ok(ModCommand::Unslow {
-        slug: required_room_target(target, USAGE)?,
+        scope: required_slow_scope(target, USAGE)?,
         username: required_username(parts.get(1).copied(), USAGE)?,
         reason: parts.get(2..).unwrap_or_default().join(" "),
     })
+}
+
+fn required_slow_scope(value: &str, usage: &str) -> Result<SlowScope> {
+    if value == "server" {
+        Ok(SlowScope::Server)
+    } else if value.starts_with('#') {
+        Ok(SlowScope::Room {
+            slug: required_room_target(value, usage)?,
+        })
+    } else {
+        anyhow::bail!(usage.to_string())
+    }
 }
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -870,8 +911,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "kick   <server|voice|#room> @name [reason...]",
             "ban    <server|#room|artboard|audio> @name [duration] [reason...]",
             "unban  <server|#room|artboard|audio|voice> @name [reason...]",
-            "slow   #room @name <interval> <duration|permanent> [reason...]",
-            "unslow #room @name [reason...]",
+            "slow   <server|#room> @name <interval> <duration|permanent> [reason...]",
+            "unslow <server|#room> @name [reason...]",
             "",
             "--- help & admin ---",
             "admin           - show admin commands",
@@ -945,8 +986,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Lists active bans for one room, e.g. #lounge.",
         ],
         "view slows" => &[
-            "view slows [#roomname] [pagenumber]",
-            "Lists active slow modes, optionally for one room.",
+            "view slows [server|#roomname] [pagenumber]",
+            "Lists active slow modes, optionally for server-wide or one room.",
             "pagenumber: optional positive page number; 15 rows per page.",
         ],
         "view audit" => &[
@@ -1032,15 +1073,16 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Removes the active audio ban for one user.",
         ],
         "slow" => &[
-            "slow #roomname @name <interval> <duration|permanent> [reason...]",
-            "Throttles one user's sends in one room without removing membership.",
+            "slow <server|#roomname> @name <interval> <duration|permanent> [reason...]",
+            "Throttles one user's sends without removing membership.",
+            "server applies to non-DM chat rooms; #roomname applies to one room.",
             "interval: positive number plus s/m/h/d, max 1d, e.g. 90s or 5m.",
             "duration: positive number plus s/m/h/d, or literal permanent.",
             "reason: optional audit text after duration.",
         ],
         "unslow" => &[
-            "unslow #roomname @name [reason...]",
-            "Removes an active slow mode for one user in one room.",
+            "unslow <server|#roomname> @name [reason...]",
+            "Removes an active server or room slow mode for one user.",
             "reason: optional audit text.",
         ],
         "artboard" => &[
@@ -1432,7 +1474,9 @@ mod tests {
         assert_eq!(
             parse_mod_command("slow #lobby @alice 90s 1d high volume").unwrap(),
             ModCommand::Slow {
-                slug: "lobby".to_string(),
+                scope: SlowScope::Room {
+                    slug: "lobby".to_string()
+                },
                 username: "alice".to_string(),
                 interval_secs: 90,
                 expires_in: Some(chrono::Duration::days(1)),
@@ -1442,7 +1486,9 @@ mod tests {
         assert_eq!(
             parse_mod_command("slow #lobby @alice 5m permanent").unwrap(),
             ModCommand::Slow {
-                slug: "lobby".to_string(),
+                scope: SlowScope::Room {
+                    slug: "lobby".to_string()
+                },
                 username: "alice".to_string(),
                 interval_secs: 300,
                 expires_in: None,
@@ -1452,7 +1498,27 @@ mod tests {
         assert_eq!(
             parse_mod_command("unslow #lobby @alice improved").unwrap(),
             ModCommand::Unslow {
-                slug: "lobby".to_string(),
+                scope: SlowScope::Room {
+                    slug: "lobby".to_string()
+                },
+                username: "alice".to_string(),
+                reason: "improved".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("slow server @alice 90s 1d high volume").unwrap(),
+            ModCommand::Slow {
+                scope: SlowScope::Server,
+                username: "alice".to_string(),
+                interval_secs: 90,
+                expires_in: Some(chrono::Duration::days(1)),
+                reason: "high volume".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("unslow server @alice improved").unwrap(),
+            ModCommand::Unslow {
+                scope: SlowScope::Server,
                 username: "alice".to_string(),
                 reason: "improved".to_string(),
             }
@@ -1467,14 +1533,23 @@ mod tests {
         assert_eq!(
             parse_mod_command("view slows").unwrap(),
             ModCommand::Slows {
-                slug: None,
+                scope: SlowListScope::All,
                 page: DEFAULT_PAGE,
             }
         );
         assert_eq!(
             parse_mod_command("view slows #lobby 2").unwrap(),
             ModCommand::Slows {
-                slug: Some("lobby".to_string()),
+                scope: SlowListScope::Room {
+                    slug: "lobby".to_string()
+                },
+                page: 2,
+            }
+        );
+        assert_eq!(
+            parse_mod_command("view slows server 2").unwrap(),
+            ModCommand::Slows {
+                scope: SlowListScope::Server,
                 page: 2,
             }
         );

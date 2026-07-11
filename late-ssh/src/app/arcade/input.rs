@@ -9,13 +9,14 @@ use crate::app::state::{
     GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING, GAME_SELECTION_NES_RHDE,
     GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE, GAME_SELECTION_NES_ZAP_RUDER,
     GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SNAKE,
-    GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
+    GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC,
 };
 
-const LOBBY_GAME_ORDER: [usize; 19] = [
+const LOBBY_GAME_ORDER: [usize; 20] = [
     GAME_SELECTION_2048,
     GAME_SELECTION_TETRIS,
     GAME_SELECTION_SNAKE,
+    GAME_SELECTION_TRAFFIC,
     GAME_SELECTION_LE_WORD,
     GAME_SELECTION_RUBIKS_CUBE,
     GAME_SELECTION_SUDOKU,
@@ -107,6 +108,12 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return true;
             }
             return super::snake::input::handle_key(&mut app.snake_state, byte);
+        } else if app.game_selection == GAME_SELECTION_TRAFFIC {
+            if byte == 0x1B || byte == b'q' || byte == b'Q' {
+                app.is_playing_game = false;
+                return true;
+            }
+            return super::traffic::input::handle_key(&mut app.traffic_state, byte);
         } else if app.game_selection == GAME_SELECTION_RUBIKS_CUBE {
             if byte == 0x1B || byte == b'q' || byte == b'Q' {
                 app.is_playing_game = false;
@@ -177,6 +184,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             if app.game_selection == GAME_SELECTION_2048
                 || app.game_selection == GAME_SELECTION_TETRIS
                 || app.game_selection == GAME_SELECTION_SNAKE
+                || app.game_selection == GAME_SELECTION_TRAFFIC
                 || app.game_selection == GAME_SELECTION_RUBIKS_CUBE
                 || app.game_selection == GAME_SELECTION_LE_WORD
                 || is_nes_selection(app.game_selection)
@@ -219,6 +227,8 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
             return super::tetris::input::handle_arrow(&mut app.tetris_state, key);
         } else if app.game_selection == GAME_SELECTION_SNAKE {
             return super::snake::input::handle_arrow(&mut app.snake_state, key);
+        } else if app.game_selection == GAME_SELECTION_TRAFFIC {
+            return super::traffic::input::handle_arrow(&mut app.traffic_state, key);
         } else if app.game_selection == GAME_SELECTION_RUBIKS_CUBE {
             app.rubiks_cube_state.ensure_current_daily();
             return super::rubiks_cube::input::handle_arrow(&mut app.rubiks_cube_state, key);
@@ -284,23 +294,13 @@ fn arcade_content_area(app: &App) -> Rect {
         height: area.height.saturating_sub(2),
     };
 
-    let app_inner = if app.show_aquarium_tray && app.shop_state.entitlements().has_aquarium() {
-        let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+    if right_sidebar_visible(app) {
         Rect {
-            height: inner.height.saturating_sub(tray.height),
+            width: inner.width.saturating_sub(24),
             ..inner
         }
     } else {
         inner
-    };
-
-    if right_sidebar_visible(app) {
-        Rect {
-            width: app_inner.width.saturating_sub(24),
-            ..app_inner
-        }
-    } else {
-        app_inner
     }
 }
 
@@ -333,6 +333,10 @@ mod tests {
         );
         assert_eq!(
             next_lobby_selection(GAME_SELECTION_SNAKE),
+            GAME_SELECTION_TRAFFIC
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_TRAFFIC),
             GAME_SELECTION_LE_WORD
         );
         assert_eq!(
@@ -354,6 +358,10 @@ mod tests {
         assert_eq!(
             next_lobby_selection(GAME_SELECTION_NES_DABG),
             GAME_SELECTION_NES_FALLING
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_NES_FALLING),
+            GAME_SELECTION_NES_BRICK_BREAKER
         );
         assert_eq!(
             next_lobby_selection(GAME_SELECTION_NES_FALLING),

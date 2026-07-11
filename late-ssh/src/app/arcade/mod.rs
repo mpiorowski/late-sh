@@ -8,5 +8,6 @@ pub mod snake;
 pub mod solitaire;
 pub mod sudoku;
 pub mod tetris;
+pub mod traffic;
 pub mod twenty_forty_eight;
 pub mod ui;

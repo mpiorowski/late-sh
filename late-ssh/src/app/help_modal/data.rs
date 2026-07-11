@@ -322,6 +322,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /members           list users in this room",
         "  /list              list public rooms",
         "  /poll              start a Home room poll with 2-3 options",
+        "  /challenge [@user] daily challenge (chess, battleship): lobby or directed",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",
@@ -332,9 +333,11 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open Hub",
-        "  Ctrl+Q / Alt+A     toggle your Aquarium tray after unlocking it in Shop",
-        "  Ctrl+F             feed your Aquarium tray with bought Aquarium Food",
+        "  /aquarium          toggle the Aquarium in the Lounge after unlocking it in Shop",
+        "  /aquarium feed     feed your Aquarium with bought Aquarium Food",
+        "  /pet               toggle the pet strip in the Lounge",
         "  Ctrl+/             search and jump to a room, DM, or Home entry",
+        "  Ctrl+Q             open / close the Lobby (daily correspondence chess)",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
         "",
         "Messages",
@@ -800,12 +803,14 @@ fn overview_lines() -> Vec<String> {
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open Hub",
-        "  Ctrl+Q / Alt+A    toggle Aquarium tray after unlocking it in Shop",
-        "  Ctrl+F            feed Aquarium tray with bought Aquarium Food",
+        "  Ctrl+Q            open / close the Lobby (daily games)",
+        "  /aquarium         toggle the Aquarium in the Lounge after unlocking it in Shop",
+        "  /aquarium feed    feed your Aquarium with bought Aquarium Food",
         "  Ctrl+/            search and jump to a room, DM, or synthetic Home entry",
         "  ?                 open this guide; Pair and terminal-specific tabs live here",
         "  w                 open Bonsai Care when not composing",
-        "  c                 open Cat Companion after unlocking it",
+        "  /pet              toggle the pet strip in the Lounge",
+        "  /feed /water      pet-strip care after unlocking the companion",
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
@@ -825,7 +830,7 @@ fn overview_lines() -> Vec<String> {
         "  `                 cycle Dashboard / seated game rooms",
         "",
         "Hub",
-        "  Ctrl+G            open Shop, Leaderboard, Quests, Events",
+        "  Ctrl+G            open Quests, Shop, Leaderboard, Events",
         "  Tab / Shift+Tab   switch Hub tabs",
         "  1-4               jump to Hub tab",
         "  Shop              j/k select, [/] subtab, Enter buy with Late Chips",
@@ -1238,14 +1243,14 @@ fn bonsai_help_lines() -> Vec<String> {
         "",
         "Pet Companion",
         "  Unlock            Hub Shop companion bought with Late Chips",
-        "  c                 open pet care after unlocking it",
-        "  f                 feed (every 2 days)",
-        "  w                 water (daily)",
-        "  p                 play (daily; 3-day care streak unlocks happy)",
-        "  q / Esc           close",
-        "  play mode         hjkl / WASD / arrows move toy",
-        "  Space / Enter / p dash toy",
-        "  c                 stop play",
+        "  strip             lives above the Lounge composer once unlocked",
+        "  /pet              show or hide the strip",
+        "  /feed             spend one pet food, or click the bowl or the pet",
+        "  once fed it strolls the screen for 30 minutes; one meal per day",
+        "  /water            water (daily), or click the water bowl",
+        "  pet food is a Hub Shop item; an empty bowl shows ? when you are out",
+        "  /petname [name]   show or set your pet's name",
+        "  3-day care streak keeps it happy",
     ]
     .into_iter()
     .map(str::to_string)
@@ -1372,7 +1377,7 @@ mod tests {
         let context = bot_app_context();
         assert!(context.contains("## Economy\n"));
         assert!(context.contains("Monthly Top Chips counts net chip delta."));
-        assert!(context.contains("Lateris, 2048, and Snake record run scores."));
+        assert!(context.contains("Lateris, 2048, Snake, and Traffic record run scores."));
         assert!(context.contains("Blackjack form: name, pace, stake."));
         assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
     }
@@ -1427,6 +1432,7 @@ mod tests {
         let lines = chat_help_lines(false).join("\n");
         for expected in [
             "/brb [message]",
+            "/challenge [@user]",
             "/coffee",
             "/friend [@user]",
             "/friends",

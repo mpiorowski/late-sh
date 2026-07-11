@@ -123,7 +123,7 @@ Every `TICK_SECS = 2`, `WorldState::tick`:
 
 ### Active sessions
 
-- Active sessions are tracked per user and session UUID. Multiple sessions for the same user should not remove the player until all sessions leave.
+- Active sessions are tracked per user and session UUID. Multiple sessions for the same user should not remove the player until all sessions leave. Character resets publish a per-user reset version in snapshots; any still-open Lateania session that observes its user's version advance stops auto-rejoining and tells the user to return to the Games hub, preventing an existing world screen from silently becoming a fresh class-select character.
 - `State::Drop` calls `leave_task`; parent navigation away from Lateania drops active state.
 - Character reset clears active sessions, removes the player, strips mob DoTs owned by that user, deletes only that user's character row, and does not wipe shared world state.
 - Loading a saved character reconciles level from total XP while never lowering an already-higher saved level, so stale saves still restore current status, stats, and unlocked abilities.
@@ -171,7 +171,7 @@ Before class choice:
 - `Quests`: read-only Frontier zone quest list.
 - `Follow`: current occupants, follow target tag, stop-follow action.
 
-UI uses a two-column layout with compact fallback for terminals narrower than 50 columns or shorter than 9 rows. The left column splits current room context (`Now`) from newest-first action scrollback (`Recent`); service room-description lines use `LogKind::Room` and are filtered out of `Recent` so movement does not bury combat, loot, chat, and system events. Arrivals use compact `LogKind::Travel` breadcrumbs so Recent still shows where the player has just been.
+UI uses a two-column layout with compact fallback for terminals narrower than 50 columns or shorter than 9 rows. The left column splits current room context (`Now`) from newest-first action scrollback (`Recent`) with a visible divider; the `Now` region wraps the room description naturally and only truncates the whole context as a last resort to preserve recent-event space. Service room-description lines use `LogKind::Room` and are filtered out of `Recent` so movement does not bury combat, loot, chat, and system events. Arrivals use compact `LogKind::Travel` breadcrumbs so Recent still shows where the player has just been. Consecutive identical recent events are collapsed with an `xN` suffix so repeated blocked-movement warnings do not flood the split.
 In the Room panel, the minimap is rendered in a separate bottom-aligned side-panel region, not appended to the room detail lines; keep it anchored so changing foes/features/hints does not make the map jump vertically.
 Room-panel variable text rows (zone, exits, features, foes, occupants, wildlife) should use the side wrapping helpers in `ui.rs` so long labels wrap within the side column instead of clipping against the border.
 Non-Room side panels are rendered through `side_paragraph`, which enables Ratatui wrapping for long quest, inventory, shop, title, and ability rows.

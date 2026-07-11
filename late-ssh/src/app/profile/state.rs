@@ -90,6 +90,15 @@ impl ProfileState {
         true
     }
 
+    /// Toggle the pet companion strip (the /pet command; same setting as the
+    /// "Pet companion strip" tweak in settings). Persists and returns the new
+    /// visibility.
+    pub fn toggle_show_pet_strip(&mut self) -> bool {
+        self.profile.show_pet_strip = !self.profile.show_pet_strip;
+        self.save_profile();
+        self.profile.show_pet_strip
+    }
+
     /// Advance both sidebars through the 4-state layout cycle (the Home `\`
     /// key): both on -> left off -> right off -> both off -> both on. `left`
     /// is the room-list sidebar, `right` the info sidebar (its mode is kept in
@@ -199,7 +208,6 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         ),
         enable_background_color: profile.enable_background_color,
         text_brightness_adjustment: profile.text_brightness_adjustment,
-        show_dashboard_header: profile.show_dashboard_header,
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_components: profile.right_sidebar_components.clone(),
@@ -208,6 +216,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         start_with_music_muted: profile.start_with_music_muted,
         land_on_home: profile.land_on_home,
         show_flag_fallback: profile.show_flag_fallback,
+        show_pet_strip: profile.show_pet_strip,
         favorite_room_ids: profile.favorite_room_ids.clone(),
         birthday: profile.birthday.clone(),
     }

@@ -705,7 +705,6 @@ async fn room_tail_task_loads_favorite_room_history() {
             theme_id: Some("late".to_string()),
             enable_background_color: false,
             text_brightness_adjustment: 0,
-            show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
@@ -714,6 +713,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             start_with_music_muted: false,
             land_on_home: false,
             show_flag_fallback: false,
+            show_pet_strip: true,
             favorite_room_ids: vec![favorite_room.id],
             birthday: None,
         },
@@ -2864,6 +2864,99 @@ async fn mod_slow_command_creates_row_audits_and_notifies_target_session() {
 }
 
 #[tokio::test]
+async fn mod_server_slow_command_creates_server_row_and_notifies_target_session() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "server_slow_actor").await;
+    let target = create_test_user(&test_db.db, "server_slow_target").await;
+
+    let session_token = "server-slow-session".to_string();
+    let active_users = Arc::new(Mutex::new(HashMap::from([(
+        target.id,
+        ActiveUser {
+            username: target.username.clone(),
+            fingerprint: Some(target.fingerprint.clone()),
+            peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
+            sessions: vec![ActiveSession {
+                token: session_token.clone(),
+                fingerprint: Some(target.fingerprint.clone()),
+                peer_ip: None,
+                afk: None,
+            }],
+            connection_count: 1,
+            last_login_at: std::time::Instant::now(),
+        },
+    )])));
+    let registry = SessionRegistry::new();
+    let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
+    registry
+        .register(session_token, session_tx, target.id)
+        .await;
+    let service = ChatService::new_with_active_users(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+        active_users,
+    )
+    .with_session_registry(registry);
+    let mut events = service.subscribe_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "slow server @server_slow_target 90s permanent high volume".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput { lines, success, .. } => {
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(
+                lines,
+                vec![
+                    "slowed @server_slow_target in server: one message every 1m 30s for permanent"
+                ]
+            );
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let message = timeout(Duration::from_secs(2), session_rx.recv())
+        .await
+        .expect("session message timeout")
+        .expect("session message");
+    match message {
+        SessionMessage::Toast { message, error } => {
+            assert!(error);
+            assert_eq!(
+                message,
+                "Slow mode in server: one message every 1m 30s. No expiry set."
+            );
+        }
+        other => panic!("expected toast message, got {other:?}"),
+    }
+
+    let slow_mode = ChatSlowMode::find_active_server_for_user(&client, target.id)
+        .await
+        .expect("slow mode lookup")
+        .expect("active server slow mode");
+    assert_eq!(slow_mode.interval_secs, 90);
+    assert!(slow_mode.room_id.is_none());
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    assert!(audit.iter().any(|entry| {
+        entry.actor_user_id == actor.id
+            && entry.action == "server_slow"
+            && entry.target_id == Some(target.id)
+    }));
+}
+
+#[tokio::test]
 async fn grant_mod_command_updates_active_session_permissions() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -3234,4 +3327,126 @@ async fn send_message_task_rejects_active_slow_mode_until_interval_passes() {
         }
         other => panic!("expected SendFailed, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn send_message_task_applies_server_slow_to_public_rooms_but_not_dms() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let actor = create_test_user(&test_db.db, "send_server_slow_actor").await;
+    let user = create_test_user(&test_db.db, "send_server_slow_target").await;
+    let peer = create_test_user(&test_db.db, "send_server_slow_peer").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "send-server-slow-room")
+        .await
+        .expect("create room");
+    let other_room = ChatRoom::get_or_create_public_room(&client, "send-server-slow-other")
+        .await
+        .expect("create other room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join user");
+    ChatRoomMember::join(&client, other_room.id, user.id)
+        .await
+        .expect("join other room user");
+    let dm = ChatRoom::get_or_create_dm(&client, user.id, peer.id)
+        .await
+        .expect("create dm");
+    ChatRoomMember::join(&client, dm.id, user.id)
+        .await
+        .expect("join dm user");
+    ChatRoomMember::join(&client, dm.id, peer.id)
+        .await
+        .expect("join dm peer");
+
+    let first_request_id = Uuid::now_v7();
+    service.send_message_task(
+        user.id,
+        room.id,
+        room.slug.clone(),
+        "first public message".to_string(),
+        first_request_id,
+        false,
+    );
+    for _ in 0..2 {
+        let _ = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("first send event timeout")
+            .expect("first send event");
+    }
+
+    ChatSlowMode::activate_server(
+        &client,
+        user.id,
+        actor.id,
+        90,
+        "too fast",
+        Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+    )
+    .await
+    .expect("activate server slow mode");
+
+    let second_request_id = Uuid::now_v7();
+    service.send_message_task(
+        user.id,
+        other_room.id,
+        other_room.slug.clone(),
+        "second public message in another room".to_string(),
+        second_request_id,
+        false,
+    );
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::SendFailed {
+            request_id,
+            message,
+            ..
+        } => {
+            assert_eq!(request_id, second_request_id);
+            assert!(
+                message.starts_with("Slow mode in server: wait "),
+                "{message}"
+            );
+        }
+        other => panic!("expected SendFailed, got {other:?}"),
+    }
+
+    let dm_request_id = Uuid::now_v7();
+    service.send_message_task(
+        user.id,
+        dm.id,
+        dm.slug.clone(),
+        "dm is not throttled".to_string(),
+        dm_request_id,
+        false,
+    );
+    let mut saw_created = false;
+    let mut saw_success = false;
+    for _ in 0..2 {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("dm send event timeout")
+            .expect("dm send event");
+        match event {
+            ChatEvent::MessageCreated { message, .. } => {
+                saw_created = true;
+                assert_eq!(message.body, "dm is not throttled");
+            }
+            ChatEvent::SendSucceeded { request_id, .. } => {
+                saw_success = true;
+                assert_eq!(request_id, dm_request_id);
+            }
+            other => panic!("unexpected dm send event: {other:?}"),
+        }
+    }
+    assert!(saw_created);
+    assert!(saw_success);
 }

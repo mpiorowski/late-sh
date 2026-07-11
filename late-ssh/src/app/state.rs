@@ -84,24 +84,33 @@ pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 4;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 5;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 6;
 pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
-pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 8;
-pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 9;
-pub(crate) const GAME_SELECTION_NES_DABG: usize = 10;
-pub(crate) const GAME_SELECTION_NES_FALLING: usize = 11;
-pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 12;
-pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 13;
-pub(crate) const GAME_SELECTION_NES_RHDE: usize = 14;
-pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 15;
-pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 16;
-pub(crate) const GAME_SELECTION_NES_2048: usize = 17;
-pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 18;
+pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
+pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 9;
+pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 10;
+pub(crate) const GAME_SELECTION_NES_DABG: usize = 11;
+pub(crate) const GAME_SELECTION_NES_FALLING: usize = 12;
+pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 13;
+pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 14;
+pub(crate) const GAME_SELECTION_NES_RHDE: usize = 15;
+pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 16;
+pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 17;
+pub(crate) const GAME_SELECTION_NES_2048: usize = 18;
+pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 19;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
 
+/// Bounds for the aquarium simulation. The tray renders inside the chat
+/// column, so mirror the default Home layout: frame borders (2) plus the
+/// room rail and right sidebar (24 each).
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
-    let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
-    crate::app::hub::aquarium::ui::bottom_tray_area(app_inner)
+    let chat_column = Rect::new(
+        1,
+        1,
+        cols.saturating_sub(2 + 24 + 24).max(20),
+        rows.saturating_sub(2),
+    );
+    crate::app::hub::aquarium::ui::top_tray_area(chat_column)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,11 +209,14 @@ pub struct SessionConfig {
     pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
     pub tetris_service: crate::app::arcade::tetris::svc::LaterisService,
     pub snake_service: crate::app::arcade::snake::svc::SnakeService,
+    pub traffic_service: crate::app::arcade::traffic::svc::TrafficService,
     pub rubiks_cube_service: crate::app::arcade::rubiks_cube::svc::RubiksCubeService,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
     pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
+    pub initial_traffic_track_scores: Vec<late_core::models::traffic::TrackScore>,
+    pub initial_traffic_high_score: Option<late_core::models::traffic::HighScore>,
     pub le_word_service: crate::app::arcade::le_word::svc::LeWordService,
     pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
     pub initial_le_word_game: Option<late_core::models::le_word::Game>,
@@ -218,6 +230,7 @@ pub struct SessionConfig {
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub daily_service: crate::app::daily::svc::DailyService,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
     pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
@@ -289,6 +302,8 @@ pub struct SessionConfig {
     pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
     /// True once this user finished (or skipped) the clubhouse tutorial.
     pub clubhouse_tutorial_done: bool,
+    /// Whether the aquarium tray was open when the user last toggled it.
+    pub show_aquarium_tray: bool,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
@@ -353,6 +368,7 @@ pub struct App {
     pub(crate) ticket_service: crate::app::tickets::svc::TicketService,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_bonsai_v2_modal: bool,
+    pub(crate) show_daily_modal: bool,
     pub(crate) show_ultimate_modal: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
@@ -411,16 +427,21 @@ pub struct App {
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub(super) activity: VecDeque<ActivityEvent>,
-    /// Mouse-wheel scroll offset for the Home top-strip Activity panel. `0`
-    /// keeps the newest event at the top (default); larger values scroll
-    /// back through older events. Capped at `activity.len()` each frame so
+    /// Mouse-wheel scroll offset for the sidebar Activity panel. `0` keeps
+    /// the newest event at the top (default); larger values scroll back
+    /// through older events. Capped at `activity.len()` each frame so
     /// trimming the buffer can't strand the user past the end.
     pub(crate) dashboard_activity_scroll: u16,
-    /// Last-rendered rect for the Home top-strip Activity panel. Set by
-    /// `dashboard::ui::draw_box_activity` during draw, consumed by mouse
-    /// wheel hit-testing in `app::input`. Reset to `None` at the top of
-    /// every frame so a layout change can't leave a stale target behind.
+    /// Last-rendered rect for the sidebar Activity panel. Set by
+    /// `activity::panel::draw_activity_inline` during draw, consumed by
+    /// mouse wheel hit-testing in `app::input`. Reset to `None` at the top
+    /// of every frame so a layout change can't leave a stale target behind.
     pub(crate) last_dashboard_activity_rect: std::cell::Cell<Option<Rect>>,
+    /// Pet-strip click targets from the last frame: the pet itself (treat),
+    /// the food bowl (feed), and the water bowl (water). Reset each frame.
+    pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_pet_strip_food_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_pet_strip_water_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -480,7 +501,6 @@ pub struct App {
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
-    pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
@@ -533,6 +553,8 @@ pub struct App {
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
     pub(crate) repaint_signal: Option<std::sync::Arc<crate::render_signal::RenderSignal>>,
+    /// Daily correspondence games: sidebar panel, modal, and board state.
+    pub(crate) daily: crate::app::daily::state::DailyState,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
     pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     pub(crate) rooms_selected_index: usize,
@@ -561,6 +583,7 @@ pub struct App {
     pub(crate) solitaire_state: crate::app::arcade::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
     pub(crate) nes_cabinet_state: crate::app::arcade::nes_cabinet::state::State,
+    pub(crate) traffic_state: crate::app::arcade::traffic::state::State,
     pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
     /// Rooms whose current pending turn already emitted a "your turn"
     /// notification; each room is cleared once that turn passes.
@@ -672,7 +695,7 @@ impl App {
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
         self.show_bonsai_v2_modal = false;
-        self.show_cat_modal = false;
+        self.show_daily_modal = false;
         // Real sessions land in the clubhouse; the integration suite predates
         // that and drives flows from Home, so tests start there.
         self.screen = Screen::Dashboard;
@@ -693,8 +716,8 @@ impl App {
             && !self.show_ticket_modal
             && !self.show_bonsai_modal
             && !self.show_bonsai_v2_modal
+            && !self.show_daily_modal
             && !self.show_ultimate_modal
-            && !self.show_cat_modal
             && !self.icon_picker_open
             && !self.room_search_modal_state.is_open()
             && !self.booth_modal_state.is_open()
@@ -869,6 +892,13 @@ impl App {
             config.initial_minesweeper_games,
         );
         let nes_cabinet_state = crate::app::arcade::nes_cabinet::state::State::new();
+        let mut traffic_state = crate::app::arcade::traffic::state::State::new();
+        traffic_state.hydrate(
+            config.user_id,
+            config.traffic_service.clone(),
+            config.initial_traffic_track_scores,
+            config.initial_traffic_high_score,
+        );
         let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
         let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
         crate::app::dashboard::state::seed_persisted_room_joins_from_rooms(
@@ -1023,7 +1053,7 @@ impl App {
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
-            show_aquarium_tray: false,
+            show_aquarium_tray: config.show_aquarium_tray,
             show_profile_modal: false,
             show_sheet_modal: false,
             show_poll_modal: false,
@@ -1032,6 +1062,7 @@ impl App {
             ticket_service: config.ticket_service,
             show_bonsai_modal: false,
             show_bonsai_v2_modal: false,
+            show_daily_modal: false,
             show_ultimate_modal: false,
             login_announcements: config.initial_announcements,
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -1079,6 +1110,9 @@ impl App {
             activity,
             dashboard_activity_scroll: 0,
             last_dashboard_activity_rect: std::cell::Cell::new(None),
+            last_pet_strip_pet_rect: std::cell::Cell::new(None),
+            last_pet_strip_food_rect: std::cell::Cell::new(None),
+            last_pet_strip_water_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -1139,7 +1173,6 @@ impl App {
             bonsai_v2_state,
             bonsai_v2_activity_ticks_remaining: 0,
             pet_state,
-            show_cat_modal: false,
             quest_state,
             shop_state,
             hub_admin_state,
@@ -1176,6 +1209,11 @@ impl App {
             dopewars_port: config.dopewars_port,
             dopewars_secret: config.dopewars_secret,
             repaint_signal: None,
+            daily: crate::app::daily::state::DailyState::new(
+                config.daily_service,
+                config.user_id,
+                notifier.clone(),
+            ),
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,
@@ -1203,6 +1241,7 @@ impl App {
             solitaire_state,
             minesweeper_state,
             nes_cabinet_state,
+            traffic_state,
             active_room_game: None,
             rooms_turn_notified_room_ids: HashSet::new(),
             rooms_last_turn_scan_at: None,
@@ -1554,8 +1593,6 @@ impl App {
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
             self.show_bonsai_v2_modal = false;
-            self.pet_state.cancel_play();
-            self.show_cat_modal = false;
         }
         self.hub_state.ensure_visible_tab(self.is_admin);
     }
@@ -1638,6 +1675,11 @@ impl App {
 
         if self.screen == Screen::Pinstar {
             self.leave_pinstar();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::DailyMatch && screen != Screen::DailyMatch {
+            self.daily.close_board();
             self.force_full_repaint();
         }
 
@@ -1900,6 +1942,13 @@ impl App {
             .set_clubhouse_tutorial_done(self.user_id);
     }
 
+    /// Persist the aquarium tray's open/closed state (fire-and-forget).
+    pub(crate) fn persist_show_aquarium_tray(&self) {
+        self.profile_state
+            .service()
+            .set_show_aquarium_tray(self.user_id, self.show_aquarium_tray);
+    }
+
     /// Open the profile modal for a user, closing the sheet modal that shares
     /// its slot. The single entry point for every profile-open trigger (chat
     /// author click, `/profile`, clubhouse avatar click).
@@ -2035,10 +2084,11 @@ impl App {
     /// because the CLI gates its Icecast decoder on the received source.
     pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
         use late_core::models::user::AudioSource;
+        // Dock order in the sidebar music stage: radio → youtube → icecast.
         let next = match self.paired_browser_source {
-            AudioSource::Icecast => AudioSource::Youtube,
-            AudioSource::Youtube => AudioSource::Radio,
-            AudioSource::Radio => AudioSource::Icecast,
+            AudioSource::Radio => AudioSource::Youtube,
+            AudioSource::Youtube => AudioSource::Icecast,
+            AudioSource::Icecast => AudioSource::Radio,
         };
         self.paired_browser_source = next;
         if let Some(active_users) = &self.active_users

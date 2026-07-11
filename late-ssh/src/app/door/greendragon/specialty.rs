@@ -127,6 +127,9 @@ const DARK_ARTS: &[Skill] = &[
                 attack,
                 defense,
                 dying_text: "Your skeleton warrior crumbles to dust.".into(),
+                ability: super::combat::CompanionAbility::Fight,
+                // Summons bypass the mercenary hire cap (LoGD `ignorelimit`).
+                ignore_limit: true,
             })
         },
     },

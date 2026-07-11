@@ -408,6 +408,26 @@ impl ProfileService {
         );
     }
 
+    /// Fire-and-forget: persist whether the aquarium tray is open so the
+    /// next session starts in the same state. No event on success; a failure
+    /// is only logged (the tray would simply start closed next session).
+    pub fn set_show_aquarium_tray(&self, user_id: Uuid, shown: bool) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_show_aquarium_tray(&client, user_id, shown).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist aquarium tray state");
+                }
+            }
+            .instrument(info_span!("profile.show_aquarium_tray_task", user_id = %user_id)),
+        );
+    }
+
     pub fn delete_account(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(

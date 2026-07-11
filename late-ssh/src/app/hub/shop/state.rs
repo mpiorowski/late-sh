@@ -155,14 +155,6 @@ impl ShopState {
         &self.snapshot.active_room_effects
     }
 
-    pub fn bot_username_color_active(&self) -> bool {
-        self.snapshot.bot_username_color_active
-            && self
-                .snapshot
-                .bot_username_color_ends_at
-                .is_some_and(|ends_at| ends_at > Utc::now())
-    }
-
     pub fn pending_room_effect(&self) -> Option<&PendingRoomEffect> {
         self.pending_room_effect.as_ref()
     }
@@ -440,15 +432,6 @@ impl ShopState {
             }
             !effects.is_empty()
         });
-        if self
-            .snapshot
-            .bot_username_color_ends_at
-            .is_some_and(|ends_at| ends_at <= now)
-        {
-            self.snapshot.bot_username_color_active = false;
-            self.snapshot.bot_username_color_ends_at = None;
-            changed = true;
-        }
         changed
     }
 }
@@ -505,8 +488,6 @@ mod tests {
             items: Vec::new(),
             entitlements: ShopEntitlements::default(),
             active_room_effects: HashMap::new(),
-            bot_username_color_active: false,
-            bot_username_color_ends_at: None,
             aquarium_hungry: false,
         };
         ShopState::for_test_snapshot(snapshot)
@@ -550,7 +531,7 @@ mod tests {
     fn select_category_by_index_switches_and_resets_selection() {
         let mut state = make_state();
         assert_eq!(state.selected_category_index(), 0);
-        assert_eq!(state.selected_category(), ShopCategory::Companions);
+        assert_eq!(state.selected_category(), ShopCategory::Chat);
 
         state.selected_index = 5;
         state.select_category_by_index(2);

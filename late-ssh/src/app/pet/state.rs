@@ -8,7 +8,6 @@ use super::svc::PetService;
 pub enum PetMood {
     Happy,
     Content,
-    Bored,
     Hungry,
     Thirsty,
     Sad,
@@ -19,7 +18,6 @@ impl PetMood {
         match self {
             PetMood::Happy => "happy",
             PetMood::Content => "content",
-            PetMood::Bored => "bored",
             PetMood::Hungry => "hungry",
             PetMood::Thirsty => "thirsty",
             PetMood::Sad => "sad",
@@ -30,7 +28,6 @@ impl PetMood {
         match self {
             PetMood::Happy => "^.^",
             PetMood::Content => "o.o",
-            PetMood::Bored => "-.-",
             PetMood::Hungry => "o.o",
             PetMood::Thirsty => "o_o",
             PetMood::Sad => "T_T",
@@ -57,20 +54,13 @@ impl PetNeedStatus {
     pub fn is_missing(self) -> bool {
         self != PetNeedStatus::Done
     }
-
-    pub fn is_overdue(self) -> bool {
-        self == PetNeedStatus::Overdue
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PetNeeds {
     pub food: PetNeedStatus,
     pub water: PetNeedStatus,
-    pub play: PetNeedStatus,
 }
-
-pub const PLAY_RUN_NEEDED: u16 = 100;
 
 const FOOD_DUE_AFTER_DAYS: i64 = 2;
 const DAILY_DUE_AFTER_DAYS: i64 = 1;
@@ -79,138 +69,32 @@ const FOOD_DUE_PENALTY: i16 = 25;
 const FOOD_OVERDUE_PENALTY: i16 = 55;
 const WATER_DUE_PENALTY: i16 = 10;
 const WATER_OVERDUE_PENALTY: i16 = 25;
-const PLAY_DUE_PENALTY: i16 = 8;
-const PLAY_OVERDUE_PENALTY: i16 = 18;
+/// Care score at or below which the pet reads `Sad` regardless of which need
+/// is missing. Overdue food alone (45) clears this bar; so does any pair of
+/// overdue needs.
+const SAD_CARE_SCORE: u8 = 50;
 
-const PLAY_FIELD_MAX: i16 = 1000;
-const PLAY_TOY_STEP: i16 = 75;
-const PLAY_TOY_DASH: i16 = 180;
-const PLAY_CATCH_RADIUS: i16 = 95;
-const PLAY_POUNCE_PENALTY: u16 = 18;
-const PLAY_MESSAGE_TICKS: usize = 15 * 2;
-const PLAY_POUNCE_COOLDOWN_TICKS: usize = 15;
 const PET_ROAM_DURATION_SECS: i64 = 30 * 60;
 
 impl PetNeeds {
     pub fn all_required_done(self) -> bool {
-        self.food == PetNeedStatus::Done
-            && self.water == PetNeedStatus::Done
-            && self.play == PetNeedStatus::Done
-    }
-
-    pub fn missing_count(self) -> usize {
-        [self.food, self.water, self.play]
-            .into_iter()
-            .filter(|status| status.is_missing())
-            .count()
-    }
-
-    pub fn overdue_count(self) -> usize {
-        [self.food, self.water, self.play]
-            .into_iter()
-            .filter(|status| status.is_overdue())
-            .count()
+        self.food == PetNeedStatus::Done && self.water == PetNeedStatus::Done
     }
 
     pub fn care_score(self) -> u8 {
         let penalty = need_penalty(self.food, FOOD_DUE_PENALTY, FOOD_OVERDUE_PENALTY)
-            + need_penalty(self.water, WATER_DUE_PENALTY, WATER_OVERDUE_PENALTY)
-            + need_penalty(self.play, PLAY_DUE_PENALTY, PLAY_OVERDUE_PENALTY);
+            + need_penalty(self.water, WATER_DUE_PENALTY, WATER_OVERDUE_PENALTY);
         (100 - penalty.clamp(0, 100)) as u8
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PetPlayState {
-    pub toy_x: i16,
-    pub toy_y: i16,
-    pub cat_x: i16,
-    pub cat_y: i16,
-    pub run_energy: u16,
-    pub pounces: u8,
-    pub message: &'static str,
-    message_ticks: usize,
-    pounce_cooldown: usize,
-}
-
-impl PetPlayState {
-    fn new() -> Self {
-        Self {
-            toy_x: PLAY_FIELD_MAX / 2,
-            toy_y: PLAY_FIELD_MAX / 4,
-            cat_x: PLAY_FIELD_MAX / 2,
-            cat_y: PLAY_FIELD_MAX * 3 / 4,
-            run_energy: 0,
-            pounces: 0,
-            message: "keep the toy away",
-            message_ticks: PLAY_MESSAGE_TICKS,
-            pounce_cooldown: 0,
-        }
-    }
-
-    fn tick(&mut self, mood: PetMood) -> bool {
-        self.message_ticks = self.message_ticks.saturating_sub(1);
-        self.pounce_cooldown = self.pounce_cooldown.saturating_sub(1);
-        if self.message_ticks == 0 {
-            self.message = "run!";
-        }
-
-        let old_cat_x = self.cat_x;
-        let old_cat_y = self.cat_y;
-        let speed = chase_speed(mood);
-        self.cat_x = step_toward(self.cat_x, self.toy_x, speed);
-        self.cat_y = step_toward(self.cat_y, self.toy_y, speed);
-
-        let distance = self.distance_to_toy();
-        if distance <= PLAY_CATCH_RADIUS && self.pounce_cooldown == 0 {
-            self.pounces = self.pounces.saturating_add(1);
-            self.run_energy = self.run_energy.saturating_sub(PLAY_POUNCE_PENALTY);
-            self.pounce_cooldown = PLAY_POUNCE_COOLDOWN_TICKS;
-            self.set_message("pounced!");
-            return false;
-        }
-
-        let moved = (self.cat_x - old_cat_x).abs() + (self.cat_y - old_cat_y).abs();
-        if moved > 0 && distance > PLAY_CATCH_RADIUS {
-            let gain = if distance > 420 { 2 } else { 1 };
-            self.run_energy = (self.run_energy + gain).min(PLAY_RUN_NEEDED);
-        }
-
-        if self.run_energy >= PLAY_RUN_NEEDED {
-            self.set_message("zoomies!");
-            true
-        } else {
-            false
-        }
-    }
-
-    fn move_toy(&mut self, dx: i16, dy: i16) {
-        self.toy_x = (self.toy_x + dx).clamp(0, PLAY_FIELD_MAX);
-        self.toy_y = (self.toy_y + dy).clamp(0, PLAY_FIELD_MAX);
-        if self.message != "pounced!" {
-            self.message = "run!";
-        }
-    }
-
-    fn dash_toy(&mut self) {
-        let dx = (self.toy_x - self.cat_x).signum();
-        let dy = (self.toy_y - self.cat_y).signum();
-        let dx = if dx == 0 { 1 } else { dx };
-        let dy = if dy == 0 { 1 } else { dy };
-        self.move_toy(dx * PLAY_TOY_DASH, dy * PLAY_TOY_DASH);
-        self.set_message("dash!");
-    }
-
-    fn set_message(&mut self, message: &'static str) {
-        self.message = message;
-        self.message_ticks = PLAY_MESSAGE_TICKS;
-    }
-
-    fn distance_to_toy(&self) -> i16 {
-        (self.cat_x - self.toy_x)
-            .abs()
-            .max((self.cat_y - self.toy_y).abs())
-    }
+/// Outcome of a feed attempt, so the caller can send an out-of-food user to
+/// the Shop while the strip carries the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedOutcome {
+    Fed,
+    OutOfFood,
+    AlreadyFedToday,
 }
 
 pub struct PetState {
@@ -219,8 +103,6 @@ pub struct PetState {
 
     pub last_fed: Option<DateTime<Utc>>,
     pub last_watered: Option<DateTime<Utc>>,
-    pub last_played: Option<DateTime<Utc>>,
-    pub last_treated: Option<DateTime<Utc>>,
     pub care_streak_days: i32,
     pub care_streak_date: Option<NaiveDate>,
 
@@ -239,7 +121,6 @@ pub struct PetState {
     pub action_feedback: Option<&'static str>,
     feedback_ticks: usize,
     animation_ticks: usize,
-    play: Option<PetPlayState>,
     roam_until: Option<DateTime<Utc>>,
 }
 
@@ -252,8 +133,6 @@ impl PetState {
             svc,
             last_fed: companion.last_fed,
             last_watered: companion.last_watered,
-            last_played: companion.last_played,
-            last_treated: companion.last_treated,
             care_streak_days: companion.care_streak_days,
             care_streak_date: companion.care_streak_date,
             name: companion.name,
@@ -263,7 +142,6 @@ impl PetState {
             action_feedback: None,
             feedback_ticks: 0,
             animation_ticks: 0,
-            play: None,
             roam_until: None,
         }
     }
@@ -296,11 +174,6 @@ impl PetState {
 
     pub fn tick(&mut self) {
         self.animation_ticks = self.animation_ticks.wrapping_add(1);
-        let mood = self.mood();
-        let play_complete = self.play.as_mut().is_some_and(|play| play.tick(mood));
-        if play_complete {
-            self.complete_play();
-        }
 
         if self.action_feedback.is_some() {
             self.feedback_ticks = self.feedback_ticks.saturating_sub(1);
@@ -337,122 +210,55 @@ impl PetState {
         self.animation_ticks
     }
 
-    pub fn play_session(&self) -> Option<&PetPlayState> {
-        self.play.as_ref()
-    }
-
     pub fn roaming_active(&self) -> bool {
         self.roam_until
             .is_some_and(|roam_until| roam_until > Utc::now())
     }
 
-    pub fn treated_today(&self) -> bool {
-        treated_on(self.last_treated, Utc::now().date_naive())
+    pub fn fed_today(&self) -> bool {
+        fed_on(self.last_fed, Utc::now().date_naive())
     }
 
-    pub fn feed(&mut self) {
-        self.play = None;
+    /// A meal costs one pet food from the Shop inventory and sends the pet off
+    /// on a full-screen stroll. Capped at one meal per UTC day, so a bowl that
+    /// is already full cannot be spun into an endless roam.
+    pub fn feed(&mut self, pet_food_quantity: i32) -> FeedOutcome {
         let now = Utc::now();
+        if fed_on(self.last_fed, now.date_naive()) {
+            self.set_feedback("already fed today");
+            return FeedOutcome::AlreadyFedToday;
+        }
+        if pet_food_quantity <= 0 {
+            self.set_feedback("buy pet food first");
+            return FeedOutcome::OutOfFood;
+        }
+
         self.last_fed = Some(now);
-        self.action_feedback = Some("fed!");
-        self.feedback_ticks = FEEDBACK_TICKS;
+        self.roam_until = Some(now + Duration::seconds(PET_ROAM_DURATION_SECS));
+        self.set_feedback("fed! strolling");
         self.svc.feed_task(self.user_id);
         self.record_care_completion_if_ready(now);
+        FeedOutcome::Fed
     }
 
     pub fn water(&mut self) {
-        self.play = None;
         let now = Utc::now();
         self.last_watered = Some(now);
-        self.action_feedback = Some("watered!");
-        self.feedback_ticks = FEEDBACK_TICKS;
+        self.set_feedback("watered!");
         self.svc.water_task(self.user_id);
         self.record_care_completion_if_ready(now);
     }
 
-    pub fn play(&mut self) {
-        if self.play.is_none() {
-            self.action_feedback = None;
-            self.play = Some(PetPlayState::new());
-        } else {
-            self.dash_play_toy();
-        }
-    }
-
-    pub fn pet_with_food(&mut self, pet_food_quantity: i32) {
-        self.play = None;
-        if pet_food_quantity <= 0 {
-            self.action_feedback = Some("buy pet food first");
-            self.feedback_ticks = FEEDBACK_TICKS;
-            return;
-        }
-        let now = Utc::now();
-        if treated_on(self.last_treated, now.date_naive()) {
-            self.action_feedback = Some("already had a treat today");
-            self.feedback_ticks = FEEDBACK_TICKS;
-            return;
-        }
-
-        self.last_treated = Some(now);
-        self.roam_until = Some(now + Duration::seconds(PET_ROAM_DURATION_SECS));
-        self.action_feedback = Some("treat! strolling");
+    fn set_feedback(&mut self, feedback: &'static str) {
+        self.action_feedback = Some(feedback);
         self.feedback_ticks = FEEDBACK_TICKS;
-        self.svc.use_pet_food_task(self.user_id);
-    }
-
-    pub fn move_play_toy_left(&mut self) {
-        if let Some(play) = &mut self.play {
-            play.move_toy(-PLAY_TOY_STEP, 0);
-        }
-    }
-
-    pub fn move_play_toy_right(&mut self) {
-        if let Some(play) = &mut self.play {
-            play.move_toy(PLAY_TOY_STEP, 0);
-        }
-    }
-
-    pub fn move_play_toy_up(&mut self) {
-        if let Some(play) = &mut self.play {
-            play.move_toy(0, -PLAY_TOY_STEP);
-        }
-    }
-
-    pub fn move_play_toy_down(&mut self) {
-        if let Some(play) = &mut self.play {
-            play.move_toy(0, PLAY_TOY_STEP);
-        }
-    }
-
-    pub fn dash_play_toy(&mut self) {
-        if let Some(play) = &mut self.play {
-            play.dash_toy();
-        }
-    }
-
-    pub fn cancel_play(&mut self) {
-        if self.play.take().is_some() {
-            self.action_feedback = Some("play stopped");
-            self.feedback_ticks = FEEDBACK_TICKS;
-        }
     }
 
     fn needs_on(&self, today: NaiveDate) -> PetNeeds {
         PetNeeds {
             food: need_after(self.last_fed, today, FOOD_DUE_AFTER_DAYS),
             water: need_after(self.last_watered, today, DAILY_DUE_AFTER_DAYS),
-            play: need_after(self.last_played, today, DAILY_DUE_AFTER_DAYS),
         }
-    }
-
-    fn complete_play(&mut self) {
-        self.play = None;
-        let now = Utc::now();
-        self.last_played = Some(now);
-        self.action_feedback = Some("played!");
-        self.feedback_ticks = FEEDBACK_TICKS;
-        self.svc.play_task(self.user_id);
-        self.record_care_completion_if_ready(now);
     }
 
     fn record_care_completion_if_ready(&mut self, now: DateTime<Utc>) {
@@ -468,33 +274,16 @@ impl PetState {
     }
 }
 
-fn step_toward(current: i16, target: i16, step: i16) -> i16 {
-    let delta = target - current;
-    if delta.abs() <= step {
-        target
-    } else {
-        current + step * delta.signum()
-    }
-}
-
-fn chase_speed(mood: PetMood) -> i16 {
-    match mood {
-        PetMood::Happy => 23,
-        PetMood::Content => 20,
-        PetMood::Bored => 18,
-        PetMood::Hungry | PetMood::Thirsty => 14,
-        PetMood::Sad => 10,
-    }
-}
-
+/// Mood is a straight walk down the needs, worst first. With only two needs
+/// left the care score already subsumes every "how many are overdue" test:
+/// nothing below `SAD_CARE_SCORE` survives to the per-need checks, and
+/// nothing above it has both needs met unless it is fully cared for.
 fn mood_for_state(
     needs: PetNeeds,
     care_streak_days: i32,
     care_streak_date: Option<NaiveDate>,
     today: NaiveDate,
 ) -> PetMood {
-    let score = needs.care_score();
-
     if needs.all_required_done()
         && care_streak_date == Some(today)
         && care_streak_days >= HAPPY_CARE_STREAK_DAYS
@@ -502,10 +291,7 @@ fn mood_for_state(
         return PetMood::Happy;
     }
 
-    if score < 50
-        || needs.overdue_count() >= 2
-        || (needs.food.is_overdue() && needs.missing_count() >= 2)
-    {
+    if needs.care_score() < SAD_CARE_SCORE {
         return PetMood::Sad;
     }
 
@@ -513,27 +299,11 @@ fn mood_for_state(
         return PetMood::Hungry;
     }
 
-    if needs.water.is_overdue() {
-        return PetMood::Thirsty;
-    }
-
-    if needs.play.is_overdue() {
-        return PetMood::Bored;
-    }
-
-    if score >= 70 {
-        return PetMood::Content;
-    }
-
     if needs.water.is_missing() {
         return PetMood::Thirsty;
     }
 
-    if needs.play.is_missing() {
-        return PetMood::Bored;
-    }
-
-    PetMood::Sad
+    PetMood::Content
 }
 
 fn need_penalty(status: PetNeedStatus, due: i16, overdue: i16) -> i16 {
@@ -557,7 +327,7 @@ fn days_since(last: Option<DateTime<Utc>>, today: NaiveDate) -> Option<i64> {
     last.map(|time| (today - time.date_naive()).num_days().max(0))
 }
 
-fn treated_on(last: Option<DateTime<Utc>>, today: NaiveDate) -> bool {
+fn fed_on(last: Option<DateTime<Utc>>, today: NaiveDate) -> bool {
     last.is_some_and(|time| time.date_naive() == today)
 }
 
@@ -579,7 +349,7 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn food_is_due_every_two_days_while_water_and_play_are_daily() {
+    fn food_is_due_every_two_days_while_water_is_daily() {
         let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
         let yesterday = Utc.with_ymd_and_hms(2026, 5, 19, 12, 0, 0).unwrap();
         let two_days = Utc.with_ymd_and_hms(2026, 5, 18, 12, 0, 0).unwrap();
@@ -613,7 +383,6 @@ mod tests {
         let cared = PetNeeds {
             food: PetNeedStatus::Done,
             water: PetNeedStatus::Done,
-            play: PetNeedStatus::Done,
         };
         assert_eq!(
             mood_for_state(cared, HAPPY_CARE_STREAK_DAYS, Some(today), today),
@@ -633,30 +402,18 @@ mod tests {
             PetMood::Content
         );
 
+        // A due water bowl reads thirsty, matching the amber bowl beside it.
         assert_eq!(
             mood_for_state(
                 PetNeeds {
                     water: PetNeedStatus::Due,
-                    play: PetNeedStatus::Due,
                     ..cared
                 },
                 HAPPY_CARE_STREAK_DAYS,
                 Some(today),
                 today,
             ),
-            PetMood::Content
-        );
-        assert_eq!(
-            mood_for_state(
-                PetNeeds {
-                    play: PetNeedStatus::Overdue,
-                    ..cared
-                },
-                HAPPY_CARE_STREAK_DAYS,
-                Some(today),
-                today,
-            ),
-            PetMood::Bored
+            PetMood::Thirsty
         );
         assert_eq!(
             mood_for_state(
@@ -682,12 +439,37 @@ mod tests {
             ),
             PetMood::Hungry
         );
+        // Score 50 sits exactly on the sad bar, so food still leads.
+        assert_eq!(
+            mood_for_state(
+                PetNeeds {
+                    food: PetNeedStatus::Due,
+                    water: PetNeedStatus::Overdue,
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
+            PetMood::Hungry
+        );
+        // Overdue food alone (45) is sad on the score, with water fully done.
+        assert_eq!(
+            mood_for_state(
+                PetNeeds {
+                    food: PetNeedStatus::Overdue,
+                    ..cared
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
+            PetMood::Sad
+        );
         assert_eq!(
             mood_for_state(
                 PetNeeds {
                     food: PetNeedStatus::Overdue,
                     water: PetNeedStatus::Due,
-                    play: PetNeedStatus::Due,
                 },
                 HAPPY_CARE_STREAK_DAYS,
                 Some(today),
@@ -700,7 +482,6 @@ mod tests {
                 PetNeeds {
                     food: PetNeedStatus::Overdue,
                     water: PetNeedStatus::Overdue,
-                    ..cared
                 },
                 HAPPY_CARE_STREAK_DAYS,
                 Some(today),
@@ -723,19 +504,18 @@ mod tests {
     }
 
     #[test]
-    fn care_score_weights_food_more_than_play() {
+    fn care_score_weights_food_more_than_water() {
         let cared = PetNeeds {
             food: PetNeedStatus::Done,
             water: PetNeedStatus::Done,
-            play: PetNeedStatus::Done,
         };
         assert_eq!(
             PetNeeds {
-                play: PetNeedStatus::Due,
+                water: PetNeedStatus::Due,
                 ..cared
             }
             .care_score(),
-            92
+            90
         );
         assert_eq!(
             PetNeeds {
@@ -753,34 +533,5 @@ mod tests {
             .care_score(),
             45
         );
-    }
-
-    #[test]
-    fn play_session_gains_energy_when_cat_runs() {
-        let mut play = PetPlayState::new();
-        play.toy_x = PLAY_FIELD_MAX;
-        play.toy_y = 0;
-        play.cat_x = 0;
-        play.cat_y = PLAY_FIELD_MAX;
-
-        for _ in 0..10 {
-            play.tick(PetMood::Happy);
-        }
-
-        assert!(play.run_energy > 0);
-        assert!(play.run_energy < PLAY_RUN_NEEDED);
-    }
-
-    #[test]
-    fn play_session_pounce_penalizes_progress() {
-        let mut play = PetPlayState::new();
-        play.run_energy = 50;
-        play.toy_x = play.cat_x;
-        play.toy_y = play.cat_y;
-
-        play.tick(PetMood::Happy);
-
-        assert_eq!(play.pounces, 1);
-        assert_eq!(play.run_energy, 50 - PLAY_POUNCE_PENALTY);
     }
 }

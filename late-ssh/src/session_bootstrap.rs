@@ -33,6 +33,8 @@ pub struct ArcadeSessionPreloads {
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
+    pub initial_traffic_track_scores: Vec<late_core::models::traffic::TrackScore>,
+    pub initial_traffic_high_score: Option<late_core::models::traffic::HighScore>,
     pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
     pub initial_le_word_game: Option<late_core::models::le_word::Game>,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
@@ -45,6 +47,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
     let twenty_forty_eight_service = state.twenty_forty_eight_service.clone();
     let tetris_service = state.tetris_service.clone();
     let snake_service = state.snake_service.clone();
+    let traffic_service = state.traffic_service.clone();
     let le_word_service = state.le_word_service.clone();
     let sudoku_service = state.sudoku_service.clone();
     let nonogram_service = state.nonogram_service.clone();
@@ -58,6 +61,8 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_tetris_high_score,
         initial_snake_game,
         initial_snake_high_score,
+        initial_traffic_track_scores,
+        initial_traffic_high_score,
         initial_le_word_daily_word,
         initial_le_word_game,
         initial_sudoku_games,
@@ -115,6 +120,24 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
                 Ok(score) => score,
                 Err(e) => {
                     tracing::warn!(error = ?e, "failed to load snake high score");
+                    None
+                }
+            }
+        },
+        async {
+            match traffic_service.load_track_scores(user_id).await {
+                Ok(scores) => scores,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load traffic track scores");
+                    Vec::new()
+                }
+            }
+        },
+        async {
+            match traffic_service.load_high_score(user_id).await {
+                Ok(score) => score,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load traffic high score");
                     None
                 }
             }
@@ -183,6 +206,8 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_tetris_high_score,
         initial_snake_game,
         initial_snake_high_score,
+        initial_traffic_track_scores,
+        initial_traffic_high_score,
         initial_le_word_daily_word,
         initial_le_word_game,
         initial_sudoku_games,
@@ -215,6 +240,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_tetris_high_score,
         initial_snake_game,
         initial_snake_high_score,
+        initial_traffic_track_scores,
+        initial_traffic_high_score,
         initial_le_word_daily_word,
         initial_le_word_game,
         initial_sudoku_games,
@@ -328,11 +355,14 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_2048_high_score,
         tetris_service: state.tetris_service.clone(),
         snake_service: state.snake_service.clone(),
+        traffic_service: state.traffic_service.clone(),
         rubiks_cube_service: state.rubiks_cube_service.clone(),
         initial_tetris_game,
         initial_snake_game,
         initial_tetris_high_score,
         initial_snake_high_score,
+        initial_traffic_track_scores,
+        initial_traffic_high_score,
         le_word_service: state.le_word_service.clone(),
         initial_le_word_daily_word,
         initial_le_word_game,
@@ -346,6 +376,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_minesweeper_games,
         lateania_service: state.lateania_service.clone(),
         greendragon_service: state.greendragon_service.clone(),
+        daily_service: state.daily_service.clone(),
         rooms_service: state.rooms_service.clone(),
         room_game_registry: state.room_game_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),
@@ -406,6 +437,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
             &user.settings,
         ),
+        show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
         activity_feed_rx,

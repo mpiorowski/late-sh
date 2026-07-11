@@ -13,6 +13,9 @@ use super::theme;
 pub enum BannerKind {
     Success,
     Error,
+    /// Neutral news (a lost daily match, a draw): amber, not red — nothing
+    /// went wrong, the user just needs to know.
+    Info,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +42,14 @@ impl Banner {
         }
     }
 
+    pub fn info(message: &str) -> Self {
+        Self {
+            message: message.to_string(),
+            kind: BannerKind::Info,
+            created_at: Instant::now(),
+        }
+    }
+
     pub fn is_active(&self) -> bool {
         self.created_at.elapsed().as_secs() < 5
     }
@@ -59,6 +70,9 @@ pub enum Screen {
     Pinstar,
     WorldCup,
     Clubhouse,
+    /// Full-screen daily-match board. Entered only from the Daily Games
+    /// modal, absent from the Tab cycle; Esc returns to the modal.
+    DailyMatch,
 }
 
 impl Screen {
@@ -82,6 +96,7 @@ impl Screen {
             | Screen::Nethack
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
+            Screen::DailyMatch => Screen::Dashboard,
         }
     }
 
@@ -100,6 +115,7 @@ impl Screen {
             | Screen::Nethack
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
+            Screen::DailyMatch => Screen::Dashboard,
         }
     }
 }
@@ -126,6 +142,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Pinstar => "Directory",
         Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
+        Screen::DailyMatch => "Daily Match",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -144,6 +161,7 @@ pub fn draw_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
     let (icon, color) = match banner.kind {
         BannerKind::Success => (" ✓ ", theme::SUCCESS()),
         BannerKind::Error => (" ✗ ", theme::ERROR()),
+        BannerKind::Info => (" • ", theme::AMBER()),
     };
 
     let content = Paragraph::new(Line::from(vec![
@@ -238,6 +256,12 @@ mod tests {
             assert_eq!(door.next(), Screen::Games);
             assert_eq!(door.prev(), Screen::Games);
         }
+    }
+
+    #[test]
+    fn daily_match_board_is_outside_the_tab_cycle_and_falls_back_home() {
+        assert_eq!(Screen::DailyMatch.next(), Screen::Dashboard);
+        assert_eq!(Screen::DailyMatch.prev(), Screen::Dashboard);
     }
 
     #[test]

@@ -1,4 +1,5 @@
-//! Pair-WS relay task used by `late webview-pair`.
+//! Pair-WS relay task used by the `late-webview` helper binary (Linux) and
+//! the in-process `late webview-pair` subcommand (Windows/macOS).
 //!
 //! Connects to /api/ws/pair?token=..., registers as `client_kind = "browser"`
 //! with `ssh_mode = "webview"`, relays inbound `load_video` / `source_changed`
@@ -16,7 +17,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
 use super::commands::{WebviewCommand, WebviewEvent};
-use crate::ws::client_platform_label;
+use crate::client_platform_label;
 
 /// Tag the webview sends on the wire. Server-side still treats the helper as a
 /// browser, but distinguishes it from a real browser through `ssh_mode`.

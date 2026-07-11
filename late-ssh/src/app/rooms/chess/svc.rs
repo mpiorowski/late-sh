@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use cozy_chess::{BitBoard, Board, Color, GameStatus, Move, Piece, Square, util::display_san_move};
+use cozy_chess::{BitBoard, Board, Color, GameStatus};
 use late_core::models::reward::CHESS_WIN_REWARD_KEY;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -13,15 +13,18 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
-    games::chips::svc::ChipService,
+    games::{
+        chess_core::{
+            rules,
+            types::{ChessColor, ChessGameResult, ChessMoveRecord, ChessMoveSpec, ChessPiece},
+        },
+        chips::svc::ChipService,
+    },
     rooms::{
         backend::RoomGameEvent,
         chess::{
             settings::{ChessClockMode, ChessTableSettings},
-            state::{
-                ChessColor, ChessGameResult, ChessMoveRecord, ChessMoveSpec, ChessPhase,
-                ChessPieceKind,
-            },
+            state::ChessPhase,
         },
         svc::RoomsService,
     },
@@ -65,12 +68,6 @@ pub struct ChessSnapshot {
     pub time_control_label: String,
     pub in_check: bool,
     pub move_history: Vec<ChessMoveRecord>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ChessPiece {
-    pub color: ChessColor,
-    pub kind: ChessPieceKind,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -568,13 +565,13 @@ impl SharedState {
             room_id: self.room_id,
             seats: self.seats,
             ready: self.ready,
-            pieces: board_pieces(&self.board),
-            turn: chess_color(self.board.side_to_move()),
+            pieces: rules::board_pieces(&self.board),
+            turn: rules::chess_color(self.board.side_to_move()),
             phase: self.phase,
             result: self.result,
             status_message: self.status_message.clone(),
             legal_moves: if self.phase == ChessPhase::Active {
-                legal_moves(&self.board)
+                rules::legal_moves(&self.board)
             } else {
                 Vec::new()
             },
@@ -607,7 +604,7 @@ impl SharedState {
 
         match self.settings.time_control.mode() {
             ChessClockMode::Countdown { .. } => {
-                let active_index = chess_color(self.board.side_to_move()).seat_index();
+                let active_index = rules::chess_color(self.board.side_to_move()).seat_index();
                 if remaining.is_zero() {
                     let active_remaining = self.clocks[active_index].remaining_secs.unwrap_or(0);
                     self.active_started_at = Some(
@@ -764,10 +761,10 @@ impl SharedState {
             return MoveOutcome::default();
         }
         let moving_color = color_for_seat(seat_index);
-        if chess_color(self.board.side_to_move()) != moving_color {
+        if rules::chess_color(self.board.side_to_move()) != moving_color {
             self.status_message = format!(
                 "{} to move.",
-                chess_color(self.board.side_to_move()).label()
+                rules::chess_color(self.board.side_to_move()).label()
             );
             return MoveOutcome::default();
         }
@@ -781,12 +778,12 @@ impl SharedState {
             };
         }
 
-        let Some(mv) = legal_move_for(&self.board, from, to) else {
+        let Some(mv) = rules::legal_move_for(&self.board, from, to) else {
             self.status_message = "Illegal move.".to_string();
             return MoveOutcome::default();
         };
 
-        let label = format!("{}", display_san_move(&self.board, mv));
+        let label = rules::san_label(&self.board, mv);
         self.board.play(mv);
         self.apply_increment(moving_color);
         self.position_history.push(self.board.clone());
@@ -855,7 +852,7 @@ impl SharedState {
         // persisted runtime state can be inconsistent. Avoid arming a timer
         // for an empty side.
         if self
-            .user_for_color(chess_color(self.board.side_to_move()))
+            .user_for_color(rules::chess_color(self.board.side_to_move()))
             .is_none()
         {
             self.active_started_at = None;
@@ -866,7 +863,7 @@ impl SharedState {
         self.active_started_at = Some(now);
         let deadline_at = match self.settings.time_control.mode() {
             ChessClockMode::Countdown { .. } => {
-                let index = chess_color(self.board.side_to_move()).seat_index();
+                let index = rules::chess_color(self.board.side_to_move()).seat_index();
                 now + Duration::from_secs(self.clocks[index].remaining_secs.unwrap_or(0))
             }
             ChessClockMode::Daily { move_secs } => now + Duration::from_secs(move_secs),
@@ -879,7 +876,7 @@ impl SharedState {
     }
 
     fn settle_active_clock(&mut self, now: Instant) -> Option<GameEndEvents> {
-        let active_color = chess_color(self.board.side_to_move());
+        let active_color = rules::chess_color(self.board.side_to_move());
         let active_index = active_color.seat_index();
         match self.settings.time_control.mode() {
             ChessClockMode::Countdown { .. } => {
@@ -1001,7 +998,7 @@ impl SharedState {
     }
 
     fn turn_status_message(&self) -> String {
-        let color = chess_color(self.board.side_to_move());
+        let color = rules::chess_color(self.board.side_to_move());
         if self.board.checkers() != BitBoard::EMPTY {
             format!("{} to move, in check.", color.label())
         } else {
@@ -1010,10 +1007,7 @@ impl SharedState {
     }
 
     fn current_position_repetition_count(&self) -> usize {
-        self.position_history
-            .iter()
-            .filter(|position| position.same_position(&self.board))
-            .count()
+        rules::repetition_count(&self.position_history, &self.board)
     }
 }
 
@@ -1032,50 +1026,6 @@ fn initial_clocks(settings: ChessTableSettings) -> [ClockState; MAX_SEATS] {
     }
 }
 
-fn board_pieces(board: &Board) -> [Option<ChessPiece>; 64] {
-    std::array::from_fn(|index| {
-        let square = Square::index(index);
-        let piece = board.piece_on(square)?;
-        let color = board.color_on(square)?;
-        Some(ChessPiece {
-            color: chess_color(color),
-            kind: chess_piece_kind(piece),
-        })
-    })
-}
-
-fn legal_moves(board: &Board) -> Vec<ChessMoveSpec> {
-    let mut moves = Vec::new();
-    board.generate_moves(|piece_moves| {
-        for mv in piece_moves {
-            moves.push(ChessMoveSpec {
-                from: mv.from as usize,
-                to: mv.to as usize,
-            });
-        }
-        false
-    });
-    moves
-}
-
-fn legal_move_for(board: &Board, from: usize, to: usize) -> Option<Move> {
-    let mut fallback = None;
-    let mut queen = None;
-    board.generate_moves(|piece_moves| {
-        for mv in piece_moves {
-            if mv.from as usize == from && mv.to as usize == to {
-                if mv.promotion == Some(Piece::Queen) {
-                    queen = Some(mv);
-                    return true;
-                }
-                fallback.get_or_insert(mv);
-            }
-        }
-        false
-    });
-    queen.or(fallback)
-}
-
 fn instant_as_utc(instant: Instant) -> DateTime<Utc> {
     let now_instant = Instant::now();
     let now_utc = Utc::now();
@@ -1085,24 +1035,6 @@ fn instant_as_utc(instant: Instant) -> DateTime<Utc> {
     } else {
         now_utc
             - chrono::Duration::from_std(now_instant.duration_since(instant)).unwrap_or_default()
-    }
-}
-
-fn chess_color(color: Color) -> ChessColor {
-    match color {
-        Color::White => ChessColor::White,
-        Color::Black => ChessColor::Black,
-    }
-}
-
-fn chess_piece_kind(piece: Piece) -> ChessPieceKind {
-    match piece {
-        Piece::Pawn => ChessPieceKind::Pawn,
-        Piece::Knight => ChessPieceKind::Knight,
-        Piece::Bishop => ChessPieceKind::Bishop,
-        Piece::Rook => ChessPieceKind::Rook,
-        Piece::Queen => ChessPieceKind::Queen,
-        Piece::King => ChessPieceKind::King,
     }
 }
 
@@ -1131,7 +1063,7 @@ pub(crate) fn runtime_state_awaiting_user_action(value: &Value, user_id: Uuid) -
     let Ok(board) = runtime.fen.parse::<Board>() else {
         return false;
     };
-    let turn = chess_color(board.side_to_move());
+    let turn = rules::chess_color(board.side_to_move());
     runtime.seats[turn.seat_index()] == Some(user_id)
 }
 

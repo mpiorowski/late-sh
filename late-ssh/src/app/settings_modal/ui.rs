@@ -673,7 +673,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // text brightness row
         Constraint::Length(1),                // right sidebar row
         Constraint::Length(1),                // room list row
-        Constraint::Length(1),                // activity boxes row
+        Constraint::Length(1),                // pet strip row
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Compose subsection heading
         Constraint::Length(1),                // composer keep-focused row
@@ -737,10 +737,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
-            TweakRow::LoungeInfo,
+            TweakRow::PetStrip,
             width,
-            "Activity boxes",
-            toggle_span(state.draft().show_dashboard_header),
+            "Pet companion strip",
+            toggle_span(state.draft().show_pet_strip),
         )),
         sections[5],
     );

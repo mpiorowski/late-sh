@@ -133,7 +133,6 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             theme_id: None,
             enable_background_color: false,
             text_brightness_adjustment: 0,
-            show_dashboard_header: false,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
@@ -142,6 +141,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             start_with_music_muted: false,
             land_on_home: false,
             show_flag_fallback: false,
+            show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },
@@ -167,7 +167,6 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         .expect("updated profile");
 
     assert_eq!(updated.username, "night-owl");
-    assert!(!updated.show_dashboard_header);
 }
 
 #[tokio::test]
@@ -206,7 +205,6 @@ async fn edit_profile_normalizes_username_before_persisting() {
             theme_id: None,
             enable_background_color: false,
             text_brightness_adjustment: 0,
-            show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
@@ -215,6 +213,7 @@ async fn edit_profile_normalizes_username_before_persisting() {
             start_with_music_muted: false,
             land_on_home: false,
             show_flag_fallback: false,
+            show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },
@@ -273,7 +272,6 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             theme_id: None,
             enable_background_color: false,
             text_brightness_adjustment: 0,
-            show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
@@ -282,6 +280,7 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             start_with_music_muted: false,
             land_on_home: false,
             show_flag_fallback: false,
+            show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },

@@ -10,8 +10,8 @@ use super::user::{
     extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
     extract_keep_composer_focused, extract_land_on_home, extract_langs, extract_notify_bell,
     extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
-    extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_dashboard_header,
-    extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_flag_fallback,
+    extract_show_pet_strip, extract_show_right_sidebar, extract_show_room_list_sidebar,
     extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
     extract_theme_id, extract_timezone, normalize_right_sidebar_components,
     normalize_text_brightness_adjustment,
@@ -36,8 +36,6 @@ pub struct Profile {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub text_brightness_adjustment: i32,
-    /// Controls the lounge top info boxes.
-    pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
     /// Ordered list of sidebar panels with their on/off state. List order is
@@ -55,6 +53,8 @@ pub struct Profile {
     pub land_on_home: bool,
     /// Tweak: show text labels instead of flag emoji in the shop Flags tab.
     pub show_flag_fallback: bool,
+    /// Tweak: show the pet strip above the chat composer (pet owners only).
+    pub show_pet_strip: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, or `None` if unset.
@@ -86,7 +86,6 @@ impl Default for Profile {
             theme_id: None,
             enable_background_color: true,
             text_brightness_adjustment: 0,
-            show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: super::user::default_right_sidebar_components(),
@@ -95,6 +94,7 @@ impl Default for Profile {
             start_with_music_muted: false,
             land_on_home: false,
             show_flag_fallback: false,
+            show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
         }
@@ -118,7 +118,6 @@ pub struct ProfileParams {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub text_brightness_adjustment: i32,
-    pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
     pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
@@ -127,6 +126,7 @@ pub struct ProfileParams {
     pub start_with_music_muted: bool,
     pub land_on_home: bool,
     pub show_flag_fallback: bool,
+    pub show_pet_strip: bool,
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
     pub birthday: Option<String>,
@@ -185,8 +185,7 @@ impl Profile {
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
     /// enable_background_color/text_brightness_adjustment/
-    /// show_dashboard_header/show_right_sidebar/
-    /// right_sidebar_mode/right_sidebar_components/
+    /// show_right_sidebar/right_sidebar_mode/right_sidebar_components/
     /// show_room_list_sidebar/keep_composer_focused/
     /// start_with_music_muted/show_flag_fallback into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
@@ -269,21 +268,21 @@ impl Profile {
                          'enable_background_color', $9::bool,
                          'text_brightness_adjustment', $10::int,
                          'notify_format', $11::text,
-                         'show_dashboard_header', $12::bool,
-                         'show_right_sidebar', $13::bool,
-                         'right_sidebar_mode', $14::text,
-                         'right_sidebar_components', $15::jsonb,
-                         'show_room_list_sidebar', $16::bool,
-                         'favorite_room_ids', $17::jsonb,
-                         'ide', $18::text,
-                         'terminal', $19::text,
-                         'os', $20::text,
-                         'langs', $21::jsonb,
-                         'birthday', $22::text,
-                         'keep_composer_focused', $23::bool,
-                         'start_with_music_muted', $24::bool,
-                         'show_flag_fallback', $25::bool,
-                         'land_on_home', $26::bool
+                         'show_right_sidebar', $12::bool,
+                         'right_sidebar_mode', $13::text,
+                         'right_sidebar_components', $14::jsonb,
+                         'show_room_list_sidebar', $15::bool,
+                         'favorite_room_ids', $16::jsonb,
+                         'ide', $17::text,
+                         'terminal', $18::text,
+                         'os', $19::text,
+                         'langs', $20::jsonb,
+                         'birthday', $21::text,
+                         'keep_composer_focused', $22::bool,
+                         'start_with_music_muted', $23::bool,
+                         'show_flag_fallback', $24::bool,
+                         'land_on_home', $25::bool,
+                         'show_pet_strip', $26::bool
                      ),
                      updated = current_timestamp
                  WHERE id = $27
@@ -300,7 +299,6 @@ impl Profile {
                     &params.enable_background_color,
                     &normalize_text_brightness_adjustment(params.text_brightness_adjustment),
                     &notify_format,
-                    &params.show_dashboard_header,
                     &params.show_right_sidebar,
                     &params.right_sidebar_mode.as_str(),
                     &right_sidebar_components_json,
@@ -315,6 +313,7 @@ impl Profile {
                     &params.start_with_music_muted,
                     &params.show_flag_fallback,
                     &params.land_on_home,
+                    &params.show_pet_strip,
                     &user_id,
                 ],
             )
@@ -341,7 +340,6 @@ impl Profile {
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
             text_brightness_adjustment: extract_text_brightness_adjustment(&user.settings),
-            show_dashboard_header: extract_show_dashboard_header(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),
             right_sidebar_mode: extract_right_sidebar_mode(&user.settings),
             right_sidebar_components: extract_right_sidebar_components(&user.settings),
@@ -350,6 +348,7 @@ impl Profile {
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
             land_on_home: extract_land_on_home(&user.settings),
             show_flag_fallback: extract_show_flag_fallback(&user.settings),
+            show_pet_strip: extract_show_pet_strip(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
             birthday: extract_birthday(&user.settings),
         }

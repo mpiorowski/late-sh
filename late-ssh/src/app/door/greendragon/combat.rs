@@ -26,9 +26,25 @@ pub struct Combatant {
     pub defense: u32,
 }
 
+/// What a companion does each round beyond existing (the `abilities` blob on
+/// LoGD's companion rows). Every ability still makes its attack roll — a
+/// healer bandages *and* swings, a defender guards *and* swings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompanionAbility {
+    /// Strikes the foe each round (the stock fighter).
+    #[default]
+    Fight,
+    /// Guards the player: the foe's companion-lash lands on a defender first.
+    Defend,
+    /// Restores up to this many HP a round to the most wounded ally — the
+    /// player first, then other companions, then itself (the field-medic).
+    Heal(u32),
+}
+
 /// A persistent ally that fights alongside the player (LoGD `apply_companion`).
-/// Summoned by skills like Bonecall, it persists across fights until its HP
-/// reaches zero. Stored on the character, so it is serde-able.
+/// Summoned by skills like Bonecall or hired at the mercenary camp, it
+/// persists across fights until its HP reaches zero. Stored on the character,
+/// so it is serde-able.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Companion {
     pub name: String,
@@ -38,6 +54,18 @@ pub struct Companion {
     pub defense: u32,
     /// Flavor logged the round the companion is destroyed.
     pub dying_text: String,
+    /// What it does each round beyond the basic strike.
+    #[serde(default)]
+    pub ability: CompanionAbility,
+    /// Doesn't count against the one-hire cap (LoGD `ignorelimit`) — true
+    /// for summons like Bonecall's skeleton, false for hires. Old saves hold
+    /// only summons, so the default leans true.
+    #[serde(default = "default_true")]
+    pub ignore_limit: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// A landed power move (LoGD `report_power_move`): an attack roll that beat the
@@ -440,7 +468,9 @@ pub fn resolve_round_buffed(
         }
     }
 
-    // The enemy lashes out at one living companion (so they can fall).
+    // The enemy lashes out at one living companion (so they can fall). A
+    // defender interposes itself (LoGD's `defend` ability: one companion
+    // soaks the round); otherwise the target is random.
     let living: Vec<usize> = companions
         .iter()
         .enumerate()
@@ -448,7 +478,11 @@ pub fn resolve_round_buffed(
         .map(|(i, _)| i)
         .collect();
     if !living.is_empty() {
-        let pick = living[rng.gen_range(0..living.len())];
+        let pick = living
+            .iter()
+            .copied()
+            .find(|&i| companions[i].ability == CompanionAbility::Defend)
+            .unwrap_or_else(|| living[rng.gen_range(0..living.len())]);
         let eatk = bell_rand(rng, enemy.attack as f64 * m.badguyatkmod);
         let cdef = bell_rand(rng, companions[pick].defense as f64);
         let dmg = trunc(eatk - cdef).max(0) as u32;
@@ -512,6 +546,44 @@ pub fn resolve_round_buffed(
         player_heal: heal,
         messages,
     }
+}
+
+/// One extra foe's strike on the player — the multi-fight case where the
+/// player attacks only their target while every other living foe still gets
+/// its round (and the failed-flee free round). Mirrors the incoming-damage
+/// half of `rolldamage` with the active buff multipliers folded in: signed,
+/// negative = the blow glanced (heals the player).
+pub fn resolve_extra_foe_strike(
+    rng: &mut impl Rng,
+    player: Combatant,
+    foe: Combatant,
+    buffs: &[Buff],
+) -> i32 {
+    let mut m = Mods::default();
+    for b in buffs.iter() {
+        m.defmod *= b.player_def_mod as f64;
+        m.badguyatkmod *= b.enemy_atk_mod as f64;
+        m.badguydmgmod *= b.enemy_dmg_mod as f64;
+        m.dmgmod *= b.player_dmg_mod as f64;
+        if b.invulnerable {
+            m.invulnerable = true;
+        }
+    }
+    let adjusted_self_def = player.defense as f64 * m.adjustment * m.defmod;
+    let foe_attack = foe.attack as f64 * m.badguyatkmod;
+    let pdefroll = bell_rand(rng, adjusted_self_def);
+    let fatkroll = bell_rand(rng, foe_attack);
+    let mut sd = -trunc(pdefroll - fatkroll);
+    if sd < 0 {
+        sd = trunc(sd as f64 / 2.0);
+        sd = iround(sd as f64 * m.dmgmod);
+    } else if sd > 0 {
+        sd = iround(sd as f64 * m.badguydmgmod);
+    }
+    if m.invulnerable {
+        sd = -sd.abs();
+    }
+    sd
 }
 
 /// How a fully simulated fight ended. Used by tests and balance checks; the
@@ -686,6 +758,8 @@ mod tests {
             attack: 10,
             defense: 1,
             dying_text: "It crumbles.".into(),
+            ability: CompanionAbility::Fight,
+            ignore_limit: true,
         }];
         let mut fell = false;
         for _ in 0..50 {

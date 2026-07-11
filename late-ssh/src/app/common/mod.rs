@@ -1,5 +1,6 @@
 pub mod composer;
 pub mod markdown;
+pub(crate) mod marquee;
 pub(crate) mod mentions;
 pub mod overlay;
 pub mod primitives;

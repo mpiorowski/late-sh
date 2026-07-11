@@ -9,6 +9,7 @@ use crate::app::arcade::snake::svc::SnakeService;
 use crate::app::arcade::solitaire::svc::SolitaireService;
 use crate::app::arcade::sudoku::svc::SudokuService;
 use crate::app::arcade::tetris::svc::LaterisService;
+use crate::app::arcade::traffic::svc::TrafficService;
 use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::audio::svc::AudioService;
@@ -109,6 +110,7 @@ pub struct State {
     pub twenty_forty_eight_service: TwentyFortyEightService,
     pub tetris_service: LaterisService,
     pub snake_service: SnakeService,
+    pub traffic_service: TrafficService,
     pub rubiks_cube_service: RubiksCubeService,
     pub le_word_service: LeWordService,
     pub sudoku_service: SudokuService,
@@ -121,6 +123,7 @@ pub struct State {
     pub chip_service: ChipService,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub daily_service: crate::app::daily::svc::DailyService,
     pub rooms_service: RoomsService,
     pub blackjack_table_manager: BlackjackTableManager,
     pub room_game_registry: RoomGameRegistry,

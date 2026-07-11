@@ -17,8 +17,8 @@ pub enum ShopCategory {
 
 impl ShopCategory {
     pub const ALL: [Self; 6] = [
-        Self::Companions,
         Self::Chat,
+        Self::Companions,
         Self::Aquarium,
         Self::Badges,
         Self::Flags,

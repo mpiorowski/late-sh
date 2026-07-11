@@ -144,8 +144,6 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.show_quit_confirm = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
@@ -188,6 +186,29 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         };
         app.banner = Some(banner);
     }
+    if let Some(command) = app.chat.take_requested_aquarium_command() {
+        match command {
+            crate::app::chat::state::AquariumCommand::Toggle => {
+                crate::app::input::toggle_aquarium_tray_globally(app);
+            }
+            crate::app::chat::state::AquariumCommand::Feed => {
+                crate::app::input::feed_aquarium_globally(app);
+            }
+        }
+    }
+    if let Some(command) = app.chat.take_requested_pet_command() {
+        match command {
+            crate::app::chat::state::PetCommand::Toggle => {
+                crate::app::input::toggle_pet_strip_globally(app);
+            }
+            crate::app::chat::state::PetCommand::Feed => {
+                crate::app::input::pet_feed_globally(app);
+            }
+            crate::app::chat::state::PetCommand::Water => {
+                crate::app::input::pet_water_globally(app);
+            }
+        }
+    }
     if let Some(topic) = app.chat.take_requested_help_topic() {
         open_help_modal(app, topic);
     }
@@ -202,6 +223,21 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     }
     if app.chat.take_requested_ultimate_modal() {
         crate::app::ultimates::open_ultimate_modal(app);
+    }
+    if let Some(request) = app.chat.take_requested_daily_challenge() {
+        use crate::app::chat::state::DailyChallengeRequest;
+        match request {
+            DailyChallengeRequest::Modal => crate::app::input::open_daily_modal_globally(app),
+            // Success is surfaced from the resulting DailyEvent::ChallengePosted
+            // (and failures from DailyEvent::Error), so a rejected challenge
+            // (self, unknown user, over the entry cap) never flashes success.
+            DailyChallengeRequest::Open(game) => {
+                app.daily.post_open_challenge(game);
+            }
+            DailyChallengeRequest::Directed(username, game) => {
+                app.daily.post_directed_challenge(&username, game);
+            }
+        }
     }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);

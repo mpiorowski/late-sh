@@ -239,16 +239,22 @@ COPY late-web/Cargo.toml late-web/Cargo.toml
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
 COPY late-dopewars/Cargo.toml late-dopewars/Cargo.toml
+COPY late-webview/Cargo.toml late-webview/Cargo.toml
 COPY vendor vendor
 
-# Create dummy source files for cargo-chef to analyze
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-nethack/src late-dopewars/src && \
+# Create dummy source files for cargo-chef to analyze. late-webview is never
+# built in these images (CLI-only YouTube helper), but it is a workspace member
+# and a late-cli path dependency, so its manifest and target stubs must exist
+# for `cargo metadata` to resolve the workspace.
+RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-nethack/src late-dopewars/src late-webview/src && \
     echo "fn main() {}" > late-core/src/lib.rs && \
     echo "fn main() {}" > late-ssh/src/main.rs && \
     echo "fn main() {}" > late-web/src/main.rs && \
     echo "fn main() {}" > late-cli/src/main.rs && \
     echo "fn main() {}" > late-nethack/src/main.rs && \
-    echo "fn main() {}" > late-dopewars/src/main.rs
+    echo "fn main() {}" > late-dopewars/src/main.rs && \
+    echo "" > late-webview/src/lib.rs && \
+    echo "fn main() {}" > late-webview/src/main.rs
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -274,8 +280,13 @@ COPY late-nethack late-nethack
 COPY late-dopewars late-dopewars
 COPY vendor vendor
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
-RUN mkdir -p late-cli/src && echo "fn main() {}" > late-cli/src/main.rs
-# Build deployable binaries only (late-cli excluded - local CLI tooling).
+COPY late-webview/Cargo.toml late-webview/Cargo.toml
+RUN mkdir -p late-cli/src late-webview/src && \
+    echo "fn main() {}" > late-cli/src/main.rs && \
+    echo "" > late-webview/src/lib.rs && \
+    echo "fn main() {}" > late-webview/src/main.rs
+# Build deployable binaries only (late-cli and late-webview excluded - local
+# CLI tooling; the webview helper ships via deploy_cli.yml, not these images).
 # late-nethack/late-dopewars have no otel feature; they are built without the
 # workspace feature flag.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \

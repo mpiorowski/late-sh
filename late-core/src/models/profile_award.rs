@@ -9,6 +9,7 @@ pub const LATEANIA_FRONTIER_KING_AWARD_CATEGORY: &str = "lateania_frontier_king"
 pub const LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY: &str = "lateania_sundering_deep";
 pub const NETHACK_AMULET_AWARD_CATEGORY: &str = "nethack_amulet";
 pub const NETHACK_ASCENSION_AWARD_CATEGORY: &str = "nethack_ascension";
+pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
 
 #[derive(Clone, Debug)]
 pub struct ProfileAward {
@@ -230,6 +231,7 @@ pub fn award_badge(category: &str, rank: i32) -> String {
             | LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY
             | NETHACK_AMULET_AWARD_CATEGORY
             | NETHACK_ASCENSION_AWARD_CATEGORY
+            | GREENDRAGON_DRAGON_AWARD_CATEGORY
     ) {
         return award_category_code(category).to_string();
     }
@@ -251,6 +253,7 @@ pub fn award_category_code(category: &str) -> &'static str {
         LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => "LYS",
         NETHACK_AMULET_AWARD_CATEGORY => "NHA",
         NETHACK_ASCENSION_AWARD_CATEGORY => "NHY",
+        GREENDRAGON_DRAGON_AWARD_CATEGORY => "GDS",
         _ => "LB",
     }
 }
@@ -267,6 +270,7 @@ pub fn award_category_label(category: &str) -> &'static str {
         LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => "Lateania Sundering Deep",
         NETHACK_AMULET_AWARD_CATEGORY => "NetHack Amulet",
         NETHACK_ASCENSION_AWARD_CATEGORY => "NetHack Ascension",
+        GREENDRAGON_DRAGON_AWARD_CATEGORY => "Green Dragon Slayer",
         _ => "Leaderboard",
     }
 }
@@ -283,6 +287,7 @@ pub fn award_category_priority(category: &str) -> i32 {
         LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => 12,
         NETHACK_AMULET_AWARD_CATEGORY => 13,
         NETHACK_ASCENSION_AWARD_CATEGORY => 14,
+        GREENDRAGON_DRAGON_AWARD_CATEGORY => 15,
         _ => 99,
     }
 }

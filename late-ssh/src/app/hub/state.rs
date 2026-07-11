@@ -17,13 +17,13 @@ pub enum HubTab {
 
 impl HubTab {
     pub const ALL: [Self; 5] = [
+        Self::Dailies,
         Self::Shop,
         Self::Leaderboard,
-        Self::Dailies,
         Self::Events,
         Self::Admin,
     ];
-    pub const PUBLIC: [Self; 4] = [Self::Shop, Self::Leaderboard, Self::Dailies, Self::Events];
+    pub const PUBLIC: [Self; 4] = [Self::Dailies, Self::Shop, Self::Leaderboard, Self::Events];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -55,7 +55,7 @@ pub struct HubState {
 impl HubState {
     pub fn new() -> Self {
         Self {
-            selected_tab: HubTab::Shop,
+            selected_tab: HubTab::Dailies,
             tab_rects: Cell::new([Rect::new(0, 0, 0, 0); HubTab::ALL.len()]),
             last_click: None,
         }
@@ -150,13 +150,13 @@ mod tests {
     fn tab_at_point_hits_set_rect() {
         let state = HubState::new();
         let mut rects = [Rect::new(0, 0, 0, 0); HubTab::ALL.len()];
-        rects[0] = Rect::new(2, 5, 8, 1); // Shop
-        rects[1] = Rect::new(11, 5, 14, 1); // Leaderboard
+        rects[0] = Rect::new(2, 5, 8, 1); // Dailies
+        rects[1] = Rect::new(11, 5, 14, 1); // Shop
         state.set_tab_rects(rects);
 
-        assert_eq!(state.tab_at_point(2, 5), Some(HubTab::Shop));
-        assert_eq!(state.tab_at_point(9, 5), Some(HubTab::Shop));
-        assert_eq!(state.tab_at_point(12, 5), Some(HubTab::Leaderboard));
+        assert_eq!(state.tab_at_point(2, 5), Some(HubTab::Dailies));
+        assert_eq!(state.tab_at_point(9, 5), Some(HubTab::Dailies));
+        assert_eq!(state.tab_at_point(12, 5), Some(HubTab::Shop));
         assert_eq!(state.tab_at_point(0, 5), None);
         assert_eq!(state.tab_at_point(2, 6), None);
     }

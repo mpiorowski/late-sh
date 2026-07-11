@@ -25,6 +25,7 @@ const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
 const CTRL_K: u8 = 0x0B;
 const CTRL_O: u8 = 0x0F;
+const CTRL_Q: u8 = 0x11;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
 
@@ -823,16 +824,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if matches!(event, ParsedInput::Byte(0x11) | ParsedInput::AltA) {
-        toggle_aquarium_tray_globally(app);
-        return;
-    }
-    if matches!(event, ParsedInput::Byte(0x06)) && feed_aquarium_globally(app) {
-        return;
-    }
-
-    // Reserved global chords and tray shortcuts have already had first claim.
-    // Otherwise the existing modal stack owns input.
+    // Reserved global chords have already had first claim. Otherwise the
+    // existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -887,8 +880,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_cat_modal {
-        crate::app::pet::modal_input::handle_input(app, event);
+    if app.show_daily_modal {
+        crate::app::daily::modal_input::handle_input(app, event);
         return;
     }
 
@@ -1593,6 +1586,15 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return false;
     }
 
+    if ctx.screen == Screen::DailyMatch {
+        // Full-screen daily board: forward everything to the board handler,
+        // except let the global `?` guide through like the door games.
+        if door_games_allows_global_help(event) {
+            return false;
+        }
+        return crate::app::daily::board_input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         match event {
             ParsedInput::Byte(byte) => {
@@ -2242,9 +2244,8 @@ fn dispatch_escape(app: &mut App) {
         crate::app::bonsai::modal_input::handle_escape(app);
         return;
     }
-    if app.show_cat_modal {
-        app.pet_state.cancel_play();
-        app.show_cat_modal = false;
+    if app.show_daily_modal {
+        crate::app::daily::modal_input::handle_escape(app);
         return;
     }
     if app.icon_picker_open {
@@ -2329,6 +2330,12 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         dispatch_screen_key(app, ctx.screen, 0x1B);
+        return;
+    }
+    // Esc from the daily board drops back to the Daily Games modal on the
+    // screen it was opened from.
+    if ctx.screen == Screen::DailyMatch {
+        crate::app::daily::board_input::close_board(app);
         return;
     }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
@@ -2666,9 +2673,6 @@ fn handle_mouse_scroll_over_screen(
     mouse: MouseEvent,
     delta: isize,
 ) -> bool {
-    if !matches!(screen, Screen::Dashboard) {
-        return false;
-    }
     let Some(x) = mouse.x.checked_sub(1) else {
         return false;
     };
@@ -2676,14 +2680,18 @@ fn handle_mouse_scroll_over_screen(
         return false;
     };
 
-    // Home top-strip Activity panel: wheel scrolls the recent-events feed
-    // through the in-memory `activity` buffer. Bigger offset = older
-    // events; clamp to the events outside the visible window so a trim
-    // can't strand us past the end.
+    // Sidebar Activity panel: wheel scrolls the recent-events feed through
+    // the in-memory `activity` buffer. Bigger offset = older events; clamp
+    // to the events outside the visible window so a trim can't strand us
+    // past the end. Works on every screen that renders the sidebar (the
+    // rect is only set on frames where the panel drew).
     if let Some(rect) = app.last_dashboard_activity_rect.get()
         && rect_contains(rect, x, y)
     {
-        let visible = activity_visible_event_rows(!app.chat.active_friend_names().is_empty());
+        let visible = crate::app::activity::panel::visible_event_rows(
+            rect.height,
+            !app.chat.active_friend_names().is_empty(),
+        );
         let max_offset = app.activity.len().saturating_sub(visible) as u16;
         let current = app.dashboard_activity_scroll.min(max_offset);
         // delta > 0 (wheel up) reveals newer events → smaller offset.
@@ -2695,6 +2703,10 @@ fn handle_mouse_scroll_over_screen(
         };
         app.dashboard_activity_scroll = next;
         return true;
+    }
+
+    if !matches!(screen, Screen::Dashboard) {
+        return false;
     }
 
     let Some(rooms_area) = dashboard_room_rail_area(app) else {
@@ -2718,14 +2730,41 @@ fn handle_mouse_scroll_over_screen(
     true
 }
 
+/// Left-clicks on the pet strip's render-recorded targets: the food bowl and
+/// the pet itself both feed, the water bowl waters. The rects are only set on
+/// frames where the strip drew, so this is a no-op wherever the strip is
+/// hidden.
+fn handle_pet_strip_click(app: &mut App, x: u16, y: u16) -> bool {
+    // The strip renders under the global modals; don't let clicks on a
+    // modal that happens to overlap it fall through to the pet.
+    if chat_scroll_clicks_blocked(app) {
+        return false;
+    }
+    if let Some(rect) = app.last_pet_strip_food_rect.get()
+        && rect_contains(rect, x, y)
+    {
+        pet_feed_globally(app);
+        return true;
+    }
+    if let Some(rect) = app.last_pet_strip_water_rect.get()
+        && rect_contains(rect, x, y)
+    {
+        pet_water_globally(app);
+        return true;
+    }
+    if let Some(rect) = app.last_pet_strip_pet_rect.get()
+        && rect_contains(rect, x, y)
+    {
+        pet_feed_globally(app);
+        return true;
+    }
+    false
+}
+
 /// One wheel notch moves the Activity feed by this many events. Single-step
 /// keeps the scroll readable on small panels without overshooting the
-/// 3-4 visible rows.
+/// handful of visible rows.
 const ACTIVITY_SCROLL_STEP: u16 = 1;
-
-fn activity_visible_event_rows(has_active_friends: bool) -> usize {
-    if has_active_friends { 3 } else { 4 }
-}
 
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
@@ -2743,6 +2782,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         return true;
     }
     if handle_chat_composer_click(app, screen, x, y) {
+        return true;
+    }
+    if handle_pet_strip_click(app, x, y) {
         return true;
     }
     if handle_chat_scroll_click(app, screen, x, y) {
@@ -2923,7 +2965,7 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_ticket_modal
         || app.show_quit_confirm
         || app.show_bonsai_modal
-        || app.show_cat_modal
+        || app.show_daily_modal
         || app.login_announcements_visible()
         || app.icon_picker_open
 }
@@ -3150,6 +3192,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Walk-mode arrows are consumed in handle_dedicated_screen_input;
         // composing-mode arrows are swallowed by the shared composer gate.
         Screen::Clubhouse => false,
+        // Daily board arrows are consumed in handle_dedicated_screen_input.
+        Screen::DailyMatch => false,
     }
 }
 
@@ -3253,8 +3297,7 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
+    app.show_daily_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3275,8 +3318,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
+    app.show_daily_modal = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
@@ -3287,7 +3329,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
-fn open_hub_modal_globally(app: &mut App) {
+fn open_hub_modal_globally(app: &mut App, tab: crate::app::hub::state::HubTab) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3297,46 +3339,102 @@ fn open_hub_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
+    app.show_daily_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+    app.hub_state.open(tab);
     app.show_hub_modal = true;
 }
 
-fn toggle_aquarium_tray_globally(app: &mut App) {
+pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
     clear_prefix_arms(app);
     if !app.shop_state.entitlements().has_aquarium() {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "Unlock Aquarium in Hub Shop",
         ));
-        open_hub_modal_globally(app);
+        open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
         return;
     }
     app.show_aquarium_tray = !app.show_aquarium_tray;
+    app.persist_show_aquarium_tray();
+    // The tray only renders in the Lounge, so the toggle needs feedback
+    // when typed from anywhere else.
+    app.banner = Some(crate::app::common::primitives::Banner::success(
+        if app.show_aquarium_tray {
+            "Aquarium open in the Lounge"
+        } else {
+            "Aquarium hidden (/aquarium to reopen)"
+        },
+    ));
 }
 
-fn feed_aquarium_globally(app: &mut App) -> bool {
-    if !app.show_aquarium_tray {
-        return false;
+/// Shared entitlement gate for the pet actions (/feed, /water and the
+/// pet-strip clicks). Shows the shop nudge and returns false when the
+/// pet companion is not unlocked.
+fn pet_available_or_nudge(app: &mut App) -> bool {
+    if app.shop_state.entitlements().has_pet_companion() {
+        return true;
     }
+    app.banner = Some(crate::app::common::primitives::Banner::error(
+        "Unlock Pet Companion in Hub Shop",
+    ));
+    open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
+    false
+}
+
+pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
+    if !pet_available_or_nudge(app) {
+        return;
+    }
+    let shown = app.profile_state.toggle_show_pet_strip();
+    app.banner = Some(crate::app::common::primitives::Banner::success(if shown {
+        "Pet strip shown"
+    } else {
+        "Pet strip hidden (/pet to bring it back)"
+    }));
+}
+
+/// A meal costs one pet food, so an empty pantry opens the Shop rather than
+/// leaving the user staring at a `?` bowl. The strip carries the message in
+/// every case; the modal is the nudge for the one case they can act on.
+pub(crate) fn pet_feed_globally(app: &mut App) {
+    if !pet_available_or_nudge(app) {
+        return;
+    }
+    let outcome = app.pet_state.feed(app.shop_state.pet_food_quantity());
+    if outcome == crate::app::pet::state::FeedOutcome::OutOfFood {
+        open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
+    }
+}
+
+pub(crate) fn pet_water_globally(app: &mut App) {
+    if pet_available_or_nudge(app) {
+        app.pet_state.water();
+    }
+}
+
+pub(crate) fn feed_aquarium_globally(app: &mut App) {
     clear_prefix_arms(app);
     if !app.shop_state.entitlements().has_aquarium() {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "Unlock Aquarium in Hub Shop",
         ));
-        return true;
+        return;
+    }
+    if !app.show_aquarium_tray {
+        app.banner = Some(crate::app::common::primitives::Banner::error(
+            "Open the aquarium first (/aquarium)",
+        ));
+        return;
     }
     if app.shop_state.aquarium_food_quantity() > 0 {
         app.aquarium_state.feed();
     }
     app.banner = Some(app.shop_state.use_aquarium_food());
-    true
 }
 
 fn open_bonsai_v2_modal_globally(app: &mut App) {
@@ -3350,8 +3448,7 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
+    app.show_daily_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3359,6 +3456,27 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
     app.show_bonsai_v2_modal = true;
+}
+
+pub(crate) fn open_daily_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
+    app.show_settings = false;
+    app.show_quit_confirm = false;
+    close_icon_picker(app);
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.daily.mark_lobby_seen();
+    app.show_daily_modal = true;
 }
 
 fn room_join_suffix_index(byte: u8) -> Option<usize> {
@@ -3435,7 +3553,17 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         CTRL_G => {
-            open_hub_modal_globally(app);
+            open_hub_modal_globally(app, crate::app::hub::state::HubTab::Dailies);
+            true
+        }
+        CTRL_Q => {
+            // Toggle: the daily surface is built for fast in-and-out, so the
+            // same chord that opens it closes it.
+            if app.show_daily_modal {
+                app.show_daily_modal = false;
+            } else {
+                open_daily_modal_globally(app);
+            }
             true
         }
         CTRL_K => {
@@ -3706,42 +3834,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 app.show_hub_modal = false;
                 app.show_quit_confirm = false;
                 app.show_bonsai_v2_modal = false;
+                app.show_daily_modal = false;
                 app.show_bonsai_modal = true;
             }
             true
         }
-        b'c' | b'C' if cat_launcher_available(app, ctx) => {
-            if !app.shop_state.entitlements().has_pet_companion() {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Unlock Pet Companion in Hub Shop",
-                ));
-                app.show_help = false;
-                app.show_profile_modal = false;
-                app.show_sheet_modal = false;
-                app.show_poll_modal = false;
-                app.poll_modal_state.close();
-                app.show_settings = false;
-                app.show_quit_confirm = false;
-                app.show_bonsai_modal = false;
-                app.show_bonsai_v2_modal = false;
-                app.pet_state.cancel_play();
-                app.show_cat_modal = false;
-                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
-                app.show_hub_modal = true;
-                return true;
-            }
-            app.show_help = false;
-            app.show_profile_modal = false;
-            app.show_sheet_modal = false;
-            app.show_poll_modal = false;
-            app.poll_modal_state.close();
-            app.show_settings = false;
-            app.show_hub_modal = false;
-            app.show_quit_confirm = false;
-            app.show_cat_modal = true;
-            true
-        }
-        b'c' | b'C' if cat_launcher_available(app, ctx) => true,
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);
@@ -3790,28 +3887,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         _ => false,
     }
-}
-
-fn cat_launcher_available(app: &App, ctx: InputContext) -> bool {
-    if ctx.chat_composing
-        || ctx.feeds_processing
-        || ctx.news_composing
-        || ctx.showcase_composing
-        || ctx.work_composing
-    {
-        return false;
-    }
-
-    if ctx.screen == Screen::Dashboard {
-        if app.chat.selected_message_id.is_some() {
-            return false;
-        }
-        if app.chat.work_selected {
-            return false;
-        }
-    }
-
-    true
 }
 
 fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
@@ -3873,6 +3948,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Clubhouse => {
             // Clubhouse keys are handled in handle_dedicated_screen_input
             // (walking, chat routing, interactions); no-op here.
+        }
+        Screen::DailyMatch => {
+            // Daily board keys are handled in handle_dedicated_screen_input.
         }
     }
 }
@@ -4574,10 +4652,12 @@ mod tests {
     fn next_activity_scroll(
         current: u16,
         total: usize,
+        panel_height: u16,
         has_active_friends: bool,
         delta: isize,
     ) -> u16 {
-        let visible = activity_visible_event_rows(has_active_friends);
+        let visible =
+            crate::app::activity::panel::visible_event_rows(panel_height, has_active_friends);
         let max_offset = total.saturating_sub(visible) as u16;
         let current = current.min(max_offset);
         if delta > 0 {
@@ -4590,40 +4670,43 @@ mod tests {
     #[test]
     fn activity_scroll_wheel_up_decreases_offset_toward_newest() {
         // 20 events, currently at offset 5; wheel up moves toward newer.
-        assert_eq!(next_activity_scroll(5, 20, true, 1), 4);
+        assert_eq!(next_activity_scroll(5, 20, 5, true, 1), 4);
         // At top already → saturating subtract clamps at 0.
-        assert_eq!(next_activity_scroll(0, 20, true, 1), 0);
+        assert_eq!(next_activity_scroll(0, 20, 5, true, 1), 0);
     }
 
     #[test]
     fn activity_scroll_wheel_down_clamps_at_max_offset() {
-        // 20 events with active friends, 3 event rows visible → max_offset = 17.
-        assert_eq!(next_activity_scroll(17, 20, true, -1), 17);
-        assert_eq!(next_activity_scroll(16, 20, true, -1), 17);
+        // 20 events, 5-row panel with active friends → 3 event rows visible
+        // → max_offset = 17.
+        assert_eq!(next_activity_scroll(17, 20, 5, true, -1), 17);
+        assert_eq!(next_activity_scroll(16, 20, 5, true, -1), 17);
     }
 
     #[test]
-    fn activity_scroll_uses_four_visible_rows_without_active_friends() {
-        // No active-friends row means the renderer shows 4 activity events.
-        assert_eq!(next_activity_scroll(16, 20, false, -1), 16);
-        assert_eq!(next_activity_scroll(15, 20, false, -1), 16);
+    fn activity_scroll_uses_panel_height_for_visible_rows() {
+        // 5-row panel without a friends row shows 4 events → max_offset 16.
+        assert_eq!(next_activity_scroll(16, 20, 5, false, -1), 16);
+        assert_eq!(next_activity_scroll(15, 20, 5, false, -1), 16);
+        // A taller (filled) panel shows more events → smaller max_offset.
+        assert_eq!(next_activity_scroll(10, 20, 12, false, -1), 9);
     }
 
     #[test]
     fn activity_scroll_zero_max_when_buffer_smaller_than_visible() {
         // Only 2 events in buffer; nothing to scroll past.
-        assert_eq!(next_activity_scroll(0, 2, true, -1), 0);
-        assert_eq!(next_activity_scroll(5, 2, false, -1), 0);
+        assert_eq!(next_activity_scroll(0, 2, 5, true, -1), 0);
+        assert_eq!(next_activity_scroll(5, 2, 5, false, -1), 0);
     }
 
     #[test]
     fn activity_scroll_clamps_stale_offset_after_buffer_trim() {
         // User was at offset 30 in a 100-event buffer; buffer trims to 10.
         // Next wheel event must clamp before stepping so we don't underflow.
-        assert_eq!(next_activity_scroll(30, 10, true, 1), 6);
-        assert_eq!(next_activity_scroll(30, 10, true, -1), 7);
-        assert_eq!(next_activity_scroll(30, 10, false, 1), 5);
-        assert_eq!(next_activity_scroll(30, 10, false, -1), 6);
+        assert_eq!(next_activity_scroll(30, 10, 5, true, 1), 6);
+        assert_eq!(next_activity_scroll(30, 10, 5, true, -1), 7);
+        assert_eq!(next_activity_scroll(30, 10, 5, false, 1), 5);
+        assert_eq!(next_activity_scroll(30, 10, 5, false, -1), 6);
     }
 
     #[test]
