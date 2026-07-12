@@ -84,9 +84,10 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         },
         // Quest-only grind signals, never surfaced anywhere public.
         ActivityKind::GamePlayed { .. } | ActivityKind::GameScored { .. } => false,
-        // Daily ritual, not a story; the loss after N days is one.
+        // The bonsai is a private ritual: neither the daily watering nor the
+        // death after N dry days belongs in the public feed.
         ActivityKind::BonsaiWatered => false,
-        ActivityKind::BonsaiLost { .. } => true,
+        ActivityKind::BonsaiLost { .. } => false,
     }
 }
 

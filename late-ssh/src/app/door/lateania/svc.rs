@@ -3730,7 +3730,6 @@ impl WorldState {
         self.pending_kills.push(KillOutcome {
             user_id,
             mob_name,
-            boss,
             achievement,
         });
         self.dirty = true;

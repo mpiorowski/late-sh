@@ -19,14 +19,17 @@ use super::{state::DailyState, svc::DailyOutcome};
 /// panel has no title row of its own: the sidebar's labeled separator rule
 /// (`── lobby ────`, glowing on your-turn) is the title.
 pub(crate) const DAILY_PANEL_HEIGHT: u16 = 6;
+/// The cap (`DAILY_MAX_ACTIVE_ENTRIES`, 10) now exceeds these four slots, so
+/// the panel is a top-4 view, not a full mirror: it shows the most actionable
+/// matches (your-turn first) and the modal shows the rest.
 const MATCH_SLOTS: usize = 4;
 
 /// Inputs for the panel, bundled so the pure line builder is easy to drive
 /// from tests.
 pub(crate) struct DailyPanelProps {
-    /// Slot rows in display order: your-turn first, then unseen results,
-    /// then waiting. Unseen results may transiently push waiting rows past
-    /// the four slots; they clear as soon as the player looks.
+    /// Slot rows in display order: your-turn first (nearest deadline within),
+    /// then unseen results, then waiting. Only the first four render; with the
+    /// cap above four the tail (typically waiting rows) lives in the modal.
     pub matches: Vec<DailyPanelMatchRow>,
     pub open_count: usize,
     pub lobby_glow: bool,
