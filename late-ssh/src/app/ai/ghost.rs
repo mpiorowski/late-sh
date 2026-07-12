@@ -223,6 +223,14 @@ const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(30);
 /// balance that was spent before the debit landed. No charge happens.
 const BARTENDER_TAB_BOUNCED_LINE: &str =
     "easy now, your tab just bounced. come back when your chips catch up to your thirst.";
+/// Flat price of a round for the house: one debit, a glass for every human
+/// online. Deliberately above [`DRINK_PRICE_MAX`] — only the deterministic
+/// `@bartender round` command can spend it, never the model.
+const BARTENDER_ROUND_PRICE: i64 = 5_000;
+/// Buzz each patron gets from a round; lands exactly on "buzzed" (level 2).
+const BARTENDER_ROUND_POINTS: i64 = 500;
+/// Ledger label for the round debit.
+const BARTENDER_ROUND_DRINK: &str = "round of house ale";
 /// How often the DB-backed drunk levels are re-seeded into the shared lobby.
 const DRUNK_SEED_INTERVAL: Duration = Duration::from_secs(60);
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
@@ -783,6 +791,22 @@ impl GhostService {
             return Ok(());
         }
 
+        if bartender_round_intent(&trigger_message.body, &bartender.username) {
+            let body = self
+                .handle_bartender_round(&trigger_message)
+                .await?;
+            let mut rng = TinyRng::seeded();
+            let delay = rng.next_between_inclusive(1, 3) as u64;
+            tokio::time::sleep(Duration::from_secs(delay)).await;
+            self.chat_service.send_bot_reply_task(
+                bartender.id,
+                trigger_message.room_id,
+                body,
+                Some(trigger_message.user_id),
+            );
+            return Ok(());
+        }
+
         let (messages, balance, drunk_level, gift_recipients) = {
             let client = self.db.get().await?;
             let messages = ChatMessage::list_recent(
@@ -834,6 +858,8 @@ impl GhostService {
             - If the patron clearly asks to buy, give, send, or pay for a drink for another user, use \"gift_offer\" only when that recipient is explicitly mentioned in the latest message and appears in this candidate list: {gift_candidates}.\n\
             - For \"gift_offer\", set recipient to that candidate's handle without @, invent the drink, set a whole-number price between {price_min} and {price_max} that fits the payer's spendable chips, and tell the payer to reply exactly \"@{username} confirm\". The server will not charge until they confirm.\n\
             - If they ask for a gift drink but no candidate is listed, use \"chat\" and ask who it is for. If they try to buy their own drink as a gift, use \"chat\".\n\n\
+            ROUND FOR THE HOUSE:\n\
+            - \"@{username} round\" is a fixed house command handled outside your hands: {round_price} chips buys every patron online a pour. If the patron asks in their own words to buy the whole bar a round, never pour or price it yourself; use \"chat\" and tell them to reply exactly \"@{username} round\".\n\n\
             Decide ONE action:\n\
             - \"pour\": ONLY when the patron themselves asked for a drink — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\
             - \"gift_offer\": ONLY for a clear request to buy a drink for a different mentioned user from the gift candidate list. No charge yet; this only creates a pending confirmation.\n\
@@ -848,6 +874,7 @@ impl GhostService {
             floor = CHIP_FLOOR,
             price_min = DRINK_PRICE_MIN,
             price_max = DRINK_PRICE_MAX,
+            round_price = BARTENDER_ROUND_PRICE,
             gift_candidates = format_gift_recipient_candidates(&gift_recipients),
         );
 
@@ -1043,6 +1070,77 @@ impl GhostService {
             None => Ok(Some(format!(
                 "{payer_mention} {BARTENDER_TAB_BOUNCED_LINE}"
             ))),
+        }
+    }
+
+    /// Pour a round for the house: a flat [`BARTENDER_ROUND_PRICE`] debit on
+    /// the caller buys [`BARTENDER_ROUND_POINTS`] of buzz for every human
+    /// currently online, the payer included. Fully deterministic — command
+    /// word, price, and buzz are all hardcoded, so the model never gets to
+    /// price a house-wide charge.
+    async fn handle_bartender_round(&self, trigger_message: &ChatMessage) -> Result<String> {
+        let client = self.db.get().await?;
+        let usernames = User::list_usernames_by_ids(&client, &[trigger_message.user_id]).await?;
+        let patron = mention_target_for_user(
+            usernames.get(&trigger_message.user_id).map(String::as_str),
+            trigger_message.user_id,
+        );
+        drop(client);
+
+        // Everyone human online gets a glass; the ghosts register with no
+        // fingerprint and don't drink on the clock.
+        let mut recipients: Vec<Uuid> = {
+            let active_users = self.active_users.lock_recover();
+            active_users
+                .iter()
+                .filter(|(_, user)| user.fingerprint.is_some())
+                .map(|(id, _)| *id)
+                .collect()
+        };
+        if !recipients.contains(&trigger_message.user_id) {
+            recipients.push(trigger_message.user_id);
+        }
+
+        if recipients.len() < 2 {
+            return Ok(format!(
+                "{patron} generous, but it's just you in here tonight. keep your chips until there's company."
+            ));
+        }
+
+        match self
+            .chip_service
+            .buy_round(
+                trigger_message.user_id,
+                &recipients,
+                BARTENDER_ROUND_PRICE,
+                BARTENDER_ROUND_POINTS,
+                BARTENDER_ROUND_DRINK,
+            )
+            .await?
+        {
+            Some(round) => {
+                for pour in &round.pours {
+                    self.clubhouse_lobby.record_drink(
+                        pour.user_id,
+                        pour.drunk_points,
+                        pour.last_drink_at,
+                    );
+                }
+                tracing::info!(
+                    payer_id = %trigger_message.user_id,
+                    pours = round.pours.len(),
+                    price = BARTENDER_ROUND_PRICE,
+                    new_balance = round.balance,
+                    "bartender poured a round for the house"
+                );
+                Ok(format!(
+                    "{patron} just bought the house a round. ale all around, {count} pours, {BARTENDER_ROUND_PRICE} chips on their tab. drink up, everyone.",
+                    count = round.pours.len(),
+                ))
+            }
+            None => Ok(format!(
+                "{patron} a round for the house runs {BARTENDER_ROUND_PRICE} chips, and your tab can't carry it tonight."
+            )),
         }
     }
 
@@ -1994,10 +2092,11 @@ fn extract_mention_handles(text: &str) -> Vec<String> {
     handles
 }
 
-fn bartender_confirmation_intent(
-    body: &str,
-    bartender_username: &str,
-) -> Option<BartenderConfirmationIntent> {
+/// The lowercased non-mention words of a message that mentions the bartender,
+/// or None without a mention. The deterministic bartender commands (confirm,
+/// cancel, round) match on this exact word list — no AI in the loop — so any
+/// extra word falls through to the model instead.
+fn bartender_command_words(body: &str, bartender_username: &str) -> Option<Vec<String>> {
     if !contains_mention(body, bartender_username) {
         return None;
     }
@@ -2006,22 +2105,47 @@ fn bartender_confirmation_intent(
         .trim()
         .trim_start_matches('@')
         .to_ascii_lowercase();
-    let words: Vec<String> = text_for_mention_detection(body)
-        .split(|c: char| {
-            !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '@')
-        })
-        .filter_map(|word| {
-            let word = word.trim().trim_start_matches('@');
-            (!word.is_empty()).then(|| word.to_ascii_lowercase())
-        })
-        .filter(|word| word != &bartender_username)
-        .collect();
+    Some(
+        text_for_mention_detection(body)
+            .split(|c: char| {
+                !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '@')
+            })
+            .filter_map(|word| {
+                let word = word.trim().trim_start_matches('@');
+                (!word.is_empty()).then(|| word.to_ascii_lowercase())
+            })
+            .filter(|word| word != &bartender_username)
+            .collect(),
+    )
+}
 
+fn bartender_confirmation_intent(
+    body: &str,
+    bartender_username: &str,
+) -> Option<BartenderConfirmationIntent> {
+    let words = bartender_command_words(body, bartender_username)?;
     match words.as_slice() {
         [word] if word == "confirm" => Some(BartenderConfirmationIntent::Confirm),
         [word] if word == "cancel" => Some(BartenderConfirmationIntent::Cancel),
         _ => None,
     }
+}
+
+/// True for the fixed round-for-the-house command: "@bartender round" or the
+/// long forms "@bartender round for everyone" / "@bartender round for the
+/// house" (punctuation is a separator, so a trailing "!" is fine).
+fn bartender_round_intent(body: &str, bartender_username: &str) -> bool {
+    let Some(words) = bartender_command_words(body, bartender_username) else {
+        return false;
+    };
+    matches!(
+        words
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        ["round"] | ["round", "for", "everyone"] | ["round", "for", "the", "house"]
+    )
 }
 
 fn dealer_should_track_outcome(outcome: Outcome) -> bool {
@@ -2246,6 +2370,30 @@ hey @bot what do you think",
             bartender_confirmation_intent("@bartender should I confirm?", "bartender"),
             None
         );
+    }
+
+    #[test]
+    fn bartender_round_intent_requires_exact_command() {
+        assert!(bartender_round_intent("@bartender round", "bartender"));
+        assert!(bartender_round_intent("@bartender ROUND!", "bartender"));
+        assert!(bartender_round_intent(
+            "@bartender round for everyone",
+            "bartender"
+        ));
+        assert!(bartender_round_intent(
+            "@bartender round for everyone!",
+            "bartender"
+        ));
+        assert!(!bartender_round_intent("round for everyone", "bartender"));
+        assert!(!bartender_round_intent(
+            "@bartender pour a round for everyone",
+            "bartender"
+        ));
+        assert!(bartender_round_intent(
+            "@bartender round for the house",
+            "bartender"
+        ));
+        assert!(!bartender_round_intent("@bartender confirm", "bartender"));
     }
 
     #[test]

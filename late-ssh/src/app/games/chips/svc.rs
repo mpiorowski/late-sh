@@ -40,6 +40,21 @@ pub struct DrinkPurchase {
     pub last_drink_at: DateTime<Utc>,
 }
 
+/// One patron's glass from a round for the house.
+#[derive(Debug, Clone, Copy)]
+pub struct RoundPour {
+    pub user_id: Uuid,
+    pub drunk_points: i64,
+    pub last_drink_at: DateTime<Utc>,
+}
+
+/// Result of a successful round for the house: one debit, many pours.
+#[derive(Debug, Clone)]
+pub struct RoundPurchase {
+    pub balance: i64,
+    pub pours: Vec<RoundPour>,
+}
+
 impl ChipService {
     pub fn new(db: Db) -> Self {
         Self { db }
@@ -149,6 +164,42 @@ impl ChipService {
             balance: chips.balance,
             drunk_points: drinks.drunk_points,
             last_drink_at: drinks.last_drink_at,
+        }))
+    }
+
+    /// Charge `payer_id` once for a round for the house and credit `points`
+    /// of buzz to every recipient (the payer included) in one transaction, so
+    /// a crash can't charge without pouring. The payer's own glass carries
+    /// the round's price in `lifetime_spent`; the rest ride free. Returns
+    /// None when the payer can't cover the round while keeping the chip
+    /// floor.
+    pub async fn buy_round(
+        &self,
+        payer_id: Uuid,
+        recipient_ids: &[Uuid],
+        price: i64,
+        points: i64,
+        drink: &str,
+    ) -> anyhow::Result<Option<RoundPurchase>> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let Some(chips) = UserChips::deduct_for_drink(&tx, payer_id, price, drink).await? else {
+            return Ok(None);
+        };
+        let mut pours = Vec::with_capacity(recipient_ids.len());
+        for &recipient_id in recipient_ids {
+            let tab = if recipient_id == payer_id { price } else { 0 };
+            let drinks = UserDrinks::record_round_pour(&tx, recipient_id, points, tab).await?;
+            pours.push(RoundPour {
+                user_id: recipient_id,
+                drunk_points: drinks.drunk_points,
+                last_drink_at: drinks.last_drink_at,
+            });
+        }
+        tx.commit().await?;
+        Ok(Some(RoundPurchase {
+            balance: chips.balance,
+            pours,
         }))
     }
 
