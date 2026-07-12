@@ -59,6 +59,65 @@ const POLL_FINALIZER_BATCH_LIMIT: i64 = 25;
 pub(crate) const GIFT_MAX_AMOUNT: i64 = 1_000_000;
 const GIFT_COOLDOWN: Duration = Duration::from_secs(30);
 
+/// The two report-only rooms. `#bugs` and `#suggestions` accept only
+/// `/bug` / `/suggest` report cards from regular users; free-text posting is
+/// reserved for staff so reports don't drown in conversation. A report is a
+/// normal chat message whose body starts with the kind's marker (same trick
+/// as `---NEWS---` cards), so reactions, replies, pins, and deletes all work
+/// on it unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReportKind {
+    Bug,
+    Suggestion,
+}
+
+impl ReportKind {
+    pub(crate) const fn slug(self) -> &'static str {
+        match self {
+            Self::Bug => "bugs",
+            Self::Suggestion => "suggestions",
+        }
+    }
+
+    pub(crate) const fn marker(self) -> &'static str {
+        match self {
+            Self::Bug => "---BUG---",
+            Self::Suggestion => "---SUGGESTION---",
+        }
+    }
+
+    pub(crate) const fn command(self) -> &'static str {
+        match self {
+            Self::Bug => "/bug",
+            Self::Suggestion => "/suggest",
+        }
+    }
+
+    pub(crate) const fn icon(self) -> &'static str {
+        match self {
+            Self::Bug => "🐛",
+            Self::Suggestion => "💡",
+        }
+    }
+
+    /// Verb phrase for the card header: `<author> filed a bug <stamp>`.
+    pub(crate) const fn verb(self) -> &'static str {
+        match self {
+            Self::Bug => "filed a bug",
+            Self::Suggestion => "made a suggestion",
+        }
+    }
+
+    /// The report kind a room slug enforces, if any.
+    pub(crate) fn for_room_slug(slug: &str) -> Option<Self> {
+        match slug {
+            "bugs" => Some(Self::Bug),
+            "suggestions" => Some(Self::Suggestion),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ChatService {
     db: Db,
@@ -150,6 +209,15 @@ fn send_error_message(error: &anyhow::Error) -> String {
         "You are banned from this room.".to_string()
     } else if error.contains("admin-only") {
         "Only admins can post in #announcements.".to_string()
+    } else if let Some(slug) = error.strip_prefix("report-only:") {
+        let command = if slug == "suggestions" {
+            "/suggest"
+        } else {
+            "/bug"
+        };
+        format!(
+            "#{slug} takes reports only: post with {command} <text>, or react to an existing one."
+        )
     } else if let Some(rest) = error.strip_prefix("slow-mode:") {
         let mut parts = rest.splitn(2, ':');
         let secs = parts
@@ -1779,6 +1847,71 @@ impl ChatService {
         });
     }
 
+    /// Post a `/bug` or `/suggest` report card into its report-only room,
+    /// regardless of which room the composer was focused on. Joins the room
+    /// first so a report never bounces on membership. Success/failure surfaces
+    /// through the usual `SendSucceeded`/`SendFailed` banners.
+    pub(crate) fn send_report_task(
+        &self,
+        user_id: Uuid,
+        kind: ReportKind,
+        text: String,
+        request_id: Uuid,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                match service.send_report(user_id, kind, text).await {
+                    Ok(()) => {
+                        let _ = service.evt_tx.send(ChatEvent::SendSucceeded {
+                            user_id,
+                            request_id,
+                        });
+                    }
+                    Err(e) => {
+                        let message = send_error_message(&e);
+                        let _ = service.evt_tx.send(ChatEvent::SendFailed {
+                            user_id,
+                            request_id,
+                            message,
+                        });
+                        late_core::error_span!(
+                            "chat_report_send_failed",
+                            error = ?e,
+                            "failed to send report"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.send_report_task",
+                user_id = %user_id,
+                slug = kind.slug(),
+                request_id = %request_id
+            )),
+        );
+    }
+
+    async fn send_report(&self, user_id: Uuid, kind: ReportKind, text: String) -> Result<()> {
+        let client = self.db.get().await?;
+        let room = ChatRoom::find_non_dm_by_slug(&client, kind.slug())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("room #{} not found", kind.slug()))?;
+        ChatRoomMember::join(&client, room.id, user_id).await?;
+        drop(client);
+
+        self.send_message(SendMessageParams {
+            user_id,
+            room_id: room.id,
+            room_slug: Some(kind.slug().to_string()),
+            body: format!("{} {}", kind.marker(), text),
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            is_admin: false,
+        })
+        .await
+    }
+
     /// Send a bot/automated reply that is a response to `reply_to_user_id`.
     /// Recording the triggering user lets each viewer hide the reply when they
     /// ignore that user, so ignored users cannot use a bot to be heard.
@@ -1998,6 +2131,22 @@ impl ChatService {
         let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("room not found"))?;
+        // Report-only rooms: regular users may only post report cards (bodies
+        // built by /bug and /suggest); staff keep free text so they can reply
+        // under a report. Checked against the DB slug so the IRC path is
+        // covered too. The staff lookup only runs on this rare gated path.
+        if !is_admin
+            && let Some(kind) = room.slug.as_deref().and_then(ReportKind::for_room_slug)
+            && !body.trim_start().starts_with(kind.marker())
+        {
+            let is_moderator = User::staff_flags_by_ids(&client, &[user_id])
+                .await?
+                .get(&user_id)
+                .is_some_and(|(_, is_moderator)| *is_moderator);
+            if !is_moderator {
+                anyhow::bail!("report-only:{}", kind.slug());
+            }
+        }
         if !is_admin
             && let Some((remaining, scope)) = slow_mode_remaining(&client, &room, user_id).await?
         {
@@ -2090,6 +2239,8 @@ impl ChatService {
                             "You can only edit your own messages."
                         } else if e.to_string().contains("empty") {
                             "Edited message cannot be empty."
+                        } else if e.to_string().starts_with("report-only:") {
+                            "Reports here must keep their marker; edit the text after it."
                         } else {
                             "Could not edit message. Please try again."
                         };
@@ -2140,6 +2291,20 @@ impl ChatService {
             target_tier_for_user_id(&client, existing.user_id).await?
         };
         ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
+
+        // Report-only rooms: a regular user's only messages there are their own
+        // report cards, and an edit must not strip the marker — otherwise
+        // editing would bypass the free-text send gate.
+        if !permissions.is_admin() && !permissions.is_moderator() {
+            let room = ChatRoom::get(&client, existing.room_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("room not found"))?;
+            if let Some(kind) = room.slug.as_deref().and_then(ReportKind::for_room_slug)
+                && !new_body.trim_start().starts_with(kind.marker())
+            {
+                anyhow::bail!("report-only:{}", kind.slug());
+            }
+        }
 
         let tx = client.transaction().await?;
         let updated = ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?;
@@ -3428,6 +3593,26 @@ mod tests {
         // Established (7d+): no cooldown.
         assert_eq!(link_cooldown_for_age(7 * day), None);
         assert_eq!(link_cooldown_for_age(365 * day), None);
+    }
+
+    #[test]
+    fn send_error_message_explains_report_only_rooms() {
+        let bugs = send_error_message(&anyhow::anyhow!("report-only:bugs"));
+        assert!(bugs.contains("#bugs"), "{bugs}");
+        assert!(bugs.contains("/bug"), "{bugs}");
+        let suggestions = send_error_message(&anyhow::anyhow!("report-only:suggestions"));
+        assert!(suggestions.contains("#suggestions"), "{suggestions}");
+        assert!(suggestions.contains("/suggest"), "{suggestions}");
+    }
+
+    #[test]
+    fn report_kind_maps_room_slugs() {
+        assert_eq!(ReportKind::for_room_slug("bugs"), Some(ReportKind::Bug));
+        assert_eq!(
+            ReportKind::for_room_slug("suggestions"),
+            Some(ReportKind::Suggestion)
+        );
+        assert_eq!(ReportKind::for_room_slug("lounge"), None);
     }
 
     #[test]

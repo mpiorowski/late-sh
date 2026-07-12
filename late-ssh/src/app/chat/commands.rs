@@ -96,6 +96,7 @@ const COMMANDS: &[Command] = &[
     global("aquarium", "toggle aquarium (/aquarium feed to feed)"),
     global("binds", "chat guide"),
     global("brb", "go AFK and mute audio"),
+    global("bug", "report a bug to #bugs"),
     global(
         "challenge",
         "post daily challenge (chess, battleship, connect4)",
@@ -123,6 +124,7 @@ const COMMANDS: &[Command] = &[
     global("public", "open public room for everyone"),
     global("roll", "roll dice (e.g. /roll 3d6)"),
     global("settings", "open settings"),
+    global("suggest", "send a suggestion to #suggestions"),
     global("tea", "post tea cup"),
     global("unfriend", "unmark user"),
     global("unignore", "unmute user"),

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-12 (activity feed became #lounge system messages and the sidebar Activity panel was retired; see the `Activity` service row and `late-ssh/src/app/chat/CONTEXT.md`)
+- Last updated: 2026-07-12 (report-only feedback rooms: `#bugs`/`#suggestions` accept only `/bug <text>` / `/suggest <text>` report cards from regular users — the commands work from any room and post a `---BUG---`/`---SUGGESTION---` marker-bodied message rendered as a ruled card (same body-marker trick as `---NEWS---`); free-text sends there are rejected for non-staff while admins/moderators keep plain-text replies and everyone keeps reactions for "+1"; no schema changes, see `late-ssh/src/app/chat/CONTEXT.md` §8. Same day: activity feed became #lounge system messages and the sidebar Activity panel was retired; see the `Activity` service row and `late-ssh/src/app/chat/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
