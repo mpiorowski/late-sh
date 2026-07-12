@@ -37,10 +37,12 @@ use crate::{
     render_signal::RenderSignal,
     session_bootstrap::{SessionBootstrapInputs, build_session_config},
     state::{ActiveSession, ActiveUser, State},
+    terminal_size::clamp_terminal_size,
 };
 
 const INPUT_QUEUE_CAP: usize = 256;
 const WS_OUT_BUFFER: usize = 8;
+const WEB_TUNNEL_WS_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
 const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
@@ -193,18 +195,20 @@ pub async fn ws_handler(
 
     let cols = params.cols.unwrap_or(120).clamp(20, 240);
     let rows = params.rows.unwrap_or(36).clamp(10, 80);
-    ws.on_upgrade(move |socket| {
-        handle_socket(WebTunnelSession {
-            socket,
-            state,
-            user,
-            is_new_user,
-            session_token,
-            cols,
-            rows,
-            _guard: guard,
+    ws.max_message_size(WEB_TUNNEL_WS_MAX_MESSAGE_BYTES)
+        .max_frame_size(WEB_TUNNEL_WS_MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| {
+            handle_socket(WebTunnelSession {
+                socket,
+                state,
+                user,
+                is_new_user,
+                session_token,
+                cols,
+                rows,
+                _guard: guard,
+            })
         })
-    })
 }
 
 async fn handle_socket(session: WebTunnelSession) {
@@ -291,12 +295,27 @@ async fn handle_socket(session: WebTunnelSession) {
                 }
             }
             Message::Text(text) => match serde_json::from_str::<ControlFrame>(&text) {
-                Ok(ControlFrame::Resize { cols, rows }) => enqueue_input(
-                    &input_tx,
-                    &signal,
-                    InputEvent::Resize { cols, rows },
-                    "resize",
-                ),
+                Ok(ControlFrame::Resize { cols, rows }) => {
+                    let terminal_size = clamp_terminal_size(u32::from(cols), u32::from(rows));
+                    if terminal_size.clamped {
+                        tracing::warn!(
+                            reported_cols = cols,
+                            reported_rows = rows,
+                            cols = terminal_size.cols,
+                            rows = terminal_size.rows,
+                            "clamped oversized web tunnel resize"
+                        );
+                    }
+                    enqueue_input(
+                        &input_tx,
+                        &signal,
+                        InputEvent::Resize {
+                            cols: terminal_size.cols,
+                            rows: terminal_size.rows,
+                        },
+                        "resize",
+                    );
+                }
                 Err(err) => {
                     tracing::warn!(error = ?err, "web tunnel bad control frame");
                     let _ = out_tx.send(Message::Close(None)).await;

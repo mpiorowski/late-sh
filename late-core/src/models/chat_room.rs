@@ -487,10 +487,23 @@ impl ChatRoom {
             .await?;
         if let Some(existing) = existing {
             let room = Self::from(existing);
-            if !room.permanent {
-                bail!("room #{slug} already exists and is not permanent");
+            if room.permanent {
+                return Ok(room);
             }
-            return Ok(room);
+            // Promote an existing non-permanent public room (e.g. a user-created
+            // `/public` room) to a permanent auto-join room. Callers bulk-add all
+            // users afterwards, so a mistyped slug will bulk-add everyone to an
+            // unleavable room — `/create-room` is admin-only for that reason.
+            let row = client
+                .query_one(
+                    "UPDATE chat_rooms
+                     SET permanent = true, auto_join = true, updated = now()
+                     WHERE id = $1
+                     RETURNING *",
+                    &[&room.id],
+                )
+                .await?;
+            return Ok(Self::from(row));
         }
 
         let row = client

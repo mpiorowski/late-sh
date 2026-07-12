@@ -52,8 +52,9 @@ fn is_bot_author(username: &str) -> bool {
     )
 }
 
-/// The #lounge system-feed author (`activity/lounge.rs`). Checked together
-/// with the body prefix before a message renders as an authorless system row.
+/// The #lounge system-feed author (`activity/lounge.rs`, nick `system`).
+/// Checked together with the body prefix before a message renders as an
+/// authorless system row.
 fn is_system_author(username: &str) -> bool {
     username
         .trim()
@@ -1493,10 +1494,15 @@ fn ensure_chat_rows_cache(
             header_segments.insert(msg.id, segments);
         }
 
-        let body_start = if is_continuation {
-            row_start
-        } else {
+        // Skip the author header (when there is one) so selection paints
+        // body rows only. Headerless entries — system lines, news cards,
+        // /me actions, continuations — select from their first row;
+        // deriving this from `is_continuation` alone left the first system
+        // line after a normal message with an empty selection range.
+        let body_start = if wrapped.header_line_index == Some(0) {
             row_start + 1
+        } else {
+            row_start
         };
         selected_ranges.insert(msg.id, (body_start, all_rows.len()));
         highlighted_ranges.insert(msg.id, (row_start, all_rows.len()));

@@ -12,5 +12,6 @@ pub mod session;
 pub mod session_bootstrap;
 pub mod ssh;
 pub mod state;
+pub(crate) mod terminal_size;
 pub mod usernames;
 pub mod web_tunnel;

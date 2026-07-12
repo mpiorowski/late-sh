@@ -32,13 +32,19 @@ use super::filter::lounge_includes;
 /// The system feed's author row. Same lazily-ensured bot pattern as the
 /// ghost users; `settings.system` additionally marks it for the unread-count
 /// exclusion in `ChatRoomMember::unread_counts_for_user`.
+///
+/// Prod note: `system` was squatted by a real zero-message account until
+/// 2026-07-12, when the owner renamed it to `system-9` to free the nick.
+/// First deploy creates this row and the case-insensitive unique username
+/// index reserves it from then on.
 pub const SYSTEM_FINGERPRINT: &str = "system-fp-000";
 pub const SYSTEM_USERNAME: &str = "system";
 
 /// Body prefix marking a system line. Deliberately readable: IRC clients see
-/// it verbatim (`<system> · mira joined`). The TUI only styles a message as a
-/// system row when the body carries this prefix AND the author is `system`,
-/// so neither a human named system nor a pasted `· ` can spoof the style.
+/// it verbatim (`<system> · mira joined`). The TUI only styles a message as
+/// a system row when the body carries this prefix AND the author is the
+/// feed bot, so neither a human squatting the nick nor a pasted `· ` can
+/// spoof the authorless style.
 pub const SYSTEM_LINE_PREFIX: &str = "· ";
 
 /// Same user re-sitting at the same table (or re-triggering any one event
