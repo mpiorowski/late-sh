@@ -792,9 +792,7 @@ impl GhostService {
         }
 
         if bartender_round_intent(&trigger_message.body, &bartender.username) {
-            let body = self
-                .handle_bartender_round(&trigger_message)
-                .await?;
+            let body = self.handle_bartender_round(&trigger_message).await?;
             let mut rng = TinyRng::seeded();
             let delay = rng.next_between_inclusive(1, 3) as u64;
             tokio::time::sleep(Duration::from_secs(delay)).await;
