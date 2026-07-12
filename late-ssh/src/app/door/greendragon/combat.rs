@@ -27,8 +27,8 @@ pub struct Combatant {
 }
 
 /// What a companion does each round beyond existing (the `abilities` blob on
-/// LoGD's companion rows). Every ability still makes its attack roll — a
-/// healer bandages *and* swings, a defender guards *and* swings.
+/// LoGD's companion rows). Fighters and defenders swing at the foe; a healer
+/// only bandages — upstream rolls its attack but never applies the damage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompanionAbility {
     /// Strikes the foe each round (the stock fighter).
@@ -50,8 +50,19 @@ pub struct Companion {
     pub name: String,
     pub hitpoints: u32,
     pub max_hitpoints: u32,
-    pub attack: u32,
-    pub defense: u32,
+    /// Float, as upstream: Bonecall's skeleton stores stats ending in .5 and
+    /// the engine consumes them un-rounded.
+    pub attack: f64,
+    pub defense: f64,
+    /// Per-level growth (the companions table's `*perlevel` columns): added
+    /// on every master victory (`train.php` `companionslevelup` default 1).
+    /// Zero for summons, as upstream's skeleton carries no perlevel keys.
+    #[serde(default)]
+    pub attack_per_level: u32,
+    #[serde(default)]
+    pub defense_per_level: u32,
+    #[serde(default)]
+    pub hp_per_level: u32,
     /// Flavor logged the round the companion is destroyed.
     pub dying_text: String,
     /// What it does each round beyond the basic strike.
@@ -318,8 +329,9 @@ fn apply_power_move(
     };
     match tier {
         Some(t) => {
-            let lo = (patkroll / 4.0) as i32;
-            let hi = (patkroll / 2.0) as i32;
+            // e_rand rounds its bounds (lib/e_rand.php), not truncates.
+            let lo = iround(patkroll / 4.0);
+            let hi = iround(patkroll / 2.0);
             let bonus = if hi > lo { rng.gen_range(lo..=hi) } else { lo };
             ((dmg + bonus).max(1), Some(t))
         }
@@ -455,13 +467,16 @@ pub fn resolve_round_buffed(
     let mut heal = 0u32;
     let mut messages = Vec::new();
 
-    // Companions strike the enemy (positive contributions only).
+    // Companions strike the enemy (positive contributions only). A healer's
+    // roll never lands on the foe — upstream's heal-ability branch rolls but
+    // discards `damage_done` (`lib/extended-battle.php`); fight and defend
+    // branches apply it.
     let eff_enemy_def = m.badguydefmod * enemy.defense as f64 / (m.adjustment * m.adjustment);
     for comp in companions.iter() {
-        if comp.hitpoints == 0 {
+        if comp.hitpoints == 0 || matches!(comp.ability, CompanionAbility::Heal(_)) {
             continue;
         }
-        let dmg = trunc(bell_rand(rng, comp.attack as f64) - bell_rand(rng, eff_enemy_def));
+        let dmg = trunc(bell_rand(rng, comp.attack) - bell_rand(rng, eff_enemy_def));
         if dmg > 0 {
             damage_to_enemy += dmg;
             messages.push(format!("{} strikes your foe for {dmg}.", comp.name));
@@ -484,7 +499,7 @@ pub fn resolve_round_buffed(
             .find(|&i| companions[i].ability == CompanionAbility::Defend)
             .unwrap_or_else(|| living[rng.gen_range(0..living.len())]);
         let eatk = bell_rand(rng, enemy.attack as f64 * m.badguyatkmod);
-        let cdef = bell_rand(rng, companions[pick].defense as f64);
+        let cdef = bell_rand(rng, companions[pick].defense);
         let dmg = trunc(eatk - cdef).max(0) as u32;
         if dmg > 0 {
             let comp = &mut companions[pick];
@@ -495,12 +510,19 @@ pub fn resolve_round_buffed(
         }
     }
 
-    // Aura heals living companions by regen/3.
-    let total_regen: u32 = buffs.iter().map(|b| b.regen).sum();
-    if total_regen > 0 && buffs.iter().any(|b| b.aura) {
+    // Each aura buff heals living companions by round(its own regen / 3)
+    // (`lib/battle-buffs.php`: `(int)round($buff['regen']/3)`).
+    for b in buffs.iter() {
+        if !b.aura {
+            continue;
+        }
+        let aura = iround(b.regen as f64 / 3.0);
+        if aura <= 0 {
+            continue;
+        }
         for comp in companions.iter_mut() {
             if comp.hitpoints > 0 {
-                comp.hitpoints = (comp.hitpoints + total_regen / 3).min(comp.max_hitpoints);
+                comp.hitpoints = (comp.hitpoints + aura as u32).min(comp.max_hitpoints);
             }
         }
     }
@@ -755,8 +777,11 @@ mod tests {
             name: "Skeleton".into(),
             hitpoints: 5,
             max_hitpoints: 5,
-            attack: 10,
-            defense: 1,
+            attack: 10.0,
+            defense: 1.0,
+            attack_per_level: 0,
+            defense_per_level: 0,
+            hp_per_level: 0,
             dying_text: "It crumbles.".into(),
             ability: CompanionAbility::Fight,
             ignore_limit: true,

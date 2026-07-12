@@ -117,15 +117,18 @@ const DARK_ARTS: &[Skill] = &[
         build: |level, _atk| {
             let lvl = level as f64;
             let hp = (lvl * 3.33).round() as u32 + 10;
-            let attack =
-                ((lvl / 4.0 + 2.0).round() * (lvl / 3.0 + 2.0).round() + 1.5).round() as u32;
-            let defense = ((lvl / 3.0).floor() * (lvl / 6.0 + 2.0).ceil() + 2.5).round() as u32;
+            // Upstream stores these un-rounded (they end in .5).
+            let attack = (lvl / 4.0 + 2.0).round() * (lvl / 3.0 + 2.0).round() + 1.5;
+            let defense = (lvl / 3.0).floor() * (lvl / 6.0 + 2.0).ceil() + 2.5;
             SkillEffect::Summon(Companion {
                 name: "Skeleton Warrior".into(),
                 hitpoints: hp,
                 max_hitpoints: hp,
                 attack,
                 defense,
+                attack_per_level: 0,
+                defense_per_level: 0,
+                hp_per_level: 0,
                 dying_text: "Your skeleton warrior crumbles to dust.".into(),
                 ability: super::combat::CompanionAbility::Fight,
                 // Summons bypass the mercenary hire cap (LoGD `ignorelimit`).

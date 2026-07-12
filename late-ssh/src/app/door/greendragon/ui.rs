@@ -16,7 +16,7 @@ use crate::app::door::landing;
 use super::commentary::{self, CommentRoom};
 use super::data;
 use super::model::{self, Character, Specialty};
-use super::state::{FoeKind, Mode, PvpVenue, State};
+use super::state::{BankOp, FoeKind, Mode, PvpVenue, State};
 
 /// Draw the live Green Dragon game (called when a character is loaded).
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
@@ -572,6 +572,40 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         }
     }
 
+    // The teller's counter: the holdings in question, and the amount line.
+    if let Mode::BankAmount(op) = state.mode() {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        if let Some(c) = state.character() {
+            let terms = match op {
+                BankOp::Deposit => format!(
+                    "\"How much goes in? You carry {} gold. Leave the line \
+                     blank to deposit it all.\"",
+                    c.gold
+                ),
+                BankOp::Withdraw => format!(
+                    "\"How much comes out? Your balance is {} gold. Leave the \
+                     line blank to withdraw it all.\"",
+                    c.gold_in_bank.max(0)
+                ),
+                BankOp::Borrow => format!(
+                    "\"How much do you need in hand? Balance and credit \
+                     together, the bank can give you {} gold. Anything past \
+                     your balance is a loan, and debt gathers interest daily.\"",
+                    c.borrow_available()
+                ),
+            };
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(terms, dim)));
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("how much gold? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
     // The vault's transfer window: the terms of the house, and the name line.
     if state.mode() == Mode::BankTransferTarget {
         let dim = Style::default().fg(theme::TEXT_DIM());
@@ -938,7 +972,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     if state.mode() == Mode::ChooseRace {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
-            "A new day stirs old memories. Whose blood runs in your veins? The choice is permanent, and each people carries its own gift.",
+            "A new day stirs old memories. Whose blood runs in your veins? The choice holds for this life, and each people carries its own gift.",
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
@@ -946,7 +980,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     if state.mode() == Mode::ChooseSpecialty {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
-            "Choose the craft you'll hone against the forest. The choice is permanent; you'll spend daily \"uses\" on its skills mid-fight.",
+            "Choose the craft you'll hone against the forest this life. You'll spend daily \"uses\" on its skills mid-fight.",
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
@@ -987,6 +1021,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
             Mode::BountyTarget => "type a name   Enter check his book   Esc never mind",
             Mode::IntelTarget => "type a name   Enter ask him   Esc never mind",
             Mode::BountyAmount => "type an amount   Enter slide the coins over   Esc never mind",
+            Mode::BankAmount(_) => "type an amount   Enter settle it   Esc never mind",
             Mode::BankTransferTarget => "type a name   Enter check the ledger   Esc never mind",
             Mode::BankTransferAmount => "type an amount   Enter send the note   Esc never mind",
             Mode::Haunt => "type a name   Enter whisper it   Esc never mind",
@@ -1036,11 +1071,13 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Loading => "Entering the realm...",
         Mode::Village => "The village of Duskmere",
         Mode::Forest => "The Forest",
+        Mode::DragonApproach => "The Dragon's Cave",
         Mode::Fight => "Battle!",
         Mode::WeaponShop => "Ironroost Weapons",
         Mode::ArmorShop => "Duskmail Armoury",
         Mode::Healer => "The Mendery",
         Mode::Bank => "The Coinvault",
+        Mode::BankAmount(_) => "The Teller's Counter",
         Mode::BankTransferTarget => "The Transfer Ledger",
         Mode::BankTransferAmount => "Writing the Note",
         Mode::Training => "The Proving Yard",

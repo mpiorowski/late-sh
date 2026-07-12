@@ -30,6 +30,9 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
 - Combat resolver (`lib/battle-skills.php` `rolldamage`): bell_rand
   inverse-normal roll, signed damage (glance heals), 1-in-20 triple crit,
   dmgmod stages, power moves >1.5/2/3/4×, reroll-until-progress, invulnerable.
+  (`bell_rand` is a continuous inverse-normal approximation of upstream's
+  441-row percentile table; z deltas ≲0.002 never move truncated integer
+  damage.)
 - Specialties (3 × 4 skills), use economy `floor(skill/3)+1`, gem advancement.
 - Buff + companion engines; forest death (gold→0, exp×0.9); master fights
   (non-lethal loss, +5 soulpoints on win); shop ladder + 75% trade-in +
@@ -80,7 +83,11 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
 - [x] **Dragon-kill gold reset**: on-hand gold is *not* retained —
   `gold = min(50 + 50·kills, 300)`; overflow gems `clamp(kills−7, 0, 10)`;
   flawless +150 gold +1 gem (unchanged); companions wiped (upstream resets
-  the field).
+  the field). Extended by the 2026-07 new-day audit: `dragon.php`'s field
+  loop reverts *every* column outside its preserve list, so the **bank
+  balance (debt included), favor, any haunt mark, the race, and the
+  specialty** reset too, and the wiped `lasthit` forces a **full new day as
+  soon as the post-kill gates close** (`dawn_owed` → `Character::dawn`).
 - [x] **Dragon points are chosen, not auto-applied**: each kill grants 1
   point; a forced spend gate (upstream: newday blocks until
   `count(dragonpoints) == dragonkills`) offers `hp` (+5 max HP), `ff`
@@ -201,11 +208,15 @@ this section originally claimed:
    human-analog's bonus fights soften the −6 dock: `10 + 2 − 6 = 6` turns.
 
 - [x] **Gate order** (upstream `newday.php:100-104`): dragon points → race →
-  specialty. `Mode::ChooseRace` is a forced one-time choice, armed on load
+  specialty. `Mode::ChooseRace` is a forced choice, armed on load
   when `race` is unset and chained after the dragon-point gate; Esc leaves
   the door and the gate re-arms. The village specialty chooser stays as-is.
   `Character.race` (enum, serde default `None`); phase 3's transmutation
-  potion resets it so the gate re-arms.
+  potion resets it so the gate re-arms. **Per-run, not one-time** (corrected
+  by the 2026-07 new-day audit): every dragon kill resets `race` — upstream's
+  field loop — so the gate re-arms after each kill, and the day itself rolls
+  only once the gates close (`settle_dawn`, matching `newday.php`'s
+  gate-then-day flow).
 - [x] **Race effects** (numbers exact; race names original — Plainsborn /
   Wealdkin / Deepfolk / Cragborn for the human/elf/dwarf/troll analogs):
   - *Plainsborn*: +2 forest fights per day (`bonus` default **2**), in
@@ -224,18 +235,22 @@ this section originally claimed:
     lucky escape zeroes the day's turns (corrections 1–2).
   - Elf/troll `pvpadjust` (same bonus defending in PvP) — landed free with
     phase 4's PvP: the defender's stats come from `attack()`/`defense()`,
-    which already fold the race add in.
+    which already fold the race add in. The attacking side matches too:
+    upstream's `racialbenefit` buff is `allowinpvp=1`/`allowintrain=1`
+    (the one stock buff so flagged), and ours rides the same stat fold.
   - The dwarf-analog's exclusive mercenary (bear companion: atk 1 +2/lvl,
     def 5 +2/lvl, hp 25 +25/lvl, ability defend, 4 gems + 600 gold) joins
     the phase-3 mercenary camp as a race-gated listing.
 - [x] **DK titles** (`titles` table + `lib/titles.php` `get_dk_title`):
-  `data::TITLES` holds `(threshold, first-style, second-style)` rows at
-  0/1/2/3/4/5/7/10/15/20 — **all title strings original** (upstream's
-  Farmboy→Undergod ladder is theirs). Selection: highest `threshold <=
-  dragon_kills`, random among rows sharing it; re-rolled on every dragon
-  kill (`dragon.php`) and stamped onto never-titled saves at load; shown
-  before the name in the stat rail (news wiring lands with phase 3).
-  `Character.title: String` (serde default empty = never titled).
+  `data::TITLES` holds `(threshold, first-style, second-style)` rows —
+  **one rung per kill 0..=31, upstream's 32-row seed** (fixed 2026-07 from
+  a compressed 10-tier ladder, phase-5 finding 1) — **all title strings
+  original** (upstream's Farmboy→God ladder is theirs). Selection: highest
+  `threshold <= dragon_kills`, random among rows sharing it; re-rolled on
+  every dragon kill (`dragon.php`) with the news/log fired every kill,
+  changed or not; stamped onto never-titled saves at load; shown before
+  the name in the stat rail. `Character.title: String` (serde default
+  empty = never titled).
 - [x] **Address style**: `Character.style` (enum `First`/`Second`, serde
   default `First`) picks the title column where upstream reads `sex`. The
   actual one-time chooser is phase 3's (with the romance/bard hooks); until
@@ -731,12 +746,17 @@ already fixed to match):
    attack/defense carry gear, boons, and the race bonus (our
    `attack()`/`defense()` fold the race add in, which *is* upstream's
    elf/troll `pvpadjust` re-add).
-5. **Nothing stock sets `allowinpvp`**, so the buff/companion nuance
+5. **Almost nothing stock sets `allowinpvp`**, so the buff/companion nuance
    collapses: every buff and companion sits PvP out on both sides (drinks,
    the lover's ward, mounts, mercenaries, Bonecall — all shelved). The one
-   buff in any PvP fight is the inn **bodyguard** (`apply_bodyguard(1)`:
-   defender attack ×1.05, attacker defense ×0.95, whole fight) — every inn
-   target has `bodyguardlevel = boughtroomtoday = 1`.
+   stock exception (found by the 2026-07 PvP audit, finding 17): the
+   elf/troll `racialbenefit` buff sets `allowinpvp=1` (and `allowintrain=1`),
+   so the *attacker* keeps their race bonus upstream — which ours reproduces
+   by construction, the race add living in `attack()`/`defense()` rather
+   than a buff (the defender's half is the `pvpadjust` re-add, correction 4).
+   The one *injected* buff in any PvP fight is the inn **bodyguard**
+   (`apply_bodyguard(1)`: defender attack ×1.05, attacker defense ×0.95,
+   whole fight) — every inn target has `bodyguardlevel = boughtroomtoday = 1`.
 6. **The sleeper can strike first**: `battle.php` rolls surprise 50/50 for
    single-foe fights, PvP included ("%s's skill allows them to get the
    first round").
@@ -778,8 +798,12 @@ already fixed to match):
   the row); the inn list is the barkeep bribe's second prize
   (`Mode::BarkeepEar`: who's upstairs / the specialty switch).
 - [x] **Immunity warning + forfeit** (`pvpwarning`): the still-immune see
-  the warning entering either list; a successful engage while immune sets
-  `pk = 1` forever.
+  the warning entering either list — a deliberate widening (2026-07 PvP
+  audit, finding 18): upstream warns only at the fields list (`pvp.php:25`;
+  `inn_bartender.php` requires the lib but never calls it), so an immune
+  newbie attacking from the inn forfeits unwarned there. Informational
+  only; the forfeit itself fires identically at engage on both venues —
+  a successful engage while immune sets `pk = 1` forever.
 - [x] **Engage** (`setup_target` as a row-locked transaction in `svc`):
   re-checks against the target's *fresh* blob (found → level ±2 → pvpflag
   10 min → awake → alive, upstream's order and precedence), stamps
@@ -1115,7 +1139,9 @@ originally claimed (the specs below are already fixed to match):
   desk — apply (clan pick off the member-count-ordered list; the officers+
   get the notice, and a chartered clan earns the registrar's read-the-
   charter reminder, upstream's two mails), file a new clan (name, tag, the
-  fee — checks in upstream's order), the public list (→ per-clan detail
+  fee — same check set; ours takes the fee before the name/tag uniqueness
+  tests where upstream validates first, a refusal-order-only difference),
+  the public list (→ per-clan detail
   roll, `detail.php`'s ordering + total-DK footer), and, once applied, the
   waiting area + withdraw-application rows (an applicant's withdraw is
   purely local, as upstream only deletes the stale mail).
@@ -1281,7 +1307,15 @@ small part, fix at the end of the step, then reset context.
 
 ### Solo-audit flow (read me first, future Fable)
 
-Per-step protocol — one step per session, nothing else:
+Session shape: work the step queue **in order, step after step, fixing as
+you go**, within one session. Don't stop after a single step — keep going
+until your context nears the **200-300k token mark**, then finish the step
+in hand, record everything here, and tell the user it's time to reset
+(`/clear`). A step too big to finish inside the budget gets split: check
+off the finished half, leave the remainder as its own unchecked box with a
+scope note (see the new-day split for the shape).
+
+Per-step protocol:
 
 1. Pick the **first unchecked box** in the step queue below.
 2. Re-read "Target / provenance" at the top of this file. Ground rules:
@@ -1302,42 +1336,209 @@ Per-step protocol — one step per session, nothing else:
 5. Record the outcome here: check the box, strike or annotate the findings
    handled, append any new findings to the list, correct any doc bullet the
    work contradicted.
-6. Stop and tell the user the step is done so they can `/clear`.
+6. Move to the next unchecked step — or, if the context budget is nearly
+   spent, stop and tell the user what closed this session so they can
+   `/clear`.
 
 ### Step queue
 
 Fix steps (already audited by the sweep; findings below):
 
-- [ ] **Fix: combat + specialties** — findings 2, 3, 9, 10, 11.
-- [ ] **Fix: dragon approach + flee** — finding 4.
-- [ ] **Fix: healer + bank access** — findings 5, 6.
-- [ ] **Fix: titles ladder** — finding 1 (needs ~22 new original title
-  names for the 0..31 ladder, or an explicit deliberate-deviation bullet).
-- [ ] **Fix: clans** — findings 8, 12.
-- [ ] **Fix: docs** — finding 7 + every PARITY bullet the fixes above
-  invalidate (healer "and at the healer", clan detail "joined", titles
-  thresholds, bank claims).
+- [x] **Fix: combat + specialties** — findings 2, 3, 9, 10, 11. All five
+  re-traced against upstream and confirmed, all five fixed (2026-07):
+  `Companion.attack/defense` are now f64 (old integer saves deserialize
+  clean), the skeleton keeps its .5 stats, aura heals `round(regen/3)` per
+  aura buff, heal-ability companions no longer strike, power-move bounds
+  round like `e_rand`, creature gold L5→199 / L6→233 (all 16 rows
+  recomputed against `creature_gold`; only those two were off).
+- [x] **Fix: dragon approach + flee** — finding 4. Re-traced and confirmed;
+  fixed 2026-07: `Mode::DragonApproach` (enter / run-for-the-inn, the run
+  costing 1 charm floored at 0; Esc walks back to the forest free, as
+  upstream's other navs stay clickable); `seen_dragon` now set at the
+  approach (upstream `forest.php:52`), not on entering; the dragon fight
+  drops its Flee row (`fightnav(true,false)` — skills stay) and Esc fights
+  the round ("the tail blocks the exit", upstream's `op=run` conversion).
+  Also landed while in the file: the dragon seek moved from the village
+  menu to the forest (`lib/forest.php:23`, where upstream's nav lives), and
+  the slumming nav now hides at level 1 (`lib/forest.php:15` — the sweep's
+  nav-visibility nit).
+- [x] **Fix: healer + bank access** — findings 5, 6. Re-traced and
+  confirmed; fixed 2026-07: the healer's hut now mends wounded companions
+  (same sawbones formula, `healer.php:106-117`; the village Mendery row
+  opens for a wounded companion too), and the bank counter takes typed
+  amounts (`Mode::BankAmount`: digits on the talk line, 0/blank = all,
+  over-asking gets upstream's arithmetic refusal instead of a clamp; the
+  borrow form is upstream's withdraw-with-borrow — balance drawn first,
+  remainder borrowed; blank-borrow = full balance+credit, a documented
+  adaptation of upstream's odd `abs(goldinbank)` default).
+- [x] **Fix: titles ladder** — finding 1. Re-traced (installer seed rows
+  0..31 + `lib/titles.php` + `dragon.php:238-242`) and fixed 2026-07: the
+  ladder is now 32 rungs, one per kill 0..=31 (existing original names kept
+  at their old thresholds so no save demotes; 22 new original names fill
+  the gaps, topping out at "The Deathless"), and the title news/log fire on
+  every kill unconditionally, as upstream's addnews does.
+- [x] **Fix: clans** — findings 8, 12. Re-traced and confirmed; fixed
+  2026-07: the public detail roll now shows rank / name / DKs / join date
+  (`lib/clan/detail.php`'s columns — the level column dropped, the join
+  date rendered `YYYY-MM-DD`), and the withdraw notice list counts a
+  just-promoted successor as an officer (upstream promotes before selecting
+  the recipients).
+- [x] **Fix: docs** — finding 7 + the invalidated bullets, fixed 2026-07:
+  CONTEXT.md's stat-derivation summary now carries `vitality_hp` + the race
+  adds, its title-ladder line says 0..=31, and a dragon-approach bullet
+  joined the faithfulness notes; PARITY's phase-2 titles bullet updated,
+  the clan-founding "upstream's order" claim corrected (ours takes the fee
+  first — refusal-order-only), and the bell_rand table-approximation
+  disclosure added to "Already 1=1". The healer "here and at the healer"
+  claim is true again since the healer fix.
 
 Audit + fix steps (not reached by the sweep):
 
-- [ ] **Audit: the 8 forest events** — `events.rs` vs the stock forest-event
-  modules (fairy, findgem, findgold, glowingstream, goldmine, sethsong,
-  crazyaudrey, foilwench, cedrikspotions — establish which are forest hooks
-  and stock-enabled); trigger odds, effect formulas, once-per-day limits.
-- [ ] **Audit: masters + dragon + new day** — `train.php`, `dragon.php`,
-  `newday.php`: challenge gating, master stats/rewards, dragon fight,
-  kill resets (verify the documented dragon-point + gold-reset deviations),
-  new-day processing order.
-- [ ] **Audit: commentary + daily news** — `lib/commentary.php`, `news.php`
-  vs `commentary.rs`: windows, allowance, verbs, pagination, recentcomments
-  marker, slurring; news generation/retention/order.
-- [ ] **Audit: PvP + bounty board** — eligibility operators (bounty `<` vs
-  PvP `<=` off-by-one is deliberate — verify both), sleeper rules,
-  resolution, steal percentages, bounty costs/payouts vs `dag`.
+- [x] **Audit: the 8 forest events** — done 2026-07, **zero findings**.
+  Established the hook roster first: exactly eight stock modules register
+  the `forest` event (findgold, findgem, goldmine, fairy, glowingstream,
+  crazyaudrey, foilwench, darkhorse — `module_addeventhook` grep; sethsong
+  and cedrikspotions are inn hooks, not forest). All eight weigh `return
+  100` — darkhorse's tavern-mount zero can't fire stock (no stock mount
+  carries `findtavern`; the mounts table's last column is `mountdkcost`).
+  Verified 1=1: the 15% trigger (`e_rand(1,100) <= 15` ≡ our `0..100 <
+  15`), events rolling before the turn spend with sober-up first, findgold
+  `e_rand(10L, 50L)`, findgem +1, the goldmine 1–20 table (5 nothing / 5
+  gold `5L..20L` / 5 gems `1..round(L/7)+1` / 3 both `10L..40L` +
+  `1..round(L/3)+1` / 2 cave-in with the strict `< chance` race roll, +10%
+  exp on death, escape zeroing turns; the mount save/death arms are inert
+  stock — no `mine_*` objprefs seed), fairy (`e_rand(1,7)`: 1 → +1 turn
+  [`fftoaward` 1], 2–3 → +2 gems, 4–5 → +1 max HP [`hptoaward` 1, carrydk
+  1 — ours rides `dragon_hp_bonus`, which feeds `investment_points` exactly
+  like upstream's raw maxhp], 6–7 → specialty; gemless accept −1 turn;
+  decline free), glowingstream 1–10 (death+news / near-death clamp
+  `round(maxhp·0.1)` floor 1 / heal+turn / gem / turns-only 5–7 / default
+  heal), crazyaudrey (1/20 hedgehog +5, triple +2, pair +1, none −1 turn
+  or −1 charm at 0), foilwench (no-specialty dead-end, gemless mock,
+  gem → increment), darkhorse (opens the room). Bonus re-verification: the
+  stock mount seed confirms ff +1/+2/+3, atk ×1.2 for 20/40/60 rounds,
+  gems 6/10/16, feeding off (`allowfeed` 0), DK cost 0.
+- [x] **Audit: masters + dragon** — done 2026-07 (`train.php`,
+  `village.php`, `dragon.php`). **Five findings, all fixed in the same
+  step**:
+  1. **Master flux was uniform-under-cap** — upstream rolls the whole
+     budget then *clamps* (`min(e_rand(0,dk), round(dk*.25))`, a spike at
+     the cap). `scaled_master` now rolls-then-clamps; the dragon keeps the
+     uncapped uniform split (`partition_flux`, verified against
+     `dragon.php`'s `e_rand(0,points)` chain).
+  2. **Master fights allowed skills/flee/buffs/companions** — upstream is
+     `fightnav(false,false)` with `suspend_buffs/companions('allowintrain')`
+     and no stock companion sets the flag (seed: `allowintrain` 0,
+     `allowinpvp` 0, `allowinshades` 1 — so torments keep companions, ours
+     already did; the one flagged *buff* is the elf/troll racial one,
+     `allowintrain=1`, which ours matches via the stat-derivation race add —
+     see the PvP audit's finding 17). Now: single Attack row, Esc fights the
+     round ("pride"), no persistent-buff injection, companions benched.
+  3. **Truancy missing** (`village.php` `automaster` 1): entering the
+     square with `experience > exp_for_next_level(level+1)`, yard unseen,
+     level < 15 forces the challenge (courtesy full heal, news item, no
+     refusing). Now intercepted in `goto(Village)`;
+     `Character::truant()` carries the strict `>` test.
+  4. **Victory skipped `increment_specialty`** — upstream's win advances
+     the craft by one. Added to the victory arm.
+  5. **Victory skipped the companion level-up** (`companionslevelup` 1):
+     each companion gains its `*perlevel` growth and heals to full.
+     `Companion` grew serde-defaulted `attack/defense/hp_per_level` fields
+     (bakes from the mercenary tuples; summons 0, exactly upstream's
+     keyless skeleton).
+  Verified clean: the exp gate operators, seenmaster stamp/clear timing,
+  non-lethal defeat (full heal + taunted news), win rewards (+1 level /
+  +10 maxhp via derivation / +5 soulpoints / +1 atk/def via derivation /
+  full heal), master pick = highest `creaturelevel <= level` (ours: the
+  per-level table), dragon base 45/25/300, dragon toughening points
+  `at+de + (int)((maxhp−150)/5)` ≡ our `investment_points()` at level 15,
+  `round(·0.75)`, and the dragon fight keeping skills + companions (no
+  suspend calls in `dragon.php`).
+- [x] **Audit: new day** — done 2026-07 (`newday.php` top to bottom, plus
+  the full stock `newday`/`newday-runonce` hook roster and `dragon.php`'s
+  hand-off into it). **`newday.php` itself verified clean**: constants
+  (turns 10, interest `e_rand(101,110)/100` with the `>4`-unused-turns and
+  ≥100k gates — debtors always compound, gate 1 needs `goldinbank>=0`),
+  processing order (interest reads yesterday's turns before the refill),
+  watermark (`recentcomments=lasthit`), `age++` unconditional /
+  `resurrections++` while dead, buff strip with `survivenewday`, the
+  resurrection flag's exact skips (playerfights/soulpoints/gravefights),
+  spirits `e_rand(-1,1)×2` with the −6 paid-res dock, and every hook:
+  drinks (harddrinks/hangover>66 −1 turn floor 0/drunkeness), lovers
+  (flirt reset + the Violet-marriage charm dock), sethsong / fivesix /
+  outhouse / crazyaudrey daily prefs, the race hooks (human +2, elf/troll
+  rounds=-1 buffs ≡ our stat adds), the 3 specialty refreshers
+  (`(int)(skill/3)` +1 active), mount ff + buff rounds, `fedmount` (inert,
+  `allowfeed` 0), and both runonce hooks (crazyaudrey rotation default −1,
+  cedrikspotions `random` default 0 — inert stock). **Three findings (13,
+  14, 15 below), 13+14 fixed in-step**; Audrey's village zoo (16) filed to
+  the missing-feature sweep. (Split out of the masters+dragon step.)
+- [x] **Audit: commentary + daily news** — done 2026-07 (`lib/commentary.php`
+  + every stock `commentdisplay` call + `drinks/drunkenize.php` + `news.php`
+  vs `commentary.rs`/svc/state/ui). **Zero deviations found**; verified 1=1:
+  the venue table (village 25/inn 20/darkhorse 10-default/shade 25 from both
+  sides/gardens+rock 30/waiting+clan 25, verbs says/whispers/boasts/projects/
+  despairs/customsay — `grassyfield` has **no stock venue**, moderation-only,
+  correctly absent; lodge/motd/superuser/petition out of scope), the
+  allowance (`round(limit/2)` ≡ `div_ceil`, counted among the newest window
+  so scrolled-out posts free you, clan-* exempt, waiting not, the <3-left
+  counter, the view-gate/talkform-gate pair collapsing to one outcome), post
+  prep (trim, silence rejection incl. bare markers, the 45-run break with
+  the consumed-breaker restart, non-says verb baking with the emote
+  escape, maxlength `200-(verb+11)`), the double-post check against the
+  live newest row, the drinks hook at upstream's exact hook point (>50
+  "drunkenly" verb, slur at any drunkenness, emotes skipped) and
+  `drunkenize` replacement-for-replacement (rate `len·drunk/500`, 9:1
+  letter:hic, first-occurrence compounding, case-matched slurs, the five
+  hic stagger shifts, adjacent-hic collapse), pagination (comscroll pages,
+  First Unseen `round(c/limit+0.5)-1` half-away, refresh/post landing on
+  page 0), the day-granular watermark marker (documented ≤1-day-coarser
+  deviation; `count_since_day` errs the same direction), and news
+  (view-time prune at `expirecontent` 180, one calendar day per page,
+  newest first, the empty-day line; the 50/page pager stands in as a
+  200-cap, self-documented). The new-day audit's `recentcomments` note was
+  fixed here instead: a kill now zeroes `comments_seen_before_day` and a
+  still-owed dawn keeps the epoch stamp through `roll_new_day`, upstream's
+  everything-is-new post-kill day. One nit filed (drunkenize strpos-0).
+- [x] **Audit: PvP + bounty board** — done 2026-07 (`pvp.php`,
+  `lib/pvplist.php`, `lib/pvpsupport.php`, `lib/pvpwarning.php`,
+  `battle.php`'s pvp branches + `apply_bodyguard`, `lib/inn/
+  inn_bartender.php`, `modules/dag.php` + `modules/dag/{dohook,run,
+  misc_functions}.php`, the race modules' `pvpadjust`/`racialbenefit`
+  hooks). **Zero mechanical deviations**; verified 1=1 operator by
+  operator: the two eligibility tests (PvP list/warning `age<=5 &&
+  exp<=1500` vs Dag's strict `age<5 && exp<1500` plus the level-3 floor —
+  the deliberate off-by-one confirmed on both sides), the list band
+  `[-1,+2]` vs the engage's `abs(diff)<=2`, the 600s dogpile window (`>`
+  boundary ≡ ours `<`), the offline window + alive + presence semantics,
+  engage refusal order and the attack spent at engage, full-health sleeper
+  off stored stats, bodyguard(1) 1.05/0.95 inn-only whole-fight, the 50/50
+  surprise, run/skill conversion, `pvpvictory` (fresh-purse min, `round(10
+  ·lvl·ln(max(1,gold)))`, 10% exp + `round(base·(1+.1·Δlvl))−base` bonus,
+  attacker level-15 double-zero, victim −5% engage exp with bank absorb,
+  staunch at 1, news + mail-as-report), `pvpdefeat` (sleeper collects off
+  the attacker's level + fresh purse, the `$wonamount` typo paying gold
+  past a level-15 defender kept 1=1, exp 10% zeroed at 15, the
+  leveled-down guard, attacker gold-0/−15%-exp/graveyard, taunted news),
+  playerfights 3/day dawn-only refill, and the whole Dag flow (fee
+  `round(amt·1.10)`, min `50·lvl` strict `<`, cap `200·lvl` strict `>`
+  counting immature rows, 5/day reset on every new day, `e_rand(0,14400)`
+  inclusive maturity delay, matured-only list/collection/own-head,
+  self-set contracts forfeited-but-open, collection inside the victory
+  settlement only and exempt from the level-15 zeroing, dragon-kill/
+  deletion closure to the house, lazy stray sweep, 18-day prune, level-
+  then-amount default sort). **Two findings, both doc-level (17, 18
+  below), fixed in-step**; the port's code is untouched.
 - [ ] **Audit: missing-feature sweep** — walk every player-reachable
   `addnav()` in village/forest/inn/graveyard/shades + every module's
   install default; list stock-on features with no port counterpart (this
-  sweep caught bank transfers last time). Reverse direction too.
+  sweep caught bank transfers last time). Reverse direction too. Already
+  queued by the new-day audit (finding 16): **Crazy Audrey's village
+  petting zoo** (`crazyaudrey.php` `village-desc`/`village` hooks,
+  `villagepercent` 20): 20% of village visits offer "pet" for 5 gold
+  (`cost`) → a 5-round ×1.05 defense buff, then the basket game gated
+  once/day by the `played` pref (its newday reset is what upstream's
+  `newday` hook is for — the *forest* event is ungated and already 1=1).
 - [ ] **Audit: licensing sweep** — every player-visible string in the port
   vs upstream prose/names; distinctive matches only, generic English is
   at most a nit.
@@ -1349,7 +1550,7 @@ Re-verify everything anyway before fixing (step 3 above).
 
 Verified:
 
-1. **Title ladder compressed 32 → 10 tiers** — `data.rs:811` vs installer
+1. **FIXED** — **Title ladder compressed 32 → 10 tiers** — `data.rs:811` vs installer
    titles seed (`lib/installer/installer_sqlstatements.php:810-841`) +
    `lib/titles.php:25-72` + `dragon.php:178,212`. Upstream promotes at
    *every* dk 0..31; the port only at 0,1,2,3,4,5,7,10,15,20 — no promotion
@@ -1357,71 +1558,137 @@ Verified:
    under our own names-original/numbers-exact rule. Related: the port gates
    the title news/log on `title != old_title` (`state.rs:3506,3520`) while
    upstream fires it on every kill (`dragon.php:238-242`).
-2. **Skeleton Warrior +0.5 atk/def** — `specialty.rs:121-122` adds an outer
+2. **FIXED** — **Skeleton Warrior +0.5 atk/def** — `specialty.rs:121-122` adds an outer
    `.round()` upstream doesn't have (`specialtydarkarts.php:177-178` stores
    floats ending in .5; the engine consumes them un-rounded). Fix: store
    companion stats as f64 or halve-adjust; HP formula already matches.
-3. **Regen aura under-heals companions** — `combat.rs:503` truncating
+3. **FIXED** — **Regen aura under-heals companions** — `combat.rs:503` truncating
    `total_regen / 3` vs upstream `(int)round(regen/3)`
    (`lib/battle-buffs.php:151`): 1 HP short at levels 2, 5, 8, 11, …
-4. **Dragon approach screen missing** — upstream `forest.php:38-52` offers
+4. **FIXED** — **Dragon approach screen missing** — upstream `forest.php:38-52` offers
    enter-the-cave vs run-away; declining costs 1 charm
    (`lib/inn/inn_default.php:30-34`), and once inside there is **no** flee
    (`dragon.php:254-258,295`, `fightnav(false)`). The port
    (`state.rs:2956`) jumps straight into `Mode::Fight` with a free 1-in-3
    flee row. Fix: add the approach screen (decline ⇒ −1 charm, floor 0)
    and remove the flee row from the dragon fight.
-5. **Companion healing absent at the healer's hut** — upstream heals
+5. **FIXED** — **Companion healing absent at the healer's hut** — upstream heals
    companions at healer *and* merc camp (`healer.php:78-117`); the port
    only at the merc camp. Formula already ported (`model.rs:2164`);
    PARITY.md's "here and at the healer" claim is currently false.
-6. **Bank moves are all-or-max only** — `state.rs:3711-3749` hardcodes
+6. **FIXED** — **Bank moves are all-or-max only** — `state.rs:3711-3749` hardcodes
    deposit-all / withdraw-all / borrow-max; upstream `bank.php` takes a
    typed amount for each (0/blank = all). The transfer window already has
    `talk_input`, so the input shape exists. Undocumented asymmetry.
-7. **CONTEXT.md:57 stale stat formulas** — `max_hp`/`attack`/`defense`
+7. **FIXED** — **CONTEXT.md:57 stale stat formulas** — `max_hp`/`attack`/`defense`
    summary omits `vitality_hp` and the race `1+level/5` adds that
    `model.rs:1025-1043` applies.
-8. **Clan detail page columns** — `state.rs:6064-6080` renders Lv and drops
+8. **FIXED** — **Clan detail page columns** — `state.rs:6064-6080` renders Lv and drops
    Join Date; upstream `lib/clan/detail.php:60-91` (and PARITY.md:1098's
    own spec) is rank/name/DKs/joined.
 
 Single-trace (finder confident, no second agent yet):
 
-9. **Field-medic deals attack damage** — `combat.rs:460-469` lets every
+9. **FIXED** — **Field-medic deals attack damage** — `combat.rs:460-469` lets every
    living companion swing; upstream's heal-ability branch never applies
    `damage_done` to the foe (riposte only, `lib/extended-battle.php:297-311`).
    The port's medic is a heal+DPS unit upstream doesn't have.
-10. **Power-move bonus truncates its bounds** — `combat.rs:321-323` uses
+10. **FIXED** — **Power-move bonus truncates its bounds** — `combat.rs:321-323` uses
     `as i32` on `patkroll/4` and `/2`; upstream `e_rand` rounds its args
     (`lib/battle-skills.php:113`, `lib/e_rand.php:12,14`). Port bonus is
     biased ~1 low on nearly every power move.
-11. **Creature gold rows off by one** — `data.rs:90` L5 gold 198 (formula
+11. **FIXED** — **Creature gold rows off by one** — `data.rs:90` L5 gold 198 (formula
     says 199) and `data.rs:97` L6 gold 234 (formula says 233) vs
     `creature_gold()` in `lib/creatures.php`. Transcription typos; all
     other levels verified exact.
-12. **Clan succession notice lost** — `svc.rs:1944-1961` builds the
+12. **FIXED** — **Clan succession notice lost** — `svc.rs:1944-1961` builds the
     resignation-notice list from pre-promotion ranks; upstream
     (`lib/clan/clan_withdraw.php:17-48`) promotes first then re-reads, so a
     plain member inheriting leadership gets the mail there but not here.
 
+New-day audit (2026-07, solo step):
+
+13. **FIXED** — **Dragon-kill reset too shallow** — `dragon.php:96-175`'s
+    DESCRIBE loop reverts every accounts column outside `$nochange` (and no
+    stock module extends `dk-preserve`): `goldinbank` (debt included),
+    `deathpower`, `hauntedby`, `race`, and `specialty` all reset to column
+    defaults; the port kept all five across a kill. A banked fortune, favor,
+    and the race/specialty choices survived a DK here and don't upstream.
+    Fixed in `slay_dragon`: all five wiped; the race gate re-arms every run
+    and the village specialty chooser re-arms via `Specialty::None`.
+14. **FIXED** — **No forced new day after a dragon kill** — the field loop
+    wipes `lasthit`, so upstream's next page load runs `newday.php` in full
+    once its gates pass: fresh turns (10 + dkff + race + spirits), age → 1,
+    full heal, soulpoints 55, grave fights 10, PvP fights 3, the daily
+    hooks. The port limped on the old day's leftover turns and pools until
+    the next calendar dawn. Fixed: `slay_dragon` sets `dawn_owed`, settled
+    by `Character::dawn` when the spend/race gates close (`settle_dawn`);
+    the load path now defers `roll_new_day` while any gate is pending,
+    matching upstream's gates-then-day order (so a just-chosen race's bonus
+    fights count into that first day's assembly).
+15. **FIXED** — **The passive dawn was silent** — upstream's new-day page
+    announces the day, turns, interest, spirits, hangover, and the breakup;
+    the port's load-path dawn surfaced only the haunt (the divorce made the
+    news but said nothing to the divorcee). Now a dawn line plus
+    hangover/divorce lines ride the report drain, and the deferred/owed
+    path logs the same set. Interest/spirits aren't itemized per-number —
+    a deliberate log-noise call, cosmetic only.
+16. **Missing: Crazy Audrey's village petting zoo** — stock feature with no
+    port counterpart; filed to the missing-feature sweep step (details in
+    its queue entry). The zoo is why upstream's `newday` hook resets the
+    `played` pref; the forest basket event is ungated and already 1=1.
+
+PvP + bounty audit (2026-07, solo step; both doc-level, fixed in-step):
+
+17. **FIXED (docs)** — **"Nothing stock sets `allowinpvp`" was false**:
+    `raceelf.php:128-129` / `racetroll.php:140-141` give the
+    `racialbenefit` buff `allowinpvp=1` and `allowintrain=1`, so upstream's
+    attacker keeps the elf/troll bonus in PvP and in master fights. The
+    port's *behavior* was already exact — the race add lives in
+    `attack()`/`defense()` (both PvP sides, master fights, the intel
+    sheet), which is precisely what the flags produce — but PARITY's PvP
+    correction 5, the masters-audit bullet, CONTEXT.md's two claims, and
+    two `state.rs` comments all overstated "nothing". All corrected; every
+    other stock buff (mounts' seed array, drinks' column set, the lover's
+    ward) carries no flag and is rightly shelved, and every stock
+    companion seeds `allowinpvp=0`/`allowintrain=0`.
+18. **Documented deviation** — **the immunity warning shows on both target
+    lists**; upstream calls `pvpwarning()` only in `pvp.php` (the fields
+    list) — `inn.php` requires the lib but never calls it, so upstream's
+    inn list warns nobody. Ours warns at both venues (informational only;
+    the forfeit fires identically at engage). Kept deliberately and noted
+    on the warning bullet.
+
 Nits (fix only if already in the file; none block parity):
 
-- Slumming nav shown at level 1 (`state.rs:6553` vs `lib/forest.php:15`);
-  mechanically identical at level 1, nav-visibility only.
+- ~~Slumming nav shown at level 1 (`state.rs:6553` vs `lib/forest.php:15`);
+  mechanically identical at level 1, nav-visibility only.~~ Fixed with the
+  dragon-approach step (the row hides below level 2).
 - HoF wealth percentile reuses the display fuzz instead of an independent
   re-fuzz (`state.rs:6471` vs `hof.php:162`); same distribution, cosmetic.
 - Earth Fist drops upstream's `areadamage` flag — inert in our
   single-target combat model.
-- Clan founding checks the fee before name/tag uniqueness
+- ~~Clan founding checks the fee before name/tag uniqueness
   (`state.rs:5505-5519` vs `lib/clan/applicant_new.php:38-56`); refusal
-  message order only, but PARITY.md:1117 "upstream's order" overstates.
+  message order only, but PARITY.md:1117 "upstream's order" overstates.~~
+  Doc corrected with the docs step (behavior unchanged, order-only).
 - Healer-companion targeting picks most-wounded vs upstream's
   first-other-then-self order (`state.rs:3108-3125`); reachable only with
   medic + summoned skeleton.
-- `bell_rand` is a continuous inverse-normal approximation of upstream's
+- Upstream's stat rail shows the day's spirits label (`pageparts.php:667`,
+  Very Low..Very High, "DEAD" while dead); the port doesn't store or render
+  the spirits roll after the dawn message. Cosmetic.
+- `drunkenize`'s adjacent-hic collapse uses `while (strpos(...))`, whose PHP
+  falsy-0 skips a `*hic**hic*` at position 0; the port's `contains` loop
+  collapses it there too. Upstream-bug direction, kept.
+- A fresh character's first day is seeded flat (10 turns, no spirits/race
+  roll — `Character::new` documents it) where upstream rolls a real first
+  `newday.php` at first login. Day-1-only, and the race gate precedes the
+  first roll anyway now; left as-is.
+- ~~`bell_rand` is a continuous inverse-normal approximation of upstream's
   441-row percentile table; z deltas ≲0.002 never move truncated integer
-  damage. Consider a one-line disclosure in "Already 1=1".
+  damage. Consider a one-line disclosure in "Already 1=1".~~ Disclosure
+  added with the docs step.
 
 Clean under the sweep (audited, zero findings): Dark Horse (all three games
 + enemy intel), graveyard/favor/resurrection/haunt, outhouse/gypsy/gardens,
