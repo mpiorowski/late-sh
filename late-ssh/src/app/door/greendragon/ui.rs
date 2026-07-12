@@ -180,8 +180,14 @@ fn draw_main(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
 }
 
 fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
+    let title = if state.zoo_village_pending() {
+        // The basket game launched from Audrey's zoo isn't a forest happening.
+        "Crazy Audrey's Baskets"
+    } else {
+        panel_title(state.mode())
+    };
     let mut lines = vec![Line::from(Span::styled(
-        panel_title(state.mode()),
+        title,
         Style::default()
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
@@ -289,11 +295,28 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         && let Some(event) = state.pending_event()
     {
         lines.push(Line::raw(""));
-        for line in event.present(c).intro {
-            lines.push(Line::from(Span::styled(
-                line,
-                Style::default().fg(theme::TEXT_DIM()),
-            )));
+        if state.zoo_village_pending() {
+            // Audrey's village game reframes the same baskets in the square
+            // (`crazyaudrey_baskets` op=baskets vs the forest wording).
+            for line in [
+                "You reach for the lid of one of Crazy Audrey's baskets while she seems",
+                "distracted - but she appears out of nowhere, ranting about colored",
+                "kittens, and pulls the baskets close. Questioned, she turns suddenly",
+                "lucid: three baskets, four kittens in each. Two alike and you'll have",
+                "a salve of energy; none alike, and it's early to bed for you.",
+            ] {
+                lines.push(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(theme::TEXT_DIM()),
+                )));
+            }
+        } else {
+            for line in event.present(c).intro {
+                lines.push(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(theme::TEXT_DIM()),
+                )));
+            }
         }
     }
 

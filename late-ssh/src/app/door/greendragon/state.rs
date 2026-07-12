@@ -730,6 +730,12 @@ impl State {
         self.pending_event
     }
 
+    /// The pending event is Audrey's *village* basket game, so the panel
+    /// frames the square rather than a forest clearing.
+    pub fn zoo_village_pending(&self) -> bool {
+        self.zoo_from_village && self.pending_event == Some(ForestEvent::PettingZoo)
+    }
+
     /// The news page being viewed: `(days back, lines)`. `None` lines mean the
     /// page is still loading.
     pub fn news_page(&self) -> (i64, Option<&[String]>) {

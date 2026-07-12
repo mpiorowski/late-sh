@@ -1529,16 +1529,40 @@ Audit + fix steps (not reached by the sweep):
   deletion closure to the house, lazy stray sweep, 18-day prune, level-
   then-amount default sort). **Two findings, both doc-level (17, 18
   below), fixed in-step**; the port's code is untouched.
-- [ ] **Audit: missing-feature sweep** — walk every player-reachable
-  `addnav()` in village/forest/inn/graveyard/shades + every module's
-  install default; list stock-on features with no port counterpart (this
-  sweep caught bank transfers last time). Reverse direction too. Already
-  queued by the new-day audit (finding 16): **Crazy Audrey's village
-  petting zoo** (`crazyaudrey.php` `village-desc`/`village` hooks,
-  `villagepercent` 20): 20% of village visits offer "pet" for 5 gold
-  (`cost`) → a 5-round ×1.05 defense buff, then the basket game gated
-  once/day by the `played` pref (its newday reset is what upstream's
-  `newday` hook is for — the *forest* event is ungated and already 1=1).
+- [x] **Audit: missing-feature sweep** — done 2026-07. Walked every
+  player-reachable `addnav()` in `village.php`, `lib/forest.php` +
+  `forest.php`, `inn.php` + `lib/inn/*`, `graveyard.php` +
+  `lib/graveyard/case_*`, `shades.php`, and every stock module's hook set
+  (all 24 modules enumerated; their full `module_addhook` surface checked
+  against the port). **One missing feature found — finding 16's petting
+  zoo, already queued — and implemented in-step** (see below). Everything
+  else accounted for: the eight forest events, the three inn modules +
+  dag + potions + drinks, the races (racedwarf's `village` hook is its
+  cities-gated dwarf-city tavern; the bear rides our merc camp as
+  documented), gardens/rock/gypsy/news/list/hof/bank(+transfers)/train/
+  shops/healer/stables/merc/clans/pvp. Village navs with no port
+  counterpart are all site tooling or non-stock: petition/FAQ, prefs,
+  referral (donator), the lodge (donator), `pavilion.php` (nav is gated on
+  a file that doesn't ship), moderation/superuser rows, bio links
+  (documented dropped with the roster), mail (resolved: reports). Reverse
+  direction re-confirmed: everything original-to-us is documented as such
+  (bandit purse-cut, the shared one-liner pool, stake ladders, the
+  rewards wiring).
+  **The zoo as implemented** (`crazyaudrey.php`, line-by-line): 20% roll
+  per village entry (`e_rand(1,100) <= villagepercent` 20); "pet" for 5
+  gold (`cost`; an empty purse wanders off free) → `apply_buff` slot
+  "zoo": defense ×1.05, 5 rounds (a re-pet replaces it); each pet re-opens
+  the basket offer unless `played` is set, in which case she recognizes
+  you and screams (still charged, still buffed). Playing the baskets sets
+  `zoo_played_today` (reset by her `newday` hook — ours in the shared
+  new-day effects, resurrection days included); *running away doesn't*,
+  and upstream's basket nav lives only on the pet page — ours clears the
+  offer on leaving the square. The game itself reuses the forest event's
+  resolver (identical odds: 1-in-20 all-hedgehogs +5, triple +2, pair +1,
+  none −1 turn or −1 charm at 0 turns), lands back in the square, and the
+  forest event stays ungated. Deliberate omission: her **profit basket**
+  (`profit`, a global cosmetic counter shown on the sign) — pure flavor
+  with no mechanical effect; the sign shows the price only.
 - [ ] **Audit: licensing sweep** — every player-visible string in the port
   vs upstream prose/names; distinctive matches only, generic English is
   at most a nit.
@@ -1633,10 +1657,12 @@ New-day audit (2026-07, solo step):
     hangover/divorce lines ride the report drain, and the deferred/owed
     path logs the same set. Interest/spirits aren't itemized per-number —
     a deliberate log-noise call, cosmetic only.
-16. **Missing: Crazy Audrey's village petting zoo** — stock feature with no
-    port counterpart; filed to the missing-feature sweep step (details in
-    its queue entry). The zoo is why upstream's `newday` hook resets the
-    `played` pref; the forest basket event is ungated and already 1=1.
+16. **FIXED** — **Missing: Crazy Audrey's village petting zoo** — stock
+    feature with no port counterpart; implemented 2026-07 with the
+    missing-feature sweep step (the full spec and one cosmetic omission
+    are recorded on that step's queue entry). The zoo is why upstream's
+    `newday` hook resets the `played` pref; the forest basket event is
+    ungated and was already 1=1.
 
 PvP + bounty audit (2026-07, solo step; both doc-level, fixed in-step):
 
@@ -1701,6 +1727,10 @@ HoF, forest spawn/jitter/payouts, bank formulas + transfers, clans core
 
 - Donator lodge, referrals, translation/admin tooling, logdnet, holiday
   modules, `cities`/travel (add-on, not stock core), petitions/moderation UI.
+- Site-account tooling with no in-door meaning: `prefs.php` (display/email
+  preferences), `bio.php` character bios (the roster's bio links are a
+  documented drop), `pavilion.php` (village nav gated on a file 1.1.2
+  doesn't ship).
 - **The "King's tournament" / jousting**: long carried here as "the phase-4
   tail", but verified 2026-07 to be **absent from stock 1.1.2** — no
   tournament module ships; the only trace is `source.php:85` hiding
