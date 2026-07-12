@@ -1438,7 +1438,7 @@ fn ensure_chat_rows_cache(
             .flatten();
         let is_system = system_text.is_some();
 
-        if !first && !is_continuation && !(is_system && prev_was_system) {
+        if !(first || is_continuation || is_system && prev_was_system) {
             all_rows.push(Line::from(""));
             row_message.push(None);
             row_kind.push(RowKindLite::Blank);
