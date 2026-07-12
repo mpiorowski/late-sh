@@ -273,8 +273,12 @@ async fn finished_match_posts_a_lounge_result_line() {
 
     assert_eq!(event.user_id, Some(black), "attributed to the winner");
     assert!(
-        matches!(&event.kind, ActivityKind::DailyResult { game } if game == "Chess"),
-        "expected a Chess DailyResult, got {:?}",
+        matches!(
+            &event.kind,
+            ActivityKind::DailyResult { game, match_id }
+                if game == "Chess" && *match_id == claimed.id
+        ),
+        "expected a Chess DailyResult for this match, got {:?}",
         event.kind
     );
     assert!(

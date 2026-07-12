@@ -1894,7 +1894,11 @@ impl ChatService {
 
     async fn send_report(&self, user_id: Uuid, kind: ReportKind, text: String) -> Result<()> {
         let client = self.db.get().await?;
-        let room = ChatRoom::find_non_dm_by_slug(&client, kind.slug())
+        // Resolve only the public report room. Slugs are not globally unique
+        // (a private topic room or a game room may share one), so a loose
+        // slug lookup could leak the report into, and join the reporter to,
+        // whichever same-slug row happened to come back first.
+        let room = ChatRoom::find_topic_room(&client, "public", kind.slug())
             .await?
             .ok_or_else(|| anyhow::anyhow!("room #{} not found", kind.slug()))?;
         ChatRoomMember::join(&client, room.id, user_id).await?;

@@ -933,6 +933,7 @@ impl DailyService {
         // a finished (claimed) match, but guard rather than assume.
         if let Some(opponent) = opponent_id {
             self.activity.daily_result_task(
+                match_id,
                 game.display_name(),
                 challenger_id,
                 opponent,

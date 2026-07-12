@@ -121,7 +121,7 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::GameStarted { game } => format!("started:{}", game.key()),
         ActivityKind::BossSlain { game, boss } => format!("boss:{}:{boss}", game.key()),
         ActivityKind::SatDown { game } => format!("sat:{}", game.key()),
-        ActivityKind::DailyResult { game } => format!("daily:{game}"),
+        ActivityKind::DailyResult { game, match_id } => format!("daily:{game}:{match_id}"),
         ActivityKind::GameWon { game, .. } => format!("won:{}", game.key()),
         ActivityKind::GameEvent { game, detail } => format!("event:{}:{detail}", game.key()),
         ActivityKind::GamePlayed { game, .. } => format!("played:{}", game.key()),
@@ -165,6 +165,20 @@ async fn ensure_system_user(db: &Db, username_directory: &UsernameDirectory) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daily_results_dedupe_per_match_not_per_game() {
+        let mut recent = HashMap::new();
+        let winner = Uuid::now_v7();
+        let first = ActivityEvent::daily_win(winner, "mira", "bob", "Chess", Uuid::now_v7());
+        assert!(!is_repeat(&mut recent, &first));
+        // A re-emit of the same finished match stays deduped...
+        assert!(is_repeat(&mut recent, &first));
+        // ...but a second match the same winner finishes at the same game is
+        // its own line: the contract is one announcement per match.
+        let second = ActivityEvent::daily_win(winner, "mira", "carol", "Chess", Uuid::now_v7());
+        assert!(!is_repeat(&mut recent, &second));
+    }
 
     #[test]
     fn repeat_window_drops_same_shape_and_keeps_distinct() {

@@ -2935,7 +2935,6 @@ impl ChatState {
         self.drain_username_directory();
         self.drain_snapshot();
         self.drain_pinned_messages();
-        let clipboard_banner = self.expire_pending_clipboard_image_upload();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_banner = self.feeds.tick();
@@ -2944,8 +2943,7 @@ impl ChatState {
         let showcase_banner = self.showcase.tick();
         let work_banner = self.work.tick();
         self.flush_pending_read_cursors_if_due();
-        clipboard_banner
-            .or(moderation_banner)
+        moderation_banner
             .or(banner)
             .or(feeds_banner)
             .or(news_banner)

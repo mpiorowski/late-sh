@@ -32,6 +32,17 @@ impl App {
         self.sync_visible_chat_room();
         self.tick_clubhouse();
 
+        // Expire a stale paired-clipboard wait here rather than inside
+        // chat.tick(): the registry slot must be cancelled along with it, so
+        // a late CLI response can't satisfy a newer request or an armed slot
+        // linger after the banner already reported the timeout.
+        if let Some(b) = self.chat.expire_pending_clipboard_image_upload() {
+            if let Some(registry) = &self.paired_client_registry {
+                registry.cancel_clipboard_request(&self.session_token);
+            }
+            self.banner = Some(b);
+        }
+
         // Services
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);

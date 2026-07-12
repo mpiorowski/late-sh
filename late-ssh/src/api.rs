@@ -69,9 +69,19 @@ enum WsPayload {
         icecast_output_available: bool,
     },
     #[serde(rename = "clipboard_image")]
-    ClipboardImage { data_base64: String },
+    ClipboardImage {
+        data_base64: String,
+        /// Echo of the `request_id` this payload answers. None from older
+        /// CLIs that predate the field.
+        #[serde(default)]
+        request_id: Option<u64>,
+    },
     #[serde(rename = "clipboard_image_failed")]
-    ClipboardImageFailed { message: String },
+    ClipboardImageFailed {
+        message: String,
+        #[serde(default)]
+        request_id: Option<u64>,
+    },
     #[serde(rename = "player_state")]
     PlayerState(PlayerStateReport),
     #[serde(rename = "voice_state")]
@@ -504,21 +514,33 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 }
                                 continue;
                             }
-                            WsPayload::ClipboardImage { data_base64 } => {
-                                if !state.paired_client_registry.take_clipboard_request(&token) {
+                            WsPayload::ClipboardImage {
+                                data_base64,
+                                request_id,
+                            } => {
+                                if !state
+                                    .paired_client_registry
+                                    .take_clipboard_request(&token, request_id)
+                                {
                                     tracing::warn!(
                                         token_hint = %token_hint,
-                                        "dropping unsolicited clipboard image payload"
+                                        "dropping unsolicited or stale clipboard image payload"
                                     );
                                     continue;
                                 }
                                 decode_clipboard_image_message(data_base64)
                             }
-                            WsPayload::ClipboardImageFailed { message } => {
-                                if !state.paired_client_registry.take_clipboard_request(&token) {
+                            WsPayload::ClipboardImageFailed {
+                                message,
+                                request_id,
+                            } => {
+                                if !state
+                                    .paired_client_registry
+                                    .take_clipboard_request(&token, request_id)
+                                {
                                     tracing::warn!(
                                         token_hint = %token_hint,
-                                        "dropping unsolicited clipboard image failure"
+                                        "dropping unsolicited or stale clipboard image failure"
                                     );
                                     continue;
                                 }

@@ -2,7 +2,7 @@ use late_core::MutexRecover;
 use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
 use serde::Serialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -33,7 +33,14 @@ pub enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
-    RequestClipboardImage,
+    /// Ask a capable CLI to read its clipboard image. `request_id` is echoed
+    /// back in the `clipboard_image`/`clipboard_image_failed` payload so a
+    /// late response to a timed-out request can't satisfy a newer one. Old
+    /// CLIs ignore the field and echo nothing; the server then falls back to
+    /// token-level matching.
+    RequestClipboardImage {
+        request_id: u64,
+    },
     /// Per-user setting: tell paired clients which audio source the user wants
     /// to hear. Server is the source of truth (persisted in
     /// `users.settings.audio_source`). Browsers swap their playback element;
@@ -76,10 +83,14 @@ pub struct PairedClientRegistry {
     clients: Arc<Mutex<HashMap<String, Vec<PairControlEntry>>>>,
     next_id: Arc<AtomicU64>,
     icecast_base_url: Arc<String>,
-    /// Tokens with an outstanding `RequestClipboardImage`. Inbound clipboard
-    /// payloads are dropped unless their token holds a slot here, so a rogue
-    /// paired client cannot queue multi-MB images into the session channel.
-    clipboard_requests: Arc<Mutex<HashSet<String>>>,
+    /// Tokens with an outstanding `RequestClipboardImage`, mapped to that
+    /// request's id. Inbound clipboard payloads are dropped unless their
+    /// token holds a slot here (so a rogue paired client cannot queue
+    /// multi-MB images into the session channel), and an echoed id that
+    /// doesn't match the slot is a late answer to an older, timed-out
+    /// request and is dropped too.
+    clipboard_requests: Arc<Mutex<HashMap<String, u64>>>,
+    next_clipboard_request_id: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -109,6 +120,7 @@ impl PairedClientRegistry {
             next_id: Arc::default(),
             icecast_base_url: Arc::new(icecast_base_url.into()),
             clipboard_requests: Arc::default(),
+            next_clipboard_request_id: Arc::default(),
         }
     }
 
@@ -379,7 +391,14 @@ impl PairedClientRegistry {
         let Some(tx) = tx else {
             return false;
         };
-        if tx.send(PairControlMessage::RequestClipboardImage).is_err() {
+        let request_id = self
+            .next_clipboard_request_id
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        if tx
+            .send(PairControlMessage::RequestClipboardImage { request_id })
+            .is_err()
+        {
             tracing::warn!(
                 token_hint = %token_hint(token),
                 "failed to send paired clipboard image request"
@@ -388,16 +407,36 @@ impl PairedClientRegistry {
         }
         self.clipboard_requests
             .lock_recover()
-            .insert(token.to_string());
+            .insert(token.to_string(), request_id);
         true
     }
 
     /// Consume the outstanding clipboard request for `token`, if any. Called
     /// by the pair WS handler before it accepts an inbound clipboard image or
     /// failure payload; a `false` return means the payload is unsolicited and
-    /// must be dropped.
-    pub fn take_clipboard_request(&self, token: &str) -> bool {
-        self.clipboard_requests.lock_recover().remove(token)
+    /// must be dropped. `request_id` is the id the client echoed back (None
+    /// from older CLIs that don't echo). An echo for a different id is a late
+    /// answer to an already-replaced request: it is refused and the slot
+    /// stays armed for the response still owed.
+    pub fn take_clipboard_request(&self, token: &str, request_id: Option<u64>) -> bool {
+        let mut requests = self.clipboard_requests.lock_recover();
+        let Some(&outstanding) = requests.get(token) else {
+            return false;
+        };
+        match request_id {
+            Some(echoed) if echoed != outstanding => false,
+            _ => {
+                requests.remove(token);
+                true
+            }
+        }
+    }
+
+    /// Drop the outstanding clipboard request for `token`. Called when the
+    /// session-side wait times out, so the slot doesn't stay armed forever
+    /// and a late response can't be accepted as if it were fresh.
+    pub fn cancel_clipboard_request(&self, token: &str) {
+        self.clipboard_requests.lock_recover().remove(token);
     }
 
     /// Update every entry for `user_id` to the new audio source and push
@@ -754,10 +793,10 @@ mod tests {
         );
 
         assert!(registry.request_clipboard_image("tok1"));
-        assert_eq!(
+        assert!(matches!(
             cli_rx.try_recv().unwrap(),
-            PairControlMessage::RequestClipboardImage
-        );
+            PairControlMessage::RequestClipboardImage { .. }
+        ));
         assert!(browser_rx.try_recv().is_err());
     }
 
@@ -787,14 +826,14 @@ mod tests {
 
         assert!(!registry.request_clipboard_image("tok1"));
         assert!(browser_rx.try_recv().is_err());
-        assert!(!registry.take_clipboard_request("tok1"));
+        assert!(!registry.take_clipboard_request("tok1", None));
     }
 
     #[test]
     fn paired_client_clipboard_request_consumed_once() {
         let registry = PairedClientRegistry::new("https://audio.late.sh");
 
-        let (cli_tx, _cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
         let cli_id = registry.register(
             "tok1".to_string(),
             cli_tx,
@@ -816,18 +855,36 @@ mod tests {
         );
 
         // No request outstanding yet: inbound payloads must be rejected.
-        assert!(!registry.take_clipboard_request("tok1"));
+        assert!(!registry.take_clipboard_request("tok1", None));
 
         assert!(registry.request_clipboard_image("tok1"));
         // First inbound payload consumes the slot; a second one is
         // unsolicited and gets dropped by the WS handler.
-        assert!(registry.take_clipboard_request("tok1"));
-        assert!(!registry.take_clipboard_request("tok1"));
+        assert!(registry.take_clipboard_request("tok1", None));
+        assert!(!registry.take_clipboard_request("tok1", None));
+
+        // An echoed id must match the outstanding request: a late answer to
+        // an older request is refused and leaves the slot armed, then the
+        // matching echo lands.
+        assert!(registry.request_clipboard_image("tok1"));
+        let _first_request = cli_rx.try_recv().expect("first request message");
+        let current = match cli_rx.try_recv() {
+            Ok(PairControlMessage::RequestClipboardImage { request_id }) => request_id,
+            other => panic!("unexpected pair control message: {other:?}"),
+        };
+        assert!(!registry.take_clipboard_request("tok1", Some(current - 1)));
+        assert!(registry.take_clipboard_request("tok1", Some(current)));
+
+        // A timed-out request is cancelled server-side: even a correctly
+        // echoed late response is then unsolicited.
+        assert!(registry.request_clipboard_image("tok1"));
+        registry.cancel_clipboard_request("tok1");
+        assert!(!registry.take_clipboard_request("tok1", None));
 
         // Unregistering the last entry clears any stale outstanding request.
         assert!(registry.request_clipboard_image("tok1"));
         registry.unregister_if_match("tok1", cli_id);
-        assert!(!registry.take_clipboard_request("tok1"));
+        assert!(!registry.take_clipboard_request("tok1", None));
     }
 
     #[test]

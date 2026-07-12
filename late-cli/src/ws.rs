@@ -50,7 +50,12 @@ enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
-    RequestClipboardImage,
+    RequestClipboardImage {
+        /// Echoed back in the clipboard payload so the server can match the
+        /// response to this exact request. None from older servers.
+        #[serde(default)]
+        request_id: Option<u64>,
+    },
     SetPlaybackSource {
         source: PairAudioSource,
         #[serde(default)]
@@ -774,8 +779,8 @@ async fn handle_pair_control(
             webview.apply_playback_source(source, embedded_webview_enabled)?;
             Ok(false)
         }
-        PairControlMessage::RequestClipboardImage => {
-            send_clipboard_image(ws).await?;
+        PairControlMessage::RequestClipboardImage { request_id } => {
+            send_clipboard_image(ws, request_id).await?;
             Ok(false)
         }
         PairControlMessage::VoiceJoin {
@@ -880,7 +885,7 @@ fn apply_audio_pair_control(
             info!(volume_percent = new_volume, "applied paired volume down");
         }
         PairControlMessage::SetPlaybackSource { .. }
-        | PairControlMessage::RequestClipboardImage
+        | PairControlMessage::RequestClipboardImage { .. }
         | PairControlMessage::VoiceJoin { .. }
         | PairControlMessage::VoiceLeave
         | PairControlMessage::VoiceSetMuted { .. }
@@ -892,6 +897,7 @@ async fn send_clipboard_image(
     ws: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
+    request_id: Option<u64>,
 ) -> Result<()> {
     let image_result = tokio::task::spawn_blocking(clipboard::image_png_bytes)
         .await
@@ -900,10 +906,12 @@ async fn send_clipboard_image(
         Ok(bytes) => json!({
             "event": "clipboard_image",
             "data_base64": STANDARD.encode(bytes),
+            "request_id": request_id,
         }),
         Err(err) => json!({
             "event": "clipboard_image_failed",
             "message": err.to_string(),
+            "request_id": request_id,
         }),
     };
     ws.send(Message::Text(payload.to_string().into())).await?;

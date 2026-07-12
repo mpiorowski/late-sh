@@ -56,10 +56,13 @@ pub enum ActivityKind {
     },
     /// A finished daily correspondence match. `action` carries the full
     /// match-level phrase ("beat bob at Chess" / "drew with bob at Connect
-    /// Four"); `game` is the label, kept only for #lounge repeat-throttling.
+    /// Four"); `game` and `match_id` exist only for #lounge repeat-throttling:
+    /// keying on the match lets one player finish two same-game matches back
+    /// to back (one line per match) while a re-emit of the same match dedupes.
     /// Fired only on a finish (win/loss or draw), never on posting or claiming.
     DailyResult {
         game: String,
+        match_id: Uuid,
     },
     BonsaiWatered,
     BonsaiLost {
@@ -331,12 +334,14 @@ impl ActivityEvent {
         winner: impl Into<String>,
         loser: impl AsRef<str>,
         game_label: &str,
+        match_id: Uuid,
     ) -> Self {
         Self::new(
             Some(winner_id),
             winner,
             ActivityKind::DailyResult {
                 game: game_label.to_string(),
+                match_id,
             },
             format!("beat {} at {game_label}", loser.as_ref()),
         )
@@ -350,12 +355,14 @@ impl ActivityEvent {
         player_a: impl Into<String>,
         player_b: impl AsRef<str>,
         game_label: &str,
+        match_id: Uuid,
     ) -> Self {
         Self::new(
             Some(player_a_id),
             player_a,
             ActivityKind::DailyResult {
                 game: game_label.to_string(),
+                match_id,
             },
             format!("drew with {} at {game_label}", player_b.as_ref()),
         )

@@ -77,9 +77,11 @@ impl ActivityPublisher {
 
     /// Announce a finished daily match to #lounge. `winner_id` is `None` for a
     /// draw; otherwise it must be one of the two players. Resolves both names,
-    /// then emits a single `DailyResult` event (one line per match).
+    /// then emits a single `DailyResult` event (one line per match; `match_id`
+    /// keys the #lounge repeat throttle so distinct matches never collapse).
     pub fn daily_result_task(
         &self,
+        match_id: Uuid,
         game_label: &'static str,
         challenger_id: Uuid,
         opponent_id: Uuid,
@@ -96,7 +98,7 @@ impl ActivityPublisher {
                     };
                     let winner_name = publisher.username_for(winner).await;
                     let loser_name = publisher.username_for(loser).await;
-                    ActivityEvent::daily_win(winner, winner_name, loser_name, game_label)
+                    ActivityEvent::daily_win(winner, winner_name, loser_name, game_label, match_id)
                 }
                 None => {
                     let challenger_name = publisher.username_for(challenger_id).await;
@@ -106,6 +108,7 @@ impl ActivityPublisher {
                         challenger_name,
                         opponent_name,
                         game_label,
+                        match_id,
                     )
                 }
             };
