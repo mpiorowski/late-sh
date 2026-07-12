@@ -96,7 +96,10 @@ const COMMANDS: &[Command] = &[
     global("aquarium", "toggle aquarium (/aquarium feed to feed)"),
     global("binds", "chat guide"),
     global("brb", "go AFK and mute audio"),
-    global("challenge", "post daily challenge (chess, battleship)"),
+    global(
+        "challenge",
+        "post daily challenge (chess, battleship, connect4)",
+    ),
     global("coffee", "post coffee cup"),
     global("dm", "open DM"),
     global("exit", "quit confirm"),

@@ -124,14 +124,21 @@ impl RoomGameRegistry {
     pub fn start_dashboard_room_join_feed_task(
         &self,
         tx: crate::app::dashboard::state::DashboardRoomJoinSender,
+        activity: crate::app::activity::publisher::ActivityPublisher,
     ) {
         for kind in self.ordered_kinds().iter().copied() {
             let mut rx = self.manager(kind).subscribe_room_events();
             let tx = tx.clone();
+            let activity = activity.clone();
             tokio::spawn(async move {
                 loop {
                     match rx.recv().await {
                         Ok(event @ RoomGameEvent::SeatJoined { .. }) => {
+                            // Every game's sit path emits SeatJoined exactly
+                            // once per fresh seat, so this is the one choke
+                            // point for the "sat down" activity story.
+                            let RoomGameEvent::SeatJoined { user_id, .. } = &event;
+                            activity.sat_down_task(*user_id, activity_game_for(kind));
                             let _ = tx.send(
                                 crate::app::dashboard::state::DashboardRoomJoin::from_room_event(
                                     event,
@@ -181,6 +188,19 @@ impl RoomGameRegistry {
 
     pub fn blackjack(&self) -> &BlackjackTableManager {
         &self.blackjack
+    }
+}
+
+fn activity_game_for(kind: GameKind) -> crate::app::activity::event::ActivityGame {
+    use crate::app::activity::event::ActivityGame;
+    match kind {
+        GameKind::Asterion => ActivityGame::Asterion,
+        GameKind::Blackjack => ActivityGame::Blackjack,
+        GameKind::Chess => ActivityGame::Chess,
+        GameKind::Poker => ActivityGame::Poker,
+        GameKind::Sshattrick => ActivityGame::Sshattrick,
+        GameKind::TicTacToe => ActivityGame::TicTacToe,
+        GameKind::Tron => ActivityGame::Tron,
     }
 }
 

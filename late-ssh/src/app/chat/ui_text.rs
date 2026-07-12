@@ -119,6 +119,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     body_style: Style,
     mentions_us: bool,
     continuation: bool,
+    system_text: Option<&str>,
     inline_image_lines: Option<&[Line<'static>]>,
     reactions: &[ChatMessageReactionSummary],
 ) -> WrappedChatEntry {
@@ -127,18 +128,25 @@ pub(super) fn wrap_chat_entry_to_lines(
     } else {
         Span::raw(" ")
     };
-    let news_payload = parse_news_payload(body);
-    let action_payload = news_payload
+    let news_payload = system_text
         .is_none()
+        .then(|| parse_news_payload(body))
+        .flatten();
+    let action_payload = (system_text.is_none() && news_payload.is_none())
         .then(|| parse_action_body(body))
         .flatten();
-    // Only normal (non-news), non-continuation messages emit a clickable
-    // author header for mouse hit-testing — news cards have their own
-    // card layout, and continuation messages omit the header so a run
-    // reads as one block.
-    let header_line_index =
-        (news_payload.is_none() && action_payload.is_none() && !continuation).then_some(0);
-    let mut lines = if let Some(news) = news_payload {
+    // Only normal (non-news, non-system), non-continuation messages emit a
+    // clickable author header for mouse hit-testing — news cards have their
+    // own card layout, system lines are authorless, and continuation
+    // messages omit the header so a run reads as one block.
+    let header_line_index = (system_text.is_none()
+        && news_payload.is_none()
+        && action_payload.is_none()
+        && !continuation)
+        .then_some(0);
+    let mut lines = if let Some(system) = system_text {
+        wrap_system_to_lines(system, width)
+    } else if let Some(news) = news_payload {
         wrap_news_to_lines(stamp, prefix, width, author_style, news)
     } else if let Some(action) = action_payload {
         wrap_action_to_lines(action, prefix, width, body_style, mentions_us)
@@ -174,6 +182,40 @@ pub(super) fn wrap_chat_entry_to_lines(
         header_line_index,
         image_line_range,
     }
+}
+
+/// A #lounge system-feed line (see `activity/lounge.rs`). The prefix alone
+/// is NOT trusted: callers must also check the author is the system user
+/// before styling, so neither a human named "system" nor a pasted "· " can
+/// spoof the authorless row.
+pub(crate) fn parse_system_line(body: &str) -> Option<&str> {
+    let text = body
+        .strip_prefix(crate::app::activity::lounge::SYSTEM_LINE_PREFIX)?
+        .trim();
+    (!text.is_empty()).then_some(text)
+}
+
+/// System lines render as exactly one authorless row — a stacked run must
+/// stay dense — so overlong text is truncated, never wrapped.
+fn wrap_system_to_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+    let budget = width.saturating_sub(4); // pad + "· " + right breathing room
+    let shown: String = if text.chars().count() > budget && budget > 1 {
+        let mut cut: String = text.chars().take(budget - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        text.to_string()
+    };
+    vec![Line::from(vec![
+        Span::raw(" "),
+        Span::styled("· ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(
+            shown,
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ])]
 }
 
 fn wrap_action_to_lines(
@@ -589,6 +631,7 @@ mod tests {
             false,
             false,
             None,
+            None,
             &[],
         );
         assert_eq!(lines_to_strings(&wrapped.lines), vec![" * mat waves"]);
@@ -708,6 +751,7 @@ mod tests {
             Style::default(),
             false,
             false,
+            None,
             None,
             &[
                 ChatMessageReactionSummary {

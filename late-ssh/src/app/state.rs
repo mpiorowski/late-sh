@@ -19,9 +19,7 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::profile::Profile;
 
 use crate::{
-    app::activity::{
-        channel::ACTIVITY_HISTORY_MAX_EVENTS, event::ActivityEvent, filter::ActivityFilter,
-    },
+    app::activity::event::ActivityEvent,
     app::audio::{client_state::ClientAudioState, viz::Visualizer},
     app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
@@ -117,32 +115,6 @@ fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
 pub(crate) enum DashboardGameToggleTarget {
     Arcade,
     Room,
-}
-
-fn seed_activity_from_history(
-    mut activity: VecDeque<ActivityEvent>,
-    activity_feed_rx: Option<&mut broadcast::Receiver<ActivityEvent>>,
-) -> VecDeque<ActivityEvent> {
-    let Some(rx) = activity_feed_rx else {
-        return activity;
-    };
-    let newest_seed_at = activity.back().map(|event| event.at);
-    let activity_filter = ActivityFilter::dashboard();
-
-    while let Ok(event) = rx.try_recv() {
-        if newest_seed_at.is_some_and(|at| event.at <= at) {
-            continue;
-        }
-        if !activity_filter.includes(&event) {
-            continue;
-        }
-        activity.push_back(event);
-        while activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {
-            activity.pop_front();
-        }
-    }
-
-    activity
 }
 
 fn seed_room_joins_from_history(
@@ -306,7 +278,6 @@ pub struct SessionConfig {
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    pub initial_activity: VecDeque<ActivityEvent>,
     pub room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub initial_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
     pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
@@ -420,19 +391,11 @@ pub struct App {
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
+    /// Live activity events, kept only to edge-detect friend joins for the
+    /// friend-online banner; the feed itself now ships to #lounge (see
+    /// `activity/lounge.rs`) and has no per-session buffer.
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
-    pub(super) activity: VecDeque<ActivityEvent>,
-    /// Mouse-wheel scroll offset for the sidebar Activity panel. `0` keeps
-    /// the newest event at the top (default); larger values scroll back
-    /// through older events. Capped at `activity.len()` each frame so
-    /// trimming the buffer can't strand the user past the end.
-    pub(crate) dashboard_activity_scroll: u16,
-    /// Last-rendered rect for the sidebar Activity panel. Set by
-    /// `activity::panel::draw_activity_inline` during draw, consumed by
-    /// mouse wheel hit-testing in `app::input`. Reset to `None` at the top
-    /// of every frame so a layout change can't leave a stale target behind.
-    pub(crate) last_dashboard_activity_rect: std::cell::Cell<Option<Rect>>,
     /// Pet-strip click targets from the last frame: the pet itself (treat),
     /// the food bowl (feed), and the water bowl (water). Reset each frame.
     pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
@@ -764,8 +727,6 @@ impl App {
         };
         tracing::debug!(cols, rows, "initializing app");
 
-        let activity =
-            seed_activity_from_history(config.initial_activity, config.activity_feed_rx.as_mut());
         let mut dashboard_room_joins =
             seed_room_joins_from_history(config.initial_room_joins, config.room_join_rx.as_mut());
 
@@ -1099,9 +1060,6 @@ impl App {
             username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
             room_join_rx: config.room_join_rx,
-            activity,
-            dashboard_activity_scroll: 0,
-            last_dashboard_activity_rect: std::cell::Cell::new(None),
             last_pet_strip_pet_rect: std::cell::Cell::new(None),
             last_pet_strip_food_rect: std::cell::Cell::new(None),
             last_pet_strip_water_rect: std::cell::Cell::new(None),
@@ -2452,39 +2410,6 @@ mod tests {
     fn shared_buffer_default_is_empty() {
         let buf = SharedBuffer::default();
         assert!(buf.take().is_empty());
-    }
-
-    #[test]
-    fn seed_activity_from_history_drops_events_already_in_history() {
-        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-        let event = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
-        tx.send(event.clone()).expect("send activity");
-        let mut history = VecDeque::new();
-        history.push_back(event);
-
-        let activity = seed_activity_from_history(history, Some(&mut rx));
-
-        assert_eq!(activity.len(), 1);
-        assert_eq!(activity[0].username, "alice");
-    }
-
-    #[test]
-    fn seed_activity_from_history_keeps_events_newer_than_history() {
-        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-        let old = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
-        let mut history = VecDeque::new();
-        history.push_back(old);
-        let mut fresh = ActivityEvent::joined(uuid::Uuid::from_u128(1), "bob");
-        fresh.at = history.back().map_or(fresh.at, |event| {
-            event.at + std::time::Duration::from_secs(1)
-        });
-        tx.send(fresh).expect("send activity");
-
-        let activity = seed_activity_from_history(history, Some(&mut rx));
-
-        assert_eq!(activity.len(), 2);
-        assert_eq!(activity[0].username, "alice");
-        assert_eq!(activity[1].username, "bob");
     }
 
     #[test]

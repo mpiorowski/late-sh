@@ -79,7 +79,7 @@ Cross-module touchpoints (outside this folder):
 - `app/render.rs`: modal + board dispatch, sidebar props population.
 - `app/common/primitives.rs`: `Screen::DailyMatch` (outside the Tab cycle, like door games).
 - `app/common/sidebar.rs`: `DAILY_HEIGHT`, render arm, `SidebarProps.daily`.
-- `late-core/src/models/user.rs`: `RightSidebarComponent::Daily` (key `daily`, label `Lobby`), default order `[Visualizer, Music, Daily, Activity, Bonsai]`, `normalize_right_sidebar_components` backfills missing panels for existing users.
+- `late-core/src/models/user.rs`: `RightSidebarComponent::Daily` (key `daily`, label `Lobby`), default order `[Visualizer, Music, Daily, Bonsai]`, `normalize_right_sidebar_components` backfills missing panels for existing users.
 - `app/chat/state.rs` + `app/chat/input.rs`: composer `/challenge [@user] [chess|battleship|connect4]` parses to a `DailyChallengeRequest` (carrying the `DailyGame`) which chat input hands to `DailyState` post methods.
 - `app/notify/mod.rs`: `Notification::daily_your_turn(game_label, opponent)` (`Kind::GameEvents`).
 - `app/help_modal/data.rs`: `Ctrl+Q` + `/challenge` help entries.

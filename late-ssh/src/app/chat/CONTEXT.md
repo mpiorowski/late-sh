@@ -107,6 +107,8 @@ Normal display flow:
 
 Room tails carry `last_read_at` so render can insert one synthetic `new messages` divider before the first unread message authored by someone else. The divider is render-only state in the chat row cache; do not persist it or count it as a chat message.
 
+System-feed lines: the `#lounge` activity feed (`app/activity/lounge.rs`) posts persisted messages authored by the `system` bot user with the `· ` body prefix. Rendering treats a message as a system line only when BOTH hold — author is `system` (`ui.rs::is_system_author`) and the body parses via `ui_text.rs::parse_system_line` — so neither a human named system nor a pasted `· ` can spoof the style. A system line renders as exactly one authorless, timestampless dim row (truncated, never wrapped: `wrap_system_to_lines`), and consecutive system lines stack with no blank separator regardless of the 120s continuation window (`prev_was_system` in `ensure_chat_rows_cache`). They are reactable/replyable/pinnable like any message, admins can delete them, they are excluded from unread counts at the SQL layer (`ChatRoomMember::unread_counts_for_user` skips `settings.system` authors), and their bodies never contain `@` so no mentions fire. IRC projects them as ordinary PRIVMSGs from the `system` nick.
+
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
 
 Login announcements:
@@ -208,7 +210,7 @@ Room favorites:
 - Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
 Home hot-room shortcuts:
-- The top activity/multiplayer/quest strip was removed; the online count + activity feed moved to the right sidebar's Activity panel (`app/activity/panel.rs`). `dashboard::ui::recent_dashboard_rooms(..., 4)` survives only for the recent-room jump keys.
+- The top activity/multiplayer/quest strip was removed; presence (online count + connected friends) now lives in the right sidebar's pinned core block, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`; the sidebar Activity panel is retired). `dashboard::ui::recent_dashboard_rooms(..., 4)` survives only for the recent-room jump keys.
 - `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.

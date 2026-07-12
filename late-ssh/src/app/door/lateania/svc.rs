@@ -735,6 +735,10 @@ impl LateaniaService {
                 if let Some(saved) = saved {
                     state.hydrate(user_id, &saved);
                 }
+                // A player materialized in the world (fresh join, not an
+                // already-present session). The lounge feed's repeat window
+                // absorbs quick leave/rejoin ping-pong.
+                svc.activity.game_started_task(user_id, ActivityGame::Mud);
             }
             state.touch(user_id);
             svc.publish(&state);
@@ -1231,6 +1235,16 @@ impl LateaniaService {
     }
 
     fn publish_kill_outcome(&self, outcome: KillOutcome) {
+        // Boss and sub-boss falls are the story tier: they ship to #lounge
+        // via the structured `BossSlain` kind, while the per-mob `GameWon`
+        // below stays dashboard/quest-only noise.
+        if outcome.boss {
+            self.activity.boss_slain_task(
+                outcome.user_id,
+                ActivityGame::Mud,
+                outcome.mob_name.clone(),
+            );
+        }
         let Some(achievement) = outcome.achievement else {
             self.activity.game_won_task(
                 outcome.user_id,
@@ -1330,6 +1344,9 @@ impl LateaniaService {
 struct KillOutcome {
     user_id: Uuid,
     mob_name: String,
+    /// The mob's `MobSpawn.boss` flag: bosses and sub-bosses alike, not just
+    /// the named achievement three.
+    boss: bool,
     achievement: Option<BossAchievement>,
 }
 
@@ -3716,6 +3733,7 @@ impl WorldState {
         self.pending_kills.push(KillOutcome {
             user_id,
             mob_name,
+            boss,
             achievement,
         });
         self.dirty = true;

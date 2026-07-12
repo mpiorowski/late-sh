@@ -147,7 +147,7 @@ impl RightSidebarMode {
 
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
-pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 5;
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 4;
 
 /// A right-sidebar panel the user can reorder and toggle. The clock is not
 /// listed here — it is always pinned at the top of the sidebar.
@@ -155,29 +155,23 @@ pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 5;
 pub enum RightSidebarComponent {
     Visualizer,
     Music,
-    Activity,
     Bonsai,
     Daily,
 }
 
 impl RightSidebarComponent {
     /// Default order, top to bottom. Used when a user has no stored list and
-    /// to backfill any panels missing from a stored list. Space cuts from the
-    /// top (the visualizer goes first under shrink); Activity is the one
-    /// flexible panel and absorbs leftover rows.
-    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
-        Self::Visualizer,
-        Self::Music,
-        Self::Daily,
-        Self::Activity,
-        Self::Bonsai,
-    ];
+    /// to backfill any panels missing from a stored list. Space cuts by
+    /// shrink priority (the visualizer goes first); Bonsai is the one
+    /// flexible panel and absorbs leftover rows. Stale stored keys (e.g. the
+    /// retired "activity" panel) are dropped on read by `from_key`.
+    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
+        [Self::Visualizer, Self::Music, Self::Daily, Self::Bonsai];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Visualizer => "visualizer",
             Self::Music => "music",
-            Self::Activity => "activity",
             Self::Bonsai => "bonsai",
             Self::Daily => "daily",
         }
@@ -187,7 +181,6 @@ impl RightSidebarComponent {
         match key.trim() {
             "visualizer" => Some(Self::Visualizer),
             "music" => Some(Self::Music),
-            "activity" => Some(Self::Activity),
             "bonsai" => Some(Self::Bonsai),
             "daily" => Some(Self::Daily),
             _ => None,
@@ -198,7 +191,6 @@ impl RightSidebarComponent {
         match self {
             Self::Visualizer => "Visualizer",
             Self::Music => "Audio playback",
-            Self::Activity => "Activity",
             Self::Bonsai => "Bonsai",
             Self::Daily => "Lobby",
         }
@@ -1580,14 +1572,15 @@ mod tests {
                 { "key": "bonsai", "enabled": false },
                 { "key": "music", "enabled": true },
                 { "key": "bogus", "enabled": true },
+                { "key": "activity", "enabled": true },
             ]
         });
         let components = extract_right_sidebar_components(&settings);
-        // Stored order kept for known entries, unknown dropped (including the
-        // retired "pet" key), missing (visualizer, daily, activity) backfilled
-        // ENABLED at the end in ALL order: an existing user's stored list
-        // predates newer panels, so they should appear rather than silently
-        // stay hidden.
+        // Stored order kept for known entries, unknown dropped (including
+        // the retired "pet" and "activity" keys), missing (visualizer,
+        // daily) backfilled ENABLED at the end in ALL order: an existing
+        // user's stored list predates newer panels, so they should appear
+        // rather than silently stay hidden.
         assert_eq!(
             components,
             vec![
@@ -1605,10 +1598,6 @@ mod tests {
                 },
                 RightSidebarComponentSetting {
                     component: RightSidebarComponent::Daily,
-                    enabled: true,
-                },
-                RightSidebarComponentSetting {
-                    component: RightSidebarComponent::Activity,
                     enabled: true,
                 },
             ]

@@ -289,7 +289,7 @@ Progression:
 - Defeating the authored final boss, the Archdemon Mal'gareth, pays a once-per-account 10,000 chip lifetime payout and grants the `LMG` profile-award badge; repeat kills can still grant normal in-world rewards but not the chip payout again.
 - Defeating the final Frontier boss, the King Who Was Promised Nothing, pays a once-per-account 20,000 chip lifetime payout and grants the `LKN` profile-award badge; repeat kills can still grant normal in-world rewards but not the chip payout again.
 - Defeating the final Reaches boss, Yssgar, the Sundering Deep, grants the once-per-account `LYS` profile-award badge with **no chip payout** (`BossAchievement.payout: None`); the badge is the whole prize, keeping the chip economy flat. Badge codes are named after the boss (Mal'Gareth, King/Nothing, YSsgar), and chat author labels collapse to the highest crown (`LYS` > `LKN` > `LMG`).
-- Every mob kill emits a Lateania activity win event. Final-boss kills route through lifetime reward templates; if the chip payout was already claimed, activity still records the defeat without the chip/badge detail.
+- Every mob kill emits a Lateania activity win event (dashboard/quest tier only; excluded from the #lounge feed). Kills of any `MobSpawn.boss` mob additionally publish a structured `BossSlain` event (`KillOutcome.boss` carries the flag out of `kill_mob`), and a player materializing in the world via `join` publishes `GameStarted` — both ship to #lounge as system lines through `app/activity/lounge.rs`. Final-boss kills route through lifetime reward templates; if the chip payout was already claimed, activity still records the defeat without the chip/badge detail.
 
 ---
 

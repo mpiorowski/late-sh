@@ -9,8 +9,6 @@ use ratatui::{
 };
 
 use super::theme;
-use crate::app::activity::event::ActivityEvent;
-use crate::app::activity::panel::{ACTIVITY_PANEL_MIN_HEIGHT, ActivityPanelProps};
 use crate::app::audio::{
     client_state::ClientAudioState,
     stations,
@@ -23,7 +21,11 @@ use late_core::models::user::{
     AudioSource, IcecastStream, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
 };
 
-const TIME_HEIGHT: u16 = 1;
+// The pinned core block above the panel list: online count + clock on the
+// first row, connected friends (or the AFK indicator) on the second. Both
+// rows are always reserved so the panels below never shift when presence
+// changes.
+const TIME_HEIGHT: u16 = 2;
 const RULE_HEIGHT: u16 = 1;
 const VISUALIZER_HEIGHT: u16 = 4;
 // Full music stage: volume rows (2) + three dock entries (title +
@@ -90,19 +92,12 @@ pub(crate) struct SidebarProps<'a> {
     pub afk: Option<&'a str>,
     /// Daily correspondence games: my matches, lobby activity, glow.
     pub daily: &'a crate::app::daily::state::DailyState,
-    /// Rolling feed of recent activity events for the Activity panel.
-    pub activity_events: &'a std::collections::VecDeque<ActivityEvent>,
-    /// Humans currently connected (bots excluded), for the Activity header.
+    /// Humans currently connected (bots excluded), for the core presence row.
     pub online_count: usize,
-    /// Connected friends, compacted into the Activity panel's friends row.
+    /// Connected friends, compacted into the core block's friends row.
     pub active_friend_names: &'a [String],
-    /// Mouse-wheel scroll offset into the activity feed (0 = newest).
-    pub activity_scroll: u16,
-    /// Free-running frame counter for the Activity panel's marquee rows.
+    /// Free-running frame counter for the music stage's marquee rows.
     pub marquee_tick: usize,
-    /// Receives the Activity panel's rendered rect each frame so mouse-wheel
-    /// hit-testing in `app::input` can route scroll events to it.
-    pub activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
@@ -123,19 +118,20 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         height: area.height,
     };
 
-    // Responsiveness: the clock is pinned at the top, then enabled panels
-    // render in the user's chosen order. When space runs short panels are
-    // dropped by `shrink_priority` (ambience first, music stage last), not
-    // by list position. Every panel renders at its full height or not at
-    // all. Leftover rows go to the Activity panel (the one flexible panel)
-    // when it is visible; otherwise they collect just above the final panel,
-    // which sticks to the bottom of the rail.
+    // Responsiveness: the core block (clock + presence) is pinned at the
+    // top, then enabled panels render in the user's chosen order. When space
+    // runs short panels are dropped by `shrink_priority` (ambience first,
+    // music stage last), not by list position. Every panel renders at its
+    // full height or not at all. Leftover rows go to the Bonsai panel (the
+    // one flexible panel — the tree renderer scales to whatever height it
+    // gets); otherwise they collect just above the final panel, which sticks
+    // to the bottom of the rail.
     let visible = visible_components(props.components, area.height);
-    let activity_visible = visible.contains(&RightSidebarComponent::Activity);
+    let bonsai_visible = visible.contains(&RightSidebarComponent::Bonsai);
 
-    // Vertical real estate, top to bottom: time, then each visible panel
-    // (rule + body at its fixed height; Activity's body is a Min so it
-    // absorbs the slack). Without a visible Activity panel, the flexible
+    // Vertical real estate, top to bottom: the core block, then each visible
+    // panel (rule + body at its fixed height; Bonsai's body is a Min so it
+    // absorbs the slack). Without a visible Bonsai panel, the flexible
     // spacer sits between the final panel's rule and body, so the rule stays
     // in the natural flow under the panel above while the body sticks to the
     // bottom of the rail. Every panel renders at its full height or not at
@@ -144,10 +140,10 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
     for (idx, component) in visible.iter().enumerate() {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-        if idx == last && !activity_visible {
+        if idx == last && !bonsai_visible {
             constraints.push(Constraint::Fill(1)); // drop the last body to the bottom
         }
-        constraints.push(if *component == RightSidebarComponent::Activity {
+        constraints.push(if *component == RightSidebarComponent::Bonsai {
             Constraint::Min(component_height(*component))
         } else {
             Constraint::Length(component_height(*component))
@@ -171,8 +167,15 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
     let mut i = 0usize;
 
-    // Time: right-aligned in the top row. Shows AFK indicator when away.
-    draw_time_top(frame, inset(layout[i]), props.clock_text, props.afk);
+    // Core block: presence + clock, then friends (or the AFK indicator).
+    draw_core_block(
+        frame,
+        inset(layout[i]),
+        props.clock_text,
+        props.afk,
+        props.online_count,
+        props.active_friend_names,
+    );
     i += 1;
 
     for (idx, component) in visible.iter().enumerate() {
@@ -194,7 +197,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
             rule_active,
         );
         i += 1;
-        if idx == last && !activity_visible {
+        if idx == last && !bonsai_visible {
             i += 1; // skip the spacer that drops the last body to the bottom
         }
         let body = inset(layout[i]);
@@ -223,20 +226,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                     },
                 );
             }
-            RightSidebarComponent::Activity => {
-                crate::app::activity::panel::draw_activity_inline(
-                    frame,
-                    body,
-                    &ActivityPanelProps {
-                        events: props.activity_events,
-                        online_count: props.online_count,
-                        active_friend_names: props.active_friend_names,
-                        scroll: props.activity_scroll,
-                        marquee_tick: props.marquee_tick,
-                    },
-                    props.activity_rect_slot,
-                );
-            }
             RightSidebarComponent::Bonsai => {
                 if props.use_bonsai_v2 {
                     crate::app::bonsai_v2::render::draw_bonsai_inline(
@@ -263,13 +252,13 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
 /// Rows a panel needs to render (excluding its rule). A panel shows at this
 /// full height or not at all; the music stage in particular is never clipped
-/// to a partial viewport. Activity is the exception in the other direction:
-/// this is its minimum, and it grows into whatever the rail has left over.
+/// to a partial viewport. Bonsai is the exception in the other direction:
+/// this is its minimum, and it grows into whatever the rail has left over
+/// (the tree renderer scales to its viewport).
 fn component_height(component: RightSidebarComponent) -> u16 {
     match component {
         RightSidebarComponent::Visualizer => VISUALIZER_HEIGHT,
         RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
-        RightSidebarComponent::Activity => ACTIVITY_PANEL_MIN_HEIGHT,
         RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
         RightSidebarComponent::Daily => DAILY_HEIGHT,
     }
@@ -285,7 +274,6 @@ fn shrink_priority(component: RightSidebarComponent) -> u8 {
         RightSidebarComponent::Visualizer => 4, // first to go
         RightSidebarComponent::Bonsai => 3,
         RightSidebarComponent::Daily => 2,
-        RightSidebarComponent::Activity => 1,
         RightSidebarComponent::Music => 0, // last panel standing
     }
 }
@@ -323,54 +311,130 @@ fn visible_components(
         .collect()
 }
 
-/// Top-of-rail time. Centered, `⊙` glyph in dim amber, optional timezone
-/// label dimmed, time digits bold amber. When AFK, replaces the clock row with
-/// an "away" indicator (glyph + "away" or "away — message" if provided).
-fn draw_time_top(frame: &mut Frame, area: Rect, clock_text: &str, afk: Option<&str>) {
+/// The pinned two-row core block at the top of the rail. Presence is chrome
+/// now, not a panel: row one is the online count (left) and the clock
+/// (right); row two is connected friends, or the AFK indicator while away.
+/// Both rows always render so the panel list below never shifts.
+fn draw_core_block(
+    frame: &mut Frame,
+    area: Rect,
+    clock_text: &str,
+    afk: Option<&str>,
+    online_count: usize,
+    active_friend_names: &[String],
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
 
-    if let Some(msg) = afk {
-        let mut spans: Vec<Span<'static>> =
-            vec![Span::styled("🌙 ", Style::default().fg(theme::AMBER_DIM()))];
-        let label = if msg.is_empty() {
-            "away".to_string()
-        } else {
-            format!("away — {msg}")
-        };
-        spans.push(Span::styled(
-            label,
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::ITALIC),
-        ));
-        frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
-        return;
-    }
+    let row = |offset: u16| Rect {
+        x: area.x,
+        y: area.y + offset,
+        width: area.width,
+        height: 1,
+    };
 
+    // Row 0 — presence left, clock right.
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("● ", Style::default().fg(theme::SUCCESS())),
+            Span::styled(
+                online_count.to_string(),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" here", Style::default().fg(theme::TEXT_DIM())),
+        ])),
+        row(0),
+    );
     let mut parts = clock_text.rsplitn(2, ' ');
     let time = parts.next().unwrap_or(clock_text);
     let label = parts.next();
-
-    // Native `⊙` (U+2299 circled dot operator). Reliably mono across terminals,
-    // reads as a small clock face without competing with the digits.
-    let mut spans: Vec<Span<'static>> =
+    // Native `⊙` (U+2299 circled dot operator). Reliably mono across
+    // terminals, reads as a small clock face without competing with digits.
+    let mut clock_spans: Vec<Span<'static>> =
         vec![Span::styled("⊙ ", Style::default().fg(theme::AMBER_DIM()))];
-    spans.push(Span::styled(
+    clock_spans.push(Span::styled(
         time.to_string(),
         Style::default()
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     ));
     if let Some(label) = label {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
+        clock_spans.push(Span::raw(" "));
+        clock_spans.push(Span::styled(
             label.to_string(),
             Style::default().fg(theme::TEXT_FAINT()),
         ));
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
+    frame.render_widget(
+        Paragraph::new(Line::from(clock_spans)).right_aligned(),
+        row(0),
+    );
+
+    if area.height < 2 {
+        return;
+    }
+
+    // Row 1 — AFK wins the row while away; otherwise connected friends.
+    // Blank when neither: the reserved row is what keeps chrome stable.
+    if let Some(msg) = afk {
+        let label = if msg.is_empty() {
+            "away".to_string()
+        } else {
+            format!("away · {msg}")
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("🌙 ", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ])),
+            row(1),
+        );
+    } else if !active_friend_names.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    ACTIVE_FRIEND_MARKER,
+                    Style::default()
+                        .fg(theme::BADGE_GOLD())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    compact_friend_names(active_friend_names, area.width as usize),
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])),
+            row(1),
+        );
+    }
+}
+
+const ACTIVE_FRIEND_MARKER: &str = "★";
+const ACTIVE_FRIEND_NAME_LIMIT: usize = 4;
+
+fn compact_friend_names(names: &[String], width: usize) -> String {
+    let mut pieces: Vec<String> = names
+        .iter()
+        .take(ACTIVE_FRIEND_NAME_LIMIT)
+        .map(|name| format!("@{}", truncate_chars(name, 10)))
+        .collect();
+    if names.len() > ACTIVE_FRIEND_NAME_LIMIT {
+        pieces.push(format!("+{}", names.len() - ACTIVE_FRIEND_NAME_LIMIT));
+    }
+    truncate_chars(
+        &pieces.join(" "),
+        width.saturating_sub(ACTIVE_FRIEND_MARKER.chars().count() + 1),
+    )
 }
 
 /// Section name rendered into each panel's separator rule. Keeps panel
@@ -379,7 +443,6 @@ fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
     match component {
         RightSidebarComponent::Visualizer => "visualizer",
         RightSidebarComponent::Music => "music",
-        RightSidebarComponent::Activity => "activity",
         RightSidebarComponent::Bonsai => "bonsai",
         RightSidebarComponent::Daily => "lobby",
     }
@@ -426,7 +489,7 @@ struct MusicStageProps<'a> {
     icecast_source_count: usize,
     radio_source_count: usize,
     /// Free-running frame counter driving the marquee on now-playing rows
-    /// too long for the rail (same clock as the Activity panel's rows).
+    /// too long for the rail.
     marquee_tick: usize,
 }
 
@@ -1240,7 +1303,7 @@ mod tests {
             on(RightSidebarComponent::Bonsai),
             on(RightSidebarComponent::Music),
             on(RightSidebarComponent::Visualizer),
-            on(RightSidebarComponent::Activity),
+            on(RightSidebarComponent::Daily),
         ];
         // Tall enough for everything: order is preserved exactly.
         assert_eq!(
@@ -1249,7 +1312,7 @@ mod tests {
                 RightSidebarComponent::Bonsai,
                 RightSidebarComponent::Music,
                 RightSidebarComponent::Visualizer,
-                RightSidebarComponent::Activity,
+                RightSidebarComponent::Daily,
             ]
         );
     }
@@ -1259,7 +1322,7 @@ mod tests {
         let components = [
             off(RightSidebarComponent::Visualizer),
             on(RightSidebarComponent::Music),
-            off(RightSidebarComponent::Activity),
+            off(RightSidebarComponent::Daily),
             on(RightSidebarComponent::Bonsai),
         ];
         assert_eq!(

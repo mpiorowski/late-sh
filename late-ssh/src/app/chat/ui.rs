@@ -52,6 +52,14 @@ fn is_bot_author(username: &str) -> bool {
     )
 }
 
+/// The #lounge system-feed author (`activity/lounge.rs`). Checked together
+/// with the body prefix before a message renders as an authorless system row.
+fn is_system_author(username: &str) -> bool {
+    username
+        .trim()
+        .eq_ignore_ascii_case(crate::app::activity::lounge::SYSTEM_USERNAME)
+}
+
 // ── Dashboard chat card ─────────────────────────────────────
 
 pub struct DashboardChatView<'a> {
@@ -1323,6 +1331,7 @@ fn ensure_chat_rows_cache(
     let mut first = true;
     let mut prev_user_id: Option<Uuid> = None;
     let mut prev_created: Option<chrono::DateTime<chrono::Utc>> = None;
+    let mut prev_was_system = false;
     let mut unread_divider_inserted = false;
 
     for msg in messages.into_iter().rev() {
@@ -1420,7 +1429,15 @@ fn ensure_chat_rows_cache(
             .as_ref()
             .is_some_and(|m| msg.body.contains(m.as_str()));
 
-        if !first && !is_continuation {
+        // System-feed lines (authored by the system bot, prefix-marked)
+        // render as one authorless row; consecutive ones stack with no
+        // blank row between them, however far apart in time.
+        let system_text = is_system_author(raw_author)
+            .then(|| super::ui_text::parse_system_line(&msg.body))
+            .flatten();
+        let is_system = system_text.is_some();
+
+        if !first && !is_continuation && !(is_system && prev_was_system) {
             all_rows.push(Line::from(""));
             row_message.push(None);
             row_kind.push(RowKindLite::Blank);
@@ -1446,6 +1463,7 @@ fn ensure_chat_rows_cache(
             body_style,
             mentions_us,
             is_continuation,
+            system_text,
             image_lines,
             reactions,
         );
@@ -1485,6 +1503,7 @@ fn ensure_chat_rows_cache(
 
         prev_user_id = Some(msg.user_id);
         prev_created = Some(msg.created);
+        prev_was_system = is_system;
     }
 
     debug_assert_eq!(all_rows.len(), row_message.len());

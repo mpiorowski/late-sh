@@ -246,13 +246,11 @@ struct DrawContext<'a> {
     selected_radio_station: late_core::models::user::RadioStation,
     radio_now_playing: Option<&'a str>,
     afk: Option<&'a str>,
-    /// Rolling feed of recent activity events for the sidebar Activity panel.
-    activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
+    /// Humans currently connected (bots excluded) plus connected friends,
+    /// for the sidebar's pinned presence rows.
     online_count: usize,
     active_friend_names: &'a [String],
-    activity_scroll: u16,
     marquee_tick: usize,
-    activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
     pet_species: &'a str,
@@ -271,7 +269,6 @@ impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
-        self.last_dashboard_activity_rect.set(None);
         self.last_pet_strip_pet_rect.set(None);
         self.last_pet_strip_food_rect.set(None);
         self.last_pet_strip_water_rect.set(None);
@@ -969,12 +966,9 @@ impl App {
                         selected_radio_station,
                         radio_now_playing: radio_now_playing.as_deref(),
                         afk: self.afk.as_deref(),
-                        activity: &self.activity,
                         online_count,
                         active_friend_names: &active_friend_names,
-                        activity_scroll: self.dashboard_activity_scroll,
                         marquee_tick: self.marquee_tick,
-                        activity_rect_slot: Some(&self.last_dashboard_activity_rect),
                         chat_state: &self.chat,
                         user_id: self.user_id,
                         pet_species: &self.pet_state.species,
@@ -1378,12 +1372,9 @@ impl App {
                     radio_now_playing: ctx.radio_now_playing,
                     afk: ctx.afk,
                     daily: ctx.daily,
-                    activity_events: ctx.activity,
                     online_count: ctx.online_count,
                     active_friend_names: ctx.active_friend_names,
-                    activity_scroll: ctx.activity_scroll,
                     marquee_tick: ctx.marquee_tick,
-                    activity_rect_slot: ctx.activity_rect_slot,
                 },
             );
         }

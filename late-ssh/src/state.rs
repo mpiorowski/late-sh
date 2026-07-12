@@ -40,7 +40,7 @@ use late_core::{
     rate_limit::IpRateLimiter,
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     net::IpAddr,
     sync::{Arc, Mutex},
     time::Instant,
@@ -70,7 +70,6 @@ pub struct ActiveUser {
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
 pub type AfkUsers = Arc<Mutex<Arc<HashSet<Uuid>>>>;
-pub type ActivityHistory = Arc<Mutex<VecDeque<ActivityEvent>>>;
 
 pub fn new_afk_users() -> AfkUsers {
     Arc::new(Mutex::new(Arc::new(HashSet::new())))
@@ -141,7 +140,6 @@ pub struct State {
     pub afk_users: AfkUsers,
     pub username_directory: UsernameDirectory,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
-    pub activity_history: ActivityHistory,
     pub room_join_feed: DashboardRoomJoinSender,
     pub room_join_history: DashboardRoomJoinHistory,
     pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,

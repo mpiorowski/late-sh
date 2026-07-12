@@ -55,6 +55,36 @@ impl ActivityPublisher {
         });
     }
 
+    pub fn game_started_task(&self, user_id: Uuid, game: ActivityGame) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher
+                .tx
+                .send(ActivityEvent::game_started(user_id, username, game));
+        });
+    }
+
+    pub fn boss_slain_task(&self, user_id: Uuid, game: ActivityGame, boss: String) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher
+                .tx
+                .send(ActivityEvent::boss_slain(user_id, username, game, boss));
+        });
+    }
+
+    pub fn sat_down_task(&self, user_id: Uuid, game: ActivityGame) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher
+                .tx
+                .send(ActivityEvent::sat_down(user_id, username, game));
+        });
+    }
+
     pub fn game_played_task(&self, user_id: Uuid, game: ActivityGame, detail: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {

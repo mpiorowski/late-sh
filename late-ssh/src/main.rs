@@ -14,6 +14,7 @@ use late_core::{
 };
 use late_ssh::{
     api,
+    app::ai::{ghost::GhostService, svc::AiService},
     app::audio::now_playing::svc::NowPlayingService,
     app::audio::svc::AudioService,
     app::chat::feeds::svc::FeedService,
@@ -24,10 +25,6 @@ use late_ssh::{
     app::chat::work::svc::WorkService,
     app::profile::svc::ProfileService,
     app::voice::svc::VoiceService,
-    app::{
-        activity::channel::ACTIVITY_HISTORY_MAX_EVENTS,
-        ai::{ghost::GhostService, svc::AiService},
-    },
     config::Config,
     moderation::service::ModerationInfra,
     session::SessionRegistry,
@@ -144,8 +141,7 @@ async fn main() -> anyhow::Result<()> {
     let username_directory = late_ssh::usernames::load(&db)
         .await
         .context("failed to load username directory")?;
-    let activity_history = Arc::new(Mutex::new(VecDeque::new()));
-    let (activity_tx, mut activity_history_rx) = late_ssh::app::activity::channel::new(512);
+    let (activity_tx, _activity_rx) = late_ssh::app::activity::channel::new(512);
     let room_join_history = Arc::new(Mutex::new(VecDeque::new()));
     let (room_join_tx, mut room_join_history_rx) = tokio::sync::broadcast::channel(512);
     let activity_publisher =
@@ -179,6 +175,12 @@ async fn main() -> anyhow::Result<()> {
     .with_irc_registry(irc_registry.clone())
     .with_force_admin(config.force_admin);
     let _poll_finalizer_recovery_task = chat_service.start_poll_finalizer_recovery_task();
+    let _lounge_feed_task = late_ssh::app::activity::lounge::start_lounge_feed_task(
+        db.clone(),
+        chat_service.clone(),
+        username_directory.clone(),
+        activity_tx.subscribe(),
+    );
     let ai_service = AiService::new(
         config.ai.enabled,
         config.ai.api_key.clone(),
@@ -277,7 +279,8 @@ async fn main() -> anyhow::Result<()> {
         tictactoe_table_manager,
         tron_table_manager,
     );
-    room_game_registry.start_dashboard_room_join_feed_task(room_join_tx.clone());
+    room_game_registry
+        .start_dashboard_room_join_feed_task(room_join_tx.clone(), activity_publisher.clone());
     let sudoku_service =
         late_ssh::app::arcade::sudoku::svc::SudokuService::new(db.clone(), activity_tx.clone());
     let nonogram_service =
@@ -405,7 +408,6 @@ async fn main() -> anyhow::Result<()> {
         afk_users,
         username_directory: username_directory.clone(),
         activity_feed: activity_tx,
-        activity_history: activity_history.clone(),
         room_join_feed: room_join_tx,
         room_join_history: room_join_history.clone(),
         now_playing_rx: now_playing_rx.clone(),
@@ -430,30 +432,6 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let mut tasks = JoinSet::new();
-    let activity_history_shutdown = singleton_shutdown.clone();
-    tasks.spawn(async move {
-        loop {
-            tokio::select! {
-                _ = activity_history_shutdown.cancelled() => break,
-                result = activity_history_rx.recv() => {
-                    match result {
-                        Ok(event) => {
-                            let mut history = activity_history.lock_recover();
-                            history.push_back(event);
-                            while history.len() > ACTIVITY_HISTORY_MAX_EVENTS {
-                                history.pop_front();
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(skipped, "activity history receiver lagged");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            }
-        }
-        Ok(())
-    });
     let room_join_history_shutdown = singleton_shutdown.clone();
     tasks.spawn(async move {
         loop {

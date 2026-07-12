@@ -37,6 +37,23 @@ pub enum ActivityKind {
         game: ActivityGame,
         detail: String,
     },
+    /// A player entered a game world (door games). Distinct from
+    /// `GamePlayed` (quest-only grind signal): this is the "come join me"
+    /// invitation shown in #lounge.
+    GameStarted {
+        game: ActivityGame,
+    },
+    /// A boss or sub-boss died to this player. `boss` is the full mob name
+    /// as the game renders it (e.g. "the Archdemon Mal'gareth").
+    BossSlain {
+        game: ActivityGame,
+        boss: String,
+    },
+    /// A player took a seat at a multiplayer table. Fired on sitting, not on
+    /// playing, so open seats become visible in #lounge.
+    SatDown {
+        game: ActivityGame,
+    },
     BonsaiWatered,
     BonsaiLost {
         survived_days: i32,
@@ -47,7 +64,11 @@ impl ActivityKind {
     pub fn category(&self) -> ActivityCategory {
         match self {
             Self::UserJoined => ActivityCategory::Session,
-            Self::GameWon { .. } | Self::GameEvent { .. } => ActivityCategory::Game,
+            Self::GameWon { .. }
+            | Self::GameEvent { .. }
+            | Self::GameStarted { .. }
+            | Self::BossSlain { .. }
+            | Self::SatDown { .. } => ActivityCategory::Game,
             Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
         }
@@ -230,6 +251,66 @@ impl ActivityEvent {
                 game,
                 detail: action.clone(),
             },
+            action,
+        )
+    }
+
+    /// A player entered a game world. Copy lives here, not at call sites.
+    pub fn game_started(user_id: Uuid, username: impl Into<String>, game: ActivityGame) -> Self {
+        let action = match game {
+            ActivityGame::Mud => "set out into Lateania".to_string(),
+            ActivityGame::Nethack => "descended into NetHack".to_string(),
+            ActivityGame::GreenDragon => "walked into the Green Dragon".to_string(),
+            ActivityGame::Asterion
+            | ActivityGame::Blackjack
+            | ActivityGame::Chess
+            | ActivityGame::LeWord
+            | ActivityGame::Minesweeper
+            | ActivityGame::Nonogram
+            | ActivityGame::Poker
+            | ActivityGame::RubiksCube
+            | ActivityGame::Sshattrick
+            | ActivityGame::Solitaire
+            | ActivityGame::Sudoku
+            | ActivityGame::TicTacToe
+            | ActivityGame::Lateris
+            | ActivityGame::TwentyFortyEight
+            | ActivityGame::Tron
+            | ActivityGame::Snake
+            | ActivityGame::Traffic => format!("started {}", game.label()),
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::GameStarted { game },
+            action,
+        )
+    }
+
+    /// A boss or sub-boss fell. `boss` is the mob name as the game renders it.
+    pub fn boss_slain(
+        user_id: Uuid,
+        username: impl Into<String>,
+        game: ActivityGame,
+        boss: impl Into<String>,
+    ) -> Self {
+        let boss = boss.into();
+        let action = format!("slew {} in {}", boss, game.label());
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::BossSlain { game, boss },
+            action,
+        )
+    }
+
+    /// A player took a seat at a multiplayer table.
+    pub fn sat_down(user_id: Uuid, username: impl Into<String>, game: ActivityGame) -> Self {
+        let action = format!("sat down at {}", game.label());
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::SatDown { game },
             action,
         )
     }
