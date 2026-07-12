@@ -578,6 +578,11 @@ pub fn handle(app: &mut App, data: &[u8]) {
         // also begin with ESC, so avoid treating those as user cancellation.
         if !saw_terminal_reply && data.contains(&0x1B) {
             app.show_splash = false;
+            // The dismissing ESC was just fed into the parser above, leaving it
+            // wedged mid-escape. Without this reset the next key merges into an
+            // `ESC <key>` Alt chord (e.g. `1` becomes Alt+1, which is swallowed)
+            // so the first post-splash keypress is silently lost.
+            app.vt_input.reset();
         }
         return;
     }
@@ -4699,6 +4704,25 @@ mod tests {
     fn vt_parser_reads_backtab_sequence() {
         let mut parser = VtInputParser::default();
         assert_eq!(parser.feed(b"\x1b[Z"), vec![ParsedInput::BackTab]);
+    }
+
+    #[test]
+    fn lone_escape_then_key_is_swallowed_as_alt_chord() {
+        // A bare ESC leaves the parser wedged mid-escape (no event yet), so the
+        // following byte merges into an `ESC 1` = Alt+1 chord that esc_dispatch
+        // drops. This is why dismissing the splash with Escape used to eat the
+        // first `1` — the splash path must `reset()` to avoid it.
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b"), vec![]);
+        assert_eq!(parser.feed(b"1"), vec![]);
+    }
+
+    #[test]
+    fn reset_after_lone_escape_lets_the_next_key_through() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b"), vec![]);
+        parser.reset();
+        assert_eq!(parser.feed(b"1"), vec![ParsedInput::Char('1')]);
     }
 
     #[test]

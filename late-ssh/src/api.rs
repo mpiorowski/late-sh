@@ -474,16 +474,19 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                     }
                                     if update.new_kind == ClientKind::Browser
                                         && update.previous_kind != ClientKind::Browser
-                                        && !route_session_message(
+                                    {
+                                        // Best-effort nudge: a stalled session
+                                        // channel only costs the browser one
+                                        // source replay; it must not tear down
+                                        // the pair socket.
+                                        let _ = route_session_message(
                                             &state,
                                             &token,
                                             &token_hint,
                                             SessionMessage::BrowserPaired,
                                             "browser paired",
                                         )
-                                        .await
-                                    {
-                                        break;
+                                        .await;
                                     }
                                 }
                                 if !applied_initial_mute
@@ -502,9 +505,23 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 continue;
                             }
                             WsPayload::ClipboardImage { data_base64 } => {
+                                if !state.paired_client_registry.take_clipboard_request(&token) {
+                                    tracing::warn!(
+                                        token_hint = %token_hint,
+                                        "dropping unsolicited clipboard image payload"
+                                    );
+                                    continue;
+                                }
                                 decode_clipboard_image_message(data_base64)
                             }
                             WsPayload::ClipboardImageFailed { message } => {
+                                if !state.paired_client_registry.take_clipboard_request(&token) {
+                                    tracing::warn!(
+                                        token_hint = %token_hint,
+                                        "dropping unsolicited clipboard image failure"
+                                    );
+                                    continue;
+                                }
                                 SessionMessage::ClipboardImageFailed {
                                     message: truncate_ws_error_message(&message),
                                 }

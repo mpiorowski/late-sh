@@ -7,7 +7,6 @@ use late_core::{
         rss_feed::RssFeed,
         rss_feed_read::RssFeedRead,
     },
-    telemetry::TracedExt,
 };
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
@@ -15,10 +14,14 @@ use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 const ENTRY_LIMIT: i64 = 100;
+// Keep at least this many recent entries visible per feed so one
+// high-volume feed cannot evict weekly/monthly feeds from the inbox.
+const PER_FEED_ENTRY_LIMIT: i64 = 20;
 const POLL_LIMIT: i64 = 64;
 const POLL_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
-const FEED_MAX_BYTES: u64 = 1_000_000;
+const FEED_MAX_BYTES: usize = 1_000_000;
+const FEED_MAX_REDIRECTS: usize = 5;
 const MAX_ENTRIES_PER_FETCH: usize = 20;
 
 #[derive(Clone, Default)]
@@ -60,7 +63,6 @@ pub enum FeedEvent {
 #[derive(Clone)]
 pub struct FeedService {
     db: Db,
-    http_client: reqwest::Client,
     snapshot_tx: watch::Sender<FeedSnapshot>,
     snapshot_rx: watch::Receiver<FeedSnapshot>,
     evt_tx: broadcast::Sender<FeedEvent>,
@@ -72,7 +74,6 @@ impl FeedService {
         let (evt_tx, _) = broadcast::channel(256);
         Self {
             db,
-            http_client: reqwest::Client::new(),
             snapshot_tx,
             snapshot_rx,
             evt_tx,
@@ -113,7 +114,9 @@ impl FeedService {
     async fn do_list(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         let feeds = RssFeed::list_for_user(&client, user_id).await?;
-        let entries = RssEntry::list_visible_for_user(&client, user_id, ENTRY_LIMIT).await?;
+        let entries =
+            RssEntry::list_visible_for_user(&client, user_id, ENTRY_LIMIT, PER_FEED_ENTRY_LIMIT)
+                .await?;
         self.snapshot_tx.send(FeedSnapshot {
             user_id: Some(user_id),
             feeds,
@@ -394,23 +397,21 @@ impl FeedService {
         Ok(inserted)
     }
 
+    // Feed URLs are user-supplied, so fetches go through the SSRF-guarded
+    // downloader (private/link-local IPs rejected, DNS pinned, every redirect
+    // hop re-validated) instead of a plain reqwest client.
     async fn fetch_feed_body(&self, url: &str) -> Result<String> {
-        let response = tokio::time::timeout(FETCH_TIMEOUT, self.http_client.get(url).send_traced())
-            .await
-            .context("RSS fetch timed out")??;
-        if !response.status().is_success() {
-            anyhow::bail!("RSS returned HTTP {}", response.status());
-        }
-        if let Some(len) = response.content_length()
-            && len > FEED_MAX_BYTES
-        {
-            anyhow::bail!("RSS body exceeds {} bytes", FEED_MAX_BYTES);
-        }
-
-        let bytes = response.bytes().await?;
-        if bytes.len() as u64 > FEED_MAX_BYTES {
-            anyhow::bail!("RSS body exceeds {} bytes", FEED_MAX_BYTES);
-        }
+        let bytes = tokio::time::timeout(
+            FETCH_TIMEOUT,
+            crate::app::files::image_upload::download_url_bytes_following_redirects(
+                url,
+                FETCH_TIMEOUT,
+                FEED_MAX_BYTES,
+                FEED_MAX_REDIRECTS,
+            ),
+        )
+        .await
+        .context("RSS fetch timed out")??;
         Ok(String::from_utf8_lossy(&bytes).to_string())
     }
 }

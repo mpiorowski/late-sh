@@ -2,7 +2,7 @@ use late_core::MutexRecover;
 use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
 use serde::Serialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -76,6 +76,10 @@ pub struct PairedClientRegistry {
     clients: Arc<Mutex<HashMap<String, Vec<PairControlEntry>>>>,
     next_id: Arc<AtomicU64>,
     icecast_base_url: Arc<String>,
+    /// Tokens with an outstanding `RequestClipboardImage`. Inbound clipboard
+    /// payloads are dropped unless their token holds a slot here, so a rogue
+    /// paired client cannot queue multi-MB images into the session channel.
+    clipboard_requests: Arc<Mutex<HashSet<String>>>,
 }
 
 #[derive(Clone)]
@@ -104,6 +108,7 @@ impl PairedClientRegistry {
             clients: Arc::default(),
             next_id: Arc::default(),
             icecast_base_url: Arc::new(icecast_base_url.into()),
+            clipboard_requests: Arc::default(),
         }
     }
 
@@ -162,6 +167,7 @@ impl PairedClientRegistry {
         );
         if entries.is_empty() {
             clients.remove(token);
+            self.clipboard_requests.lock_recover().remove(token);
         }
     }
 
@@ -380,7 +386,18 @@ impl PairedClientRegistry {
             );
             return false;
         }
+        self.clipboard_requests
+            .lock_recover()
+            .insert(token.to_string());
         true
+    }
+
+    /// Consume the outstanding clipboard request for `token`, if any. Called
+    /// by the pair WS handler before it accepts an inbound clipboard image or
+    /// failure payload; a `false` return means the payload is unsolicited and
+    /// must be dropped.
+    pub fn take_clipboard_request(&self, token: &str) -> bool {
+        self.clipboard_requests.lock_recover().remove(token)
     }
 
     /// Update every entry for `user_id` to the new audio source and push
@@ -770,6 +787,47 @@ mod tests {
 
         assert!(!registry.request_clipboard_image("tok1"));
         assert!(browser_rx.try_recv().is_err());
+        assert!(!registry.take_clipboard_request("tok1"));
+    }
+
+    #[test]
+    fn paired_client_clipboard_request_consumed_once() {
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
+
+        let (cli_tx, _cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cli_id = registry.register(
+            "tok1".to_string(),
+            cli_tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["clipboard_image".to_string()],
+                muted: false,
+                volume_percent: 30,
+                ..Default::default()
+            },
+        );
+
+        // No request outstanding yet: inbound payloads must be rejected.
+        assert!(!registry.take_clipboard_request("tok1"));
+
+        assert!(registry.request_clipboard_image("tok1"));
+        // First inbound payload consumes the slot; a second one is
+        // unsolicited and gets dropped by the WS handler.
+        assert!(registry.take_clipboard_request("tok1"));
+        assert!(!registry.take_clipboard_request("tok1"));
+
+        // Unregistering the last entry clears any stale outstanding request.
+        assert!(registry.request_clipboard_image("tok1"));
+        registry.unregister_if_match("tok1", cli_id);
+        assert!(!registry.take_clipboard_request("tok1"));
     }
 
     #[test]
