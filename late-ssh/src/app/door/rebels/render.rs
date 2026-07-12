@@ -284,10 +284,11 @@ pub fn blit_screen(buf: &mut Buffer, area: Rect, screen: &vt100::Screen) {
     // which navigate purely by moving the cursor, are visible at all.
     if !screen.hide_cursor() {
         let (row, col) = screen.cursor_position();
-        if row < area.height && col < area.width {
-            if let Some(dst) = buf.cell_mut((area.x + col, area.y + row)) {
-                dst.set_style(dst.style().add_modifier(Modifier::REVERSED));
-            }
+        if row < area.height
+            && col < area.width
+            && let Some(dst) = buf.cell_mut((area.x + col, area.y + row))
+        {
+            dst.set_style(dst.style().add_modifier(Modifier::REVERSED));
         }
     }
 }

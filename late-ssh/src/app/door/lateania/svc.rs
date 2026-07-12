@@ -1249,11 +1249,8 @@ impl LateaniaService {
         };
         // The named-achievement bosses are the story tier: they ship to #lounge
         // via the structured `BossSlain` kind.
-        self.activity.boss_slain_task(
-            outcome.user_id,
-            ActivityGame::Mud,
-            outcome.mob_name.clone(),
-        );
+        self.activity
+            .boss_slain_task(outcome.user_id, ActivityGame::Mud, outcome.mob_name.clone());
 
         let chip_svc = self.chip_svc.clone();
         let activity = self.activity.clone();
