@@ -1235,17 +1235,10 @@ impl LateaniaService {
     }
 
     fn publish_kill_outcome(&self, outcome: KillOutcome) {
-        // Boss and sub-boss falls are the story tier: they ship to #lounge
-        // via the structured `BossSlain` kind, while the per-mob `GameWon`
-        // below stays dashboard/quest-only noise.
-        if outcome.boss {
-            self.activity.boss_slain_task(
-                outcome.user_id,
-                ActivityGame::Mud,
-                outcome.mob_name.clone(),
-            );
-        }
         let Some(achievement) = outcome.achievement else {
+            // Ordinary mobs *and* the regional/sub-bosses stay dashboard/quest
+            // -only noise. Only the three named realm crowns (below) reach
+            // #lounge — the regional bosses fall so often they buried the feed.
             self.activity.game_won_task(
                 outcome.user_id,
                 ActivityGame::Mud,
@@ -1254,6 +1247,13 @@ impl LateaniaService {
             );
             return;
         };
+        // The named-achievement bosses are the story tier: they ship to #lounge
+        // via the structured `BossSlain` kind.
+        self.activity.boss_slain_task(
+            outcome.user_id,
+            ActivityGame::Mud,
+            outcome.mob_name.clone(),
+        );
 
         let chip_svc = self.chip_svc.clone();
         let activity = self.activity.clone();
@@ -1344,9 +1344,6 @@ impl LateaniaService {
 struct KillOutcome {
     user_id: Uuid,
     mob_name: String,
-    /// The mob's `MobSpawn.boss` flag: bosses and sub-bosses alike, not just
-    /// the named achievement three.
-    boss: bool,
     achievement: Option<BossAchievement>,
 }
 
