@@ -54,6 +54,13 @@ pub enum ActivityKind {
     SatDown {
         game: ActivityGame,
     },
+    /// A finished daily correspondence match. `action` carries the full
+    /// match-level phrase ("beat bob at Chess" / "drew with bob at Connect
+    /// Four"); `game` is the label, kept only for #lounge repeat-throttling.
+    /// Fired only on a finish (win/loss or draw), never on posting or claiming.
+    DailyResult {
+        game: String,
+    },
     BonsaiWatered,
     BonsaiLost {
         survived_days: i32,
@@ -68,7 +75,8 @@ impl ActivityKind {
             | Self::GameEvent { .. }
             | Self::GameStarted { .. }
             | Self::BossSlain { .. }
-            | Self::SatDown { .. } => ActivityCategory::Game,
+            | Self::SatDown { .. }
+            | Self::DailyResult { .. } => ActivityCategory::Game,
             Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
         }
@@ -312,6 +320,44 @@ impl ActivityEvent {
             username,
             ActivityKind::SatDown { game },
             action,
+        )
+    }
+
+    /// A finished daily match with a decisive result, attributed to the winner.
+    /// `loser` names the other player; the line reads "{winner} beat {loser} at
+    /// {game}".
+    pub fn daily_win(
+        winner_id: Uuid,
+        winner: impl Into<String>,
+        loser: impl AsRef<str>,
+        game_label: &str,
+    ) -> Self {
+        Self::new(
+            Some(winner_id),
+            winner,
+            ActivityKind::DailyResult {
+                game: game_label.to_string(),
+            },
+            format!("beat {} at {game_label}", loser.as_ref()),
+        )
+    }
+
+    /// A finished daily match that ended in a draw. Attributed to `player_a`
+    /// (arbitrary — the line names both): "{player_a} drew with {player_b} at
+    /// {game}".
+    pub fn daily_draw(
+        player_a_id: Uuid,
+        player_a: impl Into<String>,
+        player_b: impl AsRef<str>,
+        game_label: &str,
+    ) -> Self {
+        Self::new(
+            Some(player_a_id),
+            player_a,
+            ActivityKind::DailyResult {
+                game: game_label.to_string(),
+            },
+            format!("drew with {} at {game_label}", player_b.as_ref()),
         )
     }
 

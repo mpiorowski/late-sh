@@ -12,6 +12,7 @@ use serde_json::Value;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
+use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::games::{
     chess_core::{
         rules,
@@ -38,6 +39,10 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 pub struct DailyService {
     db: Db,
     chip_svc: ChipService,
+    /// #lounge feed sink. The *only* thing daily matches publish to activity:
+    /// a single line when a match finishes (win/loss or draw). No post/claim
+    /// event, nothing else — see `finish_events`.
+    activity: ActivityPublisher,
     snapshot_tx: watch::Sender<Arc<DailySnapshot>>,
     snapshot_rx: watch::Receiver<Arc<DailySnapshot>>,
     event_tx: broadcast::Sender<DailyEvent>,
@@ -235,12 +240,13 @@ impl DailyChessState {
 }
 
 impl DailyService {
-    pub fn new(db: Db, chip_svc: ChipService) -> Self {
+    pub fn new(db: Db, chip_svc: ChipService, activity: ActivityPublisher) -> Self {
         let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(DailySnapshot::default()));
         let (event_tx, _) = broadcast::channel(256);
         Self {
             db,
             chip_svc,
+            activity,
             snapshot_tx,
             snapshot_rx,
             event_tx,
@@ -921,6 +927,18 @@ impl DailyService {
             winner_user_id,
             result: result.to_string(),
         });
+        // Announce the finished match to #lounge — one line per match, whether
+        // decisive (win/loss) or a draw. This is the only activity daily games
+        // publish; posting/claiming stay silent. `opponent_id` is always set on
+        // a finished (claimed) match, but guard rather than assume.
+        if let Some(opponent) = opponent_id {
+            self.activity.daily_result_task(
+                game.display_name(),
+                challenger_id,
+                opponent,
+                winner_user_id,
+            );
+        }
         let Some(winner) = winner_user_id else {
             return;
         };

@@ -32,11 +32,23 @@ impl DailyGame {
     }
 
     /// Lowercase display name; also what `/challenge` accepts.
+    /// The lowercase token used in `/challenge <game>` and usage banners.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Chess => "chess",
             Self::Battleship => "battleship",
             Self::ConnectFour => "connect4",
+        }
+    }
+
+    /// The human-readable game name for prose surfaces (e.g. the #lounge result
+    /// line "beat bob at Connect Four"). Distinct from `label`, which is the
+    /// lowercase command token.
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Chess => "Chess",
+            Self::Battleship => "Battleship",
+            Self::ConnectFour => "Connect Four",
         }
     }
 

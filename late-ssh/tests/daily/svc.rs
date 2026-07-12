@@ -8,13 +8,31 @@ use late_ssh::app::daily::games::DailyGame;
 use late_ssh::app::daily::svc::{
     DAILY_MAX_ACTIVE_ENTRIES, DailyChessState, DailyOutcome, DailyService,
 };
+use late_ssh::app::activity::event::{ActivityEvent, ActivityKind};
+use late_ssh::app::activity::publisher::ActivityPublisher;
 use late_ssh::app::games::chips::svc::ChipService;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use super::helpers::new_test_db;
 
 async fn daily_service(test_db: &TestDb) -> DailyService {
-    DailyService::new(test_db.db.clone(), ChipService::new(test_db.db.clone()))
+    daily_service_with_activity(test_db).await.0
+}
+
+/// A service plus a receiver on its activity feed, for asserting the #lounge
+/// result line a finished match emits.
+async fn daily_service_with_activity(
+    test_db: &TestDb,
+) -> (DailyService, broadcast::Receiver<ActivityEvent>) {
+    let (activity_tx, activity_rx) = broadcast::channel::<ActivityEvent>(64);
+    let publisher = ActivityPublisher::new(test_db.db.clone(), activity_tx);
+    let svc = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        publisher,
+    );
+    (svc, activity_rx)
 }
 
 fn chess_state(row: &DailyMatch) -> DailyChessState {
@@ -213,6 +231,57 @@ async fn checkmate_finishes_match_and_pays_the_winner() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert_eq!(credited, Some(500), "winner never received the win payout");
+}
+
+#[tokio::test]
+async fn finished_match_posts_a_lounge_result_line() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-lounge-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-lounge-opponent").await;
+    let (svc, mut activity_rx) = daily_service_with_activity(&test_db).await;
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .await
+        .expect("post challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim challenge");
+    let (white, black) = white_black(&claimed);
+
+    // Fool's mate again: black delivers Qh4#.
+    svc.play_move(white, claimed.id, sq(5, 1), sq(5, 2))
+        .await
+        .expect("f3");
+    svc.play_move(black, claimed.id, sq(4, 6), sq(4, 4))
+        .await
+        .expect("e5");
+    svc.play_move(white, claimed.id, sq(6, 1), sq(6, 3))
+        .await
+        .expect("g4");
+    svc.play_move(black, claimed.id, sq(3, 7), sq(7, 3))
+        .await
+        .expect("Qh4#");
+
+    // The result line is emitted from a spawned task (username resolution is
+    // async), so await it with a timeout.
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), activity_rx.recv())
+        .await
+        .expect("a lounge result event arrives")
+        .expect("activity channel open");
+
+    assert_eq!(event.user_id, Some(black), "attributed to the winner");
+    assert!(
+        matches!(&event.kind, ActivityKind::DailyResult { game } if game == "Chess"),
+        "expected a Chess DailyResult, got {:?}",
+        event.kind
+    );
+    assert!(
+        event.action.starts_with("beat ") && event.action.ends_with("at Chess"),
+        "unexpected result phrasing: {:?}",
+        event.action
+    );
 }
 
 #[tokio::test]

@@ -82,6 +82,9 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             | ActivityGame::Snake
             | ActivityGame::Traffic => false,
         },
+        // Finished daily correspondence matches: one line per match (win/loss
+        // or draw). Rare and human-vs-human, so a genuine story.
+        ActivityKind::DailyResult { .. } => true,
         // Quest-only grind signals, never surfaced anywhere public.
         ActivityKind::GamePlayed { .. } | ActivityKind::GameScored { .. } => false,
         // The bonsai is a private ritual: neither the daily watering nor the

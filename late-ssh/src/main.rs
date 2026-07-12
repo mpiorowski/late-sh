@@ -212,8 +212,11 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::arcade::le_word::svc::LeWordService::new(db.clone(), activity_tx.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
     let _chip_activity_reward_task = chip_service.start_activity_reward_task(activity_tx.clone());
-    let daily_service =
-        late_ssh::app::daily::svc::DailyService::new(db.clone(), chip_service.clone());
+    let daily_service = late_ssh::app::daily::svc::DailyService::new(
+        db.clone(),
+        chip_service.clone(),
+        activity_publisher.clone(),
+    );
     daily_service.refresh_task();
     daily_service.start_sweeper_task();
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());

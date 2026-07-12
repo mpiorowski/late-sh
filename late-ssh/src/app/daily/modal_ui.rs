@@ -148,6 +148,25 @@ fn selected_line_index(daily: &DailyState, mine_count: usize, lobby_count: usize
     live_base + (after_mine - lobby_count)
 }
 
+// List rows are a fixed grid: marker, opponent, game, detail, status. `{:<N}`
+// alone pads but never truncates, so a long username would swallow the gap
+// and run columns together; `col` truncates with an ellipsis and always
+// leaves at least one space before the next column.
+const NAME_COL: usize = 16;
+const GAME_COL: usize = 12;
+const DETAIL_COL: usize = 25;
+
+fn col(text: &str, width: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < width {
+        return format!("{text:<width$}");
+    }
+    let mut out: String = chars.into_iter().take(width.saturating_sub(2)).collect();
+    out.push('…');
+    out.push(' ');
+    out
+}
+
 fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line<'static> {
     let (_, opponent) = daily.opponent_of(item);
     let opponent = opponent.unwrap_or_else(|| "player".to_string());
@@ -175,7 +194,7 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
 
     let mut spans = vec![marker_span(selected)];
     spans.push(Span::styled(
-        format!("{opponent:<16}"),
+        col(&opponent, NAME_COL),
         Style::default().fg(if my_turn {
             theme::TEXT_BRIGHT()
         } else {
@@ -183,11 +202,11 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
         }),
     ));
     spans.push(Span::styled(
-        format!("{:<12}", item.game.label()),
+        col(item.game.label(), GAME_COL),
         Style::default().fg(theme::TEXT_DIM()),
     ));
     spans.push(Span::styled(
-        format!("{progress:<18}"),
+        col(&progress, DETAIL_COL),
         Style::default().fg(theme::TEXT_DIM()),
     ));
     if my_turn {
@@ -234,14 +253,14 @@ fn finished_line(daily: &DailyState, item: &DailyFinishedItem, selected: bool) -
 
     let mut spans = vec![marker_span(selected)];
     spans.push(Span::styled(
-        format!("{opponent:<16}"),
+        col(&opponent, NAME_COL),
         Style::default().fg(theme::TEXT_BRIGHT()),
     ));
     spans.push(Span::styled(
-        format!("{:<12}", item.game.label()),
+        col(item.game.label(), GAME_COL),
         Style::default().fg(theme::TEXT_DIM()),
     ));
-    spans.push(Span::styled(format!("{outcome:<18}"), style));
+    spans.push(Span::styled(col(&outcome, DETAIL_COL), style));
     spans.push(Span::styled(
         "enter view · x dismiss",
         Style::default()
@@ -277,7 +296,7 @@ fn challenge_line(
 
     let mut spans = vec![marker_span(selected)];
     spans.push(Span::styled(
-        format!("{poster:<16}"),
+        col(&poster, NAME_COL),
         Style::default().fg(if mine {
             theme::TEXT_DIM()
         } else {
@@ -285,21 +304,21 @@ fn challenge_line(
         }),
     ));
     spans.push(Span::styled(
-        format!("{:<12}", challenge.game.label()),
+        col(challenge.game.label(), GAME_COL),
         Style::default().fg(theme::TEXT()),
     ));
     match target {
         Some(target) => spans.push(Span::styled(
-            format!("{:<18}", format!("challenges {target}")),
+            col(&format!("challenges {target}"), DETAIL_COL),
             Style::default().fg(theme::AMBER_DIM()),
         )),
         None => spans.push(Span::styled(
-            format!("{:<18}", "open challenge"),
+            col("open challenge", DETAIL_COL),
             Style::default().fg(theme::TEXT_DIM()),
         )),
     }
     spans.push(Span::styled(
-        format!("{} chips to the winner", challenge.game.win_payout()),
+        format!("{} chips", challenge.game.win_payout()),
         Style::default().fg(theme::AMBER_DIM()),
     ));
     if mine {
@@ -329,6 +348,9 @@ fn spectate_line(item: &DailyMatchItem, selected: bool) -> Line<'static> {
         DailyGame::Battleship => format!("{} shots", item.move_count),
         DailyGame::ConnectFour => format!("{} drops", item.move_count),
     };
+    // The versus pair is two usernames wide, so it takes the name and game
+    // columns together and the game rides with the progress instead.
+    let detail = format!("{} · {}", item.game.label(), progress);
     let to_move = match item.turn_user_id {
         Some(id) if id == item.challenger_id => format!("{challenger} to move"),
         Some(id) if id == item.opponent_id => format!("{opponent} to move"),
@@ -341,15 +363,11 @@ fn spectate_line(item: &DailyMatchItem, selected: bool) -> Line<'static> {
 
     let mut spans = vec![marker_span(selected)];
     spans.push(Span::styled(
-        format!("{:<16}", format!("{challenger} v {opponent}")),
+        col(&format!("{challenger} v {opponent}"), NAME_COL + GAME_COL),
         Style::default().fg(theme::TEXT()),
     ));
     spans.push(Span::styled(
-        format!("{:<12}", item.game.label()),
-        Style::default().fg(theme::TEXT_DIM()),
-    ));
-    spans.push(Span::styled(
-        format!("{progress:<18}"),
+        col(&detail, DETAIL_COL),
         Style::default().fg(theme::TEXT_DIM()),
     ));
     spans.push(Span::styled(
@@ -434,7 +452,7 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
                         }),
                     ),
                     Span::styled(
-                        format!("{:>4} chips to the winner", game.win_payout()),
+                        format!("{:>4} chips", game.win_payout()),
                         Style::default().fg(if selected {
                             theme::AMBER_DIM()
                         } else {
@@ -460,7 +478,7 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
         Some(buffer) => {
             lines.push(Line::from(Span::styled(
                 format!(
-                    "   {} · {} chips to the winner",
+                    "   {} · {} chips",
                     draft.game().label(),
                     draft.game().win_payout()
                 ),
@@ -589,4 +607,28 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .split(vertical[0]);
     horizontal[0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::col;
+
+    #[test]
+    fn col_pads_short_text_to_width() {
+        assert_eq!(col("chess", 8), "chess   ");
+    }
+
+    #[test]
+    fn col_always_leaves_a_gap_before_the_next_column() {
+        // Exactly width chars would swallow the separator; the longest
+        // fitting content is width - 1 chars plus one space.
+        assert_eq!(col("12345678", 8), "123456… ");
+        assert_eq!(col("1234567", 8), "1234567 ");
+        assert_eq!(col("challenges @kirii.md", 18), "challenges @kiri… ");
+    }
+
+    #[test]
+    fn col_counts_chars_not_bytes() {
+        assert_eq!(col("héllo", 8), "héllo   ");
+    }
 }

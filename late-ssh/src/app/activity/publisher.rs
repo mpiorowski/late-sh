@@ -75,6 +75,44 @@ impl ActivityPublisher {
         });
     }
 
+    /// Announce a finished daily match to #lounge. `winner_id` is `None` for a
+    /// draw; otherwise it must be one of the two players. Resolves both names,
+    /// then emits a single `DailyResult` event (one line per match).
+    pub fn daily_result_task(
+        &self,
+        game_label: &'static str,
+        challenger_id: Uuid,
+        opponent_id: Uuid,
+        winner_id: Option<Uuid>,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let event = match winner_id {
+                Some(winner) => {
+                    let loser = if winner == challenger_id {
+                        opponent_id
+                    } else {
+                        challenger_id
+                    };
+                    let winner_name = publisher.username_for(winner).await;
+                    let loser_name = publisher.username_for(loser).await;
+                    ActivityEvent::daily_win(winner, winner_name, loser_name, game_label)
+                }
+                None => {
+                    let challenger_name = publisher.username_for(challenger_id).await;
+                    let opponent_name = publisher.username_for(opponent_id).await;
+                    ActivityEvent::daily_draw(
+                        challenger_id,
+                        challenger_name,
+                        opponent_name,
+                        game_label,
+                    )
+                }
+            };
+            let _ = publisher.tx.send(event);
+        });
+    }
+
     pub fn sat_down_task(&self, user_id: Uuid, game: ActivityGame) {
         let publisher = self.clone();
         tokio::spawn(async move {
