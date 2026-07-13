@@ -988,8 +988,7 @@ async fn stale_match_chat_rooms_are_reaped_after_30_days() {
             .expect("claim challenge");
         match_ids.push(claimed.id);
     }
-    let (stale_finished, fresh_finished, stale_active) =
-        (match_ids[0], match_ids[1], match_ids[2]);
+    let (stale_finished, fresh_finished, stale_active) = (match_ids[0], match_ids[1], match_ids[2]);
     svc.resign(challenger.id, stale_finished)
         .await
         .expect("resign stale match");
