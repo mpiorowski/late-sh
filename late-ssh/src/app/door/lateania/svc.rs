@@ -1505,6 +1505,9 @@ struct PlayerState {
     skills: HashMap<GatherSkill, i64>,
     /// Crafting-skill xp, keyed by trade (same shape and curve as `skills`).
     craft_skills: HashMap<CraftSkill, i64>,
+    /// A weapon coated with poison: (damage per tick, strikes remaining). Each
+    /// landed melee hit leaves a poison DoT and spends one charge. Transient.
+    weapon_poison: Option<(i32, u8)>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -1949,6 +1952,14 @@ const TEMPLE_ROOM: RoomId = 4;
 const GAME_RESPAWN: Duration = Duration::from_secs(40);
 /// How long a harvested resource node stays depleted before it regrows.
 const NODE_RESPAWN: Duration = Duration::from_secs(45);
+/// Poison damage per tick applied by a coated weapon, by poison tier (0..5).
+const POISON_PER_TICK: [i32; 5] = [4, 8, 14, 22, 34];
+/// Strikes a single weapon-coating lasts before the poison is spent.
+const POISON_CHARGES: u8 = 5;
+/// Ticks each poisoned strike festers in the foe.
+const POISON_DOT_TICKS: u8 = 3;
+/// Ticks a cooked meal's well-fed regen lasts.
+const WELL_FED_TICKS: u8 = 8;
 
 impl WorldState {
     fn new(room_id: Uuid, world: World) -> Self {
@@ -2068,6 +2079,7 @@ impl WorldState {
             appearance: [0; appearance::N_FIELDS],
             skills: HashMap::new(),
             craft_skills: HashMap::new(),
+            weapon_poison: None,
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
@@ -4367,6 +4379,11 @@ impl WorldState {
 
     fn use_item(&mut self, user_id: Uuid, item_id: u32) {
         let Some(it) = item(item_id) else { return };
+        // Poisons aren't drunk - they coat your weapon.
+        if let Some(tier) = super::items::poison_tier(item_id) {
+            self.coat_weapon(user_id, item_id, tier);
+            return;
+        }
         let ItemKind::Consumable { heal, restore } = it.kind else {
             self.log_to(
                 user_id,
@@ -4383,6 +4400,8 @@ impl WorldState {
         if !has {
             return;
         }
+        // Cooked food grants a well-fed regen on top of its immediate heal.
+        let well_fed = super::items::food_tier(item_id).map(|t| 2 + t as i32);
         if let Some(p) = self.players.get_mut(&user_id) {
             if let Some(pos) = p.inventory.iter().position(|i| *i == item_id) {
                 p.inventory.remove(pos);
@@ -4390,8 +4409,43 @@ impl WorldState {
             let max = p.max_hp();
             p.hp = (p.hp + heal).min(max);
             p.resource = (p.resource + restore).min(p.max_resource);
+            if let Some(regen) = well_fed {
+                p.self_effects.push(ActiveEffect {
+                    kind: AbilityEffect::HealOverTime,
+                    magnitude: regen,
+                    remaining: WELL_FED_TICKS,
+                });
+            }
         }
-        self.log_to(user_id, LogKind::Loot, format!("You use {}.", it.name));
+        let verb = if well_fed.is_some() { "eat" } else { "use" };
+        self.log_to(user_id, LogKind::Loot, format!("You {verb} {}.", it.name));
+        self.dirty = true;
+    }
+
+    /// Coat the player's weapon with a poison: each landed melee hit will leave a
+    /// poison DoT until the charges run out. Consumes the vial.
+    fn coat_weapon(&mut self, user_id: Uuid, item_id: u32, tier: u32) {
+        let has = self
+            .players
+            .get(&user_id)
+            .map(|p| p.inventory.contains(&item_id))
+            .unwrap_or(false);
+        if !has {
+            return;
+        }
+        let per_tick = POISON_PER_TICK[(tier as usize).min(POISON_PER_TICK.len() - 1)];
+        let name = item(item_id).map(|i| i.name).unwrap_or("poison");
+        if let Some(p) = self.players.get_mut(&user_id) {
+            if let Some(pos) = p.inventory.iter().position(|i| *i == item_id) {
+                p.inventory.remove(pos);
+            }
+            p.weapon_poison = Some((per_tick, POISON_CHARGES));
+        }
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            format!("You coat your weapon with {name} ({POISON_CHARGES} strikes)."),
+        );
         self.dirty = true;
     }
 
@@ -4698,6 +4752,29 @@ impl WorldState {
             if dead {
                 self.kill_mob(user_id, mob_id);
                 continue;
+            }
+            // A poison-coated weapon leaves a festering DoT in the struck foe and
+            // spends one charge (the target is the player's current mob).
+            let poison = self.players.get(&user_id).and_then(|p| p.weapon_poison);
+            if let Some((per_tick, charges)) = poison {
+                self.seed_mob_dot(
+                    user_id,
+                    per_tick,
+                    DamageType::Poison,
+                    POISON_DOT_TICKS,
+                    "Your poison",
+                );
+                if let Some(p) = self.players.get_mut(&user_id) {
+                    let left = charges.saturating_sub(1);
+                    p.weapon_poison = (left > 0).then_some((per_tick, left));
+                }
+                if charges <= 1 {
+                    self.log_to(
+                        user_id,
+                        LogKind::System,
+                        "The last of the poison is spent.".to_string(),
+                    );
+                }
             }
             // A living, fighting companion piles onto the same target. If its
             // bite finishes the foe, the kill is credited to its owner.
@@ -6477,6 +6554,56 @@ mod tests {
             s2.players[&uid(1)].craft_xp(CraftSkill::Alchemy),
             250,
             "alchemy xp reloads through the save"
+        );
+    }
+
+    #[test]
+    fn a_poison_coats_the_weapon_instead_of_being_drunk() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let poison = super::super::items::poison_id(2);
+        s.players.get_mut(&uid(1)).unwrap().inventory.push(poison);
+        s.use_item(uid(1), poison);
+        let p = &s.players[&uid(1)];
+        assert!(p.weapon_poison.is_some(), "the weapon is coated");
+        assert!(!p.inventory.contains(&poison), "the vial is used up");
+    }
+
+    #[test]
+    fn a_coated_weapon_poisons_the_foe_and_spends_a_charge() {
+        let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+        s.players.get_mut(&uid(1)).unwrap().weapon_poison = Some((10, POISON_CHARGES));
+        s.tick();
+        assert_eq!(
+            s.players[&uid(1)].weapon_poison.map(|(_, c)| c),
+            Some(POISON_CHARGES - 1),
+            "a landed strike spends one poison charge"
+        );
+        assert!(
+            s.mob_dots.get(&mob_id).is_some_and(|d| !d.is_empty()),
+            "the struck foe is left with a poison DoT"
+        );
+    }
+
+    #[test]
+    fn eating_cooked_food_grants_a_well_fed_regen() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let meal = super::super::items::food_id(1);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.inventory.push(meal);
+            p.hp = 1;
+        }
+        s.use_item(uid(1), meal);
+        let p = &s.players[&uid(1)];
+        assert!(
+            p.self_effects
+                .iter()
+                .any(|e| e.kind == AbilityEffect::HealOverTime && e.remaining > 0),
+            "a hot meal leaves a well-fed regen"
         );
     }
 

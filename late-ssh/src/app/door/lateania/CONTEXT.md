@@ -236,6 +236,13 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 - Crafted outputs are ordinary items, so they equip / are consumed / sell through the existing systems (weapons & armor equip, potions & food heal/restore, poisons are sellable valuables until the depth update makes them applyable).
 - The **Trades** block shows all ten trades (gather then craft); the recipe `inputs` are summarised as `"3x Copper Ingot, 1x Oak Plank"`.
 
+### Crafting depth [VOLATILE]
+
+- **Applied poisons**: using a crafted poison (`items::poison_tier` routes it out of the normal consumable path in `use_item`) coats the weapon - `PlayerState::weapon_poison = Some((per_tick, charges))` (transient, `POISON_CHARGES = 5`). Each landed melee strike in the combat round seeds a `DamageType::Poison` DoT on the struck foe via the existing `seed_mob_dot` and spends a charge; `POISON_PER_TICK` scales the damage by poison tier.
+- **Cooking buffs**: eating crafted food (`items::food_tier`) heals/restores as a normal consumable *and* pushes a `HealOverTime` self-effect (well-fed regen, `WELL_FED_TICKS`), reusing the ability HoT tick.
+- **Masterwork sinks**: two Legendary smithing recipes (`items::masterwork_id`, level 45) consume a heap of top-tier intermediates (8-10 mithril ingots + ironbark planks / dire leather) for gear a clear step above the tiered craftables - the endgame material sink.
+- None of this adds save state (`weapon_poison` is transient); no schema bump.
+
 ### Frontier and Reaches loot
 
 - `items::FRONTIER_TIERS = 20`, one tier per Frontier zone; `items::REACHES_TIERS = 20`, one per Sundered Reaches zone.

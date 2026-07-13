@@ -1128,6 +1128,22 @@ pub const fn poison_id(tier: u32) -> u32 {
 pub const fn food_id(tier: u32) -> u32 {
     CRAFTED_BASE + 240 + tier
 }
+/// Masterwork gear (the endgame recipe sinks); `n` is 0 (blade) or 1 (plate).
+pub const fn masterwork_id(n: u32) -> u32 {
+    CRAFTED_BASE + 180 + n
+}
+
+/// The tier of a poison item id, if `id` is one (used to route it to the
+/// weapon-coating action instead of the normal consumable path).
+pub fn poison_tier(id: u32) -> Option<u32> {
+    (0..5).find(|&t| poison_id(t) == id)
+}
+
+/// The tier of a cooked-food item id, if `id` is one (food grants a well-fed
+/// regen buff on top of its heal).
+pub fn food_tier(id: u32) -> Option<u32> {
+    (0..5).find(|&t| food_id(t) == id)
+}
 
 const INGOT_NAMES: [&str; 5] = [
     "Copper Ingot",
@@ -1338,6 +1354,32 @@ fn build_crafted() -> Vec<Item> {
             FOOD_PRICE[t],
         ));
     }
+    // Masterwork gear: the endgame smithing sinks, made from many top-tier
+    // materials at high skill. A clear step above the tier-4 craftables.
+    out.push(eq(
+        masterwork_id(0),
+        "Masterwork Greatblade",
+        "A flawless blade of folded mithril, the work of a master's whole art.",
+        Slot::Weapon,
+        Rarity::Legendary,
+        34,
+        0,
+        0,
+        1600,
+        None,
+    ));
+    out.push(eq(
+        masterwork_id(1),
+        "Masterwork Plate",
+        "A suit of mirror-bright mithril plate, proof against nearly anything.",
+        Slot::Chest,
+        Rarity::Legendary,
+        0,
+        80,
+        8,
+        1700,
+        None,
+    ));
     out
 }
 
@@ -1712,7 +1754,11 @@ mod tests {
 
     #[test]
     fn crafted_goods_form_a_clean_catalog() {
-        assert_eq!(crafted().len(), 50, "ten crafted kinds x five tiers");
+        assert_eq!(
+            crafted().len(),
+            52,
+            "ten crafted kinds x five tiers, plus two masterwork sinks"
+        );
         for c in crafted() {
             assert!(
                 c.id >= CRAFTED_BASE && c.id < CRAFTED_BASE + 300,

@@ -12,8 +12,8 @@
 use std::sync::OnceLock;
 
 use super::items::{
-    food_id, ingot_id, leather_armor_id, leather_id, material_id, plank_id, poison_id, potion_id,
-    smith_armor_id, smith_weapon_id, wood_weapon_id,
+    food_id, ingot_id, leather_armor_id, leather_id, masterwork_id, material_id, plank_id,
+    poison_id, potion_id, smith_armor_id, smith_weapon_id, wood_weapon_id,
 };
 use super::skills::CraftSkill;
 
@@ -165,6 +165,30 @@ fn build_recipes() -> Vec<Recipe> {
             inputs: vec![ing(fish(t), 1)],
         });
     }
+
+    // ---- Masterwork: the endgame smithing sinks -------------------------
+    // Made from a heap of the very best materials at near-max Smithing; the
+    // gear step above every tiered craftable, and a real material sink.
+    r.push(Recipe {
+        output: masterwork_id(0),
+        output_qty: 1,
+        skill: Smithing,
+        level_req: 45,
+        xp: 600,
+        inputs: vec![
+            ing(ingot_id(4), 8),
+            ing(plank_id(4), 2),
+            ing(leather_id(4), 2),
+        ],
+    });
+    r.push(Recipe {
+        output: masterwork_id(1),
+        output_qty: 1,
+        skill: Smithing,
+        level_req: 45,
+        xp: 600,
+        inputs: vec![ing(ingot_id(4), 10), ing(leather_id(4), 3)],
+    });
     r
 }
 
@@ -235,8 +259,23 @@ mod tests {
                 );
             }
         }
-        // 10 recipes per tier x 5 tiers.
-        assert_eq!(recipes().len(), 50);
+        // 10 recipes per tier x 5 tiers, plus two masterwork sinks.
+        assert_eq!(recipes().len(), 52);
+    }
+
+    #[test]
+    fn masterwork_recipes_are_an_endgame_sink() {
+        let mw = recipes()
+            .iter()
+            .find(|r| r.output == masterwork_id(0))
+            .expect("a masterwork blade recipe exists");
+        assert!(mw.level_req >= 40, "masterwork demands near-max skill");
+        assert!(
+            mw.inputs
+                .iter()
+                .any(|i| i.item == ingot_id(4) && i.qty >= 5),
+            "masterwork eats a heap of the top-tier ingot"
+        );
     }
 
     #[test]
