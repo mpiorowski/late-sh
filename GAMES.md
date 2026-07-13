@@ -2,7 +2,7 @@
 
 This guide is for contributors who want to add a new multiplayer game room to
 late.sh. By the end you should know what to write, where it lives, and which
-patterns the existing games (Blackjack, Chess, Poker, Tic-Tac-Toe, Tron) already prove out.
+patterns the existing games (Blackjack, Chess, Poker, Super Snake, Tic-Tac-Toe, Tron) already prove out.
 
 If anything here disagrees with the code, trust the code and please open a PR
 to fix this file.
@@ -30,6 +30,8 @@ Live reference implementations:
 - `late-ssh/src/app/rooms/tictactoe/` — minimal example, ~6 small files
 - `late-ssh/src/app/rooms/chess/` — two-seat timed board game using a rules crate
 - `late-ssh/src/app/rooms/tron/` — four-seat real-time light-cycle example
+- `late-ssh/src/app/rooms/ssnake/` — two-seat real-time example with embedded
+  text-asset levels (see `late-ssh/assets/ssnake_levels/`)
 - `late-ssh/src/app/rooms/poker/` — asymmetric-info example with public table
   state plus per-user private hole-card state
 - `late-ssh/src/app/rooms/blackjack/` — complex example with chips, settlements,

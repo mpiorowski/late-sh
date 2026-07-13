@@ -2,19 +2,19 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-06-22
+- Last updated: 2026-07-10
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
 - `mod.rs` only declares modules. Keep it declaration-only; do not add `pub use` re-exports.
 - `backend.rs` defines the room-game traits: `RoomGameManager` for static/table-manager behavior, `ActiveRoomBackend` for per-session active-room behavior, and `RoomGameEvent` for cross-game runtime events such as successful seat joins.
-- `registry.rs` owns the process-local `RoomGameRegistry` and dispatches `GameKind` to Asterion/Blackjack/Chess/Poker/ssHattrick/Tic-Tac-Toe/Tron managers.
+- `registry.rs` owns the process-local `RoomGameRegistry` and dispatches `GameKind` to Asterion/Blackjack/Chess/Poker/ssHattrick/Super Snake/Tic-Tac-Toe/Tron managers.
 - `svc.rs` owns persistent room creation/listing/deletion over `game_rooms` plus associated `chat_rooms(kind='game')`. It stores opaque `settings: serde_json::Value` plus generic `runtime_state: serde_json::Value`; games parse their own settings and, when they opt in, their own runtime state. Slug prefixes and human-readable labels are resolved from `RoomGameRegistry` at the call site and passed into room creation; `svc.rs` does not match on `GameKind` for either.
 - `state.rs` drains `RoomsService` snapshots/events into `App` fields, clamps list selection, refreshes/prunes active room copies, completes validated room-entry events, and emits game-turn notifications.
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
 - `ui.rs` renders the directory, create modal, active room split, and delegates game drawing.
 - `game_ui.rs` owns room-game frame/sidebar/info helpers. Room games must not import Arcade UI helpers.
-- Minted room-game rewards are recorded through `game_payout_claims`; Chess uses a 60-minute cooldown, ssHattrick uses a 15-minute cooldown, Tron uses a 5-minute cooldown, and Asterion uses a UTC daily claim.
+- Minted room-game rewards are recorded through `game_payout_claims`; Chess uses a 60-minute cooldown, ssHattrick uses a 15-minute cooldown, Tron and Super Snake use a 5-minute cooldown, and Asterion uses a UTC daily claim.
 - `filter.rs` is pure filter state over `All` or a real `GameKind`.
 - `asterion/manager.rs` maps `GameRoom.id` to process-local `AsterionService` instances and prunes stopped runtimes.
 - `asterion/svc.rs` is the authoritative in-memory Asterion runtime around `asterion-core`, with public/private snapshots, per-room update/render loops, daily escape payout, and empty-room shutdown.
@@ -43,15 +43,21 @@
 - `tictactoe/svc.rs` is the authoritative in-memory Tic-Tac-Toe board runtime.
 - `tictactoe/state.rs` is the per-session Tic-Tac-Toe client wrapper.
 - `tictactoe/ui.rs` renders the Tic-Tac-Toe board and seats.
+- `ssnake/manager.rs` maps `GameRoom.id` to process-local `SsnakeService` instances.
+- `ssnake/levels.rs` embeds and parses the 20 text levels in `late-ssh/assets/ssnake_levels/` (readable header config plus a `#`/`.`/`~` string matrix; see the assets README).
+- `ssnake/settings.rs` stores the pace preset (`relaxed`, `classic`, or `swift`) that scales each level's own `tick-millis`.
+- `ssnake/svc.rs` is the authoritative in-memory Super Snake runtime and owns the real-time tick loop and the ported original game rules.
+- `ssnake/state.rs` is the per-session Super Snake client wrapper.
+- `ssnake/ui.rs` renders the arena two matrix rows per terminal row with half blocks.
 - `tron/manager.rs` maps `GameRoom.id` to process-local `TronService` instances.
 - `tron/settings.rs` stores the light-cycle speed preset (`chill`, `standard`, or `quick`) plus the rules mode (`classic`, `gaps`, or `glitch`) in room settings. Existing persisted rooms without a `mode` key load as `classic`; newly-created default Tron rooms use `glitch`.
 - `tron/svc.rs` is the authoritative in-memory Tron grid runtime and owns the real-time tick loop.
 - `tron/state.rs` is the per-session Tron client wrapper.
 - `tron/ui.rs` renders the light-cycle grid, riders, and controls.
-- Global user-action activity lives outside Rooms in `late-ssh/src/app/activity`. The room `touch_activity` methods below are inactivity timers only. Asterion, Blackjack, Chess, Poker, ssHattrick, Tic-Tac-Toe, and Tron win outcomes publish structured `ActivityEvent::game_won(...)` values through `ActivityPublisher`; add future room-game challenge signals there instead of overloading room touch state.
+- Global user-action activity lives outside Rooms in `late-ssh/src/app/activity`. The room `touch_activity` methods below are inactivity timers only. Asterion, Blackjack, Chess, Poker, ssHattrick, Super Snake, Tic-Tac-Toe, and Tron win outcomes publish structured `ActivityEvent::game_won(...)` values through `ActivityPublisher`; add future room-game challenge signals there instead of overloading room touch state.
 
 ## Persistence Model
-- `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Asterion`, `Blackjack`, `Chess`, `Poker`, `Sshattrick`, `TicTacToe`, and `Tron`.
+- `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Asterion`, `Blackjack`, `Chess`, `Poker`, `Sshattrick`, `Ssnake`, `TicTacToe`, and `Tron`.
 - A game room persists in `game_rooms`; its chat pane is backed by a unique `chat_room_id` pointing at `chat_rooms(kind='game', visibility='public', auto_join=false, game_kind, slug)`.
 - `GameRoom::create_with_chat_room` creates the chat room and game room in one SQL CTE. `RoomsService::create_game_room` wraps that in a transaction, creates/enables the game room's `voice_channels(target_kind='game_room')` row, then joins the fixed dealer user to the game chat.
 - `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`. Entering a table is validated through `RoomsService::enter_game_room_task` before the client creates a game backend, so stale/deleted snapshot rows cannot render a board. Entry events carry a per-session request id; clients ignore completions that do not match the current pending request.
@@ -201,6 +207,20 @@
 - Glitch pickups are passive and apply from later ticks instead of requiring frame-perfect activation: `Shield` absorbs one wall/trail hit and leaves the rider stationary for that tick, `Phase` passes through one trail cell without overwriting it, and `Gap` makes the rider's next three successful moves leave no trail. Charges are visible in the rider sidebar as `S`, `P`, and `G` counters.
 - Tron uses one public `watch::Sender<TronSnapshot>`; no private state or chip-balance hook is needed.
 - Tron win outcomes credit chips by round-start rider count when the user is outside the 5-minute DB-backed Tron payout cooldown: 50 chips for 2 riders, 75 for 3 riders, and 100 for 4 riders. They publish `ActivityGame::Tron` events with the winning color in `detail`; draws do not publish win activity.
+
+## Super Snake Runtime
+- `SsnakeTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `SsnakeService`.
+- Restarting the SSH process drops in-memory matches. Existing open `game_rooms` survive, but re-entering creates a fresh table.
+- Super Snake is a 2-4 seat, humans-only port of the multiplayer half of a 1990s Turbo Pascal DOS game (single-player and computer opponents were intentionally dropped). The creator picks the table size in the create modal (persisted as `\"seats\"`, clamped 2-4, default 2). Seat colors are fixed: green, red, blue, purple. A match can start with any 2+ seated players; seats filled after the start (impossible today, sitting is blocked mid-match) would spectate via the `in_round` participant flag.
+- One match = one level. The create modal picks the initial arena (`random arena` default or a fixed level; persisted in room settings as a 0-based `level` index, absent/invalid = random). Outside a running match, any seated player can browse the arena with left/right arrows or `[`/`]`: a fixed pick renders a live preview of the level map, `random arena` shows the splash, and the next `n` uses the current choice. In-room browsing changes runtime state only; the persisted room setting stays what the creator chose. Each level file is a readable `key: value` header (name, per-level lives, shared food count, bonuses, base tick, initial length, growth factor) plus a string matrix: `#` wall, `.` floor, `~` warp tunnel. Lives are pre-set per level as its difficulty knob.
+- Ported original mechanics: snakes hold still after (re)spawn until first steer; edges wrap unless walled; food grows the snake by a random roll (`growth-factor` scaled) and scores `(growth/4) * random(0..20) + 5`; roughly 1-in-35 food spawns are pink life points that grant a life instead of score; the shared food counter ends the match, and the final eater collects the level's points/lives bonus.
+- Crashing into a wall or any snake body costs a life and plays the original tail-first death shrink, then respawns at the previous size. A player whose lives drop below zero is out; when one active participant remains the survivor wins immediately (all out simultaneously = draw). The match-complete path awards the win to the highest score among participants, ties draw. Leaving a seat mid-match forfeits that player only; the match continues while 2+ participants remain.
+- Reversal guard matches the original: a steer is rejected when it opposes either the currently-buffered direction or the direction actually moved last tick.
+- The tick loop is service-side like Tron; each level carries its own `tick-millis` (all shipped levels use a uniform 125ms so pace feels consistent across arenas) and the room pace setting (`relaxed`/`classic`/`swift`) scales it by 4/3, 1, or 3/4.
+- Rendering packs two matrix rows into one terminal row using the upper-half block, so a 63x36 arena fits in 65x20 including chrome. The arena pane is kept uncluttered: no separate status row or in-arena title; status text (food left, winner) renders as the arena border title, everything else lives in the info sidebar, and `preferred_game_height` asks for two extra rows so the centered board keeps a breathing margin from the pane edges. Snakes stay flat blocks in exactly two colors (green and red, brighter heads); an idle snake blinks its head as a "steer me" hint. Food renders as a plain colored half cell like everything else (yellow; life points pink and blinking); full-height text glyphs misalign with the half-block grid, so do not reintroduce them.
+- Super Snake uses one public `watch::Sender<SsnakeSnapshot>`; no private state or chip-balance hook is needed.
+- A winner credits 150 chips through the `ssnake_win` reward template behind the 5-minute payout cooldown and publishes `ActivityGame::Ssnake` win activity with the winning color in `detail`; draws publish no win activity.
+- Seat arrays are fixed at `MAX_SEATS = 4`; the per-room open-seat count lives in `SsnakeSnapshot::seat_limit`. The flat 150-chip `ssnake_win` payout applies regardless of table size (unlike Tron's per-rider-count keys).
 
 ## Poker Runtime
 - `PokerTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `PokerService`.
