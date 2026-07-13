@@ -445,6 +445,9 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
         hint(&mut spans, "Space/Enter", "drop");
         hint(&mut spans, "r", "resign");
     }
+    if !board.spectating && detail.row.chat_room_id.is_some() {
+        hint(&mut spans, "i", "chat");
+    }
     hint(&mut spans, "Esc", "back to lobby");
     if let Some(last) = spans.last_mut() {
         let trimmed = last.content.trim_end().to_string();

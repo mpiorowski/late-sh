@@ -109,6 +109,10 @@ pub struct DailyBoardState {
     /// Usernames captured from the snapshot when the board opened, so names
     /// survive the match leaving the active list on finish.
     pub names: HashMap<Uuid, String>,
+    /// The idempotent match-chat join (which also kicks off the chat list
+    /// refresh + tail chain) has been requested for this board. Set by
+    /// `App::tick` once the loaded row reveals the chat room id.
+    pub chat_join_requested: bool,
     /// Last drawn chess board rect + tier, set during render and consumed by
     /// the mouse hit test. Cleared before every board draw.
     pub board_geometry: Cell<Option<(Rect, Tier)>>,
@@ -474,6 +478,16 @@ impl DailyState {
         matches
     }
 
+    /// Matches waiting on your move, nearest deadline first: the backtick
+    /// cycle's stops. A filtered view of `my_matches` so the hop order always
+    /// matches the panel's slot order.
+    pub fn my_turn_matches(&self) -> Vec<&DailyMatchItem> {
+        self.my_matches()
+            .into_iter()
+            .filter(|item| self.my_turn(item))
+            .collect()
+    }
+
     /// Every open challenge, oldest first (snapshot order).
     pub fn lobby(&self) -> Vec<&DailyChallengeItem> {
         self.snapshot.open_challenges.iter().collect()
@@ -737,6 +751,7 @@ impl DailyState {
             load_rx: None,
             reload_pending: false,
             names,
+            chat_join_requested: false,
             board_geometry: Cell::new(None),
             target_geometry: Cell::new(None),
         });
@@ -746,6 +761,20 @@ impl DailyState {
     pub fn close_board(&mut self) {
         self.ack_finished_result();
         self.board = None;
+    }
+
+    /// The open board's match chat room, for the embedded chat pane. `None`
+    /// for spectators (players-only chat), for matches claimed before chat
+    /// existed, and until the row has loaded.
+    pub fn board_chat_room_id(&self) -> Option<Uuid> {
+        let board = self.board.as_ref()?;
+        if board.spectating {
+            return None;
+        }
+        board
+            .detail
+            .as_ref()
+            .and_then(|detail| detail.row.chat_room_id)
     }
 
     /// Leaving a finished match's board acknowledges its result: the row

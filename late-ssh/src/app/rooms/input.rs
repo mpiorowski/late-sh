@@ -1,4 +1,3 @@
-use crate::app::state::DashboardGameToggleTarget;
 use std::time::{Duration, Instant};
 
 use crate::app::{
@@ -497,7 +496,6 @@ pub(crate) fn complete_enter_room(
         ));
     }
     app.rooms_last_active_room_id = Some(room.id);
-    app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
     app.rooms_active_room = Some(room);
     app.rooms_create_flow = None;
     true
@@ -509,11 +507,6 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
     };
     let chat_room_id = room.chat_room_id;
     touch_active_room_activity(app);
-
-    if byte == b'`' {
-        crate::app::dashboard::input::cycle_game_workspace(app);
-        return true;
-    }
 
     if byte == 0x1B
         && app

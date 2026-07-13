@@ -133,6 +133,9 @@ struct DrawContext<'a> {
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// Embedded match chat for the daily board; `None` while spectating,
+    /// loading, or on matches without a chat room.
+    daily_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     games_hub_selected: usize,
     rebels_enabled: bool,
     nethack_enabled: bool,
@@ -744,6 +747,58 @@ impl App {
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                 });
+        let daily_chat_view =
+            self.daily
+                .board_chat_room_id()
+                .map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+                    title: "Match Chat",
+                    messages: self.chat.messages_for_room(chat_room_id),
+                    overlay: self.chat.overlay(),
+                    image_modal,
+                    rows_cache: &mut self.daily_chat_rows_cache,
+                    usernames: chat_usernames,
+                    countries: chat_countries,
+                    friend_user_ids: self.chat.friend_user_ids(),
+                    afk_user_ids: self.afk_user_ids.as_ref(),
+                    message_reactions,
+                    inline_images: &self.chat.inline_image_cache,
+                    unread_marker: self
+                        .chat
+                        .room_unread_markers
+                        .get(&chat_room_id)
+                        .copied()
+                        .flatten(),
+                    current_user_id: self.user_id,
+                    voice_channel_id: self
+                        .chat
+                        .voice_channels_by_room_id
+                        .get(&chat_room_id)
+                        .map(|channel| channel.id),
+                    voice_snapshot,
+                    voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                    show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                    selected_message_id: self.chat.selected_message_id,
+                    selected_image_message: self
+                        .chat
+                        .selected_message_has_inline_image_in_room(chat_room_id),
+                    highlighted_message_id: self.chat.highlighted_message_id,
+                    reaction_picker_active: self.chat.is_reaction_leader_active(),
+                    composer: self.chat.composer(),
+                    composing: self.chat.composing,
+                    mention_matches: &self.chat.mention_ac.matches,
+                    mention_selected: self.chat.mention_ac.selected,
+                    mention_active: self.chat.mention_ac.active,
+                    reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                    is_editing: self.chat.edited_message_id.is_some(),
+                    bonsai_glyphs,
+                    chat_badges,
+                    profile_award_badges,
+                    drunk_levels: &self.drunk_levels,
+                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                    composer_rect_slot: Some(&self.chat.last_composer_rect),
+                    composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+                    chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+                });
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.
         // Both are only assembled while that screen is up.
@@ -864,6 +919,7 @@ impl App {
                         room_game_registry: &self.room_game_registry,
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
+                        daily_chat_view,
                         games_hub_selected: self.games_hub_state.selected(),
                         rebels_enabled: self.rebels_enabled,
                         nethack_enabled: self.nethack_enabled,
@@ -1345,6 +1401,7 @@ impl App {
                 ctx.daily,
                 ctx.terminal_image_protocol,
                 terminal_images,
+                ctx.daily_chat_view.take(),
             ),
         }
 

@@ -5,7 +5,12 @@ use chrono::{DateTime, Utc};
 use cozy_chess::{Board, GameStatus};
 use late_core::{
     db::Db,
-    models::{daily_match::DailyMatch, user::User},
+    models::{
+        chat_room::ChatRoom,
+        daily_match::DailyMatch,
+        user::User,
+        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -31,6 +36,8 @@ pub const DAILY_MAX_ACTIVE_ENTRIES: i64 = 10;
 pub const DAILY_MOVE_HOURS: i64 = 24;
 const DAILY_STATE_VERSION: u8 = 1;
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
+/// Chat-room reaping is an hourly concern riding the 60s sweeper loop.
+const CHAT_CLEANUP_EVERY_TICKS: u64 = 60;
 
 /// Correspondence daily games. One process-global instance like
 /// `RoomsService`; no live actor per match, every mutation loads state from
@@ -272,10 +279,12 @@ impl DailyService {
 
     /// One background loop: forfeit expired turns, then republish the
     /// snapshot. The republish doubles as the slow-poll backstop for any
-    /// mutation whose refresh was lost.
+    /// mutation whose refresh was lost. Once an hour it also reaps match
+    /// chat rooms 30+ days past finish/cancel.
     pub fn start_sweeper_task(&self) {
         let svc = self.clone();
         tokio::spawn(async move {
+            let mut ticks: u64 = 0;
             loop {
                 if let Err(e) = svc.sweep_expired().await {
                     tracing::error!(error = ?e, "failed to sweep expired daily matches");
@@ -283,9 +292,26 @@ impl DailyService {
                 if let Err(e) = svc.refresh().await {
                     tracing::error!(error = ?e, "failed to refresh daily matches");
                 }
+                if ticks % CHAT_CLEANUP_EVERY_TICKS == 0 {
+                    match svc.cleanup_stale_chat_rooms().await {
+                        Ok(0) => {}
+                        Ok(deleted) => {
+                            tracing::info!(deleted, "reaped stale daily match chat rooms");
+                        }
+                        Err(e) => {
+                            tracing::error!(error = ?e, "failed to reap stale daily match chat rooms");
+                        }
+                    }
+                }
+                ticks = ticks.wrapping_add(1);
                 tokio::time::sleep(SWEEP_INTERVAL).await;
             }
         });
+    }
+
+    async fn cleanup_stale_chat_rooms(&self) -> Result<u64> {
+        let client = self.db.get().await?;
+        DailyMatch::delete_stale_chat_rooms(&client).await
     }
 
     pub fn post_challenge_task(
@@ -433,7 +459,7 @@ impl DailyService {
     }
 
     pub async fn claim_challenge(&self, user_id: Uuid, match_id: Uuid) -> Result<DailyMatch> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         self.ensure_entry_capacity(&client, user_id).await?;
         let challenge = DailyMatch::get(&client, match_id)
             .await?
@@ -480,8 +506,22 @@ impl DailyService {
                 (serde_json::to_value(state)?, first)
             }
         };
-        let claimed = DailyMatch::claim(
-            &client,
+        // Usernames for the voice channel label, loaded before the claim
+        // transaction opens.
+        let challenger_name = User::get(&client, challenge.challenger_id)
+            .await?
+            .map(|user| user.username)
+            .ok_or_else(|| anyhow::anyhow!("challenger not found"))?;
+        let claimer_name = User::get(&client, user_id)
+            .await?
+            .map(|user| user.username)
+            .ok_or_else(|| anyhow::anyhow!("claiming user not found"))?;
+        // One transaction: the guarded claim plus the match's private chat
+        // room, both memberships, and its voice channel. If any piece fails
+        // the challenge stays open instead of leaving a half-wired match.
+        let tx = client.transaction().await?;
+        let mut claimed = DailyMatch::claim(
+            &tx,
             match_id,
             user_id,
             first_turn_user,
@@ -490,6 +530,25 @@ impl DailyService {
         )
         .await?
         .ok_or_else(|| anyhow::anyhow!("challenge is no longer open"))?;
+        let chat_room = ChatRoom::create_daily_match_room(
+            &tx,
+            &claimed.game_kind,
+            &format!("daily-{}", claimed.id),
+            claimed.challenger_id,
+            user_id,
+        )
+        .await?;
+        VoiceChannel::upsert_for_target(
+            &tx,
+            TARGET_CHAT_ROOM,
+            chat_room.id,
+            &format!("{}: {challenger_name} v {claimer_name}", game.label()),
+            true,
+        )
+        .await?;
+        DailyMatch::set_chat_room(&tx, claimed.id, chat_room.id).await?;
+        tx.commit().await?;
+        claimed.chat_room_id = Some(chat_room.id);
         let _ = self.event_tx.send(DailyEvent::ChallengeClaimed {
             match_id: claimed.id,
             challenger_id: claimed.challenger_id,

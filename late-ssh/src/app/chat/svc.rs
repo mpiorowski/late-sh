@@ -3174,6 +3174,15 @@ impl ChatService {
         if room.kind != "game" {
             anyhow::bail!("Only game rooms can be joined here");
         }
+        // Private game rooms are daily match chats: membership is fixed at
+        // claim time to the two players, so joining is only the idempotent
+        // re-join that kicks off the tail/list refresh chain. Nobody else
+        // may enter.
+        if room.visibility != "public"
+            && !ChatRoomMember::is_member(&client, room.id, user_id).await?
+        {
+            anyhow::bail!("this match chat is players only");
+        }
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
     }

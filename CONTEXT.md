@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-12 (report-only feedback rooms: `#bugs`/`#suggestions` accept only `/bug <text>` / `/suggest <text>` report cards from regular users — the commands work from any room and post a `---BUG---`/`---SUGGESTION---` marker-bodied message rendered as a ruled card (same body-marker trick as `---NEWS---`); free-text sends there are rejected for non-staff while admins/moderators keep plain-text replies and everyone keeps reactions for "+1"; no schema changes, see `late-ssh/src/app/chat/CONTEXT.md` §8. Same day: activity feed became #lounge system messages and the sidebar Activity panel was retired; see the `Activity` service row and `late-ssh/src/app/chat/CONTEXT.md`)
+- Last updated: 2026-07-13 (new Runbook §10.5 Incident log: dated crash entries with verdicts/fixes; add an entry for every crash investigation; 2026-07 OOM follow-up shipped clipboard request-gating on the pair WS, SSRF-guarded RSS fetches, per-feed RSS fairness, best-effort `BrowserPaired` routing. Previous update 2026-07-12: report-only feedback rooms: `#bugs`/`#suggestions` accept only `/bug <text>` / `/suggest <text>` report cards from regular users — the commands work from any room and post a `---BUG---`/`---SUGGESTION---` marker-bodied message rendered as a ruled card (same body-marker trick as `---NEWS---`); free-text sends there are rejected for non-staff while admins/moderators keep plain-text replies and everyone keeps reactions for "+1"; no schema changes, see `late-ssh/src/app/chat/CONTEXT.md` §8. Same day: activity feed became #lounge system messages and the sidebar Activity panel was retired; see the `Activity` service row and `late-ssh/src/app/chat/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -23,6 +23,7 @@ This file is the primary working context for the entire late.sh project.
 - Validate `Critical Invariants`
 - Update telemetry references if operation/event names changed
 - Remove obsolete notes
+- After any crash/incident investigation, add a dated entry to the Incident log (§10.5)
 - Read `late-ssh/assets/splash_tips/new_and_returning_users_tip_pool.json` and `late-ssh/assets/splash_tips/returning_users_tip_pool.json` to keep splash tips aligned with any feature/key changes
 
 ### Freshness target
@@ -865,7 +866,7 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorite
 
 Repo-level finding: input now lands in a per-session queue and the render loop wakes on input, so ordinary keystrokes no longer wait on the app mutex before being queued. Remaining broad risk is render cost under high fan-out because `render_once` still holds the app lock across synchronous `app.tick()` + `app.render()`.
 
-Chat-specific row-cache, snapshot, unread-count, and scoped-loading performance notes live in `late-ssh/src/app/chat/CONTEXT.md`.
+Chat-specific row-cache, snapshot, unread-count, and scoped-loading performance notes live in `late-ssh/src/app/chat/CONTEXT.md`. Crash/OOM incidents (as opposed to slowness) live in the Runbook incident log, §10.5.
 
 ---
 
@@ -953,7 +954,7 @@ Notes:
 
 ### 10.2.2 Production incident triage
 
-When prod looks down or slow, start with Kubernetes state, then metrics shape, then DB evidence. Do not assume "too many users" unless the active-session metrics support it.
+When prod looks down or slow, start with Kubernetes state, then metrics shape, then DB evidence. Do not assume "too many users" unless the active-session metrics support it. Before diagnosing from scratch, read the incident log in §10.5: past crashes with verdicts, shipped fixes, and what-to-check-next live there, and every new investigation should add an entry.
 
 Useful first pass:
 
@@ -1039,7 +1040,39 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 7. Liquidsoap debugging → `docker run --rm savonet/liquidsoap:v2.4.0 liquidsoap -h <topic>`
 8. Music missing from PVC → Re-run infra deploy to trigger `sync_music` job (syncs from R2). For manual recovery: `aws s3 sync s3://$MUSIC_BUCKET/ ./music/ --endpoint-url $S3_ENDPOINT` then `kubectl cp` each genre dir individually into the pod.
 9. Repeated Postgres `role "root" does not exist` lines in GitHub Actions are often service-log noise, not the failure. They’re misleading because Actions prints service container logs after a job fails. Generally check for other errors before stopping to try and fix this probable red-herring.
-10. `service-ssh`/Postgres OOM with low user count → First check Lateania saved furniture amplification. Run:
+10. `service-ssh`/Postgres OOM with low user count → work through the incident log (§10.5): Lateania furniture amplification first, then the per-session pair/WS amplifiers from the 2026-07 OOMs.
+11. NetHack door dead for everyone with `Too many hacks running now` → orphaned getlock slots; see the NetHack entry in §10.5 and `late-ssh/src/app/door/nethack/CONTEXT.md` §9.
+
+### 10.5 Incident log [VOLATILE]
+
+One dated entry per production crash or serious incident. **Add a new entry (newest first) whenever a crash is investigated**, even if the root cause stays unproven; the negative evidence ("we checked X, it was clean") is exactly what the next investigation needs. Keep verdicts honest: "consistent and plausible, not proven" beats a confident wrong root cause. Triage commands live in §10.2.2; the symptom checklist in §10.4; performance (non-crash) findings in §8.5.
+
+Entry template: symptom → evidence → verdict → fixes shipped → what to check if it repeats.
+
+#### 2026-07-12/13: service-ssh OOM #2 (2 GB step, plateau, then kill)
+
+- **Symptom:** RSS jumped 630 MB → 2056 MB between 12:12:30 and 12:13:00, sat flat at ~2 GB for two full minutes, then OOM-killed at 12:15:18. Working set was still ~2.2 GB at the last 30s scrape, so a second spike past the limit happened inside the final 18s. The plateau-then-second-spike shape is NOT what a single bogus resize looks like (that is one instant spike, then freed or immediate OOM).
+- **Evidence:** every terminal size found in traces was normal (77×37, 86×48, 173×48); no oversized pty or window-change was captured. The terminal-size theory holds on magnitude (ratatui-core 0.1.0 `Rect::new` does not clamp area, `Buffer::filled` allocates `width*height` Cells (~32 B each) and `Terminal` holds two buffers, so a hostile ~8000×4000 resize ≈ 2 GB) but it was never proven to be this incident's cause.
+- **Verdict:** unproven. The resize clamp (`late-ssh/src/terminal_size.rs`) is correct defensive hygiene either way.
+- **Fixes shipped (2026-07-13):** clipboard-image amplifier closed: the pair WS used to accept unsolicited `clipboard_image` payloads (up to 10 MB decoded each) into the per-session `channel(64)`, i.e. up to ~640 MB per session token; inbound clipboard payloads are now request-gated (`PairedClientRegistry::take_clipboard_request`, see `late-ssh/src/app/chat/CONTEXT.md`). Found in the same audit: RSS fetcher SSRF fixed (feed fetches now use the guarded downloader with per-hop redirect re-validation; `rss_feeds` contained live cloud-metadata probes), and `BrowserPaired` routing reverted to best-effort so a 250 ms send timeout no longer tears down the pair socket.
+- **If it repeats:** run §10.2.2 triage, then grep the previous container logs around the spike for clamp/pair markers and the new clipboard gate:
+
+```bash
+kubectl logs -n default deploy/service-ssh --previous --since-time=<spike-start> | rg 'clamped oversized pty dimensions|clamped oversized window resize|clamped oversized web tunnel resize|dropping unsolicited clipboard image|ws pair message routing timed out|ws pair request received|registered paired client|registered cli session token'
+```
+
+No clamp/clipboard hits → inspect other per-session payloads on `/api/ws/pair` (frame sizes, queued `SessionMessage` variants) and per-session allocations in the render path.
+
+#### 2026-07-12: service-ssh OOM #1 (single macOS pair correlation)
+
+- **Symptom:** memory jumped ~800 MiB → ~2.3 GiB in one scrape while sessions only moved 13 → 14, correlated with one macOS native pair.
+- **Fixes shipped:** client-controlled terminal dimensions clamped (500×200) in `late-ssh/src/terminal_size.rs`; 16 MB pair-WS frame cap.
+- **Verdict:** terminal-size cause plausible, not proven (see OOM #2 above, which re-examined the data).
+
+#### Undated: service-ssh/Postgres OOM via Lateania furniture amplification
+
+- **Symptom:** OOM with low user count; `mud_characters.data->'house_furniture'` inflated to huge arrays.
+- **Check:**
 
 ```sql
 SELECT u.username,
@@ -1051,7 +1084,7 @@ ORDER BY jsonb_array_length(coalesce(m.data->'house_furniture', '[]'::jsonb)) DE
 LIMIT 10;
 ```
 
-Emergency cleanup, if the field is inflated and cosmetic furniture loss is acceptable:
+- **Emergency cleanup** (if the field is inflated and cosmetic furniture loss is acceptable):
 
 ```sql
 UPDATE mud_characters
@@ -1060,15 +1093,14 @@ SET data = jsonb_set(data, '{house_furniture}', '[]'::jsonb, true),
 WHERE jsonb_array_length(coalesce(data->'house_furniture', '[]'::jsonb)) > 0;
 ```
 
-Then deploy the `late-ssh/src/app/door/lateania/svc.rs` fix that replaces/dedupes/caps furniture on hydrate/save; otherwise users can re-amplify the field.
+- **Fix shipped:** `late-ssh/src/app/door/lateania/svc.rs` replaces/dedupes/caps furniture on hydrate/save; without it users can re-amplify the field.
 
-For a `service-ssh`-only low-user OOM where the furniture query is clean, check for a single-session spike around pair/PTY setup:
+#### Undated: NetHack door dead prod-wide (getlock slot exhaustion)
 
-```bash
-kubectl logs -n default deploy/service-ssh --previous --since-time=<spike-start> | rg 'clamped oversized pty dimensions|clamped oversized window resize|clamped oversized web tunnel resize|ws pair message routing timed out|ws pair request received|registered paired client|registered cli session token'
-```
-
-The 2026-07-12 incident showed memory jumping from ~800 MiB to ~2.3 GiB in one scrape while sessions only moved 13 -> 14, correlated with one macOS native pair. Client-controlled terminal dimensions are now clamped in `late-ssh/src/terminal_size.rs`; if a future OOM repeats without clamp logs, inspect other per-session payloads on `/api/ws/pair`, especially frame sizes and clipboard/image messages.
+- **Symptom:** every launch fails with `Too many hacks running now`; the door is dead for all users.
+- **Cause:** SIGKILL-while-live orphans a getlock slot; once all `MAXPLAYERS` slots are orphaned, `getlock()` fails for everyone.
+- **Emergency fix:** `rm -f $VAR_PLAYGROUND/?lock.*` in the late-nethack pod (safe only while no games are live).
+- **Fixes shipped:** SIGHUP hangup-save teardown before any SIGKILL, plus a boot-time orphan-lock sweep. Details and invariants in `late-ssh/src/app/door/nethack/CONTEXT.md` §9.
 
 ## 11. TUI Screens Reference [STABLE]
 

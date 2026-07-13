@@ -166,6 +166,40 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// Private two-player chat room for a claimed daily match, plus both
+    /// memberships, in one statement. `kind = 'game'` (hidden from the Home
+    /// rail, no Mentions, no IRC) but `visibility = 'private'`: only the two
+    /// players are ever members, and the public game-room join path rejects
+    /// private rooms. `game_kind` is the daily roster kind string; the slug
+    /// is `daily-{match_id}`, unique per match. No ON CONFLICT: a duplicate
+    /// slug means a bug, not a race to absorb.
+    pub async fn create_daily_match_room(
+        client: &impl GenericClient,
+        game_kind: &str,
+        slug: &str,
+        player_a: Uuid,
+        player_b: Uuid,
+    ) -> Result<Self> {
+        let slug = normalize_game_slug(slug)?;
+        let row = client
+            .query_one(
+                "WITH room AS (
+                     INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                     VALUES ('game', 'private', false, $1, $2)
+                     RETURNING *
+                 ),
+                 members AS (
+                     INSERT INTO chat_room_members (room_id, user_id)
+                     SELECT room.id, member_id
+                     FROM room, unnest(ARRAY[$3, $4]::uuid[]) AS member_id
+                 )
+                 SELECT * FROM room",
+                &[&slug, &game_kind, &player_a, &player_b],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     pub async fn create_private_room(client: &Client, slug: &str) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 

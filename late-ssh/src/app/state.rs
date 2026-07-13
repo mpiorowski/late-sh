@@ -111,12 +111,6 @@ fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
     crate::app::hub::aquarium::ui::top_tray_area(chat_column)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DashboardGameToggleTarget {
-    Arcade,
-    Room,
-}
-
 fn seed_room_joins_from_history(
     mut joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
     room_join_rx: Option<&mut crate::app::dashboard::state::DashboardRoomJoinReceiver>,
@@ -419,6 +413,9 @@ pub struct App {
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// Daily board embedded match chat; separate cache because width and
+    /// visible messages differ from the other chat surfaces.
+    pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
@@ -471,7 +468,6 @@ pub struct App {
     /// Arcade Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
-    pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
     pub(crate) door_delete_confirm: bool,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
@@ -692,6 +688,9 @@ impl App {
                 .map(|room| room.chat_room_id),
             // The clubhouse pins the embedded chat to #lounge.
             Screen::Clubhouse => self.chat.lounge_room_id(),
+            // The daily board's match chat; None while spectating or before
+            // the row loads.
+            Screen::DailyMatch => self.daily.board_chat_room_id(),
             _ => None,
         }
     }
@@ -1092,6 +1091,7 @@ impl App {
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
@@ -1132,7 +1132,6 @@ impl App {
             ),
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
-            dashboard_game_toggle_target: None,
             door_delete_confirm: false,
             games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,

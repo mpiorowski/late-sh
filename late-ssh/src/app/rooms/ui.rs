@@ -753,31 +753,18 @@ pub(crate) fn active_room_game_area(active_room_game: &dyn ActiveRoomBackend, ar
     }
 }
 
+// Backtick left the rooms cycle (it hops lobby games only now), so the
+// spacer is a plain rule with no key hint.
 fn draw_active_room_spacer(frame: &mut Frame, area: Rect) {
     if area.height == 0 {
         return;
     }
 
-    let rule_width = area.width as usize;
-    let label = " toggle dashboard/game";
-    let hint_width = 2 + 1 + label.chars().count() + 2;
-    let right_rule_width = usize::from(rule_width > hint_width);
-    let left_rule_width = rule_width.saturating_sub(hint_width + right_rule_width);
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "─".repeat(left_rule_width),
-                Style::default().fg(theme::BORDER()),
-            ),
-            Span::styled("  ", Style::default().fg(theme::BORDER())),
-            Span::styled("`", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(label, Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("  ", Style::default().fg(theme::BORDER())),
-            Span::styled(
-                "─".repeat(right_rule_width),
-                Style::default().fg(theme::BORDER()),
-            ),
-        ])),
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(theme::BORDER()),
+        ))),
         area,
     );
 }

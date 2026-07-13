@@ -31,12 +31,19 @@ use crate::app::{
 const INFO_SIDEBAR_WIDTH: u16 = 24;
 const INFO_SIDEBAR_MIN_WIDTH: u16 = 92;
 
+/// Below this height the chat pane is dropped and the board keeps the whole
+/// screen; the pane itself takes a third of the height within these bounds.
+const CHAT_MIN_AREA_HEIGHT: u16 = 27;
+const CHAT_MIN_HEIGHT: u16 = 9;
+const CHAT_MAX_HEIGHT: u16 = 13;
+
 pub(crate) fn draw(
     frame: &mut Frame,
     area: Rect,
     daily: &DailyState,
     image_protocol: Option<TerminalImageProtocol>,
     terminal_images: &mut TerminalImageFrame,
+    chat: Option<crate::app::chat::ui::EmbeddedRoomChatView<'_>>,
 ) {
     let Some(board) = &daily.board else {
         frame.render_widget(
@@ -57,6 +64,65 @@ pub(crate) fn draw(
         draw_center_message(frame, area, "Loading match…");
         return;
     };
+
+    // Match chat rides below the board like the active-room split; the board
+    // area shrinks before the game picks its tier so sizing stays honest.
+    let (game_area, spacer_area, chat_area) = split_board_and_chat(area, chat.is_some());
+    draw_match(
+        frame,
+        game_area,
+        daily,
+        board,
+        detail,
+        image_protocol,
+        terminal_images,
+    );
+    if let (Some(chat), Some(chat_area)) = (chat, chat_area) {
+        if let Some(spacer_area) = spacer_area {
+            draw_chat_spacer(frame, spacer_area);
+        }
+        crate::app::chat::ui::draw_embedded_room_chat(frame, chat_area, chat, terminal_images);
+    }
+}
+
+/// `(board, spacer, chat)`: the chat slab exists only when a chat view does
+/// and the terminal is tall enough to keep the board playable above it.
+fn split_board_and_chat(area: Rect, has_chat: bool) -> (Rect, Option<Rect>, Option<Rect>) {
+    if !has_chat || area.height < CHAT_MIN_AREA_HEIGHT {
+        return (area, None, None);
+    }
+    let chat_h = (area.height / 3).clamp(CHAT_MIN_HEIGHT, CHAT_MAX_HEIGHT);
+    let rows = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(chat_h),
+    ])
+    .split(area);
+    (rows[0], Some(rows[1]), Some(rows[2]))
+}
+
+fn draw_chat_spacer(frame: &mut Frame, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(theme::BORDER_DIM()),
+        ))),
+        area,
+    );
+}
+
+fn draw_match(
+    frame: &mut Frame,
+    area: Rect,
+    daily: &DailyState,
+    board: &DailyBoardState,
+    detail: &DailyMatchDetail,
+    image_protocol: Option<TerminalImageProtocol>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     if area.height < 10 || area.width < 30 {
         frame.render_widget(Paragraph::new("The board needs more room."), area);
         return;
@@ -488,6 +554,9 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
             "pieces ascii"
         },
     );
+    if !board.spectating && detail.row.chat_room_id.is_some() {
+        hint(&mut spans, "i", "chat");
+    }
     hint(&mut spans, "Esc", "back to lobby");
     if let Some(last) = spans.last_mut() {
         let trimmed = last.content.trim_end().to_string();

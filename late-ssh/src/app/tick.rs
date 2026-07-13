@@ -276,6 +276,20 @@ impl App {
         if let Some(b) = self.daily.tick() {
             self.banner = Some(b);
         }
+        // The match chat room id only becomes known once the board's row
+        // loads, so the visible-room sync (read marker + tail) and the
+        // one-time idempotent join both key off the loaded detail here
+        // rather than off the screen switch.
+        if self.screen == crate::app::common::primitives::Screen::DailyMatch {
+            self.sync_visible_chat_room();
+            if let Some(chat_room_id) = self.daily.board_chat_room_id()
+                && let Some(board) = self.daily.board.as_mut()
+                && !board.chat_join_requested
+            {
+                board.chat_join_requested = true;
+                self.chat.join_game_room_chat(chat_room_id);
+            }
+        }
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
         }
