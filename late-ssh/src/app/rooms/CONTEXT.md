@@ -4,6 +4,7 @@
 - Scope: `late-ssh/src/app/rooms`
 - Last updated: 2026-06-22
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
+- **Sunset notice (2026-07-13):** this domain is scheduled for demolition per `devdocs/FRD-LOBBY-CONSOLIDATION.md` — Poker/Blackjack/Asterion/Tron move into the Lobby as fixed house tables; live Chess/Tic-Tac-Toe/ssHattrick and the whole directory die. Avoid investing in new rooms infrastructure; check the FRD before large changes here.
 
 ## Source Map
 - `mod.rs` only declares modules. Keep it declaration-only; do not add `pub use` re-exports.
