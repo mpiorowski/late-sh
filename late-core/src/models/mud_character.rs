@@ -3,7 +3,7 @@
 // One row per user holding a schema-versioned JSON blob. The MUD game owns the
 // blob's shape; this model only loads and upserts it. Keeping the character as
 // opaque JSON lets the game add fields (new stats, inventory, quest flags)
-// without a migration each time, the same trade game_rooms.runtime_state makes.
+// without a migration each time.
 
 use anyhow::Result;
 use serde_json::Value;

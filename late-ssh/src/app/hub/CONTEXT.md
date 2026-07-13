@@ -10,7 +10,7 @@
 
 `late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Shop, Leaderboard, Quests, Events, and the admin-only reward-template/shop-item editor. Former Guide content now lives in the global `?` guide's Economy topic under `late-ssh/src/app/help_modal/hub_guide.rs`. Hub also owns the Shop-unlocked Aquarium tray toggled with the `/aquarium` composer command (alias `/aq`).
 
-Hub is a cross-product domain surface. It may render Arcade, Rooms, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; Rooms/table runtime stays under `late-ssh/src/app/rooms`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
+Hub is a cross-product domain surface. It may render Arcade, Lobby, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; the Lobby's game runtimes stay under `late-ssh/src/app/lobby`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
 Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 

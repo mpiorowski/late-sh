@@ -76,7 +76,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                     // The landmark props are signposts: Enter walks through.
                     Some(Interactive::Arcade) => app.set_screen(Screen::Arcade),
                     Some(Interactive::Doors) => app.set_screen(Screen::Games),
-                    Some(Interactive::Poker) => app.set_screen(Screen::Rooms),
+                    Some(Interactive::Poker) => {
+                        crate::app::input::open_daily_modal_globally(app);
+                    }
                     Some(Interactive::Easel) => app.set_screen(Screen::Artboard),
                     _ => {
                         if let Some(lounge_id) = app.chat.lounge_room_id() {

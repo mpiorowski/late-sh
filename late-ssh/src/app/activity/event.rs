@@ -21,10 +21,6 @@ pub enum ActivityKind {
         detail: Option<String>,
         score: Option<i32>,
     },
-    GamePlayed {
-        game: ActivityGame,
-        detail: Option<String>,
-    },
     GameScored {
         game: ActivityGame,
         score: i32,
@@ -37,8 +33,7 @@ pub enum ActivityKind {
         game: ActivityGame,
         detail: String,
     },
-    /// A player entered a game world (door games). Distinct from
-    /// `GamePlayed` (quest-only grind signal): this is the "come join me"
+    /// A player entered a game world (door games): the "come join me"
     /// invitation shown in #lounge.
     GameStarted {
         game: ActivityGame,
@@ -80,7 +75,7 @@ impl ActivityKind {
             | Self::BossSlain { .. }
             | Self::SatDown { .. }
             | Self::DailyResult { .. } => ActivityCategory::Game,
-            Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
+            Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
         }
     }
@@ -365,25 +360,6 @@ impl ActivityEvent {
                 match_id,
             },
             format!("drew with {} at {game_label}", player_b.as_ref()),
-        )
-    }
-
-    pub fn game_played(
-        user_id: Uuid,
-        username: impl Into<String>,
-        game: ActivityGame,
-        detail: Option<String>,
-    ) -> Self {
-        let base_action = format!("played {} round", game.label());
-        let action = match detail.as_deref() {
-            Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),
-            _ => base_action,
-        };
-        Self::new(
-            Some(user_id),
-            username,
-            ActivityKind::GamePlayed { game, detail },
-            action,
         )
     }
 

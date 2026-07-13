@@ -505,7 +505,6 @@ fn slot_difficulty_preference(cadence: &str, slot: i32) -> Option<&'static str> 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QuestSource {
     Arcade,
-    Multiplayer,
     Other,
 }
 
@@ -521,7 +520,6 @@ fn quest_source(template: &QuestTemplate) -> QuestSource {
         "daily_puzzle_win" | "arcade_puzzle_solved" | "arcade_score" | "arcade_level" => {
             QuestSource::Arcade
         }
-        "room_rounds_played" | "room_wins" => QuestSource::Multiplayer,
         _ => QuestSource::Other,
     }
 }
@@ -1047,13 +1045,13 @@ mod tests {
     }
 
     #[test]
-    fn slots_draw_arcade_by_difficulty_and_skip_room_quests() {
+    fn slots_draw_arcade_by_difficulty_and_skip_non_arcade_quests() {
         let period_start = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let templates = vec![
             template("easy_arcade", "easy", "puzzle", "daily_puzzle_win"),
             template("medium_arcade", "medium", "arcade", "arcade_score"),
             template("hard_arcade", "hard", "arcade", "arcade_score"),
-            template("medium_room", "medium", "casino", "room_rounds_played"),
+            template("medium_other", "medium", "bonsai", "bonsai_watered"),
         ];
 
         let slot_one = choose_template(&templates, "daily", period_start, 1, &[], &[]).unwrap();

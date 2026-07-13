@@ -1383,10 +1383,10 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
             vec![
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
-                    Span::styled("the game tables, page 4", text),
+                    Span::styled("the Lobby: house tables + daily games", text),
                 ]),
                 Line::from(Span::styled(
-                    "poker · blackjack · chess · tron, chips on the line",
+                    "poker · blackjack · asterion · tron, chips on the line",
                     dim,
                 )),
             ],

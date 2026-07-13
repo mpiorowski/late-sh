@@ -15,7 +15,7 @@ This file owns chat-specific context that used to make the root `CONTEXT.md` too
 
 Included here:
 - Home chat rooms, DMs, public/private topic rooms, synthetic entries, and game-backed room chat.
-- Home/Dashboard chat center, room rail, and embedded Rooms chat surfaces.
+- Home/Dashboard chat center, room rail, and the embedded game-chat surfaces (house tables, daily match boards).
 - Message composer, replies, edits, deletes, reactions, pinned messages, ignores, overlays, and autocomplete.
 - Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles still use chat-adjacent services/state, but their UI is hosted on Directory page 7.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
@@ -32,7 +32,7 @@ late-ssh/src/app/chat/
 |-- action.rs                    # Shared CTCP-style `/me` action encoding/parsing
 |-- svc.rs                       # ChatService: DB boundary, snapshots, events, room/message tasks
 |-- state.rs                     # ChatState: local UI state, receivers, composer, room/message selection
-|-- input.rs                     # Home chat input plus shared message actions used by Dashboard/Rooms
+|-- input.rs                     # Home chat input plus shared message actions used by Dashboard and embedded game chat
 |-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
@@ -71,7 +71,7 @@ Chat-owned moderation commands also use `room_ban.rs`,
 
 - `svc.rs` is the async boundary between TUI state, DB models, mention notifications, and broadcast/watch channels.
 - `state.rs` owns local chat data, room/message selection, composer state, reply/edit/reaction/pin state, overlays, synthetic-entry substates, unread/read tracking, and cache inputs.
-- `input.rs` maps Home chat keys to state/service actions. `handle_message_action_in_room` is shared by Home chat and embedded Rooms chat.
+- `input.rs` maps Home chat keys to state/service actions. `handle_message_action_in_room` is shared by Home chat and the embedded game-chat panes.
 - `ui.rs` renders Home room rail/chat center surfaces and owns `ChatRowsCache`.
 - `ui_text.rs` centralizes wrapping for normal messages, the small Markdown subset, reply quotes, `---NEWS---` cards, and reaction footers.
 
@@ -126,7 +126,7 @@ Room model:
 - `lounge` must have slug `lounge`, is public, auto-join, and permanent.
 - `language` rooms are public, opt-in, unique by `language_code`, with slug `lang-{code}`.
 - `topic` rooms are unique by `(visibility, slug)`.
-- `game` rooms require `game_kind + slug`, are unique by `(game_kind, slug)`, and DB constraints require `auto_join = false`. Two flavors: public rooms attached to `game_rooms` tables (Rooms domain), and private two-player daily match chats (slug `daily-{match_id}`, created in the daily claim transaction with both memberships — see `late-ssh/src/app/daily/CONTEXT.md`). `ChatService::join_game_room` joins public game rooms freely but rejects non-members for private ones (`this match chat is players only`); daily players are already members, so their "join" is only the idempotent re-join that triggers the list/tail refresh chain.
+- `game` rooms require `game_kind + slug`, are unique by `(game_kind, slug)`, and DB constraints require `auto_join = false`. Two flavors: permanent public house-table rooms (slugs `poker`/`blackjack`/`maze`/`tron`, seeded at startup by `HouseTableRegistry::ensure_chat_rooms`), and private two-player daily match chats (slug `daily-{match_id}`, created in the daily claim transaction with both memberships — see `late-ssh/src/app/lobby/daily/CONTEXT.md`). `ChatService::join_game_room` joins public game rooms freely but rejects non-members for private ones (`this match chat is players only`); daily players are already members, so their "join" is only the idempotent re-join that triggers the list/tail refresh chain.
 - DMs canonicalize endpoint UUIDs by text order and are unique by `(dm_user_a, dm_user_b)`.
 
 Membership:
@@ -186,7 +186,7 @@ RSS:
 - The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#lounge` announcement.
 - Enter copies the selected RSS entry URL, `d` dismisses it, and `r` asks the RSS poller to refresh.
 
-Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.
+Game rooms stay in `ChatState.rooms` for the embedded game-chat panes, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.
 
 Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
@@ -211,16 +211,15 @@ Room favorites:
 - Favorites are no longer edited through a Settings tab.
 - Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
-Home hot-room shortcuts:
-- The top activity/multiplayer/quest strip was removed; presence (online count + connected friends) now lives in the right sidebar's pinned core block, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`; the sidebar Activity panel is retired). `dashboard::ui::recent_dashboard_rooms(..., 4)` survives only for the recent-room jump keys.
-- `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
+Home presence:
+- The top activity/multiplayer/quest strip was removed; presence (online count + connected friends) lives in the right sidebar's pinned core block, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`; the sidebar Activity panel is retired). The `b1`-`b4` recent-room jump keys died with the Rooms demolition.
 
-`App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.
+`App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from the current screen (Home/Dashboard, house table, daily board, Clubhouse), stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or open-surface changes.
 
 There are separate `ChatRowsCache` instances on `App` for:
 - Home lounge dashboard chat.
 - Home chat center for the selected real room/synthetic entry.
-- Rooms embedded chat.
+- Embedded game chat (house tables, daily match boards).
 
 Do not share a row cache across surfaces unless width and visible messages are guaranteed identical.
 
@@ -230,7 +229,7 @@ Do not share a row cache across surfaces unless width and visible messages are g
 
 The main composer is a `ratatui_textarea::TextArea<'static>`.
 
-`composer_room_id` is the authoritative send target while composing. This matters because Home and Rooms do not necessarily drive `selected_room_id` in the same way.
+`composer_room_id` is the authoritative send target while composing. This matters because Home and the embedded game surfaces do not necessarily drive `selected_room_id` in the same way.
 
 `/me <action>` stores a CTCP-style action body through `chat/action.rs` and renders locally as italic `* name action`; IRC delivery unwraps it into the same readable action text. Keep new action handling on the shared helpers so TUI and IRC stay aligned.
 
@@ -471,10 +470,10 @@ Home lounge dashboard chat:
 - Composer is capped at 5 visible lines.
 - Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always renders when present, and the top activity/quest/shop strip drops before chat when space is tight.
 
-Embedded Rooms chat:
+Embedded game chat:
 - Uses `EmbeddedRoomChatView`.
 - Composer is capped at 4 visible lines.
-- Game-backed chat rooms are joined through Rooms flow, not the Home room rail.
+- Game-backed chat rooms are joined through their surface's idempotent `join_game_room_chat` (fired from `App::tick`), not the Home room rail.
 
 Message rendering:
 - Local message storage is newest-first.
@@ -528,7 +527,7 @@ Cache:
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
-| Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
+| Double-click composer bar | Enter compose mode (same as `i`). Dashboard + embedded game chat only. |
 | Click message body | Move message selection to that block (same as `j`/`k` landing on it). |
 | Double-click message body | Reply to that message (same as `r`). |
 | Click username (or special / friend / bonsai / monthly award / brb badge) | Open that author's profile modal. Debounced ~280 ms so a fast double-click can promote to a mention instead. |
@@ -541,12 +540,12 @@ The composer rect is captured during `chat::ui` draw into `ChatState::last_compo
 `app::input::handle_chat_composer_click` consumes left-button clicks inside that
 rect, stashes the click on `ChatState::last_composer_click`, and on a second
 click within 500 ms at the same cell calls `start_composing_in_room` with the
-Dashboard's `selected_room_id` or the Rooms screen's `rooms_active_room`
+Dashboard's `selected_room_id` or the open game surface's chat room
 chat-room id.
 
 The chat scroll itself uses the same capture-on-draw pattern: each draw site
 that paints messages (Home `#lounge` dashboard card, Home chat center
-real-room branch, and embedded Rooms chat) publishes a `ChatHitLayout` into
+real-room branch, and embedded game chat) publishes a `ChatHitLayout` into
 `ChatState::last_chat_hit_layout` — a single `Cell<Option<ChatHitLayout>>`
 reset alongside `last_composer_rect`. The layout pairs the content `Rect`
 with one `ChatRowHit` per painted row (including leading viewport

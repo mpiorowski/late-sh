@@ -86,7 +86,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // or draw). Rare and human-vs-human, so a genuine story.
         ActivityKind::DailyResult { .. } => true,
         // Quest-only grind signals, never surfaced anywhere public.
-        ActivityKind::GamePlayed { .. } | ActivityKind::GameScored { .. } => false,
+        ActivityKind::GameScored { .. } => false,
         // The bonsai is a private ritual: neither the daily watering nor the
         // death after N dry days belongs in the public feed.
         ActivityKind::BonsaiWatered => false,

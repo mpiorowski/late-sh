@@ -124,7 +124,6 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::DailyResult { game, match_id } => format!("daily:{game}:{match_id}"),
         ActivityKind::GameWon { game, .. } => format!("won:{}", game.key()),
         ActivityKind::GameEvent { game, detail } => format!("event:{}:{detail}", game.key()),
-        ActivityKind::GamePlayed { game, .. } => format!("played:{}", game.key()),
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),
         ActivityKind::BonsaiWatered => "bonsai-watered".to_string(),
         ActivityKind::BonsaiLost { .. } => "bonsai-lost".to_string(),

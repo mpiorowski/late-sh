@@ -1,14 +1,10 @@
-use late_core::{
-    MutexRecover,
-    models::{artboard_ban::ArtboardBan, user::User},
-};
+use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
 use crate::app::activity::event::ActivityEvent;
 use crate::app::artboard::svc::ArtboardSnapshotService;
 use crate::app::common::theme;
-use crate::app::dashboard::state::DashboardRoomJoinReceiver;
 use crate::app::state::SessionConfig;
 use crate::authz::Permissions;
 use crate::session::SessionMessage;
@@ -23,7 +19,6 @@ pub struct SessionBootstrapInputs {
     pub session_token: String,
     pub session_rx: Option<mpsc::Receiver<SessionMessage>>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    pub room_join_rx: Option<DashboardRoomJoinReceiver>,
 }
 
 pub struct ArcadeSessionPreloads {
@@ -227,7 +222,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_rx,
         activity_feed_rx,
-        room_join_rx,
     } = inputs;
 
     let user_id = user.id;
@@ -377,8 +371,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         lateania_service: state.lateania_service.clone(),
         greendragon_service: state.greendragon_service.clone(),
         daily_service: state.daily_service.clone(),
-        rooms_service: state.rooms_service.clone(),
-        room_game_registry: state.room_game_registry.clone(),
         house_registry: state.house_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),
         dartboard_provenance: state.dartboard_provenance.clone(),
@@ -438,8 +430,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
         activity_feed_rx,
-        room_join_rx,
-        initial_room_joins: state.room_join_history.lock_recover().clone(),
         initial_announcements,
         user_id,
         permissions,

@@ -1933,7 +1933,7 @@ impl ChatState {
                 None => {
                     return Some(Banner::error(&format!(
                         "Usage: /challenge [@user] [{}]",
-                        crate::app::daily::games::DailyGame::usage_labels()
+                        crate::app::lobby::daily::games::DailyGame::usage_labels()
                     )));
                 }
             }
@@ -4462,9 +4462,9 @@ pub(crate) enum DailyChallengeRequest {
     /// Bare `/challenge`: open the Daily Games modal.
     Modal,
     /// `/challenge <game>`: post an open-lobby challenge.
-    Open(crate::app::daily::games::DailyGame),
+    Open(crate::app::lobby::daily::games::DailyGame),
     /// `/challenge @user [game]`: post a directed challenge.
-    Directed(String, crate::app::daily::games::DailyGame),
+    Directed(String, crate::app::lobby::daily::games::DailyGame),
 }
 
 /// `Some(Some(request))` on a valid `/challenge` line, `Some(None)` on a
@@ -4472,7 +4472,7 @@ pub(crate) enum DailyChallengeRequest {
 /// Game names come from the daily roster (`chess`, `battleship`, ...);
 /// omitting one on a directed challenge defaults to the roster's first game.
 fn parse_challenge_command(input: &str) -> Option<Option<DailyChallengeRequest>> {
-    use crate::app::daily::games::DailyGame;
+    use crate::app::lobby::daily::games::DailyGame;
 
     let trimmed = input.trim();
     if trimmed == "/challenge" {

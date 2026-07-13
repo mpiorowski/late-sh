@@ -9,10 +9,10 @@ use late_core::{
 };
 use late_ssh::app::activity::event::{ActivityEvent, ActivityKind};
 use late_ssh::app::activity::publisher::ActivityPublisher;
-use late_ssh::app::daily::battleship::DailyBattleshipState;
-use late_ssh::app::daily::connect4::DailyConnect4State;
-use late_ssh::app::daily::games::DailyGame;
-use late_ssh::app::daily::svc::{
+use late_ssh::app::lobby::daily::battleship::DailyBattleshipState;
+use late_ssh::app::lobby::daily::connect4::DailyConnect4State;
+use late_ssh::app::lobby::daily::games::DailyGame;
+use late_ssh::app::lobby::daily::svc::{
     DAILY_MAX_ACTIVE_ENTRIES, DailyChessState, DailyOutcome, DailyService,
 };
 use late_ssh::app::games::chips::svc::ChipService;

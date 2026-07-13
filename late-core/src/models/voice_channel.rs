@@ -5,7 +5,6 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 pub const TARGET_CHAT_ROOM: &str = "chat_room";
-pub const TARGET_GAME_ROOM: &str = "game_room";
 
 crate::model! {
     table = "voice_channels";
@@ -82,26 +81,11 @@ impl VoiceChannel {
         Ok(Self::from(row))
     }
 
-    pub async fn ensure_enabled_for_game_room(
-        client: &impl GenericClient,
-        game_room_id: Uuid,
-        display_name: &str,
-    ) -> Result<Self> {
-        Self::upsert_for_target(client, TARGET_GAME_ROOM, game_room_id, display_name, true).await
-    }
-
     pub async fn enabled_for_chat_rooms(
         client: &Client,
         chat_room_ids: &[Uuid],
     ) -> Result<HashMap<Uuid, Self>> {
         Self::enabled_for_targets(client, TARGET_CHAT_ROOM, chat_room_ids).await
-    }
-
-    pub async fn enabled_for_game_rooms(
-        client: &Client,
-        game_room_ids: &[Uuid],
-    ) -> Result<HashMap<Uuid, Self>> {
-        Self::enabled_for_targets(client, TARGET_GAME_ROOM, game_room_ids).await
     }
 
     async fn enabled_for_targets(
@@ -133,7 +117,7 @@ impl VoiceChannel {
 
 fn validate_target_kind(target_kind: &str) -> Result<()> {
     match target_kind {
-        TARGET_CHAT_ROOM | TARGET_GAME_ROOM => Ok(()),
+        TARGET_CHAT_ROOM => Ok(()),
         _ => bail!("unknown voice target kind: {target_kind}"),
     }
 }

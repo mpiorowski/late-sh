@@ -44,7 +44,6 @@ use late_core::{
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
         drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks, drunk_level_word},
-        game_room::{GameKind, GameRoom},
         user::{User, UserParams},
     },
 };
@@ -61,8 +60,9 @@ use crate::{
     app::clubhouse::lobby::SharedLobby,
     app::games::chips::svc::ChipService,
     app::help_modal::data::bot_app_context,
-    app::house::blackjack::{state::Outcome, svc::BlackjackEvent},
-    app::rooms::blackjack::manager::BlackjackTableManager,
+    app::lobby::house::blackjack::{state::Outcome, svc::BlackjackEvent},
+    app::lobby::house::registry::HouseTableRegistry,
+    app::lobby::house::tables::HouseTable,
     state::{ActiveUser, ActiveUsers},
 };
 
@@ -71,7 +71,7 @@ pub struct GhostService {
     db: Db,
     chat_service: ChatService,
     ai_service: AiService,
-    blackjack_table_manager: BlackjackTableManager,
+    house_registry: HouseTableRegistry,
     active_users: ActiveUsers,
     activity_tx: broadcast::Sender<ActivityEvent>,
     username_directory: crate::usernames::UsernameDirectory,
@@ -237,7 +237,7 @@ impl GhostService {
         db: Db,
         chat_service: ChatService,
         ai_service: AiService,
-        blackjack_table_manager: BlackjackTableManager,
+        house_registry: HouseTableRegistry,
         active_users: ActiveUsers,
         activity_tx: broadcast::Sender<ActivityEvent>,
         username_directory: crate::usernames::UsernameDirectory,
@@ -248,7 +248,7 @@ impl GhostService {
             db,
             chat_service,
             ai_service,
-            blackjack_table_manager,
+            house_registry,
             active_users,
             activity_tx,
             username_directory,
@@ -1051,7 +1051,7 @@ impl GhostService {
         dealer: BotUser,
         shutdown: late_core::shutdown::CancellationToken,
     ) {
-        let mut events = self.blackjack_table_manager.subscribe_events();
+        let mut events = self.house_registry.subscribe_blackjack_events();
         let mut room_states: HashMap<Uuid, DealerRoomState> = HashMap::new();
 
         tracing::info!(username = %dealer.username, "dealer blackjack responder started");
@@ -1122,17 +1122,12 @@ impl GhostService {
         dealer: BotUser,
         trigger: DealerTrigger,
     ) -> Result<()> {
-        let (chat_room_id, messages) = {
+        let Some(chat_room_id) = self.house_registry.chat_room_id(HouseTable::Blackjack) else {
+            return Ok(());
+        };
+        let messages = {
             let client = self.db.get().await?;
-            let Some(chat_room_id) = self
-                .blackjack_chat_room_id(&client, trigger.room_id)
-                .await?
-            else {
-                return Ok(());
-            };
-            let messages =
-                ChatMessage::list_recent(&client, chat_room_id, DEALER_HISTORY_SIZE).await?;
-            (chat_room_id, messages)
+            ChatMessage::list_recent(&client, chat_room_id, DEALER_HISTORY_SIZE).await?
         };
 
         if dealer_non_dealer_messages_since_last_comment(&messages, dealer.id)
@@ -1324,14 +1319,6 @@ impl GhostService {
         );
 
         Ok(())
-    }
-
-    async fn blackjack_chat_room_id(
-        &self,
-        client: &tokio_postgres::Client,
-        room_id: Uuid,
-    ) -> Result<Option<Uuid>> {
-        GameRoom::open_chat_room_id(client, room_id, GameKind::Blackjack).await
     }
 
     /// Build chat history string from recent messages.

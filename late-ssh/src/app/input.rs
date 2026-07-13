@@ -83,7 +83,7 @@ impl InputContext {
 fn screen_has_chat_pane(screen: Screen) -> bool {
     matches!(
         screen,
-        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch | Screen::HouseTable
+        Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable
     )
 }
 
@@ -895,8 +895,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_daily_modal {
-        crate::app::daily::modal_input::handle_input(app, event);
+    if app.show_lobby_modal {
+        crate::app::lobby::modal_input::handle_input(app, event);
         return;
     }
 
@@ -1009,13 +1009,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             }
         }
     }
-    if ctx.screen == Screen::Rooms
-        && !ctx.chat_composing
-        && crate::app::rooms::input::handle_event(app, &event)
-    {
-        return;
-    }
-
     match event {
         ParsedInput::FocusGained
         | ParsedInput::FocusLost
@@ -1617,7 +1610,7 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if door_games_allows_global_help(event) {
             return false;
         }
-        return crate::app::daily::board_input::handle_event(app, event);
+        return crate::app::lobby::daily::board_input::handle_event(app, event);
     }
 
     if ctx.screen == Screen::HouseTable {
@@ -1625,7 +1618,7 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if door_games_allows_global_help(event) {
             return false;
         }
-        return crate::app::house::input::handle_event(app, event);
+        return crate::app::lobby::house::input::handle_event(app, event);
     }
 
     if ctx.screen == Screen::Arcade && app.is_playing_game {
@@ -1644,11 +1637,6 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
             }
             _ => {}
         }
-        return true;
-    }
-
-    if ctx.screen == Screen::Rooms && app.rooms_active_room.is_some() {
-        let _ = crate::app::rooms::input::handle_event(app, event);
         return true;
     }
 
@@ -2270,8 +2258,8 @@ fn dispatch_escape(app: &mut App) {
         crate::app::bonsai::modal_input::handle_escape(app);
         return;
     }
-    if app.show_daily_modal {
-        crate::app::daily::modal_input::handle_escape(app);
+    if app.show_lobby_modal {
+        crate::app::lobby::modal_input::handle_escape(app);
         return;
     }
     if app.icon_picker_open {
@@ -2365,7 +2353,7 @@ fn dispatch_escape(app: &mut App) {
             app.chat.clear_message_selection();
             return;
         }
-        crate::app::daily::board_input::close_board(app);
+        crate::app::lobby::daily::board_input::close_board(app);
         return;
     }
     // Esc from a house table mirrors the daily board: peel chat selection
@@ -2380,7 +2368,7 @@ fn dispatch_escape(app: &mut App) {
             app.chat.clear_message_selection();
             return;
         }
-        crate::app::house::input::close_table(app);
+        crate::app::lobby::house::input::close_table(app);
         return;
     }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
@@ -2459,10 +2447,6 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::Dashboard && ctx.feeds_processing {
         app.chat.feeds.stop_processing();
-        return;
-    }
-    if ctx.screen == Screen::Rooms {
-        dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
     if ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some() {
@@ -2643,10 +2627,9 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         14 => Some(Screen::Dashboard),
         16 => Some(Screen::Arcade),
         18 => Some(Screen::Games),
-        20 => Some(Screen::Rooms),
-        22 => Some(Screen::Artboard),
-        24 => Some(Screen::Pinstar),
-        26 => Some(Screen::WorldCup),
+        20 => Some(Screen::Artboard),
+        22 => Some(Screen::Pinstar),
+        24 => Some(Screen::WorldCup),
         _ => None,
     }
 }
@@ -2657,9 +2640,6 @@ fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
     }
 
     reset_composers_for_page_change(app);
-    if target == Screen::Rooms {
-        app.rooms_active_room = None;
-    }
     app.set_screen(target);
     app.chat.clear_message_selection();
 }
@@ -2953,7 +2933,6 @@ pub(crate) struct PendingChatProfileOpen {
 /// room on show (no active table, pre-109 match, synthetic Home entry).
 fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
     match screen {
-        Screen::Rooms => app.rooms_active_room.as_ref().map(|r| r.chat_room_id),
         Screen::Dashboard => app.chat.selected_room_id,
         Screen::DailyMatch => app.daily.board_chat_room_id(),
         Screen::HouseTable => app.house.chat_room_id(),
@@ -2975,7 +2954,7 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_poll_modal
         || app.show_quit_confirm
         || app.show_bonsai_modal
-        || app.show_daily_modal
+        || app.show_lobby_modal
         || app.login_announcements_visible()
         || app.icon_picker_open
 }
@@ -3167,10 +3146,7 @@ fn mouse_scroll_delta(mouse: MouseEvent) -> Option<isize> {
 
 fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
     // Route arrows to autocomplete when active
-    if matches!(
-        screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-    ) && app.chat.is_composing()
+    if matches!(screen, Screen::Dashboard | Screen::Clubhouse) && app.chat.is_composing()
         && app.chat.is_autocomplete_active()
     {
         chat::input::handle_autocomplete_arrow(app, key);
@@ -3190,7 +3166,6 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Nethack => false,
         Screen::Dopewars => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
-        Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
         Screen::Pinstar => {
             // Arrows handled via handle_dedicated_screen_input
@@ -3294,7 +3269,6 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 
 fn clear_prefix_arms(app: &mut App) {
     app.music_prefix_armed = false;
-    app.room_join_prefix_armed = false;
     app.room_section_prefix_armed = false;
 }
 
@@ -3309,7 +3283,7 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
-    app.show_daily_modal = false;
+    app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3330,7 +3304,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
-    app.show_daily_modal = false;
+    app.show_lobby_modal = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
@@ -3351,7 +3325,7 @@ fn open_hub_modal_globally(app: &mut App, tab: crate::app::hub::state::HubTab) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
-    app.show_daily_modal = false;
+    app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3460,7 +3434,7 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
-    app.show_daily_modal = false;
+    app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3487,18 +3461,8 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.daily.mark_lobby_seen();
-    app.show_daily_modal = true;
-}
-
-fn room_join_suffix_index(byte: u8) -> Option<usize> {
-    match byte {
-        b'1' => Some(0),
-        b'2' => Some(1),
-        b'3' => Some(2),
-        b'4' => Some(3),
-        _ => None,
-    }
+    app.lobby.mark_seen(&app.daily);
+    app.show_lobby_modal = true;
 }
 
 fn room_section_suffix(byte: u8) -> Option<RoomSection> {
@@ -3510,30 +3474,6 @@ fn room_section_suffix(byte: u8) -> Option<RoomSection> {
         b'd' | b'D' => Some(RoomSection::Dms),
         _ => None,
     }
-}
-
-fn enter_recent_join_room(app: &mut App, index: usize) -> bool {
-    let Some(room) = crate::app::dashboard::ui::recent_dashboard_rooms(
-        &app.rooms_snapshot,
-        &app.room_game_registry,
-        &app.dashboard_room_joins,
-        4,
-    )
-    .into_iter()
-    .nth(index)
-    .map(|card| card.room) else {
-        app.banner = Some(crate::app::common::primitives::Banner::error(&format!(
-            "No recent room join in slot {}.",
-            index + 1
-        )));
-        return true;
-    };
-
-    if crate::app::rooms::input::enter_room(app, room) {
-        reset_composers_for_page_change(app);
-        app.set_screen(Screen::Rooms);
-    }
-    true
 }
 
 pub(crate) fn trigger_global_quit(app: &mut App) {
@@ -3571,8 +3511,8 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         CTRL_Q => {
             // Toggle: the daily surface is built for fast in-and-out, so the
             // same chord that opens it closes it.
-            if app.show_daily_modal {
-                app.show_daily_modal = false;
+            if app.show_lobby_modal {
+                app.show_lobby_modal = false;
             } else {
                 open_daily_modal_globally(app);
             }
@@ -3611,8 +3551,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         && !ctx.work_composing
         && ctx.screen != Screen::Artboard
         && !(ctx.screen == Screen::Pinstar && app.pinstar_state.is_some());
-    let chat_message_shortcut = matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
-        && app.chat.selected_message_id.is_some();
+    let chat_message_shortcut =
+        ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
         app.help_modal_state
             .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
@@ -3661,13 +3601,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             return toggle_room_section_from_key(app, ctx, section);
         }
         return true;
-    }
-
-    if app.room_join_prefix_armed {
-        app.room_join_prefix_armed = false;
-        if let Some(index) = room_join_suffix_index(byte) {
-            return enter_recent_join_room(app, index);
-        }
     }
 
     match byte {
@@ -3740,16 +3673,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'b' | b'B'
-            if !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing
-                && !ctx.showcase_composing
-                && !ctx.work_composing =>
-        {
-            app.room_join_prefix_armed = true;
-            true
-        }
         b'v' | b'V'
             if !ctx.chat_composing
                 && !ctx.feeds_processing
@@ -3808,7 +3731,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 app.show_hub_modal = false;
                 app.show_quit_confirm = false;
                 app.show_bonsai_v2_modal = false;
-                app.show_daily_modal = false;
+                app.show_lobby_modal = false;
                 app.show_bonsai_modal = true;
             }
             true
@@ -3830,21 +3753,15 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.rooms_active_room = None;
-            app.set_screen(Screen::Rooms);
+            app.set_screen(Screen::Artboard);
             true
         }
         b'5' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Artboard);
-            true
-        }
-        b'6' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
             app.set_screen(Screen::Pinstar);
             true
         }
-        b'7' if !artboard_blocks_page_switch => {
+        b'6' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::WorldCup);
             true
@@ -3904,9 +3821,6 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);
-        }
-        Screen::Rooms => {
-            crate::app::rooms::input::handle_key(app, byte);
         }
         Screen::Artboard => {
             let _ = crate::app::artboard::page::handle_key(app, byte);
@@ -4717,13 +4631,12 @@ mod tests {
         assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Dashboard));
         assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Arcade));
         assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Games));
-        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Artboard));
-        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Pinstar));
-        assert_eq!(topbar_screen_hit_test(26, 0), Some(Screen::WorldCup));
+        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
+        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
+        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::WorldCup));
         // The door games are no longer top-level tabs; the column past the last
         // digit and the gaps between digits map to nothing.
-        assert_eq!(topbar_screen_hit_test(28, 0), None);
+        assert_eq!(topbar_screen_hit_test(26, 0), None);
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);
     }
@@ -5269,15 +5182,6 @@ mod tests {
             sanitize_paste_markers("https://example.com"),
             "https://example.com"
         );
-    }
-
-    #[test]
-    fn room_join_suffixes_are_one_based_digits() {
-        assert_eq!(room_join_suffix_index(b'1'), Some(0));
-        assert_eq!(room_join_suffix_index(b'2'), Some(1));
-        assert_eq!(room_join_suffix_index(b'3'), Some(2));
-        assert_eq!(room_join_suffix_index(b'4'), Some(3));
-        assert_eq!(room_join_suffix_index(b'b'), None);
     }
 
     #[test]
