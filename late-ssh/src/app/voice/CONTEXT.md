@@ -83,6 +83,12 @@ Public API:
 
 DMs and private rooms are created with enabled chat-room voice channels by
 default. Public chat rooms are enabled by staff through `/mod room-voice`.
+Daily match chats too: claiming a daily challenge creates an enabled
+`target_kind='chat_room'` channel (display name `{game}: {challenger} v
+{opponent}`) in the claim transaction, rendered as the usual strip above the
+board's embedded chat; the daily sweeper deletes the channel with the chat
+room 30 days after the match ends (see
+`late-ssh/src/app/daily/CONTEXT.md`).
 
 Snapshots are sorted by lowercase username, then `user_id`.
 

@@ -1,7 +1,7 @@
 //! Full-screen daily connect four board: one gravity grid with the cursor
 //! sliding along the columns and a landing preview in the hovered one.
 //! Shares the daily board chrome — status line, player bars, pinned key
-//! hints, result overlay — with the chess and battleship renderers.
+//! hints — with the chess and battleship renderers.
 
 use chrono::Utc;
 use ratatui::{
@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::app::{
     common::theme,
     daily::{
-        board_ui::{draw_center_message, draw_overlay, name_for, result_banner},
+        board_ui::{draw_center_message, name_for, result_banner},
         connect4::{self, DailyConnect4State, Disc},
         state::{Connect4Detail, DailyBoardState, DailyMatchDetail, DailyState, format_deadline},
     },
@@ -146,11 +146,6 @@ pub(crate) fn draw(
         Paragraph::new(key_line(board, detail)).alignment(Alignment::Center),
         hint_row,
     );
-
-    if finished {
-        let (heading, subtitle, color) = result_banner(daily, board, detail);
-        draw_overlay(frame, grid_rect, heading, &subtitle, color);
-    }
 }
 
 fn disc_color(disc: Disc) -> Color {

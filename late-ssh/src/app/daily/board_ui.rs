@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 use uuid::Uuid;
 
@@ -222,10 +222,6 @@ fn draw_match(
     );
     if let Some(board_area) = board_area {
         board.board_geometry.set(Some((board_area, tier)));
-        if finished {
-            let (heading, subtitle, color) = result_banner(daily, board, detail);
-            draw_overlay(frame, board_area, heading, &subtitle, color);
-        }
     }
 
     draw_player_bar(
@@ -652,47 +648,6 @@ fn append_moves(lines: &mut Vec<Line<'static>>, chess: &ChessDetail, budget: usi
         let skip = pairs.len() - (budget - 1);
         lines.extend(pairs.into_iter().skip(skip));
     }
-}
-
-pub(super) fn draw_overlay(
-    frame: &mut Frame,
-    board_area: Rect,
-    heading: &str,
-    subtitle: &str,
-    color: Color,
-) {
-    let width =
-        (heading.chars().count().max(subtitle.chars().count()) as u16 + 8).min(board_area.width);
-    let height = 5.min(board_area.height);
-    let overlay = Rect {
-        x: board_area.x + board_area.width.saturating_sub(width) / 2,
-        y: board_area.y + board_area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    };
-    frame.render_widget(Clear, overlay);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(color));
-    let inner = block.inner(overlay);
-    frame.render_widget(block, overlay);
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(inner);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            heading.to_string(),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )))
-        .alignment(Alignment::Center),
-        rows[0],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            subtitle.to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        )))
-        .alignment(Alignment::Center),
-        rows[1],
-    );
 }
 
 pub(super) fn name_for(board: &DailyBoardState, user_id: Uuid) -> String {

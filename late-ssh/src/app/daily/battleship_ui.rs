@@ -1,7 +1,7 @@
 //! Full-screen daily battleship board: your shots on their waters (left,
 //! where the cursor lives) and your own fleet taking fire (right). Shares
-//! the daily board chrome — status line, player bars, pinned key hints,
-//! result overlay — with the chess renderer in `board_ui`.
+//! the daily board chrome — status line, player bars, pinned key hints —
+//! with the chess renderer in `board_ui`.
 
 use chrono::Utc;
 use ratatui::{
@@ -17,7 +17,7 @@ use crate::app::{
     common::theme,
     daily::{
         battleship::{self, DailyBattleshipState, Shot},
-        board_ui::{draw_center_message, draw_overlay, name_for, result_banner},
+        board_ui::{draw_center_message, name_for, result_banner},
         state::{BattleshipDetail, DailyBoardState, DailyMatchDetail, DailyState, format_deadline},
     },
 };
@@ -170,17 +170,6 @@ pub(crate) fn draw(
         Paragraph::new(key_line(board, detail)).alignment(Alignment::Center),
         hint_row,
     );
-
-    if finished {
-        let overlay_rect = Rect {
-            x: grids_x,
-            y: grids_row.y,
-            width: GRIDS_WIDTH.min(area.width),
-            height: GRID_ROWS,
-        };
-        let (heading, subtitle, color) = result_banner(daily, board, detail);
-        draw_overlay(frame, overlay_rect, heading, &subtitle, color);
-    }
 }
 
 const INFO_RAIL_WIDTH: u16 = 24;
