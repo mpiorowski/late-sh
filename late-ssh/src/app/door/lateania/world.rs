@@ -21,7 +21,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::damage::{DamageProfile, DamageType};
-use super::skills::GatherSkill;
+use super::skills::{CraftSkill, GatherSkill};
 
 /// Compass and vertical directions a player can move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -373,6 +373,9 @@ pub enum FeatureKind {
     Stable,
     /// A housing clerk: examine it to buy a deed and furnish a home.
     Housing,
+    /// A crafting station (forge/workbench/tannery/alchemy lab/cooking fire):
+    /// stand here and press the craft key to work its recipes.
+    CraftStation(CraftSkill),
 }
 
 impl FeatureKind {
@@ -387,6 +390,7 @@ impl FeatureKind {
             Self::Board => "board",
             Self::Stable => "stable",
             Self::Housing => "clerk",
+            Self::CraftStation(skill) => skill.station(),
         }
     }
 }
@@ -521,6 +525,48 @@ pub const FEATURES: &[Feature] = &[
         FeatureKind::Bank,
         EMBERGATE_BANK_DESC,
     ),
+    // ---- Embergate crafters' row (Market Row, room 3): the craft stations ----
+    feat(
+        3,
+        "the public forge",
+        FeatureKind::CraftStation(CraftSkill::Smithing),
+        "A great stone forge roars at the head of Market Row, its coals kept lit \
+         for any traveller with ore to smelt and the arm to swing a hammer. Anvils, \
+         tongs, and quenching-troughs stand ready; smelt ore into ingots here, then \
+         beat them into blades and plate.",
+    ),
+    feat(
+        3,
+        "the carpenter's workbench",
+        FeatureKind::CraftStation(CraftSkill::Woodworking),
+        "A long, scarred workbench under an awning, hung with saws, drawknives and \
+         clamps and drifted deep in fragrant shavings. Season your logs into planks \
+         here, and shape them into bows and hafts.",
+    ),
+    feat(
+        3,
+        "the tannery",
+        FeatureKind::CraftStation(CraftSkill::Leatherworking),
+        "A row of stretching-frames and reeking tan-pits behind the market, where \
+         raw hides are cured into supple leather. Not a place to linger downwind - \
+         but the only place to turn a kill's hide into armor.",
+    ),
+    feat(
+        3,
+        "the alchemy lab",
+        FeatureKind::CraftStation(CraftSkill::Alchemy),
+        "A cramped stall of bubbling retorts, hanging bunches of dried herbs, and \
+         shelves of stoppered vials in every colour of harm and healing. Brew \
+         draughts to mend yourself here - or poisons to coat a waiting blade.",
+    ),
+    feat(
+        3,
+        "the cooking fire",
+        FeatureKind::CraftStation(CraftSkill::Cooking),
+        "A broad communal cook-fire with spits, griddles and a blackened stockpot, \
+         where the market's traders take their meals. Cook your catch into hot food \
+         that restores far more than raw fish ever could.",
+    ),
     // ---- Tasmania (harbor capital) --------------------------------------
     feat(
         TASMANIA_SQUARE,
@@ -591,6 +637,19 @@ pub const FEATURES: &[Feature] = &[
 
 pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
     FEATURES.iter().filter(|f| f.room == room).collect()
+}
+
+/// The crafting skills whose stations stand in a room (empty if none). Used to
+/// gate crafting and to build the craft panel.
+pub fn craft_stations_at(room: RoomId) -> Vec<CraftSkill> {
+    FEATURES
+        .iter()
+        .filter(|f| f.room == room)
+        .filter_map(|f| match f.kind {
+            FeatureKind::CraftStation(skill) => Some(skill),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A small benefit a Boon creature confers while you share its room.
@@ -7979,6 +8038,31 @@ mod tests {
                 feature.room
             );
         }
+    }
+
+    #[test]
+    fn craft_stations_stand_in_real_rooms_and_cover_every_trade() {
+        let world = seed_world();
+        for skill in CraftSkill::ALL {
+            let rooms: Vec<RoomId> = FEATURES
+                .iter()
+                .filter(|f| f.kind == FeatureKind::CraftStation(skill))
+                .map(|f| f.room)
+                .collect();
+            assert!(!rooms.is_empty(), "no station trains {}", skill.label());
+            for r in rooms {
+                assert!(
+                    world.rooms.contains_key(&r),
+                    "{} station in missing room {}",
+                    skill.label(),
+                    r
+                );
+            }
+        }
+        assert!(
+            !craft_stations_at(3).is_empty(),
+            "Embergate's crafters' row exposes stations"
+        );
     }
 
     #[test]

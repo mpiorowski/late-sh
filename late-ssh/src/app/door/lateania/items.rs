@@ -202,6 +202,29 @@ const fn consumable(
     }
 }
 
+const fn valuable(
+    id: u32,
+    name: &'static str,
+    desc: &'static str,
+    rarity: Rarity,
+    price: i64,
+) -> Item {
+    Item {
+        id,
+        name,
+        desc,
+        kind: ItemKind::Valuable,
+        rarity,
+        mods: StatMods {
+            attack: 0,
+            max_hp: 0,
+            armor: 0,
+        },
+        price,
+        class_hint: None,
+    }
+}
+
 /// The full item catalog.
 pub const BONEWRIGHT_SCEPTER_ID: u32 = 1011;
 pub const HEARTWOOD_THORNBLADE_ID: u32 = 1012;
@@ -1065,6 +1088,265 @@ pub fn materials() -> &'static [Item] {
     CATALOG.get_or_init(build_materials)
 }
 
+// ---- Crafted goods -------------------------------------------------------
+//
+// Crafting turns raw materials into refined intermediates (ingots, planks,
+// leather) and finished goods (weapons, armor, potions, poisons, food). IDs live
+// in 4200..4500, clear of the raw materials (4000..4100). Recipes in
+// `crafting.rs` reference these ids by the const helpers below; `item` resolves
+// them like any other. Five tiers each, mirroring the material tiers.
+
+pub const CRAFTED_BASE: u32 = 4200;
+
+pub const fn ingot_id(tier: u32) -> u32 {
+    CRAFTED_BASE + tier
+}
+pub const fn plank_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 20 + tier
+}
+pub const fn leather_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 40 + tier
+}
+pub const fn smith_weapon_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 100 + tier
+}
+pub const fn smith_armor_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 120 + tier
+}
+pub const fn wood_weapon_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 140 + tier
+}
+pub const fn leather_armor_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 160 + tier
+}
+pub const fn potion_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 200 + tier
+}
+pub const fn poison_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 220 + tier
+}
+pub const fn food_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 240 + tier
+}
+
+const INGOT_NAMES: [&str; 5] = [
+    "Copper Ingot",
+    "Tin Ingot",
+    "Iron Ingot",
+    "Silver Ingot",
+    "Mithril Ingot",
+];
+const PLANK_NAMES: [&str; 5] = [
+    "Birch Plank",
+    "Oak Plank",
+    "Ash Plank",
+    "Yew Plank",
+    "Ironbark Plank",
+];
+const LEATHER_NAMES: [&str; 5] = [
+    "Rough Leather",
+    "Thick Leather",
+    "Boar Leather",
+    "Bear Leather",
+    "Dire Leather",
+];
+const SMITH_WEAPON_NAMES: [&str; 5] = [
+    "Copper Sword",
+    "Tin Sabre",
+    "Iron Sword",
+    "Silver Sword",
+    "Mithril Sword",
+];
+const SMITH_ARMOR_NAMES: [&str; 5] = [
+    "Copper Cuirass",
+    "Tin Cuirass",
+    "Iron Cuirass",
+    "Silver Cuirass",
+    "Mithril Cuirass",
+];
+const WOOD_WEAPON_NAMES: [&str; 5] = [
+    "Birch Shortbow",
+    "Oak Longbow",
+    "Ash Recurve",
+    "Yew Warbow",
+    "Ironbark Greatbow",
+];
+const LEATHER_ARMOR_NAMES: [&str; 5] = [
+    "Rough Jerkin",
+    "Thick Jerkin",
+    "Boarhide Vest",
+    "Bearhide Coat",
+    "Direhide Cuirass",
+];
+const POTION_NAMES: [&str; 5] = [
+    "Minor Healing Draught",
+    "Lesser Healing Draught",
+    "Greater Healing Draught",
+    "Superior Healing Draught",
+    "Master Healing Draught",
+];
+const POISON_NAMES: [&str; 5] = [
+    "Weak Toxin",
+    "Numbing Poison",
+    "Virulent Bile",
+    "Deadly Venom",
+    "Wyrm Venom",
+];
+const FOOD_NAMES: [&str; 5] = [
+    "Grilled Bream",
+    "Pan-Seared Trout",
+    "Smoked Pike",
+    "Sturgeon Steak",
+    "Moonscale Feast",
+];
+
+const INTER_RARITY: [Rarity; 5] = [
+    Rarity::Common,
+    Rarity::Common,
+    Rarity::Uncommon,
+    Rarity::Uncommon,
+    Rarity::Rare,
+];
+const FINAL_RARITY: [Rarity; 5] = [
+    Rarity::Common,
+    Rarity::Uncommon,
+    Rarity::Uncommon,
+    Rarity::Rare,
+    Rarity::Epic,
+];
+
+fn build_crafted() -> Vec<Item> {
+    let mut out = Vec::new();
+    // Per-tier stat/price tables (index 0..5, low to high).
+    const INGOT_PRICE: [i64; 5] = [24, 54, 96, 150, 220];
+    const PLANK_PRICE: [i64; 5] = [20, 46, 84, 130, 190];
+    const LEATHER_PRICE: [i64; 5] = [22, 50, 90, 140, 205];
+    const WEAPON_ATK: [i32; 5] = [6, 11, 16, 21, 26];
+    const WEAPON_PRICE: [i64; 5] = [60, 140, 260, 440, 700];
+    const BOW_ATK: [i32; 5] = [5, 10, 15, 20, 25];
+    const BOW_PRICE: [i64; 5] = [55, 130, 250, 430, 690];
+    const PLATE_HP: [i32; 5] = [8, 16, 26, 40, 60];
+    const PLATE_ARM: [i32; 5] = [1, 2, 3, 4, 6];
+    const PLATE_PRICE: [i64; 5] = [70, 150, 280, 460, 720];
+    const JERKIN_HP: [i32; 5] = [6, 12, 20, 30, 44];
+    const JERKIN_ARM: [i32; 5] = [1, 1, 2, 3, 4];
+    const JERKIN_PRICE: [i64; 5] = [50, 120, 230, 400, 640];
+    const POTION_HEAL: [i32; 5] = [25, 45, 75, 120, 180];
+    const POTION_PRICE: [i64; 5] = [20, 45, 90, 160, 260];
+    const POISON_PRICE: [i64; 5] = [15, 40, 80, 140, 220];
+    const FOOD_HEAL: [i32; 5] = [20, 35, 55, 85, 130];
+    const FOOD_REST: [i32; 5] = [10, 20, 35, 55, 85];
+    const FOOD_PRICE: [i64; 5] = [15, 35, 70, 120, 190];
+
+    for t in 0..5usize {
+        let tu = t as u32;
+        // Intermediates (sellable valuables and recipe inputs).
+        out.push(valuable(
+            ingot_id(tu),
+            INGOT_NAMES[t],
+            "A refined metal bar, ready for the forge.",
+            INTER_RARITY[t],
+            INGOT_PRICE[t],
+        ));
+        out.push(valuable(
+            plank_id(tu),
+            PLANK_NAMES[t],
+            "A planed board, true and square for the workbench.",
+            INTER_RARITY[t],
+            PLANK_PRICE[t],
+        ));
+        out.push(valuable(
+            leather_id(tu),
+            LEATHER_NAMES[t],
+            "Supple tanned leather, ready to be worked.",
+            INTER_RARITY[t],
+            LEATHER_PRICE[t],
+        ));
+        // Finished goods.
+        out.push(eq(
+            smith_weapon_id(tu),
+            SMITH_WEAPON_NAMES[t],
+            "Forged steel with a keen, hammered edge.",
+            Slot::Weapon,
+            FINAL_RARITY[t],
+            WEAPON_ATK[t],
+            0,
+            0,
+            WEAPON_PRICE[t],
+            None,
+        ));
+        out.push(eq(
+            smith_armor_id(tu),
+            SMITH_ARMOR_NAMES[t],
+            "A forged breastplate, proof against a hard blow.",
+            Slot::Chest,
+            FINAL_RARITY[t],
+            0,
+            PLATE_HP[t],
+            PLATE_ARM[t],
+            PLATE_PRICE[t],
+            None,
+        ));
+        out.push(eq(
+            wood_weapon_id(tu),
+            WOOD_WEAPON_NAMES[t],
+            "A supple bow of seasoned wood, strung and true.",
+            Slot::Weapon,
+            FINAL_RARITY[t],
+            BOW_ATK[t],
+            0,
+            0,
+            BOW_PRICE[t],
+            Some(Class::Ranger),
+        ));
+        out.push(eq(
+            leather_armor_id(tu),
+            LEATHER_ARMOR_NAMES[t],
+            "Light leather armor that never slows a step.",
+            Slot::Chest,
+            FINAL_RARITY[t],
+            0,
+            JERKIN_HP[t],
+            JERKIN_ARM[t],
+            JERKIN_PRICE[t],
+            None,
+        ));
+        out.push(consumable(
+            potion_id(tu),
+            POTION_NAMES[t],
+            "A brewed cordial that knits wounds closed.",
+            FINAL_RARITY[t],
+            POTION_HEAL[t],
+            0,
+            POTION_PRICE[t],
+        ));
+        // Poisons are sellable for now; the depth update makes them applyable.
+        out.push(valuable(
+            poison_id(tu),
+            POISON_NAMES[t],
+            "A stoppered vial of poison, meant to coat a blade.",
+            FINAL_RARITY[t],
+            POISON_PRICE[t],
+        ));
+        out.push(consumable(
+            food_id(tu),
+            FOOD_NAMES[t],
+            "A hot cooked meal that restores body and focus.",
+            FINAL_RARITY[t],
+            FOOD_HEAL[t],
+            FOOD_REST[t],
+            FOOD_PRICE[t],
+        ));
+    }
+    out
+}
+
+/// The crafted-goods catalog, built once and reused for the `item` lookup.
+pub fn crafted() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_crafted)
+}
+
 pub fn item(id: u32) -> Option<&'static Item> {
     ITEMS
         .iter()
@@ -1072,6 +1354,7 @@ pub fn item(id: u32) -> Option<&'static Item> {
         .or_else(|| frontier_items().iter().find(|i| i.id == id))
         .or_else(|| reaches_items().iter().find(|i| i.id == id))
         .or_else(|| materials().iter().find(|i| i.id == id))
+        .or_else(|| crafted().iter().find(|i| i.id == id))
 }
 
 // ---- Generated catalogs (Frontier and Sundered Reaches) ------------------
@@ -1399,6 +1682,7 @@ mod tests {
             .chain(frontier_items().iter())
             .chain(reaches_items().iter())
             .chain(materials().iter())
+            .chain(crafted().iter())
             .map(|i| i.id)
             .collect();
         ids.sort_unstable();
@@ -1423,6 +1707,29 @@ mod tests {
             assert!(m.sell_price() >= 1, "materials are worth something");
             // Look-ups resolve through the shared catalog.
             assert!(item(m.id).is_some(), "material {} is not findable", m.id);
+        }
+    }
+
+    #[test]
+    fn crafted_goods_form_a_clean_catalog() {
+        assert_eq!(crafted().len(), 50, "ten crafted kinds x five tiers");
+        for c in crafted() {
+            assert!(
+                c.id >= CRAFTED_BASE && c.id < CRAFTED_BASE + 300,
+                "crafted item {} sits in the 4200 band",
+                c.id
+            );
+            assert!(c.sell_price() >= 1, "crafted goods are worth something");
+            assert!(
+                item(c.id).is_some(),
+                "crafted item {} is not findable",
+                c.id
+            );
+            assert!(
+                materials().iter().all(|m| m.id != c.id),
+                "crafted item {} collides with a raw material",
+                c.id
+            );
         }
     }
 

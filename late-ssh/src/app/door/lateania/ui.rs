@@ -337,6 +337,7 @@ fn draw_side(
         Panel::Stable => stable_panel(view, state.cursor()),
         Panel::Housing => housing_panel(view, state.cursor()),
         Panel::Appearance => (appearance_panel(view, state.cursor()), None),
+        Panel::Crafting => crafting_panel(view, state.cursor()),
     };
     let off = scroll_offset(
         state.list_scroll(),
@@ -1493,6 +1494,69 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<u
     (lines, sel_line)
 }
 
+fn crafting_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+    let Some(craft) = &view.crafting else {
+        return (
+            vec![Line::from(Span::styled(
+                "No crafting station here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
+    };
+    let mut sel_line = None;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("Crafting - {}", craft.stations),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+    ];
+    if craft.entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  no recipes here",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, e) in craft.entries.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let marker = if selected { ">" } else { " " };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else if e.craftable {
+            Style::default().fg(theme::TEXT())
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        // Name row, with a gated reason when it can't be made.
+        let mut name_spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+        if !e.craftable && !e.reason.is_empty() {
+            name_spans.push(Span::styled(
+                format!("  ({})", e.reason),
+                Style::default().fg(theme::ERROR()),
+            ));
+        }
+        lines.push(Line::from(name_spans));
+        // Ingredient row.
+        lines.push(Line::from(Span::styled(
+            format!("    {} · {}", e.skill.to_lowercase(), e.inputs),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter craft"));
+    lines.push(hint("u", "close"));
+    (lines, sel_line)
+}
+
 fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(stable) = &view.stable else {
         return (
@@ -1783,6 +1847,9 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     }
     if view.housing.is_some() {
         lines.push(hint("n", "housing ledger"));
+    }
+    if view.crafting.is_some() {
+        lines.push(hint("u", "craft (station here)"));
     }
     lines.push(hint("Esc", "leave"));
     lines
@@ -2251,14 +2318,24 @@ fn interactable_color(kind: &str) -> ratatui::style::Color {
     match kind {
         "fountain" => theme::SUCCESS(),
         "bank" | "board" | "stable" | "clerk" => theme::AMBER_GLOW(),
+        _ if is_craft_station(kind) => theme::AMBER_GLOW(),
         _ => theme::MENTION(),
     }
+}
+
+/// The craft-station feature tags (see `CraftSkill::station`), which read as
+/// actionable like the other vendors.
+fn is_craft_station(kind: &str) -> bool {
+    matches!(
+        kind,
+        "forge" | "workbench" | "tannery" | "alchemy lab" | "cooking fire"
+    )
 }
 
 /// Whether a feature kind is something you actively use/trade at (vs. just look
 /// at). Drives a brighter, bolder treatment so actionable things pop.
 fn is_actionable_feature(kind: &str) -> bool {
-    matches!(kind, "fountain" | "bank" | "board" | "stable" | "clerk")
+    matches!(kind, "fountain" | "bank" | "board" | "stable" | "clerk") || is_craft_station(kind)
 }
 
 #[cfg(test)]

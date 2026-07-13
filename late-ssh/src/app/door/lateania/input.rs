@@ -8,7 +8,8 @@
 //     slot 10; deeper rosters cast from the Abilities panel); z flee.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
-//   - World: y works a resource node here (chop/mine/fish/forage/skin).
+//   - World: y works a resource node here (chop/mine/fish/forage/skin);
+//     u opens the crafting panel where a craft station stands.
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
 //     buys the selected beast and x feeds/tends the one you have. n opens the
@@ -105,6 +106,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Stable
             | Panel::Housing
             | Panel::Appearance
+            | Panel::Crafting
             | Panel::Abilities
     );
 
@@ -204,6 +206,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'y' | b'Y' => {
             // Work a resource node here (chop/mine/fish/forage/skin).
             state.gather();
+            InputAction::Handled
+        }
+        b'u' | b'U' => {
+            // The crafting panel opens where a craft station stands.
+            if view.crafting.is_some() {
+                state.toggle_panel(Panel::Crafting);
+            }
             InputAction::Handled
         }
         b'\r' | b'\n' => {
@@ -312,6 +321,7 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Stable
             | Panel::Housing
             | Panel::Appearance
+            | Panel::Crafting
     );
     match key {
         b'A' => {

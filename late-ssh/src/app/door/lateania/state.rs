@@ -45,6 +45,8 @@ pub enum Panel {
     /// The appearance/bio builder: pick a field with the cursor, `Enter` cycles
     /// its option forward and `x` cycles back.
     Appearance,
+    /// The crafting panel at a station: select a recipe and `Enter` to make it.
+    Crafting,
 }
 
 pub struct State {
@@ -219,6 +221,7 @@ impl State {
             Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Appearance => self.view().appearance.len(),
+            Panel::Crafting => self.view().crafting.map(|c| c.entries.len()).unwrap_or(0),
             _ => 0,
         }
     }
@@ -437,6 +440,13 @@ impl State {
                 }
             }
             Panel::Appearance => self.cycle_appearance(1),
+            Panel::Crafting => {
+                if let Some(cr) = self.view().crafting
+                    && let Some(entry) = cr.entries.get(self.cursor)
+                {
+                    self.svc.craft_task(self.user_id, entry.recipe);
+                }
+            }
             _ => {}
         }
     }

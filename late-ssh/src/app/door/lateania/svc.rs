@@ -44,6 +44,7 @@ use crate::app::{
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::appearance;
 use super::classes::{ARCHETYPE_LEVEL, ArchetypeDef, Class, level_for_xp, xp_for_level};
+use super::crafting::{recipe, recipe_indices_for};
 use super::damage::{DamageProfile, DamageType, Defense};
 use super::housing::{self, furniture_by_key, plot_of_room};
 use super::items::{
@@ -53,12 +54,12 @@ use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
 use super::pets::{Pet, pet_species_by_key};
-use super::skills::{GatherSkill, skill_level_for_xp, skill_progress};
+use super::skills::{CraftSkill, GatherSkill, skill_level_for_xp, skill_progress};
 use super::stats::AbilityScores;
 use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, ResourceNode, RoomId,
-    World, critter_index, critters_at, features_at, frontier_entrance_room, is_frontier_room,
-    node_index, nodes_at, seed_world,
+    World, craft_stations_at, critter_index, critters_at, features_at, frontier_entrance_room,
+    is_frontier_room, node_index, nodes_at, seed_world,
 };
 
 /// World heartbeat. One combat round resolves per tick.
@@ -329,6 +330,32 @@ pub struct SkillView {
     pub xp_next: i64,
 }
 
+/// One recipe row in the crafting panel.
+#[derive(Clone, Debug)]
+pub struct CraftEntryView {
+    /// Global recipe index, passed back to `craft`.
+    pub recipe: usize,
+    pub name: String,
+    /// The craft skill it trains, e.g. "Smithing".
+    pub skill: String,
+    /// Compact ingredient list, e.g. "3x Copper Ingot, 1x Oak Plank".
+    pub inputs: String,
+    /// True when it can be made right now (station here, skilled enough, have
+    /// the materials).
+    pub craftable: bool,
+    /// Why it can't be made, when `craftable` is false; empty when it can.
+    pub reason: String,
+}
+
+/// The crafting panel, present when the player stands at any craft station. Lists
+/// every recipe worked at the stations in this room.
+#[derive(Clone, Debug)]
+pub struct CraftView {
+    /// The stations standing here, e.g. "forge, alchemy lab".
+    pub stations: String,
+    pub entries: Vec<CraftEntryView>,
+}
+
 #[derive(Clone, Debug)]
 pub struct OccupantView {
     pub user_id: Uuid,
@@ -509,6 +536,8 @@ pub struct PlayerView {
     pub stable: Option<StableView>,
     /// The housing ledger, present at the clerk or inside a home you own.
     pub housing: Option<HousingView>,
+    /// The crafting panel, present when standing at any craft station.
+    pub crafting: Option<CraftView>,
     /// The composed character bio (from the appearance choices).
     pub bio: String,
     /// The appearance/bio builder rows: (field label, chosen option).
@@ -591,6 +620,7 @@ impl PlayerView {
             pet: None,
             stable: None,
             housing: None,
+            crafting: None,
             bio: String::new(),
             appearance: Vec::new(),
             log: Vec::new(),
@@ -1159,6 +1189,11 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.gather(user_id));
     }
 
+    /// Craft the recipe at a global index, if the station/skill/materials allow.
+    pub fn craft_task(&self, user_id: Uuid, recipe_index: usize) {
+        self.mutate(user_id, move |s| s.craft(user_id, recipe_index));
+    }
+
     /// Re-roll ability scores on the selection screen (before a class is chosen).
     pub fn reroll_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.reroll(user_id));
@@ -1468,6 +1503,8 @@ struct PlayerState {
     /// Gathering-skill xp, keyed by trade; the level is a pure function of xp.
     /// A missing entry means the trade is untrained (level 1, 0 xp).
     skills: HashMap<GatherSkill, i64>,
+    /// Crafting-skill xp, keyed by trade (same shape and curve as `skills`).
+    craft_skills: HashMap<CraftSkill, i64>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -1534,6 +1571,28 @@ impl PlayerState {
     /// Total xp trained in a gathering skill (0 if untrained).
     fn skill_xp(&self, skill: GatherSkill) -> i64 {
         self.skills.get(&skill).copied().unwrap_or(0)
+    }
+
+    /// Total xp trained in a crafting skill (0 if untrained).
+    fn craft_xp(&self, skill: CraftSkill) -> i64 {
+        self.craft_skills.get(&skill).copied().unwrap_or(0)
+    }
+
+    /// How many of an item id sit in the pack.
+    fn item_count(&self, id: u32) -> u32 {
+        self.inventory.iter().filter(|&&i| i == id).count() as u32
+    }
+
+    /// Remove up to `n` copies of an item id from the pack.
+    fn consume(&mut self, id: u32, mut n: u32) {
+        self.inventory.retain(|&x| {
+            if n > 0 && x == id {
+                n -= 1;
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 
@@ -2008,6 +2067,7 @@ impl WorldState {
             pet: None,
             appearance: [0; appearance::N_FIELDS],
             skills: HashMap::new(),
+            craft_skills: HashMap::new(),
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
@@ -2217,6 +2277,11 @@ impl WorldState {
                 .iter()
                 .filter_map(|(key, xp)| GatherSkill::from_key(key).map(|s| (s, *xp)))
                 .collect();
+            p.craft_skills = saved
+                .craft_skills
+                .iter()
+                .filter_map(|(key, xp)| CraftSkill::from_key(key).map(|s| (s, *xp)))
+                .collect();
             // Restore the chosen archetype (ignored if the key is unknown or no
             // longer matches the class, e.g. a respec/rename).
             p.archetype = saved
@@ -2311,6 +2376,11 @@ impl WorldState {
             appearance: p.appearance.to_vec(),
             skills: p
                 .skills
+                .iter()
+                .map(|(s, xp)| (s.key().to_string(), *xp))
+                .collect(),
+            craft_skills: p
+                .craft_skills
                 .iter()
                 .map(|(s, xp)| (s.key().to_string(), *xp))
                 .collect(),
@@ -3092,6 +3162,103 @@ impl WorldState {
         }
         self.dirty = true;
         true
+    }
+
+    /// Craft the recipe at `recipe_index`: requires the matching station in the
+    /// room, enough craft-skill level, and all input materials. Consumes the
+    /// inputs, adds the output, and trains the craft skill.
+    fn craft(&mut self, user_id: Uuid, recipe_index: usize) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(rc) = recipe(recipe_index) else {
+            return;
+        };
+        // Gather everything decidable under a read borrow, then drop it.
+        let room_id;
+        let level;
+        let missing: Option<(u32, u32)>;
+        {
+            let Some(player) = self.players.get(&user_id) else {
+                return;
+            };
+            if player.respawn_at.is_some() {
+                return;
+            }
+            room_id = player.room;
+            level = skill_level_for_xp(player.craft_xp(rc.skill));
+            missing = rc
+                .inputs
+                .iter()
+                .find(|ing| player.item_count(ing.item) < ing.qty)
+                .map(|ing| (ing.item, ing.qty));
+        }
+        if !craft_stations_at(room_id).contains(&rc.skill) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You need a {} to make that.", rc.skill.station()),
+            );
+            return;
+        }
+        if level < rc.level_req {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "Your {} ({level}) isn't skilled enough - that needs level {}.",
+                    rc.skill.label(),
+                    rc.level_req,
+                ),
+            );
+            return;
+        }
+        if let Some((item_id, qty)) = missing {
+            let name = item(item_id).map(|i| i.name).unwrap_or("materials");
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You don't have the materials ({qty}x {name})."),
+            );
+            return;
+        }
+
+        let out_name = item(rc.output)
+            .map(|i| i.name.to_string())
+            .unwrap_or_else(|| "something".to_string());
+        let (before, after) = {
+            let p = self.players.get_mut(&user_id).expect("player present");
+            for ing in &rc.inputs {
+                p.consume(ing.item, ing.qty);
+            }
+            for _ in 0..rc.output_qty {
+                p.inventory.push(rc.output);
+            }
+            let cur = p.craft_xp(rc.skill);
+            p.craft_skills.insert(rc.skill, cur + rc.xp as i64);
+            (
+                skill_level_for_xp(cur),
+                skill_level_for_xp(cur + rc.xp as i64),
+            )
+        };
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "You {} {out_name}. (+{} {} xp)",
+                rc.skill.verb(),
+                rc.xp,
+                rc.skill.label(),
+            ),
+        );
+        if after > before {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {} rises to level {after}!", rc.skill.label()),
+            );
+        }
+        self.dirty = true;
     }
 
     fn look(&mut self, user_id: Uuid) {
@@ -5630,7 +5797,7 @@ impl WorldState {
                 })
                 .collect();
             // Every gathering trade, in a stable order, with its live progress.
-            let skills: Vec<SkillView> = GatherSkill::ALL
+            let mut skills: Vec<SkillView> = GatherSkill::ALL
                 .iter()
                 .map(|&s| {
                     let xp = player.skill_xp(s);
@@ -5643,6 +5810,72 @@ impl WorldState {
                     }
                 })
                 .collect();
+            // The maker's trades follow the gatherer's in the same Trades block.
+            skills.extend(CraftSkill::ALL.iter().map(|&s| {
+                let xp = player.craft_xp(s);
+                let (xp_into, xp_next) = skill_progress(xp);
+                SkillView {
+                    name: s.label().to_string(),
+                    level: skill_level_for_xp(xp),
+                    xp_into,
+                    xp_next,
+                }
+            }));
+            // The crafting panel: every recipe worked at the stations in this room.
+            let crafting = {
+                let stations = craft_stations_at(player.room);
+                if stations.is_empty() {
+                    None
+                } else {
+                    let mut entries = Vec::new();
+                    for &st in &stations {
+                        let clevel = skill_level_for_xp(player.craft_xp(st));
+                        for ri in recipe_indices_for(st) {
+                            let Some(rc) = recipe(ri) else {
+                                continue;
+                            };
+                            let inputs = rc
+                                .inputs
+                                .iter()
+                                .map(|ing| {
+                                    let n = item(ing.item).map(|i| i.name).unwrap_or("?");
+                                    format!("{}x {n}", ing.qty)
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let have_mats = rc
+                                .inputs
+                                .iter()
+                                .all(|ing| player.item_count(ing.item) >= ing.qty);
+                            let (craftable, reason) = if clevel < rc.level_req {
+                                (false, format!("needs {} {}", st.label(), rc.level_req))
+                            } else if !have_mats {
+                                (false, "need materials".to_string())
+                            } else {
+                                (true, String::new())
+                            };
+                            entries.push(CraftEntryView {
+                                recipe: ri,
+                                name: item(rc.output)
+                                    .map(|i| i.name.to_string())
+                                    .unwrap_or_default(),
+                                skill: st.label().to_string(),
+                                inputs,
+                                craftable,
+                                reason,
+                            });
+                        }
+                    }
+                    Some(CraftView {
+                        stations: stations
+                            .iter()
+                            .map(|s| s.station())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        entries,
+                    })
+                }
+            };
             let in_combat_with = player.target.and_then(|mob_id| {
                 self.mobs
                     .get(&mob_id)
@@ -5897,6 +6130,7 @@ impl WorldState {
                     pet,
                     stable,
                     housing,
+                    crafting,
                     bio: appearance::compose_bio(&player.appearance),
                     appearance: (0..appearance::N_FIELDS)
                         .map(|i| {
@@ -6156,6 +6390,93 @@ mod tests {
             s2.players[&uid(1)].skill_xp(GatherSkill::Mining),
             500,
             "mining xp reloads through the save"
+        );
+    }
+
+    fn copper_ingot_recipe() -> usize {
+        recipe_indices_for(CraftSkill::Smithing)
+            .into_iter()
+            .find(|&i| recipe(i).unwrap().output == super::super::items::ingot_id(0))
+            .expect("a copper ingot recipe exists")
+    }
+
+    #[test]
+    fn crafting_at_a_station_consumes_inputs_and_makes_the_output() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Stand at Embergate's crafters' row (room 3) with 2 copper ore.
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.room = 3;
+            p.inventory.push(super::super::items::material_id(1, 0));
+            p.inventory.push(super::super::items::material_id(1, 0));
+        }
+        s.craft(uid(1), copper_ingot_recipe());
+        let p = &s.players[&uid(1)];
+        assert_eq!(
+            p.item_count(super::super::items::material_id(1, 0)),
+            0,
+            "the ore is consumed"
+        );
+        assert_eq!(
+            p.item_count(super::super::items::ingot_id(0)),
+            1,
+            "an ingot is produced"
+        );
+        assert!(
+            p.craft_xp(CraftSkill::Smithing) > 0,
+            "smithing is trained by crafting"
+        );
+    }
+
+    #[test]
+    fn crafting_needs_both_the_station_and_the_materials() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let ri = copper_ingot_recipe();
+        // Away from a forge (town square) with no ore: nothing is made.
+        s.players.get_mut(&uid(1)).unwrap().room = 1;
+        s.craft(uid(1), ri);
+        assert_eq!(
+            s.players[&uid(1)].item_count(super::super::items::ingot_id(0)),
+            0,
+            "no station means no craft"
+        );
+        // At the forge but still without ore: still nothing, and no xp.
+        s.players.get_mut(&uid(1)).unwrap().room = 3;
+        s.craft(uid(1), ri);
+        assert_eq!(
+            s.players[&uid(1)].item_count(super::super::items::ingot_id(0)),
+            0,
+            "no materials means no craft"
+        );
+        assert_eq!(
+            s.players[&uid(1)].craft_xp(CraftSkill::Smithing),
+            0,
+            "a failed craft trains nothing"
+        );
+    }
+
+    #[test]
+    fn craft_skill_xp_survives_a_save_load_round_trip() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .craft_skills
+            .insert(CraftSkill::Alchemy, 250);
+        let saved = s.export_saved(uid(1)).expect("classed characters export");
+        let mut s2 = world();
+        s2.join(uid(1));
+        s2.hydrate(uid(1), &saved);
+        assert_eq!(
+            s2.players[&uid(1)].craft_xp(CraftSkill::Alchemy),
+            250,
+            "alchemy xp reloads through the save"
         );
     }
 

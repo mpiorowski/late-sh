@@ -64,8 +64,9 @@ Current game scale:
 | `housing.rs` | Player housing data + address arithmetic. `TIERS` (5 homes Hut→Tower: price/ground/upper rooms), the 50+-piece `FURNITURE` catalogue, `HOUSING_BASE`/`plot_base`/`plot_of_room`/`is_housing_room`. Homes are **static rooms** (generated in `world.rs::extend_housing` as Hearthward Close off Market Row); only **ownership** (`plot_owner`) and **furnishings** (`house_furniture`) are dynamic side-state on `svc.rs`, so movement/visiting/snapshot work unchanged and the homes are public shared-world plots. |
 | `appearance.rs` | Character appearance/bio. `FIELDS` (Build/Hair/Eyes/Bearing/Origin, each with a menu of options) + `compose_bio`. The TUI has no free-text, so a player customises by cycling preset options (`e` opens the Appearance panel; `Enter`/`x` cycle a field). Stored as `[u8; N_FIELDS]` on `PlayerState`, persisted, shown on the sheet and when profiling another adventurer (Follow panel). |
 | `pets.rs` | Combat companions. `PetSpecies` data table (`PET_SPECIES`, `pet_species_by_key`) of buyable beasts, and the live `Pet` (held on `PlayerState`, always co-located with its owner). Loyalty (earned by feeding) drives the level via a pure function; `max_hp`/`attack` scale with level. The world wiring (buying at a Stable, feeding, taking wounds, biting the owner's target each combat round) lives in `svc.rs`. Persisted by species key + loyalty (HP restored full on load). |
-| `items.rs` | Item catalog, equipment slots, consumables, valuables, shops, generated Frontier loot. Also the **raw-material catalog** (`materials()`/`material_id`/`MATERIAL_BASE = 4000`): 5 skills x 5 tiers of gathered materials (logs/ores/fish/herbs/hides), `Valuable` kind (immediately sellable), IDs `4000..4100` (skill index x 20 + tier). |
-| `skills.rs` | **Gathering skills** (`GatherSkill`: Woodcutting/Mining/Fishing/Foraging/Skinning) and their own 1-50 xp curve (`xp_for_skill_level`/`skill_level_for_xp`/`skill_progress`), independent of class level and steepening past level 10. Persisted per-player as (skill key, xp). |
+| `items.rs` | Item catalog, equipment slots, consumables, valuables, shops, generated Frontier loot. Also the **raw-material catalog** (`materials()`/`material_id`/`MATERIAL_BASE = 4000`): 5 skills x 5 tiers of gathered materials (logs/ores/fish/herbs/hides), `Valuable` kind (immediately sellable), IDs `4000..4100` (skill index x 20 + tier). And the **crafted-goods catalog** (`crafted()`/`CRAFTED_BASE = 4200` + the `*_id(tier)` helpers): intermediates (ingots/planks/leather) and finished goods (weapons/armor/potions/poisons/food), IDs `4200..4500`. Both chained into `item()`. |
+| `skills.rs` | **Gathering skills** (`GatherSkill`: Woodcutting/Mining/Fishing/Foraging/Skinning) and **crafting skills** (`CraftSkill`: Smithing/Woodworking/Leatherworking/Alchemy/Cooking), both on one 1-50 xp curve (`xp_for_skill_level`/`skill_level_for_xp`/`skill_progress`), independent of class level and steepening past level 10. Persisted per-player as (skill key, xp) for each set. |
+| `crafting.rs` | **Recipes** (`Recipe`/`recipes()`/`recipe(i)`/`recipe_indices_for(skill)`): inputs -> output, gated by a `CraftSkill` + level. 50 recipes (10 per tier x 5 tiers) that **chain** (ore -> ingot -> weapon). Data only; `svc::craft` resolves and applies them. Built at runtime and cached (inputs are `Vec`, not a leaked slice). |
 | `damage.rs` | Damage schools, mob resistance/weakness profiles, damage multiplier math. |
 | `stats.rs` | D&D-style ability scores, 4d6-drop-lowest rolls, modifiers, HP/attack bonuses. |
 | `persist.rs` | JSON schemas for durable character saves and shared world saves. Versioned (`SCHEMA_VERSION`); new fields use `#[serde(default)]` so old saves load (e.g. `board_progress`/`board_done` for quests). |
@@ -150,7 +151,7 @@ Before class choice:
 - The Town Square Frontier descent requires `Bane of the Archdemon Mal'gareth`, `Bane of The Bonewright Lich`, `Bane of the Elder Dryad`, and `Bane of the Abyss-Thing`; after those title gates, it still uses a transient two-step warning: the first `>` logs that the Frontier is older, meaner country for seasoned adventurers, and the next `>` confirms descent. Service-backed non-movement actions clear the pending warning.
 - Combat: `space`, `x`, or Enter attacks when not in a list panel; `z` flees.
 - Abilities: `1-9` use unlocked ability slots unless a list panel is open; `0` uses slot 10. The Abilities panel is a list panel: Enter casts the highlighted ability, which is the only way to reach rosters deeper than ten (the classic classes' late slots).
-- World actions: `y` works a resource node in the room (chop/mine/fish/forage/skin - the highest tier you qualify for); `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel; `g` casts the Resurrection rite on the nearest fallen adventurer in the room (Cleric/Paladin/Druid only); `p` opens the Stable (companion vendor) where one stands; `n` opens the housing ledger (at the clerk, or inside a home you own); `e` opens the appearance/bio builder.
+- World actions: `y` works a resource node in the room (chop/mine/fish/forage/skin - the highest tier you qualify for); `u` opens the crafting panel where a craft station stands; `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel; `g` casts the Resurrection rite on the nearest fallen adventurer in the room (Cleric/Paladin/Druid only); `p` opens the Stable (companion vendor) where one stands; `n` opens the housing ledger (at the clerk, or inside a home you own); `e` opens the appearance/bio builder.
 - While dead (a corpse): all normal keys are suppressed; only `r`/Enter (release to the temple) and `Esc` (leave) respond, until a resurrection or the auto-release deadline.
 - Panels: `c` character, `v` abilities, `t` inventory, `b` shop where a merchant exists, `o` examine/look, `k` titles, `j` quest journal, `f` follow.
 - List panels: `w/s` or up/down move cursor; `1-9` jump and activate; Enter activates. The view auto-scrolls to keep the highlighted row within a small scroll-off margin (top and bottom).
@@ -171,6 +172,7 @@ Before class choice:
 - `Titles`: earned titles; selecting active title again clears it.
 - `Quests`: read-only Frontier zone quest list.
 - `Follow`: current occupants, follow target tag, stop-follow action.
+- `Crafting`: recipes worked at the craft station(s) in the room; select and Enter to craft.
 
 UI uses a two-column layout with compact fallback for terminals narrower than 50 columns or shorter than 9 rows. The left column splits current room context (`Now`) from newest-first action scrollback (`Recent`) with a visible divider; the `Now` region wraps the room description naturally and only truncates the whole context as a last resort to preserve recent-event space. Service room-description lines use `LogKind::Room` and are filtered out of `Recent` so movement does not bury combat, loot, chat, and system events. Arrivals use compact `LogKind::Travel` breadcrumbs so Recent still shows where the player has just been. Consecutive identical recent events are collapsed with an `xN` suffix so repeated blocked-movement warnings do not flood the split.
 In the Room panel, the minimap is rendered in a separate bottom-aligned side-panel region, not appended to the room detail lines; keep it anchored so changing foes/features/hints does not make the map jump vertically.
@@ -225,6 +227,14 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 - `y` works the highest-tier node in the room the player qualifies for (`svc::gather`/`try_gather`): it grants the raw material to the pack plus skill xp, then depletes for `NODE_RESPAWN` (45s, tracked in `WorldState::gathered`, mirroring `hunted`). Under-skilled or regrowing nodes log why and yield nothing. No combat and no safe/unsafe gate - gathering works anywhere a node stands.
 - Raw materials (`items::materials`, IDs `4000..4100`) are `Valuable` today, so they are immediately sellable ("tradeable"); the crafting update turns them into gear/consumables and further recipe chains.
 - The Room panel shows a **Resources** section (like Wildlife) with a `◆`/`·` marker per node and a gatherable/reason tag; the character sheet + narrow panel show a **Trades** block (each skill's level and progress) with the `y` hint.
+
+### Crafting [VOLATILE]
+
+- Five crafting trades (`skills::CraftSkill`) - Smithing, Woodworking, Leatherworking, Alchemy, Cooking - level 1..=50 on the same curve, tracked as a separate `craft_skills` map on `PlayerState` and persisted (schema v13).
+- `world::FEATURES` places the five **craft stations** (`FeatureKind::CraftStation(CraftSkill)`) in Embergate's Market Row (room 3): a forge, workbench, tannery, alchemy lab and cooking fire. `craft_stations_at(room)` gates crafting and builds the panel. Stations read as actionable gold in the room (`ui::is_craft_station`).
+- `u` opens the **Crafting** panel (`Panel::Crafting`) where any station stands; it lists every recipe worked at the stations here, each flagged craftable/gated (station + skill level + materials). `Enter` crafts the selected recipe (`svc::craft` / `craft_task`): it consumes the inputs (`PlayerState::consume`/`item_count`), adds the output, and trains the craft skill. Recipes **chain** - smelt ore -> ingot, then forge ingot + plank -> sword.
+- Crafted outputs are ordinary items, so they equip / are consumed / sell through the existing systems (weapons & armor equip, potions & food heal/restore, poisons are sellable valuables until the depth update makes them applyable).
+- The **Trades** block shows all ten trades (gather then craft); the recipe `inputs` are summarised as `"3x Copper Ingot, 1x Oak Plank"`.
 
 ### Frontier and Reaches loot
 
@@ -308,7 +318,7 @@ Progression:
 
 Character persistence uses `late_core::models::mud_character` / `mud_characters`.
 
-Saved character schema version: `12`.
+Saved character schema version: `13`.
 
 Durable fields:
 - class key, XP, level, carried gold, banked gold, current HP;
@@ -322,7 +332,8 @@ Durable fields:
 - companion species key + accumulated loyalty (the pet reloads at full health; its level derives from loyalty);
 - owned housing plot (tier index) + placed furnishings as (room, key) pairs (re-registered into `plot_owner`/`house_furniture` on load);
 - appearance/bio trait indices (`Vec<u8>`, clamped to valid options on load);
-- gathering-skill xp as (skill key, total xp) pairs (unknown keys dropped on load).
+- gathering-skill xp as (skill key, total xp) pairs (unknown keys dropped on load);
+- crafting-skill xp as (skill key, total xp) pairs.
 
 Transient by design:
 - current target;

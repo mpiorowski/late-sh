@@ -88,6 +88,92 @@ impl fmt::Display for GatherSkill {
     }
 }
 
+/// A crafting trade - the maker's side of the economy. Each turns gathered raw
+/// materials (and refined intermediates) into usable, sellable goods, and levels
+/// 1..=50 on the very same curve as the gathering skills.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CraftSkill {
+    Smithing,
+    Woodworking,
+    Leatherworking,
+    Alchemy,
+    Cooking,
+}
+
+impl CraftSkill {
+    pub const ALL: [CraftSkill; 5] = [
+        CraftSkill::Smithing,
+        CraftSkill::Woodworking,
+        CraftSkill::Leatherworking,
+        CraftSkill::Alchemy,
+        CraftSkill::Cooking,
+    ];
+
+    /// Stable index used to lay out crafted-item ids (see `items`). Never change.
+    pub const fn index(self) -> u32 {
+        match self {
+            Self::Smithing => 0,
+            Self::Woodworking => 1,
+            Self::Leatherworking => 2,
+            Self::Alchemy => 3,
+            Self::Cooking => 4,
+        }
+    }
+
+    /// Stable key for persistence (never change once shipped).
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Smithing => "smithing",
+            Self::Woodworking => "woodworking",
+            Self::Leatherworking => "leatherworking",
+            Self::Alchemy => "alchemy",
+            Self::Cooking => "cooking",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.key() == key)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Smithing => "Smithing",
+            Self::Woodworking => "Woodworking",
+            Self::Leatherworking => "Leatherworking",
+            Self::Alchemy => "Alchemy",
+            Self::Cooking => "Cooking",
+        }
+    }
+
+    /// The making verb for the craft log line: "You forge ...", "You brew ...".
+    pub fn verb(self) -> &'static str {
+        match self {
+            Self::Smithing => "forge",
+            Self::Woodworking => "craft",
+            Self::Leatherworking => "tan",
+            Self::Alchemy => "brew",
+            Self::Cooking => "cook",
+        }
+    }
+
+    /// The station a crafter works at (feature name / panel wording).
+    pub fn station(self) -> &'static str {
+        match self {
+            Self::Smithing => "forge",
+            Self::Woodworking => "workbench",
+            Self::Leatherworking => "tannery",
+            Self::Alchemy => "alchemy lab",
+            Self::Cooking => "cooking fire",
+        }
+    }
+}
+
+impl fmt::Display for CraftSkill {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// Skill level cap - the same 50 the class levels use, so "level 1 to 50" reads
 /// consistently across the game.
 pub const SKILL_MAX_LEVEL: i32 = 50;
@@ -145,6 +231,19 @@ mod tests {
         let mut idx: Vec<u32> = GatherSkill::ALL.iter().map(|s| s.index()).collect();
         idx.sort_unstable();
         assert_eq!(idx, vec![0, 1, 2, 3, 4]);
+        let mut cidx: Vec<u32> = CraftSkill::ALL.iter().map(|s| s.index()).collect();
+        cidx.sort_unstable();
+        assert_eq!(cidx, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn craft_keys_round_trip_and_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for s in CraftSkill::ALL {
+            assert!(seen.insert(s.key()), "duplicate craft key {}", s.key());
+            assert_eq!(CraftSkill::from_key(s.key()), Some(s));
+        }
+        assert_eq!(CraftSkill::from_key("nonsense"), None);
     }
 
     #[test]

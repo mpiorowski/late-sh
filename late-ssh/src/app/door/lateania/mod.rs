@@ -6,6 +6,7 @@
 pub mod abilities;
 pub mod appearance;
 pub mod classes;
+pub mod crafting;
 pub mod damage;
 pub mod housing;
 pub mod input;
