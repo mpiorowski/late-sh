@@ -283,6 +283,13 @@ impl State {
         }
     }
 
+    /// Work a resource node in the current room (chop/mine/fish/forage/skin).
+    pub fn gather(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.gather_task(self.user_id);
+        }
+    }
+
     /// Speak the word of recall: warp back to Embergate's Town Square.
     pub fn recall(&mut self) {
         if self.ensure_player_present() {

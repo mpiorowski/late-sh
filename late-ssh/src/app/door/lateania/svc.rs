@@ -53,10 +53,12 @@ use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
 use super::pets::{Pet, pet_species_by_key};
+use super::skills::{GatherSkill, skill_level_for_xp, skill_progress};
 use super::stats::AbilityScores;
 use super::world::{
-    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RoomId, World,
-    critter_index, critters_at, features_at, frontier_entrance_room, is_frontier_room, seed_world,
+    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, ResourceNode, RoomId,
+    World, critter_index, critters_at, features_at, frontier_entrance_room, is_frontier_room,
+    node_index, nodes_at, seed_world,
 };
 
 /// World heartbeat. One combat round resolves per tick.
@@ -304,6 +306,29 @@ pub struct WildlifeView {
     pub perk: String,
 }
 
+/// One harvestable resource node in the room, for the Resources list.
+#[derive(Clone, Debug)]
+pub struct NodeView {
+    pub name: String,
+    pub note: String,
+    /// The gathering skill it belongs to, e.g. "Woodcutting".
+    pub skill: String,
+    /// True when the player can work it right now (off cooldown and skilled enough).
+    pub gatherable: bool,
+    /// Why it can't be worked, when `gatherable` is false: "needs Mining 16" or
+    /// "regrowing"; empty when it can.
+    pub reason: String,
+}
+
+/// One gathering skill's progress, for the character sheet Skills block.
+#[derive(Clone, Debug)]
+pub struct SkillView {
+    pub name: String,
+    pub level: i32,
+    pub xp_into: i64,
+    pub xp_next: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct OccupantView {
     pub user_id: Uuid,
@@ -470,6 +495,10 @@ pub struct PlayerView {
     pub following: Option<Uuid>,
     /// Wild creatures sharing the room.
     pub wildlife: Vec<WildlifeView>,
+    /// Harvestable resource nodes in the room (trees, veins, fishing spots...).
+    pub nodes: Vec<NodeView>,
+    /// The player's gathering skills and their progress, for the Skills block.
+    pub skills: Vec<SkillView>,
     pub in_combat_with: Option<String>,
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
@@ -553,6 +582,8 @@ impl PlayerView {
             occupants: Vec::new(),
             following: None,
             wildlife: Vec::new(),
+            nodes: Vec::new(),
+            skills: Vec::new(),
             in_combat_with: None,
             abilities: Vec::new(),
             inventory: Vec::new(),
@@ -1123,6 +1154,11 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.look(user_id));
     }
 
+    /// Work a resource node in the current room (chop/mine/fish/forage/skin).
+    pub fn gather_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.gather(user_id));
+    }
+
     /// Re-roll ability scores on the selection screen (before a class is chosen).
     pub fn reroll_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.reroll(user_id));
@@ -1429,6 +1465,9 @@ struct PlayerState {
     pet: Option<Pet>,
     /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
     appearance: [u8; appearance::N_FIELDS],
+    /// Gathering-skill xp, keyed by trade; the level is a pure function of xp.
+    /// A missing entry means the trade is untrained (level 1, 0 xp).
+    skills: HashMap<GatherSkill, i64>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -1490,6 +1529,11 @@ impl PlayerState {
     fn armor(&self) -> i32 {
         let (_, _, armor) = self.equipment_mods();
         armor
+    }
+
+    /// Total xp trained in a gathering skill (0 if untrained).
+    fn skill_xp(&self, skill: GatherSkill) -> i64 {
+        self.skills.get(&skill).copied().unwrap_or(0)
     }
 }
 
@@ -1822,6 +1866,8 @@ struct WorldState {
     world_revision: u64,
     /// Hunt cooldowns for `Game` critters, keyed by global WILDLIFE index.
     hunted: HashMap<usize, Instant>,
+    /// Harvest cooldowns for resource nodes, keyed by global NODES index.
+    gathered: HashMap<usize, Instant>,
     /// Next id for a runtime-only summoned add (Summoner behavior). Kept well
     /// clear of authored spawn ids so the two never collide.
     next_summon_id: u32,
@@ -1842,6 +1888,8 @@ const SAVED_HOUSE_FURNITURE_LIMIT: usize = 512;
 const TEMPLE_ROOM: RoomId = 4;
 /// How long a hunted game critter stays gone before it wanders back.
 const GAME_RESPAWN: Duration = Duration::from_secs(40);
+/// How long a harvested resource node stays depleted before it regrows.
+const NODE_RESPAWN: Duration = Duration::from_secs(45);
 
 impl WorldState {
     fn new(room_id: Uuid, world: World) -> Self {
@@ -1880,6 +1928,7 @@ impl WorldState {
             world_dirty: false,
             world_revision: 0,
             hunted: HashMap::new(),
+            gathered: HashMap::new(),
             next_summon_id: SUMMON_ID_START,
             world_ticks: 0,
             world_boss: None,
@@ -1958,6 +2007,7 @@ impl WorldState {
             archetype: None,
             pet: None,
             appearance: [0; appearance::N_FIELDS],
+            skills: HashMap::new(),
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
@@ -2160,6 +2210,13 @@ impl WorldState {
             p.board_progress = saved.board_progress.clone();
             p.board_done = saved.board_done.clone();
             p.quest_cooldowns = saved.quest_cooldowns.clone();
+            // Restore gathering-skill xp (unknown keys are dropped, so retiring a
+            // trade never breaks a save).
+            p.skills = saved
+                .skills
+                .iter()
+                .filter_map(|(key, xp)| GatherSkill::from_key(key).map(|s| (s, *xp)))
+                .collect();
             // Restore the chosen archetype (ignored if the key is unknown or no
             // longer matches the class, e.g. a respec/rename).
             p.archetype = saved
@@ -2252,6 +2309,11 @@ impl WorldState {
                 .map(|plot| self.saved_house_furniture_for_plot(user_id, plot))
                 .unwrap_or_default(),
             appearance: p.appearance.to_vec(),
+            skills: p
+                .skills
+                .iter()
+                .map(|(s, xp)| (s.key().to_string(), *xp))
+                .collect(),
         }))
     }
 
@@ -2902,6 +2964,132 @@ impl WorldState {
             LogKind::Loot,
             format!("You stalk and catch {name}. (+{xp} xp)"),
         );
+        self.dirty = true;
+        true
+    }
+
+    /// Work a resource node in the current room: harvest the highest-tier node
+    /// the player qualifies for, granting its raw material and skill xp. Nodes
+    /// don't need a safe/unsafe room and never involve combat.
+    fn gather(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            return;
+        }
+        let room_id = player.room;
+        if nodes_at(room_id).is_empty() {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                "There's nothing to gather here.".to_string(),
+            );
+            return;
+        }
+        // `try_gather` logs its own reason when a node is present but unworkable.
+        self.try_gather(user_id, room_id);
+    }
+
+    /// Harvest the best node in the room the player can work right now. Returns
+    /// true if a material was taken. When a node is present but out of reach
+    /// (under-skilled) or still regrowing, it logs why and returns false.
+    fn try_gather(&mut self, user_id: Uuid, room_id: RoomId) -> bool {
+        let now = Instant::now();
+        let Some(player) = self.players.get(&user_id) else {
+            return false;
+        };
+        let nodes = nodes_at(room_id);
+
+        // Pick the highest-tier node the player qualifies for and that is off
+        // cooldown. Also remember the toughest node they're too unskilled for,
+        // and whether anything here is merely regrowing, for a helpful message.
+        let mut choice: Option<(usize, &'static ResourceNode)> = None;
+        let mut under_skilled: Option<(&'static ResourceNode, i32)> = None;
+        let mut regrowing = false;
+        for &n in &nodes {
+            let Some(ni) = node_index(n) else {
+                continue;
+            };
+            let level = skill_level_for_xp(player.skill_xp(n.skill));
+            if level < n.level_req {
+                if under_skilled.is_none_or(|(u, _)| n.tier > u.tier) {
+                    under_skilled = Some((n, level));
+                }
+                continue;
+            }
+            let ready = match self.gathered.get(&ni) {
+                Some(t) => now.duration_since(*t) >= NODE_RESPAWN,
+                None => true,
+            };
+            if !ready {
+                regrowing = true;
+                continue;
+            }
+            if choice.is_none_or(|(_, c)| n.tier > c.tier) {
+                choice = Some((ni, n));
+            }
+        }
+
+        let Some((ni, node)) = choice else {
+            if let Some((n, level)) = under_skilled {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!(
+                        "You can't work {} yet - it needs {} level {} (yours is {level}).",
+                        n.name,
+                        n.skill.label(),
+                        n.level_req,
+                    ),
+                );
+            } else if regrowing {
+                self.log_to(
+                    user_id,
+                    LogKind::Normal,
+                    "The resources here need time to recover.".to_string(),
+                );
+            }
+            return false;
+        };
+
+        self.gathered.insert(ni, now);
+        let skill = node.skill;
+        let yield_item = node.yield_item;
+        let gained = node.xp;
+        let node_name = node.name;
+        let item_name = item(yield_item)
+            .map(|i| i.name.to_string())
+            .unwrap_or_else(|| "something".to_string());
+        let (before, after) = if let Some(p) = self.players.get_mut(&user_id) {
+            p.inventory.push(yield_item);
+            let cur = p.skill_xp(skill);
+            let before = skill_level_for_xp(cur);
+            let new_xp = cur + gained as i64;
+            p.skills.insert(skill, new_xp);
+            (before, skill_level_for_xp(new_xp))
+        } else {
+            return false;
+        };
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "You {} {node_name} and take {item_name}. (+{gained} {} xp)",
+                skill.verb(),
+                skill.label(),
+            ),
+        );
+        if after > before {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {} rises to level {after}!", skill.label()),
+            );
+        }
         self.dirty = true;
         true
     }
@@ -5415,6 +5603,46 @@ impl WorldState {
                     },
                 })
                 .collect();
+            // Harvestable nodes in the room, each flagged with whether the player
+            // can work it now and, if not, why (under-skilled or regrowing).
+            let nodes: Vec<NodeView> = nodes_at(player.room)
+                .into_iter()
+                .map(|n| {
+                    let level = skill_level_for_xp(player.skill_xp(n.skill));
+                    let ready = match node_index(n).and_then(|ni| self.gathered.get(&ni)) {
+                        Some(t) => now.duration_since(*t) >= NODE_RESPAWN,
+                        None => true,
+                    };
+                    let (gatherable, reason) = if level < n.level_req {
+                        (false, format!("needs {} {}", n.skill.label(), n.level_req))
+                    } else if !ready {
+                        (false, "regrowing".to_string())
+                    } else {
+                        (true, String::new())
+                    };
+                    NodeView {
+                        name: n.name.to_string(),
+                        note: n.note.to_string(),
+                        skill: n.skill.label().to_string(),
+                        gatherable,
+                        reason,
+                    }
+                })
+                .collect();
+            // Every gathering trade, in a stable order, with its live progress.
+            let skills: Vec<SkillView> = GatherSkill::ALL
+                .iter()
+                .map(|&s| {
+                    let xp = player.skill_xp(s);
+                    let (xp_into, xp_next) = skill_progress(xp);
+                    SkillView {
+                        name: s.label().to_string(),
+                        level: skill_level_for_xp(xp),
+                        xp_into,
+                        xp_next,
+                    }
+                })
+                .collect();
             let in_combat_with = player.target.and_then(|mob_id| {
                 self.mobs
                     .get(&mob_id)
@@ -5660,6 +5888,8 @@ impl WorldState {
                     occupants,
                     following: player.following,
                     wildlife,
+                    nodes,
+                    skills,
                     in_combat_with,
                     abilities,
                     inventory,
@@ -5844,6 +6074,89 @@ mod tests {
 
     fn world() -> WorldState {
         WorldState::new(uid(999), seed_world())
+    }
+
+    #[test]
+    fn gathering_a_node_yields_its_material_and_trains_the_skill() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // Stand at the roadside birch (Woodcutting tier 0, room 600).
+        s.players.get_mut(&uid(1)).unwrap().room = 600;
+        let before = s.players[&uid(1)].inventory.len();
+        s.gather(uid(1));
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.inventory.len(), before + 1, "a material is taken");
+        assert!(
+            p.inventory
+                .contains(&super::super::items::material_id(0, 0)),
+            "the birch log lands in the pack"
+        );
+        assert_eq!(
+            p.skill_xp(GatherSkill::Woodcutting),
+            12,
+            "woodcutting xp is granted"
+        );
+    }
+
+    #[test]
+    fn a_worked_node_is_depleted_until_it_regrows() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        s.players.get_mut(&uid(1)).unwrap().room = 600;
+        s.gather(uid(1));
+        let after_one = s.players[&uid(1)].inventory.len();
+        s.gather(uid(1)); // still on cooldown
+        assert_eq!(
+            s.players[&uid(1)].inventory.len(),
+            after_one,
+            "the same node can't be stripped twice before it regrows"
+        );
+    }
+
+    #[test]
+    fn an_underskilled_node_refuses_to_be_worked() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // The ironbark (tier 4, room 803) needs Woodcutting 38; a fresh
+        // character has no woodcutting training at all.
+        s.players.get_mut(&uid(1)).unwrap().room = 803;
+        let before = s.players[&uid(1)].inventory.len();
+        s.gather(uid(1));
+        let p = &s.players[&uid(1)];
+        assert_eq!(
+            p.inventory.len(),
+            before,
+            "nothing is taken while under-skilled"
+        );
+        assert_eq!(
+            p.skill_xp(GatherSkill::Woodcutting),
+            0,
+            "no xp for a node you can't work"
+        );
+    }
+
+    #[test]
+    fn skill_xp_survives_a_save_load_round_trip() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .skills
+            .insert(GatherSkill::Mining, 500);
+        let saved = s.export_saved(uid(1)).expect("classed characters export");
+        let mut s2 = world();
+        s2.join(uid(1));
+        s2.hydrate(uid(1), &saved);
+        assert_eq!(
+            s2.players[&uid(1)].skill_xp(GatherSkill::Mining),
+            500,
+            "mining xp reloads through the save"
+        );
     }
 
     fn grant_frontier_unlock_titles(s: &mut WorldState, user_id: Uuid) {

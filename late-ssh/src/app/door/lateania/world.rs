@@ -21,6 +21,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::damage::{DamageProfile, DamageType};
+use super::skills::GatherSkill;
 
 /// Compass and vertical directions a player can move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -781,6 +782,308 @@ pub fn critters_at(room: RoomId) -> Vec<&'static CritterSpawn> {
 /// per-world hunt cooldowns.
 pub fn critter_index(c: &CritterSpawn) -> Option<usize> {
     WILDLIFE.iter().position(|w| std::ptr::eq(w, c))
+}
+
+/// A harvestable resource node fixed to a room: a tree stand, an ore vein, a
+/// fishing spot, or a herb/skinning patch. Modelled exactly like wildlife -
+/// static data keyed to a home room, with a per-node respawn cooldown tracked on
+/// the service (`gathered`). Harvesting one grants its raw material plus skill
+/// xp, gated behind a minimum skill level so higher tiers stay out of reach
+/// until the trade is trained up.
+#[derive(Clone, Copy, Debug)]
+pub struct ResourceNode {
+    pub home: RoomId,
+    pub skill: GatherSkill,
+    /// What the player sees and acts on, e.g. "an old oak wood".
+    pub name: &'static str,
+    /// Short flavour shown in the Resources list.
+    pub note: &'static str,
+    /// Tier 0..5, low to high; sets the material and the difficulty band.
+    pub tier: u8,
+    /// Minimum skill level required to work it.
+    pub level_req: i32,
+    /// Item id granted on a successful harvest (derived from skill + tier).
+    pub yield_item: u32,
+    /// Skill xp granted per harvest.
+    pub xp: i32,
+}
+
+const fn node(
+    home: RoomId,
+    skill: GatherSkill,
+    name: &'static str,
+    note: &'static str,
+    tier: u8,
+    level_req: i32,
+    xp: i32,
+) -> ResourceNode {
+    ResourceNode {
+        home,
+        skill,
+        name,
+        note,
+        tier,
+        level_req,
+        // The yield is fixed by the node's skill and tier, so the material can
+        // never drift out of sync with its source.
+        yield_item: super::items::material_id(skill.index(), tier as u32),
+        xp,
+    }
+}
+
+/// Every harvestable node in the world, keyed to its home room. Tiers climb with
+/// distance/difficulty from Embergate: roadside starters near town, mid materials
+/// out in the overworld wings, and the best materials deep in the harder zones.
+pub const NODES: &[ResourceNode] = &[
+    // ---- Woodcutting: birch -> oak -> ash -> yew -> ironbark ------------
+    node(
+        600,
+        GatherSkill::Woodcutting,
+        "a stand of roadside birch",
+        "slim white birches along the verge",
+        0,
+        1,
+        12,
+    ),
+    node(
+        680,
+        GatherSkill::Woodcutting,
+        "an old oak wood",
+        "gnarled oaks on the hillside",
+        1,
+        8,
+        30,
+    ),
+    node(
+        684,
+        GatherSkill::Woodcutting,
+        "a grove of mountain ash",
+        "straight ash on the high slopes",
+        2,
+        16,
+        70,
+    ),
+    node(
+        688,
+        GatherSkill::Woodcutting,
+        "an ancient yew",
+        "a black, age-twisted yew",
+        3,
+        26,
+        150,
+    ),
+    node(
+        803,
+        GatherSkill::Woodcutting,
+        "ironbark rooted in the dark",
+        "iron-hard trunks in the fungal deep",
+        4,
+        38,
+        320,
+    ),
+    // ---- Mining: copper -> tin -> iron -> silver -> mithril -------------
+    node(
+        601,
+        GatherSkill::Mining,
+        "a weathered copper outcrop",
+        "green-streaked stone by the road",
+        0,
+        1,
+        12,
+    ),
+    node(
+        740,
+        GatherSkill::Mining,
+        "a tin-streaked rockface",
+        "pale ore in the desert rock",
+        1,
+        8,
+        30,
+    ),
+    node(
+        743,
+        GatherSkill::Mining,
+        "a deep iron seam",
+        "red iron banding the cliff",
+        2,
+        16,
+        70,
+    ),
+    node(
+        748,
+        GatherSkill::Mining,
+        "a glinting silver vein",
+        "silver threading the deep rock",
+        3,
+        26,
+        150,
+    ),
+    node(
+        750,
+        GatherSkill::Mining,
+        "a mithril lode",
+        "the fabled blue-white ore",
+        4,
+        38,
+        320,
+    ),
+    // ---- Fishing: bream -> trout -> pike -> sturgeon -> moonscale -------
+    node(
+        620,
+        GatherSkill::Fishing,
+        "the harbor shallows",
+        "small fish in the clear shallows",
+        0,
+        1,
+        12,
+    ),
+    node(
+        720,
+        GatherSkill::Fishing,
+        "the oasis pool",
+        "fish rising in the still oasis",
+        0,
+        1,
+        12,
+    ),
+    node(
+        660,
+        GatherSkill::Fishing,
+        "the high lake shore",
+        "trout holding in the cold lake",
+        1,
+        8,
+        30,
+    ),
+    node(
+        641,
+        GatherSkill::Fishing,
+        "a tidal cove",
+        "pike hunting the running cove",
+        2,
+        16,
+        70,
+    ),
+    node(
+        701,
+        GatherSkill::Fishing,
+        "a black fen pool",
+        "something big turns in the dark water",
+        3,
+        26,
+        150,
+    ),
+    node(
+        650,
+        GatherSkill::Fishing,
+        "the kraken's deep",
+        "pale shapes in the abyssal water",
+        4,
+        38,
+        320,
+    ),
+    // ---- Foraging: marsh sage -> redleaf -> bloodthistle -> frostbloom -> sunmoss
+    node(
+        603,
+        GatherSkill::Foraging,
+        "a verge of marsh sage",
+        "grey-green sage along the ditch",
+        0,
+        1,
+        12,
+    ),
+    node(
+        682,
+        GatherSkill::Foraging,
+        "a redleaf meadow",
+        "red-veined leaves in the meadow",
+        1,
+        8,
+        30,
+    ),
+    node(
+        700,
+        GatherSkill::Foraging,
+        "a bloodthistle bog",
+        "dark thistles standing in the mire",
+        2,
+        16,
+        70,
+    ),
+    node(
+        690,
+        GatherSkill::Foraging,
+        "a cold high meadow",
+        "pale blooms rimed with frost",
+        3,
+        26,
+        150,
+    ),
+    node(
+        801,
+        GatherSkill::Foraging,
+        "a cavern lit by sunmoss",
+        "moss that glows faintly in the dark",
+        4,
+        38,
+        320,
+    ),
+    // ---- Skinning: rough -> thick -> boar -> bear -> direhide -----------
+    node(
+        604,
+        GatherSkill::Skinning,
+        "fresh boar sign under the oaks",
+        "trampled ground and shed bristles",
+        0,
+        1,
+        12,
+    ),
+    node(
+        760,
+        GatherSkill::Skinning,
+        "a well-worn game trail",
+        "hoof-churned earth on the savanna",
+        1,
+        8,
+        30,
+    ),
+    node(
+        762,
+        GatherSkill::Skinning,
+        "a razorback wallow",
+        "a muddy wallow, still warm",
+        2,
+        16,
+        70,
+    ),
+    node(
+        765,
+        GatherSkill::Skinning,
+        "a cave-bear's kill",
+        "a fresh kill dragged half-eaten",
+        3,
+        26,
+        150,
+    ),
+    node(
+        767,
+        GatherSkill::Skinning,
+        "a dire-beast lair",
+        "old bones and a rank, huge musk",
+        4,
+        38,
+        320,
+    ),
+];
+
+pub fn nodes_at(room: RoomId) -> Vec<&'static ResourceNode> {
+    NODES.iter().filter(|n| n.home == room).collect()
+}
+
+/// Stable global index of a node (its position in `NODES`), used to key
+/// per-world harvest cooldowns.
+pub fn node_index(n: &ResourceNode) -> Option<usize> {
+    NODES.iter().position(|x| std::ptr::eq(x, n))
 }
 
 fn room(
@@ -7674,6 +7977,78 @@ mod tests {
                 "feature {:?} references missing room {}",
                 feature.name,
                 feature.room
+            );
+        }
+    }
+
+    #[test]
+    fn every_node_lives_in_a_real_room() {
+        let world = seed_world();
+        for n in NODES {
+            assert!(
+                world.rooms.contains_key(&n.home),
+                "node {:?} references missing room {}",
+                n.name,
+                n.home
+            );
+        }
+    }
+
+    #[test]
+    fn every_node_yields_a_real_material_matching_its_skill_and_tier() {
+        for n in NODES {
+            assert!(
+                (n.tier as u32) < super::super::items::MATERIAL_TIERS,
+                "node {:?} tier {} out of range",
+                n.name,
+                n.tier
+            );
+            assert_eq!(
+                n.yield_item,
+                super::super::items::material_id(n.skill.index(), n.tier as u32),
+                "node {:?} yield must follow its skill + tier",
+                n.name
+            );
+            assert!(
+                super::super::items::item(n.yield_item).is_some(),
+                "node {:?} yields missing item {}",
+                n.name,
+                n.yield_item
+            );
+            assert!(
+                n.level_req >= 1,
+                "node {:?} needs a real skill gate",
+                n.name
+            );
+        }
+    }
+
+    #[test]
+    fn node_indices_round_trip_and_cover_every_skill() {
+        // `node_index` is exercised exactly as the service uses it: on the
+        // 'static refs handed out by `nodes_at` (const promotion makes the two
+        // NODES views share storage, as with critters). Every node must be
+        // reachable and map back to a unique index.
+        let world = seed_world();
+        let mut seen = std::collections::HashSet::new();
+        for &id in world.rooms.keys() {
+            for n in nodes_at(id) {
+                let idx = node_index(n).expect("a node from nodes_at has an index");
+                seen.insert(idx);
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            NODES.len(),
+            "every node is reachable via nodes_at and indexes uniquely"
+        );
+        // At least one node per gathering skill, so every trade has somewhere to
+        // train.
+        for skill in GatherSkill::ALL {
+            assert!(
+                NODES.iter().any(|n| n.skill == skill),
+                "no node trains {}",
+                skill.label()
             );
         }
     }

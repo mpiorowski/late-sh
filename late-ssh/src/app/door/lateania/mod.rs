@@ -13,6 +13,7 @@ pub mod items;
 pub mod persist;
 pub mod pets;
 pub mod screen;
+pub mod skills;
 pub mod state;
 pub mod stats;
 pub mod svc;

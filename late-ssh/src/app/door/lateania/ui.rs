@@ -716,6 +716,28 @@ fn room_panel(
             ));
         }
     }
+    if !view.nodes.is_empty() {
+        lines.push(section("Resources"));
+        for n in &view.nodes {
+            let (marker, color) = if n.gatherable {
+                ("◆ ", theme::AMBER())
+            } else {
+                ("· ", theme::TEXT_DIM())
+            };
+            let detail = if n.gatherable {
+                format!(", {} (press y)", n.skill.to_lowercase())
+            } else if !n.reason.is_empty() {
+                format!(", {}", n.reason)
+            } else {
+                String::new()
+            };
+            lines.extend(side_text_wrap(
+                &format!("{marker}{}{detail}", n.name),
+                color,
+                width,
+            ));
+        }
+    }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
     lines
@@ -906,6 +928,8 @@ fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
             .add_modifier(Modifier::BOLD),
     )));
     lines.extend(wrap(&view.trait_desc, 24));
+    lines.push(Line::raw(""));
+    lines.extend(skills_block(view));
     lines
 }
 
@@ -956,6 +980,42 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
     }
     lines.push(Line::raw(""));
     lines.push(hint("c", "close  v abilities  t bag"));
+    lines
+}
+
+/// The gathering-trades block: each skill's level and a compact progress
+/// readout. Shown on both the full character sheet and the narrow panel; the `y`
+/// hint teaches how to work a node.
+fn skills_block(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Trades")];
+    if view.skills.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  untrained",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+        return lines;
+    }
+    for s in &view.skills {
+        let progress = if s.xp_next > 0 {
+            format!("{}/{}", s.xp_into, s.xp_next)
+        } else {
+            "max".to_string()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", s.name), Style::default().fg(theme::TEXT())),
+            Span::styled(
+                format!("L{}", s.level),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {progress}"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    lines.push(hint("y", "gather a resource node"));
     lines
 }
 
@@ -1173,6 +1233,8 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
             Style::default().fg(theme::BADGE_GOLD()),
         )));
     }
+    lines.push(Line::raw(""));
+    lines.extend(skills_block(view));
     lines.push(Line::raw(""));
     lines.push(hint("c", "close  v abilities  t bag"));
     lines.push(hint("[ ]", "scroll"));

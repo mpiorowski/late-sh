@@ -960,12 +960,118 @@ pub const ITEMS: &[Item] = &[
     },
 ];
 
+// ---- Raw gathering materials --------------------------------------------
+//
+// Trees, ore veins, fishing spots and herb/skinning patches (see world::NODES)
+// drop these raw materials when harvested (see svc gather). They are Valuables
+// for now - immediately sellable to any merchant, which is what "tradeable"
+// means today - and become crafting inputs in the crafting update. IDs live in
+// 4000..4100 (skill index * 20 + tier), clear of the authored (<1500) and
+// generated Frontier/Reaches (3000..3400) ranges.
+
+/// Base id for the raw-material catalog.
+pub const MATERIAL_BASE: u32 = 4000;
+/// Tiers per gathering skill (levels of material, low to high).
+pub const MATERIAL_TIERS: u32 = 5;
+
+/// The item id of the raw material a skill drops at a given tier (0-based). The
+/// `skill_index` is `skills::GatherSkill::index`.
+pub const fn material_id(skill_index: u32, tier: u32) -> u32 {
+    MATERIAL_BASE + skill_index * 20 + tier
+}
+
+/// Names per skill (rows follow `GatherSkill::index`) and tier (columns low->high).
+const MATERIAL_NAMES: [[&str; 5]; 5] = [
+    // Woodcutting
+    ["Birch Log", "Oak Log", "Ash Log", "Yew Log", "Ironbark Log"],
+    // Mining
+    [
+        "Copper Ore",
+        "Tin Ore",
+        "Iron Ore",
+        "Silver Ore",
+        "Mithril Ore",
+    ],
+    // Fishing
+    [
+        "River Bream",
+        "Silver Trout",
+        "Grey Pike",
+        "Deep Sturgeon",
+        "Moonscale Fish",
+    ],
+    // Foraging
+    [
+        "Marsh Sage",
+        "Redleaf",
+        "Bloodthistle",
+        "Frostbloom",
+        "Sunmoss",
+    ],
+    // Skinning
+    [
+        "Rough Hide",
+        "Thick Hide",
+        "Boar Hide",
+        "Bear Pelt",
+        "Direhide",
+    ],
+];
+
+/// One flavour line per skill (rows follow `GatherSkill::index`).
+const MATERIAL_FLAVOR: [&str; 5] = [
+    "A length of cut timber, ready for the sawbench.",
+    "Raw ore, still cold from the rock; a smith can smelt it down.",
+    "A fresh-landed fish, good eating or good bait.",
+    "A bundle of cut herbs, pungent and green.",
+    "A cleaned hide, ready for the tanner's rack.",
+];
+
+fn build_materials() -> Vec<Item> {
+    let mut out = Vec::with_capacity(25);
+    for (s, names) in MATERIAL_NAMES.iter().enumerate() {
+        for (t, name) in names.iter().enumerate() {
+            let tier = t as i64;
+            // 6, 24, 54, 96, 150 gold: a modest trickle, so gathering feeds
+            // crafting rather than replacing combat as a gold source.
+            let price = 6 * (tier + 1) * (tier + 1);
+            let rarity = match t {
+                0 | 1 => Rarity::Common,
+                2 | 3 => Rarity::Uncommon,
+                _ => Rarity::Rare,
+            };
+            out.push(Item {
+                id: material_id(s as u32, t as u32),
+                name,
+                desc: MATERIAL_FLAVOR[s],
+                kind: ItemKind::Valuable,
+                rarity,
+                mods: StatMods {
+                    attack: 0,
+                    max_hp: 0,
+                    armor: 0,
+                },
+                price,
+                class_hint: None,
+            });
+        }
+    }
+    out
+}
+
+/// The raw-material catalog, built once and reused for the `item` lookup.
+pub fn materials() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_materials)
+}
+
 pub fn item(id: u32) -> Option<&'static Item> {
     ITEMS
         .iter()
         .find(|i| i.id == id)
         .or_else(|| frontier_items().iter().find(|i| i.id == id))
         .or_else(|| reaches_items().iter().find(|i| i.id == id))
+        .or_else(|| materials().iter().find(|i| i.id == id))
 }
 
 // ---- Generated catalogs (Frontier and Sundered Reaches) ------------------
@@ -1292,12 +1398,32 @@ mod tests {
             .iter()
             .chain(frontier_items().iter())
             .chain(reaches_items().iter())
+            .chain(materials().iter())
             .map(|i| i.id)
             .collect();
         ids.sort_unstable();
         let n = ids.len();
         ids.dedup();
         assert_eq!(n, ids.len(), "duplicate item id");
+    }
+
+    #[test]
+    fn materials_form_a_clean_sellable_catalog() {
+        assert_eq!(materials().len(), 25, "five skills x five tiers");
+        for m in materials() {
+            assert!(
+                m.id >= MATERIAL_BASE && m.id < MATERIAL_BASE + 100,
+                "material {} sits in the 4000 band",
+                m.id
+            );
+            assert!(
+                matches!(m.kind, ItemKind::Valuable),
+                "raw materials are sellable valuables for now"
+            );
+            assert!(m.sell_price() >= 1, "materials are worth something");
+            // Look-ups resolve through the shared catalog.
+            assert!(item(m.id).is_some(), "material {} is not findable", m.id);
+        }
     }
 
     #[test]

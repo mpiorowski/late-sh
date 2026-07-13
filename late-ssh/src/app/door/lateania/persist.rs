@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 11;
+const SCHEMA_VERSION: u32 = 12;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -45,6 +45,7 @@ pub struct SavedCharacterInit {
     pub owned_plot: Option<u32>,
     pub house_furniture: Vec<(u32, String)>,
     pub appearance: Vec<u8>,
+    pub skills: Vec<(String, i64)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -122,6 +123,10 @@ pub struct SavedCharacter {
     /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
     #[serde(default)]
     pub appearance: Vec<u8>,
+    /// Gathering-skill xp as (skill key, total xp) pairs (see `skills`); empty
+    /// for pre-gathering saves, which simply start every trade at level 1.
+    #[serde(default)]
+    pub skills: Vec<(String, i64)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -199,6 +204,7 @@ impl SavedCharacter {
             owned_plot: init.owned_plot,
             house_furniture: init.house_furniture,
             appearance: init.appearance,
+            skills: init.skills,
         }
     }
 
@@ -282,6 +288,7 @@ mod tests {
             owned_plot: Some(3),
             house_furniture: vec![(9040, "feather_bed".to_string())],
             appearance: vec![1, 2, 3, 4, 5],
+            skills: vec![("woodcutting".to_string(), 900), ("mining".to_string(), 40)],
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -307,6 +314,10 @@ mod tests {
             vec![(9040, "feather_bed".to_string())]
         );
         assert_eq!(back.appearance, vec![1, 2, 3, 4, 5]);
+        assert_eq!(
+            back.skills,
+            vec![("woodcutting".to_string(), 900), ("mining".to_string(), 40)]
+        );
     }
 
     #[test]

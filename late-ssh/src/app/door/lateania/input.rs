@@ -8,6 +8,7 @@
 //     slot 10; deeper rosters cast from the Abilities panel); z flee.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
+//   - World: y works a resource node here (chop/mine/fish/forage/skin).
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
 //     buys the selected beast and x feeds/tends the one you have. n opens the
@@ -198,6 +199,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'e' | b'E' => {
             // Open the appearance / bio builder.
             state.open_appearance();
+            InputAction::Handled
+        }
+        b'y' | b'Y' => {
+            // Work a resource node here (chop/mine/fish/forage/skin).
+            state.gather();
             InputAction::Handled
         }
         b'\r' | b'\n' => {

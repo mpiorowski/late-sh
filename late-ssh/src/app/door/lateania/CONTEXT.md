@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-06-17
+- Last updated: 2026-07-13
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -58,13 +58,14 @@ Current game scale:
 | `input.rs` | Active-world key routing after launch. App-level launch/reset/leave handling belongs in `screen.rs`. |
 | `ui.rs` | Ratatui rendering for class select, log, compact mode, side panels, minimap, hints. The Character panel expands to a full-width dashboard (accent-tinted class portrait, dot-rated ability scores, vitals/XP meters) when the area is at least 72x18, else falls back to the narrow side panel; Foes/Adventurers/Follow render as aligned roster rows with HP meters. Lock-free, snapshot-only. |
 | `svc.rs` | Authoritative runtime: service tasks, `WorldState`, player/mob state, combat, movement, following, shops, persistence, snapshots, activity events. |
-| `world.rs` | Immutable world data and generation: rooms, exits, mobs, features, wildlife, minimap, overworld, Frontier. |
+| `world.rs` | Immutable world data and generation: rooms, exits, mobs, features, wildlife, minimap, overworld, Frontier. Also **resource nodes** (`NODES`/`ResourceNode`/`nodes_at`/`node_index`): trees, ore veins, fishing spots and herb/skinning patches keyed to rooms, modelled exactly like `WILDLIFE` (static data + a per-node service cooldown), each with a skill, tier, min-level gate, and derived yield item. |
 | `classes.rs` | Twelve playable classes (Warrior/Mage/Cleric/Rogue/Ranger/Druid/Necromancer/Bard/Monk/Paladin/Warlock/Berserker), resources (incl. Spirit/Souls/Tempo/Ki), passive traits, level 1-50 stat curves, XP curve. Adding a class means an arm in every `match self` here (name/primary_score/resource/tagline/description/trait_name/trait_desc/stats_at/as_key/from_key), an entry in `ALL`, an ability roster in `abilities.rs`, and (if the trait needs runtime behaviour) a hook in `svc.rs`: upkeep loop for regen (Druid/Paladin) and Tempo (Bard); `kill_mob` for harvest (Necromancer/Warlock); `strike_player` for Monk mitigation; the combat round for Berserker frenzy. **Every level grants something:** the curve grows each level (surfaced by `check_level_up`, which logs the concrete +HP/+attack/+resource gains per level), plus `level_milestone`/`milestone_hp_bonus` add a named milestone (Blooded…Ascended) with a permanent +HP every fifth level, a pure function of level, so no extra save state; `current_milestone(level)` shows on the character sheet. **Archetypes:** at `ARCHETYPE_LEVEL` each class offers two paths (the `ARCHETYPES` data table; `archetypes_for`/`archetype_by_key`), each carrying a `Role` (Tank/Healer/DPS) and four percent modifiers (`attack_pct`/`mitigation_pct`/`heal_pct`/`max_hp_pct`). The modifiers apply at existing combat hooks in `svc.rs` (DPS in `attack()`+`spell_damage`, Tank in `strike_player`, Healer in `heal_player`, max-HP in `max_hp()`); no engine changes; the chosen `&'static ArchetypeDef` is held on `PlayerState` and persisted by key. |
 | `abilities.rs` | Ability roster and unlock helpers. Effects are data, resolved in `svc.rs`. |
 | `housing.rs` | Player housing data + address arithmetic. `TIERS` (5 homes Hut→Tower: price/ground/upper rooms), the 50+-piece `FURNITURE` catalogue, `HOUSING_BASE`/`plot_base`/`plot_of_room`/`is_housing_room`. Homes are **static rooms** (generated in `world.rs::extend_housing` as Hearthward Close off Market Row); only **ownership** (`plot_owner`) and **furnishings** (`house_furniture`) are dynamic side-state on `svc.rs`, so movement/visiting/snapshot work unchanged and the homes are public shared-world plots. |
 | `appearance.rs` | Character appearance/bio. `FIELDS` (Build/Hair/Eyes/Bearing/Origin, each with a menu of options) + `compose_bio`. The TUI has no free-text, so a player customises by cycling preset options (`e` opens the Appearance panel; `Enter`/`x` cycle a field). Stored as `[u8; N_FIELDS]` on `PlayerState`, persisted, shown on the sheet and when profiling another adventurer (Follow panel). |
 | `pets.rs` | Combat companions. `PetSpecies` data table (`PET_SPECIES`, `pet_species_by_key`) of buyable beasts, and the live `Pet` (held on `PlayerState`, always co-located with its owner). Loyalty (earned by feeding) drives the level via a pure function; `max_hp`/`attack` scale with level. The world wiring (buying at a Stable, feeding, taking wounds, biting the owner's target each combat round) lives in `svc.rs`. Persisted by species key + loyalty (HP restored full on load). |
-| `items.rs` | Item catalog, equipment slots, consumables, valuables, shops, generated Frontier loot. |
+| `items.rs` | Item catalog, equipment slots, consumables, valuables, shops, generated Frontier loot. Also the **raw-material catalog** (`materials()`/`material_id`/`MATERIAL_BASE = 4000`): 5 skills x 5 tiers of gathered materials (logs/ores/fish/herbs/hides), `Valuable` kind (immediately sellable), IDs `4000..4100` (skill index x 20 + tier). |
+| `skills.rs` | **Gathering skills** (`GatherSkill`: Woodcutting/Mining/Fishing/Foraging/Skinning) and their own 1-50 xp curve (`xp_for_skill_level`/`skill_level_for_xp`/`skill_progress`), independent of class level and steepening past level 10. Persisted per-player as (skill key, xp). |
 | `damage.rs` | Damage schools, mob resistance/weakness profiles, damage multiplier math. |
 | `stats.rs` | D&D-style ability scores, 4d6-drop-lowest rolls, modifiers, HP/attack bonuses. |
 | `persist.rs` | JSON schemas for durable character saves and shared world saves. Versioned (`SCHEMA_VERSION`); new fields use `#[serde(default)]` so old saves load (e.g. `board_progress`/`board_done` for quests). |
@@ -149,7 +150,7 @@ Before class choice:
 - The Town Square Frontier descent requires `Bane of the Archdemon Mal'gareth`, `Bane of The Bonewright Lich`, `Bane of the Elder Dryad`, and `Bane of the Abyss-Thing`; after those title gates, it still uses a transient two-step warning: the first `>` logs that the Frontier is older, meaner country for seasoned adventurers, and the next `>` confirms descent. Service-backed non-movement actions clear the pending warning.
 - Combat: `space`, `x`, or Enter attacks when not in a list panel; `z` flees.
 - Abilities: `1-9` use unlocked ability slots unless a list panel is open; `0` uses slot 10. The Abilities panel is a list panel: Enter casts the highlighted ability, which is the only way to reach rosters deeper than ten (the classic classes' late slots).
-- World actions: `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel; `g` casts the Resurrection rite on the nearest fallen adventurer in the room (Cleric/Paladin/Druid only); `p` opens the Stable (companion vendor) where one stands; `n` opens the housing ledger (at the clerk, or inside a home you own); `e` opens the appearance/bio builder.
+- World actions: `y` works a resource node in the room (chop/mine/fish/forage/skin - the highest tier you qualify for); `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel; `g` casts the Resurrection rite on the nearest fallen adventurer in the room (Cleric/Paladin/Druid only); `p` opens the Stable (companion vendor) where one stands; `n` opens the housing ledger (at the clerk, or inside a home you own); `e` opens the appearance/bio builder.
 - While dead (a corpse): all normal keys are suppressed; only `r`/Enter (release to the temple) and `Esc` (leave) respond, until a resurrection or the auto-release deadline.
 - Panels: `c` character, `v` abilities, `t` inventory, `b` shop where a merchant exists, `o` examine/look, `k` titles, `j` quest journal, `f` follow.
 - List panels: `w/s` or up/down move cursor; `1-9` jump and activate; Enter activates. The view auto-scrolls to keep the highlighted row within a small scroll-off margin (top and bottom).
@@ -216,6 +217,14 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 - `CritterKind::Game` can be hunted by attacking when no combat mob is present. Hunted game grants small XP and is hidden by a per-world 40-second cooldown keyed by global wildlife index.
 - `CritterKind::Boon(Perk)` applies on room entry. Perks are `Embolden`, `Mend`, and `Quicken`.
 - Wildlife appears in the Room panel; game critters show as huntable only while off cooldown.
+
+### Gathering and skills [VOLATILE]
+
+- Five gathering trades (`skills::GatherSkill`) - Woodcutting, Mining, Fishing, Foraging, Skinning - each levelled 1..=50 on its own steepening xp curve, tracked as a `skill -> total xp` map on `PlayerState` and persisted (schema v12).
+- `world::NODES` seeds harvestable nodes (trees/ore veins/fishing spots/herb & skinning patches) across the overworld, tiered 0..5 by area difficulty (roadside starters near town; the best materials deep in the harder wings and capital waters). Each node has a min skill level and a fixed yield material derived from `(skill, tier)`.
+- `y` works the highest-tier node in the room the player qualifies for (`svc::gather`/`try_gather`): it grants the raw material to the pack plus skill xp, then depletes for `NODE_RESPAWN` (45s, tracked in `WorldState::gathered`, mirroring `hunted`). Under-skilled or regrowing nodes log why and yield nothing. No combat and no safe/unsafe gate - gathering works anywhere a node stands.
+- Raw materials (`items::materials`, IDs `4000..4100`) are `Valuable` today, so they are immediately sellable ("tradeable"); the crafting update turns them into gear/consumables and further recipe chains.
+- The Room panel shows a **Resources** section (like Wildlife) with a `◆`/`·` marker per node and a gatherable/reason tag; the character sheet + narrow panel show a **Trades** block (each skill's level and progress) with the `y` hint.
 
 ### Frontier and Reaches loot
 
@@ -299,7 +308,7 @@ Progression:
 
 Character persistence uses `late_core::models::mud_character` / `mud_characters`.
 
-Saved character schema version: `11`.
+Saved character schema version: `12`.
 
 Durable fields:
 - class key, XP, level, carried gold, banked gold, current HP;
@@ -312,7 +321,8 @@ Durable fields:
 - chosen archetype key (validated against the saved class on load);
 - companion species key + accumulated loyalty (the pet reloads at full health; its level derives from loyalty);
 - owned housing plot (tier index) + placed furnishings as (room, key) pairs (re-registered into `plot_owner`/`house_furniture` on load);
-- appearance/bio trait indices (`Vec<u8>`, clamped to valid options on load).
+- appearance/bio trait indices (`Vec<u8>`, clamped to valid options on load);
+- gathering-skill xp as (skill key, total xp) pairs (unknown keys dropped on load).
 
 Transient by design:
 - current target;
