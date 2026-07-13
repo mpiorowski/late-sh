@@ -379,6 +379,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         daily_service: state.daily_service.clone(),
         rooms_service: state.rooms_service.clone(),
         room_game_registry: state.room_game_registry.clone(),
+        house_registry: state.house_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),
         dartboard_provenance: state.dartboard_provenance.clone(),
         artboard_snapshot_service: ArtboardSnapshotService::new(state.db.clone()),

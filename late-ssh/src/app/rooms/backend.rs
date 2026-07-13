@@ -3,18 +3,14 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::files::terminal_image::{TerminalImageFrame, TerminalImageProtocol};
 use crate::app::input::{MouseEvent, ParsedInput};
-use crate::usernames::UsernameLookup;
 
 use super::svc::{GameKind, RoomListItem};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputAction {
-    Ignored,
-    Handled,
-    Leave,
-}
+// The runtime-shared types moved to `house/types.rs` with the surviving
+// game runtimes; re-exported here so directory-era code keeps compiling
+// until the rooms domain is demolished.
+pub use crate::app::house::types::{GameDrawCtx, InputAction, RoomGameEvent, RoomTitleDetails};
 
 #[derive(Debug, Clone)]
 pub struct DirectoryMeta {
@@ -27,24 +23,6 @@ pub struct DirectoryMeta {
 pub struct DirectoryHints {
     pub occupied: usize,
     pub total: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct RoomTitleDetails {
-    pub seated: Option<String>,
-    pub role: Option<String>,
-    pub balance: Option<i64>,
-}
-
-pub struct GameDrawCtx<'a> {
-    pub usernames: &'a UsernameLookup<'a>,
-    pub image_protocol: Option<TerminalImageProtocol>,
-    pub terminal_images: &'a mut TerminalImageFrame,
-}
-
-#[derive(Debug, Clone)]
-pub enum RoomGameEvent {
-    SeatJoined { room_id: Uuid, user_id: Uuid },
 }
 
 pub enum CreateModalAction {

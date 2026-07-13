@@ -19,6 +19,7 @@ use crate::app::{
         svc::{DailyChallengeItem, DailyFinishedItem, DailyMatchItem, DailyOutcome},
     },
     games::chess_core::types::ChessColor,
+    house::{state::HouseState, tables::HouseTable},
 };
 
 // Near-fullscreen: daily games are a primary destination, not a peek. A
@@ -29,7 +30,7 @@ const MODAL_MAX_HEIGHT: u16 = 40;
 const MODAL_H_MARGIN: u16 = 8;
 const MODAL_V_MARGIN: u16 = 4;
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, daily: &DailyState) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, daily: &DailyState, house: &HouseState) {
     let width = area
         .width
         .saturating_sub(MODAL_H_MARGIN)
@@ -60,7 +61,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, daily: &DailyState) {
     ])
     .split(inner);
 
-    draw_list(frame, layout[0], daily);
+    draw_list(frame, layout[0], daily, house);
     draw_status(frame, layout[1], daily);
     draw_footer(frame, layout[2], daily);
 
@@ -69,7 +70,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, daily: &DailyState) {
     }
 }
 
-fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
+fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState, house: &HouseState) {
     let finished = daily.my_finished();
     let matches = daily.my_matches();
     let lobby = daily.lobby();
@@ -116,11 +117,23 @@ fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
             ));
         }
     }
+    // The fixed house tables: always present (stable chrome), one row per
+    // roster variant, live occupancy from the singleton services.
+    lines.push(Line::raw(""));
+    lines.push(section_line(width, "house tables"));
+    let house_base = lobby_base + lobby.len() + live.len();
+    for (idx, table) in HouseTable::ALL.into_iter().enumerate() {
+        lines.push(house_line(
+            table,
+            house.registry().occupancy(table).label(),
+            daily.selected == house_base + idx,
+        ));
+    }
 
     // Keep the selected row in view on small terminals: scroll whole lines.
     let budget = area.height as usize;
     if lines.len() > budget {
-        let selected_line = selected_line_index(daily, lobby_base, lobby.len());
+        let selected_line = selected_line_index(daily, lobby_base, lobby.len(), live.len());
         let skip = selected_line.saturating_sub(budget.saturating_sub(1));
         lines.drain(..skip);
         lines.truncate(budget);
@@ -128,10 +141,42 @@ fn draw_list(frame: &mut Frame, area: Rect, daily: &DailyState) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// A fixed house table: name, pitch, live occupancy. Enter opens the table.
+fn house_line(table: HouseTable, occupancy: String, selected: bool) -> Line<'static> {
+    let mut spans = vec![marker_span(selected)];
+    spans.push(Span::styled(
+        col(table.display_name(), NAME_COL),
+        Style::default().fg(if selected {
+            theme::TEXT_BRIGHT()
+        } else {
+            theme::TEXT()
+        }),
+    ));
+    spans.push(Span::styled(
+        col(table.tagline(), GAME_COL + DETAIL_COL),
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    let occupied = !occupancy.starts_with("empty");
+    spans.push(Span::styled(
+        occupancy,
+        Style::default().fg(if occupied {
+            theme::AMBER()
+        } else {
+            theme::TEXT_FAINT()
+        }),
+    ));
+    Line::from(spans)
+}
+
 /// Line index of the selected entry inside the built list (headers offset).
 /// `mine_count` is the "your matches" section's row count: unseen results
 /// plus active matches.
-fn selected_line_index(daily: &DailyState, mine_count: usize, lobby_count: usize) -> usize {
+fn selected_line_index(
+    daily: &DailyState,
+    mine_count: usize,
+    lobby_count: usize,
+    live_count: usize,
+) -> usize {
     if daily.selected < mine_count {
         return 1 + daily.selected;
     }
@@ -142,10 +187,21 @@ fn selected_line_index(daily: &DailyState, mine_count: usize, lobby_count: usize
     if after_mine < lobby_count {
         return lobby_base + after_mine;
     }
-    // lobby rows (or empty row) + blank + live-games header
+    // lobby rows (or empty row) + blank + live-games header (only when the
+    // live section is drawn at all)
     let lobby_rows = lobby_count.max(1);
     let live_base = lobby_base + lobby_rows + 2;
-    live_base + (after_mine - lobby_count)
+    let after_lobby = after_mine - lobby_count;
+    if after_lobby < live_count {
+        return live_base + after_lobby;
+    }
+    // live rows (when present) + blank + house-tables header
+    let house_base = if live_count > 0 {
+        live_base + live_count + 2
+    } else {
+        lobby_base + lobby_rows + 2
+    };
+    house_base + (after_lobby - live_count)
 }
 
 // List rows are a fixed grid: marker, opponent, game, detail, status. `{:<N}`

@@ -13,12 +13,12 @@ use uuid::Uuid;
 use crate::app::{
     activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
+    house::asterion::{
+        state::State,
+        svc::{AsterionService, AsterionServiceInit, MAX_HEROES_PER_ROOM},
+    },
     rooms::{
-        asterion::{
-            create_modal::AsterionCreateModal,
-            state::State,
-            svc::{AsterionService, AsterionServiceInit, MAX_HEROES_PER_ROOM},
-        },
+        asterion::create_modal::AsterionCreateModal,
         backend::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, GameDrawCtx,
             InputAction, RoomGameEvent, RoomGameManager, RoomTitleDetails,
@@ -79,7 +79,7 @@ impl AsterionRoomManager {
             room_id: room.id,
             chip_svc: self.chip_svc.clone(),
             activity: self.activity.clone(),
-            rooms_service: self.rooms_service.clone(),
+            rooms_service: Some(self.rooms_service.clone()),
             db: self.db.clone(),
             room_event_tx: self.event_tx.clone(),
         }) {
@@ -212,11 +212,11 @@ impl ActiveRoomBackend for State {
     }
 
     fn handle_key(&mut self, byte: u8) -> InputAction {
-        super::input::handle_key(self, byte)
+        crate::app::house::asterion::input::handle_key(self, byte)
     }
 
     fn handle_arrow(&mut self, key: u8) -> bool {
-        super::input::handle_arrow(self, key)
+        crate::app::house::asterion::input::handle_arrow(self, key)
     }
 
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
@@ -224,7 +224,7 @@ impl ActiveRoomBackend for State {
     }
 
     fn draw(&self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, ctx: GameDrawCtx<'_>) {
-        super::ui::draw_game(frame, area, self, ctx.usernames);
+        crate::app::house::asterion::ui::draw_game(frame, area, self, ctx.usernames);
     }
 
     fn title_details(&self) -> Option<RoomTitleDetails> {

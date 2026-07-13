@@ -232,7 +232,7 @@ async fn main() -> anyhow::Result<()> {
     let blackjack_table_manager =
         late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(
             chip_service.clone(),
-            late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
+            late_ssh::app::house::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
             activity_publisher.clone(),
             rooms_service.clone(),
         );
@@ -284,6 +284,17 @@ async fn main() -> anyhow::Result<()> {
     );
     room_game_registry
         .start_dashboard_room_join_feed_task(room_join_tx.clone(), activity_publisher.clone());
+    let house_registry = late_ssh::app::house::registry::HouseTableRegistry::new(
+        chip_service.clone(),
+        late_ssh::app::house::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
+        activity_publisher.clone(),
+        db.clone(),
+    );
+    house_registry
+        .ensure_chat_rooms()
+        .await
+        .context("failed to ensure house table chat rooms")?;
+    house_registry.start_seat_activity_task();
     let sudoku_service =
         late_ssh::app::arcade::sudoku::svc::SudokuService::new(db.clone(), activity_tx.clone());
     let nonogram_service =
@@ -398,6 +409,7 @@ async fn main() -> anyhow::Result<()> {
         rooms_service,
         blackjack_table_manager,
         room_game_registry,
+        house_registry,
         dartboard_server,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),

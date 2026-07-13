@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::app::{
     games::cards::{CardRank, CardSuit, PlayingCard},
-    rooms::blackjack::{
+    house::blackjack::{
         player::BlackjackPlayerInfo,
         svc::{BlackjackEvent, BlackjackService},
     },

@@ -1,6 +1,6 @@
 use asterion_core::{Direction, GameCommand};
 
-use crate::app::rooms::{asterion::state::State, backend::InputAction};
+use crate::app::house::{asterion::state::State, types::InputAction};
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     let direction = if let Some(direction) = movement_direction_for_key(byte) {

@@ -10,9 +10,7 @@ use uuid::Uuid;
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::chips::svc::ChipService,
-    rooms::{
-        backend::RoomGameEvent,
-        svc::RoomsService,
+    house::{
         tron::{
             settings::TronTableSettings,
             state::{
@@ -20,7 +18,9 @@ use crate::app::{
                 TronOutcome, TronPhase, TronPickup,
             },
         },
+        types::RoomGameEvent,
     },
+    rooms::svc::RoomsService,
 };
 
 const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
@@ -46,7 +46,7 @@ pub struct TronService {
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TronSnapshot>,
     snapshot_rx: watch::Receiver<TronSnapshot>,
-    rooms_service: RoomsService,
+    rooms_service: Option<RoomsService>,
     room_in_round: Arc<AtomicBool>,
     state: Arc<Mutex<SharedState>>,
 }
@@ -113,7 +113,8 @@ struct GameEndEvents {
 #[derive(Clone)]
 pub struct TronServiceContext {
     pub room_event_tx: broadcast::Sender<RoomGameEvent>,
-    pub rooms_service: RoomsService,
+    /// `None` for house tables: no `game_rooms` row to keep `in_round`/`open`.
+    pub rooms_service: Option<RoomsService>,
 }
 
 impl TronService {
@@ -286,11 +287,9 @@ impl TronService {
     }
 
     fn sync_room_status(&self, in_round: bool) {
-        self.rooms_service.sync_room_status_task(
-            self.room_id,
-            self.room_in_round.clone(),
-            in_round,
-        );
+        if let Some(rooms_service) = &self.rooms_service {
+            rooms_service.sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
+        }
     }
 
     fn publish_game_end(&self, game_end: Option<GameEndEvents>) {
@@ -931,7 +930,7 @@ fn mix_u64(mut value: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::rooms::tron::settings::TronMode;
+    use crate::app::house::tron::settings::TronMode;
 
     fn state_with_two_players() -> (SharedState, Uuid, Uuid) {
         state_with_two_players_and_settings(TronTableSettings::default())

@@ -79,6 +79,7 @@ fn activate_selection(app: &mut App) {
         OpenFinished(crate::app::daily::svc::DailyFinishedItem),
         ConfirmClaim(uuid::Uuid),
         Claim(uuid::Uuid),
+        OpenHouseTable(crate::app::house::tables::HouseTable),
     }
     let action = match app.daily.selected_entry() {
         Some(DailyModalEntry::Match(item)) => Some(Action::OpenBoard(item.clone())),
@@ -96,9 +97,10 @@ fn activate_selection(app: &mut App) {
                 Some(Action::ConfirmClaim(challenge.id))
             }
         }
+        Some(DailyModalEntry::House(table)) => Some(Action::OpenHouseTable(table)),
         None => None,
     };
-    // Switching matches while a board is already open keeps the
+    // Switching surfaces while a board or table is already open keeps the
     // original return screen, so Esc never lands on a dead board.
     let return_screen = if app.screen == Screen::DailyMatch {
         app.daily
@@ -106,6 +108,8 @@ fn activate_selection(app: &mut App) {
             .as_ref()
             .map(|board| board.return_screen)
             .unwrap_or(Screen::Dashboard)
+    } else if app.screen == Screen::HouseTable {
+        app.house.return_screen
     } else {
         app.screen
     };
@@ -125,6 +129,16 @@ fn activate_selection(app: &mut App) {
         }
         Some(Action::Claim(match_id)) => {
             app.daily.claim_challenge(match_id);
+        }
+        Some(Action::OpenHouseTable(table)) => {
+            if !app.house.enter(table, return_screen, app.chip_balance) {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "The table failed to open. Try again in a moment.",
+                ));
+                return;
+            }
+            app.show_daily_modal = false;
+            app.set_screen(Screen::HouseTable);
         }
         None => {}
     }

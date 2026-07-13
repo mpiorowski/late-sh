@@ -8,11 +8,9 @@ use ratatui::{
 
 use crate::app::{
     common::theme,
+    house::blackjack::settings::{BlackjackTableSettings, PACE_OPTIONS, STAKE_OPTIONS},
     input::{ParsedInput, sanitize_paste_markers},
-    rooms::{
-        backend::{CreateModalAction, CreateRoomModal},
-        blackjack::settings::{BlackjackTableSettings, PACE_OPTIONS, STAKE_OPTIONS},
-    },
+    rooms::backend::{CreateModalAction, CreateRoomModal},
 };
 
 const DISPLAY_NAME_MAX_LEN: usize = 48;

@@ -1,6 +1,6 @@
-use crate::app::rooms::{
-    backend::InputAction,
+use crate::app::house::{
     tron::state::{Direction, State},
+    types::InputAction,
 };
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {

@@ -1,6 +1,6 @@
 # FRD: Lobby Consolidation (Phases 2 & 3)
 
-- Status: Phase 1 shipped 2026-07-13 (uncommitted in tree at time of writing); phases 2 and 3 approved but not started.
+- Status: Phase 1 shipped 2026-07-13; phase 2 (house tables) shipped 2026-07-13 (uncommitted in tree at time of writing) — see `late-ssh/src/app/house/CONTEXT.md`. Phase 3 (demolition) approved but not started; owner wants the whole `app/rooms/` folder GONE, and phase 2 pre-staged that: the four surviving runtimes now live under `app/house/<game>/`, so phase 3 deletes `app/rooms/` wholesale (plus the `Option<RoomsService>` seams and the `rooms/backend.rs` re-export of `house::types`).
 - Owner decisions are LOCKED unless the owner reopens them; do not re-litigate.
 - Read first: root `CONTEXT.md`, `late-ssh/src/app/daily/CONTEXT.md`, `late-ssh/src/app/rooms/CONTEXT.md`. Memory file `project_lobby_consolidation.md` mirrors the short version of this doc.
 
@@ -36,6 +36,8 @@ Goal shape (all new code in `late-ssh/src/app/daily/` or a sibling `late-ssh/src
 7. **Payouts/activity**: keep each game's existing chip payout paths and `ActivityEvent::game_won`/`SatDown` publishing; the `SatDown` choke point moves from the rooms registry to wherever house-table seat joins converge.
 
 Phase 2 leaves the Rooms screen alive as a fallback; it just becomes redundant. That's deliberate — the owner wants to feel the house-table UX before demolition.
+
+Phase 2 as shipped (2026-07-13): everything above, plus the runtime relocation. `HouseTable` roster + `HouseTableRegistry` singletons + `Screen::HouseTable` + modal section + `GameWorkspace::HouseTable` backtick stop are in `late-ssh/src/app/house/` (see its `CONTEXT.md`). The four game runtimes (svc/state/input/ui/settings) moved from `app/rooms/<game>/` to `app/house/<game>/`; `game_ui.rs`/`image_render.rs` moved too; `InputAction`/`GameDrawCtx`/`RoomGameEvent`/`RoomTitleDetails` moved to `house/types.rs` with `rooms/backend.rs` re-exporting. The rooms managers/create modals stayed in `rooms/` and now import from `house::`. Deferred to phase 3: your-turn desktop notify for house poker/blackjack (rooms scan untouched), quest re-pointing (owner discussion required first).
 
 ## Phase 3: demolition (only after phase 2 feels right)
 

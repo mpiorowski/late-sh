@@ -199,6 +199,7 @@ pub struct SessionConfig {
     pub daily_service: crate::app::daily::svc::DailyService,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
     pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
+    pub house_registry: crate::app::house::registry::HouseTableRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
     /// enters the dartboard game from the arcade.
@@ -416,6 +417,8 @@ pub struct App {
     /// Daily board embedded match chat; separate cache because width and
     /// visible messages differ from the other chat surfaces.
     pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// House table embedded chat, same reasoning as the daily cache.
+    pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
@@ -510,6 +513,8 @@ pub struct App {
     pub(crate) repaint_signal: Option<std::sync::Arc<crate::render_signal::RenderSignal>>,
     /// Daily correspondence games: sidebar panel, modal, and board state.
     pub(crate) daily: crate::app::daily::state::DailyState,
+    /// House tables: the fixed multiplayer tables behind the Lobby modal.
+    pub(crate) house: crate::app::house::state::HouseState,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
     pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     pub(crate) rooms_selected_index: usize,
@@ -691,6 +696,8 @@ impl App {
             // The daily board's match chat; None while spectating or before
             // the row loads.
             Screen::DailyMatch => self.daily.board_chat_room_id(),
+            // The open house table's permanent chat room.
+            Screen::HouseTable => self.house.chat_room_id(),
             _ => None,
         }
     }
@@ -1092,6 +1099,7 @@ impl App {
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
@@ -1163,6 +1171,7 @@ impl App {
                 config.user_id,
                 notifier.clone(),
             ),
+            house: crate::app::house::state::HouseState::new(config.user_id, config.house_registry),
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,
@@ -1629,6 +1638,11 @@ impl App {
 
         if self.screen == Screen::DailyMatch && screen != Screen::DailyMatch {
             self.daily.close_board();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::HouseTable && screen != Screen::HouseTable {
+            self.house.close();
             self.force_full_repaint();
         }
 

@@ -4,7 +4,8 @@
 - Scope: `late-ssh/src/app/rooms`
 - Last updated: 2026-06-22
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
-- **Sunset notice (2026-07-13):** this domain is scheduled for demolition per `devdocs/FRD-LOBBY-CONSOLIDATION.md` — Poker/Blackjack/Asterion/Tron move into the Lobby as fixed house tables; live Chess/Tic-Tac-Toe/ssHattrick and the whole directory die. Avoid investing in new rooms infrastructure; check the FRD before large changes here.
+- **Sunset notice (2026-07-13):** this domain is scheduled for demolition per `devdocs/FRD-LOBBY-CONSOLIDATION.md` — the whole folder gets deleted in phase 3. Avoid investing in new rooms infrastructure; check the FRD before large changes here.
+- **Phase 2 shipped (2026-07-13):** Poker/Blackjack/Asterion/Tron now ALSO run as fixed house tables behind the Lobby modal, and their runtime code (svc/state/input/ui/settings, blackjack `player.rs`, plus `game_ui.rs`/`image_render.rs`) physically moved to `late-ssh/src/app/house/` (see its `CONTEXT.md`). What remains here is directory-era code that dies with the folder: the screen/directory/create flow, `backend.rs` traits (`InputAction`/`GameDrawCtx`/`RoomGameEvent`/`RoomTitleDetails` re-exported from `house::types`), the per-game `manager.rs`/`create_modal.rs`, `RoomsService`, and the dead games (chess/tictactoe/sshattrick). The four services take `Option<RoomsService>`: managers pass `Some`, house singletons pass `None`. References below to per-game svc/state/ui files now mean their `app/house/<game>/` locations.
 
 ## Source Map
 - `mod.rs` only declares modules. Keep it declaration-only; do not add `pub use` re-exports.

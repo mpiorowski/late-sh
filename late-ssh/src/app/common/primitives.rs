@@ -73,6 +73,10 @@ pub enum Screen {
     /// Full-screen daily-match board. Entered only from the Daily Games
     /// modal, absent from the Tab cycle; Esc returns to the modal.
     DailyMatch,
+    /// Full-screen house table (poker/blackjack/asterion/tron). Entered only
+    /// from the Lobby modal, absent from the Tab cycle; Esc returns to the
+    /// modal.
+    HouseTable,
 }
 
 impl Screen {
@@ -97,6 +101,7 @@ impl Screen {
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
+            Screen::HouseTable => Screen::Dashboard,
         }
     }
 
@@ -116,6 +121,7 @@ impl Screen {
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
+            Screen::HouseTable => Screen::Dashboard,
         }
     }
 }
@@ -143,6 +149,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
+        Screen::HouseTable => "House Table",
     };
 
     let current_line = Paragraph::new(Line::from(vec![

@@ -7,6 +7,7 @@ use late_core::MutexRecover;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::app::house::poker::{settings::PokerTableSettings, state::State, svc::PokerService};
 use crate::app::{
     activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
@@ -15,10 +16,7 @@ use crate::app::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
             RoomGameManager,
         },
-        poker::{
-            create_modal::PokerCreateModal, settings::PokerTableSettings, state::State,
-            svc::PokerService,
-        },
+        poker::create_modal::PokerCreateModal,
         svc::{GameKind, RoomListItem, RoomsService},
     },
 };
@@ -59,7 +57,7 @@ impl PokerTableManager {
                     self.activity.clone(),
                     settings,
                     self.event_tx.clone(),
-                    self.rooms_service.clone(),
+                    Some(self.rooms_service.clone()),
                 )
             })
             .clone()
@@ -174,11 +172,11 @@ impl ActiveRoomBackend for State {
     }
 
     fn handle_key(&mut self, byte: u8) -> crate::app::rooms::backend::InputAction {
-        crate::app::rooms::poker::input::handle_key(self, byte)
+        crate::app::house::poker::input::handle_key(self, byte)
     }
 
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
-        let fancy = crate::app::rooms::poker::ui::fancy_game_height(area);
+        let fancy = crate::app::house::poker::ui::fancy_game_height(area);
         if fancy > 0 {
             fancy
         } else {
@@ -192,7 +190,7 @@ impl ActiveRoomBackend for State {
         area: ratatui::layout::Rect,
         ctx: crate::app::rooms::backend::GameDrawCtx<'_>,
     ) {
-        crate::app::rooms::poker::ui::draw_game(frame, area, self, ctx.usernames);
+        crate::app::house::poker::ui::draw_game(frame, area, self, ctx.usernames);
     }
 
     fn title_details(&self) -> Option<crate::app::rooms::backend::RoomTitleDetails> {

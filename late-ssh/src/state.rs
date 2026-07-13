@@ -126,6 +126,7 @@ pub struct State {
     pub rooms_service: RoomsService,
     pub blackjack_table_manager: BlackjackTableManager,
     pub room_game_registry: RoomGameRegistry,
+    pub house_registry: crate::app::house::registry::HouseTableRegistry,
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
     pub leaderboard_service: LeaderboardService,

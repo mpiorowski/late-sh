@@ -877,6 +877,7 @@ impl russh::server::Handler for ClientHandler {
             daily_service: self.state.daily_service.clone(),
             rooms_service: self.state.rooms_service.clone(),
             room_game_registry: self.state.room_game_registry.clone(),
+            house_registry: self.state.house_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
             dartboard_provenance: self.state.dartboard_provenance.clone(),
             artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(

@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::app::{
     common::theme,
-    rooms::{
+    house::{
         game_ui::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
             key_hint, payout_cooldown_label,
@@ -429,7 +429,7 @@ fn pickup_hint(pickup: TronPickup, text: &str) -> Line<'static> {
     ])
 }
 
-fn rider_power_text(player: crate::app::rooms::tron::svc::TronPlayerSnapshot) -> String {
+fn rider_power_text(player: crate::app::house::tron::svc::TronPlayerSnapshot) -> String {
     let mut parts = Vec::new();
     if player.shield_charges > 0 {
         parts.push(format!("S{}", player.shield_charges));
@@ -583,7 +583,7 @@ fn pickup_color(pickup: TronPickup) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::rooms::tron::{state::BOARD_CELLS, svc::TronPlayerSnapshot};
+    use crate::app::house::tron::{state::BOARD_CELLS, svc::TronPlayerSnapshot};
 
     fn blank_snapshot() -> TronSnapshot {
         TronSnapshot {

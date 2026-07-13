@@ -78,7 +78,11 @@ impl InputContext {
 fn is_chat_composer_context(ctx: InputContext) -> bool {
     matches!(
         ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse | Screen::DailyMatch
+        Screen::Dashboard
+            | Screen::Rooms
+            | Screen::Clubhouse
+            | Screen::DailyMatch
+            | Screen::HouseTable
     ) && ctx.chat_composing
 }
 
@@ -902,7 +906,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 
     if matches!(
         ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse | Screen::DailyMatch
+        Screen::Dashboard
+            | Screen::Rooms
+            | Screen::Clubhouse
+            | Screen::DailyMatch
+            | Screen::HouseTable
     ) && app.chat.has_overlay()
     {
         handle_overlay_input(app, &event);
@@ -1592,6 +1600,14 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
             return false;
         }
         return crate::app::daily::board_input::handle_event(app, event);
+    }
+
+    if ctx.screen == Screen::HouseTable {
+        // Full-screen house table: same shape as the daily board.
+        if door_games_allows_global_help(event) {
+            return false;
+        }
+        return crate::app::house::input::handle_event(app, event);
     }
 
     if ctx.screen == Screen::Arcade && app.is_playing_game {
@@ -2291,7 +2307,7 @@ fn dispatch_escape(app: &mut App) {
     }
     if matches!(
         ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch
+        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch | Screen::HouseTable
     ) && app.chat.is_reaction_leader_active()
     {
         app.chat.cancel_reaction_leader();
@@ -2299,7 +2315,11 @@ fn dispatch_escape(app: &mut App) {
     }
     if matches!(
         ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse | Screen::DailyMatch
+        Screen::Dashboard
+            | Screen::Rooms
+            | Screen::Clubhouse
+            | Screen::DailyMatch
+            | Screen::HouseTable
     ) && app.chat.has_overlay()
     {
         app.chat.close_overlay();
@@ -2343,6 +2363,21 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         crate::app::daily::board_input::close_board(app);
+        return;
+    }
+    // Esc from a house table mirrors the daily board: peel chat selection
+    // first, then drop back to the Lobby modal.
+    if ctx.screen == Screen::HouseTable {
+        if let Some(chat_room_id) = app.house.chat_room_id()
+            && app
+                .chat
+                .selected_message_body_in_room(chat_room_id)
+                .is_some()
+        {
+            app.chat.clear_message_selection();
+            return;
+        }
+        crate::app::house::input::close_table(app);
         return;
     }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
@@ -2596,6 +2631,11 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
                 chat::input::handle_scroll_in_room(app, chat_room_id, delta);
             }
         }
+        Screen::HouseTable => {
+            if let Some(chat_room_id) = app.house.chat_room_id() {
+                chat::input::handle_scroll_in_room(app, chat_room_id, delta);
+            }
+        }
         Screen::Artboard => {}
         Screen::Pinstar => {}
         Screen::WorldCup => app.worldcup.scroll(delta),
@@ -2822,7 +2862,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
 fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
     if !matches!(
         screen,
-        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch
+        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch | Screen::HouseTable
     ) {
         return false;
     }
@@ -2932,6 +2972,7 @@ fn chat_click_room_id(app: &App, screen: Screen) -> Option<Uuid> {
         Screen::Rooms => app.rooms_active_room.as_ref().map(|r| r.chat_room_id),
         Screen::Dashboard => app.chat.selected_room_id,
         Screen::DailyMatch => app.daily.board_chat_room_id(),
+        Screen::HouseTable => app.house.chat_room_id(),
         _ => None,
     }
 }
@@ -2990,7 +3031,7 @@ fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
 fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
     if !matches!(
         screen,
-        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch
+        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch | Screen::HouseTable
     ) {
         return false;
     }
@@ -3182,6 +3223,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Clubhouse => false,
         // Daily board arrows are consumed in handle_dedicated_screen_input.
         Screen::DailyMatch => false,
+        // House table arrows are consumed in handle_dedicated_screen_input.
+        Screen::HouseTable => false,
     }
 }
 
@@ -3901,6 +3944,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::DailyMatch => {
             // Daily board keys are handled in handle_dedicated_screen_input.
+        }
+        Screen::HouseTable => {
+            // House table keys are handled in handle_dedicated_screen_input.
         }
     }
 }

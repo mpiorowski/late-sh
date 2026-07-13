@@ -18,15 +18,15 @@ use crate::app::{
             piece_glyph,
         },
     },
+    house::game_ui::{
+        draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
+        key_hint, payout_cooldown_label,
+    },
     rooms::{
         backend::GameDrawCtx,
         chess::{
             state::{ChessPhase, State},
             svc::{CHESS_WIN_CHIP_PAYOUT, CHESS_WIN_PAYOUT_COOLDOWN, ChessSnapshot},
-        },
-        game_ui::{
-            draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
-            key_hint, payout_cooldown_label,
         },
     },
 };

@@ -29,12 +29,13 @@ use super::{
 
 /// One selectable row in the Daily Games modal: unseen results first, then
 /// your matches, then the open lobby, then other people's live games you can
-/// watch.
+/// watch, then the fixed house tables.
 pub enum DailyModalEntry<'a> {
     Finished(&'a DailyFinishedItem),
     Match(&'a DailyMatchItem),
     Challenge(&'a DailyChallengeItem),
     Spectate(&'a DailyMatchItem),
+    House(crate::app::house::tables::HouseTable),
 }
 
 /// A challenge being composed: a small picker overlay on the Lobby modal.
@@ -556,6 +557,7 @@ impl DailyState {
             + self.my_matches().len()
             + self.lobby().len()
             + self.live_games().len()
+            + crate::app::house::tables::HouseTable::ALL.len()
     }
 
     pub fn modal_entry_at(&self, index: usize) -> Option<DailyModalEntry<'_>> {
@@ -573,10 +575,16 @@ impl DailyState {
         if index < lobby.len() {
             return Some(DailyModalEntry::Challenge(lobby[index]));
         }
-        self.live_games()
-            .get(index - lobby.len())
+        let index = index - lobby.len();
+        let live = self.live_games();
+        if index < live.len() {
+            return Some(DailyModalEntry::Spectate(live[index]));
+        }
+        // The fixed house-table block sits at the bottom, always present.
+        crate::app::house::tables::HouseTable::ALL
+            .get(index - live.len())
             .copied()
-            .map(DailyModalEntry::Spectate)
+            .map(DailyModalEntry::House)
     }
 
     pub fn selected_entry(&self) -> Option<DailyModalEntry<'_>> {

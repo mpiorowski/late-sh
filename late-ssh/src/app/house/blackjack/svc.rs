@@ -9,18 +9,16 @@ use uuid::Uuid;
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::{cards::PlayingCard, chips::svc::ChipService},
-    rooms::{
-        blackjack::{
-            player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
-            settings::BlackjackTableSettings,
-            state::{
-                Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase,
-                SETTLEMENT_MIN_VIEW_MS, SeatAction, SeatPhase, Shoe, can_double, dealer_must_hit,
-                is_bust, is_natural_blackjack, payout_credit, score, settle,
-            },
+    house::blackjack::{
+        player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
+        settings::BlackjackTableSettings,
+        state::{
+            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase,
+            SETTLEMENT_MIN_VIEW_MS, SeatAction, SeatPhase, Shoe, can_double, dealer_must_hit,
+            is_bust, is_natural_blackjack, payout_credit, score, settle,
         },
-        svc::RoomsService,
     },
+    rooms::svc::RoomsService,
 };
 
 const BETTING_LOCK_CAP_SECS: u64 = 30;
@@ -37,7 +35,8 @@ pub struct BlackjackService {
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_tx: broadcast::Sender<BlackjackEvent>,
     activity: ActivityPublisher,
-    rooms_service: RoomsService,
+    /// `None` for house tables: no `game_rooms` row to keep `in_round`/`open`.
+    rooms_service: Option<RoomsService>,
     room_in_round: Arc<AtomicBool>,
     table: Arc<Mutex<SharedTableState>>,
 }
@@ -200,7 +199,7 @@ impl BlackjackService {
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
         activity: ActivityPublisher,
-        rooms_service: RoomsService,
+        rooms_service: Option<RoomsService>,
     ) -> Self {
         Self::new_with_settings(
             room_id,
@@ -220,7 +219,7 @@ impl BlackjackService {
         event_tx: broadcast::Sender<BlackjackEvent>,
         activity: ActivityPublisher,
         settings: BlackjackTableSettings,
-        rooms_service: RoomsService,
+        rooms_service: Option<RoomsService>,
     ) -> Self {
         let table = SharedTableState::new(settings);
         let initial_snapshot = table.snapshot();
@@ -1116,11 +1115,9 @@ impl BlackjackService {
     }
 
     fn sync_room_status(&self, in_round: bool) {
-        self.rooms_service.sync_room_status_task(
-            self.room_id,
-            self.room_in_round.clone(),
-            in_round,
-        );
+        if let Some(rooms_service) = &self.rooms_service {
+            rooms_service.sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
+        }
     }
 }
 
@@ -1566,10 +1563,10 @@ impl SharedTableState {
     fn bet_for_amount(&self, amount: i64) -> Result<Bet, BetFailure> {
         Bet::new_for_table(amount, self.settings.min_bet(), self.settings.max_bet()).map_err(|e| {
             match e {
-                crate::app::rooms::blackjack::state::BetError::BelowMin => {
+                crate::app::house::blackjack::state::BetError::BelowMin => {
                     BetFailure::BelowMin(self.settings.min_bet())
                 }
-                crate::app::rooms::blackjack::state::BetError::AboveMax => {
+                crate::app::house::blackjack::state::BetError::AboveMax => {
                     BetFailure::AboveMax(self.settings.max_bet())
                 }
             }
@@ -2098,7 +2095,7 @@ impl SharedTableState {
 mod tests {
     use super::*;
     use crate::app::games::cards::{CardRank, CardSuit, PlayingCard};
-    use crate::app::rooms::blackjack::state::MIN_BET;
+    use crate::app::house::blackjack::state::MIN_BET;
 
     fn user_id() -> Uuid {
         Uuid::now_v7()

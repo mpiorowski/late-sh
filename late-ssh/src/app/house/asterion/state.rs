@@ -5,7 +5,7 @@ use ratatui::text::Line;
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::app::rooms::image_render::img_to_lines;
+use crate::app::house::image_render::img_to_lines;
 
 use super::svc::{AsterionPrivateSnapshot, AsterionPublicSnapshot, AsterionService};
 

@@ -26,12 +26,12 @@ use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
 use late_ssh::app::games::chips::svc::ChipService;
+use late_ssh::app::house::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::pet::svc::PetService;
 use late_ssh::app::pinstar::svc::PinstarServerRegistry;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
-use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::rooms::chess::manager::ChessTableManager;
 use late_ssh::app::rooms::poker::manager::PokerTableManager;
 use late_ssh::app::rooms::registry::RoomGameRegistry;
@@ -113,6 +113,16 @@ fn test_dartboard_server() -> dartboard_local::ServerHandle {
 
 fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArtboardProvenance {
     ArtboardProvenance::default().shared()
+}
+
+fn test_house_registry(db: Db) -> late_ssh::app::house::registry::HouseTableRegistry {
+    let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
+    late_ssh::app::house::registry::HouseTableRegistry::new(
+        ChipService::new(db.clone()),
+        BlackjackPlayerDirectory::new(db.clone()),
+        ActivityPublisher::new(db.clone(), activity_tx),
+        db,
+    )
 }
 
 fn test_room_game_registry(db: Db) -> RoomGameRegistry {
@@ -363,6 +373,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
                 rooms_service.clone(),
             ),
         ),
+        house_registry: test_house_registry(db.clone()),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
         leaderboard_service,
@@ -492,6 +503,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
+        house_registry: test_house_registry(db.clone()),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
         artboard_snapshot_service: late_ssh::app::artboard::svc::ArtboardSnapshotService::new(
@@ -660,6 +672,7 @@ pub fn make_app_with_paired_client(
         ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
+        house_registry: test_house_registry(db.clone()),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
         artboard_snapshot_service: late_ssh::app::artboard::svc::ArtboardSnapshotService::new(

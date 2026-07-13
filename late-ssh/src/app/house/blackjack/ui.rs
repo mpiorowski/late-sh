@@ -9,7 +9,7 @@ use ratatui::{
 use crate::app::{
     common::theme,
     games::cards::{AsciiCardTheme, PlayingCard},
-    rooms::{
+    house::{
         blackjack::state::{
             BlackjackSeat, BlackjackSnapshot, Outcome, Phase, SeatAction, SeatPhase, State, is_bust,
         },

@@ -3,7 +3,7 @@ use std::time::Instant;
 use crate::app::{
     common::theme,
     games::cards::{AsciiCardTheme, CardSuit, PlayingCard},
-    rooms::{
+    house::{
         game_ui::key_hint,
         poker::{
             state::State,

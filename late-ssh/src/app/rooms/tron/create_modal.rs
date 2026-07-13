@@ -8,11 +8,9 @@ use ratatui::{
 
 use crate::app::{
     common::theme,
+    house::tron::settings::{MODE_OPTIONS, SPEED_OPTIONS, TronTableSettings},
     input::{ParsedInput, sanitize_paste_markers},
-    rooms::{
-        backend::{CreateModalAction, CreateRoomModal},
-        tron::settings::{MODE_OPTIONS, SPEED_OPTIONS, TronTableSettings},
-    },
+    rooms::backend::{CreateModalAction, CreateRoomModal},
 };
 
 const DISPLAY_NAME_MAX_LEN: usize = 48;

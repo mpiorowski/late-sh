@@ -8,13 +8,11 @@ use ratatui::{
 
 use crate::app::{
     common::theme,
-    input::{ParsedInput, sanitize_paste_markers},
-    rooms::{
-        backend::{CreateModalAction, CreateRoomModal},
-        poker::settings::{
-            PACE_OPTIONS, PokerTableSettings, SMALL_BLIND_OPTIONS, STARTING_STACK_OPTIONS,
-        },
+    house::poker::settings::{
+        PACE_OPTIONS, PokerTableSettings, SMALL_BLIND_OPTIONS, STARTING_STACK_OPTIONS,
     },
+    input::{ParsedInput, sanitize_paste_markers},
+    rooms::backend::{CreateModalAction, CreateRoomModal},
 };
 
 const DISPLAY_NAME_MAX_LEN: usize = 48;

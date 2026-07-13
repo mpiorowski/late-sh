@@ -7,6 +7,12 @@ use late_core::MutexRecover;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::app::house::blackjack::{
+    player::BlackjackPlayerDirectory,
+    settings::BlackjackTableSettings,
+    state::{BlackjackSnapshot, Phase, SeatPhase, State},
+    svc::{BlackjackEvent, BlackjackService},
+};
 use crate::app::{
     activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
@@ -15,13 +21,7 @@ use crate::app::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
             RoomGameManager,
         },
-        blackjack::{
-            create_modal::BlackjackCreateModal,
-            player::BlackjackPlayerDirectory,
-            settings::BlackjackTableSettings,
-            state::{BlackjackSnapshot, Phase, SeatPhase, State},
-            svc::{BlackjackEvent, BlackjackService},
-        },
+        blackjack::create_modal::BlackjackCreateModal,
         svc::{GameKind, RoomListItem, RoomsService},
     },
 };
@@ -79,7 +79,7 @@ impl BlackjackTableManager {
                     event_tx,
                     self.activity.clone(),
                     settings,
-                    self.rooms_service.clone(),
+                    Some(self.rooms_service.clone()),
                 )
             })
             .clone()
@@ -228,21 +228,21 @@ impl ActiveRoomBackend for State {
         } else {
             byte
         };
-        match crate::app::rooms::blackjack::input::handle_key(self, byte) {
-            crate::app::rooms::blackjack::input::InputAction::Ignored => {
+        match crate::app::house::blackjack::input::handle_key(self, byte) {
+            crate::app::house::blackjack::input::InputAction::Ignored => {
                 crate::app::rooms::backend::InputAction::Ignored
             }
-            crate::app::rooms::blackjack::input::InputAction::Handled => {
+            crate::app::house::blackjack::input::InputAction::Handled => {
                 crate::app::rooms::backend::InputAction::Handled
             }
-            crate::app::rooms::blackjack::input::InputAction::Leave => {
+            crate::app::house::blackjack::input::InputAction::Leave => {
                 crate::app::rooms::backend::InputAction::Leave
             }
         }
     }
 
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
-        let fancy = crate::app::rooms::blackjack::ui::fancy_game_height(area);
+        let fancy = crate::app::house::blackjack::ui::fancy_game_height(area);
         if fancy > 0 {
             fancy
         } else {
@@ -256,7 +256,7 @@ impl ActiveRoomBackend for State {
         area: ratatui::layout::Rect,
         ctx: crate::app::rooms::backend::GameDrawCtx<'_>,
     ) {
-        crate::app::rooms::blackjack::ui::draw_game(frame, area, self, false, ctx.usernames);
+        crate::app::house::blackjack::ui::draw_game(frame, area, self, false, ctx.usernames);
     }
 
     fn title_details(&self) -> Option<crate::app::rooms::backend::RoomTitleDetails> {

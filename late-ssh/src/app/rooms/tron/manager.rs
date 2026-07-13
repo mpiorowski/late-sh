@@ -7,6 +7,11 @@ use late_core::MutexRecover;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::app::house::tron::{
+    settings::TronTableSettings,
+    state::{State, TronOutcome, TronPhase},
+    svc::{TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TronService, TronServiceContext},
+};
 use crate::app::{
     activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
@@ -16,15 +21,7 @@ use crate::app::{
             RoomGameManager,
         },
         svc::{GameKind, RoomListItem, RoomsService},
-        tron::{
-            create_modal::TronCreateModal,
-            settings::TronTableSettings,
-            state::{State, TronOutcome, TronPhase},
-            svc::{
-                TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TronService,
-                TronServiceContext,
-            },
-        },
+        tron::create_modal::TronCreateModal,
     },
 };
 
@@ -66,7 +63,7 @@ impl TronTableManager {
                     settings,
                     TronServiceContext {
                         room_event_tx: self.event_tx.clone(),
-                        rooms_service: self.rooms_service.clone(),
+                        rooms_service: Some(self.rooms_service.clone()),
                     },
                 )
             })
@@ -153,15 +150,15 @@ impl ActiveRoomBackend for State {
     }
 
     fn handle_key(&mut self, byte: u8) -> crate::app::rooms::backend::InputAction {
-        crate::app::rooms::tron::input::handle_key(self, byte)
+        crate::app::house::tron::input::handle_key(self, byte)
     }
 
     fn handle_arrow(&mut self, key: u8) -> bool {
-        crate::app::rooms::tron::input::handle_arrow(self, key)
+        crate::app::house::tron::input::handle_arrow(self, key)
     }
 
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
-        crate::app::rooms::tron::ui::preferred_height(area)
+        crate::app::house::tron::ui::preferred_height(area)
     }
 
     fn draw(
@@ -170,7 +167,7 @@ impl ActiveRoomBackend for State {
         area: ratatui::layout::Rect,
         ctx: crate::app::rooms::backend::GameDrawCtx<'_>,
     ) {
-        crate::app::rooms::tron::ui::draw_game(frame, area, self, ctx.usernames);
+        crate::app::house::tron::ui::draw_game(frame, area, self, ctx.usernames);
     }
 
     fn title_details(&self) -> Option<crate::app::rooms::backend::RoomTitleDetails> {
@@ -184,7 +181,7 @@ impl ActiveRoomBackend for State {
             Some(TronOutcome::Winner { seat_index }) => {
                 format!(
                     "{} won",
-                    crate::app::rooms::tron::state::TronColor::for_seat(seat_index).label()
+                    crate::app::house::tron::state::TronColor::for_seat(seat_index).label()
                 )
             }
             Some(TronOutcome::Draw) => "draw".to_string(),

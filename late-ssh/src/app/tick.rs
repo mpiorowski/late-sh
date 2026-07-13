@@ -290,6 +290,16 @@ impl App {
                 self.chat.join_game_room_chat(chat_room_id);
             }
         }
+        self.house.tick();
+        if self.screen == crate::app::common::primitives::Screen::HouseTable {
+            self.sync_visible_chat_room();
+            if let Some(chat_room_id) = self.house.chat_room_id()
+                && !self.house.chat_join_requested
+            {
+                self.house.chat_join_requested = true;
+                self.chat.join_game_room_chat(chat_room_id);
+            }
+        }
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
         }
@@ -616,6 +626,9 @@ impl App {
         {
             self.chip_balance = balance;
         }
+        if let Some(balance) = self.house.client().and_then(|client| client.chip_balance()) {
+            self.chip_balance = balance;
+        }
 
         // Drunk glow for chat author labels: copy out of the shared lobby
         // about once a second so renders read owned state, and re-reading
@@ -634,10 +647,17 @@ impl App {
                     .active_room_game
                     .as_ref()
                     .is_none_or(|game| game.can_sync_external_chip_balance())
+                && self
+                    .house
+                    .client()
+                    .is_none_or(|client| client.can_sync_external_chip_balance())
             {
                 self.chip_balance = balance;
                 if let Some(active_room_game) = &mut self.active_room_game {
                     active_room_game.sync_external_chip_balance(balance);
+                }
+                if let Some(client) = self.house.client_mut() {
+                    client.sync_external_chip_balance(balance);
                 }
             }
         }
@@ -676,10 +696,18 @@ impl App {
                 .active_room_game
                 .as_ref()
                 .is_none_or(|game| game.can_sync_external_chip_balance())
+            && self
+                .house
+                .client()
+                .is_none_or(|client| client.can_sync_external_chip_balance())
         {
             self.chip_balance = self.shop_state.balance();
             if let Some(active_room_game) = &mut self.active_room_game {
                 active_room_game.sync_external_chip_balance(self.chip_balance);
+            }
+            let balance = self.chip_balance;
+            if let Some(client) = self.house.client_mut() {
+                client.sync_external_chip_balance(balance);
             }
         }
 

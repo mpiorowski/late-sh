@@ -1,4 +1,4 @@
-use crate::app::rooms::{backend::InputAction, poker::state::State};
+use crate::app::house::{poker::state::State, types::InputAction};
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     if !state.is_seated() {

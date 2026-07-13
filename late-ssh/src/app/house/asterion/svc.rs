@@ -18,7 +18,8 @@ use uuid::Uuid;
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::chips::svc::ChipService,
-    rooms::{backend::RoomGameEvent, svc::RoomsService},
+    house::types::RoomGameEvent,
+    rooms::svc::RoomsService,
 };
 
 pub const MAX_HEROES_PER_ROOM: usize = 12;
@@ -37,18 +38,20 @@ pub struct AsterionService {
     lifecycle: Arc<AsterionLifecycle>,
     room_in_round: Arc<AtomicBool>,
     chip_svc: ChipService,
-    rooms_service: RoomsService,
+    /// `None` for house tables: no `game_rooms` row to keep `in_round`/`open`
+    /// or to touch for idle cleanup.
+    rooms_service: Option<RoomsService>,
     activity: ActivityPublisher,
     db: Db,
 }
 
-pub(super) struct AsterionServiceInit {
-    pub(super) room_id: Uuid,
-    pub(super) chip_svc: ChipService,
-    pub(super) activity: ActivityPublisher,
-    pub(super) rooms_service: RoomsService,
-    pub(super) db: Db,
-    pub(super) room_event_tx: broadcast::Sender<RoomGameEvent>,
+pub(crate) struct AsterionServiceInit {
+    pub(crate) room_id: Uuid,
+    pub(crate) chip_svc: ChipService,
+    pub(crate) activity: ActivityPublisher,
+    pub(crate) rooms_service: Option<RoomsService>,
+    pub(crate) db: Db,
+    pub(crate) room_event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 #[derive(Debug)]
@@ -188,7 +191,7 @@ fn diff_set<T: PartialEq>(tx: &watch::Sender<T>, next: T) {
 }
 
 impl AsterionService {
-    pub(super) fn new_with_events(init: AsterionServiceInit) -> anyhow::Result<Self> {
+    pub(crate) fn new_with_events(init: AsterionServiceInit) -> anyhow::Result<Self> {
         let AsterionServiceInit {
             room_id,
             chip_svc,
@@ -255,7 +258,7 @@ impl AsterionService {
         self.sessions.contains_user(user_id)
     }
 
-    pub(super) fn unregister_session(&self, user_id: Uuid, session_id: Uuid) {
+    pub(crate) fn unregister_session(&self, user_id: Uuid, session_id: Uuid) {
         self.sessions.remove(user_id, session_id);
     }
 
@@ -331,8 +334,8 @@ impl AsterionService {
                 let mut state = svc.state.lock().await;
                 state.record_activity(user_id, Instant::now())
             };
-            if should_touch_room {
-                svc.rooms_service.touch_room_task(svc.room_id);
+            if should_touch_room && let Some(rooms_service) = &svc.rooms_service {
+                rooms_service.touch_room_task(svc.room_id);
             }
         });
     }
@@ -447,11 +450,9 @@ impl AsterionService {
     }
 
     fn sync_room_status(&self, in_round: bool) {
-        self.rooms_service.sync_room_status_task(
-            self.room_id,
-            self.room_in_round.clone(),
-            in_round,
-        );
+        if let Some(rooms_service) = &self.rooms_service {
+            rooms_service.sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
+        }
     }
 
     fn publish_rejected(&self, user_id: Uuid) {

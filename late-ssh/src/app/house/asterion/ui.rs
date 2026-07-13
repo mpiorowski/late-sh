@@ -10,7 +10,7 @@ use ratatui::{
 
 use crate::app::{
     common::theme,
-    rooms::{
+    house::{
         asterion::state::State,
         game_ui::{draw_game_frame_with_info_sidebar, info_label_value, key_hint},
     },

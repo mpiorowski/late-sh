@@ -10,20 +10,18 @@ use sshattrick_core::GameSide;
 
 use crate::app::{
     common::theme,
-    rooms::{
-        game_ui::{
-            draw_game_frame_with_info_sidebar, info_label_value, key_hint, payout_cooldown_label,
+    house::game_ui::{
+        draw_game_frame_with_info_sidebar, info_label_value, key_hint, payout_cooldown_label,
+    },
+    rooms::sshattrick::{
+        big_text::{
+            BigNumberFont, blue_scored, blue_won, dash, disconnection, draw as draw_banner,
+            palette_colors, red_scored, red_won,
         },
-        sshattrick::{
-            big_text::{
-                BigNumberFont, blue_scored, blue_won, dash, disconnection, draw as draw_banner,
-                palette_colors, red_scored, red_won,
-            },
-            state::State,
-            svc::{
-                Phase, SSHATTRICK_WIN_CHIP_PAYOUT, SSHATTRICK_WIN_PAYOUT_COOLDOWN,
-                SshattrickPublicSnapshot,
-            },
+        state::State,
+        svc::{
+            Phase, SSHATTRICK_WIN_CHIP_PAYOUT, SSHATTRICK_WIN_PAYOUT_COOLDOWN,
+            SshattrickPublicSnapshot,
         },
     },
 };
