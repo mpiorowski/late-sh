@@ -16,7 +16,7 @@ use crate::app::house::{
     poker::settings::{PokerPace, PokerTableSettings},
     tron::settings::{TronMode, TronSpeed, TronTableSettings},
 };
-use crate::app::rooms::svc::GameKind;
+use late_core::models::game_room::GameKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HouseTable {
