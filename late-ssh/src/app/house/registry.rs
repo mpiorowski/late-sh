@@ -294,7 +294,6 @@ impl HouseTableRegistry {
             PokerService::new_with_settings_and_events(
                 HouseTable::Poker.table_id(),
                 self.chip_svc.clone(),
-                self.activity.clone(),
                 HouseTable::poker_settings(),
                 self.event_tx.clone(),
                 None,
@@ -313,7 +312,6 @@ impl HouseTableRegistry {
                 self.chip_svc.clone(),
                 self.player_directory.clone(),
                 event_tx,
-                self.activity.clone(),
                 HouseTable::blackjack_settings(),
                 None,
             )
@@ -359,7 +357,6 @@ impl HouseTableRegistry {
         match AsterionService::new_with_events(AsterionServiceInit {
             room_id: HouseTable::Asterion.table_id(),
             chip_svc: self.chip_svc.clone(),
-            activity: self.activity.clone(),
             rooms_service: None,
             db: self.db.clone(),
             room_event_tx: self.event_tx.clone(),
@@ -382,7 +379,6 @@ impl HouseTableRegistry {
             TronService::new_with_events(
                 HouseTable::Tron.table_id(),
                 self.chip_svc.clone(),
-                self.activity.clone(),
                 HouseTable::tron_settings(),
                 TronServiceContext {
                     room_event_tx: self.event_tx.clone(),

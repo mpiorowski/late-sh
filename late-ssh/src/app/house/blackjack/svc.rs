@@ -7,7 +7,6 @@ use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
-    activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::{cards::PlayingCard, chips::svc::ChipService},
     house::blackjack::{
         player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
@@ -34,7 +33,6 @@ pub struct BlackjackService {
     snapshot_tx: watch::Sender<BlackjackSnapshot>,
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_tx: broadcast::Sender<BlackjackEvent>,
-    activity: ActivityPublisher,
     /// `None` for house tables: no `game_rooms` row to keep `in_round`/`open`.
     rooms_service: Option<RoomsService>,
     room_in_round: Arc<AtomicBool>,
@@ -198,7 +196,6 @@ impl BlackjackService {
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
-        activity: ActivityPublisher,
         rooms_service: Option<RoomsService>,
     ) -> Self {
         Self::new_with_settings(
@@ -206,7 +203,6 @@ impl BlackjackService {
             chip_svc,
             player_directory,
             event_tx,
-            activity,
             BlackjackTableSettings::default(),
             rooms_service,
         )
@@ -217,7 +213,6 @@ impl BlackjackService {
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
-        activity: ActivityPublisher,
         settings: BlackjackTableSettings,
         rooms_service: Option<RoomsService>,
     ) -> Self {
@@ -231,7 +226,6 @@ impl BlackjackService {
             snapshot_tx,
             snapshot_rx,
             event_tx,
-            activity,
             rooms_service,
             room_in_round: Arc::new(AtomicBool::new(false)),
             table: Arc::new(Mutex::new(table)),
@@ -1047,7 +1041,6 @@ impl BlackjackService {
     ) -> anyhow::Result<Vec<SettledBalance>> {
         // Quest progress only counts hands played against at least one other
         // player; solo blackjack against the dealer earns chips but no dailies.
-        let round_was_multiplayer = { self.table.lock().await.round_player_count >= 2 };
         let mut settled_balances = Vec::new();
         for settlement in settlements {
             let new_balance = if settlement.credit == 0 {
@@ -1087,24 +1080,6 @@ impl BlackjackService {
                 credit: settlement.credit,
                 new_balance,
             });
-            if round_was_multiplayer {
-                self.activity.game_played_task(
-                    settlement.user_id,
-                    ActivityGame::Blackjack,
-                    Some(format!("bet {}", settlement.bet)),
-                );
-                if matches!(
-                    settlement.outcome,
-                    Outcome::PlayerBlackjack | Outcome::PlayerWin
-                ) {
-                    self.activity.game_won_task(
-                        settlement.user_id,
-                        ActivityGame::Blackjack,
-                        Some(format!("bet {}", settlement.bet)),
-                        None,
-                    );
-                }
-            }
         }
         Ok(settled_balances)
     }

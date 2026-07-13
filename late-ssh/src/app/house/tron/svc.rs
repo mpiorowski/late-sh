@@ -8,7 +8,6 @@ use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
-    activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::chips::svc::ChipService,
     house::{
         tron::{
@@ -41,7 +40,6 @@ const TRON_PLAYED_MIN_TICKS: u32 = 30;
 pub struct TronService {
     room_id: Uuid,
     chip_svc: ChipService,
-    activity: ActivityPublisher,
     settings: TronTableSettings,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TronSnapshot>,
@@ -121,7 +119,6 @@ impl TronService {
     pub fn new_with_events(
         room_id: Uuid,
         chip_svc: ChipService,
-        activity: ActivityPublisher,
         settings: TronTableSettings,
         context: TronServiceContext,
     ) -> Self {
@@ -135,7 +132,6 @@ impl TronService {
         Self {
             room_id,
             chip_svc,
-            activity,
             settings,
             room_event_tx,
             snapshot_tx,
@@ -296,10 +292,6 @@ impl TronService {
         let Some(game_end) = game_end else {
             return;
         };
-        for user_id in game_end.played {
-            self.activity
-                .game_played_task(user_id, ActivityGame::Tron, Some("round".to_string()));
-        }
         self.publish_win(game_end.win);
     }
 
@@ -339,12 +331,6 @@ impl TronService {
                     }
                 });
             }
-            self.activity.game_won_task(
-                win.user_id,
-                ActivityGame::Tron,
-                Some(win.color.label().to_string()),
-                None,
-            );
         }
     }
 

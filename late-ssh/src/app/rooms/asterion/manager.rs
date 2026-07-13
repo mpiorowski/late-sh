@@ -11,7 +11,6 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::{
-    activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
     house::asterion::{
         state::State,
@@ -31,7 +30,6 @@ const STOPPED_SERVICE_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AsterionRoomManager {
-    activity: ActivityPublisher,
     chip_svc: ChipService,
     db: Db,
     rooms_service: RoomsService,
@@ -40,15 +38,9 @@ pub struct AsterionRoomManager {
 }
 
 impl AsterionRoomManager {
-    pub fn new(
-        chip_svc: ChipService,
-        activity: ActivityPublisher,
-        rooms_service: RoomsService,
-        db: Db,
-    ) -> Self {
+    pub fn new(chip_svc: ChipService, rooms_service: RoomsService, db: Db) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         let manager = Self {
-            activity,
             chip_svc,
             db,
             rooms_service,
@@ -78,7 +70,6 @@ impl AsterionRoomManager {
         match AsterionService::new_with_events(AsterionServiceInit {
             room_id: room.id,
             chip_svc: self.chip_svc.clone(),
-            activity: self.activity.clone(),
             rooms_service: Some(self.rooms_service.clone()),
             db: self.db.clone(),
             room_event_tx: self.event_tx.clone(),

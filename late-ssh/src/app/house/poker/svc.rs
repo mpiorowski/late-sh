@@ -10,7 +10,6 @@ use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
-    activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::{
         cards::{CardRank, CardSuit, PlayingCard},
         chips::svc::ChipService,
@@ -30,7 +29,6 @@ const MAX_MISSED_ACTIONS: u8 = 3;
 pub struct PokerService {
     room_id: Uuid,
     chip_svc: ChipService,
-    activity: ActivityPublisher,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     public_tx: watch::Sender<PokerPublicSnapshot>,
     public_rx: watch::Receiver<PokerPublicSnapshot>,
@@ -154,13 +152,11 @@ impl PokerService {
     pub fn new(
         room_id: Uuid,
         chip_svc: ChipService,
-        activity: ActivityPublisher,
         rooms_service: Option<RoomsService>,
     ) -> Self {
         Self::new_with_settings(
             room_id,
             chip_svc,
-            activity,
             PokerTableSettings::default(),
             rooms_service,
         )
@@ -169,7 +165,6 @@ impl PokerService {
     pub fn new_with_settings(
         room_id: Uuid,
         chip_svc: ChipService,
-        activity: ActivityPublisher,
         settings: PokerTableSettings,
         rooms_service: Option<RoomsService>,
     ) -> Self {
@@ -177,7 +172,6 @@ impl PokerService {
         Self::new_with_settings_and_events(
             room_id,
             chip_svc,
-            activity,
             settings,
             room_event_tx,
             rooms_service,
@@ -187,7 +181,6 @@ impl PokerService {
     pub fn new_with_settings_and_events(
         room_id: Uuid,
         chip_svc: ChipService,
-        activity: ActivityPublisher,
         settings: PokerTableSettings,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
         rooms_service: Option<RoomsService>,
@@ -198,7 +191,6 @@ impl PokerService {
         Self {
             room_id,
             chip_svc,
-            activity,
             room_event_tx,
             public_tx,
             public_rx,
@@ -536,19 +528,6 @@ impl PokerService {
 
                 match result {
                     Ok(new_balance) => {
-                        svc.activity.game_played_task(
-                            settlement.user_id,
-                            ActivityGame::Poker,
-                            Some("hand".to_string()),
-                        );
-                        if settlement.credit > 0 {
-                            svc.activity.game_won_task(
-                                settlement.user_id,
-                                ActivityGame::Poker,
-                                Some(format!("pot {}", settlement.credit)),
-                                None,
-                            );
-                        }
                         updates.push(PokerSettlementUpdate {
                             user_id: settlement.user_id,
                             credit: settlement.credit,

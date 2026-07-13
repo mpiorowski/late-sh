@@ -5,8 +5,6 @@
 //! always route to chat, and the message-action keys route to chat while a
 //! match-chat message is selected.
 
-use uuid::Uuid;
-
 use crate::app::daily::games::DailyGame;
 use crate::app::games::chess_core::{board_ui, types::ChessPieceRenderMode};
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
@@ -40,12 +38,12 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             app.chat.clear_message_selection();
             return true;
         }
-        if chat_priority_key(app, byte)
+        if crate::app::chat::input::chat_priority_key(app, byte)
             && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
         {
             return true;
         }
-        if selected_chat_key(app, chat_room_id, byte)
+        if crate::app::chat::input::selected_chat_key(app, chat_room_id, byte)
             && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
         {
             return true;
@@ -72,43 +70,6 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
         _ => return false,
     }
     true
-}
-
-/// Keys chat always wins, mirroring the active-room split: reaction-leader
-/// digits, `i` compose, `j`/`k` selection, Ctrl+D/Ctrl+U half-page.
-fn chat_priority_key(app: &App, byte: u8) -> bool {
-    if app.chat.is_reaction_leader_active() {
-        return true;
-    }
-    matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15)
-}
-
-/// Message-action keys that route to chat only while a match-chat message is
-/// selected; otherwise the board keeps them (`r` resign, `p` pieces, Enter
-/// play).
-fn selected_chat_key(app: &App, chat_room_id: Uuid, byte: u8) -> bool {
-    let selected_in_room = app
-        .chat
-        .selected_message_body_in_room(chat_room_id)
-        .is_some();
-    selected_in_room
-        && matches!(
-            byte,
-            b'd' | b'D'
-                | b'r'
-                | b'R'
-                | b'e'
-                | b'E'
-                | b'p'
-                | b'c'
-                | b'f'
-                | b'F'
-                | b'g'
-                | b'G'
-                | b'\r'
-                | b'\n'
-                | 0x10
-        )
 }
 
 pub(crate) fn handle_arrow(app: &mut App, key: u8) {

@@ -518,13 +518,13 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    if should_route_active_room_chat_priority_key(app, byte)
+    if crate::app::chat::input::chat_priority_key(app, byte)
         && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
     {
         return true;
     }
 
-    if should_route_active_room_selected_chat_key(app, chat_room_id, byte)
+    if crate::app::chat::input::selected_chat_key(app, chat_room_id, byte)
         && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
     {
         return true;
@@ -639,42 +639,6 @@ fn touch_active_room_activity(app: &mut App) {
 
 fn active_room_page_step(app: &App) -> isize {
     (app.size.1 / 6).max(1) as isize
-}
-
-fn should_route_active_room_chat_priority_key(app: &App, byte: u8) -> bool {
-    if app.chat.is_reaction_leader_active() {
-        return true;
-    }
-    matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15)
-}
-
-fn should_route_active_room_selected_chat_key(
-    app: &App,
-    chat_room_id: uuid::Uuid,
-    byte: u8,
-) -> bool {
-    let selected_in_room = app
-        .chat
-        .selected_message_body_in_room(chat_room_id)
-        .is_some();
-    selected_in_room
-        && matches!(
-            byte,
-            b'd' | b'D'
-                | b'r'
-                | b'R'
-                | b'e'
-                | b'E'
-                | b'p'
-                | b'c'
-                | b'f'
-                | b'F'
-                | b'g'
-                | b'G'
-                | b'\r'
-                | b'\n'
-                | 0x10
-        )
 }
 
 fn can_delete_room(is_admin: bool) -> bool {

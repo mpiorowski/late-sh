@@ -130,16 +130,11 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let rooms_service = RoomsService::new(db.clone());
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx);
-    let asterion_room_manager = AsterionRoomManager::new(
-        chip_service.clone(),
-        activity_publisher.clone(),
-        rooms_service.clone(),
-        db.clone(),
-    );
+    let asterion_room_manager =
+        AsterionRoomManager::new(chip_service.clone(), rooms_service.clone(), db.clone());
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         BlackjackPlayerDirectory::new(db.clone()),
-        activity_publisher.clone(),
         rooms_service.clone(),
     );
     RoomGameRegistry::new(
@@ -150,11 +145,7 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
             activity_publisher.clone(),
             rooms_service.clone(),
         ),
-        PokerTableManager::new(
-            chip_service.clone(),
-            activity_publisher.clone(),
-            rooms_service.clone(),
-        ),
+        PokerTableManager::new(chip_service.clone(), rooms_service.clone()),
         SshattrickRoomManager::new(
             rooms_service.clone(),
             chip_service.clone(),
@@ -162,11 +153,7 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
             db,
         ),
         TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
-        TronTableManager::new(
-            chip_service,
-            activity_publisher.clone(),
-            rooms_service.clone(),
-        ),
+        TronTableManager::new(chip_service, rooms_service.clone()),
     )
 }
 
@@ -266,16 +253,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let rooms_service = RoomsService::new(db.clone());
     let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
-    let asterion_room_manager = AsterionRoomManager::new(
-        chip_service.clone(),
-        activity_publisher.clone(),
-        rooms_service.clone(),
-        db.clone(),
-    );
+    let asterion_room_manager =
+        AsterionRoomManager::new(chip_service.clone(), rooms_service.clone(), db.clone());
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         blackjack_player_directory.clone(),
-        activity_publisher.clone(),
         rooms_service.clone(),
     );
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
@@ -355,11 +337,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
                 activity_publisher.clone(),
                 rooms_service.clone(),
             ),
-            PokerTableManager::new(
-                chip_service.clone(),
-                activity_publisher.clone(),
-                rooms_service.clone(),
-            ),
+            PokerTableManager::new(chip_service.clone(), rooms_service.clone()),
             SshattrickRoomManager::new(
                 rooms_service.clone(),
                 chip_service.clone(),
@@ -367,11 +345,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
                 db.clone(),
             ),
             TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
-            TronTableManager::new(
-                chip_service.clone(),
-                activity_publisher.clone(),
-                rooms_service.clone(),
-            ),
+            TronTableManager::new(chip_service.clone(), rooms_service.clone()),
         ),
         house_registry: test_house_registry(db.clone()),
         dartboard_server,

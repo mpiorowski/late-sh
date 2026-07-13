@@ -75,15 +75,27 @@ impl InputContext {
     }
 }
 
-fn is_chat_composer_context(ctx: InputContext) -> bool {
+/// Screens that draw an embedded chat pane (message scroll + composer bar).
+/// THE roster for every pane-shaped gate — message clicks, composer-bar
+/// clicks, wheel/page scroll, reaction-leader Esc. A new screen with
+/// embedded chat joins here and in `embedded_chat_room_id`, and every gate
+/// follows; do not hand-write this screen list anywhere else.
+fn screen_has_chat_pane(screen: Screen) -> bool {
     matches!(
-        ctx.screen,
-        Screen::Dashboard
-            | Screen::Rooms
-            | Screen::Clubhouse
-            | Screen::DailyMatch
-            | Screen::HouseTable
-    ) && ctx.chat_composing
+        screen,
+        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch | Screen::HouseTable
+    )
+}
+
+/// Screens where typing can land in the chat composer: the pane screens
+/// plus the Clubhouse, which composes into #lounge (speech bubbles) without
+/// drawing a pane. Used for the composer-priority gate and chat overlays.
+fn screen_composes_chat(screen: Screen) -> bool {
+    screen_has_chat_pane(screen) || screen == Screen::Clubhouse
+}
+
+fn is_chat_composer_context(ctx: InputContext) -> bool {
+    screen_composes_chat(ctx.screen) && ctx.chat_composing
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -900,20 +912,15 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if handle_dedicated_screen_input(app, ctx, &event) {
+    // A chat overlay owns input on every chat-composing screen, BEFORE the
+    // dedicated screen handlers so a game/board underneath never sees the
+    // keys (screens must not re-check `has_overlay` themselves).
+    if screen_composes_chat(ctx.screen) && app.chat.has_overlay() {
+        handle_overlay_input(app, &event);
         return;
     }
 
-    if matches!(
-        ctx.screen,
-        Screen::Dashboard
-            | Screen::Rooms
-            | Screen::Clubhouse
-            | Screen::DailyMatch
-            | Screen::HouseTable
-    ) && app.chat.has_overlay()
-    {
-        handle_overlay_input(app, &event);
+    if handle_dedicated_screen_input(app, ctx, &event) {
         return;
     }
 
@@ -1465,6 +1472,17 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
 }
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    // The composer-priority invariant, in one place: while the chat composer
+    // is open on a screen that owns one, no screen handler sees the event.
+    // Everything falls through to the shared composer pipeline instead
+    // (`handle_modal_input` for bytes, the composer arms of the generic
+    // match for arrows/paste/etc). Screens must not re-check composing
+    // themselves — this gate is what keeps `q`/Enter/wasd out of the game
+    // while typing.
+    if is_chat_composer_context(ctx) {
+        return false;
+    }
+
     if ctx.screen == Screen::Games {
         return handle_games_hub_input(app, event);
     }
@@ -1630,9 +1648,6 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Rooms && app.rooms_active_room.is_some() {
-        if ctx.chat_composing {
-            return false;
-        }
         let _ = crate::app::rooms::input::handle_event(app, event);
         return true;
     }
@@ -2305,23 +2320,11 @@ fn dispatch_escape(app: &mut App) {
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
-    if matches!(
-        ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch | Screen::HouseTable
-    ) && app.chat.is_reaction_leader_active()
-    {
+    if screen_has_chat_pane(ctx.screen) && app.chat.is_reaction_leader_active() {
         app.chat.cancel_reaction_leader();
         return;
     }
-    if matches!(
-        ctx.screen,
-        Screen::Dashboard
-            | Screen::Rooms
-            | Screen::Clubhouse
-            | Screen::DailyMatch
-            | Screen::HouseTable
-    ) && app.chat.has_overlay()
-    {
+    if screen_composes_chat(ctx.screen) && app.chat.has_overlay() {
         app.chat.close_overlay();
         return;
     }
@@ -2615,33 +2618,15 @@ pub fn sanitize_paste_markers(s: &str) -> String {
 }
 
 fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
+    // Chat-pane screens scroll the room they're showing; the clubhouse has
+    // no scrollable chat panel (bubbles carry the conversation and the full
+    // history lives on Home), so it resolves to None like everything else.
+    if let Some(room_id) = embedded_chat_room_id(app, screen) {
+        chat::input::handle_scroll_in_room(app, room_id, delta);
+        return;
+    }
     match screen {
-        Screen::Dashboard => {
-            if let Some(room_id) = app.chat.selected_room_id {
-                chat::input::handle_scroll_in_room(app, room_id, delta);
-            }
-        }
-        Screen::Rooms => {
-            if let Some(room) = app.rooms_active_room.as_ref() {
-                chat::input::handle_scroll_in_room(app, room.chat_room_id, delta);
-            }
-        }
-        Screen::DailyMatch => {
-            if let Some(chat_room_id) = app.daily.board_chat_room_id() {
-                chat::input::handle_scroll_in_room(app, chat_room_id, delta);
-            }
-        }
-        Screen::HouseTable => {
-            if let Some(chat_room_id) = app.house.chat_room_id() {
-                chat::input::handle_scroll_in_room(app, chat_room_id, delta);
-            }
-        }
-        Screen::Artboard => {}
-        Screen::Pinstar => {}
         Screen::WorldCup => app.worldcup.scroll(delta),
-        // The clubhouse has no scrollable chat panel; bubbles carry the
-        // conversation and the full history lives on Home.
-        Screen::Clubhouse => {}
         _ => {}
     }
 }
@@ -2856,14 +2841,11 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
 /// Click inside the chat composer bar. A double-click enters compose mode,
 /// mirroring `i`/Enter. Once composing, a single click positions the text
 /// cursor at the clicked cell, so you can click between letters to place the
-/// caret. Only fires on Dashboard / Rooms — the only screens where the chat
-/// composer is drawn — and only for clicks inside the composer rect, so the
+/// caret. Only fires on the chat-pane screens — where the composer bar is
+/// drawn — and only for clicks inside the composer rect, so the
 /// message-row click flow (selection, link-open) is untouched.
 fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
-    if !matches!(
-        screen,
-        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch | Screen::HouseTable
-    ) {
+    if !screen_has_chat_pane(screen) {
         return false;
     }
     let Some(rect) = app.chat.last_composer_rect.get() else {
@@ -2883,7 +2865,7 @@ fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> 
     );
     if is_double {
         app.chat.last_composer_click = None;
-        if let Some(room_id) = chat_click_room_id(app, screen) {
+        if let Some(room_id) = embedded_chat_room_id(app, screen) {
             app.chat.start_composing_in_room(room_id);
             // Land the caret where the focusing double-click pointed.
             app.chat.composer_click_to_cursor(rect, x, y);
@@ -2963,11 +2945,13 @@ pub(crate) struct PendingChatProfileOpen {
     pub time: std::time::Instant,
 }
 
-/// Resolve which chat room a click in the message scroll targets.
-/// Single source of truth so the composer bar
-/// (`handle_chat_composer_click`) and the message scroll above it
-/// always agree on which room a click belongs to.
-fn chat_click_room_id(app: &App, screen: Screen) -> Option<Uuid> {
+/// Resolve which chat room a screen's embedded chat pane is showing right
+/// now. Single source of truth for every room-addressed gate — composer-bar
+/// clicks, message-scroll clicks, wheel/page scroll — so they always agree
+/// on which room an interaction belongs to. Screens outside
+/// `screen_has_chat_pane` resolve to `None`, as do pane screens with no
+/// room on show (no active table, pre-109 match, synthetic Home entry).
+fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
     match screen {
         Screen::Rooms => app.rooms_active_room.as_ref().map(|r| r.chat_room_id),
         Screen::Dashboard => app.chat.selected_room_id,
@@ -3029,10 +3013,7 @@ fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
 /// can be promoted to an `@mention` insertion in `App::tick`. Returns
 /// `true` if the click was consumed.
 fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
-    if !matches!(
-        screen,
-        Screen::Dashboard | Screen::Rooms | Screen::DailyMatch | Screen::HouseTable
-    ) {
+    if !screen_has_chat_pane(screen) {
         return false;
     }
     if chat_scroll_clicks_blocked(app) {
@@ -3050,7 +3031,7 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
     let Some(hit) = layout.rows.get(row_idx) else {
         return false;
     };
-    let Some(room_id) = chat_click_room_id(app, screen) else {
+    let Some(room_id) = embedded_chat_room_id(app, screen) else {
         return false;
     };
     let Some(kind) = classify_chat_hit(hit, col) else {
@@ -4415,28 +4396,21 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
 pub(crate) fn try_open_icon_picker(app: &mut App) {
     let ctx = InputContext::from_app(app);
     // Only chat composers can receive icons.
-    if !matches!(
-        ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-    ) {
+    if !screen_composes_chat(ctx.screen) {
         return;
     }
     if !ctx.chat_composing {
-        if ctx.screen == Screen::Dashboard {
-            if let Some(room_id) = app.chat.selected_room_id {
-                app.chat.start_composing_in_room(room_id);
-            }
-        } else if ctx.screen == Screen::Rooms {
-            if let Some(room) = app.rooms_active_room.as_ref() {
-                app.chat.start_composing_in_room(room.chat_room_id);
-            }
-        } else if ctx.screen == Screen::Clubhouse {
-            if let Some(lounge_id) = app.chat.lounge_room_id() {
-                app.chat.start_composing_in_room(lounge_id);
-            }
+        let room_id = if ctx.screen == Screen::Clubhouse {
+            app.chat.lounge_room_id()
         } else {
-            app.chat.start_composing();
-        }
+            embedded_chat_room_id(app, ctx.screen)
+        };
+        // No room on show (synthetic Home entry, chatless table) — nothing
+        // for the picker to feed, so don't open it.
+        let Some(room_id) = room_id else {
+            return;
+        };
+        app.chat.start_composing_in_room(room_id);
     }
     if app.icon_catalog.is_none() {
         app.icon_catalog = Some(icon_picker::catalog::IconCatalogData::load());
@@ -4582,11 +4556,7 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
             }
 
             let ctx = InputContext::from_app(app);
-            if matches!(
-                ctx.screen,
-                Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-            ) && ctx.chat_composing
-            {
+            if is_chat_composer_context(ctx) {
                 for ch in icon_str.chars() {
                     app.chat.composer_push(ch);
                 }

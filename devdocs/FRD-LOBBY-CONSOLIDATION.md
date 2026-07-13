@@ -1,6 +1,6 @@
-# FRD: Lobby Consolidation (Phases 2 & 3)
+# FRD: Lobby Consolidation (Phases 2, 3 & 4)
 
-- Status: Phase 1 shipped 2026-07-13; phase 2 (house tables) shipped 2026-07-13 (uncommitted in tree at time of writing) — see `late-ssh/src/app/house/CONTEXT.md`. Phase 3 (demolition) approved but not started; owner wants the whole `app/rooms/` folder GONE, and phase 2 pre-staged that: the four surviving runtimes now live under `app/house/<game>/`, so phase 3 deletes `app/rooms/` wholesale (plus the `Option<RoomsService>` seams and the `rooms/backend.rs` re-export of `house::types`).
+- Status: Phase 1 shipped 2026-07-13; phase 2 (house tables) shipped 2026-07-13 (uncommitted in tree at time of writing) — see `late-ssh/src/app/house/CONTEXT.md`. Phase 3 (demolition) approved but not started; owner wants the whole `app/rooms/` folder GONE, and phase 2 pre-staged that: the four surviving runtimes now live under `app/house/<game>/`, so phase 3 deletes `app/rooms/` wholesale (plus the `Option<RoomsService>` seams and the `rooms/backend.rs` re-export of `house::types`). Phase 4 (lobby domain consolidation: `app/daily/` + `app/house/` under one `app/lobby/`) is PLANNED ONLY — approved as a plan 2026-07-13, execute strictly after phase 3.
 - Owner decisions are LOCKED unless the owner reopens them; do not re-litigate.
 - Read first: root `CONTEXT.md`, `late-ssh/src/app/daily/CONTEXT.md`, `late-ssh/src/app/rooms/CONTEXT.md`. Memory file `project_lobby_consolidation.md` mirrors the short version of this doc.
 
@@ -13,7 +13,7 @@ Locked decisions:
 - Delete with no replacement: live table **Chess** (daily chess is the replacement), **Tic-Tac-Toe** (connect four owns the niche), **ssHattrick**.
 - No user table creation, no settings forms, fixed stakes. One table per variant; a second stake tier later = a new enum variant, not config.
 - Poker/blackjack must NOT be forced through the `daily_matches` correspondence model (N-player, house-banked, real-time; the 24h-deadline shape would corrupt the daily domain). Rejected explicitly.
-- **Quest re-pointing (phase 3): STOP AND DISCUSS WITH THE OWNER FIRST.** He asked for this verbatim ("when you get to quests sides, talk with me"). `QuestService` assigns a "multiplayer room-game daily quest" fed by rooms activity events (`SatDown` via `RoomGameRegistry::start_dashboard_room_join_feed_task`, `game_won` publishers in each runtime); deleting rooms without re-pointing leaves players uncompletable daily quests.
+- **Quest re-pointing: RESOLVED with the owner 2026-07-13, implemented same day (ahead of the demolition).** Decisions: (a) assigned quests are arcade-only for now — daily slot 1 easy, daily slot 2 medium, weekly slot hard, all from the arcade page (score/level runs plus the daily puzzles; the code's `QuestSource::Arcade` covers both). Implemented in `late-core/src/models/quest.rs` (`slot_difficulty_preference` / `slot_source_preference`, unit-tested) plus migration `110_disable_room_quests.sql` (deactivates every `room_rounds_played`/`room_wins` template — poker, blackjack, tron, chess — and deletes current/future assignments pointing at them so the draw refills from the arcade pool; progress rows cascade). (b) House-table activity is sit-downs ONLY: someone sits at poker/blackjack/tron or enters the maze (`ActivityKind::SatDown` via the registries' choke points). The `game_won`/`game_played` publishers were deleted from the four house runtimes, and the now-dead `ActivityPublisher` seams were stripped from the services, both registries' constructors, the rooms managers, and `main.rs`. Chip payouts were never event-driven (direct `ChipService` calls) and are unchanged. Accepted consequences: #lounge loses the tron/asterion win lines (sit-down invitation lines stay), and `metrics::record_game_win` no longer counts house games. Still true: deleting rooms chess kills nothing (its quest templates are already inactive).
 
 ## What phase 1 shipped (context for the code you'll touch)
 
@@ -43,7 +43,7 @@ Phase 2 as shipped (2026-07-13): everything above, plus the runtime relocation. 
 
 Checklist assembled from phase-1 archaeology; grep beyond it, this codebase hides seams:
 
-- **Quests first, with owner sign-off** (see locked decisions). Reward templates with room-game params, `QuestService`'s multiplayer daily draw, activity consumers.
+- **Quests: DONE 2026-07-13** (see locked decisions — arcade-only slots, migration 110, house events reduced to sit-downs). What remains for phase 3 here: delete the `room_rounds_played`/`room_wins` match arms and `QuestSource::Multiplayer` in `hub/dailies/svc.rs` + `quest.rs` once the rooms runtimes stop emitting anything (the dead-game runtimes still publish `game_won` until deleted).
 - Rooms screen + directory + create/delete/search/filter (`app/rooms/{input,ui,state,filter}.rs`), screen number freed in `primitives.rs`, topbar hit-test, splash tips (`late-ssh/assets/splash_tips/*.json` — check for Rooms/Tables mentions), help modal Tables topic.
 - `RoomGameManager` / `ActiveRoomBackend` traits, `RoomGameRegistry`, per-game `manager.rs` files, `App::active_room_game`, `rooms_active_room` and friends.
 - Dead runtimes: `chess/` (rooms), `tictactoe/`, `sshattrick/` — plus `ChessTimeControl::Daily` legacy parsing, which finally becomes deletable with the whole rooms chess module.
@@ -55,10 +55,45 @@ Checklist assembled from phase-1 archaeology; grep beyond it, this codebase hide
 - Docs: rewrite `rooms/CONTEXT.md` (or fold into the new house-table context), root `CONTEXT.md` screen list/keybindings/data-model/service rows, `chat/CONTEXT.md` game-room references, `games/CONTEXT.md` chess_core ownership note.
 - Tests: `late-ssh/tests/` rooms/blackjack/poker/etc. suites need porting to the singleton services, not deleting wholesale — the game-rule coverage is the valuable part.
 
+## Phase 4: lobby domain consolidation (PLAN ONLY — execute after phase 3)
+
+The Lobby now fronts two game domains that grew up separately: `app/daily/` (async correspondence matches) and `app/house/` (live house tables). They already share the modal, the backtick cycle, the embedded-chat screen shape, and the "leave surface → return screen → reopen modal" flow — but the shared parts live in `daily/` by historical accident (the modal predates house tables), and `dashboard/input.rs` owns the workspace cycle that spans both. Phase 4 puts everything under one `app/lobby/` domain. This is a REORGANIZATION, not a redesign: zero behavior change, no DB change, `cargo check --tests` green with no logic diffs.
+
+Sequencing: strictly after phase 3. Moving the modules first would drag the rooms seams (`Option<RoomsService>`, `rooms/backend.rs` re-export) into the new tree and double the churn. Phase 3's test porting also lands file paths phase 4 would otherwise move twice.
+
+Proposed layout (mirror the phase-2 runtime relocation mechanics — `git mv`, then fix paths):
+
+```
+app/lobby/
+  mod.rs           declarations only
+  modal_input.rs   moved from daily/ (it already renders/routes both domains)
+  modal_ui.rs      moved from daily/
+  workspace.rs     GameWorkspace + next_workspace (+ their unit tests) moved out of dashboard/input.rs
+  state.rs         LobbyState, split out of DailyState: modal cursor/scroll, claim-confirm,
+                   mark_lobby_seen / seen_open_ids, the rule-label glow inputs
+  daily/           app/daily/ moved wholesale, minus the modal files
+  house/           app/house/ moved wholesale
+```
+
+Steps, in order:
+1. Mechanical moves: `app/daily/*` → `app/lobby/daily/*`, `app/house/*` → `app/lobby/house/*`; sweep `crate::app::daily::` / `crate::app::house::` paths (includes the chat-surface rosters in `app/input.rs` — `embedded_chat_room_id` and the Esc-peel branches reference `app.daily` / `app.house` accessors; update paths only, do not restructure the gates).
+2. Hoist the modal to `lobby/`: move `modal_input.rs` / `modal_ui.rs`; rename `DailyModalEntry` → `LobbyEntry` (its `House` variant being a "daily" type is the smell this phase exists to fix).
+3. Split `LobbyState` out of `DailyState` (the risky step — the glow/seen logic is edge-triggered, port its unit tests with it). The `ChallengeDraft` stays in `daily/`: it posts daily challenges. `App::show_daily_modal` → `App::show_lobby_modal`.
+4. Move the backtick cycle: `GameWorkspace` + `next_workspace` → `lobby/workspace.rs`; `dashboard/input.rs` keeps only the key binding + call.
+5. Docs: new `lobby/CONTEXT.md` (entry points: modal, panel, backtick, both screens) with `lobby/daily/CONTEXT.md` and `lobby/house/CONTEXT.md` staying per-sub-domain; update root `CONTEXT.md` module map and this FRD's status line.
+
+Locked-shape guardrails (owner style, do not drift):
+- `DailyService` and `HouseTableRegistry` stay SEPARATE services. No unifying trait over them, no `GameSurface` abstraction — the modal already consumes both through plain exhaustive code; keep enums + exhaustive matches, no `_ =>` on roster enums.
+- Keep `Screen::DailyMatch` and `Screen::HouseTable` as-is (no user-visible change, no churn in `primitives.rs`/input gates). Renaming screens is out of scope.
+- `daily_matches`, reward keys, migrations: untouched. The sidebar panel stays in `lobby/daily/` (its content is matches; the `lobby` rule label is owned by `common/sidebar.rs` regardless).
+- Don't merge the board/table input files just because they rhyme; they already share `chat::input::chat_priority_key` / `selected_chat_key` and the central composer/overlay gates. Extract further shared helpers only if a diff-shrinking, behavior-identical extraction falls out naturally.
+
+Open items to confirm with the owner at execution time: (a) does `App` grow a nested `App::lobby` owning modal/glow state (proposed) or do `App::daily` / `App::house` simply move under a namespace; (b) the `LobbyEntry` name.
+
 ## House rules that bit during phase 1 (save yourself the rediscovery)
 
 - Owner workflow: no unprompted commits, no `cargo test`/`clippy`/`nextest` — `cargo check --tests` is the agent-side gate. Lowercase `bail!` strings, sentence-case banners. UUID v7. No em dashes in UI copy. Stable chrome (fixed heights between states). Forward migrations only.
-- `is_chat_composer_context` in `app/input.rs` is the master gate for "typed bytes go to the chat composer" — any new screen with embedded chat must join it AND the sibling gates (overlay handling + close, reaction-leader Esc, scroll routing, `chat_click_room_id`, composer/scroll click hit tests). Phase 1's `Screen::DailyMatch` edits are the worked example.
+- Chat-surface gating in `app/input.rs` was consolidated 2026-07-13 (after `Screen::DailyMatch` and `Screen::HouseTable` both shipped with the game handler eating composer keys): a new screen with embedded chat now joins exactly TWO rosters and everything else follows. Add it to `screen_has_chat_pane` (drives composer/scroll click hit tests, reaction-leader Esc; `screen_composes_chat` layers Clubhouse on top and drives the composer-priority gate + chat overlays) and to `embedded_chat_room_id` (screen → visible chat room; drives click targets and wheel/page scroll). Composer-beats-game and overlay-beats-game are enforced centrally — one gate at the top of `handle_dedicated_screen_input`, one before it — so screen handlers must NOT re-check `chat_composing`/`has_overlay` themselves. The chat-vs-game key split on split screens is shared too: `chat::input::chat_priority_key` / `selected_chat_key`.
 - `ChatRoomMember::join` takes `&Client`; transaction-scoped model methods need `&impl GenericClient` (pattern: `DailyMatch::claim`). Widening is backward-compatible.
 - `voice_channels.target_id` has no FK — every deletion path must clean voice channels explicitly.
 - `compose_room_switch_allowed` deliberately allows only Dashboard; embedded-chat screens must not allow Ctrl+N/P room switching.

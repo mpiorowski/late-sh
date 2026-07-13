@@ -13,7 +13,6 @@ use crate::app::house::tron::{
     svc::{TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TronService, TronServiceContext},
 };
 use crate::app::{
-    activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
     rooms::{
         backend::{
@@ -28,22 +27,16 @@ use crate::app::{
 #[derive(Clone)]
 pub struct TronTableManager {
     chip_svc: ChipService,
-    activity: ActivityPublisher,
     rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, TronService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl TronTableManager {
-    pub fn new(
-        chip_svc: ChipService,
-        activity: ActivityPublisher,
-        rooms_service: RoomsService,
-    ) -> Self {
+    pub fn new(chip_svc: ChipService, rooms_service: RoomsService) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
-            activity,
             rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
@@ -59,7 +52,6 @@ impl TronTableManager {
                 TronService::new_with_events(
                     room.id,
                     self.chip_svc.clone(),
-                    self.activity.clone(),
                     settings,
                     TronServiceContext {
                         room_event_tx: self.event_tx.clone(),

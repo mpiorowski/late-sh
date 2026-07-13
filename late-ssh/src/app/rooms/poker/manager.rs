@@ -9,7 +9,6 @@ use uuid::Uuid;
 
 use crate::app::house::poker::{settings::PokerTableSettings, state::State, svc::PokerService};
 use crate::app::{
-    activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
     rooms::{
         backend::{
@@ -24,22 +23,16 @@ use crate::app::{
 #[derive(Clone)]
 pub struct PokerTableManager {
     chip_svc: ChipService,
-    activity: ActivityPublisher,
     rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, PokerService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl PokerTableManager {
-    pub fn new(
-        chip_svc: ChipService,
-        activity: ActivityPublisher,
-        rooms_service: RoomsService,
-    ) -> Self {
+    pub fn new(chip_svc: ChipService, rooms_service: RoomsService) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
-            activity,
             rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
@@ -54,7 +47,6 @@ impl PokerTableManager {
                 PokerService::new_with_settings_and_events(
                     room.id,
                     self.chip_svc.clone(),
-                    self.activity.clone(),
                     settings,
                     self.event_tx.clone(),
                     Some(self.rooms_service.clone()),

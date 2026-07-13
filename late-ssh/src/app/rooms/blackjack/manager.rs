@@ -14,7 +14,6 @@ use crate::app::house::blackjack::{
     svc::{BlackjackEvent, BlackjackService},
 };
 use crate::app::{
-    activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
     rooms::{
         backend::{
@@ -30,7 +29,6 @@ use crate::app::{
 pub struct BlackjackTableManager {
     chip_svc: ChipService,
     player_directory: BlackjackPlayerDirectory,
-    activity: ActivityPublisher,
     rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, BlackjackService>>>,
     event_tx: broadcast::Sender<BlackjackEvent>,
@@ -41,7 +39,6 @@ impl BlackjackTableManager {
     pub fn new(
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
-        activity: ActivityPublisher,
         rooms_service: RoomsService,
     ) -> Self {
         let (event_tx, _) = broadcast::channel::<BlackjackEvent>(256);
@@ -49,7 +46,6 @@ impl BlackjackTableManager {
         Self {
             chip_svc,
             player_directory,
-            activity,
             rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
@@ -77,7 +73,6 @@ impl BlackjackTableManager {
                     self.chip_svc.clone(),
                     self.player_directory.clone(),
                     event_tx,
-                    self.activity.clone(),
                     settings,
                     Some(self.rooms_service.clone()),
                 )

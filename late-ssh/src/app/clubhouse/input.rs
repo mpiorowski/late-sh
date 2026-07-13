@@ -7,8 +7,9 @@
 //! table, and the easel jump to their app pages (2/3/4/5), the jukebox opens
 //! the Music Booth, and the dog gets petted where everyone can see it.
 //! Returns `false` for anything it does not own so global keys (numbers,
-//! Tab, `q`, `?`, `v` music chords, ...) keep working, and returns `false`
-//! outright while composing so the shared composer pipeline gets the bytes.
+//! Tab, `q`, `?`, `v` music chords, ...) keep working. Composing and
+//! chat-overlay input never reaches this handler: the shared composer and
+//! overlay gates in `app/input.rs` intercept first (`screen_composes_chat`).
 
 use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
@@ -18,15 +19,6 @@ use super::lobby::Emote;
 use super::map::Interactive;
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
-    // While typing, the global composer pipeline owns every byte.
-    if app.chat.is_composing() {
-        return false;
-    }
-    // Chat overlays opened elsewhere are handled by the shared overlay path.
-    if app.chat.has_overlay() {
-        return false;
-    }
-
     // A left click on a patron opens their profile, the same view as
     // `/profile <name>`. Other mouse events (scroll) fall through to the
     // global handlers.

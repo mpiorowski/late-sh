@@ -16,10 +16,7 @@ use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
-    activity::{event::ActivityGame, publisher::ActivityPublisher},
-    games::chips::svc::ChipService,
-    house::types::RoomGameEvent,
-    rooms::svc::RoomsService,
+    games::chips::svc::ChipService, house::types::RoomGameEvent, rooms::svc::RoomsService,
 };
 
 pub const MAX_HEROES_PER_ROOM: usize = 12;
@@ -41,14 +38,12 @@ pub struct AsterionService {
     /// `None` for house tables: no `game_rooms` row to keep `in_round`/`open`
     /// or to touch for idle cleanup.
     rooms_service: Option<RoomsService>,
-    activity: ActivityPublisher,
     db: Db,
 }
 
 pub(crate) struct AsterionServiceInit {
     pub(crate) room_id: Uuid,
     pub(crate) chip_svc: ChipService,
-    pub(crate) activity: ActivityPublisher,
     pub(crate) rooms_service: Option<RoomsService>,
     pub(crate) db: Db,
     pub(crate) room_event_tx: broadcast::Sender<RoomGameEvent>,
@@ -195,7 +190,6 @@ impl AsterionService {
         let AsterionServiceInit {
             room_id,
             chip_svc,
-            activity,
             rooms_service,
             db,
             room_event_tx,
@@ -216,7 +210,6 @@ impl AsterionService {
             room_in_round: Arc::new(AtomicBool::new(false)),
             chip_svc,
             rooms_service,
-            activity,
             db,
         };
         svc.spawn_update_task();
@@ -417,30 +410,20 @@ impl AsterionService {
         let svc = self.clone();
         tokio::spawn(async move {
             let escape_date = Utc::now().date_naive();
-            let payout = match svc
+            if let Err(error) = svc
                 .chip_svc
                 .credit_asterion_daily_escape(user_id, escape_date)
                 .await
             {
-                Ok(payout) => payout,
-                Err(error) => {
-                    tracing::error!(
-                        ?error,
-                        %user_id,
-                        "failed to credit Asterion daily escape payout"
-                    );
-                    svc.activity
-                        .game_won_task(user_id, ActivityGame::Asterion, None, None);
-                    return;
-                }
-            };
-            {
-                let mut state = svc.state.lock().await;
-                state.mark_daily_prize_claimed(user_id);
+                tracing::error!(
+                    ?error,
+                    %user_id,
+                    "failed to credit Asterion daily escape payout"
+                );
+                return;
             }
-            let detail = payout.credited.then(|| format!("{} chips", payout.amount));
-            svc.activity
-                .game_won_task(user_id, ActivityGame::Asterion, detail, None);
+            let mut state = svc.state.lock().await;
+            state.mark_daily_prize_claimed(user_id);
         });
     }
 

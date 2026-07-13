@@ -225,7 +225,6 @@ async fn main() -> anyhow::Result<()> {
     rooms_service.cleanup_inactive_tables_task();
     let asterion_room_manager = late_ssh::app::rooms::asterion::manager::AsterionRoomManager::new(
         chip_service.clone(),
-        activity_publisher.clone(),
         rooms_service.clone(),
         db.clone(),
     );
@@ -233,7 +232,6 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(
             chip_service.clone(),
             late_ssh::app::house::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
-            activity_publisher.clone(),
             rooms_service.clone(),
         );
     let tictactoe_table_manager =
@@ -248,12 +246,10 @@ async fn main() -> anyhow::Result<()> {
     );
     let poker_table_manager = late_ssh::app::rooms::poker::manager::PokerTableManager::new(
         chip_service.clone(),
-        activity_publisher.clone(),
         rooms_service.clone(),
     );
     let tron_table_manager = late_ssh::app::rooms::tron::manager::TronTableManager::new(
         chip_service.clone(),
-        activity_publisher.clone(),
         rooms_service.clone(),
     );
     let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(

@@ -387,7 +387,8 @@ changes per game — that's where the rules live.
 - Avoid `i`, `j`, `k`, arrows up/down, scroll, and message-action keys
   (`d`, `r`, `e`, `p`, `c`, `f`, `g`) — these are routed to embedded chat
   before reaching the game. Full list in
-  `rooms/input.rs::should_route_active_room_chat_key`.
+  `chat/input.rs::chat_priority_key` / `selected_chat_key` (shared by the
+  active room, the daily board, and house tables).
 - Backtick toggles Dashboard — don't bind it.
 
 ## Project conventions

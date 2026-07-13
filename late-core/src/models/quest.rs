@@ -457,11 +457,11 @@ fn choose_template<'a>(
     selected_templates: &[Uuid],
     selected_domains: &[String],
 ) -> Option<&'a QuestTemplate> {
-    let buckets = slot_bucket_preferences(cadence, slot);
+    let difficulty = slot_difficulty_preference(cadence, slot);
     let source = slot_source_preference(cadence, slot);
     let mut pool = filtered_pool(
         templates,
-        buckets,
+        difficulty,
         source,
         selected_templates,
         selected_domains,
@@ -470,7 +470,7 @@ fn choose_template<'a>(
     if pool.is_empty() {
         pool = filtered_pool(
             templates,
-            buckets,
+            difficulty,
             source,
             selected_templates,
             selected_domains,
@@ -487,11 +487,18 @@ fn choose_template<'a>(
     weighted_pick(&pool, cadence, period_start, slot)
 }
 
-fn slot_bucket_preferences(cadence: &str, slot: i32) -> &'static [&'static str] {
+/// Assigned quests are arcade-only for now (owner decision 2026-07-13, see
+/// `devdocs/FRD-LOBBY-CONSOLIDATION.md`): the daily slots draw an easy and
+/// a medium quest, the weekly slot a hard one — all from the arcade page
+/// (score/level runs plus the daily puzzles). The room-game templates were
+/// deactivated by migration 110; the Rooms demolition (phase 3) deletes
+/// their events.
+fn slot_difficulty_preference(cadence: &str, slot: i32) -> Option<&'static str> {
     match (cadence, slot) {
-        ("daily", 1) => &["quick", "skill"],
-        ("daily", 2) => &["skill", "casino"],
-        _ => &[],
+        ("daily", 1) => Some("easy"),
+        ("daily", 2) => Some("medium"),
+        ("weekly", 1) => Some("hard"),
+        _ => None,
     }
 }
 
@@ -504,8 +511,7 @@ enum QuestSource {
 
 fn slot_source_preference(cadence: &str, slot: i32) -> Option<QuestSource> {
     match (cadence, slot) {
-        ("daily", 1) => Some(QuestSource::Arcade),
-        ("daily", 2) => Some(QuestSource::Multiplayer),
+        ("daily", 1) | ("daily", 2) | ("weekly", 1) => Some(QuestSource::Arcade),
         _ => None,
     }
 }
@@ -522,7 +528,7 @@ fn quest_source(template: &QuestTemplate) -> QuestSource {
 
 fn filtered_pool<'a>(
     templates: &'a [QuestTemplate],
-    buckets: &[&str],
+    difficulty: Option<&str>,
     source: Option<QuestSource>,
     selected_templates: &[Uuid],
     selected_domains: &[String],
@@ -531,7 +537,7 @@ fn filtered_pool<'a>(
     templates
         .iter()
         .filter(|template| !selected_templates.contains(&template.id))
-        .filter(|template| buckets.is_empty() || buckets.contains(&template.bucket.as_str()))
+        .filter(|template| difficulty.is_none_or(|difficulty| template.difficulty == difficulty))
         .filter(|template| source.is_none_or(|source| quest_source(template) == source))
         .filter(|template| !avoid_domains || !selected_domains.contains(&template.domain))
         .collect()
@@ -1017,7 +1023,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn template(key: &str, bucket: &str, domain: &str, kind: &str) -> QuestTemplate {
+    fn template(key: &str, difficulty: &str, domain: &str, kind: &str) -> QuestTemplate {
         QuestTemplate {
             id: Uuid::now_v7(),
             created: DateTime::<Utc>::UNIX_EPOCH,
@@ -1026,9 +1032,9 @@ mod tests {
             title: key.to_string(),
             description: key.to_string(),
             cadence: "daily".to_string(),
-            bucket: bucket.to_string(),
+            bucket: "skill".to_string(),
             domain: domain.to_string(),
-            difficulty: "medium".to_string(),
+            difficulty: difficulty.to_string(),
             kind: kind.to_string(),
             params: json!({}),
             target: 1,
@@ -1041,18 +1047,22 @@ mod tests {
     }
 
     #[test]
-    fn daily_slots_split_arcade_and_multiplayer_sources() {
+    fn slots_draw_arcade_by_difficulty_and_skip_room_quests() {
         let period_start = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let templates = vec![
-            template("arcade", "skill", "arcade", "arcade_score"),
-            template("room", "skill", "strategy", "room_rounds_played"),
+            template("easy_arcade", "easy", "puzzle", "daily_puzzle_win"),
+            template("medium_arcade", "medium", "arcade", "arcade_score"),
+            template("hard_arcade", "hard", "arcade", "arcade_score"),
+            template("medium_room", "medium", "casino", "room_rounds_played"),
         ];
 
         let slot_one = choose_template(&templates, "daily", period_start, 1, &[], &[]).unwrap();
         let slot_two = choose_template(&templates, "daily", period_start, 2, &[], &[]).unwrap();
+        let weekly = choose_template(&templates, "weekly", period_start, 1, &[], &[]).unwrap();
 
-        assert_eq!(slot_one.key, "arcade");
-        assert_eq!(slot_two.key, "room");
+        assert_eq!(slot_one.key, "easy_arcade");
+        assert_eq!(slot_two.key, "medium_arcade");
+        assert_eq!(weekly.key, "hard_arcade");
     }
 
     #[test]
