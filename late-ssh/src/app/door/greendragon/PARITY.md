@@ -34,7 +34,17 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
   441-row percentile table; z deltas ≲0.002 never move truncated integer
   damage.)
 - Specialties (3 × 4 skills), use economy `floor(skill/3)+1`, gem advancement.
-- Buff + companion engines; forest death (gold→0, exp×0.9); master fights
+- Companion combat (`rollcompaniondamage`/`report_companion_move`,
+  `lib/extended-battle.php`): each fighting companion runs its own paired
+  exchange through the shared roller (the 1-in-20 crit, dmgmod stages,
+  reroll-until-progress, signed riposte), the foe answers **every** companion
+  while it still stands, healers roll but never land a direct swing. Brought
+  to 1=1 2026-07 (previously the foe struck one random companion per round
+  with a plain `trunc(atk−def)` roll — the last combat simplification). The
+  only unmodelled piece is upstream's badguy bonus double-attack
+  (`bgchancetodouble`), which nothing stock sets and which `defend` exists
+  only to suppress — so `defend` is inert here.
+- Buff engine; forest death (gold→0, exp×0.9); master fights
   (non-lethal loss, +5 soulpoints on win); shop ladder + 75% trade-in +
   level gating; healer full-heal cost `round(ln(level)·(missing+10))`;
   8 stock forest events at 15% (`forestchance`); exp curve + DK scaling;
@@ -120,9 +130,6 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
   multi-fight overflow clamps at 16 instead of 17.
 - Doppleganger fallback (empty creature query) is unreachable with a static
   table — omitted.
-- Companion incoming-damage model: foe rolls against a random companion each
-  round rather than LoGD's single-target redistribution (pre-existing,
-  see CONTEXT.md).
 - `suicide` searching: stock default **off** — correctly absent.
 
 ## Phase 1 — the dead realm (`graveyard.php`, `shades.php`, `lib/graveyard/case_*.php`) — DONE
@@ -1563,9 +1570,29 @@ Audit + fix steps (not reached by the sweep):
   forest event stays ungated. Deliberate omission: her **profit basket**
   (`profit`, a global cosmetic counter shown on the sign) — pure flavor
   with no mechanical effect; the sign shows the price only.
-- [ ] **Audit: licensing sweep** — every player-visible string in the port
-  vs upstream prose/names; distinctive matches only, generic English is
-  at most a nit.
+- [x] **Audit: licensing sweep** — done 2026-07. Every name table
+  (creatures, masters, weapons, armor, mounts, mercenaries, titles, the core
+  NPCs — Morvane/Varn/Maren/Hobb/Alder/Wren/Skarn/Elsbet) verified against
+  the installer seed + module files: **zero overlap**. The prose sweep
+  (forest events, inn, tavern, romance, PvP flee/no-skill lines, taunt pool,
+  outhouse) was clean — paraphrase, not text reuse. **Three verbatim
+  upstream names had slipped through** and were renamed in-step:
+  - **"Crazy Audrey"** (the petting-zoo/basket NPC, `modules/crazyaudrey.php`)
+    → **"Mad Juna"** (`ForestEvent::PettingZoo` was already neutral; only
+    strings/comments changed).
+  - **"Foilwench"** (`modules/foilwench.php`) → **"Lady Filigree"**; the enum
+    variant and resolver renamed `Foilwench`/`resolve_foilwench` →
+    `Filigree`/`resolve_filigree` (the type isn't serialized, so the rename
+    is internal-only).
+  - **"Dark Horse Tavern"** (`modules/darkhorse.php`) → **"The Crooked
+    Wheel"** in every player-visible string and prose comment; the
+    `CommentRoom::DarkHorse` identifier and the stable `"darkhorse"`
+    commentary section key are **kept** (the key is DB-persisted — renaming
+    it would orphan existing rows), as are the lowercase `darkhorse.php` /
+    `crazyaudrey` / `foilwench` upstream source citations.
+  Nits left as defensible: "The Mausoleum" (common noun for exactly that
+  room) and the mirror-fright haunt fumble (a reworded gag, no shared text).
+  `cargo check --tests` clean after the renames.
 
 ### Findings (2026-07 sweep)
 
