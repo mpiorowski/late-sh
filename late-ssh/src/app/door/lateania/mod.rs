@@ -5,6 +5,7 @@
 // contributes to it. This world stands on the foundation you built.
 pub mod abilities;
 pub mod appearance;
+pub mod archipelago;
 pub mod classes;
 pub mod crafting;
 pub mod damage;

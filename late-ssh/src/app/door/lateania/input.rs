@@ -118,6 +118,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Follow
             | Panel::Stable
             | Panel::Housing
+            | Panel::Portal
             | Panel::Appearance
             | Panel::Crafting
             | Panel::Abilities
@@ -142,6 +143,29 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     if byte == b'0' && !in_list {
         state.use_ability(10);
         return InputAction::Handled;
+    }
+
+    // Batch-sell shortcuts, only inside the Inventory panel (so they don't shadow
+    // the global meanings of A/C/J elsewhere): A = sell all loose gear, C = sell
+    // commons, J = sell junk (anything that wouldn't improve you). All keep your
+    // potions and equipped gear, and need a merchant present.
+    if panel == Panel::Inventory {
+        use super::svc::SellBatch;
+        match byte {
+            b'A' => {
+                state.sell_batch(SellBatch::All);
+                return InputAction::Handled;
+            }
+            b'C' => {
+                state.sell_batch(SellBatch::Common);
+                return InputAction::Handled;
+            }
+            b'J' | b'j' => {
+                state.sell_batch(SellBatch::NonUpgrades);
+                return InputAction::Handled;
+            }
+            _ => {}
+        }
     }
 
     match byte {
@@ -177,6 +201,19 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             if view.housing.is_some() {
                 state.toggle_panel(Panel::Housing);
             }
+            InputAction::Handled
+        }
+        b'i' | b'I' => {
+            // The waystone menu opens when standing on a portal. (Moved off `y`,
+            // which the gather action uses.)
+            if view.portal.is_some() {
+                state.open_portal();
+            }
+            InputAction::Handled
+        }
+        b'm' | b'M' => {
+            // Toggle the whole-world atlas.
+            state.toggle_panel(Panel::Map);
             InputAction::Handled
         }
         b'o' | b'O' => {

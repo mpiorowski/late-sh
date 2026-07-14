@@ -57,9 +57,9 @@ use super::pets::{Pet, pet_species_by_key};
 use super::skills::{CraftSkill, GatherSkill, skill_level_for_xp, skill_progress};
 use super::stats::AbilityScores;
 use super::world::{
-    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, ResourceNode, RoomId,
-    World, craft_stations_at, critter_index, critters_at, features_at, frontier_entrance_room,
-    is_frontier_room, node_index, nodes_at, seed_world,
+    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RegionProgress,
+    ResourceNode, RoomId, World, craft_stations_at, critter_index, critters_at, features_at,
+    frontier_entrance_room, is_frontier_room, node_index, nodes_at, seed_world,
 };
 
 /// World heartbeat. One combat round resolves per tick.
@@ -403,6 +403,22 @@ pub struct InvView {
     /// How this gear compares to what's worn in its slot, e.g. "vs worn: +3 atk
     /// -2 hp", "new slot", or "" for non-gear / the worn item itself.
     pub compare: String,
+    /// The same comparison as a percent power change (positive = an upgrade,
+    /// shown green; negative = worse, red). None for non-gear or the item
+    /// already equipped. Drives the batch-sell "non-upgrades" filter.
+    pub compare_pct: Option<i32>,
+}
+
+/// A batch-sell request at a merchant. Consumables and equipped gear are never
+/// touched; only loose inventory is sold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SellBatch {
+    /// Every loose piece of gear and every valuable.
+    All,
+    /// Only common-rarity gear (plus valuables).
+    Common,
+    /// Gear that wouldn't improve the character (not an upgrade), plus valuables.
+    NonUpgrades,
 }
 
 /// One shop listing.
@@ -417,6 +433,8 @@ pub struct ShopEntryView {
     pub stats: String,
     /// How this gear compares to what's worn in its slot (see `InvView::compare`).
     pub compare: String,
+    /// The same comparison as a percent power change (see `InvView::compare_pct`).
+    pub compare_pct: Option<i32>,
 }
 
 /// The player's live companion, for the room/character panels.
@@ -478,6 +496,13 @@ pub struct HousingView {
     /// False = buying deeds at the clerk; true = furnishing a home you own.
     pub furnish: bool,
     pub entries: Vec<HousingEntryView>,
+}
+
+/// The waystone fast-travel menu, present when standing on a portal.
+#[derive(Clone, Debug)]
+pub struct PortalView {
+    /// Each destination: `(label, room id, is_here)`.
+    pub entries: Vec<(String, RoomId, bool)>,
 }
 
 #[derive(Clone, Debug)]
@@ -546,6 +571,8 @@ pub struct PlayerView {
     pub housing: Option<HousingView>,
     /// The crafting panel, present when standing at any craft station.
     pub crafting: Option<CraftView>,
+    /// The waystone fast-travel menu, present when standing on a portal.
+    pub portal: Option<PortalView>,
     /// The composed character bio (from the appearance choices).
     pub bio: String,
     /// The appearance/bio builder rows: (field label, chosen option).
@@ -575,6 +602,8 @@ pub struct PlayerView {
     pub features: Vec<FeatureView>,
     /// Overhead map of the explored neighbourhood around the player.
     pub minimap: MiniMap,
+    /// The whole-world atlas: exploration progress per major region (Map panel).
+    pub atlas: Vec<RegionProgress>,
     /// The world clock phase, e.g. "dawn"/"day"/"dusk"/"night".
     pub time_of_day: &'static str,
     /// The current weather, e.g. "clear"/"rain"/"fog"/"storm".
@@ -629,6 +658,7 @@ impl PlayerView {
             stable: None,
             housing: None,
             crafting: None,
+            portal: None,
             bio: String::new(),
             appearance: Vec::new(),
             log: Vec::new(),
@@ -645,6 +675,7 @@ impl PlayerView {
             resurrection_cap: 0,
             features: Vec::new(),
             minimap: MiniMap::default(),
+            atlas: Vec::new(),
             time_of_day: "day",
             weather: "clear",
             escort: None,
@@ -1280,6 +1311,16 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.sell(user_id, item_id));
     }
 
+    /// Batch-sell loose inventory at a merchant (see `SellBatch`).
+    pub fn sell_batch_task(&self, user_id: Uuid, kind: SellBatch) {
+        self.mutate(user_id, move |s| s.sell_batch(user_id, kind));
+    }
+
+    /// Step through a waystone portal to another landing.
+    pub fn travel_task(&self, user_id: Uuid, dest: RoomId) {
+        self.mutate(user_id, move |s| s.travel(user_id, dest));
+    }
+
     pub fn delete_character_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -1576,6 +1617,33 @@ impl PlayerState {
             }
         }
         (attack, hp, armor)
+    }
+
+    /// Compare a piece of gear against what is worn in its slot, as a percent
+    /// power change (positive = upgrade). `None` for non-gear, an unslotted item,
+    /// or the very item already equipped in that slot.
+    fn compare_gear(&self, it: &super::items::Item) -> Option<i32> {
+        let slot = it.slot()?;
+        if self.equipped.get(&slot) == Some(&it.id) {
+            return None; // this is the equipped item itself
+        }
+        let worn_power = self
+            .equipped
+            .get(&slot)
+            .and_then(|id| item(*id))
+            .map(|w| w.power())
+            .unwrap_or(0);
+        let new_power = it.power();
+        if worn_power == 0 {
+            // Nothing worn: any positive-power gear is a straight gain.
+            return (new_power > 0).then_some(100);
+        }
+        Some((new_power - worn_power) * 100 / worn_power.max(1))
+    }
+
+    /// Whether a piece of gear would improve the character over what is worn.
+    fn is_upgrade(&self, it: &super::items::Item) -> bool {
+        self.compare_gear(it).is_some_and(|pct| pct > 0)
     }
 
     /// The chosen archetype's tuning percentages, or all-zero if none is picked.
@@ -3602,8 +3670,59 @@ impl WorldState {
                 LogKind::System,
                 "Press n to open the housing ledger: buy a deed here, or furnish a home you own from inside it.".to_string(),
             );
+        } else if feat.kind == FeatureKind::Portal {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Press y to open the ways: step through to any village or island you know of."
+                    .to_string(),
+            );
         }
         self.dirty = true;
+    }
+
+    /// Step through a waystone to another. Only works when the player stands on a
+    /// portal, is out of combat, and the destination is a real portal landing.
+    fn travel(&mut self, user_id: Uuid, dest: RoomId) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if p.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't step through while fighting.".to_string(),
+            );
+            return;
+        }
+        let on_portal = features_at(p.room)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Portal);
+        if !on_portal {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "There is no waystone here to step through.".to_string(),
+            );
+            return;
+        }
+        let valid = super::archipelago::portal_destinations()
+            .iter()
+            .any(|(_, r)| *r == dest);
+        if !valid || dest == p.room {
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.previous_room = Some(p.room);
+            p.room = dest;
+            p.visited.insert(dest);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Travel,
+            "The waystone takes you in a breath of blue light...".to_string(),
+        );
+        self.describe_room(user_id);
     }
 
     fn board_quest_available(&self, p: &PlayerState, q: &BoardQuest) -> bool {
@@ -4374,6 +4493,13 @@ impl WorldState {
             p.hp = p.max_hp();
             p.resource = p.max_resource;
         }
+        // Level-up is a moment: lead with a bold banner, then the per-level
+        // detail. Full heal + resource already applied above.
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("★═══ LEVEL UP! You are now level {new_level}. ═══★"),
+        );
         // Every level is a real reward: announce the concrete stat gains, any
         // ability learned, and the named milestone at every fifth level.
         let res_label = class.resource().label();
@@ -4404,7 +4530,24 @@ impl WorldState {
                 self.log_to(
                     user_id,
                     LogKind::Loot,
-                    format!("  Milestone - {name}! Hard-won growth toughens you (permanent +HP)."),
+                    format!(
+                        "  ✦ Milestone - {name}! Hard-won growth toughens you (permanent +HP)."
+                    ),
+                );
+                // Milestones are a big deal: the whole world hears of it.
+                self.log_all(format!(
+                    "A hero rises: an adventurer has reached the rank of {name}."
+                ));
+            }
+            if lvl == Class::MAX_LEVEL {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    "  ⚔ You have reached the pinnacle - level 50, the height of your calling. Few ever stand here.".to_string(),
+                );
+                self.log_all(
+                    "The bells of Embergate ring: an adventurer has reached level 50, the pinnacle of their calling!"
+                        .to_string(),
                 );
             }
         }
@@ -4649,6 +4792,72 @@ impl WorldState {
             user_id,
             LogKind::Loot,
             format!("You sell {} for {}g.", it.name, price),
+        );
+    }
+
+    /// Which kind of batch-sell was requested.
+    fn sell_batch(&mut self, user_id: Uuid, kind: SellBatch) {
+        if shop_at(self.players.get(&user_id).map(|p| p.room).unwrap_or(0)).is_none() {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You need a merchant to sell.".to_string(),
+            );
+            return;
+        }
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        // Decide which pack items to sell. Equipped gear and consumables are
+        // always kept; the batch only touches loose inventory.
+        let doomed: Vec<u32> = p
+            .inventory
+            .iter()
+            .copied()
+            .filter(|id| {
+                let Some(it) = item(*id) else { return false };
+                match it.kind {
+                    ItemKind::Consumable { .. } => false, // never dump potions
+                    ItemKind::Valuable => true,           // pure sell-fodder, always goes
+                    ItemKind::Equipment(_) => match kind {
+                        SellBatch::All => true,
+                        SellBatch::Common => it.rarity == super::items::Rarity::Common,
+                        // "won't improve the character": not an upgrade over worn gear.
+                        SellBatch::NonUpgrades => !p.is_upgrade(it),
+                    },
+                }
+            })
+            .collect();
+        if doomed.is_empty() {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Nothing to sell that way.".to_string(),
+            );
+            return;
+        }
+        let mut count = 0;
+        let mut total = 0;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            for id in &doomed {
+                if let Some(pos) = p.inventory.iter().position(|i| i == id) {
+                    p.inventory.remove(pos);
+                    let price = item(*id).map(|it| it.sell_price()).unwrap_or(1);
+                    p.gold += price;
+                    total += price;
+                    count += 1;
+                }
+            }
+        }
+        let what = match kind {
+            SellBatch::All => "loose gear and valuables",
+            SellBatch::Common => "common items",
+            SellBatch::NonUpgrades => "items that wouldn't improve you",
+        };
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You sell {count} {what} for {total}g."),
         );
     }
 
@@ -6146,6 +6355,7 @@ impl WorldState {
                     sell_price: it.sell_price(),
                     stats: it.stat_summary(),
                     compare: compare_to_worn(&player.equipped, it),
+                    compare_pct: player.compare_gear(it),
                 })
                 .chain(
                     player
@@ -6161,6 +6371,7 @@ impl WorldState {
                             sell_price: it.sell_price(),
                             stats: it.stat_summary(),
                             compare: String::new(),
+                            compare_pct: None,
                         }),
                 )
                 .collect();
@@ -6181,6 +6392,7 @@ impl WorldState {
                         affordable: player.gold >= it.price,
                         stats: it.stat_summary(),
                         compare: compare_to_worn(&player.equipped, it),
+                        compare_pct: player.compare_gear(it),
                     })
                     .collect(),
             });
@@ -6257,6 +6469,17 @@ impl WorldState {
                 None
             };
 
+            // The waystone menu is present whenever the room holds a portal.
+            let portal = features_at(player.room)
+                .iter()
+                .any(|f| f.kind == FeatureKind::Portal)
+                .then(|| PortalView {
+                    entries: super::archipelago::portal_destinations()
+                        .into_iter()
+                        .map(|(label, room)| (label.to_string(), room, room == player.room))
+                        .collect(),
+                });
+
             let xp_into = player.xp - xp_for_level(player.level);
             let xp_next = if player.level >= Class::MAX_LEVEL {
                 0
@@ -6275,6 +6498,7 @@ impl WorldState {
             let minimap =
                 self.world
                     .minimap(player.room, player.previous_room, &player.visited, 3, 2);
+            let atlas = self.world.region_progress(&player.visited);
             let mut quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
                 .filter_map(|z| {
                     super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
@@ -6351,6 +6575,7 @@ impl WorldState {
                     stable,
                     housing,
                     crafting,
+                    portal,
                     bio: appearance::compose_bio(&player.appearance),
                     appearance: (0..appearance::N_FIELDS)
                         .map(|i| {
@@ -6374,6 +6599,7 @@ impl WorldState {
                     resurrection_cap: player.resurrection_cap,
                     features,
                     minimap,
+                    atlas,
                     time_of_day,
                     weather,
                     escort: player
@@ -7554,6 +7780,78 @@ mod tests {
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, before - 80);
         assert!(p.inventory.contains(&1001));
+    }
+
+    #[test]
+    fn waystone_travel_teleports_between_portals() {
+        use super::super::archipelago::{island_entrance, village_room};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Room 1 (Embergate square) has the town waystone.
+        assert_eq!(s.players[&uid(1)].room, 1);
+        s.travel(uid(1), village_room(0));
+        assert_eq!(
+            s.players[&uid(1)].room,
+            village_room(0),
+            "steps through to Lantern Cove"
+        );
+        // From a village waystone, hop to an island landing.
+        s.travel(uid(1), island_entrance(3));
+        assert_eq!(s.players[&uid(1)].room, island_entrance(3));
+    }
+
+    #[test]
+    fn travel_needs_a_waystone_and_a_real_destination() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Walk to a plain room with no portal, then try to travel: refused.
+        s.move_player(uid(1), Dir::North); // the Gilded Flagon (room 2), no portal
+        let here = s.players[&uid(1)].room;
+        s.travel(uid(1), super::super::archipelago::village_room(0));
+        assert_eq!(s.players[&uid(1)].room, here, "no waystone, no travel");
+    }
+
+    #[test]
+    fn class_cannot_be_changed_once_chosen() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // A second choice must be ignored - no re-classing mid-adventure.
+        s.choose_class(uid(1), Class::Mage);
+        assert_eq!(
+            s.players[&uid(1)].class,
+            Some(Class::Warrior),
+            "class is locked in once chosen"
+        );
+    }
+
+    #[test]
+    fn sell_batch_dumps_junk_but_keeps_upgrades_and_potions() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.move_player(uid(1), Dir::East); // to the smithy (room 3), a merchant
+        assert_eq!(s.players[&uid(1)].room, 3);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.equipped.clear();
+            // A weak weapon worn, a stronger one loose (an upgrade to keep), a
+            // weaker one loose (junk), and a potion (must survive).
+            p.equipped.insert(Slot::Weapon, 1001); // Iron Longsword
+            p.inventory = vec![1004, 1000, 1300]; // strong wpn, weak wpn, potion
+            p.gold = 0;
+        }
+        s.sell_batch(uid(1), SellBatch::NonUpgrades);
+        let p = &s.players[&uid(1)];
+        assert!(p.inventory.contains(&1300), "keeps the potion");
+        assert!(!p.inventory.contains(&1000), "sells the weaker weapon");
+        assert!(
+            p.inventory.contains(&1004) || p.equipped.values().any(|v| *v == 1004),
+            "keeps the upgrade weapon"
+        );
+        assert!(p.gold > 0, "selling junk earns gold");
     }
 
     #[test]

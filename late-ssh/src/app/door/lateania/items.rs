@@ -115,6 +115,16 @@ impl Item {
         (self.price / 2).max(1)
     }
 
+    /// A single "how good is this gear" score, for comparing two items in the
+    /// same slot. Attack and armor weigh full; HP is cheaper per point. Non-gear
+    /// scores 0. Used for upgrade highlighting and the "sell non-upgrades" batch.
+    pub fn power(&self) -> i32 {
+        match self.kind {
+            ItemKind::Equipment(_) => self.mods.attack * 3 + self.mods.armor * 3 + self.mods.max_hp,
+            _ => 0,
+        }
+    }
+
     /// A compact one-line summary of what the item does, for the inventory and
     /// shop panels: e.g. "+8 atk", "+10 hp +2 arm", "heal 30 / +20 res", or a
     /// sell-value hint for valuables.
@@ -1822,6 +1832,26 @@ mod tests {
     }
 
     #[test]
+    fn every_equippable_item_carries_real_stats() {
+        // No dead gear: every wearable item in every catalog must actually
+        // grant at least one stat, so nothing is a pure downgrade to bare hands.
+        for it in ITEMS
+            .iter()
+            .chain(frontier_items().iter())
+            .chain(reaches_items().iter())
+        {
+            if matches!(it.kind, ItemKind::Equipment(_)) {
+                assert!(
+                    it.power() > 0,
+                    "equippable item {} ({}) has no stats",
+                    it.id,
+                    it.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn crafted_goods_form_a_clean_catalog() {
         assert_eq!(
             crafted().len(),
@@ -1846,6 +1876,22 @@ mod tests {
                 c.id
             );
         }
+    }
+
+    #[test]
+    fn power_ranks_gear_and_is_zero_for_non_gear() {
+        let sword = ITEMS
+            .iter()
+            .find(|it| matches!(it.kind, ItemKind::Equipment(Slot::Weapon)))
+            .expect("a weapon exists");
+        assert!(sword.power() > 0);
+        assert!(
+            ITEMS
+                .iter()
+                .filter(|it| matches!(it.kind, ItemKind::Consumable { .. }))
+                .all(|it| it.power() == 0),
+            "consumables have no gear-power"
+        );
     }
 
     #[test]

@@ -47,6 +47,12 @@ pub enum Panel {
     Appearance,
     /// The crafting panel at a station: select a recipe and `Enter` to make it.
     Crafting,
+    /// The waystone fast-travel menu: pick a destination and `Enter` to step
+    /// through to it.
+    Portal,
+    /// The whole-world atlas: exploration progress per region (read-only,
+    /// scrollable with `[` / `]`). Toggled with `m`.
+    Map,
 }
 
 pub struct State {
@@ -225,6 +231,7 @@ impl State {
             Panel::Follow => self.view().occupants.len(),
             Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
+            Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
             Panel::Appearance => self.view().appearance.len(),
             Panel::Crafting => self.view().crafting.map(|c| c.entries.len()).unwrap_or(0),
             _ => 0,
@@ -498,6 +505,14 @@ impl State {
                     }
                 }
             }
+            Panel::Portal => {
+                if let Some(portal) = self.view().portal
+                    && let Some((_, room, _)) = portal.entries.get(self.cursor)
+                {
+                    self.svc.travel_task(self.user_id, *room);
+                    self.panel = Panel::Room;
+                }
+            }
             Panel::Appearance => self.cycle_appearance(1),
             Panel::Crafting => {
                 if let Some(cr) = self.view().crafting
@@ -508,6 +523,11 @@ impl State {
             }
             _ => {}
         }
+    }
+
+    /// Open the waystone fast-travel menu (only meaningful on a portal).
+    pub fn open_portal(&mut self) {
+        self.toggle_panel(Panel::Portal);
     }
 
     /// Cycle the highlighted appearance field forward (+1) or back (-1).
@@ -533,6 +553,13 @@ impl State {
             if let Some(row) = view.inventory.get(self.cursor) {
                 self.svc.sell_task(self.user_id, row.item_id);
             }
+        }
+    }
+
+    /// Batch-sell from the inventory panel (all / common / non-upgrades).
+    pub fn sell_batch(&mut self, kind: super::svc::SellBatch) {
+        if self.ensure_player_present() {
+            self.svc.sell_batch_task(self.user_id, kind);
         }
     }
 }
