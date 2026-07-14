@@ -735,6 +735,10 @@ impl LateaniaService {
                 if let Some(saved) = saved {
                     state.hydrate(user_id, &saved);
                 }
+                // A player materialized in the world (fresh join, not an
+                // already-present session). The lounge feed's repeat window
+                // absorbs quick leave/rejoin ping-pong.
+                svc.activity.game_started_task(user_id, ActivityGame::Mud);
             }
             state.touch(user_id);
             svc.publish(&state);
@@ -1232,6 +1236,9 @@ impl LateaniaService {
 
     fn publish_kill_outcome(&self, outcome: KillOutcome) {
         let Some(achievement) = outcome.achievement else {
+            // Ordinary mobs *and* the regional/sub-bosses stay dashboard/quest
+            // -only noise. Only the three named realm crowns (below) reach
+            // #lounge — the regional bosses fall so often they buried the feed.
             self.activity.game_won_task(
                 outcome.user_id,
                 ActivityGame::Mud,
@@ -1240,6 +1247,10 @@ impl LateaniaService {
             );
             return;
         };
+        // The named-achievement bosses are the story tier: they ship to #lounge
+        // via the structured `BossSlain` kind.
+        self.activity
+            .boss_slain_task(outcome.user_id, ActivityGame::Mud, outcome.mob_name.clone());
 
         let chip_svc = self.chip_svc.clone();
         let activity = self.activity.clone();

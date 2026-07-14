@@ -19,9 +19,7 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::profile::Profile;
 
 use crate::{
-    app::activity::{
-        channel::ACTIVITY_HISTORY_MAX_EVENTS, event::ActivityEvent, filter::ActivityFilter,
-    },
+    app::activity::event::ActivityEvent,
     app::audio::{client_state::ClientAudioState, viz::Visualizer},
     app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
@@ -113,53 +111,6 @@ fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
     crate::app::hub::aquarium::ui::top_tray_area(chat_column)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DashboardGameToggleTarget {
-    Arcade,
-    Room,
-}
-
-fn seed_activity_from_history(
-    mut activity: VecDeque<ActivityEvent>,
-    activity_feed_rx: Option<&mut broadcast::Receiver<ActivityEvent>>,
-) -> VecDeque<ActivityEvent> {
-    let Some(rx) = activity_feed_rx else {
-        return activity;
-    };
-    let newest_seed_at = activity.back().map(|event| event.at);
-    let activity_filter = ActivityFilter::dashboard();
-
-    while let Ok(event) = rx.try_recv() {
-        if newest_seed_at.is_some_and(|at| event.at <= at) {
-            continue;
-        }
-        if !activity_filter.includes(&event) {
-            continue;
-        }
-        activity.push_back(event);
-        while activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {
-            activity.pop_front();
-        }
-    }
-
-    activity
-}
-
-fn seed_room_joins_from_history(
-    mut joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
-    room_join_rx: Option<&mut crate::app::dashboard::state::DashboardRoomJoinReceiver>,
-) -> VecDeque<crate::app::dashboard::state::DashboardRoomJoin> {
-    let Some(rx) = room_join_rx else {
-        return joins;
-    };
-
-    while let Ok(join) = rx.try_recv() {
-        crate::app::dashboard::state::push_recent_room_join(&mut joins, join);
-    }
-
-    joins
-}
-
 const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
 const CURSOR_SHAPE_STEADY_UNDERLINE: &[u8] = b"\x1b[4 q";
 
@@ -230,9 +181,8 @@ pub struct SessionConfig {
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
-    pub daily_service: crate::app::daily::svc::DailyService,
-    pub rooms_service: crate::app::rooms::svc::RoomsService,
-    pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
+    pub daily_service: crate::app::lobby::daily::svc::DailyService,
+    pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
     /// enters the dartboard game from the arcade.
@@ -306,9 +256,6 @@ pub struct SessionConfig {
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    pub initial_activity: VecDeque<ActivityEvent>,
-    pub room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
-    pub initial_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
     pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
     pub permissions: Permissions,
@@ -364,7 +311,7 @@ pub struct App {
     pub(crate) show_poll_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_bonsai_v2_modal: bool,
-    pub(crate) show_daily_modal: bool,
+    pub(crate) show_lobby_modal: bool,
     pub(crate) show_ultimate_modal: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
@@ -420,19 +367,10 @@ pub struct App {
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
+    /// Live activity events, kept only to edge-detect friend joins for the
+    /// friend-online banner; the feed itself now ships to #lounge (see
+    /// `activity/lounge.rs`) and has no per-session buffer.
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
-    pub(super) activity: VecDeque<ActivityEvent>,
-    /// Mouse-wheel scroll offset for the sidebar Activity panel. `0` keeps
-    /// the newest event at the top (default); larger values scroll back
-    /// through older events. Capped at `activity.len()` each frame so
-    /// trimming the buffer can't strand the user past the end.
-    pub(crate) dashboard_activity_scroll: u16,
-    /// Last-rendered rect for the sidebar Activity panel. Set by
-    /// `activity::panel::draw_activity_inline` during draw, consumed by
-    /// mouse wheel hit-testing in `app::input`. Reset to `None` at the top
-    /// of every frame so a layout change can't leave a stale target behind.
-    pub(crate) last_dashboard_activity_rect: std::cell::Cell<Option<Rect>>,
     /// Pet-strip click targets from the last frame: the pet itself (treat),
     /// the food bowl (feed), and the water bowl (water). Reset each frame.
     pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
@@ -455,7 +393,11 @@ pub struct App {
     pub(crate) afk_user_ids: Arc<HashSet<Uuid>>,
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
-    pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// Daily board embedded match chat; separate cache because width and
+    /// visible messages differ from the other chat surfaces.
+    pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// House table embedded chat, same reasoning as the daily cache.
+    pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
@@ -469,7 +411,6 @@ pub struct App {
     pub(crate) selected_radio_station: late_core::models::user::RadioStation,
 
     pub(crate) music_prefix_armed: bool,
-    pub(crate) room_join_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
 
     /// AFK state set by /brb command. None = active.
@@ -508,7 +449,6 @@ pub struct App {
     /// Arcade Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
-    pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
     pub(crate) door_delete_confirm: bool,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
@@ -549,26 +489,13 @@ pub struct App {
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
     pub(crate) repaint_signal: Option<std::sync::Arc<crate::render_signal::RenderSignal>>,
-    /// Daily correspondence games: sidebar panel, modal, and board state.
-    pub(crate) daily: crate::app::daily::state::DailyState,
-    pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
-    pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
-    pub(crate) rooms_selected_index: usize,
-    pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
-    pub(crate) rooms_last_active_room_id: Option<Uuid>,
-    pub(crate) rooms_last_touched_room_id: Option<Uuid>,
-    pub(crate) rooms_last_touched_at: Option<Instant>,
-    pub(crate) rooms_enter_request_id: u64,
-    pub(crate) rooms_pending_enter_request_id: Option<u64>,
-    pub(crate) rooms_create_flow: Option<crate::app::rooms::backend::CreateRoomFlow>,
-    pub(crate) rooms_filter: crate::app::rooms::filter::RoomsFilter,
-    pub(crate) rooms_search_active: bool,
-    pub(crate) rooms_search_query: String,
-    pub(super) rooms_snapshot_rx:
-        tokio::sync::watch::Receiver<crate::app::rooms::svc::RoomsSnapshot>,
-    pub(super) rooms_event_rx: tokio::sync::broadcast::Receiver<crate::app::rooms::svc::RoomsEvent>,
-    pub(crate) rooms_snapshot: crate::app::rooms::svc::RoomsSnapshot,
-    pub(crate) dashboard_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
+    /// Lobby modal state spanning both game domains: cursor, claim-confirm,
+    /// unseen-challenge glow.
+    pub(crate) lobby: crate::app::lobby::state::LobbyState,
+    /// Daily correspondence games: sidebar panel and board state.
+    pub(crate) daily: crate::app::lobby::daily::state::DailyState,
+    /// House tables: the fixed multiplayer tables behind the Lobby modal.
+    pub(crate) house: crate::app::lobby::house::state::HouseState,
     pub(crate) twenty_forty_eight_state: crate::app::arcade::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::arcade::tetris::state::State,
     pub(crate) snake_state: crate::app::arcade::snake::state::State,
@@ -580,11 +507,6 @@ pub struct App {
     pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
     pub(crate) nes_cabinet_state: crate::app::arcade::nes_cabinet::state::State,
     pub(crate) traffic_state: crate::app::arcade::traffic::state::State,
-    pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
-    /// Rooms whose current pending turn already emitted a "your turn"
-    /// notification; each room is cleared once that turn passes.
-    pub(crate) rooms_turn_notified_room_ids: HashSet<Uuid>,
-    pub(crate) rooms_last_turn_scan_at: Option<Instant>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -646,9 +568,9 @@ pub struct App {
     /// flags for kitty. Seeded from TERM, refined by the XTVERSION reply.
     pub(crate) terminal_is_kitty: bool,
 
-    /// Desktop-notification domain: producers push through cloned
-    /// `notifier` handles; render drains `notify_outbox` into OSC bytes.
-    pub(crate) notifier: crate::app::notify::Notifier,
+    /// Desktop-notification domain: producers (chat, daily) push through
+    /// cloned `notifier` handles; render drains `notify_outbox` into OSC
+    /// bytes.
     pub(crate) notify_outbox: crate::app::notify::Outbox,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
@@ -691,7 +613,7 @@ impl App {
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
         self.show_bonsai_v2_modal = false;
-        self.show_daily_modal = false;
+        self.show_lobby_modal = false;
         // Real sessions land in the clubhouse; the integration suite predates
         // that and drives flows from Home, so tests start there.
         self.screen = Screen::Dashboard;
@@ -711,7 +633,7 @@ impl App {
             && !self.show_poll_modal
             && !self.show_bonsai_modal
             && !self.show_bonsai_v2_modal
-            && !self.show_daily_modal
+            && !self.show_lobby_modal
             && !self.show_ultimate_modal
             && !self.icon_picker_open
             && !self.room_search_modal_state.is_open()
@@ -723,12 +645,13 @@ impl App {
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
         match self.screen {
             Screen::Dashboard => self.chat.selected_room_id,
-            Screen::Rooms => self
-                .rooms_active_room
-                .as_ref()
-                .map(|room| room.chat_room_id),
             // The clubhouse pins the embedded chat to #lounge.
             Screen::Clubhouse => self.chat.lounge_room_id(),
+            // The daily board's match chat; None while spectating or before
+            // the row loads.
+            Screen::DailyMatch => self.daily.board_chat_room_id(),
+            // The open house table's permanent chat room.
+            Screen::HouseTable => self.house.chat_room_id(),
             _ => None,
         }
     }
@@ -751,7 +674,7 @@ impl App {
         self.splash_hint = hint.into();
     }
 
-    pub fn new(mut config: SessionConfig) -> anyhow::Result<Self> {
+    pub fn new(config: SessionConfig) -> anyhow::Result<Self> {
         let (cols, rows) = if config.cols == 0 || config.rows == 0 {
             tracing::warn!(
                 config.cols,
@@ -763,11 +686,6 @@ impl App {
             (config.cols, config.rows)
         };
         tracing::debug!(cols, rows, "initializing app");
-
-        let activity =
-            seed_activity_from_history(config.initial_activity, config.activity_feed_rx.as_mut());
-        let mut dashboard_room_joins =
-            seed_room_joins_from_history(config.initial_room_joins, config.room_join_rx.as_mut());
 
         let shared = SharedBuffer::default();
         let backend = CrosstermBackend::new(shared.clone());
@@ -894,13 +812,11 @@ impl App {
             config.initial_traffic_track_scores,
             config.initial_traffic_high_score,
         );
-        let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
-        let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
-        crate::app::dashboard::state::seed_persisted_room_joins_from_rooms(
-            &mut dashboard_room_joins,
-            &rooms_snapshot,
+        let daily = crate::app::lobby::daily::state::DailyState::new(
+            config.daily_service.clone(),
+            config.user_id,
+            notifier.clone(),
         );
-        let rooms_event_rx = config.rooms_service.subscribe_events();
         let dartboard_server = config.dartboard_server.clone();
         let dartboard_provenance = config.dartboard_provenance.clone();
         let artboard_snapshot_service = config.artboard_snapshot_service.clone();
@@ -1054,7 +970,7 @@ impl App {
             show_poll_modal: false,
             show_bonsai_modal: false,
             show_bonsai_v2_modal: false,
-            show_daily_modal: false,
+            show_lobby_modal: false,
             show_ultimate_modal: false,
             login_announcements: config.initial_announcements,
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -1098,10 +1014,6 @@ impl App {
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
-            room_join_rx: config.room_join_rx,
-            activity,
-            dashboard_activity_scroll: 0,
-            last_dashboard_activity_rect: std::cell::Cell::new(None),
             last_pet_strip_pet_rect: std::cell::Cell::new(None),
             last_pet_strip_food_rect: std::cell::Cell::new(None),
             last_pet_strip_water_rect: std::cell::Cell::new(None),
@@ -1133,7 +1045,8 @@ impl App {
             afk_user_ids: crate::state::afk_users_snapshot(&afk_users),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
-            rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
@@ -1142,7 +1055,6 @@ impl App {
             selected_icecast_stream: config.initial_icecast_stream,
             selected_radio_station: config.initial_radio_station,
             music_prefix_armed: false,
-            room_join_prefix_armed: false,
             room_section_prefix_armed: false,
             afk: None,
             afk_muted: false,
@@ -1174,7 +1086,6 @@ impl App {
             ),
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
-            dashboard_game_toggle_target: None,
             door_delete_confirm: false,
             games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,
@@ -1201,28 +1112,13 @@ impl App {
             dopewars_port: config.dopewars_port,
             dopewars_secret: config.dopewars_secret,
             repaint_signal: None,
-            daily: crate::app::daily::state::DailyState::new(
-                config.daily_service,
+            lobby: crate::app::lobby::state::LobbyState::new(&daily),
+            daily,
+            house: crate::app::lobby::house::state::HouseState::new(
                 config.user_id,
+                config.house_registry,
                 notifier.clone(),
             ),
-            rooms_service: config.rooms_service,
-            room_game_registry: config.room_game_registry,
-            rooms_selected_index: 0,
-            rooms_active_room: None,
-            rooms_last_active_room_id: None,
-            rooms_last_touched_room_id: None,
-            rooms_last_touched_at: None,
-            rooms_enter_request_id: 0,
-            rooms_pending_enter_request_id: None,
-            rooms_create_flow: None,
-            rooms_filter: crate::app::rooms::filter::RoomsFilter::default(),
-            rooms_search_active: false,
-            rooms_search_query: String::new(),
-            rooms_snapshot_rx,
-            rooms_event_rx,
-            rooms_snapshot,
-            dashboard_room_joins,
             twenty_forty_eight_state,
             tetris_state,
             snake_state,
@@ -1234,9 +1130,6 @@ impl App {
             minesweeper_state,
             nes_cabinet_state,
             traffic_state,
-            active_room_game: None,
-            rooms_turn_notified_room_ids: HashSet::new(),
-            rooms_last_turn_scan_at: None,
             dartboard_state: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,
@@ -1258,7 +1151,6 @@ impl App {
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
             terminal_is_kitty,
-            notifier,
             notify_outbox,
             is_draining: config.is_draining,
             icon_picker_open: false,
@@ -1672,6 +1564,11 @@ impl App {
 
         if self.screen == Screen::DailyMatch && screen != Screen::DailyMatch {
             self.daily.close_board();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::HouseTable && screen != Screen::HouseTable {
+            self.house.close();
             self.force_full_repaint();
         }
 
@@ -2128,11 +2025,6 @@ impl App {
     /// The voice channel the user can currently join, based on the visible
     /// chat or active game surface.
     pub fn active_voice_channel(&self) -> Option<Uuid> {
-        if let Screen::Rooms = self.screen
-            && let Some(room) = self.rooms_active_room.as_ref()
-        {
-            return room.voice_channel_id;
-        }
         let room_id = self.current_visible_chat_room_id()?;
         self.chat.room_voice_channel_id(room_id)
     }
@@ -2452,39 +2344,6 @@ mod tests {
     fn shared_buffer_default_is_empty() {
         let buf = SharedBuffer::default();
         assert!(buf.take().is_empty());
-    }
-
-    #[test]
-    fn seed_activity_from_history_drops_events_already_in_history() {
-        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-        let event = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
-        tx.send(event.clone()).expect("send activity");
-        let mut history = VecDeque::new();
-        history.push_back(event);
-
-        let activity = seed_activity_from_history(history, Some(&mut rx));
-
-        assert_eq!(activity.len(), 1);
-        assert_eq!(activity[0].username, "alice");
-    }
-
-    #[test]
-    fn seed_activity_from_history_keeps_events_newer_than_history() {
-        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-        let old = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
-        let mut history = VecDeque::new();
-        history.push_back(old);
-        let mut fresh = ActivityEvent::joined(uuid::Uuid::from_u128(1), "bob");
-        fresh.at = history.back().map_or(fresh.at, |event| {
-            event.at + std::time::Duration::from_secs(1)
-        });
-        tx.send(fresh).expect("send activity");
-
-        let activity = seed_activity_from_history(history, Some(&mut rx));
-
-        assert_eq!(activity.len(), 2);
-        assert_eq!(activity[0].username, "alice");
-        assert_eq!(activity[1].username, "bob");
     }
 
     #[test]

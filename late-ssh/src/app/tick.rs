@@ -1,9 +1,7 @@
 use std::time::Instant;
 
 use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC};
-use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::event::ActivityKind;
-use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
 use crate::app::files::inline_image::InlineImageRenderSettings;
@@ -33,6 +31,17 @@ impl App {
 
         self.sync_visible_chat_room();
         self.tick_clubhouse();
+
+        // Expire a stale paired-clipboard wait here rather than inside
+        // chat.tick(): the registry slot must be cancelled along with it, so
+        // a late CLI response can't satisfy a newer request or an armed slot
+        // linger after the banner already reported the timeout.
+        if let Some(b) = self.chat.expire_pending_clipboard_image_upload() {
+            if let Some(registry) = &self.paired_client_registry {
+                registry.cancel_clipboard_request(&self.session_token);
+            }
+            self.banner = Some(b);
+        }
 
         // Services
         if let Some(b) = self.chat.tick() {
@@ -258,14 +267,34 @@ impl App {
                 _ => (),
             }
         }
-        if let Some(active_room_game) = &mut self.active_room_game {
-            active_room_game.tick();
-        }
-        if let Some(b) = self.tick_rooms() {
-            self.banner = Some(b);
-        }
         if let Some(b) = self.daily.tick() {
             self.banner = Some(b);
+        }
+        // Modal cursor, pending claim, and glow follow the daily snapshot.
+        self.lobby.sync(&self.daily);
+        // The match chat room id only becomes known once the board's row
+        // loads, so the visible-room sync (read marker + tail) and the
+        // one-time idempotent join both key off the loaded detail here
+        // rather than off the screen switch.
+        if self.screen == crate::app::common::primitives::Screen::DailyMatch {
+            self.sync_visible_chat_room();
+            if let Some(chat_room_id) = self.daily.board_chat_room_id()
+                && let Some(board) = self.daily.board.as_mut()
+                && !board.chat_join_requested
+            {
+                board.chat_join_requested = true;
+                self.chat.join_game_room_chat(chat_room_id);
+            }
+        }
+        self.house.tick();
+        if self.screen == crate::app::common::primitives::Screen::HouseTable {
+            self.sync_visible_chat_room();
+            if let Some(chat_room_id) = self.house.chat_room_id()
+                && !self.house.chat_join_requested
+            {
+                self.house.chat_join_requested = true;
+                self.chat.join_game_room_chat(chat_room_id);
+            }
         }
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
@@ -586,11 +615,7 @@ impl App {
                 let _ = state.save();
             }
         }
-        if let Some(balance) = self
-            .active_room_game
-            .as_ref()
-            .and_then(|game| game.chip_balance())
-        {
+        if let Some(balance) = self.house.client().and_then(|client| client.chip_balance()) {
             self.chip_balance = balance;
         }
 
@@ -608,13 +633,13 @@ impl App {
             self.leaderboard = rx.borrow_and_update().clone();
             if let Some(&balance) = self.leaderboard.user_chips.get(&self.user_id)
                 && self
-                    .active_room_game
-                    .as_ref()
-                    .is_none_or(|game| game.can_sync_external_chip_balance())
+                    .house
+                    .client()
+                    .is_none_or(|client| client.can_sync_external_chip_balance())
             {
                 self.chip_balance = balance;
-                if let Some(active_room_game) = &mut self.active_room_game {
-                    active_room_game.sync_external_chip_balance(balance);
+                if let Some(client) = self.house.client_mut() {
+                    client.sync_external_chip_balance(balance);
                 }
             }
         }
@@ -650,13 +675,14 @@ impl App {
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
             && self
-                .active_room_game
-                .as_ref()
-                .is_none_or(|game| game.can_sync_external_chip_balance())
+                .house
+                .client()
+                .is_none_or(|client| client.can_sync_external_chip_balance())
         {
             self.chip_balance = self.shop_state.balance();
-            if let Some(active_room_game) = &mut self.active_room_game {
-                active_room_game.sync_external_chip_balance(self.chip_balance);
+            let balance = self.chip_balance;
+            if let Some(client) = self.house.client_mut() {
+                client.sync_external_chip_balance(balance);
             }
         }
 
@@ -676,21 +702,16 @@ impl App {
             self.bonsai_care_state.tick();
         }
 
+        // The activity feed subscription survives the retired sidebar panel
+        // for one job: edge-detecting friend joins for the friend-online
+        // banner. The public feed itself ships to #lounge (activity/lounge).
         if let Some(rx) = &mut self.activity_feed_rx {
-            let activity_filter = ActivityFilter::dashboard();
             while let Ok(event) = rx.try_recv() {
-                if !activity_filter.includes(&event) {
-                    continue;
-                }
                 if matches!(&event.kind, ActivityKind::UserJoined)
                     && let Some(user_id) = event.user_id
                     && let Some(b) = self.chat.note_friend_join(user_id, &event.username)
                 {
                     self.banner = Some(b);
-                }
-                self.activity.push_back(event);
-                if self.activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {
-                    self.activity.pop_front();
                 }
             }
         }

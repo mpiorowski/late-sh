@@ -26,7 +26,6 @@ use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
 use crate::app::activity::event::ActivityEvent;
-use crate::app::dashboard::state::DashboardRoomJoinReceiver;
 use crate::app::{
     common::theme,
     state::{App, SessionConfig},
@@ -36,6 +35,7 @@ use crate::metrics;
 use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
+use crate::terminal_size::clamp_terminal_size;
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 const PROXY_V1_MAX_LEN: usize = 108;
@@ -83,7 +83,6 @@ struct ClientHandler {
 
     /// Activity feed
     activity_feed_rx: Option<tokio::sync::broadcast::Receiver<ActivityEvent>>,
-    room_join_rx: Option<DashboardRoomJoinReceiver>,
 
     /// Session bindings
     channel: Option<Channel<Msg>>,
@@ -290,7 +289,6 @@ impl Server {
             user: None,
             is_new_user: false,
             activity_feed_rx: None,
-            room_join_rx: None,
             transport_peer_addr,
             peer_addr: effective_peer_addr,
             peer_ip,
@@ -621,7 +619,6 @@ impl russh::server::Handler for ClientHandler {
 
         self.user = Some(user);
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
-        self.room_join_rx = Some(self.state.room_join_feed.subscribe());
         let _ = self
             .state
             .activity_feed
@@ -677,6 +674,17 @@ impl russh::server::Handler for ClientHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(term, col_width, row_height, "pty requested");
+        let terminal_size = clamp_terminal_size(col_width, row_height);
+        if terminal_size.clamped {
+            tracing::warn!(
+                term,
+                reported_cols = col_width,
+                reported_rows = row_height,
+                cols = terminal_size.cols,
+                rows = terminal_size.rows,
+                "clamped oversized pty dimensions"
+            );
+        }
         let session_token = self.ensure_cli_session().await?;
         self.track_active_session_token(&session_token);
         let session_rx = self
@@ -822,8 +830,8 @@ impl russh::server::Handler for ClientHandler {
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
         let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
-            cols: col_width as u16,
-            rows: row_height as u16,
+            cols: terminal_size.cols,
+            rows: terminal_size.rows,
             term: term.to_string(),
 
             // Services / data sources
@@ -863,8 +871,7 @@ impl russh::server::Handler for ClientHandler {
             lateania_service: self.state.lateania_service.clone(),
             greendragon_service: self.state.greendragon_service.clone(),
             daily_service: self.state.daily_service.clone(),
-            rooms_service: self.state.rooms_service.clone(),
-            room_game_registry: self.state.room_game_registry.clone(),
+            house_registry: self.state.house_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
             dartboard_provenance: self.state.dartboard_provenance.clone(),
             artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
@@ -929,9 +936,6 @@ impl russh::server::Handler for ClientHandler {
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
-            initial_activity: self.state.activity_history.lock_recover().clone(),
-            room_join_rx: self.room_join_rx.take(),
-            initial_room_joins: self.state.room_join_history.lock_recover().clone(),
             initial_announcements,
             user_id,
             permissions,
@@ -1231,12 +1235,22 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(col_width, row_height, "window resize");
+        let terminal_size = clamp_terminal_size(col_width, row_height);
+        if terminal_size.clamped {
+            tracing::warn!(
+                reported_cols = col_width,
+                reported_rows = row_height,
+                cols = terminal_size.cols,
+                rows = terminal_size.rows,
+                "clamped oversized window resize"
+            );
+        }
         let Some(app) = self.app.as_ref() else {
             return Ok(());
         };
         {
             let mut app = app.lock().await;
-            if let Err(e) = app.resize(col_width as u16, row_height as u16) {
+            if let Err(e) = app.resize(terminal_size.cols, terminal_size.rows) {
                 tracing::error!(error = ?e, "error resizing app");
             }
             if let Some(signal) = self.render_signal.as_ref() {

@@ -171,6 +171,19 @@ impl UserDrinks {
         Self::record(client, user_id, points, 0).await
     }
 
+    /// Record one glass of a bought round: `points` of buzz, with `tab` chips
+    /// attributed to this row. The payer's own glass carries the round's full
+    /// price so their `lifetime_spent` matches the chip ledger; everyone
+    /// else's rides at 0.
+    pub async fn record_round_pour(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        points: i64,
+        tab: i64,
+    ) -> Result<Self> {
+        Self::record(client, user_id, points, tab).await
+    }
+
     pub async fn find(client: &Client, user_id: Uuid) -> Result<Option<Self>> {
         let row = client
             .query_opt("SELECT * FROM user_drinks WHERE user_id = $1", &[&user_id])

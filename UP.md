@@ -67,6 +67,16 @@ happened inside late.sh.
 - Daily one-line digest for the grind volume ("2,314 mobs slain by 9
   adventurers; mira hit level 30").
 - Styled dim/one-line, reactable/replyable like normal messages.
+- 2026-07-12 landed (v1): the activity feed ships to #lounge as persisted
+  system lines from a `system` bot user — dim, authorless, one row each,
+  consecutive lines stack with no gap, reactable/replyable, excluded from
+  unread badges. Routing is one exhaustive match (`activity/filter.rs::
+  lounge_includes`): joins, table-game sits (new `SatDown` event from every
+  room game), door-game stories (new Lateania `GameStarted` on world entry
+  and `BossSlain` on every boss/sub-boss kill; NetHack/Green Dragon events
+  as-is), match wins, bonsai losses. Per-hand gambling wins, arcade solo
+  solves, per-mob kills, and waterings stay out. Not yet: the hourly budget
+  and the daily digest (only a 10-minute per-user-per-shape repeat window).
 
 ### 3. Surface games in the sidebar / clean up the sidebar
 - A "Today" card: your open duels/challenges, today's featured game, live
@@ -83,6 +93,13 @@ happened inside late.sh.
   modal and play mini-game removed); aquarium became a persistent 12-row
   top tray on /aquarium (Ctrl+Q/Ctrl+F freed); hub reordered to Quests,
   Shop, Leaderboard, Events with Chat first inside Shop.
+- 2026-07-12 landed: the Activity panel is retired (one less panel and one
+  less toggle; stale stored "activity" keys dropped on read). Presence
+  became core chrome: the pinned clock grew into a two-row block (online
+  count left + clock right, then connected friends or the AFK line, both
+  rows always reserved so panels never shift). Bonsai is now the flexible
+  fill panel — the tree scales into leftover rows. The freed flexibility is
+  where the future "Today" card can land.
 
 ### 4. Chips: real reasons to spend
 Benchmark everything against the drink (100-1000 chips, hours of visible

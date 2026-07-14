@@ -275,6 +275,22 @@ pub fn blit_screen(buf: &mut Buffer, area: Rect, screen: &vt100::Screen) {
             );
         }
     }
+
+    // The physical terminal cursor is hidden app-wide (`cursor::Hide`), and this
+    // is a pure buffer blit with no access to the ratatui hardware cursor, so a
+    // parked cursor would otherwise be invisible. Draw it ourselves as a
+    // reverse-video block over its cell — authentic to a real terminal (NetHack
+    // keeps the cursor on your `@`) and the only way look/travel mode (`;`, `_`),
+    // which navigate purely by moving the cursor, are visible at all.
+    if !screen.hide_cursor() {
+        let (row, col) = screen.cursor_position();
+        if row < area.height
+            && col < area.width
+            && let Some(dst) = buf.cell_mut((area.x + col, area.y + row))
+        {
+            dst.set_style(dst.style().add_modifier(Modifier::REVERSED));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -320,5 +336,25 @@ mod tests {
     #[test]
     fn default_color_maps_to_reset() {
         assert_eq!(to_ratatui_color(vt100::Color::Default), Color::Reset);
+    }
+
+    #[test]
+    fn visible_cursor_is_drawn_as_a_reversed_block() {
+        // Park the cursor at row 0, col 2 (CUP is 1-based) with it shown.
+        let p = parser(2, 5, b"\x1b[?25h\x1b[1;3H");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 2));
+        blit_screen(&mut buf, Rect::new(0, 0, 5, 2), p.screen());
+        assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+        // A cell the cursor is not on stays un-reversed.
+        assert!(!buf[(0, 0)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn hidden_cursor_draws_no_block() {
+        // ESC[?25l hides the cursor; nothing should be reversed.
+        let p = parser(2, 5, b"\x1b[?25l\x1b[1;3H");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 2));
+        blit_screen(&mut buf, Rect::new(0, 0, 5, 2), p.screen());
+        assert!(!buf[(2, 0)].modifier.contains(Modifier::REVERSED));
     }
 }

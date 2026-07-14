@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-07-05
+- Last updated: 2026-07-12 (report-only `#bugs`/`#suggestions`: `/bug` and `/suggest` post marker-bodied report cards; free text there is staff-only)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -15,9 +15,9 @@ This file owns chat-specific context that used to make the root `CONTEXT.md` too
 
 Included here:
 - Home chat rooms, DMs, public/private topic rooms, synthetic entries, and game-backed room chat.
-- Home/Dashboard chat center, room rail, and embedded Rooms chat surfaces.
+- Home/Dashboard chat center, room rail, and the embedded game-chat surfaces (house tables, daily match boards).
 - Message composer, replies, edits, deletes, reactions, pinned messages, ignores, overlays, and autocomplete.
-- Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot; enabled chat/game rooms render an embedded voice strip and expose `/voice`/`/mute` controls. Showcase/Projects and Work/Profiles still use chat-adjacent services/state, but their UI is hosted on Directory page 7.
+- Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles still use chat-adjacent services/state, but their UI is hosted on Directory page 7.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
 
 Global SSH, audio, games, profile, rooms/blackjack, observability, and repo-wide test policy stay in the root context.
@@ -32,7 +32,7 @@ late-ssh/src/app/chat/
 |-- action.rs                    # Shared CTCP-style `/me` action encoding/parsing
 |-- svc.rs                       # ChatService: DB boundary, snapshots, events, room/message tasks
 |-- state.rs                     # ChatState: local UI state, receivers, composer, room/message selection
-|-- input.rs                     # Home chat input plus shared message actions used by Dashboard/Rooms
+|-- input.rs                     # Home chat input plus shared message actions used by Dashboard and embedded game chat
 |-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
@@ -71,7 +71,7 @@ Chat-owned moderation commands also use `room_ban.rs`,
 
 - `svc.rs` is the async boundary between TUI state, DB models, mention notifications, and broadcast/watch channels.
 - `state.rs` owns local chat data, room/message selection, composer state, reply/edit/reaction/pin state, overlays, synthetic-entry substates, unread/read tracking, and cache inputs.
-- `input.rs` maps Home chat keys to state/service actions. `handle_message_action_in_room` is shared by Home chat and embedded Rooms chat.
+- `input.rs` maps Home chat keys to state/service actions. `handle_message_action_in_room` is shared by Home chat and the embedded game-chat panes.
 - `ui.rs` renders Home room rail/chat center surfaces and owns `ChatRowsCache`.
 - `ui_text.rs` centralizes wrapping for normal messages, the small Markdown subset, reply quotes, `---NEWS---` cards, and reaction footers.
 
@@ -107,6 +107,8 @@ Normal display flow:
 
 Room tails carry `last_read_at` so render can insert one synthetic `new messages` divider before the first unread message authored by someone else. The divider is render-only state in the chat row cache; do not persist it or count it as a chat message.
 
+System-feed lines: the `#lounge` activity feed (`app/activity/lounge.rs`) posts persisted messages authored by the `system` bot user (`SYSTEM_USERNAME`) with the `· ` body prefix. Rendering treats a message as a system line only when BOTH hold — author is the feed bot (`ui.rs::is_system_author`) and the body parses via `ui_text.rs::parse_system_line` — so neither a human squatting a nick nor a pasted `· ` can spoof the style. A system line renders as exactly one authorless, timestampless dim row (truncated, never wrapped: `wrap_system_to_lines`), and consecutive system lines stack with no blank separator regardless of the 120s continuation window (`prev_was_system` in `ensure_chat_rows_cache`). They are reactable/replyable/pinnable like any message, admins can delete them, they are excluded from unread counts at the SQL layer (`ChatRoomMember::unread_counts_for_user` skips `settings.system` authors), and their bodies never contain `@` so no mentions fire. IRC projects them as ordinary PRIVMSGs from the `system` nick.
+
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
 
 Login announcements:
@@ -124,7 +126,7 @@ Room model:
 - `lounge` must have slug `lounge`, is public, auto-join, and permanent.
 - `language` rooms are public, opt-in, unique by `language_code`, with slug `lang-{code}`.
 - `topic` rooms are unique by `(visibility, slug)`.
-- `game` rooms are public, opt-in, require `game_kind + slug`, are unique by `(game_kind, slug)`, and DB constraints require `auto_join = false`.
+- `game` rooms require `game_kind + slug`, are unique by `(game_kind, slug)`, and DB constraints require `auto_join = false`. Two flavors: permanent public house-table rooms (slugs `poker`/`blackjack`/`maze`/`tron`, seeded at startup by `HouseTableRegistry::ensure_chat_rooms`), and private two-player daily match chats (slug `daily-{match_id}`, created in the daily claim transaction with both memberships — see `late-ssh/src/app/lobby/daily/CONTEXT.md`). `ChatService::join_game_room` joins public game rooms freely but rejects non-members for private ones (`this match chat is players only`); daily players are already members, so their "join" is only the idempotent re-join that triggers the list/tail refresh chain.
 - DMs canonicalize endpoint UUIDs by text order and are unique by `(dm_user_a, dm_user_b)`.
 
 Membership:
@@ -163,11 +165,11 @@ Notifications:
 
 ## 6. Rooms And Selection
 
-`RoomSlot` represents either a real room or one of the Home synthetic entries: RSS (`RoomSlot::Feeds`), News, Notifications/Mentions, or Discover. `RoomSlot::Showcase` and `RoomSlot::Work` remain in code for state compatibility and focused helpers, but they are no longer emitted by Home visual order, room rail, or room jump. Voice is rendered as an embedded strip on voice-enabled rooms, not as its own room slot.
+`RoomSlot` represents either a real room or one of the Home synthetic entries: RSS (`RoomSlot::Feeds`), News, Notifications/Mentions, or Discover. `RoomSlot::Showcase` and `RoomSlot::Work` remain in code for state compatibility and focused helpers, but they are no longer emitted by Home visual order, room rail, or room jump. The `#voice` room is a normal `RoomSlot::Room` (a permanent public room, pinned at the bottom of Core directly above Discover in both `state.rs::visual_order_for_rooms` and the `ui.rs` hit-test mirror), matched by slug `voice`; being permanent is what keeps it in Core rather than sorting into Channels (which excludes slug `voice`). Voice-enabled rooms additionally render an embedded voice strip when open.
 
 Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`. The base navigation order is:
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
-2. Core permanent rooms plus synthetic updates: `lounge`, `announcements`, `suggestions`, `bugs`, Notifications/Mentions, News, RSS when available, and Discover / `+ browse rooms` last. Collapsing Core hides these synthetic update entries too (Discover included).
+2. Core permanent rooms plus synthetic updates: `lounge`, `announcements`, `suggestions`, `bugs`, Notifications/Mentions, News, RSS when available, the permanent `#voice` room (matched by slug, directly above Discover), and Discover / `+ browse rooms` last. Collapsing Core hides these synthetic update entries too (Discover included). A `#voice` room that is not permanent shows nowhere: Core requires `permanent` and Channels excludes slug `voice`, so promote it with `/create-room voice`.
 3. Other non-DM chat-list rooms/channels, excluding favorites.
 4. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
 
@@ -179,10 +181,12 @@ RSS:
 - RSS subscriptions are per-user and managed in `Settings -> RSS`.
 - `rss_feeds` stores connected RSS/Atom URLs; `rss_entries` stores private pending entries.
 - The background `FeedService` polls active feeds, parses a conservative RSS/Atom subset, stores unseen entries, and publishes per-user events.
+- Feed URLs are user-supplied, so fetches go through the SSRF-guarded downloader (`files::image_upload::download_url_bytes_following_redirects`): private/link-local/reserved resolved IPs rejected, DNS pinned, every redirect hop re-validated (up to 5 hops; feeds legitimately redirect), 1 MB body cap. Do not swap in a plain `reqwest::Client`.
+- The visible entry list is capped per feed (`PER_FEED_ENTRY_LIMIT`, 20) inside the flat `ENTRY_LIMIT` (100) window via `RssEntry::list_visible_for_user`, so a high-volume feed (news site, ~20 posts/day) cannot evict weekly/monthly feeds from the inbox.
 - The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#lounge` announcement.
 - Enter copies the selected RSS entry URL, `d` dismisses it, and `r` asks the RSS poller to refresh.
 
-Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.
+Game rooms stay in `ChatState.rooms` for the embedded game-chat panes, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.
 
 Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
@@ -207,16 +211,15 @@ Room favorites:
 - Favorites are no longer edited through a Settings tab.
 - Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
-Home hot-room shortcuts:
-- The top activity/multiplayer/quest strip was removed; the online count + activity feed moved to the right sidebar's Activity panel (`app/activity/panel.rs`). `dashboard::ui::recent_dashboard_rooms(..., 4)` survives only for the recent-room jump keys.
-- `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
+Home presence:
+- The top activity/multiplayer/quest strip was removed; presence (online count + connected friends) lives in the right sidebar's pinned core block, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`; the sidebar Activity panel is retired). The `b1`-`b4` recent-room jump keys died with the Rooms demolition.
 
-`App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.
+`App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from the current screen (Home/Dashboard, house table, daily board, Clubhouse), stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or open-surface changes.
 
 There are separate `ChatRowsCache` instances on `App` for:
 - Home lounge dashboard chat.
 - Home chat center for the selected real room/synthetic entry.
-- Rooms embedded chat.
+- Embedded game chat (house tables, daily match boards).
 
 Do not share a row cache across surfaces unless width and visible messages are guaranteed identical.
 
@@ -226,7 +229,7 @@ Do not share a row cache across surfaces unless width and visible messages are g
 
 The main composer is a `ratatui_textarea::TextArea<'static>`.
 
-`composer_room_id` is the authoritative send target while composing. This matters because Home and Rooms do not necessarily drive `selected_room_id` in the same way.
+`composer_room_id` is the authoritative send target while composing. This matters because Home and the embedded game surfaces do not necessarily drive `selected_room_id` in the same way.
 
 `/me <action>` stores a CTCP-style action body through `chat/action.rs` and renders locally as italic `* name action`; IRC delivery unwraps it into the same readable action text. Keep new action handling on the shared helpers so TUI and IRC stay aligned.
 
@@ -279,6 +282,7 @@ User commands:
 - `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
 - `/petname [name]` shows or sets the user's cat name; `/petname clear` removes it.
 - `/brb [message]` posts a short away message to the active composer room, marks the session away in the sidebar, publishes a moon badge next to that user's chat name for everyone while any active session is away, and mutes paired audio if it was not already muted. Sending a normal chat message clears away state for that session and only unmutes paired audio when `/brb` performed the mute.
+- `/bug <text>` and `/suggest <text>` post a report card into `#bugs` / `#suggestions` regardless of the composer's current room (`ChatService::send_report_task` resolves the room by slug and joins the caller first). A report is a normal chat message whose body starts with `ReportKind::marker()` (`---BUG---` / `---SUGGESTION---`, same trick as `---NEWS---` cards), so reactions, replies, pins, and deletes work unchanged; `ui_text::wrap_report_to_lines` renders the card. Text under 10 chars (`REPORT_MIN_CHARS`) banners usage instead of posting. Those two rooms are report-only: `send_message` rejects free-text sends from non-staff (`report-only:<slug>` error, covers IRC too since it checks the DB slug), while admins/moderators keep plain text so they can reply under a report; everyone keeps reactions ("+1"). The staff-flag DB lookup runs only on that rare gated path.
 - `/coffee` and `/tea` post a small ASCII-cup chat message to the current room as a coffee/tea-break ritual. No arguments. Steam pattern rotates per invocation through `CUP_VARIANT_COUNT` variants tracked on `ChatState::next_cup_variant` (session-local, not persisted). Routes through the normal `send_message_with_reply_task` send path — the body is a regular chat message subject to the same length/visibility rules.
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
@@ -289,7 +293,7 @@ User commands:
 - `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.
 
 Admin commands:
-- `/create-room #room` creates a permanent auto-join room and bulk-adds existing users. It is idempotent on rooms that are already permanent, but it refuses to promote an existing non-permanent public room: promotion would bulk-add every user to a room nobody can leave, and a mistyped slug must not be able to do that to a user-created `/public` room.
+- `/create-room #room` creates a permanent auto-join room and bulk-adds existing users. It is idempotent on rooms that are already permanent, and it promotes an existing non-permanent public room to permanent + auto-join (`ChatRoom::ensure_permanent` UPDATEs the row, then the caller bulk-adds users) — this is how a user-created `/public #voice` room becomes the permanent `#voice` core room. Because promotion bulk-adds every user to a room nobody can leave, `/create-room` is admin-only and a mistyped slug will promote whatever public room matches it.
 - `/delete-room #room` deletes a permanent room.
 - `/fill-room #room` bulk-adds all users to an existing public room and flips `auto_join=true`; private rooms cannot be filled.
 
@@ -339,7 +343,8 @@ Image uploads and inline rendering:
 - `/upload <url>` is the explicit URL upload path: it downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send and preview.
 - `/paste-image` is the explicit paired-CLI clipboard path. It requires an updated `late` paired client, not just browser pairing or plain `ssh`.
 - Non-admin uploads use a per-session `ChatState` cooldown. This is intentionally lightweight, not a server-side quota.
-- URL downloads for upload and inline rendering must go through `files::image_upload::download_url_bytes`: validate `http(s)`, reject localhost/private/link-local/reserved resolved IPs, pin reqwest DNS to the validated addresses, disable redirects, and stream with a hard byte cap. Do not add new ad hoc `reqwest.get(url).bytes()` paths for chat images.
+- URL downloads for upload and inline rendering must go through `files::image_upload::download_url_bytes`: validate `http(s)`, reject localhost/private/link-local/reserved resolved IPs, pin reqwest DNS to the validated addresses, disable redirects, and stream with a hard byte cap. Do not add new ad hoc `reqwest.get(url).bytes()` paths for chat images. Fetchers that must follow redirects (RSS feeds) use `download_url_bytes_following_redirects`, which re-validates every hop.
+- Paired clipboard uploads are request-gated: `PairedClientRegistry::request_clipboard_image` records an outstanding request per token, and the pair WS handler drops any inbound `clipboard_image`/`clipboard_image_failed` payload whose token has no outstanding request (`take_clipboard_request`). This keeps a rogue paired client from queuing multi-MB decoded images into the bounded per-session channel.
 - Inline image rendering detects likely image URLs in visible room messages, fetches them through the same secure downloader, rejects oversized decoded dimensions, retries transient failures with backoff, and caches an `InlineImagePreview` by message id. Inline previews are only the RGB block fallback used by scrolling chat rows. Kitty/iTerm2/Sixel native image data is fetched separately, lazily, only while the explicit selected-message image modal is open on a supported terminal. Inline previews are best-effort; failures are intentionally silent/noisy only at trace level.
 - Kitty, iTerm2, and Sixel image support is intentionally narrow and modal-only. `files::terminal_image` detects Kitty-family terminals from PTY `TERM`, XTVERSION, and forwarded env hints: Kitty, Ghostty, Rio, Warp, and Konsole. It detects iTerm2-family support from `TERM_PROGRAM`/`LC_TERMINAL`, XTVERSION, `TERM_FEATURES`, `OSC 1337;Capabilities`, and env hints for iTerm2, WezTerm, mintty, and hterm-style identities. It detects Sixel from explicit identities (`windows terminal`, `foot`, `contour`, `mlterm`, `sixel`), `WT_SESSION`/`WT_PROFILE_ID` env hints, and DA1 (Primary Device Attributes) replies advertising attribute 4 — the DA1 probe is sent last at alt-screen entry and only fills in Sixel when no richer protocol was detected, so Kitty/iTerm2 always win over Sixel. If `TERM` is tmux, full image previews are intentionally disabled and chat uses the RGB block fallback; no tmux graphics passthrough is attempted. Unsupported or undetected terminals, including stock Alacritty, keep the RGB block preview. Kitty images use late.sh-owned ids in the `0x4C000000..0x4CFFFFFF` range plus a dedicated z-index so cleanup can target them by range/z-index as well as by visible placement. Sixel payloads are generated only for Sixel sessions, use adaptive palette fallback, and fail back to the RGB block preview if the final payload still exceeds the hard byte cap. Because Sixel has no terminal-side scaling, the image modal reports its image cell capacity into `TerminalImageFrame` during draw, the render loop feeds it back into chat state, and Sixel fetches encode to fit that capacity (first fetch is deferred one frame after the modal opens until capacity is known; a cached Sixel encode that no longer fits, e.g. after shrink, is re-fetched at the new capacity). A forced repaint resets terminal image placement state so modal images are re-emitted after clear/resize/drop recovery. Direct terminals get Kitty cleanup commands on enter/leave alt-screen. Alt-screen enter/leave and forced full repaint begin with an ST terminator so a killed session that left iTerm2/Sixel inside an unterminated DCS/OSC image payload can recover before normal clear/repaint bytes. Closing an iTerm2 or Sixel image modal forces a full repaint because those inline images are not tracked/deleted like Kitty placements.
 
@@ -388,7 +393,7 @@ Ignores:
 - `users.settings.ignored_user_ids` stores UUIDs, not usernames.
 - `users.settings.friend_user_ids` stores private one-way friend marks as UUIDs.
 - `/ignore @user` and `/unignore @user` resolve usernames at command time.
-- A message is hidden if its author is ignored, OR if `chat_messages.reply_to_user_id` is an ignored user. The latter hides bot/automated replies directed at an ignored user so they cannot be heard by proxy through `@bot`/`@graybeard`/`@dealer`. Only bots set `reply_to_user_id` (via `ChatService::send_bot_reply_task`); human replies use `reply_to_message_id`. The shared filter helper is `state::message_is_ignored_in`.
+- A message is hidden if its author is ignored, OR if `chat_messages.reply_to_user_id` is an ignored user. The latter hides bot/automated replies directed at an ignored user so they cannot be heard by proxy through `@bot`/`@graybeard`/`@bartender`. Only bots set `reply_to_user_id` (via `ChatService::send_bot_reply_task`); human replies use `reply_to_message_id`. The shared filter helper is `state::message_is_ignored_in`.
 - Ignore filtering applies to DMs too. An ignored peer's DM messages are filtered, and the DM room is hidden from the room rail/navigation while the peer is ignored (`visual_order_for_rooms` skips DMs whose `dm_peer_id` is ignored), so a new DM from the ignored user can't resurface the room or its unread badge. Unignoring restores the DM on the next render/snapshot.
 - `IgnoreListUpdated` refilters local messages in place (all rooms, including DMs and `reply_to_user_id` matches) with no DB refetch, then refreshes the Mentions list/unread count.
 - `unignore` does not retroactively restore already-filtered local messages until a future tail/snapshot naturally reloads them.
@@ -465,10 +470,10 @@ Home lounge dashboard chat:
 - Composer is capped at 5 visible lines.
 - Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always renders when present, and the top activity/quest/shop strip drops before chat when space is tight.
 
-Embedded Rooms chat:
+Embedded game chat:
 - Uses `EmbeddedRoomChatView`.
 - Composer is capped at 4 visible lines.
-- Game-backed chat rooms are joined through Rooms flow, not the Home room rail.
+- Game-backed chat rooms are joined through their surface's idempotent `join_game_room_chat` (fired from `App::tick`), not the Home room rail.
 
 Message rendering:
 - Local message storage is newest-first.
@@ -522,7 +527,7 @@ Cache:
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
-| Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
+| Double-click composer bar | Enter compose mode (same as `i`). Dashboard + embedded game chat only. |
 | Click message body | Move message selection to that block (same as `j`/`k` landing on it). |
 | Double-click message body | Reply to that message (same as `r`). |
 | Click username (or special / friend / bonsai / monthly award / brb badge) | Open that author's profile modal. Debounced ~280 ms so a fast double-click can promote to a mention instead. |
@@ -535,12 +540,12 @@ The composer rect is captured during `chat::ui` draw into `ChatState::last_compo
 `app::input::handle_chat_composer_click` consumes left-button clicks inside that
 rect, stashes the click on `ChatState::last_composer_click`, and on a second
 click within 500 ms at the same cell calls `start_composing_in_room` with the
-Dashboard's `selected_room_id` or the Rooms screen's `rooms_active_room`
+Dashboard's `selected_room_id` or the open game surface's chat room
 chat-room id.
 
 The chat scroll itself uses the same capture-on-draw pattern: each draw site
 that paints messages (Home `#lounge` dashboard card, Home chat center
-real-room branch, and embedded Rooms chat) publishes a `ChatHitLayout` into
+real-room branch, and embedded game chat) publishes a `ChatHitLayout` into
 `ChatState::last_chat_hit_layout` — a single `Cell<Option<ChatHitLayout>>`
 reset alongside `last_composer_rect`. The layout pairs the content `Rect`
 with one `ChatRowHit` per painted row (including leading viewport
@@ -689,3 +694,4 @@ Test gaps:
 - News payload fields must sanitize the separator and newlines.
 - Showcase and Work posts do not create chat messages; News posts do.
 - Game rooms must remain opt-in and `auto_join=false`.
+- Private `kind='game'` rooms (daily match chat) are membership-fixed at creation; no join path may admit a third user, and they stay hidden from the rail/Mentions/IRC like all game rooms. The daily sweeper hard-deletes them 30 days after the match ends.

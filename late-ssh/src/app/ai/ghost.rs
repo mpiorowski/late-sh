@@ -1,8 +1,7 @@
 //! The "ghost" bots: always-on chat characters (@bot, @graybeard,
-//! @bartender, @dealer) plus their init, mention responders, the dealer's
-//! blackjack table commentary, and the clubhouse tutorial's @bartender
-//! welcome. Each bot registers with `fingerprint: None` so it stays out of
-//! the human headcount (`active_users` / clubhouse lobby).
+//! @bartender) plus their init, mention responders, and the clubhouse
+//! tutorial's @bartender welcome. Each bot registers with `fingerprint: None`
+//! so it stays out of the human headcount (`active_users` / clubhouse lobby).
 //!
 //! ## AI call policy: grounded vs cheap
 //!
@@ -19,17 +18,16 @@
 //! - `generate_json` — ungrounded JSON with a hard-enforced `responseSchema`
 //!   (only possible without a tool). The **@bartender mention** uses this: it
 //!   answers house Q&A from the injected app context and decides drink orders
-//!   (`pour`/`gift_offer`/`offer`/`chat` + a priced drink) as guaranteed
+//!   (`pour`/`gift`/`offer`/`chat` + a priced drink) as guaranteed
 //!   well-formed JSON.
 //!   It trades live web lookups for a reply shape that never breaks the parser.
 //! - `generate_short_reply` — ungrounded (no web lookup, so no grounded-call
 //!   latency), cheap. The output cap carries enough headroom for a thinking
 //!   model's reasoning tokens so the visible line isn't sheared off mid-thought.
 //!   Use for pure in-character banter that never needs a lookup: **@graybeard
-//!   mentions**, both **@dealer** paths (blackjack quips + mentions), and the
-//!   **@bartender tutorial greeting**. The greeting in particular MUST use
-//!   this: paired with the grounded path it timed out every time and only the
-//!   scripted fallback ever showed.
+//!   mentions** and the **@bartender tutorial greeting**. The greeting in
+//!   particular MUST use this: paired with the grounded path it timed out
+//!   every time and only the scripted fallback ever showed.
 //!
 //! When adding a bot line, default to `generate_short_reply` and only reach
 //! for `generate_reply` if the character genuinely answers factual questions.
@@ -44,13 +42,11 @@ use late_core::{
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
         drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks, drunk_level_word},
-        game_room::{GameKind, GameRoom},
         user::{User, UserParams},
     },
 };
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -62,7 +58,6 @@ use crate::{
     app::clubhouse::lobby::SharedLobby,
     app::games::chips::svc::ChipService,
     app::help_modal::data::bot_app_context,
-    app::rooms::blackjack::{manager::BlackjackTableManager, state::Outcome, svc::BlackjackEvent},
     state::{ActiveUser, ActiveUsers},
 };
 
@@ -71,13 +66,11 @@ pub struct GhostService {
     db: Db,
     chat_service: ChatService,
     ai_service: AiService,
-    blackjack_table_manager: BlackjackTableManager,
     active_users: ActiveUsers,
     activity_tx: broadcast::Sender<ActivityEvent>,
     username_directory: crate::usernames::UsernameDirectory,
     chip_service: ChipService,
     clubhouse_lobby: SharedLobby,
-    pending_gift_drinks: SharedPendingGiftDrinks,
 }
 
 #[derive(Clone)]
@@ -86,78 +79,12 @@ struct BotUser {
     username: String,
 }
 
-#[derive(Clone, Copy)]
-struct DealerTrigger {
-    room_id: Uuid,
-    user_id: Uuid,
-    outcome: Outcome,
-    bet: i64,
-    credit: i64,
-    new_balance: i64,
-}
-
-#[derive(Default)]
-struct DealerRoomState {
-    action_count: usize,
-    last_reply: Option<Instant>,
-}
-
-type SharedPendingGiftDrinks = Arc<Mutex<HashMap<PendingGiftDrinkKey, PendingGiftDrink>>>;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct PendingGiftDrinkKey {
-    payer_id: Uuid,
-    room_id: Uuid,
-}
-
-#[derive(Clone, Debug)]
-struct PendingGiftDrink {
-    recipient_id: Uuid,
-    recipient_handle: String,
-    payer_handle: String,
-    drink: String,
-    price: i64,
-    created_at: Instant,
-}
-
 const BOT_FINGERPRINT: &str = "bot-fp-000";
 const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
 const GHOST_MENTION_HISTORY_SIZE: i64 = 40;
 const BOT_MENTION_REPLY_MAX_LINES: usize = 4;
 const GHOST_REPLY_DEFAULT_MAX_LINES: usize = 2;
-pub(crate) const DEALER_FINGERPRINT: &str = "dealer-fp-000";
-const DEALER_USERNAME: &str = "dealer";
-const DEALER_ACTION_THRESHOLD: usize = 4;
-const DEALER_HISTORY_SIZE: i64 = 10;
-const DEALER_MIN_NON_DEALER_MESSAGES: usize = 3;
-const DEALER_COOLDOWN: Duration = Duration::from_secs(75);
-const DEALER_PERSONA: &str = "You are @dealer, a hard-edged blackjack dealer in a tiny terminal casino. \
-    You are formal, exacting, observant, and openly contemptuous of sloppy play. \
-    Your charm is precision: you notice bad timing, weak nerve, greedy hits, timid stands, ugly bets, and lucky nonsense. \
-    You are built to needle players. You should be irritating enough that people want to beat the table just to shut you up. \
-    You do not rant. You do not explain the joke. You cut cleanly, then move the hand along. \
-    Voice: polished, dry, predatory, a little tacky in the way an old casino carpet is tacky. \
-    Think velvet rope, cold smile, perfect shuffle, cheap gold cufflinks, and no patience for amateur confidence. \
-    Add melodramatic casino gossip energy: country-club whispers, private tennis lessons, suspicious spouses, family lawyers, champagne debts, \
-    disappointed heirs, perfume in the hallway, chauffeurs waiting too long, ruined reputations, dramatic staircases, and society-page humiliation. \
-    Treat all such scandal as obviously fictional theater, never as a real claim about the player. \
-    Keep innuendo PG-13 and tacky, not explicit. \
-    You may say sir, madam, friend, tourist, genius, hero, champion, or player occasionally, usually with contempt. \
-    You should sound more like a hardcoded dealer NPC than a chatbot: compact, quotable, decisive. \
-    Be harsher than polite banter: condescending, picky, tacky, surgical, and smug. \
-    Use only casino and blackjack language: house edge, soft hands, busted hands, cold cards, hot streaks, insurance, shoes, felt, chips, nerve, discipline, luck, greed, fear, taste, timing. \
-    Do not use developer, software, startup, internet, or tech metaphors. No deploys, frameworks, bills, dashboards, code, AI, or engineering references. \
-    Do not rely on stock catchphrases or reusable sample lines. Generate fresh table talk every time. \
-    Build each jab from the actual outcome plus one sharp angle: bad risk judgment, cowardice, greed, accidental luck, \
-    fake confidence, cheap bravado, ugly timing, weak nerve, poor discipline, or tasteless betting. \
-    For wins: be grudging, suspicious, dismissive, or annoyed that bad judgment was rewarded. \
-    For losses: be sharper, more surgical, and more insulting about the decision. \
-    For pushes or small outcomes: be bored, dismissive, or offended by the lack of drama. \
-    Never mention real gambling addiction, real financial hardship, or shame real money problems. \
-    These are fake chips in a terminal game. Attack the play, the taste, the nerve, the confidence, and the fake-chip bankroll. \
-    Never use slurs, threats, explicit sexual insults, or identity attacks. \
-    Vary your openers and targets. Do not repeat catchphrases.";
 const GRAYBEARD_FINGERPRINT: &str = "graybeard-fp-000";
 const GRAYBEARD_USERNAME: &str = "graybeard";
 const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply nostalgic and resigned about the state of modern software. \
@@ -208,7 +135,6 @@ pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 m
 const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
 const BARTENDER_USERNAME: &str = "bartender";
 const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(5);
-const BARTENDER_GIFT_CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
 /// Cap on the tutorial greeting generation before the scripted line goes out
 /// instead. The greeting uses `generate_short_reply` (ungrounded, small output
 /// cap), which returns in ~1-2s, so this only needs to bound a slow or hung
@@ -218,11 +144,19 @@ const BARTENDER_GREETING_TIMEOUT: Duration = Duration::from_secs(10);
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
 /// Cap on the grounded JSON order call; on timeout the mention is dropped
 /// (never charged) and the 25s cooldown lets the patron re-ask.
-const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(30);
+const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(60);
 /// Scripted line for the rare race where the model priced a pour against a
 /// balance that was spent before the debit landed. No charge happens.
 const BARTENDER_TAB_BOUNCED_LINE: &str =
     "easy now, your tab just bounced. come back when your chips catch up to your thirst.";
+/// Flat price of a round for the house: one debit, a glass for every human
+/// online. Deliberately above [`DRINK_PRICE_MAX`] — only the deterministic
+/// `@bartender round` command can spend it, never the model.
+const BARTENDER_ROUND_PRICE: i64 = 5_000;
+/// Buzz each patron gets from a round; lands exactly on "buzzed" (level 2).
+const BARTENDER_ROUND_POINTS: i64 = 500;
+/// Ledger label for the round debit.
+const BARTENDER_ROUND_DRINK: &str = "round of house ale";
 /// How often the DB-backed drunk levels are re-seeded into the shared lobby.
 const DRUNK_SEED_INTERVAL: Duration = Duration::from_secs(60);
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
@@ -249,7 +183,6 @@ impl GhostService {
         db: Db,
         chat_service: ChatService,
         ai_service: AiService,
-        blackjack_table_manager: BlackjackTableManager,
         active_users: ActiveUsers,
         activity_tx: broadcast::Sender<ActivityEvent>,
         username_directory: crate::usernames::UsernameDirectory,
@@ -260,13 +193,11 @@ impl GhostService {
             db,
             chat_service,
             ai_service,
-            blackjack_table_manager,
             active_users,
             activity_tx,
             username_directory,
             chip_service,
             clubhouse_lobby,
-            pending_gift_drinks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -344,30 +275,7 @@ impl GhostService {
             }
         }
 
-        if self.ai_service.is_enabled() {
-            match self.ensure_dealer_user().await {
-                Ok(dealer) => {
-                    self.set_always_on(&dealer);
-                    let svc = self.clone();
-                    let dealer_shutdown = shutdown.clone();
-                    let mention_dealer = dealer.clone();
-                    let mention_shutdown = shutdown.clone();
-                    tokio::spawn(async move {
-                        svc.run_dealer_task(dealer, dealer_shutdown).await;
-                    });
-                    let svc = self.clone();
-                    tokio::spawn(async move {
-                        svc.run_dealer_mention_task(mention_dealer, mention_shutdown)
-                            .await;
-                    });
-                }
-                Err(err) => {
-                    tracing::error!(error = ?err, "ghost service failed to initialize @dealer user");
-                }
-            }
-        }
-
-        tracing::info!("ghost service started (bot + graybeard + bartender + dealer always-on)");
+        tracing::info!("ghost service started (bot + graybeard + bartender always-on)");
 
         // Keep alive until shutdown so the spawned tasks stay referenced.
         shutdown.cancelled().await;
@@ -721,19 +629,13 @@ impl GhostService {
                             if !contains_mention(&message.body, &bartender.username) {
                                 continue;
                             }
-                            let is_confirm_or_cancel =
-                                bartender_confirmation_intent(&message.body, &bartender.username)
-                                    .is_some();
-                            if !is_confirm_or_cancel
-                                && let Some(last) = last_reply.get(&message.user_id)
+                            if let Some(last) = last_reply.get(&message.user_id)
                                 && last.elapsed() < BARTENDER_MENTION_COOLDOWN
                             {
                                 continue;
                             }
 
-                            if !is_confirm_or_cancel {
-                                last_reply.insert(message.user_id, Instant::now());
-                            }
+                            last_reply.insert(message.user_id, Instant::now());
                             let svc = self.clone();
                             let bartender = bartender.clone();
                             tokio::spawn(async move {
@@ -767,10 +669,8 @@ impl GhostService {
             }
         }
 
-        if let Some(body) = self
-            .handle_bartender_confirmation(&bartender, &trigger_message)
-            .await?
-        {
+        if bartender_round_intent(&trigger_message.body, &bartender.username) {
+            let body = self.handle_bartender_round(&trigger_message).await?;
             let mut rng = TinyRng::seeded();
             let delay = rng.next_between_inclusive(1, 3) as u64;
             tokio::time::sleep(Duration::from_secs(delay)).await;
@@ -831,16 +731,18 @@ impl GhostService {
             - spendable on drinks: {spendable} (house rule: a patron always keeps {floor} chips; you can only pour a price that fits inside spendable)\n\
             - current state: {drunk_word} ({serving_note})\n\n\
             GIFT DRINKS:\n\
-            - If the patron clearly asks to buy, give, send, or pay for a drink for another user, use \"gift_offer\" only when that recipient is explicitly mentioned in the latest message and appears in this candidate list: {gift_candidates}.\n\
-            - For \"gift_offer\", set recipient to that candidate's handle without @, invent the drink, set a whole-number price between {price_min} and {price_max} that fits the payer's spendable chips, and tell the payer to reply exactly \"@{username} confirm\". The server will not charge until they confirm.\n\
+            - If the patron clearly asks to buy, give, send, or pay for a drink for another user, use \"gift\" only when that recipient is explicitly mentioned in the latest message and appears in this candidate list: {gift_candidates}. Mentioning someone else by name in the same breath as an order is itself the trigger — no separate confirmation step exists.\n\
+            - For \"gift\", set recipient to that candidate's handle without @, invent the drink, and set a whole-number price between {price_min} and {price_max} that fits the payer's spendable chips. It is poured and charged immediately, so phrase the line as already served, not offered.\n\
             - If they ask for a gift drink but no candidate is listed, use \"chat\" and ask who it is for. If they try to buy their own drink as a gift, use \"chat\".\n\n\
+            ROUND FOR THE HOUSE:\n\
+            - \"@{username} round\" is a fixed house command handled outside your hands: {round_price} chips buys every patron online a pour. If the patron asks in their own words to buy the whole bar a round, never pour or price it yourself; use \"chat\" and tell them to reply exactly \"@{username} round\".\n\n\
             Decide ONE action:\n\
-            - \"pour\": ONLY when the patron themselves asked for a drink — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\
-            - \"gift_offer\": ONLY for a clear request to buy a drink for a different mentioned user from the gift candidate list. No charge yet; this only creates a pending confirmation.\n\
+            - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\
+            - \"gift\": a clear request to buy a drink for a different mentioned user from the gift candidate list. Charges the payer immediately, no confirmation step.\n\
             - \"offer\": the patron asked for a drink but cannot afford it (or wants more than their spendable). Charge nothing; counter-offer something in their range, with its price, kindly.\n\
             - \"chat\": everything else — greetings, house questions, banter, anything ambiguous. Answer exactly as you always do. No charge. When in doubt, chat; never charge on a maybe.\n\n\
             Return ONLY a JSON object, no markdown fences:\n\
-            {{\"action\": \"pour\" | \"gift_offer\" | \"offer\" | \"chat\", \"recipient\": string or null, \"drink\": string or null, \"price\": integer or null, \"line\": string}}\n\
+            {{\"action\": \"pour\" | \"gift\" | \"offer\" | \"chat\", \"recipient\": string or null, \"drink\": string or null, \"price\": integer or null, \"line\": string}}\n\
             \"line\" is your chat message: 1-3 short lines, no markdown, no emoji, never prefixed with your own username, never SKIP.",
             username = bartender.username,
             persona = BARTENDER_PERSONA,
@@ -848,6 +750,7 @@ impl GhostService {
             floor = CHIP_FLOOR,
             price_min = DRINK_PRICE_MIN,
             price_max = DRINK_PRICE_MAX,
+            round_price = BARTENDER_ROUND_PRICE,
             gift_candidates = format_gift_recipient_candidates(&gift_recipients),
         );
 
@@ -873,8 +776,7 @@ impl GhostService {
             Ok(Ok(None)) => return Ok(()),
             Ok(Err(e)) => return Err(e),
             Err(_) => {
-                tracing::warn!("bartender order generation timed out");
-                return Ok(());
+                return Err(anyhow::anyhow!("bartender order generation timed out"));
             }
         };
 
@@ -887,36 +789,39 @@ impl GhostService {
         let body = match decision {
             BartenderDecision::Skip => return Ok(()),
             BartenderDecision::Say { line } => line,
-            BartenderDecision::GiftOffer {
+            BartenderDecision::Gift {
                 recipient_id,
                 recipient_handle,
                 drink,
                 price,
+                line,
             } => {
-                let mut pending_gifts = self.pending_gift_drinks.lock_recover();
-                // Sweep offers no one confirmed before stashing this one, so the
-                // map can't accumulate abandoned tabs.
-                pending_gifts
-                    .retain(|_, gift| gift.created_at.elapsed() <= BARTENDER_GIFT_CONFIRM_TIMEOUT);
-                pending_gifts.insert(
-                    PendingGiftDrinkKey {
-                        payer_id: trigger_message.user_id,
-                        room_id: trigger_message.room_id,
-                    },
-                    PendingGiftDrink {
-                        recipient_id,
-                        recipient_handle: recipient_handle.clone(),
-                        payer_handle: patron.trim_start_matches('@').to_string(),
-                        drink: drink.clone(),
-                        price,
-                        created_at: Instant::now(),
-                    },
-                );
-                drop(pending_gifts);
-                format!(
-                    "{patron} {drink} for @{recipient_handle}, {price} chips. reply '@{bartender} confirm' to put it on your tab.",
-                    bartender = bartender.username
-                )
+                match self
+                    .chip_service
+                    .buy_drink_for(trigger_message.user_id, recipient_id, price, &drink)
+                    .await?
+                {
+                    Some(purchase) => {
+                        self.clubhouse_lobby.record_drink(
+                            recipient_id,
+                            purchase.drunk_points,
+                            purchase.last_drink_at,
+                        );
+                        tracing::info!(
+                            payer_id = %trigger_message.user_id,
+                            recipient_id = %recipient_id,
+                            recipient_handle = %recipient_handle,
+                            price,
+                            drink = %drink,
+                            payer_balance = purchase.balance,
+                            "bartender poured a gift drink"
+                        );
+                        line
+                    }
+                    // The balance moved between the prompt and the debit; the
+                    // floor guard refused the pour. Never retry, never charge.
+                    None => format!("{patron} {BARTENDER_TAB_BOUNCED_LINE}"),
+                }
             }
             BartenderDecision::Pour { drink, price, line } => {
                 match self
@@ -958,91 +863,74 @@ impl GhostService {
         Ok(())
     }
 
-    async fn handle_bartender_confirmation(
-        &self,
-        bartender: &BotUser,
-        trigger_message: &ChatMessage,
-    ) -> Result<Option<String>> {
-        let Some(intent) =
-            bartender_confirmation_intent(&trigger_message.body, &bartender.username)
-        else {
-            return Ok(None);
-        };
-
+    /// Pour a round for the house: a flat [`BARTENDER_ROUND_PRICE`] debit on
+    /// the caller buys [`BARTENDER_ROUND_POINTS`] of buzz for every human
+    /// currently online, the payer included. Fully deterministic — command
+    /// word, price, and buzz are all hardcoded, so the model never gets to
+    /// price a house-wide charge.
+    async fn handle_bartender_round(&self, trigger_message: &ChatMessage) -> Result<String> {
         let client = self.db.get().await?;
         let usernames = User::list_usernames_by_ids(&client, &[trigger_message.user_id]).await?;
-        let payer_mention = mention_target_for_user(
+        let patron = mention_target_for_user(
             usernames.get(&trigger_message.user_id).map(String::as_str),
             trigger_message.user_id,
         );
         drop(client);
 
-        let key = PendingGiftDrinkKey {
-            payer_id: trigger_message.user_id,
-            room_id: trigger_message.room_id,
+        // Everyone human online gets a glass; the ghosts register with no
+        // fingerprint and don't drink on the clock.
+        let mut recipients: Vec<Uuid> = {
+            let active_users = self.active_users.lock_recover();
+            active_users
+                .iter()
+                .filter(|(_, user)| user.fingerprint.is_some())
+                .map(|(id, _)| *id)
+                .collect()
         };
-
-        if intent == BartenderConfirmationIntent::Cancel {
-            let removed = self.pending_gift_drinks.lock_recover().remove(&key);
-            let body = if removed.is_some() {
-                format!("{payer_mention} tab closed. nothing poured, nothing charged.")
-            } else {
-                format!("{payer_mention} nothing on the bar waiting for confirmation.")
-            };
-            return Ok(Some(body));
+        if !recipients.contains(&trigger_message.user_id) {
+            recipients.push(trigger_message.user_id);
         }
 
-        let pending = {
-            let mut pending_gifts = self.pending_gift_drinks.lock_recover();
-            match pending_gifts.remove(&key) {
-                Some(pending) if pending.created_at.elapsed() <= BARTENDER_GIFT_CONFIRM_TIMEOUT => {
-                    pending
-                }
-                Some(_) => {
-                    return Ok(Some(format!(
-                        "{payer_mention} that drink offer went flat. ask me for a fresh one."
-                    )));
-                }
-                None => {
-                    return Ok(Some(format!(
-                        "{payer_mention} nothing on the bar waiting for confirmation."
-                    )));
-                }
-            }
-        };
+        if recipients.len() < 2 {
+            return Ok(format!(
+                "{patron} generous, but it's just you in here tonight. keep your chips until there's company."
+            ));
+        }
 
         match self
             .chip_service
-            .buy_drink_for(
+            .buy_round(
                 trigger_message.user_id,
-                pending.recipient_id,
-                pending.price,
-                &pending.drink,
+                &recipients,
+                BARTENDER_ROUND_PRICE,
+                BARTENDER_ROUND_POINTS,
+                BARTENDER_ROUND_DRINK,
             )
             .await?
         {
-            Some(purchase) => {
-                self.clubhouse_lobby.record_drink(
-                    pending.recipient_id,
-                    purchase.drunk_points,
-                    purchase.last_drink_at,
-                );
+            Some(round) => {
+                for pour in &round.pours {
+                    self.clubhouse_lobby.record_drink(
+                        pour.user_id,
+                        pour.drunk_points,
+                        pour.last_drink_at,
+                    );
+                }
                 tracing::info!(
                     payer_id = %trigger_message.user_id,
-                    recipient_id = %pending.recipient_id,
-                    price = pending.price,
-                    drink = %pending.drink,
-                    payer_balance = purchase.balance,
-                    "bartender poured a gift drink"
+                    pours = round.pours.len(),
+                    price = BARTENDER_ROUND_PRICE,
+                    new_balance = round.balance,
+                    "bartender poured a round for the house"
                 );
-                Ok(Some(format!(
-                    "@{} {}, from @{}. enjoy it before it starts enjoying you.",
-                    pending.recipient_handle, pending.drink, pending.payer_handle
-                )))
+                Ok(format!(
+                    "{patron} just bought the house a round. ale all around, {count} pours, {BARTENDER_ROUND_PRICE} chips on their tab. drink up, everyone.",
+                    count = round.pours.len(),
+                ))
             }
-            None => Ok(Some(format!(
-                "{payer_mention} {BARTENDER_TAB_BOUNCED_LINE}"
-            ))),
+            None => Ok(format!(
+                "{patron} a round for the house runs {BARTENDER_ROUND_PRICE} chips, and your tab can't carry it tonight."
+            )),
         }
     }
 
@@ -1078,294 +966,6 @@ impl GhostService {
         Ok(())
     }
 
-    async fn run_dealer_task(
-        self,
-        dealer: BotUser,
-        shutdown: late_core::shutdown::CancellationToken,
-    ) {
-        let mut events = self.blackjack_table_manager.subscribe_events();
-        let mut room_states: HashMap<Uuid, DealerRoomState> = HashMap::new();
-
-        tracing::info!(username = %dealer.username, "dealer blackjack responder started");
-
-        loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => {
-                    tracing::info!(username = %dealer.username, "dealer blackjack responder shutting down");
-                    break;
-                }
-                recv_result = events.recv() => {
-                    match recv_result {
-                        Ok(BlackjackEvent::HandSettled {
-                            room_id,
-                            user_id,
-                            bet,
-                            outcome,
-                            credit,
-                            new_balance,
-                        }) => {
-                            if !dealer_should_track_outcome(outcome) {
-                                continue;
-                            }
-
-                            let state = room_states.entry(room_id).or_default();
-                            state.action_count = state.action_count.saturating_add(1);
-                            if state.action_count < DEALER_ACTION_THRESHOLD {
-                                continue;
-                            }
-                            if state
-                                .last_reply
-                                .is_some_and(|last| last.elapsed() < DEALER_COOLDOWN)
-                            {
-                                continue;
-                            }
-
-                            state.action_count = 0;
-                            state.last_reply = Some(Instant::now());
-                            let trigger = DealerTrigger {
-                                room_id,
-                                user_id,
-                                outcome,
-                                bet,
-                                credit,
-                                new_balance,
-                            };
-                            let svc = self.clone();
-                            let dealer = dealer.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = svc.dealer_blackjack_comment(dealer, trigger).await {
-                                    tracing::error!(error = ?e, room_id = %trigger.room_id, "dealer blackjack comment failed");
-                                }
-                            });
-                        }
-                        Ok(_) => {}
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(skipped, "dealer blackjack responder lagged");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            }
-        }
-    }
-
-    async fn dealer_blackjack_comment(
-        &self,
-        dealer: BotUser,
-        trigger: DealerTrigger,
-    ) -> Result<()> {
-        let (chat_room_id, messages) = {
-            let client = self.db.get().await?;
-            let Some(chat_room_id) = self
-                .blackjack_chat_room_id(&client, trigger.room_id)
-                .await?
-            else {
-                return Ok(());
-            };
-            let messages =
-                ChatMessage::list_recent(&client, chat_room_id, DEALER_HISTORY_SIZE).await?;
-            (chat_room_id, messages)
-        };
-
-        if dealer_non_dealer_messages_since_last_comment(&messages, dealer.id)
-            < DEALER_MIN_NON_DEALER_MESSAGES
-        {
-            return Ok(());
-        }
-
-        let (history_str, mut usernames) = self.build_chat_history(&messages).await?;
-        if !usernames.contains_key(&trigger.user_id) {
-            let client = self.db.get().await?;
-            usernames.extend(User::list_usernames_by_ids(&client, &[trigger.user_id]).await?);
-        }
-        let player = mention_target_for_user(
-            usernames.get(&trigger.user_id).map(String::as_str),
-            trigger.user_id,
-        );
-
-        let system_prompt = format!(
-            "Your username is: {username}\n\n\
-            {persona}\n\n\
-            You comment after blackjack hands in a game room. \
-            Keep it to ONE short line. No markdown. No emoji. No username prefix. \
-            You may address the latest player with their @handle when it sounds natural. \
-            Be smug and playful, never cruel. \
-            If the chat history is too quiet or there is no natural comment, output exactly: SKIP.",
-            username = dealer.username,
-            persona = DEALER_PERSONA
-        );
-
-        let prompt = format!(
-            "{history_str}---\n\
-            LATEST BLACKJACK RESULT:\n\
-            player: {player}\n\
-            outcome: {outcome}\n\
-            bet: {bet}\n\
-            payout credit: {credit}\n\
-            new chip balance: {new_balance}\n\
-            Now write the dealer's smirking one-line table comment. Output only message text.",
-            outcome = dealer_outcome_label(trigger.outcome),
-            bet = trigger.bet,
-            credit = trigger.credit,
-            new_balance = trigger.new_balance,
-        );
-
-        // A one-line table quip — no web lookup, so use the cheap path.
-        let Some(reply) = self
-            .ai_service
-            .generate_short_reply(&system_prompt, &prompt)
-            .await?
-        else {
-            return Ok(());
-        };
-        let Some(safe_reply) = sanitize_generated_reply(&reply, Some(&dealer.username)) else {
-            return Ok(());
-        };
-
-        let mut rng = TinyRng::seeded();
-        let delay = rng.next_between_inclusive(2, 6) as u64;
-        tokio::time::sleep(Duration::from_secs(delay)).await;
-
-        self.chat_service.send_bot_reply_task(
-            dealer.id,
-            chat_room_id,
-            safe_reply,
-            Some(trigger.user_id),
-        );
-
-        Ok(())
-    }
-
-    async fn run_dealer_mention_task(
-        self,
-        dealer: BotUser,
-        shutdown: late_core::shutdown::CancellationToken,
-    ) {
-        let mut events = self.chat_service.subscribe_events();
-        let mut last_reply: HashMap<Uuid, Instant> = HashMap::new();
-
-        tracing::info!(username = %dealer.username, "dealer mention responder started");
-
-        loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => {
-                    tracing::info!(username = %dealer.username, "dealer mention responder shutting down");
-                    break;
-                }
-                recv_result = events.recv() => {
-                    match recv_result {
-                        Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
-                            if message.user_id == dealer.id {
-                                continue;
-                            }
-                            if let Some(targets) = target_user_ids
-                                && !targets.contains(&dealer.id)
-                            {
-                                continue;
-                            }
-                            if !contains_mention(&message.body, &dealer.username) {
-                                continue;
-                            }
-                            if let Some(last) = last_reply.get(&message.room_id)
-                                && last.elapsed() < DEALER_COOLDOWN
-                            {
-                                continue;
-                            }
-
-                            last_reply.insert(message.room_id, Instant::now());
-                            let svc = self.clone();
-                            let dealer = dealer.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = svc.dealer_mention_reply(dealer, message).await {
-                                    tracing::error!(error = ?e, "dealer mention reply failed");
-                                }
-                            });
-                        }
-                        Ok(_) => {}
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(skipped, "dealer mention responder lagged");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            }
-        }
-    }
-
-    async fn dealer_mention_reply(
-        &self,
-        dealer: BotUser,
-        trigger_message: ChatMessage,
-    ) -> Result<()> {
-        let messages = {
-            let client = self.db.get().await?;
-            if !chat_room_is_game(&client, trigger_message.room_id).await? {
-                return Ok(());
-            }
-            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
-                .await?
-        };
-        if messages.is_empty() {
-            return Ok(());
-        }
-
-        let (history_str, usernames) = self.build_chat_history(&messages).await?;
-        let speaker = mention_target_for_user(
-            usernames.get(&trigger_message.user_id).map(String::as_str),
-            trigger_message.user_id,
-        );
-
-        let system_prompt = format!(
-            "Your username is: {username}\n\n\
-            {persona}\n\n\
-            Someone in a blackjack game room mentioned you. Reply in character. \
-            Keep it to ONE short line. No markdown. No emoji. No username prefix. \
-            You may address them as {speaker}. \
-            Be smug and playful, never cruel. Do NOT output SKIP.",
-            username = dealer.username,
-            persona = DEALER_PERSONA
-        );
-
-        let prompt = format!(
-            "{history_str}---\n\
-            The latest message mentioned @{dealer}. Reply as the dealer. Output only message text.",
-            dealer = dealer.username
-        );
-
-        // In-character dealer banter; no lookup needed, so the cheap path fits.
-        let Some(reply) = self
-            .ai_service
-            .generate_short_reply(&system_prompt, &prompt)
-            .await?
-        else {
-            return Ok(());
-        };
-        let Some(safe_reply) = sanitize_generated_reply(&reply, Some(&dealer.username)) else {
-            return Ok(());
-        };
-
-        let mut rng = TinyRng::seeded();
-        let delay = rng.next_between_inclusive(1, 5) as u64;
-        tokio::time::sleep(Duration::from_secs(delay)).await;
-
-        self.chat_service.send_bot_reply_task(
-            dealer.id,
-            trigger_message.room_id,
-            safe_reply,
-            Some(trigger_message.user_id),
-        );
-
-        Ok(())
-    }
-
-    async fn blackjack_chat_room_id(
-        &self,
-        client: &tokio_postgres::Client,
-        room_id: Uuid,
-    ) -> Result<Option<Uuid>> {
-        GameRoom::open_chat_room_id(client, room_id, GameKind::Blackjack).await
-    }
-
     /// Build chat history string from recent messages.
     async fn build_chat_history(
         &self,
@@ -1399,10 +999,6 @@ impl GhostService {
     async fn ensure_bartender_user(&self) -> Result<BotUser> {
         self.ensure_user(BARTENDER_FINGERPRINT, BARTENDER_USERNAME)
             .await
-    }
-
-    async fn ensure_dealer_user(&self) -> Result<BotUser> {
-        self.ensure_user(DEALER_FINGERPRINT, DEALER_USERNAME).await
     }
 
     async fn ensure_user(&self, fingerprint: &str, username: &str) -> Result<BotUser> {
@@ -1571,12 +1167,13 @@ enum BartenderDecision {
         price: i64,
         line: String,
     },
-    /// Store an exact drink offer for a later deterministic confirmation.
-    GiftOffer {
+    /// Charge the payer immediately and pour for `recipient_id` instead.
+    Gift {
         recipient_id: Uuid,
         recipient_handle: String,
         drink: String,
         price: i64,
+        line: String,
     },
     /// Post `line`, charge nothing (chat, counter-offer, or a downgraded
     /// pour the server refused to price).
@@ -1600,12 +1197,6 @@ struct BartenderGiftRecipient {
     handle: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BartenderConfirmationIntent {
-    Confirm,
-    Cancel,
-}
-
 /// The response schema Gemini must conform the bartender's order to. Enforced
 /// server-side (only possible ungrounded), so the reply is always valid JSON in
 /// this exact shape — `action` is one of the bartender verbs, `line` is always
@@ -1614,7 +1205,7 @@ fn bartender_order_schema() -> serde_json::Value {
     json!({
         "type": "object",
         "properties": {
-            "action": { "type": "string", "enum": ["pour", "gift_offer", "offer", "chat"] },
+            "action": { "type": "string", "enum": ["pour", "gift", "offer", "chat"] },
             "recipient": { "type": "string", "nullable": true },
             "drink": { "type": "string", "nullable": true },
             "price": { "type": "integer", "nullable": true },
@@ -1739,7 +1330,7 @@ fn parse_bartender_order(
     };
 
     let action = order.action.as_deref();
-    if !matches!(action, Some("pour" | "gift_offer")) {
+    if !matches!(action, Some("pour" | "gift")) {
         return BartenderDecision::Say { line };
     }
 
@@ -1760,7 +1351,7 @@ fn parse_bartender_order(
         .map(|drink| drink.trim().to_string())
         .filter(|drink| !drink.is_empty())
         .unwrap_or_else(|| "house pour".to_string());
-    if action == Some("gift_offer") {
+    if action == Some("gift") {
         let Some(recipient) = order
             .recipient
             .as_deref()
@@ -1774,11 +1365,12 @@ fn parse_bartender_order(
         else {
             return BartenderDecision::Say { line };
         };
-        return BartenderDecision::GiftOffer {
+        return BartenderDecision::Gift {
             recipient_id: recipient.id,
             recipient_handle: recipient.handle.clone(),
             drink,
             price,
+            line,
         };
     }
 
@@ -1994,10 +1586,11 @@ fn extract_mention_handles(text: &str) -> Vec<String> {
     handles
 }
 
-fn bartender_confirmation_intent(
-    body: &str,
-    bartender_username: &str,
-) -> Option<BartenderConfirmationIntent> {
+/// The lowercased non-mention words of a message that mentions the bartender,
+/// or None without a mention. The deterministic `round` command matches on
+/// this exact word list — no AI in the loop — so any extra word falls through
+/// to the model instead.
+fn bartender_command_words(body: &str, bartender_username: &str) -> Option<Vec<String>> {
     if !contains_mention(body, bartender_username) {
         return None;
     }
@@ -2006,53 +1599,35 @@ fn bartender_confirmation_intent(
         .trim()
         .trim_start_matches('@')
         .to_ascii_lowercase();
-    let words: Vec<String> = text_for_mention_detection(body)
-        .split(|c: char| {
-            !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '@')
-        })
-        .filter_map(|word| {
-            let word = word.trim().trim_start_matches('@');
-            (!word.is_empty()).then(|| word.to_ascii_lowercase())
-        })
-        .filter(|word| word != &bartender_username)
-        .collect();
-
-    match words.as_slice() {
-        [word] if word == "confirm" => Some(BartenderConfirmationIntent::Confirm),
-        [word] if word == "cancel" => Some(BartenderConfirmationIntent::Cancel),
-        _ => None,
-    }
-}
-
-fn dealer_should_track_outcome(outcome: Outcome) -> bool {
-    matches!(
-        outcome,
-        Outcome::PlayerBlackjack | Outcome::PlayerWin | Outcome::DealerWin
+    Some(
+        text_for_mention_detection(body)
+            .split(|c: char| {
+                !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '@')
+            })
+            .filter_map(|word| {
+                let word = word.trim().trim_start_matches('@');
+                (!word.is_empty()).then(|| word.to_ascii_lowercase())
+            })
+            .filter(|word| word != &bartender_username)
+            .collect(),
     )
 }
 
-fn dealer_outcome_label(outcome: Outcome) -> &'static str {
-    match outcome {
-        Outcome::PlayerBlackjack => "player blackjack",
-        Outcome::PlayerWin => "player win",
-        Outcome::Push => "push",
-        Outcome::DealerWin => "player loss",
-    }
-}
-
-fn dealer_non_dealer_messages_since_last_comment(
-    messages: &[ChatMessage],
-    dealer_id: Uuid,
-) -> usize {
-    messages
-        .iter()
-        .take_while(|message| message.user_id != dealer_id)
-        .filter(|message| message.user_id != dealer_id)
-        .count()
-}
-
-async fn chat_room_is_game(client: &tokio_postgres::Client, room_id: Uuid) -> Result<bool> {
-    ChatRoom::is_kind(client, room_id, "game").await
+/// True for the fixed round-for-the-house command: "@bartender round" or the
+/// long forms "@bartender round for everyone" / "@bartender round for the
+/// house" (punctuation is a separator, so a trailing "!" is fine).
+fn bartender_round_intent(body: &str, bartender_username: &str) -> bool {
+    let Some(words) = bartender_command_words(body, bartender_username) else {
+        return false;
+    };
+    matches!(
+        words
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        ["round"] | ["round", "for", "everyone"] | ["round", "for", "the", "house"]
+    )
 }
 
 fn valid_mention_start(text: &str, at: usize) -> bool {
@@ -2233,19 +1808,27 @@ hey @bot what do you think",
     }
 
     #[test]
-    fn bartender_confirmation_intent_requires_simple_command() {
-        assert_eq!(
-            bartender_confirmation_intent("@bartender confirm", "bartender"),
-            Some(BartenderConfirmationIntent::Confirm)
-        );
-        assert_eq!(
-            bartender_confirmation_intent("@bartender cancel!", "bartender"),
-            Some(BartenderConfirmationIntent::Cancel)
-        );
-        assert_eq!(
-            bartender_confirmation_intent("@bartender should I confirm?", "bartender"),
-            None
-        );
+    fn bartender_round_intent_requires_exact_command() {
+        assert!(bartender_round_intent("@bartender round", "bartender"));
+        assert!(bartender_round_intent("@bartender ROUND!", "bartender"));
+        assert!(bartender_round_intent(
+            "@bartender round for everyone",
+            "bartender"
+        ));
+        assert!(bartender_round_intent(
+            "@bartender round for everyone!",
+            "bartender"
+        ));
+        assert!(!bartender_round_intent("round for everyone", "bartender"));
+        assert!(!bartender_round_intent(
+            "@bartender pour a round for everyone",
+            "bartender"
+        ));
+        assert!(bartender_round_intent(
+            "@bartender round for the house",
+            "bartender"
+        ));
+        assert!(!bartender_round_intent("@bartender confirm", "bartender"));
     }
 
     #[test]
@@ -2361,27 +1944,28 @@ hey @bot what do you think",
     }
 
     #[test]
-    fn parse_bartender_order_creates_gift_offer_for_known_recipient() {
+    fn parse_bartender_order_creates_gift_for_known_recipient() {
         let alice_id = Uuid::from_u128(1);
         let recipients = [BartenderGiftRecipient {
             id: alice_id,
             handle: "alice".to_string(),
         }];
-        let raw = r#"{"action": "gift_offer", "recipient": "alice", "drink": "Kernel Panic Punch", "price": 300, "line": "kernel panic punch for @alice, 300 chips. reply @bartender confirm."}"#;
+        let raw = r#"{"action": "gift", "recipient": "alice", "drink": "Kernel Panic Punch", "price": 300, "line": "kernel panic punch for @alice, 300 chips."}"#;
         assert_eq!(
             parse_bartender_order(raw, 900, "bartender", &recipients),
-            BartenderDecision::GiftOffer {
+            BartenderDecision::Gift {
                 recipient_id: alice_id,
                 recipient_handle: "alice".to_string(),
                 drink: "Kernel Panic Punch".to_string(),
                 price: 300,
+                line: "kernel panic punch for @alice, 300 chips.".to_string(),
             }
         );
     }
 
     #[test]
-    fn parse_bartender_order_refuses_gift_offer_for_unknown_recipient() {
-        let raw = r#"{"action": "gift_offer", "recipient": "mallory", "drink": "Kernel Panic Punch", "price": 300, "line": "who is that one for?"}"#;
+    fn parse_bartender_order_refuses_gift_for_unknown_recipient() {
+        let raw = r#"{"action": "gift", "recipient": "mallory", "drink": "Kernel Panic Punch", "price": 300, "line": "who is that one for?"}"#;
         assert_eq!(
             parse_bartender_order(raw, 900, "bartender", &[]),
             BartenderDecision::Say {

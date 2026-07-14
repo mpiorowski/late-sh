@@ -20,6 +20,13 @@ pub enum Mode {
 /// reach the launcher's global quit and drop the whole SSH session.
 const EXIT_GRACE_TICKS: u8 = 10;
 
+/// Post a "descended" feed event only when the deepest level crosses into a new
+/// band of this many dungeon levels. The Amulet sits ~25-30 levels down, so a
+/// per-level event buried the feed; every 5th level keeps ~5-6 beats per run.
+/// Keyed off the band (not `dlvl % 5`) so a multi-level drop (trapdoor chain)
+/// still posts exactly once for the band it lands in.
+const DESCENT_EVENT_STEP: i32 = 5;
+
 pub struct State {
     user_id: uuid::Uuid,
     host: String,
@@ -54,8 +61,9 @@ pub struct State {
     /// can't spoof the win payout.
     seen_ascension_prelude: bool,
     /// Deepest dungeon level seen this session (from the `Dlvl:` status field).
-    /// A new maximum posts a "descended" activity event. `None` until the first
-    /// status line is parsed (the baseline, posted silently).
+    /// A new maximum that crosses into a deeper `DESCENT_EVENT_STEP` band posts
+    /// a "descended" activity event. `None` until the first status line is
+    /// parsed (the baseline, posted silently).
     deepest_dlvl: Option<i32>,
     /// Most recently parsed dungeon level. The tombstone screen hides the status
     /// line, so the last value seen before death is the level the player died on.
@@ -223,10 +231,14 @@ impl State {
                 None => self.deepest_dlvl = Some(dlvl),
                 Some(prev) if dlvl > prev => {
                     self.deepest_dlvl = Some(dlvl);
-                    awards.note_event(
-                        self.user_id,
-                        format!("descended to NetHack dungeon level {dlvl}"),
-                    );
+                    // Only announce when the new depth enters a deeper band, so
+                    // a level-by-level dive posts every 5th level, not each one.
+                    if dlvl / DESCENT_EVENT_STEP > prev / DESCENT_EVENT_STEP {
+                        awards.note_event(
+                            self.user_id,
+                            format!("descended to NetHack dungeon level {dlvl}"),
+                        );
+                    }
                 }
                 Some(_) => {}
             }

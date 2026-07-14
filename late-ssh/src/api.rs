@@ -16,7 +16,10 @@ use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::{MutexRecover, audio::VizFrame};
 use serde::Deserialize;
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::Any;
 use tower_http::cors::CorsLayer;
@@ -36,6 +39,9 @@ use crate::{
 struct PairParams {
     token: String,
 }
+
+const PAIR_WS_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const PAIR_SESSION_MESSAGE_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Deserialize)]
 #[serde(tag = "event")]
@@ -63,9 +69,19 @@ enum WsPayload {
         icecast_output_available: bool,
     },
     #[serde(rename = "clipboard_image")]
-    ClipboardImage { data_base64: String },
+    ClipboardImage {
+        data_base64: String,
+        /// Echo of the `request_id` this payload answers. None from older
+        /// CLIs that predate the field.
+        #[serde(default)]
+        request_id: Option<u64>,
+    },
     #[serde(rename = "clipboard_image_failed")]
-    ClipboardImageFailed { message: String },
+    ClipboardImageFailed {
+        message: String,
+        #[serde(default)]
+        request_id: Option<u64>,
+    },
     #[serde(rename = "player_state")]
     PlayerState(PlayerStateReport),
     #[serde(rename = "voice_state")]
@@ -272,7 +288,9 @@ async fn ws_handler(
         metrics::record_ws_pair_rejected_unknown_token();
         return StatusCode::NOT_FOUND.into_response();
     }
-    ws.on_upgrade(move |socket| async move { handle_socket(socket, params.token, state).await })
+    ws.max_message_size(PAIR_WS_MAX_MESSAGE_BYTES)
+        .max_frame_size(PAIR_WS_MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| async move { handle_socket(socket, params.token, state).await })
 }
 
 async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
@@ -467,10 +485,18 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                     if update.new_kind == ClientKind::Browser
                                         && update.previous_kind != ClientKind::Browser
                                     {
-                                        state
-                                            .session_registry
-                                            .send_message(&token, SessionMessage::BrowserPaired)
-                                            .await;
+                                        // Best-effort nudge: a stalled session
+                                        // channel only costs the browser one
+                                        // source replay; it must not tear down
+                                        // the pair socket.
+                                        let _ = route_session_message(
+                                            &state,
+                                            &token,
+                                            &token_hint,
+                                            SessionMessage::BrowserPaired,
+                                            "browser paired",
+                                        )
+                                        .await;
                                     }
                                 }
                                 if !applied_initial_mute
@@ -488,10 +514,36 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 }
                                 continue;
                             }
-                            WsPayload::ClipboardImage { data_base64 } => {
+                            WsPayload::ClipboardImage {
+                                data_base64,
+                                request_id,
+                            } => {
+                                if !state
+                                    .paired_client_registry
+                                    .take_clipboard_request(&token, request_id)
+                                {
+                                    tracing::warn!(
+                                        token_hint = %token_hint,
+                                        "dropping unsolicited or stale clipboard image payload"
+                                    );
+                                    continue;
+                                }
                                 decode_clipboard_image_message(data_base64)
                             }
-                            WsPayload::ClipboardImageFailed { message } => {
+                            WsPayload::ClipboardImageFailed {
+                                message,
+                                request_id,
+                            } => {
+                                if !state
+                                    .paired_client_registry
+                                    .take_clipboard_request(&token, request_id)
+                                {
+                                    tracing::warn!(
+                                        token_hint = %token_hint,
+                                        "dropping unsolicited or stale clipboard image failure"
+                                    );
+                                    continue;
+                                }
                                 SessionMessage::ClipboardImageFailed {
                                     message: truncate_ws_error_message(&message),
                                 }
@@ -523,11 +575,9 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                             }
                         };
 
-                        if !state.session_registry.send_message(&token, msg).await {
-                            tracing::warn!(
-                                token_hint = %token_hint,
-                                "ws pair message could not be routed to a live session"
-                            );
+                        if !route_session_message(&state, &token, &token_hint, msg, "ws payload")
+                            .await
+                        {
                             break;
                         }
                     }
@@ -586,6 +636,40 @@ fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry
         .broadcast_playback_source_for_token(token);
+}
+
+async fn route_session_message(
+    state: &State,
+    token: &str,
+    token_hint: &str,
+    msg: SessionMessage,
+    label: &'static str,
+) -> bool {
+    match tokio::time::timeout(
+        PAIR_SESSION_MESSAGE_TIMEOUT,
+        state.session_registry.send_message(token, msg),
+    )
+    .await
+    {
+        Ok(true) => true,
+        Ok(false) => {
+            tracing::warn!(
+                token_hint = %token_hint,
+                label,
+                "ws pair message could not be routed to a live session"
+            );
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                token_hint = %token_hint,
+                label,
+                timeout_ms = PAIR_SESSION_MESSAGE_TIMEOUT.as_millis() as u64,
+                "ws pair message routing timed out"
+            );
+            false
+        }
+    }
 }
 
 async fn send_json_ws<T: serde::Serialize>(

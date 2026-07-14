@@ -48,8 +48,17 @@ const AFK_BADGE: &str = "🌙";
 fn is_bot_author(username: &str) -> bool {
     matches!(
         username.trim().to_ascii_lowercase().as_str(),
-        "bot" | "graybeard" | "dealer" | "bartender"
+        "bot" | "graybeard" | "bartender"
     )
+}
+
+/// The #lounge system-feed author (`activity/lounge.rs`, nick `system`).
+/// Checked together with the body prefix before a message renders as an
+/// authorless system row.
+fn is_system_author(username: &str) -> bool {
+    username
+        .trim()
+        .eq_ignore_ascii_case(crate::app::activity::lounge::SYSTEM_USERNAME)
 }
 
 // ── Dashboard chat card ─────────────────────────────────────
@@ -1323,6 +1332,7 @@ fn ensure_chat_rows_cache(
     let mut first = true;
     let mut prev_user_id: Option<Uuid> = None;
     let mut prev_created: Option<chrono::DateTime<chrono::Utc>> = None;
+    let mut prev_was_system = false;
     let mut unread_divider_inserted = false;
 
     for msg in messages.into_iter().rev() {
@@ -1420,7 +1430,15 @@ fn ensure_chat_rows_cache(
             .as_ref()
             .is_some_and(|m| msg.body.contains(m.as_str()));
 
-        if !first && !is_continuation {
+        // System-feed lines (authored by the system bot, prefix-marked)
+        // render as one authorless row; consecutive ones stack with no
+        // blank row between them, however far apart in time.
+        let system_text = is_system_author(raw_author)
+            .then(|| super::ui_text::parse_system_line(&msg.body))
+            .flatten();
+        let is_system = system_text.is_some();
+
+        if !(first || is_continuation || is_system && prev_was_system) {
             all_rows.push(Line::from(""));
             row_message.push(None);
             row_kind.push(RowKindLite::Blank);
@@ -1446,6 +1464,7 @@ fn ensure_chat_rows_cache(
             body_style,
             mentions_us,
             is_continuation,
+            system_text,
             image_lines,
             reactions,
         );
@@ -1475,16 +1494,22 @@ fn ensure_chat_rows_cache(
             header_segments.insert(msg.id, segments);
         }
 
-        let body_start = if is_continuation {
-            row_start
-        } else {
+        // Skip the author header (when there is one) so selection paints
+        // body rows only. Headerless entries — system lines, news cards,
+        // /me actions, continuations — select from their first row;
+        // deriving this from `is_continuation` alone left the first system
+        // line after a normal message with an empty selection range.
+        let body_start = if wrapped.header_line_index == Some(0) {
             row_start + 1
+        } else {
+            row_start
         };
         selected_ranges.insert(msg.id, (body_start, all_rows.len()));
         highlighted_ranges.insert(msg.id, (row_start, all_rows.len()));
 
         prev_user_id = Some(msg.user_id);
         prev_created = Some(msg.created);
+        prev_was_system = is_system;
     }
 
     debug_assert_eq!(all_rows.len(), row_message.len());
@@ -4060,9 +4085,8 @@ mod tests {
     fn is_bot_author_matches_all_ghost_users() {
         assert!(is_bot_author("bot"));
         assert!(is_bot_author("graybeard"));
-        assert!(is_bot_author("dealer"));
-        assert!(is_bot_author(" Dealer "));
         assert!(is_bot_author("bartender"));
+        assert!(is_bot_author(" Bartender "));
         assert!(!is_bot_author("mat"));
     }
 

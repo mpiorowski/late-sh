@@ -4,6 +4,7 @@ use ratatui::{
 };
 
 use crate::app::chat::action::parse_action_body;
+use crate::app::chat::svc::ReportKind;
 use crate::app::common::{markdown::render_body_to_lines, theme};
 use late_core::models::{article::NEWS_MARKER, chat_message_reaction::ChatMessageReactionSummary};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -119,6 +120,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     body_style: Style,
     mentions_us: bool,
     continuation: bool,
+    system_text: Option<&str>,
     inline_image_lines: Option<&[Line<'static>]>,
     reactions: &[ChatMessageReactionSummary],
 ) -> WrappedChatEntry {
@@ -127,19 +129,34 @@ pub(super) fn wrap_chat_entry_to_lines(
     } else {
         Span::raw(" ")
     };
-    let news_payload = parse_news_payload(body);
-    let action_payload = news_payload
+    let news_payload = system_text
         .is_none()
-        .then(|| parse_action_body(body))
+        .then(|| parse_news_payload(body))
         .flatten();
-    // Only normal (non-news), non-continuation messages emit a clickable
-    // author header for mouse hit-testing — news cards have their own
-    // card layout, and continuation messages omit the header so a run
-    // reads as one block.
-    let header_line_index =
-        (news_payload.is_none() && action_payload.is_none() && !continuation).then_some(0);
-    let mut lines = if let Some(news) = news_payload {
+    let report_payload = (system_text.is_none() && news_payload.is_none())
+        .then(|| parse_report_payload(body))
+        .flatten();
+    let action_payload =
+        (system_text.is_none() && news_payload.is_none() && report_payload.is_none())
+            .then(|| parse_action_body(body))
+            .flatten();
+    // Only normal (non-news, non-report, non-system), non-continuation
+    // messages emit a clickable author header for mouse hit-testing — news
+    // and report cards have their own card layout, system lines are
+    // authorless, and continuation messages omit the header so a run reads
+    // as one block.
+    let header_line_index = (system_text.is_none()
+        && news_payload.is_none()
+        && report_payload.is_none()
+        && action_payload.is_none()
+        && !continuation)
+        .then_some(0);
+    let mut lines = if let Some(system) = system_text {
+        wrap_system_to_lines(system, width)
+    } else if let Some(news) = news_payload {
         wrap_news_to_lines(stamp, prefix, width, author_style, news)
+    } else if let Some((kind, text)) = report_payload {
+        wrap_report_to_lines(stamp, prefix, width, author_style, kind, text)
     } else if let Some(action) = action_payload {
         wrap_action_to_lines(action, prefix, width, body_style, mentions_us)
     } else {
@@ -174,6 +191,40 @@ pub(super) fn wrap_chat_entry_to_lines(
         header_line_index,
         image_line_range,
     }
+}
+
+/// A #lounge system-feed line (see `activity/lounge.rs`). The prefix alone
+/// is NOT trusted: callers must also check the author is the system user
+/// before styling, so neither a human named "system" nor a pasted "· " can
+/// spoof the authorless row.
+pub(crate) fn parse_system_line(body: &str) -> Option<&str> {
+    let text = body
+        .strip_prefix(crate::app::activity::lounge::SYSTEM_LINE_PREFIX)?
+        .trim();
+    (!text.is_empty()).then_some(text)
+}
+
+/// System lines render as exactly one authorless row — a stacked run must
+/// stay dense — so overlong text is truncated, never wrapped.
+fn wrap_system_to_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+    let budget = width.saturating_sub(4); // pad + "· " + right breathing room
+    let shown: String = if text.chars().count() > budget && budget > 1 {
+        let mut cut: String = text.chars().take(budget - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        text.to_string()
+    };
+    vec![Line::from(vec![
+        Span::raw(" "),
+        Span::styled("· ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(
+            shown,
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ])]
 }
 
 fn wrap_action_to_lines(
@@ -357,6 +408,80 @@ fn wrap_news_to_lines(
         pad,
         Span::styled("─".repeat(inner_width), border_style),
     ]));
+    lines
+}
+
+// ── Report cards (/bug, /suggest) ───────────────────────────
+
+/// A `/bug` or `/suggest` report card: the kind's marker at the start of the
+/// body, everything after it is the report text. Mirrors `parse_news_payload`:
+/// the marker must open the message so pasted markers mid-text don't spoof a
+/// card.
+pub(crate) fn parse_report_payload(body: &str) -> Option<(ReportKind, &str)> {
+    let trimmed = body.trim_start();
+    for kind in [ReportKind::Bug, ReportKind::Suggestion] {
+        if let Some(rest) = trimmed.strip_prefix(kind.marker()) {
+            return Some((kind, rest.trim()));
+        }
+    }
+    None
+}
+
+/// Report cards render as a compact ruled block so reports stand apart from
+/// staff replies in the report-only rooms:
+/// ```text
+///  mat filed a bug 12:34
+///  ────────────────────
+///  🐛 the thing broke when …
+///  ────────────────────
+/// ```
+fn wrap_report_to_lines(
+    stamp: &str,
+    prefix: &str,
+    width: usize,
+    author_style: Style,
+    kind: ReportKind,
+    text: &str,
+) -> Vec<Line<'static>> {
+    let border_style = Style::default().fg(theme::BORDER());
+    let body_style = Style::default().fg(theme::CHAT_BODY());
+    let meta_style = Style::default().fg(theme::TEXT_FAINT());
+    let pad = Span::raw(" ");
+
+    let mut lines = vec![Line::from(vec![
+        pad.clone(),
+        Span::styled(prefix.to_string(), author_style),
+        Span::styled(
+            format!(" {} ", kind.verb()),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(stamp.to_string(), meta_style),
+    ])];
+
+    let text = if text.is_empty() {
+        kind.command()
+    } else {
+        text
+    };
+    let body = format!("{} {}", kind.icon(), text);
+    if width < 10 {
+        lines.push(Line::from(vec![
+            pad,
+            Span::styled(normalize_inline_text(&body), body_style),
+        ]));
+        return lines;
+    }
+
+    let inner_width = width.saturating_sub(2).max(1);
+    let rule = || {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("─".repeat(inner_width), border_style),
+        ])
+    };
+    lines.push(rule());
+    lines.extend(render_body_to_lines(&body, width, pad, body_style));
+    lines.push(rule());
     lines
 }
 
@@ -576,6 +701,44 @@ mod tests {
     }
 
     #[test]
+    fn parse_report_payload_requires_marker_at_start() {
+        assert_eq!(
+            parse_report_payload("---BUG--- the door ate my hat"),
+            Some((ReportKind::Bug, "the door ate my hat"))
+        );
+        assert_eq!(
+            parse_report_payload("  ---SUGGESTION--- more cats"),
+            Some((ReportKind::Suggestion, "more cats"))
+        );
+        assert!(parse_report_payload("hello ---BUG--- fake").is_none());
+        assert!(parse_report_payload("regular message").is_none());
+    }
+
+    #[test]
+    fn wrap_chat_entry_to_lines_renders_report_card() {
+        let wrapped = wrap_chat_entry_to_lines(
+            "---BUG--- the door ate my hat",
+            "[now]",
+            "mat",
+            40,
+            Style::default(),
+            None,
+            Style::default(),
+            false,
+            false,
+            None,
+            None,
+            &[],
+        );
+        let lines = lines_to_strings(&wrapped.lines);
+        assert_eq!(lines[0], " mat filed a bug [now]");
+        assert!(lines[1].contains('─'), "{lines:?}");
+        assert!(lines[2].contains("🐛 the door ate my hat"), "{lines:?}");
+        assert!(lines.last().unwrap().contains('─'), "{lines:?}");
+        assert_eq!(wrapped.header_line_index, None);
+    }
+
+    #[test]
     fn wrap_chat_entry_to_lines_renders_action_message() {
         let body = crate::app::chat::action::encode_action_body("waves").expect("action");
         let wrapped = wrap_chat_entry_to_lines(
@@ -588,6 +751,7 @@ mod tests {
             Style::default(),
             false,
             false,
+            None,
             None,
             &[],
         );
@@ -708,6 +872,7 @@ mod tests {
             Style::default(),
             false,
             false,
+            None,
             None,
             &[
                 ChatMessageReactionSummary {

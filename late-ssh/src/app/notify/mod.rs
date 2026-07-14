@@ -71,19 +71,19 @@ impl Notification {
         }
     }
 
-    pub(crate) fn your_turn(game: &str, room: &str) -> Self {
-        Self {
-            kind: Kind::GameEvents,
-            title: format!("{game}: your turn"),
-            body: format!("Waiting on you in {room}"),
-        }
-    }
-
     pub(crate) fn daily_your_turn(game: &str, opponent: &str) -> Self {
         Self {
             kind: Kind::GameEvents,
             title: format!("Daily {game}: your turn"),
             body: format!("@{opponent} is waiting on your move"),
+        }
+    }
+
+    pub(crate) fn house_your_turn(game: &str) -> Self {
+        Self {
+            kind: Kind::GameEvents,
+            title: format!("{game}: your turn"),
+            body: "the table is waiting on your move".to_string(),
         }
     }
 

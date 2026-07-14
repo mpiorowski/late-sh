@@ -3,8 +3,8 @@ use crate::app::help_modal::data::HelpTopic;
 use ratatui::layout::Rect;
 
 use crate::app::state::{
-    App, DashboardGameToggleTarget, GAME_SELECTION_2048, GAME_SELECTION_LE_WORD,
-    GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
+    App, GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
+    GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
     GAME_SELECTION_NES_CONCENTRATION_ROOM, GAME_SELECTION_NES_DABG,
     GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING, GAME_SELECTION_NES_RHDE,
     GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE, GAME_SELECTION_NES_ZAP_RUDER,
@@ -79,12 +79,6 @@ pub(crate) fn is_nes_selection(selection: usize) -> bool {
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.is_playing_game {
-        if byte == b'`' {
-            app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
-            app.set_screen(Screen::Dashboard);
-            return true;
-        }
-
         if app.game_selection == GAME_SELECTION_2048 {
             if byte == 0x1B || byte == b'q' || byte == b'Q' {
                 // Exit game mode back to lobby
@@ -201,7 +195,6 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                     app.sudoku_state.ensure_loaded();
                 }
                 app.is_playing_game = true;
-                app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
             }
             true
         }

@@ -7,7 +7,7 @@ use late_core::{
     db::Db,
     models::{
         chat_room_member::ChatRoomMember,
-        voice_channel::{TARGET_CHAT_ROOM, TARGET_GAME_ROOM, VoiceChannel},
+        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
 };
 use serde::Serialize;
@@ -698,19 +698,6 @@ async fn ensure_user_can_join_voice(
 ) -> anyhow::Result<()> {
     let chat_room_id = match channel.target_kind.as_str() {
         TARGET_CHAT_ROOM => channel.target_id,
-        TARGET_GAME_ROOM => {
-            let row = client
-                .query_opt(
-                    "SELECT chat_room_id
-                     FROM game_rooms
-                     WHERE id = $1
-                       AND status <> 'closed'",
-                    &[&channel.target_id],
-                )
-                .await?;
-            row.context("voice channel is not available")?
-                .get::<_, Uuid>("chat_room_id")
-        }
         other => anyhow::bail!("unknown voice target kind: {other}"),
     };
 

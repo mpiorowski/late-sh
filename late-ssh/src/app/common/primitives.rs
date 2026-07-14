@@ -60,7 +60,6 @@ pub enum Screen {
     Dashboard,
     Arcade,
     Games,
-    Rooms,
     Lateania,
     Rebels,
     Nethack,
@@ -73,11 +72,15 @@ pub enum Screen {
     /// Full-screen daily-match board. Entered only from the Daily Games
     /// modal, absent from the Tab cycle; Esc returns to the modal.
     DailyMatch,
+    /// Full-screen house table (poker/blackjack/asterion/tron). Entered only
+    /// from the Lobby modal, absent from the Tab cycle; Esc returns to the
+    /// modal.
+    HouseTable,
 }
 
 impl Screen {
     /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
-    /// through World Cup (`7`). The door games (Lateania, Rebels, Nethack,
+    /// through World Cup (`6`). The door games (Lateania, Rebels, Nethack,
     /// Green Dragon) are reached through the Games hub, not the tab bar, so
     /// they are absent from the cycle; if one is somehow current,
     /// `next`/`prev` fall back to the hub that owns them.
@@ -86,8 +89,7 @@ impl Screen {
             Screen::Clubhouse => Screen::Dashboard,
             Screen::Dashboard => Screen::Arcade,
             Screen::Arcade => Screen::Games,
-            Screen::Games => Screen::Rooms,
-            Screen::Rooms => Screen::Artboard,
+            Screen::Games => Screen::Artboard,
             Screen::Artboard => Screen::Pinstar,
             Screen::Pinstar => Screen::WorldCup,
             Screen::WorldCup => Screen::Clubhouse,
@@ -97,6 +99,7 @@ impl Screen {
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
+            Screen::HouseTable => Screen::Dashboard,
         }
     }
 
@@ -106,8 +109,7 @@ impl Screen {
             Screen::Dashboard => Screen::Clubhouse,
             Screen::Arcade => Screen::Dashboard,
             Screen::Games => Screen::Arcade,
-            Screen::Rooms => Screen::Games,
-            Screen::Artboard => Screen::Rooms,
+            Screen::Artboard => Screen::Games,
             Screen::Pinstar => Screen::Artboard,
             Screen::WorldCup => Screen::Pinstar,
             Screen::Lateania
@@ -116,6 +118,7 @@ impl Screen {
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
+            Screen::HouseTable => Screen::Dashboard,
         }
     }
 }
@@ -137,12 +140,12 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Dopewars => "dopewars",
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "Arcade",
-        Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
         Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
+        Screen::HouseTable => "House Table",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -225,8 +228,7 @@ mod tests {
         assert_eq!(Screen::Clubhouse.next(), Screen::Dashboard);
         assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
         assert_eq!(Screen::Arcade.next(), Screen::Games);
-        assert_eq!(Screen::Games.next(), Screen::Rooms);
-        assert_eq!(Screen::Rooms.next(), Screen::Artboard);
+        assert_eq!(Screen::Games.next(), Screen::Artboard);
         assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
         assert_eq!(Screen::Pinstar.next(), Screen::WorldCup);
         assert_eq!(Screen::WorldCup.next(), Screen::Clubhouse);
@@ -238,8 +240,7 @@ mod tests {
         assert_eq!(Screen::Dashboard.prev(), Screen::Clubhouse);
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
         assert_eq!(Screen::Games.prev(), Screen::Arcade);
-        assert_eq!(Screen::Rooms.prev(), Screen::Games);
-        assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
+        assert_eq!(Screen::Artboard.prev(), Screen::Games);
         assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
         assert_eq!(Screen::WorldCup.prev(), Screen::Pinstar);
     }

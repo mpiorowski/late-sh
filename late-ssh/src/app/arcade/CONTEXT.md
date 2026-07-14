@@ -16,7 +16,7 @@ Shared game-domain primitives live under `late-ssh/src/app/games`:
 - `games/cards.rs` for card ranks/suits/rendering used by Solitaire and room card games.
 - `games/chips/svc.rs` for Late Chips balances, initial grants, debits, payouts, floors, and daily bonuses.
 
-Rooms/table games are separate and live under `late-ssh/src/app/rooms`. Do not make Rooms depend on Arcade modules for shared game behavior.
+Multiplayer table games are separate and live under `late-ssh/src/app/lobby`. Do not make the Lobby depend on Arcade modules for shared game behavior.
 
 Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 

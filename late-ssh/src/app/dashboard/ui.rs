@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -11,62 +9,9 @@ use ratatui::{
 use crate::app::{
     chat::ui::{DashboardChatView, draw_dashboard_chat_card},
     common::{markdown::wrap_plain_line, theme},
-    dashboard::state::DashboardRoomJoin,
     files::terminal_image::TerminalImageFrame,
-    rooms::{
-        registry::{RoomDirectorySummary, RoomGameRegistry},
-        svc::{RoomListItem, RoomsSnapshot},
-    },
 };
 use late_core::models::chat_message::ChatMessage;
-
-#[derive(Clone, Debug)]
-pub struct DashboardRoomCard {
-    pub room: RoomListItem,
-    pub game_label: &'static str,
-    pub occupied_seats: Option<usize>,
-    pub total_seats: usize,
-    pub recent_join_user_id: Option<uuid::Uuid>,
-}
-
-impl DashboardRoomCard {
-    fn new(room: &RoomListItem, summary: RoomDirectorySummary) -> Self {
-        Self {
-            room: room.clone(),
-            game_label: summary.game_label,
-            occupied_seats: summary.occupied_seats,
-            total_seats: summary.total_seats,
-            recent_join_user_id: None,
-        }
-    }
-
-    fn with_recent_join_user(mut self, user_id: uuid::Uuid) -> Self {
-        self.recent_join_user_id = Some(user_id);
-        self
-    }
-}
-
-pub(crate) fn recent_dashboard_rooms(
-    snapshot: &RoomsSnapshot,
-    registry: &RoomGameRegistry,
-    recent_joins: &VecDeque<DashboardRoomJoin>,
-    max: usize,
-) -> Vec<DashboardRoomCard> {
-    let mut rooms = Vec::new();
-    for join in recent_joins {
-        let Some(room) = snapshot.rooms.iter().find(|room| room.id == join.room_id) else {
-            continue;
-        };
-        rooms.push(
-            DashboardRoomCard::new(room, registry.directory_summary(room))
-                .with_recent_join_user(join.user_id),
-        );
-        if rooms.len() >= max {
-            break;
-        }
-    }
-    rooms
-}
 
 pub struct DashboardRenderInput<'a> {
     pub pinned_messages: &'a [ChatMessage],

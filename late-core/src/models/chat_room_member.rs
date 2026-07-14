@@ -202,13 +202,17 @@ impl ChatRoomMember {
     ) -> Result<HashMap<Uuid, i64>> {
         let rows = client
             .query(
+                // The system-feed bot (settings.system = true) posts ambient
+                // #lounge lines; they must never light anyone's unread badge.
                 "SELECT m.room_id, COALESCE(unread.unread_count, 0)::bigint AS unread_count
                  FROM chat_room_members m
                  LEFT JOIN LATERAL (
                     SELECT COUNT(msg.id)::bigint AS unread_count
                     FROM chat_messages msg
+                    JOIN users author ON author.id = msg.user_id
                     WHERE msg.room_id = m.room_id
                       AND msg.user_id <> m.user_id
+                      AND COALESCE((author.settings->>'system')::boolean, false) = false
                       AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
                  ) unread ON true
                  WHERE m.user_id = $1",
