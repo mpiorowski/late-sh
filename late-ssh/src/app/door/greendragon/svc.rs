@@ -463,7 +463,7 @@ async fn commit_delete(db: Db, gate: Arc<TokioMutex<u64>>, seq: u64, user_id: Uu
 }
 
 /// UTC day-number, used to drive once-per-day forest-turn/heal regeneration.
-fn today() -> i64 {
+pub(crate) fn today() -> i64 {
     Utc::now().timestamp().div_euclid(86_400)
 }
 
@@ -805,20 +805,51 @@ impl GreenDragonService {
             // the bank pays a freshly-rolled interest rate; the day's "spirits"
             // (e_rand(-1,1) twice, -2..+2) jitter the forest fights, LoGD-style.
             // The RNG stays inside a sync block (thread_rng isn't Send).
-            let rolled = {
+            //
+            // Upstream's gates run before the day rolls (`newday.php` shows
+            // the dragon-point spend and race/style choices first, then the
+            // day): while a gate is pending, the roll is deferred to
+            // `settle_dawn` at gate close — that's also how a dragon kill's
+            // owed forced day lands, and it keeps a just-chosen race's bonus
+            // fights in that first day's assembly.
+            let gates_pending = character.dragon_points_unspent > 0
+                || character.style == model::AddressStyle::Unchosen
+                || character.race == model::Race::None;
+            let rolled = if gates_pending {
+                None
+            } else {
                 let mut rng = rand::thread_rng();
                 let interest =
                     rng.gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
                 let spirits = rng.gen_range(-1..=1) + rng.gen_range(-1..=1);
                 character.roll_new_day(day, interest, spirits, &mut rng)
             };
-            // A haunt collected at this dawn (`newday.php`'s `hauntedby`
-            // block): the message rides the report drain, which the session
-            // empties into the log right after this load lands.
-            if let Some(haunter) = rolled.as_ref().and_then(|fx| fx.haunted_by.as_ref()) {
+            // The dawn's report (`newday.php` announces the day, the
+            // hangover, the haunt, and the breakup on its page): the lines
+            // ride the report drain, which the session empties into the log
+            // right after this load lands.
+            if let Some(fx) = rolled.as_ref() {
                 character.pvp_reports.push(format!(
-                    "{haunter} haunted your dreams in the night; the fright costs you a forest fight today."
+                    "A new day dawns over Duskmere; you wake refreshed with {} turns.",
+                    character.turns
                 ));
+                if fx.hangover {
+                    character.pvp_reports.push(
+                        "You wake hungover from last night's drinking; it costs you a turn."
+                            .to_string(),
+                    );
+                }
+                if let Some(haunter) = fx.haunted_by.as_ref() {
+                    character.pvp_reports.push(format!(
+                        "{haunter} haunted your dreams in the night; the fright costs you a forest fight today."
+                    ));
+                }
+                if fx.divorced {
+                    character.pvp_reports.push(format!(
+                        "{} wakes cold beside you and walks out. The marriage is over.",
+                        crate::app::door::greendragon::data::partner(character.style)
+                    ));
+                }
             }
             // Entering the door marks the character present (upstream's
             // `loggedin`); every in-play save re-stamps it and the leave save
@@ -1919,6 +1950,7 @@ async fn withdraw_inner(
         .filter(|(id, _, _)| *id != me)
         .collect();
     let mut lines: Vec<String> = Vec::new();
+    let mut promoted: Option<Uuid> = None;
     if my_rank >= model::CLAN_LEADER
         && !members
             .iter()
@@ -1931,6 +1963,7 @@ async fn withdraw_inner(
             let gate = inner.gate(target);
             let _held = gate.lock().await;
             if let Some(name) = promote_to_leader_tx(&inner.db, clan_id, target).await? {
+                promoted = Some(target);
                 lines.push(format!("{name} inherits the leadership of {}.", clan.name));
             }
         } else {
@@ -1949,10 +1982,12 @@ async fn withdraw_inner(
         }
     }
     // The officers' notice (`clan_withdraw.php`'s system mail) — sent for
-    // any real member's departure, the leader's included.
+    // any real member's departure, the leader's included. Upstream promotes
+    // the successor *before* selecting the officers, so a plain member who
+    // just inherited the leadership gets the notice too.
     for (officer, _, _) in members
         .iter()
-        .filter(|(_, c, _)| c.clan_rank >= model::CLAN_OFFICER)
+        .filter(|(id, c, _)| c.clan_rank >= model::CLAN_OFFICER || promoted == Some(*id))
     {
         let gate = inner.gate(*officer);
         let _held = gate.lock().await;

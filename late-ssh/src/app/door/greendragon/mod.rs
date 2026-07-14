@@ -12,7 +12,7 @@
 //! - `specialty` — the twelve specialty combat skills (buff factories)
 //! - `events`    — forest special events (the non-combat vignettes)
 //! - `inn`       — the inn's bard song and romance ladder resolvers
-//! - `tavern`    — the Dark Horse Tavern's gambling game logic
+//! - `tavern`    — the Crooked Wheel's gambling game logic
 //! - `persist`   — JSON save/load envelope with a schema version
 //! - `svc`       — DB-backed load/save service (cheap to clone)
 //! - `state`     — per-session game state: mode machine, encounter, message log
