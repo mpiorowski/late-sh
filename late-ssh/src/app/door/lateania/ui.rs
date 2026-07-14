@@ -120,7 +120,32 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         )])]),
         rows[0],
     );
-    draw_game(frame, rows[1], state, usernames);
+    // While composing a chat line, reserve the bottom row for the say prompt.
+    if let Some(text) = state.chat_text() {
+        let body = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(rows[1]);
+        draw_game(frame, body[0], state, usernames);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    "Say: ",
+                    Style::default()
+                        .fg(theme::AMBER_GLOW())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{text}\u{2588}"),
+                    Style::default().fg(theme::TEXT_BRIGHT()),
+                ),
+                Span::styled(
+                    "   (Enter send · Esc cancel)",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ])),
+            body[1],
+        );
+    } else {
+        draw_game(frame, rows[1], state, usernames);
+    }
 }
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
@@ -1863,6 +1888,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(hint("c v t", "sheet abilities bag"));
     lines.push(hint("j k", "quests titles"));
     lines.push(hint("r f", "recall follow"));
+    lines.push(hint("'", "say (local chat)"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
     }

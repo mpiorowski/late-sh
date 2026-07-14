@@ -185,6 +185,9 @@ const FRONTIER_REQUIRED_TITLES: [&str; 4] = [
 ];
 /// The Sundered Reaches open only to whoever has unmade the Frontier's crown.
 const REACHES_GATE_TITLE: &str = "Bane of the King Who Was Promised Nothing";
+/// Kaelmyr, the Ashen Reach, opens only to whoever has drowned the deepest crown
+/// of the Reaches - the Bane of Yssgar. It is the deepest end-game gate.
+const KAELMYR_GATE_TITLE: &str = "Bane of Yssgar, the Sundering Deep";
 
 /// How often the world autosaves every present character's progress.
 const AUTOSAVE_SECS: u64 = 60;
@@ -1920,6 +1923,83 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         repeat: Repeat::Once,
         blurb: "Few return from the floor of all seas. Reach the Sundering Deep and prove it can be done.",
     },
+    // ---- Kaelmyr, the Ashen Reach (the ash-cairn board, off Yssgar) -------
+    BoardQuest {
+        id: 17,
+        board: super::world::KAELMYR_BASE,
+        title: "Cross the Ash-Gate",
+        objective: Objective::Reach {
+            zone: "The Cinderfall Shore",
+        },
+        reward_gold: 300,
+        reward_title: Some("Ash-Walker"),
+        repeat: Repeat::Once,
+        blurb: "A burnt continent lies below the drowned wound. Descend the ash-gate and set foot on Kaelmyr.",
+    },
+    BoardQuest {
+        id: 18,
+        board: super::world::KAELMYR_BASE,
+        title: "Salt the Cinder-Dead",
+        objective: Objective::Bounty {
+            name_contains: "revenant",
+            count: 6,
+        },
+        reward_gold: 700,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "The Reaches' dead wash up and rise again on the burnt strand. Put six of the cinder-dead down.",
+    },
+    BoardQuest {
+        id: 19,
+        board: super::world::KAELMYR_BASE,
+        title: "Break the Emberkin Rite",
+        objective: Objective::Bounty {
+            name_contains: "Emberkin",
+            count: 4,
+        },
+        reward_gold: 760,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "The ash-shamans keep their pyres lit with the living. Scatter four of the Emberkin from the terraces.",
+    },
+    BoardQuest {
+        id: 20,
+        board: super::world::KAELMYR_BASE,
+        title: "Ashen Salvage",
+        objective: Objective::Collect {
+            item: super::items::KAELMYR_SHORE_RELIC_ID,
+            count: 3,
+        },
+        reward_gold: 720,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "Relics of the world's first age wash up on the cinder shore. Bring back three from Kaelmyr.",
+    },
+    BoardQuest {
+        id: 21,
+        board: super::world::KAELMYR_BASE,
+        title: "Reach the Ashen King",
+        objective: Objective::Reach {
+            zone: "The Unquenched Throne",
+        },
+        reward_gold: 1200,
+        reward_title: Some("Throne-Seeker of Kaelmyr"),
+        repeat: Repeat::Once,
+        blurb: "Kaethyr the Unquenched has ruled the ash since the Sundering. Walk to his burning throne and look upon it.",
+    },
+    BoardQuest {
+        id: 22,
+        board: super::world::KAELMYR_BASE,
+        title: "Silence the Hollow Choir",
+        objective: Objective::Bounty {
+            name_contains: "Choir",
+            count: 4,
+        },
+        reward_gold: 820,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "The Hollow Choir sings to wake the drowned god beneath the wound. Silence four of the choristers.",
+    },
 ];
 
 fn board_quest(id: u32) -> Option<&'static BoardQuest> {
@@ -2669,6 +2749,11 @@ impl WorldState {
                 "Beyond the sea-gate lie the Sundered Reaches: a drowned realm crueller than any Frontier mile. Press {} again if you truly mean to pass.",
                 dir_input_hint(dir)
             ))
+        } else if self.is_kaelmyr_gateway(from, dest) {
+            Some(format!(
+                "Below Yssgar's chamber gapes the wound the seas fled into, and beyond it lies Kaelmyr, the Ashen Reach: a burnt continent older than the world's drowning. Nothing you have faced compares. Press {} again if you truly mean to descend.",
+                dir_input_hint(dir)
+            ))
         } else {
             None
         };
@@ -2705,6 +2790,11 @@ impl WorldState {
     /// The sea-gate: stepping from Matlatesh's square into the Sundered Reaches.
     fn is_reaches_gateway(&self, from: RoomId, dest: RoomId) -> bool {
         from == super::world::MATLATESH_SQUARE && super::world::is_reaches_room(dest)
+    }
+
+    /// The ash-gate: stepping from Yssgar's Reaches chamber down into Kaelmyr.
+    fn is_kaelmyr_gateway(&self, from: RoomId, dest: RoomId) -> bool {
+        super::world::is_reaches_room(from) && super::world::is_kaelmyr_room(dest)
     }
 
     fn can_cross_progression_gate(&mut self, user_id: Uuid, from: RoomId, dest: RoomId) -> bool {
@@ -2754,6 +2844,18 @@ impl WorldState {
                 user_id,
                 LogKind::System,
                 "The sea-gate stands sealed. Only one crowned Bane of the King Who Was Promised Nothing may pass into the Sundered Reaches.".to_string(),
+            );
+            return false;
+        }
+
+        if self.is_kaelmyr_gateway(from, dest)
+            && !self.player_has_title(user_id, KAELMYR_GATE_TITLE)
+        {
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "The wound stays shut against you. Only one who has drowned Yssgar - a crowned Bane of Yssgar, the Sundering Deep - may descend into Kaelmyr.".to_string(),
             );
             return false;
         }
@@ -2822,6 +2924,8 @@ impl WorldState {
             format!("{} (dangerous Frontier)", dir.label())
         } else if self.is_reaches_gateway(from, dest) {
             format!("{} (the Sundered Reaches)", dir.label())
+        } else if self.is_kaelmyr_gateway(from, dest) {
+            format!("{} (Kaelmyr, the Ashen Reach)", dir.label())
         } else {
             dir.label().to_string()
         }
