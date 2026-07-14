@@ -24,7 +24,9 @@ use crate::app::{
 const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
 const GAP_PERIOD: u16 = 7;
 const PICKUP_COUNT: usize = 6;
-const MAX_SHIELD_CHARGES: u8 = 2;
+/// Ticks of double-speed a Boost pickup grants, and the cap when stacking.
+const PICKUP_BOOST_TICKS: u8 = 5;
+const MAX_BOOST_TICKS: u8 = 10;
 const MAX_PHASE_CHARGES: u8 = 2;
 const MAX_GAP_MOVES: u8 = 6;
 const PICKUP_GAP_MOVES: u8 = 3;
@@ -52,7 +54,7 @@ pub struct TronPlayerSnapshot {
     pub direction: Direction,
     pub alive: bool,
     pub crashed: bool,
-    pub shield_charges: u8,
+    pub boost_ticks: u8,
     pub phase_charges: u8,
     pub gap_moves: u8,
 }
@@ -64,7 +66,7 @@ impl TronPlayerSnapshot {
             direction: Direction::Right,
             alive: false,
             crashed: false,
-            shield_charges: 0,
+            boost_ticks: 0,
             phase_charges: 0,
             gap_moves: 0,
         }
@@ -468,7 +470,7 @@ impl SharedState {
                     direction,
                     alive: true,
                     crashed: false,
-                    shield_charges: 0,
+                    boost_ticks: 0,
                     phase_charges: 0,
                     gap_moves: 0,
                 };
@@ -510,11 +512,49 @@ impl SharedState {
             }
         }
 
+        // Riders holding a Boost move twice this tick. Snapshot before moving so
+        // a Boost picked up mid-tick starts next tick, not this one.
+        let boosting: [bool; SEAT_COUNT] =
+            std::array::from_fn(|i| self.players[i].alive && self.players[i].boost_ticks > 0);
+
+        self.advance_step([true; SEAT_COUNT]);
+
+        let second_step: [bool; SEAT_COUNT] =
+            std::array::from_fn(|i| boosting[i] && self.players[i].alive);
+        if second_step.iter().any(|&b| b) {
+            self.advance_step(second_step);
+        }
+
+        for (seat_index, &was_boosting) in boosting.iter().enumerate() {
+            if was_boosting && self.players[seat_index].alive {
+                self.players[seat_index].boost_ticks =
+                    self.players[seat_index].boost_ticks.saturating_sub(1);
+            }
+        }
+
+        let game_end = self.finish_if_needed();
+        if self.phase == TronPhase::Running {
+            self.status_message = format!("{} riders alive.", self.alive_count());
+        }
+        TickOutcome {
+            ticked: true,
+            game_end,
+        }
+    }
+
+    /// One simultaneous movement step for the seats flagged in `movers`; others
+    /// hold their cell as live obstacles. Run once per tick for everyone, then a
+    /// second time for boosted riders only, which is how a Boost crosses two
+    /// cells (checking the intermediate cell, then the destination) and lays
+    /// trail on both.
+    fn advance_step(&mut self, movers: [bool; SEAT_COUNT]) {
         let mut next_positions = [None; SEAT_COUNT];
         let mut crashed = [false; SEAT_COUNT];
         let mut phased = [false; SEAT_COUNT];
-        let mut shielded = [false; SEAT_COUNT];
         for seat_index in 0..SEAT_COUNT {
+            if !movers[seat_index] {
+                continue;
+            }
             let player = self.players[seat_index];
             if !player.alive {
                 continue;
@@ -531,11 +571,7 @@ impl SharedState {
                 || next_y < 0
                 || next_y >= BOARD_HEIGHT as i16
             {
-                if self.consume_shield(seat_index) {
-                    shielded[seat_index] = true;
-                } else {
-                    crashed[seat_index] = true;
-                }
+                crashed[seat_index] = true;
                 continue;
             }
             let next = Position {
@@ -546,8 +582,6 @@ impl SharedState {
                 if self.consume_phase(seat_index) {
                     next_positions[seat_index] = Some(next);
                     phased[seat_index] = true;
-                } else if self.consume_shield(seat_index) {
-                    shielded[seat_index] = true;
                 } else {
                     crashed[seat_index] = true;
                 }
@@ -568,18 +602,21 @@ impl SharedState {
             }
         }
 
-        // A shielded rider remains on its current cell for this tick. Do not
-        // let another rider phase into that live head and create overlapping
-        // heads in the public snapshot.
+        // Moving onto a rider that stays put this step (a non-mover, or one that
+        // crashed here) is a head-on into a live body. The board check already
+        // stops moves into trailed cells; this catches a stationary head sitting
+        // in one of its own trail gaps, which matters in the boost sub-step
+        // where only boosted riders move and the rest are obstacles.
         for mover in 0..SEAT_COUNT {
             let Some(next) = next_positions[mover] else {
                 continue;
             };
-            for (stationary, &stationary_shielded) in shielded.iter().enumerate() {
-                if mover == stationary || !stationary_shielded {
+            for other in 0..SEAT_COUNT {
+                if other == mover || !self.players[other].alive {
                     continue;
                 }
-                if self.players[stationary].head == Some(next) {
+                let other_advances = next_positions[other].is_some() && !crashed[other];
+                if !other_advances && self.players[other].head == Some(next) {
                     crashed[mover] = true;
                 }
             }
@@ -605,15 +642,6 @@ impl SharedState {
                     self.spawn_pickup(pickup);
                 }
             }
-        }
-
-        let game_end = self.finish_if_needed();
-        if self.phase == TronPhase::Running {
-            self.status_message = format!("{} riders alive.", self.alive_count());
-        }
-        TickOutcome {
-            ticked: true,
-            game_end,
         }
     }
 
@@ -752,14 +780,6 @@ impl SharedState {
             && self.players.iter().all(|player| player.head != Some(pos))
     }
 
-    fn consume_shield(&mut self, seat_index: usize) -> bool {
-        if self.players[seat_index].shield_charges == 0 {
-            return false;
-        }
-        self.players[seat_index].shield_charges -= 1;
-        true
-    }
-
     fn consume_phase(&mut self, seat_index: usize) -> bool {
         if self.players[seat_index].phase_charges == 0 {
             return false;
@@ -782,11 +802,11 @@ impl SharedState {
 
     fn grant_pickup(&mut self, seat_index: usize, pickup: TronPickup) {
         match pickup {
-            TronPickup::Shield => {
-                self.players[seat_index].shield_charges = self.players[seat_index]
-                    .shield_charges
-                    .saturating_add(1)
-                    .min(MAX_SHIELD_CHARGES);
+            TronPickup::Boost => {
+                self.players[seat_index].boost_ticks = self.players[seat_index]
+                    .boost_ticks
+                    .saturating_add(PICKUP_BOOST_TICKS)
+                    .min(MAX_BOOST_TICKS);
             }
             TronPickup::Phase => {
                 self.players[seat_index].phase_charges = self.players[seat_index]
@@ -864,7 +884,7 @@ fn start_direction(seat_index: usize) -> Direction {
 
 fn pickup_kind_for_slot(index: usize) -> TronPickup {
     match index % 6 {
-        0 | 5 => TronPickup::Shield,
+        0 | 5 => TronPickup::Boost,
         1 | 3 => TronPickup::Phase,
         _ => TronPickup::Gap,
     }
@@ -1012,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn shield_charge_absorbs_one_trail_hit_without_moving() {
+    fn boost_moves_two_cells_and_trails_both() {
         let (mut state, user, _) = state_with_two_players();
         let tick_loop = state.start_round(user).unwrap();
         state.board = [None; BOARD_CELLS];
@@ -1020,20 +1040,24 @@ mod tests {
         let start = Position { x: 10, y: 10 };
         state.players[0].head = Some(start);
         state.players[0].direction = Direction::Right;
-        state.players[0].shield_charges = 1;
+        state.players[0].boost_ticks = 1;
         state.pending_directions[0] = Direction::Right;
         state.players[1].head = Some(Position { x: 40, y: 10 });
         state.players[1].direction = Direction::Right;
         state.pending_directions[1] = Direction::Right;
         state.board[start.index()] = Some(0);
-        state.board[Position { x: 11, y: 10 }.index()] = Some(1);
         state.board[Position { x: 40, y: 10 }.index()] = Some(1);
 
         state.tick_generation(tick_loop.generation);
 
+        let mid = Position { x: 11, y: 10 };
+        let end = Position { x: 12, y: 10 };
         assert!(state.players[0].alive);
-        assert_eq!(state.players[0].head, Some(start));
-        assert_eq!(state.players[0].shield_charges, 0);
+        // Two cells crossed in one tick, trail laid on both, charge spent.
+        assert_eq!(state.players[0].head, Some(end));
+        assert_eq!(state.board[mid.index()], Some(0));
+        assert_eq!(state.board[end.index()], Some(0));
+        assert_eq!(state.players[0].boost_ticks, 0);
     }
 
     #[test]

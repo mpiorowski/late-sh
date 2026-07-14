@@ -321,7 +321,7 @@ fn info_lines(state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static
     if snapshot.mode_label == "glitch" {
         lines.extend([
             section_header("Pickups"),
-            pickup_hint(TronPickup::Shield, "absorbs wall/trail"),
+            pickup_hint(TronPickup::Boost, "surges two cells/tick"),
             pickup_hint(TronPickup::Phase, "passes trail once"),
             pickup_hint(TronPickup::Gap, "next trail gaps"),
             Line::raw(""),
@@ -431,8 +431,8 @@ fn pickup_hint(pickup: TronPickup, text: &str) -> Line<'static> {
 
 fn rider_power_text(player: crate::app::lobby::house::tron::svc::TronPlayerSnapshot) -> String {
     let mut parts = Vec::new();
-    if player.shield_charges > 0 {
-        parts.push(format!("S{}", player.shield_charges));
+    if player.boost_ticks > 0 {
+        parts.push(format!("B{}", player.boost_ticks));
     }
     if player.phase_charges > 0 {
         parts.push(format!("P{}", player.phase_charges));
@@ -566,7 +566,7 @@ fn trail_color(seat: usize) -> Color {
 
 fn pickup_glyph(pickup: TronPickup) -> char {
     match pickup {
-        TronPickup::Shield => 'S',
+        TronPickup::Boost => 'B',
         TronPickup::Phase => 'P',
         TronPickup::Gap => 'G',
     }
@@ -574,7 +574,7 @@ fn pickup_glyph(pickup: TronPickup) -> char {
 
 fn pickup_color(pickup: TronPickup) -> Color {
     match pickup {
-        TronPickup::Shield => Color::Rgb(130, 210, 255),
+        TronPickup::Boost => Color::Rgb(255, 176, 59),
         TronPickup::Phase => Color::Rgb(190, 145, 255),
         TronPickup::Gap => Color::Rgb(118, 238, 156),
     }
@@ -596,7 +596,7 @@ mod tests {
                 direction: Direction::Right,
                 alive: false,
                 crashed: false,
-                shield_charges: 0,
+                boost_ticks: 0,
                 phase_charges: 0,
                 gap_moves: 0,
             }; SEAT_COUNT],

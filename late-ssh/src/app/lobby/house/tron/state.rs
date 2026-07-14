@@ -38,7 +38,7 @@ impl TronColor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TronPickup {
-    Shield,
+    Boost,
     Phase,
     Gap,
 }
@@ -46,7 +46,7 @@ pub enum TronPickup {
 impl TronPickup {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Shield => "shield",
+            Self::Boost => "boost",
             Self::Phase => "phase",
             Self::Gap => "gap",
         }
