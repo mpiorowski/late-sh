@@ -3,9 +3,10 @@
 //! opens the #lounge composer, and what you send floats over your head as a
 //! speech bubble; `w` waves and `x` dances for everyone; `t` at the bar
 //! pours a `@bartender ` mention into the composer. Enter next to a landmark
-//! prop follows its signpost: the arcade cabinet, the heavy door, the poker
-//! table, and the easel jump to their app pages (2/3/4/5), the jukebox opens
-//! the Music Booth, and the dog gets petted where everyone can see it.
+//! prop follows its signpost: the arcade cabinet, the heavy door, and the
+//! easel jump to their app pages (2/3/4), the poker table opens the Lobby
+//! modal, the jukebox opens the Music Booth, and the dog gets petted where
+//! everyone can see it.
 //! Returns `false` for anything it does not own so global keys (numbers,
 //! Tab, `q`, `?`, `v` music chords, ...) keep working. Composing and
 //! chat-overlay input never reaches this handler: the shared composer and
@@ -32,6 +33,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         if matches!(byte, b'\r' | b'\n') && app.clubhouse.tutorial_capturing_keys() {
             if app.clubhouse.tutorial_advance() {
                 app.persist_clubhouse_tutorial_done();
+                // The last box sends them off to the chat: land on the
+                // dashboard (#lounge on Home), page 1.
+                app.set_screen(Screen::Dashboard);
             }
             return true;
         }

@@ -1222,7 +1222,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                 )),
                 Line::default(),
                 Line::from(Span::styled(
-                    "arcade cabinet (2) · big table (4) · artboard (5)",
+                    "arcade cabinet (2) · artboard (4)",
                     text,
                 )),
                 Line::from(Span::styled(
@@ -1235,6 +1235,10 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                 )),
                 Line::default(),
                 Line::from(vec![
+                    Span::styled("[Ctrl+Q] ", key),
+                    Span::styled("the lobby: house tables + daily games", text),
+                ]),
+                Line::from(vec![
                     Span::styled("[Ctrl+G] ", key),
                     Span::styled("the hub, quests · shop · leaderboard", text),
                 ]),
@@ -1245,7 +1249,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                 Line::default(),
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
-                    Span::styled("start the night", dim),
+                    Span::styled("head to the chat", dim),
                 ]),
             ],
         ),

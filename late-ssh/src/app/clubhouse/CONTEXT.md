@@ -103,7 +103,10 @@ room is the chat surface, and the full history lives in #lounge on Home.
   AI-generated in his voice when the AI service is up, falling back to a
   scripted line on disabled AI, errors, or a 6s timeout
   (`ghost::bartender_tutorial_greeting`); either way it must tell them to
-  press `i`. Then `SendOff` lists the landmarks and Ctrl+O.
+  press `i`. Then `SendOff` lists the walkable landmarks (arcade 2, heavy
+  door 3, easel 4) plus Ctrl+Q (the Lobby modal) and Ctrl+G (the hub); its
+  Enter finishes the tour and drops the player onto the dashboard (#lounge
+  on Home, page 1) so they land in the chat.
 - Enter advances popups (`tutorial_capturing_keys`); Esc anywhere skips
   (arm in `dispatch_escape`). Completion persists once via
   `ProfileService::set_clubhouse_tutorial_done` (fire-and-forget, failure
