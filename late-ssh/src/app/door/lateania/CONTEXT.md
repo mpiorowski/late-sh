@@ -303,6 +303,7 @@ Progression:
 - Item rarities: Common, Uncommon, Rare, Epic, Legendary.
 - Item kinds: Equipment, Consumable, Valuable.
 - Valuables, including Frontier relics, show a `valuable / sell Xg` stat line in inventory/shop UI so players know they are sell loot; generated Frontier relic descriptions also state that they have no combat use.
+- Gear rows in the inventory and shop panels carry a **comparison line** vs. what's worn in that slot (`InvView::compare`/`ShopEntryView::compare`, built by `svc::compare_to_worn`): green upgrade / red downgrade / amber trade-off, or "new slot"; empty for the worn item and non-gear (`ui::compare_line`).
 - Starter inventory is a Rusty Shortsword and two Minor Healing Draughts. Starting gold is 120.
 - Shops are in Embergate: Ember Forge, Outfitter, Apothecary, and Curio Cart.
 - Shop economy intentionally includes expensive late-game gold sinks: masterwork weapon/armor/head/hands, premium curio gear, and the repeatable Phoenix Tonic. The masterwork shop pieces are shop-stock, not boss drops, so gold remains useful after normal boss clears.

@@ -48,7 +48,7 @@ use super::crafting::{recipe, recipe_indices_for};
 use super::damage::{DamageProfile, DamageType, Defense};
 use super::housing::{self, furniture_by_key, plot_of_room};
 use super::items::{
-    CATACOMBS_RELIC_ID, CAVERNS_RELIC_ID, ItemKind, Slot, THORNWOOD_RELIC_ID, item, shop_at,
+    CATACOMBS_RELIC_ID, CAVERNS_RELIC_ID, Item, ItemKind, Slot, THORNWOOD_RELIC_ID, item, shop_at,
 };
 use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
@@ -397,6 +397,9 @@ pub struct InvView {
     pub sell_price: i64,
     /// Compact stat summary for the panel, e.g. "+8 atk" or "heal 30".
     pub stats: String,
+    /// How this gear compares to what's worn in its slot, e.g. "vs worn: +3 atk
+    /// -2 hp", "new slot", or "" for non-gear / the worn item itself.
+    pub compare: String,
 }
 
 /// One shop listing.
@@ -409,6 +412,8 @@ pub struct ShopEntryView {
     pub affordable: bool,
     /// Compact stat summary for the panel, e.g. "+8 atk".
     pub stats: String,
+    /// How this gear compares to what's worn in its slot (see `InvView::compare`).
+    pub compare: String,
 }
 
 /// The player's live companion, for the room/character panels.
@@ -648,6 +653,37 @@ impl PlayerView {
 
 pub fn empty_player_view() -> PlayerView {
     PlayerView::empty()
+}
+
+/// A compact comparison of a piece of gear against whatever the player currently
+/// wears in that slot, for the inventory and shop panels. Returns "" for
+/// non-gear and for the worn item itself; "new slot" when nothing is worn there;
+/// otherwise the stat deltas, e.g. "vs worn: +3 atk -2 hp".
+fn compare_to_worn(equipped: &HashMap<Slot, u32>, it: &Item) -> String {
+    let Some(slot) = it.slot() else {
+        return String::new();
+    };
+    match equipped.get(&slot).and_then(|id| item(*id)) {
+        None => "new slot".to_string(),
+        Some(worn) if worn.id == it.id => String::new(),
+        Some(worn) => {
+            let deltas = [
+                (it.mods.attack - worn.mods.attack, "atk"),
+                (it.mods.max_hp - worn.mods.max_hp, "hp"),
+                (it.mods.armor - worn.mods.armor, "arm"),
+            ];
+            let parts: Vec<String> = deltas
+                .iter()
+                .filter(|(d, _)| *d != 0)
+                .map(|(d, label)| format!("{d:+} {label}"))
+                .collect();
+            if parts.is_empty() {
+                "same as worn".to_string()
+            } else {
+                format!("vs worn: {}", parts.join(" "))
+            }
+        }
+    }
 }
 
 impl LateaniaService {
@@ -6005,6 +6041,7 @@ impl WorldState {
                     equipped: false,
                     sell_price: it.sell_price(),
                     stats: it.stat_summary(),
+                    compare: compare_to_worn(&player.equipped, it),
                 })
                 .chain(
                     player
@@ -6019,6 +6056,7 @@ impl WorldState {
                             equipped: true,
                             sell_price: it.sell_price(),
                             stats: it.stat_summary(),
+                            compare: String::new(),
                         }),
                 )
                 .collect();
@@ -6038,6 +6076,7 @@ impl WorldState {
                         price: it.price,
                         affordable: player.gold >= it.price,
                         stats: it.stat_summary(),
+                        compare: compare_to_worn(&player.equipped, it),
                     })
                     .collect(),
             });
@@ -6584,6 +6623,21 @@ mod tests {
             s.mob_dots.get(&mob_id).is_some_and(|d| !d.is_empty()),
             "the struck foe is left with a poison DoT"
         );
+    }
+
+    #[test]
+    fn gear_comparison_reads_against_what_is_worn() {
+        let mut equipped = HashMap::new();
+        equipped.insert(Slot::Weapon, 1000u32); // Rusty Shortsword, +4 atk
+        let stronger = item(super::super::items::smith_weapon_id(2)).unwrap(); // Iron Sword, +16
+        let cmp = compare_to_worn(&equipped, stronger);
+        assert!(cmp.starts_with("vs worn:"), "shows a comparison: {cmp}");
+        assert!(cmp.contains("+12 atk"), "16 vs 4 should read +12: {cmp}");
+        // A bare slot reads as a new slot; a consumable never compares.
+        let empty = HashMap::new();
+        assert_eq!(compare_to_worn(&empty, stronger), "new slot");
+        let potion = item(super::super::items::potion_id(0)).unwrap();
+        assert_eq!(compare_to_worn(&empty, potion), "");
     }
 
     #[test]

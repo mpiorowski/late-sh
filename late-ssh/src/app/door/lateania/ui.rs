@@ -1394,20 +1394,41 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
             Style::default().fg(rarity_color(&it.rarity))
         };
         let spans = vec![Span::styled(format!("{marker} {}{}", it.name, tag), style)];
+        lines.push(Line::from(spans));
         if !it.stats.is_empty() {
-            lines.push(Line::from(spans));
             lines.push(Line::from(Span::styled(
                 format!("    {}", it.stats),
                 Style::default().fg(theme::TEXT_DIM()),
             )));
-            continue;
         }
-        lines.push(Line::from(spans));
+        if let Some(cmp) = compare_line(&it.compare) {
+            lines.push(cmp);
+        }
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter equip/use"));
     lines.push(hint("x", "sell (at a shop)  t close"));
     (lines, sel_line)
+}
+
+/// A coloured "vs worn" comparison line for a gear row: green for an upgrade,
+/// red for a downgrade, amber for a mixed trade-off. None when there's nothing
+/// to compare.
+fn compare_line(compare: &str) -> Option<Line<'static>> {
+    if compare.is_empty() {
+        return None;
+    }
+    let up = compare == "new slot" || compare.contains('+');
+    let down = compare.contains('-');
+    let color = match (up, down) {
+        (true, false) => theme::SUCCESS(),
+        (false, true) => theme::ERROR(),
+        _ => theme::AMBER(),
+    };
+    Some(Line::from(Span::styled(
+        format!("    {compare}"),
+        Style::default().fg(color),
+    )))
 }
 
 fn inventory_item_tag(equipped: bool, slot: Option<&str>) -> String {
@@ -1480,6 +1501,9 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<u
                 ),
                 Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
             ]));
+            if let Some(cmp) = compare_line(&e.compare) {
+                lines.push(cmp);
+            }
             continue;
         }
         spans.push(Span::styled(
