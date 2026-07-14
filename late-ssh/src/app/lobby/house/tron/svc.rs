@@ -288,7 +288,11 @@ impl TronService {
                     return;
                 };
                 match chip_svc
-                    .credit_cooldown_reward_template(win.user_id, reward_key, TRON_WIN_LEDGER_REASON)
+                    .credit_cooldown_reward_template(
+                        win.user_id,
+                        reward_key,
+                        TRON_WIN_LEDGER_REASON,
+                    )
                     .await
                 {
                     Ok(payout) => {
