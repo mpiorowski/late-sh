@@ -50,7 +50,7 @@ pub enum ActivityKind {
         game: ActivityGame,
     },
     /// A finished daily correspondence match. `action` carries the full
-    /// match-level phrase ("beat bob at Chess" / "drew with bob at Connect
+    /// match-level phrase ("won a game of Chess" / "drew with bob at Connect
     /// Four"); `game` and `match_id` exist only for #lounge repeat-throttling:
     /// keying on the match lets one player finish two same-game matches back
     /// to back (one line per match) while a re-emit of the same match dedupes.
@@ -321,9 +321,6 @@ impl ActivityEvent {
         )
     }
 
-    /// A finished daily match with a decisive result, attributed to the winner.
-    /// `loser` names the other player; the line reads "{winner} beat {loser} at
-    /// {game}".
     /// A finished daily match with a winner. The line names only the winner and
     /// the game — "{winner} won a game of {game}" — never the loser: a friendly
     /// clubhouse feed, not a scoreboard that shames whoever lost. `match_id`

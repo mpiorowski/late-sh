@@ -130,7 +130,13 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::BossSlain { game, boss } => format!("boss:{}:{boss}", game.key()),
         ActivityKind::SatDown { game } => format!("sat:{}", game.key()),
         ActivityKind::DailyResult { game, match_id } => format!("daily:{game}:{match_id}"),
-        ActivityKind::GameWon { game, .. } => format!("won:{}", game.key()),
+        // Daily-puzzle wins ride `GameWon` and carry the board (difficulty) in
+        // `detail`, so two distinct same-game boards (Sudoku easy + hard) inside
+        // the window must post separately; keep `detail` in the key so only an
+        // exact re-emit of the same board collapses.
+        ActivityKind::GameWon { game, detail, .. } => {
+            format!("won:{}:{}", game.key(), detail.as_deref().unwrap_or_default())
+        }
         ActivityKind::GameEvent { game, detail } => format!("event:{}:{detail}", game.key()),
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),
         ActivityKind::BonsaiWatered => "bonsai-watered".to_string(),
