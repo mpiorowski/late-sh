@@ -1395,6 +1395,7 @@ pub fn item(id: u32) -> Option<&'static Item> {
         .find(|i| i.id == id)
         .or_else(|| frontier_items().iter().find(|i| i.id == id))
         .or_else(|| reaches_items().iter().find(|i| i.id == id))
+        .or_else(|| kaelmyr_items().iter().find(|i| i.id == id))
         .or_else(|| materials().iter().find(|i| i.id == id))
         .or_else(|| crafted().iter().find(|i| i.id == id))
 }
@@ -1416,8 +1417,18 @@ pub const FRONTIER_TIERS: usize = 20;
 /// Number of Sundered Reaches loot tiers - one per zone (see world::REACHES_ZONES_DATA).
 pub const REACHES_TIERS: usize = 20;
 
+/// Number of Kaelmyr loot tiers - one per zone (see world::KAELMYR_ZONES_DATA).
+pub const KAELMYR_TIERS: usize = 20;
+
 const FRONTIER_ITEM_BASE: u32 = 3000;
 const REACHES_ITEM_BASE: u32 = 3200;
+/// Kaelmyr, the Ashen Reach: a third generated continent, its gear one clear
+/// step past the drowned Reaches. IDs live in the free 3400..3600 band (authored
+/// items top out well below 3000; materials start at 4000).
+pub const KAELMYR_ITEM_BASE: u32 = 3400;
+/// The Cinderfall Shore relic (Kaelmyr tier-0 relic), dropped on the ashen shore
+/// and collected for the ash-cairn board's opening bounty.
+pub const KAELMYR_SHORE_RELIC_ID: u32 = KAELMYR_ITEM_BASE + 9;
 
 /// The full generated frontier item catalog (200 items).
 pub fn frontier_items() -> &'static [Item] {
@@ -1429,6 +1440,12 @@ pub fn frontier_items() -> &'static [Item] {
 pub fn reaches_items() -> &'static [Item] {
     static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
     CATALOG.get_or_init(build_reaches_items)
+}
+
+/// The full generated Kaelmyr item catalog (200 items).
+pub fn kaelmyr_items() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_kaelmyr_items)
 }
 
 /// The drop table for a frontier zone (tier 0..FRONTIER_TIERS): representative
@@ -1446,6 +1463,14 @@ pub fn reaches_loot(tier: usize) -> &'static [u32] {
     static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
     let tables = TABLES.get_or_init(|| generated_loot_tables(REACHES_ITEM_BASE, REACHES_TIERS));
     tables[tier.min(REACHES_TIERS - 1)].as_slice()
+}
+
+/// The drop table for a Kaelmyr zone (tier 0..KAELMYR_TIERS), same shape as
+/// `reaches_loot` but drawn from the Kaelmyr catalog.
+pub fn kaelmyr_loot(tier: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| generated_loot_tables(KAELMYR_ITEM_BASE, KAELMYR_TIERS));
+    tables[tier.min(KAELMYR_TIERS - 1)].as_slice()
 }
 
 fn generated_loot_tables(base_id: u32, tiers: usize) -> Vec<Vec<u32>> {
@@ -1568,6 +1593,49 @@ fn build_reaches_items() -> Vec<Item> {
         },
         draught_desc: "A briny restorative pressed from abyssal kelp and pearl-dust.",
         relic_desc: "A relic of the drowned realm with no combat use; merchants pay dearly for these.",
+    })
+}
+
+fn build_kaelmyr_items() -> Vec<Item> {
+    // One ashland material per zone, low to high - matched to KAELMYR_ZONES_DATA.
+    const MATERIALS: [&str; KAELMYR_TIERS] = [
+        "Ashglass",
+        "Cinderbound",
+        "Emberforged",
+        "Slagsteel",
+        "Pyrewrought",
+        "Charbone",
+        "Glowstone",
+        "Sootglass",
+        "Magmawrought",
+        "Basaltbound",
+        "Stormglass",
+        "Skyforged",
+        "Voidcinder",
+        "Wrathsteel",
+        "Hollowbone",
+        "Choirglass",
+        "Sunderash",
+        "Godsforged",
+        "Cataclysm",
+        "Worldwound",
+    ];
+    // Kaelmyr is the deepest continent yet, so every tier reads as endgame gear.
+    const TIER_RARITY: [Rarity; KAELMYR_TIERS] = [Rarity::Legendary; KAELMYR_TIERS];
+    build_generated_items(GeneratedRealm {
+        base_id: KAELMYR_ITEM_BASE,
+        // Continue the power curve one full continent past the Reaches: Kaelmyr
+        // tier 0 lands just above Reaches tier 19.
+        power_offset: (FRONTIER_TIERS + REACHES_TIERS) as i32,
+        materials: &MATERIALS,
+        rarities: &TIER_RARITY,
+        gear_desc: |type_name| {
+            format!(
+                "Ash-forged {type_name}, hammered on the burning anvils of Kaelmyr and never once cooled."
+            )
+        },
+        draught_desc: "A scalding tonic brewed from ash-lichen and cinder-salt.",
+        relic_desc: "A relic of the Ashen Reach with no combat use; collectors pay a fortune for these.",
     })
 }
 
@@ -1723,6 +1791,7 @@ mod tests {
             .iter()
             .chain(frontier_items().iter())
             .chain(reaches_items().iter())
+            .chain(kaelmyr_items().iter())
             .chain(materials().iter())
             .chain(crafted().iter())
             .map(|i| i.id)
@@ -1904,6 +1973,43 @@ mod tests {
     }
 
     #[test]
+    fn kaelmyr_loot_outclasses_the_deepest_reaches_tier() {
+        // Kaelmyr continues the curve one continent past the Reaches: entry-tier
+        // Kaelmyr gear must beat the Reaches' top tier, and the whole catalog must
+        // resolve through item(id) in the 3400..3600 band.
+        let reaches_top = item(REACHES_ITEM_BASE + 19 * 10).expect("deepest reaches blade exists");
+        let kaelmyr_entry = item(KAELMYR_ITEM_BASE).expect("first kaelmyr blade exists");
+        assert!(
+            kaelmyr_entry.mods.attack > reaches_top.mods.attack,
+            "kaelmyr entry gear should out-damage the deepest reaches gear"
+        );
+        for tier in 0..KAELMYR_TIERS as u32 {
+            for i in 0..10 {
+                let id = KAELMYR_ITEM_BASE + tier * 10 + i;
+                assert!(item(id).is_some(), "kaelmyr item {id} should resolve");
+                assert!(
+                    (KAELMYR_ITEM_BASE..KAELMYR_ITEM_BASE + 200).contains(&id),
+                    "kaelmyr ids must stay in 3400..3600"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kaelmyr_relics_state_they_are_not_combat_items() {
+        for tier in 0..KAELMYR_TIERS {
+            let id = KAELMYR_ITEM_BASE + (tier as u32) * 10 + 9;
+            let relic = item(id).expect("kaelmyr relic should exist");
+            assert_eq!(relic.kind, ItemKind::Valuable);
+            assert!(
+                relic.desc.contains("no combat use"),
+                "{} should explain its lack of combat use",
+                relic.name
+            );
+        }
+    }
+
+    #[test]
     fn reaches_relics_state_they_are_not_combat_items() {
         for tier in 0..REACHES_TIERS {
             let id = REACHES_ITEM_BASE + (tier as u32) * 10 + 9;
@@ -1923,6 +2029,7 @@ mod tests {
             .iter()
             .chain(frontier_items().iter())
             .chain(reaches_items().iter())
+            .chain(kaelmyr_items().iter())
         {
             if it.kind == ItemKind::Valuable {
                 let summary = it.stat_summary();

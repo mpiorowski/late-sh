@@ -428,6 +428,15 @@ const BOARD_DESC: &str = "A weathered board of pinned notices and bounties stand
     square, scrawled by frightened hands and countersigned by the town. Examine it again to \
     take up the next posting, or - if you have earned it - to claim a finished one.";
 
+/// Kaelmyr keeps no towns; its only board is a cairn of scorched stones at the
+/// ashen shore, where the survivors of the drowned Reaches and the tribes' few
+/// deserters scratch their needs. The runtime offers and claims the same way.
+const KAELMYR_BOARD_DESC: &str = "A cairn of scorched stones stands at the ash-gate, hung \
+    with charms of bone and glass and scratched all over with the needs of the desperate: \
+    survivors washed up from the drowned Reaches, deserters of the tribes, and hunters who \
+    mean to walk deeper than sense allows. Examine it again to take up the next posting, or - \
+    if you have earned it - to claim a finished one.";
+
 /// Every capital keeps a stable/menagerie; the runtime opens the companion
 /// vendor when one is examined, where adventurers buy and feed beasts of war.
 const STABLE_DESC: &str = "A long timber stable backs onto the square, loud with the stamp \
@@ -481,6 +490,15 @@ pub const FEATURES: &[Feature] = &[
         "the bounty board",
         FeatureKind::Board,
         BOARD_DESC,
+    ),
+    // Kaelmyr's only safe hold: an ashland cairn-board at the Cinderfall Shore
+    // ash-gate, where the continent's postings hang. Gated behind the Bane of
+    // Yssgar, so only the deepest veterans ever read it.
+    feat(
+        KAELMYR_BASE,
+        "the ash-cairn board",
+        FeatureKind::Board,
+        KAELMYR_BOARD_DESC,
     ),
     // ---- Stables (one per capital: the companion vendor) ----------------
     feat(1, "the war-stable", FeatureKind::Stable, STABLE_DESC),
@@ -2941,6 +2959,12 @@ pub fn seed_world() -> World {
     // gateway search avoids the cavern portal.
     extend_reaches(&mut rooms, &mut spawns, &mut behaviors);
 
+    // Append Kaelmyr, the Ashen Reach: a third ~1900-room continent (rooms
+    // 12000+), a burnt ash-land of braided mazes and organic calderas hung off
+    // Yssgar's chamber in the Reaches and gated behind the Bane of Yssgar. Runs
+    // after the Reaches so its sea-gate search can find Yssgar's home room.
+    extend_kaelmyr(&mut rooms, &mut spawns, &mut behaviors);
+
     // Flesh out the four capitals with a district of new safe rooms each.
     extend_cities(&mut rooms);
 
@@ -4045,10 +4069,14 @@ fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
         // The Reaches deliberately ride the Frontier multipliers: their authored
         // base stats sit on the same pre-scale curve, entering just under the
         // King Who Was Promised Nothing and climbing well past him by Yssgar.
-        let reaches = spawn.id >= REACHES_SPAWN_ID_START;
+        // Kaelmyr (mob ids 960000+) rides the same endgame multipliers; its
+        // authored base stats simply sit a full continent higher on the curve.
+        let reaches = (REACHES_SPAWN_ID_START..KAELMYR_SPAWN_ID_START).contains(&spawn.id);
+        let kaelmyr = spawn.id >= KAELMYR_SPAWN_ID_START;
+        let endgame = frontier || reaches || kaelmyr;
         let living_dark = is_living_dark_spawn(spawn.id);
         let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) =
-            match (frontier || reaches, living_dark, spawn.boss) {
+            match (endgame, living_dark, spawn.boss) {
                 (true, _, true) => (12, 5, 21, 10, 4, 3),
                 (true, _, false) => (2, 1, 19, 10, 3, 2),
                 (false, true, true) => (6, 1, 7, 2, 2, 1),
@@ -4060,7 +4088,7 @@ fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
         spawn.damage = scale_i32(spawn.damage, dmg_num, dmg_den);
         spawn.xp = scale_i32(spawn.xp, xp_num, xp_den);
         if !spawn.boss {
-            spawn.respawn_secs = if frontier || reaches {
+            spawn.respawn_secs = if endgame {
                 scale_u64(spawn.respawn_secs, 3, 4).max(60)
             } else {
                 scale_u64(spawn.respawn_secs, 4, 5).max(25)
@@ -4782,6 +4810,621 @@ fn extend_reaches(
     if let Some(r) = rooms.get_mut(&entrance) {
         r.exits.insert(portal.opposite(), MATLATESH_SQUARE);
     }
+}
+
+// ==== Kaelmyr, the Ashen Reach ============================================
+//
+// A THIRD continent (rooms 12000+), hung off the deepest room of the Sundered
+// Reaches - Yssgar's drowned chamber - and gated behind the Bane of Yssgar
+// title, the deepest end-game crown in the game. Where the Reaches are a
+// drowned sea-realm, Kaelmyr is its opposite: a burnt, ash-choked landmass
+// torn loose from the seabed when Yssgar was slain and the seas drained into
+// the wound he left. The surfacing land baked sunless under an ash-sky, older
+// than Lateania itself, and five peoples cling to its cinders.
+//
+//   HISTORY. Long before the drowned cities of the Reaches, Kaelmyr floated
+//   above the Sundering Deep, a green shelf of the world's first age. When the
+//   Deep was unmade, the shelf broke and rose burning through the drained seas.
+//   Its people did not all die. The Sundering is remembered here not as an end
+//   but as a beginning: the day the ash-sky closed and the calderas woke.
+//
+//   TRIBES woven through the twenty zones:
+//     * The Emberkin    - ash-shamans and fire-cultists of the western calderas,
+//                          who read prophecy in cinder and keep the pyres lit.
+//     * The Cinderbound  - the bound dead, revenants shackled to labour the ash
+//                          by older masters; some have slipped their chains.
+//     * The Gloamwrights - glass-and-obsidian artificers of the black deserts,
+//                          who forge weapons the sun never touched.
+//     * The Stormheld    - sky-clans of the storm-spires who never set foot on
+//                          ash, striking down from the thunderheads.
+//     * The Hollow Choir - the final cult at the continent's wound, who sing to
+//                          the drowned god sleeping beneath and mean to wake it.
+//
+//   THROUGH-LINE. The zones march west-to-east and down: from the ashen shore
+//   where the Reaches spill their dead, through the Emberkin calderas, the
+//   Cinderbound labour-fields, the Gloamwright glass deserts, up into the
+//   Stormheld spires, and down at last into the Hollow Choir's wound, where the
+//   Ashen King, Kaethyr the Unquenched, has ruled since the Sundering and means
+//   to sing the sleeping god awake.
+
+pub const KAELMYR_BASE: RoomId = 12_000;
+const KAELMYR_W: usize = 13;
+const KAELMYR_H: usize = 9;
+const KAELMYR_ZONES: usize = KAELMYR_ZONES_DATA.len();
+/// Kaelmyr mob ids sit in a fresh band above the Reaches (which use 950000+).
+const KAELMYR_SPAWN_ID_START: u32 = 960_000;
+const KAELMYR_SEED: u64 = 0xA54E_D4EA_D000_u64;
+/// Each zone reserves this many room ids (a `KAELMYR_W`×`KAELMYR_H` cell field).
+const KAELMYR_ZONE_STRIDE: u32 = (KAELMYR_W * KAELMYR_H) as u32;
+
+/// Which Kaelmyr zones are carved as organic caverns (calderas, lava-tubes, and
+/// the drowned wound) rather than braided mazes. The rest are mazes. Never a grid.
+const fn kaelmyr_zone_is_cavern(z: usize) -> bool {
+    matches!(z, 2 | 8 | 14 | 19)
+}
+
+pub fn is_kaelmyr_room(id: RoomId) -> bool {
+    (KAELMYR_BASE..KAELMYR_BASE + KAELMYR_ZONES as u32 * KAELMYR_ZONE_STRIDE).contains(&id)
+}
+
+/// Twenty zones of Kaelmyr: (zone, adjective, ground, landmark, creatures, three
+/// mob names, boss). The tribe threading is carried in the mob/boss names and
+/// the landmarks; `kaelmyr_desc` supplies the paragraph prose.
+#[allow(clippy::type_complexity)]
+const KAELMYR_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+    (
+        "Cinderfall Shore",
+        "ash-choked",
+        "grey cinder-drift",
+        "the Reaches' dead heaped on a burnt strand",
+        "shore-scavengers",
+        [
+            "a tide-cast revenant",
+            "a cinder-crawler",
+            "an ash-gorged carrion-thing",
+        ],
+        "Warden Vosk of the Drowned Gate",
+    ),
+    (
+        "Emberkin Terraces",
+        "smouldering",
+        "warm pumice",
+        "the smoke-terraces of the ash-shamans",
+        "Emberkin zealots",
+        ["an Emberkin acolyte", "a pyre-tender", "a cinder-reader"],
+        "Mother Ashglass, First of the Emberkin",
+    ),
+    (
+        "Calder Vhael",
+        "furnace-hot",
+        "cracked black glass",
+        "a living caldera that breathes fire",
+        "flame-born",
+        ["a magma-drake whelp", "a living cinder", "an ember-wraith"],
+        "Vhael, the Breathing Caldera",
+    ),
+    (
+        "Pyre-Roads",
+        "smoke-blind",
+        "road-ash trodden hard",
+        "the funeral roads the Emberkin walk their dead",
+        "pyre-walkers",
+        ["a masked pyre-priest", "an ash-pilgrim", "a cinder-hound"],
+        "The Grand Cindarch",
+    ),
+    (
+        "Sunless Vents",
+        "sulphur-reeking",
+        "hot vent-mud",
+        "a field of shrieking fumaroles",
+        "vent-dwellers",
+        [
+            "a sulphur-scaled lurker",
+            "a vent-crawler",
+            "a fume-choked horror",
+        ],
+        "The Vent-Mother",
+    ),
+    (
+        "Cinderbound Fields",
+        "chain-scarred",
+        "trampled slag",
+        "the labour-fields of the shackled dead",
+        "the shackled dead",
+        [
+            "a chained cinderbound",
+            "an overseer-wraith",
+            "a slag-hauler revenant",
+        ],
+        "The Chainmaster Undying",
+    ),
+    (
+        "Slagworks Ruin",
+        "iron-stained",
+        "cooled slag-heaps",
+        "the broken foundries of a dead age",
+        "foundry-haunts",
+        ["a molten revenant", "a bellows-thrall", "a slag-golem"],
+        "The Furnace-Lord",
+    ),
+    (
+        "Ashen Barrows",
+        "grave-still",
+        "barrow-ash",
+        "the burial-mounds of the Cinderbound's old masters",
+        "barrow-bound",
+        [
+            "a barrow-shackled dead",
+            "a grave-cinder wight",
+            "an ash-entombed lord",
+        ],
+        "The King Beneath the Ash",
+    ),
+    (
+        "Gloamwright Deeps",
+        "obsidian-dark",
+        "shard-strewn glass",
+        "the glass-galleries of the black artificers",
+        "glass-wrights",
+        [
+            "a Gloamwright artisan",
+            "an obsidian sentinel",
+            "a shard-familiar",
+        ],
+        "Archwright Sethume of the Black Glass",
+    ),
+    (
+        "Black Deserts",
+        "mirror-flat",
+        "glassed black sand",
+        "a desert fused to a single sheet of glass",
+        "glass-stalkers",
+        ["a mirage-hunter", "a glass-skinned nomad", "a heat-wraith"],
+        "The Mirror of Noon",
+    ),
+    (
+        "Volcanoglass Reach",
+        "razor-bright",
+        "fresh volcanic glass",
+        "spires of glass drawn straight from the fire",
+        "glasswork-guardians",
+        [
+            "a glass-forged knight",
+            "a molten-cored sentinel",
+            "a shard-swarm",
+        ],
+        "The Glasswright Tyrant",
+    ),
+    (
+        "Ashfall Wastes",
+        "snowing-ash",
+        "deep grey drift",
+        "a plain buried under endless falling ash",
+        "wastes-wanderers",
+        [
+            "an ash-drowned nomad",
+            "a drift-lurker",
+            "a grey-lung revenant",
+        ],
+        "The Grey Pilgrim",
+    ),
+    (
+        "Stormheld Ascent",
+        "wind-torn",
+        "bare wind-scoured rock",
+        "the first ledges of the sky-clans",
+        "sky-clan outriders",
+        [
+            "a Stormheld skirmisher",
+            "a cliff-lancer",
+            "a thunder-scout",
+        ],
+        "Warlord Skarn of the Stormheld",
+    ),
+    (
+        "Thunderspires",
+        "storm-crowned",
+        "lightning-fused stone",
+        "spires that comb the lightning from the sky",
+        "spire-riders",
+        [
+            "a storm-lancer",
+            "a levinbolt caster",
+            "a gale-borne raider",
+        ],
+        "Aethelmyr, the Sky-Queen",
+    ),
+    (
+        "Cinder-Storms",
+        "ash-blind",
+        "spinning cinder-wrack",
+        "the eye of a standing firestorm",
+        "storm-born",
+        [
+            "a firestorm revenant",
+            "a whirling ember-horror",
+            "a cinder-cyclone wraith",
+        ],
+        "The Heart of the Firestorm",
+    ),
+    (
+        "Hollowing",
+        "sound-swallowing",
+        "hollow ash-crust",
+        "where the ash-crust rings hollow over a void",
+        "the hollowed-out",
+        [
+            "a hollow-voiced revenant",
+            "a silence-eater",
+            "an echo-wraith",
+        ],
+        "The First Voice of the Choir",
+    ),
+    (
+        "Choirhold Caverns",
+        "hymn-haunted",
+        "damp sunken ash",
+        "the cavern-halls of the drowned-god cult",
+        "Choir-cultists",
+        [
+            "a Hollow Choir chorister",
+            "a drowned-god zealot",
+            "a hymn-bound wraith",
+        ],
+        "The Choirmaster of the Hollow",
+    ),
+    (
+        "Drowned Wound",
+        "abyss-cold",
+        "the wound's black silt",
+        "the wound where the seas drained away",
+        "wound-dwellers",
+        [
+            "a wound-crawling horror",
+            "a drained-sea revenant",
+            "a fathom-cold terror",
+        ],
+        "The Thing the Seas Fled",
+    ),
+    (
+        "Unquenched Throne",
+        "fire-and-ash",
+        "throne-cinders of a dead age",
+        "the burning throne of the Ashen King",
+        "throne-guard",
+        [
+            "an ash-crowned knight",
+            "an Unquenched zealot",
+            "a cinder-forged guardian",
+        ],
+        "Kaethyr the Unquenched, Ashen King of Kaelmyr",
+    ),
+    (
+        "Sundering Wound",
+        "world-unmaking",
+        "the floor beneath the world",
+        "the deepest scar, where the world was first cut",
+        "the unmade",
+        [
+            "a herald of the unmaking",
+            "an unmade terror",
+            "a singer-of-the-end",
+        ],
+        "Kaethyr Ascendant, Who Sang the God Awake",
+    ),
+];
+
+/// Kaelmyr's paragraph prose: an ashland twist on `frontier_desc`, so the new
+/// continent reads as burnt rather than drowned or wild. Weaves the tribe/place
+/// flavour and hits the >=180-char, >=2-sentence room-prose bar.
+fn kaelmyr_desc(adj: &str, ground: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "You pick across {adj} ground where {ground} crunches and shifts beneath every wary step, and the ash-sky hangs low and starless overhead.",
+        "The land here is broken and burnt, the {ground} pale and treacherous, and a hot wind carries the reek of old fire out of the {adj} dark.",
+        "This {adj} stretch offers no green thing and no shade; only {ground} runs grey to a horizon smudged out by drifting ash.",
+        "The way winds between leaning shelves of scorched rock, the {ground} banked deep in the hollows and still warm to the touch.",
+        "Cinders sift down without end across this {adj} reach, and the {ground} whispers underfoot like something trying to speak.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Ahead looms {feature}, half-lost in the smoke and older than any living memory of it.",
+        "Off the trail stands {feature}, a landmark for the few tribes that still walk these ashes.",
+        "The blackened bones of {feature} jut from the drift, from an age before the Sundering closed the sky.",
+        "Beside the way rests {feature}, silent witness to whatever fire first burned this world.",
+        "Through the haze you make out {feature}, leaning under the weight of uncounted ash-falls.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere in the smoke {creature} call to one another, and the sound is not one that welcomes strangers.",
+        "The air hangs thick with menace, for {creature} have left their marks on stone and ash alike.",
+        "Nothing stirs but the falling cinders, yet you feel {creature} watching from beyond the reddened murk.",
+        "A charred reek drifts on the hot wind; {creature} hunt these ashes, and they hunt without mercy.",
+        "A ringing quiet holds the reach, the quiet of a place from which {creature} have driven all else into the fire.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{ground}", ground);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+/// The Ashen King's ashland places, filling in the non-entrance, non-boss cells.
+const KAELMYR_PLACES: [&str; 10] = [
+    "Cinderway",
+    "Emberhollow",
+    "Ashcrossing",
+    "Smoke-Overlook",
+    "Pyre-Mark",
+    "Slag-Descent",
+    "Cinder-Reach",
+    "Ember-Gauntlet",
+    "Ash-Sanctum",
+    "Smoke-Threshold",
+];
+
+/// Build Kaelmyr, the Ashen Reach: twenty zones of braided mazes and organic
+/// calderas, each carved (never a grid), chained deepest-room -> next-entrance,
+/// and hung off the deepest room of the Sundered Reaches (Yssgar's chamber).
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_kaelmyr(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (KAELMYR_W, KAELMYR_H);
+    let n = w * h;
+    let mut spawn_id: u32 = KAELMYR_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
+        KAELMYR_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = KAELMYR_BASE + (z as u32) * KAELMYR_ZONE_STRIDE;
+        // Kaelmyr picks up a full continent past the Reaches (which sat at 12+z);
+        // its power curve is the deepest in the game.
+        let tier = (z + 32) as i32;
+        let mut rng = MazeRng::new(KAELMYR_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Carve as a braided maze or an organic cavern (with the connectivity
+        // pass), reducing both to a common form: which cells are rooms, their
+        // distance from the entrance, and their open exits. A too-sparse cavern
+        // falls back to a maze so no zone comes out empty. No uniform grids here.
+        let cavern_floor = if kaelmyr_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 24).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        // The zone boss waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Ash-Gate").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Ashen Heart").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", KAELMYR_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str = Box::leak(
+                kaelmyr_desc(adj, ground, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    safe: is_entrance && z == 0, // only the ashen shore is a safe waystation
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            // Behaviour by maze-role: dead-ends ambush, junctions swarm, corridors
+            // patrol or cast; the deepest cell holds the boss.
+            let depth = dist[cell] as i32;
+            let stormland = z >= 12; // the Stormheld spires and beyond crackle
+            let (mob_name, behavior, boss_mob, hp, dmg) = if is_boss {
+                (
+                    boss,
+                    MobBehavior::Brute,
+                    true,
+                    3200 + tier * 260,
+                    128 + tier * 6,
+                )
+            } else if degree == 1 {
+                (
+                    mob_names[0],
+                    MobBehavior::Ambusher,
+                    false,
+                    1900 + tier * 70 + depth * 7,
+                    116 + tier * 4 + depth,
+                )
+            } else if degree >= 3 {
+                (
+                    mob_names[1],
+                    if rng.chance(50) {
+                        MobBehavior::PackHunter
+                    } else {
+                        MobBehavior::Summoner
+                    },
+                    false,
+                    2000 + tier * 80 + depth * 7,
+                    118 + tier * 5 + depth,
+                )
+            } else {
+                // Leave some corridors quiet so the reach breathes.
+                if rng.chance(35) {
+                    continue;
+                }
+                let behavior = match rng.below(4) {
+                    0 => MobBehavior::Wanderer,
+                    1 => MobBehavior::Patroller,
+                    2 => MobBehavior::Hunter,
+                    _ => MobBehavior::Caster(if stormland {
+                        DamageType::Lightning
+                    } else {
+                        DamageType::Fire
+                    }),
+                };
+                (
+                    mob_names[2],
+                    behavior,
+                    false,
+                    1900 + tier * 70 + depth * 7,
+                    116 + tier * 4 + depth,
+                )
+            };
+            let profile = match behavior {
+                MobBehavior::Caster(school) => DamageProfile::new(school, None, None),
+                _ => DamageProfile::new(DamageType::Physical, None, None),
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                // XP continues past the Reaches: Kaelmyr is the longest grind in
+                // the game, ending at the Ashen King Ascendant.
+                xp: if boss_mob {
+                    1400 + tier * 110
+                } else {
+                    420 + tier * 45 + depth * 6
+                },
+                respawn_secs: if boss_mob { 600 } else { 90 },
+                loot: super::items::kaelmyr_loot(z),
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior boss room descends to
+        // this zone's ash-gate, and back up again.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang Kaelmyr off the deepest room of the Sundered Reaches - Yssgar's
+    // drowned chamber - so the whole continent is reachable and gated behind the
+    // Bane of Yssgar. Descend through the wound Yssgar left, and rise back.
+    let entrance = KAELMYR_BASE;
+    if let Some(yssgar_room) = kaelmyr_seagate_room(rooms, spawns) {
+        if let Some(hub) = rooms.get_mut(&yssgar_room) {
+            hub.exits.insert(Dir::Down, entrance);
+        }
+        if let Some(r) = rooms.get_mut(&entrance) {
+            r.exits.insert(Dir::Up, yssgar_room);
+        }
+    }
+}
+
+/// The room Kaelmyr hangs off: the Reaches room where Yssgar, the Sundering
+/// Deep, makes his home - the deepest boss chamber of the whole drowned realm.
+/// Falls back to any Sundering Deep room, then the Reaches sea-gate, so the
+/// continent is never orphaned even if the Reaches change shape.
+fn kaelmyr_seagate_room(rooms: &HashMap<RoomId, Room>, spawns: &[MobSpawn]) -> Option<RoomId> {
+    spawns
+        .iter()
+        .find(|s| s.name == "Yssgar, the Sundering Deep")
+        .map(|s| s.home)
+        .filter(|home| rooms.contains_key(home))
+        .or_else(|| {
+            rooms
+                .values()
+                .filter(|r| is_reaches_room(r.id) && r.zone == "The Sundering Deep")
+                .max_by_key(|r| r.id)
+                .map(|r| r.id)
+        })
+        .or_else(|| rooms.contains_key(&REACHES_BASE).then_some(REACHES_BASE))
 }
 
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
@@ -7487,10 +8130,21 @@ mod tests {
             (750..=1000).contains(&reaches),
             "the Sundered Reaches should be ~900 rooms, got {reaches}"
         );
-        // No stray rooms outside the six known groups.
+        // Kaelmyr, the Ashen Reach: a third continent of braided mazes and organic
+        // calderas (rooms 12000+). Mazes fill their cell field; calderas are
+        // sparse, so the total is a sane band rather than an exact count.
+        let kaelmyr = count_in(
+            KAELMYR_BASE,
+            KAELMYR_BASE + KAELMYR_ZONES as RoomId * KAELMYR_ZONE_STRIDE,
+        );
+        assert!(
+            (1800..=KAELMYR_ZONES * KAELMYR_W * KAELMYR_H).contains(&kaelmyr),
+            "Kaelmyr should be ~2000 rooms, got {kaelmyr}"
+        );
+        // No stray rooms outside the seven known groups.
         assert_eq!(
             world.rooms.len(),
-            original + catacombs + thornwood + caverns + housing + reaches,
+            original + catacombs + thornwood + caverns + housing + reaches + kaelmyr,
             "every room should belong to a known region"
         );
         for spawn in &world.spawns {
@@ -7527,6 +8181,107 @@ mod tests {
             degrees.len() >= 3,
             "rooms should vary in how many ways they branch (got {degrees:?})"
         );
+    }
+
+    #[test]
+    fn kaelmyr_is_mazes_and_calderas_not_grids() {
+        let world = seed_world();
+        let kaelmyr: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| is_kaelmyr_room(r.id))
+            .collect();
+        // A real continent of rooms (~2000).
+        assert!(kaelmyr.len() >= 1800, "Kaelmyr is a sizeable continent");
+        // A uniform grid has no dead-ends; braided mazes and calderas have many.
+        let dead_ends = kaelmyr.iter().filter(|r| r.exits.len() == 1).count();
+        assert!(
+            dead_ends >= 20,
+            "Kaelmyr should wind into dead-ends, not be square blocks (got {dead_ends})"
+        );
+        let degrees: std::collections::HashSet<usize> =
+            kaelmyr.iter().map(|r| r.exits.len()).collect();
+        assert!(
+            degrees.len() >= 3,
+            "Kaelmyr rooms should vary in how many ways they branch (got {degrees:?})"
+        );
+    }
+
+    #[test]
+    fn kaelmyr_is_reachable_gated_and_behaviour_driven() {
+        let world = seed_world();
+        // The whole continent hangs off Yssgar's chamber in the Reaches, so a BFS
+        // from the Reaches base reaches into Kaelmyr.
+        let mut seen = HashSet::new();
+        let mut stack = vec![world.start_room];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(r) = world.room(id) {
+                for to in r.exits.values() {
+                    stack.push(*to);
+                }
+            }
+        }
+        assert!(
+            world.rooms.keys().any(|id| is_kaelmyr_room(*id)),
+            "Kaelmyr rooms exist"
+        );
+        assert!(
+            world.rooms.keys().all(|id| seen.contains(id)),
+            "every Kaelmyr room must be reachable from the start"
+        );
+        // The entrance hangs off a real Reaches room via Up, and that room links
+        // back down into Kaelmyr - the gated sea-gate spine, reciprocal.
+        let entrance = world.room(KAELMYR_BASE).expect("Kaelmyr ash-gate exists");
+        let up = entrance.exits.get(&Dir::Up).copied();
+        assert!(
+            up.is_some_and(is_reaches_room),
+            "the Kaelmyr entrance rises into the Reaches"
+        );
+        let reaches_room = world.room(up.unwrap()).expect("the reaches gate room");
+        assert!(
+            reaches_room.exits.get(&Dir::Down) == Some(&KAELMYR_BASE),
+            "the Reaches gate descends into Kaelmyr"
+        );
+        // Kaelmyr foes are all behaviour-driven, with several distinct behaviours.
+        let spawns: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| s.id >= KAELMYR_SPAWN_ID_START)
+            .collect();
+        assert!(!spawns.is_empty(), "Kaelmyr should be populated");
+        let mut kinds = HashSet::new();
+        for s in &spawns {
+            let b = world.behavior_of(s.id);
+            assert_ne!(
+                b,
+                MobBehavior::Sentinel,
+                "{} should have a behavior",
+                s.name
+            );
+            kinds.insert(std::mem::discriminant(&b));
+        }
+        assert!(kinds.len() >= 4, "Kaelmyr should field varied behaviours");
+        // Every zone has exactly one boss, and Kaelmyr loot resolves and stays
+        // clear of the Frontier/Reaches catalogs.
+        let bosses = spawns.iter().filter(|s| s.boss).count();
+        assert_eq!(bosses, KAELMYR_ZONES, "one boss per Kaelmyr zone");
+        for s in &spawns {
+            for id in s.loot {
+                assert!(
+                    (3400..3600).contains(id),
+                    "{} should drop Kaelmyr catalog loot (3400..3600), got {id}",
+                    s.name
+                );
+                assert!(
+                    crate::app::door::lateania::items::item(*id).is_some(),
+                    "{} drops missing item {id}",
+                    s.name
+                );
+            }
+        }
     }
 
     #[test]
