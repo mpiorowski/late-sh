@@ -35,6 +35,19 @@ pub enum InputAction {
 }
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
+    // While composing a chat line, keys feed the line until Enter (send) or Esc
+    // (cancel). This runs before the Esc-leaves check so Esc cancels compose
+    // rather than leaving the world. Chat is world-local (never hits late.sh).
+    if state.chat_active() {
+        match byte {
+            0x1B => state.chat_cancel(),
+            b'\r' | b'\n' => state.chat_send(),
+            0x7f | 0x08 => state.chat_backspace(),
+            0x20..=0x7e => state.chat_push(byte as char),
+            _ => {}
+        }
+        return InputAction::Handled;
+    }
     // Lateania reserves Esc for returning to its landing page.
     if byte == 0x1B {
         return InputAction::Leave;
@@ -215,6 +228,12 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
+        b'\'' => {
+            // Open the local chat line (say to the room). World-local; does not
+            // leak into late.sh.
+            state.open_chat();
+            InputAction::Handled
+        }
         b'\r' | b'\n' => {
             if in_list {
                 state.activate_selection();
@@ -311,6 +330,10 @@ fn select_row(state: &mut State, target: usize) {
 }
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
+    // Arrow keys do nothing while composing a chat line (they'd otherwise move).
+    if state.chat_active() {
+        return true;
+    }
     let in_list = matches!(
         state.panel(),
         Panel::Inventory

@@ -67,6 +67,10 @@ pub struct State {
     join_requested_at: Instant,
     reset_version: u64,
     reset_elsewhere: bool,
+    /// The chat line being composed, if the player is typing (Some = compose
+    /// mode captures keys). Chat is world-local via the service's `say`, so it
+    /// never leaks into late.sh's global feed.
+    chat_buffer: Option<String>,
 }
 
 impl State {
@@ -94,6 +98,7 @@ impl State {
             join_requested_at,
             reset_version,
             reset_elsewhere: false,
+            chat_buffer: None,
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -290,6 +295,60 @@ impl State {
     pub fn gather(&mut self) {
         if self.ensure_player_present() {
             self.svc.gather_task(self.user_id);
+        }
+    }
+
+    // ---- Local chat (say) ----------------------------------------------
+    //
+    // Composing a line captures keystrokes until Enter (send) or Esc (cancel).
+    // Sending routes through the service's world-local `say`, so Lateania chat
+    // stays inside Lateania and never reaches late.sh's global feed.
+
+    /// True while the player is typing a chat line (input capture is active).
+    pub fn chat_active(&self) -> bool {
+        self.chat_buffer.is_some()
+    }
+
+    /// The line being composed, for the input prompt (None when not composing).
+    pub fn chat_text(&self) -> Option<&str> {
+        self.chat_buffer.as_deref()
+    }
+
+    /// Begin composing a chat line.
+    pub fn open_chat(&mut self) {
+        if self.chat_buffer.is_none() {
+            self.chat_buffer = Some(String::new());
+        }
+    }
+
+    /// Discard the line being composed.
+    pub fn chat_cancel(&mut self) {
+        self.chat_buffer = None;
+    }
+
+    /// Append a typed character to the chat line (capped so it can't run away).
+    pub fn chat_push(&mut self, c: char) {
+        if let Some(buf) = self.chat_buffer.as_mut()
+            && buf.chars().count() < 200
+        {
+            buf.push(c);
+        }
+    }
+
+    /// Delete the last character of the chat line.
+    pub fn chat_backspace(&mut self) {
+        if let Some(buf) = self.chat_buffer.as_mut() {
+            buf.pop();
+        }
+    }
+
+    /// Send the composed line as local speech, then close compose mode.
+    pub fn chat_send(&mut self) {
+        if let Some(buf) = self.chat_buffer.take() {
+            let msg = buf.trim().to_string();
+            if !msg.is_empty() && self.ensure_player_present() {
+                self.svc.say_task(self.user_id, msg);
+            }
         }
     }
 
