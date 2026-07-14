@@ -1,4 +1,4 @@
-//! The Dark Horse Tavern's gambling games (`modules/game_dice.php`,
+//! The Crooked Wheel's gambling games (`modules/game_dice.php`,
 //! `game_fivesix.php`, `game_stones.php`): the pure game logic, transcribed
 //! 1=1 from the stock modules. The menu wiring, the shared Five Sixes pot
 //! (svc), and all prose live elsewhere; these are the mechanics.
