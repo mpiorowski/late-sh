@@ -76,9 +76,11 @@ impl ActivityPublisher {
     }
 
     /// Announce a finished daily match to #lounge. `winner_id` is `None` for a
-    /// draw; otherwise it must be one of the two players. Resolves both names,
-    /// then emits a single `DailyResult` event (one line per match; `match_id`
-    /// keys the #lounge repeat throttle so distinct matches never collapse).
+    /// draw; otherwise it must be one of the two players. Emits a single
+    /// `DailyResult` event (one line per match; `match_id` keys the #lounge
+    /// repeat throttle so distinct matches never collapse). A decisive result
+    /// names only the winner (the loser is never resolved); a draw names both
+    /// players, so `opponent_id` is only looked up on the draw path.
     pub fn daily_result_task(
         &self,
         match_id: Uuid,
@@ -90,16 +92,12 @@ impl ActivityPublisher {
         let publisher = self.clone();
         tokio::spawn(async move {
             let event = match winner_id {
+                // Decisive: name only the winner — the loser is never resolved.
                 Some(winner) => {
-                    let loser = if winner == challenger_id {
-                        opponent_id
-                    } else {
-                        challenger_id
-                    };
                     let winner_name = publisher.username_for(winner).await;
-                    let loser_name = publisher.username_for(loser).await;
-                    ActivityEvent::daily_win(winner, winner_name, loser_name, game_label, match_id)
+                    ActivityEvent::daily_win(winner, winner_name, game_label, match_id)
                 }
+                // Draw: nobody lost, so name both players.
                 None => {
                     let challenger_name = publisher.username_for(challenger_id).await;
                     let opponent_name = publisher.username_for(opponent_id).await;

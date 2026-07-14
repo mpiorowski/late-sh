@@ -195,6 +195,22 @@ pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
+/// Compact relative stamp for tight rows: `now`, `5m`, `3h`, `2d`, `06-12`.
+pub fn format_relative_time_short(dt: chrono::DateTime<chrono::Utc>) -> String {
+    let diff = chrono::Utc::now().signed_duration_since(dt);
+    if diff.num_seconds() < 60 {
+        "now".to_string()
+    } else if diff.num_minutes() < 60 {
+        format!("{}m", diff.num_minutes())
+    } else if diff.num_hours() < 24 {
+        format!("{}h", diff.num_hours())
+    } else if diff.num_days() < 7 {
+        format!("{}d", diff.num_days())
+    } else {
+        dt.format("%m-%d").to_string()
+    }
+}
+
 /// Build a one-line action-hint footer: `key desc · key desc · …`.
 ///
 /// Keys render in amber, descriptions dim, separators faint. This is the shared

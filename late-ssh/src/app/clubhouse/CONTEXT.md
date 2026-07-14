@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-07-03 (bartender sells drinks for Late Chips: grounded JSON order flow in `ai/ghost.rs`, floor-guarded debit + `user_drinks` buzz tracking, drunk-level glow under username labels here and on chat author labels. Previously: opened to everyone: admin gate removed, `0` joins the top nav and Tab cycle, sessions land here on connect; AI bartender greeting with scripted fallback; bartender banner top-left; shared multiplayer lobby, spawn-in-seat, speech bubbles replace the embedded chat panel, emotes, door ambience, dog petting, first-visit tutorial)
+- Last updated: 2026-07-03 (bartender sells drinks for Late Chips: grounded JSON order flow in `ai/ghost.rs`, floor-guarded debit + `user_drinks` buzz tracking, drunk-level glow under username labels here and on chat author labels)
 - Status: Active
 
 ## 1. Summary

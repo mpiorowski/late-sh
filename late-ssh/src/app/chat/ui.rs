@@ -56,9 +56,7 @@ fn is_bot_author(username: &str) -> bool {
 /// Checked together with the body prefix before a message renders as an
 /// authorless system row.
 fn is_system_author(username: &str) -> bool {
-    username
-        .trim()
-        .eq_ignore_ascii_case(crate::app::activity::lounge::SYSTEM_USERNAME)
+    crate::app::activity::lounge::is_system_username(username)
 }
 
 // ── Dashboard chat card ─────────────────────────────────────
@@ -67,6 +65,9 @@ pub struct DashboardChatView<'a> {
     /// When present, the 3-row pet strip renders between the messages and
     /// the composer (pet entitlement + tweak resolved by the caller).
     pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
+    /// Recent #lounge system-feed lines (newest first), packed left to
+    /// right into the composer-gap row.
+    pub activity_ticker: &'a [super::state::ActivityTickerEntry],
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
@@ -534,17 +535,18 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
 }
 
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
-    let (messages, _, composer) = split_chat_pet_strip_and_composer(area, composer_height, 0);
+    let (messages, _, _, composer) = split_chat_pet_strip_and_composer(area, composer_height, 0);
     (messages, composer)
 }
 
-/// Vertical layout for a chat surface: messages fill, then a 1-row gap, then
-/// an optional pet strip (0 rows when absent) directly above the composer.
+/// Vertical layout for a chat surface: messages fill, then a 1-row gap (the
+/// activity ticker slot), then an optional pet strip (0 rows when absent)
+/// directly above the composer.
 fn split_chat_pet_strip_and_composer(
     area: Rect,
     composer_height: u16,
     pet_strip_height: u16,
-) -> (Rect, Rect, Rect) {
+) -> (Rect, Rect, Rect, Rect) {
     let layout = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(CHAT_COMPOSER_GAP_HEIGHT),
@@ -552,7 +554,67 @@ fn split_chat_pet_strip_and_composer(
         Constraint::Length(composer_height),
     ])
     .split(area);
-    (layout[0], layout[2], layout[3])
+    (layout[0], layout[1], layout[2], layout[3])
+}
+
+/// The one-row #lounge activity ticker rendered in the gap between messages
+/// and composer. The queue packs left to right, newest first — each event as
+/// `text (5m)` with faint `·` separators — and events that no longer fit
+/// collapse into a trailing `+N`. The row itself always exists (it doubles
+/// as the composer gap), so the chrome never moves; an empty queue just
+/// leaves it blank.
+fn draw_activity_ticker(
+    frame: &mut Frame,
+    area: Rect,
+    entries: &[super::state::ActivityTickerEntry],
+) {
+    if entries.is_empty() || area.is_empty() {
+        return;
+    }
+    let text_style = Style::default()
+        .fg(theme::TEXT_DIM())
+        .add_modifier(Modifier::ITALIC);
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let width = area.width as usize;
+
+    let mut spans = vec![Span::raw(" "), Span::styled("· ", faint)];
+    let mut used = 3usize;
+    let mut shown = 0usize;
+    for (i, entry) in entries.iter().enumerate() {
+        let stamp = format!(
+            " ({})",
+            crate::app::common::primitives::format_relative_time_short(entry.at)
+        );
+        let sep = if i == 0 { 0 } else { 3 }; // " · "
+        // Keep room for a trailing " +N" unless this is the last entry.
+        let reserve = if i + 1 < entries.len() { 4 } else { 0 };
+        let cost = entry.text.chars().count() + stamp.chars().count();
+        if i > 0 {
+            if used + sep + cost + reserve > width {
+                break;
+            }
+            spans.push(Span::styled(" · ", faint));
+            used += sep;
+        }
+        // The newest entry always shows, truncated to fit if it must.
+        let budget = width.saturating_sub(used + stamp.chars().count() + reserve);
+        let text: String = if i == 0 && entry.text.chars().count() > budget && budget > 1 {
+            let mut cut: String = entry.text.chars().take(budget - 1).collect();
+            cut.push('…');
+            cut
+        } else {
+            entry.text.clone()
+        };
+        used += text.chars().count() + stamp.chars().count();
+        spans.push(Span::styled(text, text_style));
+        spans.push(Span::styled(stamp, faint));
+        shown += 1;
+    }
+    let hidden = entries.len() - shown;
+    if hidden > 0 {
+        spans.push(Span::styled(format!(" +{hidden}"), faint));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_room_page_effects(frame: &mut Frame, area: Rect, effects: &[ActiveChatRoomEffect]) {
@@ -995,8 +1057,9 @@ pub fn draw_dashboard_chat_card(
     } else {
         0
     };
-    let (mut messages_area, pet_strip_area, composer_area) =
+    let (mut messages_area, ticker_area, pet_strip_area, composer_area) =
         split_chat_pet_strip_and_composer(area, composer_height, pet_strip_height);
+    draw_activity_ticker(frame, ticker_area, view.activity_ticker);
     if let Some(pet_strip) = &view.pet_strip {
         crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
     }
@@ -2283,6 +2346,9 @@ pub struct ChatRenderInput<'a> {
     /// When present, the 3-row pet strip renders between the messages and
     /// the composer (pet entitlement + tweak resolved by the caller).
     pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
+    /// Recent #lounge system-feed lines (newest first), packed left to
+    /// right into the composer-gap row.
+    pub activity_ticker: &'a [super::state::ActivityTickerEntry],
     pub feeds_selected: bool,
     pub feeds_processing: bool,
     pub feeds_unread_count: i64,
@@ -3758,8 +3824,9 @@ pub fn draw_chat_center(
     } else {
         0
     };
-    let (messages_area, pet_strip_area, composer_area) =
+    let (messages_area, ticker_area, pet_strip_area, composer_area) =
         split_chat_pet_strip_and_composer(area, selection_mode.composer_height(), pet_strip_height);
+    draw_activity_ticker(frame, ticker_area, view.activity_ticker);
     if let Some(pet_strip) = &view.pet_strip {
         crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
     }
@@ -4420,6 +4487,7 @@ mod tests {
 
         ChatRenderInput {
             pet_strip: None,
+            activity_ticker: &[],
             feeds_selected: false,
             feeds_processing: false,
             feeds_unread_count: 0,

@@ -42,7 +42,7 @@ impl DailyGame {
     }
 
     /// The human-readable game name for prose surfaces (e.g. the #lounge result
-    /// line "beat bob at Connect Four"). Distinct from `label`, which is the
+    /// line "won a game of Connect Four"). Distinct from `label`, which is the
     /// lowercase command token.
     pub const fn display_name(self) -> &'static str {
         match self {

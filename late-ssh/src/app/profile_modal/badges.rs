@@ -59,5 +59,6 @@ pub(crate) fn legend_lines() -> Vec<Line<'static>> {
             "NHA NetHack Amulet  NHY NetHack Ascension",
             dim,
         )),
+        Line::from(Span::styled("GDS Green Dragon Slayer", dim)),
     ]
 }

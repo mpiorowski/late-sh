@@ -324,10 +324,13 @@ impl ActivityEvent {
     /// A finished daily match with a decisive result, attributed to the winner.
     /// `loser` names the other player; the line reads "{winner} beat {loser} at
     /// {game}".
+    /// A finished daily match with a winner. The line names only the winner and
+    /// the game — "{winner} won a game of {game}" — never the loser: a friendly
+    /// clubhouse feed, not a scoreboard that shames whoever lost. `match_id`
+    /// keys the #lounge repeat throttle.
     pub fn daily_win(
         winner_id: Uuid,
         winner: impl Into<String>,
-        loser: impl AsRef<str>,
         game_label: &str,
         match_id: Uuid,
     ) -> Self {
@@ -338,13 +341,14 @@ impl ActivityEvent {
                 game: game_label.to_string(),
                 match_id,
             },
-            format!("beat {} at {game_label}", loser.as_ref()),
+            format!("won a game of {game_label}"),
         )
     }
 
     /// A finished daily match that ended in a draw. Attributed to `player_a`
     /// (arbitrary — the line names both): "{player_a} drew with {player_b} at
-    /// {game}".
+    /// {game}". Unlike [`Self::daily_win`], a draw shames no one, so naming both
+    /// players is fair game.
     pub fn daily_draw(
         player_a_id: Uuid,
         player_a: impl Into<String>,
