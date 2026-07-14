@@ -44,7 +44,7 @@ Locked shape (owner decisions):
 
 ## 4. The blackjack event feed
 
-The blackjack event channel is created eagerly in `HouseTableRegistry::new` (not lazily with the service) so `forward_blackjack_seat_joins` can subscribe at startup, before anyone sits down, and relay seat joins onto the shared seat-activity stream; the lazy `BlackjackService` is handed the same sender when first created.
+The blackjack event channel is created eagerly in `HouseTableRegistry::new` (not lazily with the service), so its sender outlives every service instance. `forward_blackjack_seat_joins` subscribes lazily, inside `blackjack_service`'s `get_or_insert_with` on the first sit-down, and relays seat joins onto the shared seat-activity stream; the subscribe runs just before the `BlackjackService` that emits those events is constructed with the same sender, so no seat join can be missed.
 
 ## 5. UI surfaces
 

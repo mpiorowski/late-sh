@@ -232,6 +232,7 @@ impl HouseTableRegistry {
                         crate::app::lobby::house::blackjack::state::Phase::BetPending
                             | crate::app::lobby::house::blackjack::state::Phase::PlayerTurn
                             | crate::app::lobby::house::blackjack::state::Phase::DealerTurn
+                            | crate::app::lobby::house::blackjack::state::Phase::Settling
                     ),
                 }
             }

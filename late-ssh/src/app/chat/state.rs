@@ -3523,6 +3523,12 @@ impl ChatState {
                 }
                 ChatEvent::GameRoomJoined { user_id, room_id } if self.user_id == user_id => {
                     self.request_list();
+                    // House tables join lazily, so the visible-room tail can be
+                    // requested before membership lands and fail the member
+                    // check, leaving room_id stuck in loading_tail_rooms. Clear
+                    // it first so this post-join request actually issues instead
+                    // of being suppressed as already-loading.
+                    self.loading_tail_rooms.remove(&room_id);
                     self.request_room_tail(room_id);
                 }
                 ChatEvent::RoomFailed { user_id, message } if self.user_id == user_id => {

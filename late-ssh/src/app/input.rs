@@ -3144,8 +3144,11 @@ fn mouse_scroll_delta(mouse: MouseEvent) -> Option<isize> {
 }
 
 fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
-    // Route arrows to autocomplete when active
-    if matches!(screen, Screen::Dashboard | Screen::Clubhouse)
+    // Route arrows to autocomplete when active. Every chat-composing screen
+    // (Dashboard, Clubhouse, and the embedded Daily/House chats) shares the
+    // composer, so the mention popup can open on any of them; the composer
+    // gate keeps arrows out of the game handlers while it's up.
+    if screen_composes_chat(screen)
         && app.chat.is_composing()
         && app.chat.is_autocomplete_active()
     {

@@ -1869,6 +1869,12 @@ impl SharedState {
     }
 
     fn remove_seat(&mut self, index: usize) {
+        // The service is a process-global singleton, so drop the departing
+        // user's cached global balance instead of letting the map accumulate
+        // one entry per user who ever sat for the life of the process.
+        if let Some(user_id) = self.seats[index] {
+            self.global_balances.remove(&user_id);
+        }
         self.seats[index] = None;
         self.balances[index] = 0;
         self.hole_cards[index].clear();
