@@ -64,13 +64,14 @@ pub(crate) fn draw_daily_inline(
     let my_matches = state.my_matches();
     let (turn_rows, waiting_rows): (Vec<_>, Vec<_>) =
         my_matches.iter().partition(|item| state.my_turn(item));
-    let match_row = |item: &&crate::app::lobby::daily::svc::DailyMatchItem, status| DailyPanelMatchRow {
-        opponent: state
-            .opponent_of(item)
-            .1
-            .unwrap_or_else(|| "player".to_string()),
-        status,
-    };
+    let match_row =
+        |item: &&crate::app::lobby::daily::svc::DailyMatchItem, status| DailyPanelMatchRow {
+            opponent: state
+                .opponent_of(item)
+                .1
+                .unwrap_or_else(|| "player".to_string()),
+            status,
+        };
     // Actionable beats news beats waiting: your-turn rows, then unseen
     // results, then matches waiting on the opponent.
     let mut matches: Vec<DailyPanelMatchRow> = turn_rows

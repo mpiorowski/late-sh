@@ -279,41 +279,37 @@ impl TronService {
     }
 
     fn publish_win(&self, win: Option<WinEvent>) {
-        if let Some(win) = win {
-            if win.payout > 0 {
-                let chip_svc = self.chip_svc.clone();
-                tokio::spawn(async move {
-                    let Some(reward_key) = win.reward_key else {
-                        return;
-                    };
-                    match chip_svc
-                        .credit_cooldown_reward_template(
-                            win.user_id,
-                            reward_key,
-                            TRON_WIN_LEDGER_REASON,
-                        )
-                        .await
-                    {
-                        Ok(payout) => {
-                            if !payout.credited {
-                                tracing::info!(
-                                    user_id = %win.user_id,
-                                    payout = payout.amount,
-                                    "suppressed tron win chips due to payout cooldown"
-                                );
-                            }
-                        }
-                        Err(error) => {
-                            tracing::error!(
-                                ?error,
+        if let Some(win) = win
+            && win.payout > 0
+        {
+            let chip_svc = self.chip_svc.clone();
+            tokio::spawn(async move {
+                let Some(reward_key) = win.reward_key else {
+                    return;
+                };
+                match chip_svc
+                    .credit_cooldown_reward_template(win.user_id, reward_key, TRON_WIN_LEDGER_REASON)
+                    .await
+                {
+                    Ok(payout) => {
+                        if !payout.credited {
+                            tracing::info!(
                                 user_id = %win.user_id,
-                                payout = win.payout,
-                                "failed to credit tron win chips"
+                                payout = payout.amount,
+                                "suppressed tron win chips due to payout cooldown"
                             );
                         }
                     }
-                });
-            }
+                    Err(error) => {
+                        tracing::error!(
+                            ?error,
+                            user_id = %win.user_id,
+                            payout = win.payout,
+                            "failed to credit tron win chips"
+                        );
+                    }
+                }
+            });
         }
     }
 

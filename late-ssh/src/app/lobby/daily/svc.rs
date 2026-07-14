@@ -292,7 +292,7 @@ impl DailyService {
                 if let Err(e) = svc.refresh().await {
                     tracing::error!(error = ?e, "failed to refresh daily matches");
                 }
-                if ticks % CHAT_CLEANUP_EVERY_TICKS == 0 {
+                if ticks.is_multiple_of(CHAT_CLEANUP_EVERY_TICKS) {
                     match svc.cleanup_stale_chat_rooms().await {
                         Ok(0) => {}
                         Ok(deleted) => {

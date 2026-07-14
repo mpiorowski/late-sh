@@ -35,10 +35,10 @@ impl HouseTable {
     /// state, so each variant owns a fixed one.
     pub const fn table_id(self) -> Uuid {
         match self {
-            Self::Poker => Uuid::from_u128(0x001a7e_5000_7000_8000_000000000001),
-            Self::Blackjack => Uuid::from_u128(0x001a7e_5000_7000_8000_000000000002),
-            Self::Asterion => Uuid::from_u128(0x001a7e_5000_7000_8000_000000000003),
-            Self::Tron => Uuid::from_u128(0x001a7e_5000_7000_8000_000000000004),
+            Self::Poker => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0001),
+            Self::Blackjack => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0002),
+            Self::Asterion => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0003),
+            Self::Tron => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0004),
         }
     }
 

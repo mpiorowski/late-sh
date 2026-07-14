@@ -49,8 +49,10 @@ pub const SYSTEM_LINE_PREFIX: &str = "· ";
 
 /// Same user re-sitting at the same table (or re-triggering any one event
 /// shape) within this window is dropped: seat toggling must not fill the
-/// lounge. Everything else in the feed is naturally rare.
-const REPEAT_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// lounge. Genuinely distinct events still pass — a chess win keys on its
+/// `match_id`, so each match is its own line. Everything else is naturally
+/// rare.
+const REPEAT_WINDOW: Duration = Duration::from_secs(30 * 60);
 
 /// Spawn the forwarder. Failure to ensure the system user disables the feed
 /// for this process (logged); it does not take the server down.

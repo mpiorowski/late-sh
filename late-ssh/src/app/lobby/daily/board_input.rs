@@ -5,9 +5,9 @@
 //! always route to chat, and the message-action keys route to chat while a
 //! match-chat message is selected.
 
-use crate::app::lobby::daily::games::DailyGame;
 use crate::app::games::chess_core::{board_ui, types::ChessPieceRenderMode};
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
+use crate::app::lobby::daily::games::DailyGame;
 use crate::app::state::App;
 
 /// Route one event to the board. Returns true when consumed.

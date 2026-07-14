@@ -1630,7 +1630,6 @@ fn bartender_round_intent(body: &str, bartender_username: &str) -> bool {
     )
 }
 
-
 fn valid_mention_start(text: &str, at: usize) -> bool {
     if at == 0 {
         return true;

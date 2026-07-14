@@ -12,7 +12,9 @@ use ratatui::{
 };
 
 use crate::app::files::terminal_image::TerminalImageFrame;
-use crate::app::{chat::ui::EmbeddedRoomChatView, common::theme, lobby::house::state::HouseTableClient};
+use crate::app::{
+    chat::ui::EmbeddedRoomChatView, common::theme, lobby::house::state::HouseTableClient,
+};
 use crate::usernames::UsernameLookup;
 
 pub(crate) fn draw(

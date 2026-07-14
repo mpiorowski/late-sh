@@ -182,9 +182,9 @@ impl HouseTableRegistry {
                     crate::app::lobby::house::asterion::state::State::new(svc, user_id, session_id),
                 ))
             }
-            HouseTable::Tron => Some(HouseTableClient::Tron(
+            HouseTable::Tron => Some(HouseTableClient::Tron(Box::new(
                 crate::app::lobby::house::tron::state::State::new(self.tron_service(), user_id),
-            )),
+            ))),
         }
     }
 
@@ -257,7 +257,8 @@ impl HouseTableRegistry {
                 HouseOccupancy {
                     seated: snapshot.seats.iter().filter(|seat| seat.is_some()).count(),
                     capacity,
-                    in_round: snapshot.phase == crate::app::lobby::house::tron::state::TronPhase::Running,
+                    in_round: snapshot.phase
+                        == crate::app::lobby::house::tron::state::TronPhase::Running,
                 }
             }
         }
@@ -309,10 +310,7 @@ impl HouseTableRegistry {
                 let snapshot = svc.current_snapshot();
                 let action_phase = matches!(
                     snapshot.phase,
-                    PokerPhase::PreFlop
-                        | PokerPhase::Flop
-                        | PokerPhase::Turn
-                        | PokerPhase::River
+                    PokerPhase::PreFlop | PokerPhase::Flop | PokerPhase::Turn | PokerPhase::River
                 );
                 action_phase
                     && snapshot

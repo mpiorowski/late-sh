@@ -9,7 +9,9 @@ use ratatui::{Frame, layout::Rect};
 use uuid::Uuid;
 
 use crate::app::common::primitives::Screen;
-use crate::app::lobby::house::{registry::HouseTableRegistry, tables::HouseTable, types::InputAction};
+use crate::app::lobby::house::{
+    registry::HouseTableRegistry, tables::HouseTable, types::InputAction,
+};
 use crate::app::notify::{Notification, Notifier};
 use crate::usernames::UsernameLookup;
 
@@ -17,7 +19,7 @@ pub enum HouseTableClient {
     Poker(crate::app::lobby::house::poker::state::State),
     Blackjack(crate::app::lobby::house::blackjack::state::State),
     Asterion(crate::app::lobby::house::asterion::state::State),
-    Tron(crate::app::lobby::house::tron::state::State),
+    Tron(Box<crate::app::lobby::house::tron::state::State>),
 }
 
 impl HouseTableClient {
@@ -66,10 +68,14 @@ impl HouseTableClient {
                     crate::app::lobby::house::blackjack::input::InputAction::Handled => {
                         InputAction::Handled
                     }
-                    crate::app::lobby::house::blackjack::input::InputAction::Leave => InputAction::Leave,
+                    crate::app::lobby::house::blackjack::input::InputAction::Leave => {
+                        InputAction::Leave
+                    }
                 }
             }
-            Self::Asterion(state) => crate::app::lobby::house::asterion::input::handle_key(state, byte),
+            Self::Asterion(state) => {
+                crate::app::lobby::house::asterion::input::handle_key(state, byte)
+            }
             Self::Tron(state) => crate::app::lobby::house::tron::input::handle_key(state, byte),
         }
     }
@@ -80,7 +86,9 @@ impl HouseTableClient {
         match self {
             Self::Poker(_) => false,
             Self::Blackjack(_) => false,
-            Self::Asterion(state) => crate::app::lobby::house::asterion::input::handle_arrow(state, key),
+            Self::Asterion(state) => {
+                crate::app::lobby::house::asterion::input::handle_arrow(state, key)
+            }
             Self::Tron(state) => crate::app::lobby::house::tron::input::handle_arrow(state, key),
         }
     }
@@ -114,7 +122,9 @@ impl HouseTableClient {
                 crate::app::lobby::house::poker::ui::draw_game(frame, area, state, usernames);
             }
             Self::Blackjack(state) => {
-                crate::app::lobby::house::blackjack::ui::draw_game(frame, area, state, false, usernames);
+                crate::app::lobby::house::blackjack::ui::draw_game(
+                    frame, area, state, false, usernames,
+                );
             }
             Self::Asterion(state) => {
                 crate::app::lobby::house::asterion::ui::draw_game(frame, area, state, usernames);

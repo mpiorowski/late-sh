@@ -23,4 +23,3 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
 
     chat::input::handle_byte(app, byte)
 }
-

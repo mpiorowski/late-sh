@@ -9,8 +9,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::Context;
 use late_core::{
-    db::Db, models::chat_room::ChatRoom, rate_limit::IpRateLimiter,
-    shutdown::CancellationToken,
+    db::Db, models::chat_room::ChatRoom, rate_limit::IpRateLimiter, shutdown::CancellationToken,
 };
 use late_ssh::{
     api,
@@ -31,10 +30,7 @@ use late_ssh::{
     ssh,
     state::State,
 };
-use tokio::{
-    sync::Semaphore,
-    task::JoinSet,
-};
+use tokio::{sync::Semaphore, task::JoinSet};
 
 fn begin_drain(
     state: &State,

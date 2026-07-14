@@ -17,14 +17,14 @@ use uuid::Uuid;
 
 use crate::app::{
     common::theme,
-    lobby::daily::state::{
-        ChessDetail, DailyBoardState, DailyGameDetail, DailyMatchDetail, DailyState,
-        format_deadline,
-    },
     files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
     games::chess_core::{
         board_ui::{self, BoardCtx, pick_tier},
         types::{ChessColor, ChessPiece, ChessPieceKind, ChessPieceRenderMode, piece_glyph},
+    },
+    lobby::daily::state::{
+        ChessDetail, DailyBoardState, DailyGameDetail, DailyMatchDetail, DailyState,
+        format_deadline,
     },
 };
 

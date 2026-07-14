@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn other_keys_fall_through() {
         let mut s = State::default();
-        for b in [b'7', b'q', b'\t', b'?', b'x'] {
+        for b in *b"7q\t?x" {
             assert!(!handle_key(&mut s, b));
         }
         assert_eq!(s.view, View::Overview);

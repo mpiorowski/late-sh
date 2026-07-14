@@ -472,7 +472,8 @@ impl State {
     pub fn canvas_for_render(&self, width: u16, height: u16) -> Option<Canvas> {
         let mut canvas = if self.ownership_overlay {
             self.owner_overlay_canvas(width, height)
-        } else if let Some(floating) = self.editor.floating.as_ref() {
+        } else {
+            let floating = self.editor.floating.as_ref()?;
             let mut canvas = self.snapshot.canvas.clone();
             if !floating.transparent {
                 if let Some(bounds) = self.floating_source_bounds {
@@ -487,8 +488,6 @@ impl State {
                 }
             }
             canvas
-        } else {
-            return None;
         };
 
         if self.ownership_overlay
