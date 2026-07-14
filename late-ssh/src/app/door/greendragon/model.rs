@@ -127,7 +127,7 @@ pub const FIVESIX_COST: u64 = 5;
 /// The shared Five Sixes pot's ceiling; growth past it is pocketed by the
 /// house (`maxjackpot`).
 pub const FIVESIX_MAX_POT: u64 = 5000;
-/// The Dark Horse barman's price for a word on one enemy (`darkhorse.php`'s
+/// The Crooked Wheel barman's price for a word on one enemy (`darkhorse.php`'s
 /// bartender: a flat 100 gold per name, no bribe needed).
 pub const INTEL_COST: u64 = 100;
 /// Charm required to propose marriage (rung 7 checks `charm >= 22` directly).
@@ -680,7 +680,7 @@ pub fn transmute_sickness() -> PersistedBuff {
     }
 }
 
-/// A village visit has this chance (percent) of Crazy Audrey setting up her
+/// A village visit has this chance (percent) of Mad Juna setting up her
 /// petting zoo in the square (`crazyaudrey` `villagepercent` 20, rolled
 /// `e_rand(1,100) <= 20` on every village pageview).
 pub const ZOO_CHANCE_PCT: u32 = 20;

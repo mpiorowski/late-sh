@@ -539,7 +539,7 @@ pub const BARD: &str = "Alder";
 pub const BARMAID: &str = "Wren";
 /// The ostler who runs the stables.
 pub const OSTLER: &str = "Fenwick";
-/// The one-eyed gambler at the Dark Horse Tavern (the "old man").
+/// The one-eyed gambler at the Crooked Wheel (the "old man").
 pub const GAMBLER: &str = "the one-eyed gambler";
 /// The bounty broker sulking in the inn's darkest booth (the Dag
 /// Durnick-analog; upstream's name is theirs, this one is ours).

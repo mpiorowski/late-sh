@@ -40,7 +40,7 @@ pub enum CommentRoom {
     Village,
     /// The Sleeping Stag's table talk (`inn.php`, section "inn").
     Inn,
-    /// The etchings in the Dark Horse's tables (`modules/darkhorse.php`,
+    /// The etchings in the Crooked Wheel's tables (`modules/darkhorse.php`,
     /// section "darkhorse").
     DarkHorse,
     /// The gardens (`gardens.php`, section "gardens"): a pure social corner.
@@ -79,7 +79,7 @@ impl CommentRoom {
     }
 
     /// The room's display window (upstream's per-call `$limit`), also the
-    /// base of the daily post allowance: village 25, inn 20, Dark Horse 10
+    /// base of the daily post allowance: village 25, inn 20, Crooked Wheel 10
     /// (the default), shade 25, gardens and the rock 30, the waiting area
     /// and clan halls 25.
     pub fn display_limit(self) -> usize {
