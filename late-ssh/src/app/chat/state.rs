@@ -4128,8 +4128,8 @@ pub struct ActivityTickerEntry {
     pub at: DateTime<Utc>,
 }
 
-/// The ticker queue length: enough to fill the row several times over, so
-/// the `+N` tail count stays honest without hoarding history.
+/// The ticker queue length: enough that packing left to right always fills
+/// the row on any sane terminal width, without hoarding history.
 const ACTIVITY_TICKER_CAP: usize = 10;
 
 /// Insert into the newest-first ticker queue, deduped by message id (tails

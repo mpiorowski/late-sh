@@ -559,10 +559,10 @@ fn split_chat_pet_strip_and_composer(
 
 /// The one-row #lounge activity ticker rendered in the gap between messages
 /// and composer. The queue packs left to right, newest first — each event as
-/// `text (5m)` with faint `·` separators — and events that no longer fit
-/// collapse into a trailing `+N`. The row itself always exists (it doubles
-/// as the composer gap), so the chrome never moves; an empty queue just
-/// leaves it blank.
+/// `text (5m)` with faint `·` separators — until the row is full; whatever
+/// doesn't fit is simply not shown (the queue is sized to outfill the row).
+/// The row itself always exists (it doubles as the composer gap), so the
+/// chrome never moves; an empty queue just leaves it blank.
 fn draw_activity_ticker(
     frame: &mut Frame,
     area: Rect,
@@ -579,25 +579,21 @@ fn draw_activity_ticker(
 
     let mut spans = vec![Span::raw(" "), Span::styled("· ", faint)];
     let mut used = 3usize;
-    let mut shown = 0usize;
     for (i, entry) in entries.iter().enumerate() {
         let stamp = format!(
             " ({})",
             crate::app::common::primitives::format_relative_time_short(entry.at)
         );
-        let sep = if i == 0 { 0 } else { 3 }; // " · "
-        // Keep room for a trailing " +N" unless this is the last entry.
-        let reserve = if i + 1 < entries.len() { 4 } else { 0 };
         let cost = entry.text.chars().count() + stamp.chars().count();
         if i > 0 {
-            if used + sep + cost + reserve > width {
+            if used + 3 + cost > width {
                 break;
             }
-            spans.push(Span::styled(" · ", faint));
-            used += sep;
+            spans.push(Span::styled(" · ", faint)); // sep
+            used += 3;
         }
         // The newest entry always shows, truncated to fit if it must.
-        let budget = width.saturating_sub(used + stamp.chars().count() + reserve);
+        let budget = width.saturating_sub(used + stamp.chars().count());
         let text: String = if i == 0 && entry.text.chars().count() > budget && budget > 1 {
             let mut cut: String = entry.text.chars().take(budget - 1).collect();
             cut.push('…');
@@ -608,11 +604,6 @@ fn draw_activity_ticker(
         used += text.chars().count() + stamp.chars().count();
         spans.push(Span::styled(text, text_style));
         spans.push(Span::styled(stamp, faint));
-        shown += 1;
-    }
-    let hidden = entries.len() - shown;
-    if hidden > 0 {
-        spans.push(Span::styled(format!(" +{hidden}"), faint));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
