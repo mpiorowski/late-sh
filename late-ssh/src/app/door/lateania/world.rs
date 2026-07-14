@@ -242,6 +242,13 @@ const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
         "the Matlatesh sea-gate",
     ),
     (
+        "The Sunderlakes",
+        16_000,
+        18_000,
+        "peaceful / fishing",
+        "off the Melvanala lake",
+    ),
+    (
         "Portal Villages",
         super::archipelago::VILLAGE_BASE,
         super::archipelago::VILLAGE_BASE + 1000,
@@ -1068,6 +1075,35 @@ const fn node(
     }
 }
 
+/// A resource node whose harvest yields an *explicit* item rather than the
+/// tiered material derived from `(skill, tier)`. This lets a gathering spot hand
+/// out a specific catalog item - e.g. one of the forty Sunderlakes fish - while
+/// still training its skill and respawning exactly like any other node (the
+/// gather flow in `svc.rs` reads `yield_item` directly, so no new mechanic is
+/// needed). The tier still sets the difficulty band; `level_req` gates it.
+#[allow(clippy::too_many_arguments)]
+const fn node_yielding(
+    home: RoomId,
+    skill: GatherSkill,
+    name: &'static str,
+    note: &'static str,
+    tier: u8,
+    level_req: i32,
+    yield_item: u32,
+    xp: i32,
+) -> ResourceNode {
+    ResourceNode {
+        home,
+        skill,
+        name,
+        note,
+        tier,
+        level_req,
+        yield_item,
+        xp,
+    }
+}
+
 /// Every harvestable node in the world, keyed to its home room. Tiers climb with
 /// distance/difficulty from Embergate: roadside starters near town, mid materials
 /// out in the overworld wings, and the best materials deep in the harder zones.
@@ -1310,6 +1346,410 @@ pub const NODES: &[ResourceNode] = &[
         4,
         38,
         320,
+    ),
+    // ---- Fishing: the forty Sunderlakes fish, spread across the maze zones
+    // by prestige (four per zone), gated by rising Fishing level (see
+    // extend_lakes / lakes_fish_for_zone). Homes sit on always-present maze
+    // cells, so every node room is real. Yields are explicit fish items.
+    node_yielding(
+        16005,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Silver Minnow",
+        0,
+        1,
+        4600,
+        15,
+    ),
+    node_yielding(
+        16027,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Reed Perch",
+        0,
+        2,
+        4601,
+        18,
+    ),
+    node_yielding(
+        16049,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Mudsnout Carp",
+        0,
+        3,
+        4602,
+        21,
+    ),
+    node_yielding(
+        16071,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Copperscale Roach",
+        0,
+        4,
+        4603,
+        24,
+    ),
+    node_yielding(
+        16093,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Marsh Bream",
+        0,
+        6,
+        4604,
+        27,
+    ),
+    node_yielding(
+        16115,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Bristle Loach",
+        0,
+        7,
+        4605,
+        30,
+    ),
+    node_yielding(
+        16137,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Fenwater Tench",
+        0,
+        8,
+        4606,
+        33,
+    ),
+    node_yielding(
+        16159,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Islet Rudd",
+        0,
+        9,
+        4607,
+        36,
+    ),
+    node_yielding(
+        16269,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Blue Mere Trout",
+        1,
+        11,
+        4608,
+        39,
+    ),
+    node_yielding(
+        16291,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Ghost Grayling",
+        1,
+        12,
+        4609,
+        42,
+    ),
+    node_yielding(
+        16313,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Cavern Blindfish",
+        1,
+        13,
+        4610,
+        45,
+    ),
+    node_yielding(
+        16335,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Reedmace Pike",
+        1,
+        14,
+        4611,
+        48,
+    ),
+    node_yielding(
+        16357,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Sunken Char",
+        1,
+        16,
+        4612,
+        51,
+    ),
+    node_yielding(
+        16379,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Drowned Valley Eel",
+        1,
+        17,
+        4613,
+        54,
+    ),
+    node_yielding(
+        16401,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Lanternjaw",
+        1,
+        18,
+        4614,
+        57,
+    ),
+    node_yielding(
+        16423,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Silt-Gilded Barbel",
+        1,
+        19,
+        4615,
+        60,
+    ),
+    node_yielding(
+        16533,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Moonpale Salmon",
+        2,
+        21,
+        4616,
+        63,
+    ),
+    node_yielding(
+        16555,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Glasswater Sturgeon",
+        2,
+        22,
+        4617,
+        66,
+    ),
+    node_yielding(
+        16577,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Meregleam Tench",
+        2,
+        23,
+        4618,
+        69,
+    ),
+    node_yielding(
+        16599,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Stormfin Bass",
+        2,
+        24,
+        4619,
+        72,
+    ),
+    node_yielding(
+        16621,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Hollow-Cavern Ray",
+        2,
+        26,
+        4620,
+        75,
+    ),
+    node_yielding(
+        16643,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Bittern's Bane",
+        2,
+        27,
+        4621,
+        78,
+    ),
+    node_yielding(
+        16665,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Amberweed Golden",
+        2,
+        28,
+        4622,
+        81,
+    ),
+    node_yielding(
+        16687,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Frostmere Whitefish",
+        2,
+        29,
+        4623,
+        84,
+    ),
+    node_yielding(
+        16797,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Kingfisher's Prize",
+        3,
+        31,
+        4624,
+        87,
+    ),
+    node_yielding(
+        16819,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Deep Meregold",
+        3,
+        32,
+        4625,
+        90,
+    ),
+    node_yielding(
+        16841,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Silverback Salmon",
+        3,
+        33,
+        4626,
+        93,
+    ),
+    node_yielding(
+        16863,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Drowned-God Carp",
+        3,
+        34,
+        4627,
+        96,
+    ),
+    node_yielding(
+        16885,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Voidmere Sturgeon",
+        3,
+        36,
+        4628,
+        99,
+    ),
+    node_yielding(
+        16907,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Ghostlight Pike",
+        3,
+        37,
+        4629,
+        102,
+    ),
+    node_yielding(
+        16929,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Tempest Marlin",
+        3,
+        38,
+        4630,
+        105,
+    ),
+    node_yielding(
+        16951,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Abyss Anglerfish",
+        3,
+        39,
+        4631,
+        108,
+    ),
+    node_yielding(
+        17061,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Sunderlake Leviathan",
+        4,
+        41,
+        4632,
+        111,
+    ),
+    node_yielding(
+        17083,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for The Mere-Mother",
+        4,
+        42,
+        4633,
+        114,
+    ),
+    node_yielding(
+        17105,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Moonscale Royal",
+        4,
+        43,
+        4634,
+        117,
+    ),
+    node_yielding(
+        17127,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Drowned Crown Bass",
+        4,
+        44,
+        4635,
+        120,
+    ),
+    node_yielding(
+        17149,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Heartglow Trout",
+        4,
+        46,
+        4636,
+        123,
+    ),
+    node_yielding(
+        17171,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for The Fathom-King",
+        4,
+        47,
+        4637,
+        126,
+    ),
+    node_yielding(
+        17193,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Weeping Silverfin",
+        4,
+        48,
+        4638,
+        129,
+    ),
+    node_yielding(
+        17215,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for The First Fish",
+        4,
+        49,
+        4639,
+        132,
     ),
 ];
 
@@ -3124,6 +3564,12 @@ pub fn seed_world() -> World {
     // Yssgar's chamber in the Reaches and gated behind the Bane of Yssgar. Runs
     // after the Reaches so its sea-gate search can find Yssgar's home room.
     extend_kaelmyr(&mut rooms, &mut spawns, &mut behaviors);
+
+    // Append the Sunderlakes: a large, peaceful ~1200-room water country (rooms
+    // 16000+) of reed-mazes and flooded caverns hung off the Melvanala high lake
+    // by a normal walk. Mid-game friendly; the draw is the fishing (forty fish
+    // species caught at Fishing-gated resource nodes).
+    extend_lakes(&mut rooms, &mut spawns, &mut behaviors);
 
     // Flesh out the four capitals with a district of new safe rooms each.
     extend_cities(&mut rooms);
@@ -5822,6 +6268,556 @@ fn kaelmyr_seagate_room(rooms: &HashMap<RoomId, Room>, spawns: &[MobSpawn]) -> O
                 .map(|r| r.id)
         })
         .or_else(|| rooms.contains_key(&REACHES_BASE).then_some(REACHES_BASE))
+}
+
+// ==== The Sunderlakes ======================================================
+//
+// A large, peaceful water country (rooms 16000+) of flooded caverns, reed
+// labyrinths, island-dotted meres and drowned valleys, hung off the Melvanala
+// high lake by a normal walk. Where Kaelmyr is a burnt end-game grind, the
+// Sunderlakes are mid-game friendly and serene: fewer and weaker mobs, whole
+// zones with nothing worse than a territorial pike, and - above all - fish. It
+// is the fishing country of Lateania: forty species (items 4600..4700) are
+// caught here at resource nodes gated by the Fishing skill, the prized deep
+// catches waiting for anglers who have trained the trade high enough to reach
+// the deep meres and drowned trenches.
+//
+//   LORE. When the Sundering drained the seas into Yssgar's wound and raised
+//   Kaelmyr burning from the seabed, the water it displaced had to go somewhere.
+//   It came down the mountain valleys behind Melvanala as a slow, silver flood
+//   that never wholly went away. A thousand meres and drowned dells were left
+//   behind, and the highland folk - who had always fished the one great lake -
+//   found a whole country of new water to work. They call it the Sunderlakes:
+//   the lakes the Sundering made. It is quiet, and green, and very deep in
+//   places, and the fishing has no equal in the world.
+//
+//   THROUGH-LINE. The zones wind outward and downward from the Anglers' Dock on
+//   the Melvanala shore: through reed labyrinths and island meres, down into the
+//   flooded caverns, and at last into the drowned valleys where whole villages
+//   lie under the water and the biggest fish of all move slow in the dark.
+
+pub const LAKES_BASE: RoomId = 16_000;
+const LAKES_W: usize = 11;
+const LAKES_H: usize = 8;
+const LAKES_ZONES: usize = LAKES_ZONES_DATA.len();
+/// Sunderlakes mob ids sit in a fresh band above Kaelmyr (960000+) and the
+/// Archipelago (970000+), clear of both.
+const LAKES_SPAWN_ID_START: u32 = 980_000;
+const LAKES_SEED: u64 = 0x5A17_1A4E_5000_u64;
+/// Each zone reserves this many room ids (a `LAKES_W`×`LAKES_H` cell field).
+const LAKES_ZONE_STRIDE: u32 = (LAKES_W * LAKES_H) as u32;
+
+/// Which Sunderlakes zones are carved as organic caverns (the flooded cavern
+/// halls) rather than braided reed-mazes. The rest are mazes. Never a grid.
+/// Fishing nodes are only seeded in the maze zones (every maze cell exists, so
+/// their node home rooms are guaranteed real; cavern floors are sparse).
+const fn lakes_zone_is_cavern(z: usize) -> bool {
+    matches!(z, 2 | 5 | 8 | 11)
+}
+
+pub fn is_lakes_room(id: RoomId) -> bool {
+    (LAKES_BASE..LAKES_BASE + LAKES_ZONES as u32 * LAKES_ZONE_STRIDE).contains(&id)
+}
+
+/// Fourteen zones of the Sunderlakes: (zone, adjective, water noun, landmark,
+/// creatures, three mob names, a notable/boss). Kept peaceful - the mob names
+/// lean toward wildlife and lost things rather than horrors, and the notables
+/// are lake-guardians more than tyrants. `lakes_desc` supplies the prose.
+#[allow(clippy::type_complexity)]
+const LAKES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 14] = [
+    (
+        "Anglers' Dock",
+        "sun-dappled",
+        "clear shallow water",
+        "the long weathered jetties of the lake-fishers",
+        "dock-things",
+        [
+            "a tangled net-wraith",
+            "a snapping mere-turtle",
+            "a bank-vole swarm",
+        ],
+        "Old Grib, the Jetty-Keeper",
+    ),
+    (
+        "Reed Labyrinth",
+        "whispering",
+        "reed-shadowed water",
+        "a maze of head-high reeds that hides the sky",
+        "reed-lurkers",
+        [
+            "a reed-stalking heron",
+            "a marsh-adder",
+            "a whispering reed-spirit",
+        ],
+        "the Heron-King of the Reeds",
+    ),
+    (
+        "Sunken Grotto",
+        "green-lit",
+        "still cavern water",
+        "a flooded cave whose roof drips like slow rain",
+        "grotto-dwellers",
+        [
+            "a blind cave-newt",
+            "a pale grotto-crab",
+            "a dripping stone-lurker",
+        ],
+        "the Grotto Warden",
+    ),
+    (
+        "Isle Meres",
+        "island-dotted",
+        "wide open mere-water",
+        "a scatter of green islets on a mirror-still mere",
+        "islet-wildlife",
+        ["a territorial mere-pike", "an otter-pack", "a nesting swan"],
+        "the Great Mere-Otter",
+    ),
+    (
+        "Willow Drowns",
+        "leaf-shadowed",
+        "root-tangled water",
+        "a drowned willow-wood, its branches trailing in the flood",
+        "willow-haunts",
+        ["a willow-wisp", "a drowned root-thing", "a bank-heron"],
+        "the Weeping Willow-Mother",
+    ),
+    (
+        "Weeping Caverns",
+        "echoing",
+        "black cavern pools",
+        "a cave-hall where the walls seem to weep cold water",
+        "cavern-drifters",
+        [
+            "a cave-eel",
+            "a drifting jelly-thing",
+            "a stone-cold lurker",
+        ],
+        "the Weeping Deep-Thing",
+    ),
+    (
+        "Lily Reaches",
+        "flower-strewn",
+        "lily-choked shallows",
+        "a broad slow reach carpeted white and gold with waterlilies",
+        "lily-dwellers",
+        [
+            "a lily-frog chorus",
+            "a snapping snapping-turtle",
+            "a heron in the reeds",
+        ],
+        "the Lilypad Sovereign",
+    ),
+    (
+        "Drowned Orchard",
+        "blossom-drowned",
+        "orchard-flooded water",
+        "an orchard sunk to its crowns, blossom floating on the flood",
+        "orchard-ghosts",
+        [
+            "a drowned orchard-keeper",
+            "a blossom-wisp",
+            "a windfall-eel",
+        ],
+        "the Orchard-Drowned Steward",
+    ),
+    (
+        "Glasswater Deep",
+        "crystal-clear",
+        "impossibly clear deep water",
+        "a deep so clear the bottom seems a stone's throw and is a hundred feet",
+        "deep-dwellers",
+        [
+            "a glass-clear ray",
+            "a deep-water sturgeon",
+            "a cold-current lurker",
+        ],
+        "the Glasswater Leviathan",
+    ),
+    (
+        "Fenlight Marsh",
+        "will-o-lit",
+        "lantern-lit fen-water",
+        "a fen where cold lights drift low over the standing water",
+        "marsh-lights",
+        ["a will-o'-the-wisp", "a fen-adder", "a bog-lurker"],
+        "the Fenlight Warden",
+    ),
+    (
+        "Mirror Meres",
+        "sky-holding",
+        "mirror-flat water",
+        "meres so still they hold the mountains upside down",
+        "mirror-dwellers",
+        [
+            "a mirror-carp",
+            "a reflected wraith",
+            "a still-water lurker",
+        ],
+        "the Mirror-Mere Guardian",
+    ),
+    (
+        "Fathom Caverns",
+        "lightless",
+        "fathomless black water",
+        "flooded caverns that fall away into water no light has touched",
+        "fathom-things",
+        ["an abyss-anglerfish", "a fathom-eel", "a lightless drifter"],
+        "the Fathom-King's Herald",
+    ),
+    (
+        "Drowned Valley",
+        "sorrow-still",
+        "valley-deep flood-water",
+        "a whole valley and its village lost beneath the silver flood",
+        "valley-drowned",
+        [
+            "a drowned villager",
+            "a flooded belfry-ghost",
+            "a silt-wading lurker",
+        ],
+        "the Bell-Drowned Warden",
+    ),
+    (
+        "Mere-Mother's Deep",
+        "sacred-still",
+        "the deepest sacred water",
+        "the oldest, deepest mere, where the fen-folk say the first fish still swims",
+        "the deep-sacred",
+        [
+            "a shrine-guardian eel",
+            "a deep-water leviathan",
+            "an ancient mere-thing",
+        ],
+        "the Mere-Mother, Eldest of the Deep",
+    ),
+];
+
+const LAKES_PLACES: [&str; 10] = [
+    "Shallows",
+    "Reed-Bend",
+    "Islet",
+    "Backwater",
+    "Ford",
+    "Deep-Channel",
+    "Fishing-Stand",
+    "Lily-Bank",
+    "Still-Pool",
+    "Landing",
+];
+
+/// The Sunderlakes' paragraph prose: a serene, watery counterpart to
+/// `frontier_desc` / `kaelmyr_desc`. Peaceful by default, hitting the
+/// >=180-char, multi-sentence room-prose bar. Varied by the cell index.
+fn lakes_desc(adj: &str, water: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "You wade a {adj} stretch where {water} laps warm and slow against your legs, and dragonflies stitch the bright air above the surface.",
+        "The way winds along a bank of {adj} country, {water} spreading green and quiet on every side under a wide and gentle sky.",
+        "Here the flood opens into {adj} calm; {water} stretches out mirror-smooth, and the only sound is the plink of a rising fish.",
+        "A punt-track threads this {adj} reach, the {water} broken only by lily-pads and the slow spreading rings where something fed.",
+        "The land lies half-drowned and {adj} here, {water} standing between low green hummocks where herons fish the margins undisturbed.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Ahead lies {feature}, reflected whole and unbroken in the still water.",
+        "Off across the water stands {feature}, a landmark the lake-fishers steer by.",
+        "The flood has half-swallowed {feature}, and the sight of it is strange and peaceful at once.",
+        "Beside the channel rests {feature}, softened by weed and the long patient work of the water.",
+        "Through the reeds you glimpse {feature}, quiet and green and older than the flood that drowned it.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere out on the water {creature} go about their business, paying you no mind at all.",
+        "The water is thick with life; {creature} move through the shallows, and the fishing here is famously fine.",
+        "It is a good place to cast a line - {creature} rise all around, and the deep water keeps its own counsel.",
+        "A heron lifts off unhurried, and {creature} slip away into the reeds; nothing here means you any harm.",
+        "The quiet is broken only by {creature} and the slow music of moving water, and it soothes the traveller's heart.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{water}", water);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+/// Build the Sunderlakes: fourteen zones of braided reed-mazes and flooded
+/// caverns (rooms 16000+), each carved (never a grid), chained deepest-room ->
+/// next-entrance, and hung off the Melvanala high lake by a normal walk. Kept
+/// peaceful: mobs are fewer and weaker than Kaelmyr, whole corridors are left
+/// serene, and the draw is the fishing (see `NODES` fishing spots at 16000+).
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_lakes(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (LAKES_W, LAKES_H);
+    let n = w * h;
+    let mut spawn_id: u32 = LAKES_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, water, feature, creature, mob_names, boss)) in
+        LAKES_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = LAKES_BASE + (z as u32) * LAKES_ZONE_STRIDE;
+        // A gentle mid-game power band that rises across the zones. Far below
+        // Kaelmyr - the Sunderlakes are meant to be enjoyable, not a wall.
+        let tier = z as i32;
+        let mut rng = MazeRng::new(LAKES_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Carve as a braided reed-maze or a flooded cavern (with the
+        // connectivity pass). A too-sparse cavern falls back to a maze so no
+        // zone comes out empty. No uniform grids.
+        let cavern_floor = if lakes_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 24).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        // The zone's notable waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Landing").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Deep Water").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", LAKES_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str =
+                Box::leak(lakes_desc(adj, water, feature, creature, cell as u32).into_boxed_str());
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    // The whole first zone is a safe angler's haven; deeper
+                    // zones keep their entrance landings safe too, so the country
+                    // reads as friendly resting-water between the fishing.
+                    safe: is_entrance,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            // A peaceful country: the notable is a modest guardian, and only a
+            // fraction of the other cells hold anything at all - and what they
+            // hold is weak. Dead-ends may hide an ambusher, junctions a small
+            // pack, corridors are mostly empty water.
+            let (mob_name, behavior, boss_mob, hp, dmg): (&str, MobBehavior, bool, i32, i32) =
+                if is_boss {
+                    (
+                        boss,
+                        MobBehavior::Brute,
+                        true,
+                        420 + tier * 80,
+                        22 + tier * 3,
+                    )
+                } else if degree == 1 {
+                    // Half the dead-ends are simply quiet.
+                    if rng.chance(50) {
+                        continue;
+                    }
+                    (
+                        mob_names[0],
+                        MobBehavior::Ambusher,
+                        false,
+                        150 + tier * 22 + depth * 3,
+                        12 + tier + depth / 2,
+                    )
+                } else if degree >= 3 {
+                    if rng.chance(45) {
+                        continue;
+                    }
+                    (
+                        mob_names[1],
+                        MobBehavior::PackHunter,
+                        false,
+                        160 + tier * 24 + depth * 3,
+                        13 + tier + depth / 2,
+                    )
+                } else {
+                    // Corridors are mostly serene open water.
+                    if rng.chance(72) {
+                        continue;
+                    }
+                    let behavior = match rng.below(3) {
+                        0 => MobBehavior::Wanderer,
+                        1 => MobBehavior::Patroller,
+                        _ => MobBehavior::Skirmisher,
+                    };
+                    (
+                        mob_names[2],
+                        behavior,
+                        false,
+                        150 + tier * 22 + depth * 3,
+                        11 + tier + depth / 2,
+                    )
+                };
+            let profile = DamageProfile::new(DamageType::Physical, None, None);
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp: if boss_mob {
+                    120 + tier * 30
+                } else {
+                    28 + tier * 8 + depth * 2
+                },
+                respawn_secs: if boss_mob { 240 } else { 60 },
+                // The Sunderlakes have no generated gear catalog of their own -
+                // the reward here is the fishing. A slain notable/mob may drop a
+                // fish from the zone's band, which resolves through `item`.
+                loot: lakes_loot(z),
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior deep-water room descends
+        // to this zone's landing, and rises back.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang the Sunderlakes off the Melvanala high lake by a normal walk exit, so
+    // the whole country is reachable. The first landing (Anglers' Dock) is a safe
+    // haven. Lightly gated or not at all - it is meant to be mid-game friendly.
+    let entrance = LAKES_BASE;
+    let portal = [Dir::South, Dir::East, Dir::West, Dir::North, Dir::Down]
+        .into_iter()
+        .find(|d| {
+            rooms
+                .get(&MELVANALA_SQUARE)
+                .is_some_and(|r| !r.exits.contains_key(d))
+        })
+        .unwrap_or(Dir::South);
+    if let Some(hub) = rooms.get_mut(&MELVANALA_SQUARE) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), MELVANALA_SQUARE);
+    }
+}
+
+/// A small drop table for a Sunderlakes zone: the zone's own band of fish, so a
+/// slain lake-notable may yield a catch. Fish resolve through `item`.
+fn lakes_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..LAKES_ZONES)
+            .map(|zone| {
+                // Each zone's fish band (see `lakes_fish_for_zone`).
+                lakes_fish_for_zone(zone).to_vec()
+            })
+            .collect()
+    });
+    tables[z.min(LAKES_ZONES - 1)].as_slice()
+}
+
+/// The fish species (item ids) associated with a Sunderlakes zone. The forty
+/// fish are spread across the ten maze zones in order of prestige (four per
+/// maze zone); cavern zones borrow the band of the nearest maze zone for their
+/// loot. This same mapping seeds the fishing NODES (see `LAKES_FISH_NODES`).
+fn lakes_fish_for_zone(z: usize) -> Vec<u32> {
+    // Maze zones in ascending order carry the fish bands 0..10; a cavern zone
+    // borrows the band of the maze zone just before it.
+    let maze_rank = (0..=z).filter(|&zz| !lakes_zone_is_cavern(zz)).count();
+    let band = maze_rank.saturating_sub(1).min(9);
+    let base = super::items::FISH_BASE + (band as u32) * 4;
+    (0..4).map(|i| base + i).collect()
 }
 
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
@@ -8538,6 +9534,17 @@ mod tests {
             (1800..=KAELMYR_ZONES * KAELMYR_W * KAELMYR_H).contains(&kaelmyr),
             "Kaelmyr should be ~2000 rooms, got {kaelmyr}"
         );
+        // The Sunderlakes: a peaceful water country of reed-mazes and flooded
+        // caverns (rooms 16000+). Mazes fill their cell field; caverns are
+        // sparse, so the total is a sane band rather than an exact count.
+        let lakes = count_in(
+            LAKES_BASE,
+            LAKES_BASE + LAKES_ZONES as RoomId * LAKES_ZONE_STRIDE,
+        );
+        assert!(
+            (900..=LAKES_ZONES * LAKES_W * LAKES_H).contains(&lakes),
+            "the Sunderlakes should be ~1200 rooms, got {lakes}"
+        );
         // The Shattered Archipelago: portal villages + maze/cavern islands.
         use super::super::archipelago as arch;
         let villages = count_in(arch::VILLAGE_BASE, arch::VILLAGE_BASE + 1000);
@@ -8560,6 +9567,7 @@ mod tests {
                 + housing
                 + reaches
                 + kaelmyr
+                + lakes
                 + villages
                 + islands,
             "every room should belong to a known region"
@@ -8705,6 +9713,127 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_sunderlakes_are_mazes_and_caverns_not_grids() {
+        let world = seed_world();
+        let lakes: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| is_lakes_room(r.id))
+            .collect();
+        // A real, sizeable water country (~1200 rooms).
+        assert!(lakes.len() >= 900, "the Sunderlakes are sizeable");
+        // A uniform grid has no dead-ends; braided reed-mazes and flooded
+        // caverns have many. Dead-ends + varied branching prove the shape.
+        let dead_ends = lakes.iter().filter(|r| r.exits.len() == 1).count();
+        assert!(
+            dead_ends >= 20,
+            "the Sunderlakes should wind into dead-ends, not be square blocks (got {dead_ends})"
+        );
+        let degrees: std::collections::HashSet<usize> =
+            lakes.iter().map(|r| r.exits.len()).collect();
+        assert!(
+            degrees.len() >= 3,
+            "Sunderlakes rooms should vary in how many ways they branch (got {degrees:?})"
+        );
+    }
+
+    #[test]
+    fn the_sunderlakes_are_reachable_peaceful_and_full_of_fish() {
+        let world = seed_world();
+        // Reachable by a normal walk from the start (hung off Melvanala's lake).
+        let mut seen = HashSet::new();
+        let mut stack = vec![world.start_room];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(r) = world.room(id) {
+                for to in r.exits.values() {
+                    stack.push(*to);
+                }
+            }
+        }
+        assert!(
+            world.rooms.keys().any(|id| is_lakes_room(*id)),
+            "Sunderlakes rooms exist"
+        );
+        assert!(
+            world
+                .rooms
+                .keys()
+                .filter(|id| is_lakes_room(**id))
+                .all(|id| seen.contains(id)),
+            "every Sunderlakes room must be reachable from the start"
+        );
+        // The entrance landing rises into the Melvanala high lake and back down.
+        let entrance = world.room(LAKES_BASE).expect("Sunderlakes landing exists");
+        assert!(entrance.safe, "the Anglers' Dock landing is a safe haven");
+        assert!(
+            entrance.exits.values().any(|to| *to == MELVANALA_SQUARE),
+            "the Sunderlakes hang off the Melvanala lake"
+        );
+        // Peaceful: fewer, weaker foes than Kaelmyr. Every zone has one notable.
+        let spawns: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| s.id >= LAKES_SPAWN_ID_START && is_lakes_room(s.home))
+            .collect();
+        let bosses = spawns.iter().filter(|s| s.boss).count();
+        assert_eq!(bosses, LAKES_ZONES, "one notable per Sunderlakes zone");
+        let king = world
+            .spawns
+            .iter()
+            .find(|s| s.name == "the King Who Was Promised Nothing")
+            .expect("the Frontier king spawns");
+        assert!(
+            spawns.iter().all(|s| s.damage < king.damage),
+            "the Sunderlakes stay gentler than the endgame"
+        );
+        // The heart of the region: forty fish, caught at Fishing nodes across the
+        // lakes, every node yielding a real fish gated by the Fishing skill.
+        let fish_nodes: Vec<&ResourceNode> = NODES
+            .iter()
+            .filter(|nn| nn.skill == GatherSkill::Fishing && is_lakes_room(nn.home))
+            .collect();
+        assert_eq!(
+            fish_nodes.len(),
+            super::super::items::FISH_COUNT as usize,
+            "one fishing spot per fish species is seeded in the lakes"
+        );
+        let mut species = HashSet::new();
+        for nn in &fish_nodes {
+            assert!(
+                world.rooms.contains_key(&nn.home),
+                "fishing spot {:?} homes to a real lake room",
+                nn.name
+            );
+            let fid = nn.yield_item;
+            assert!(
+                (super::super::items::FISH_BASE
+                    ..super::super::items::FISH_BASE + super::super::items::FISH_COUNT)
+                    .contains(&fid),
+                "a lake fishing spot yields a fish (4600 band), got {fid}"
+            );
+            assert!(
+                super::super::items::item(fid).is_some(),
+                "fishing spot yields a real fish item {fid}"
+            );
+            species.insert(fid);
+        }
+        assert_eq!(
+            species.len(),
+            super::super::items::FISH_COUNT as usize,
+            "all forty fish species are catchable"
+        );
+        // The gates rise: the shallowest spot is open to any angler, the deepest
+        // demands real Fishing training.
+        let min_gate = fish_nodes.iter().map(|nn| nn.level_req).min().unwrap();
+        let max_gate = fish_nodes.iter().map(|nn| nn.level_req).max().unwrap();
+        assert!(min_gate <= 2, "shallow fish are open to beginners");
+        assert!(max_gate >= 40, "the prized deep fish need a trained angler");
     }
 
     #[test]
@@ -9328,21 +10457,34 @@ mod tests {
 
     #[test]
     fn every_node_yields_a_real_material_matching_its_skill_and_tier() {
+        use super::super::items;
         for n in NODES {
             assert!(
-                (n.tier as u32) < super::super::items::MATERIAL_TIERS,
+                (n.tier as u32) < items::MATERIAL_TIERS,
                 "node {:?} tier {} out of range",
                 n.name,
                 n.tier
             );
-            assert_eq!(
-                n.yield_item,
-                super::super::items::material_id(n.skill.index(), n.tier as u32),
-                "node {:?} yield must follow its skill + tier",
-                n.name
-            );
+            // Two kinds of yield: the classic tiered material (derived from
+            // skill + tier) and an explicit catalog item (the Sunderlakes fish,
+            // seeded via `node_yielding`). Both must resolve through `item`.
+            if (items::FISH_BASE..items::FISH_BASE + items::FISH_COUNT).contains(&n.yield_item) {
+                assert_eq!(
+                    n.skill,
+                    GatherSkill::Fishing,
+                    "only Fishing nodes yield fish ({:?})",
+                    n.name
+                );
+            } else {
+                assert_eq!(
+                    n.yield_item,
+                    items::material_id(n.skill.index(), n.tier as u32),
+                    "node {:?} material yield must follow its skill + tier",
+                    n.name
+                );
+            }
             assert!(
-                super::super::items::item(n.yield_item).is_some(),
+                items::item(n.yield_item).is_some(),
                 "node {:?} yields missing item {}",
                 n.name,
                 n.yield_item

@@ -4683,8 +4683,11 @@ impl WorldState {
         if !has {
             return;
         }
-        // Cooked food grants a well-fed regen on top of its immediate heal.
-        let well_fed = super::items::food_tier(item_id).map(|t| 2 + t as i32);
+        // Cooked food grants a well-fed regen on top of its immediate heal, and
+        // so do the rarest Sunderlakes fish (their "special" - see fish_well_fed).
+        let well_fed = super::items::food_tier(item_id)
+            .map(|t| 2 + t as i32)
+            .or_else(|| super::items::fish_well_fed(item_id));
         if let Some(p) = self.players.get_mut(&user_id) {
             if let Some(pos) = p.inventory.iter().position(|i| *i == item_id) {
                 p.inventory.remove(pos);

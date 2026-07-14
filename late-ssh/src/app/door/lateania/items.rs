@@ -1399,6 +1399,169 @@ pub fn crafted() -> &'static [Item] {
     CATALOG.get_or_init(build_crafted)
 }
 
+// ---- The Sunderlakes fish catalog (ids 4600..4700) -----------------------
+//
+// Forty distinct fish species netted, angled, and speared across the lake
+// country of the Sunderlakes (see world::extend_lakes). They sit in a fresh
+// 4600..4700 band, clear of the raw materials (4000..4100), crafted goods
+// (4200..4500), and the generated Frontier/Reaches/Kaelmyr loot (3000..3600).
+//
+// Each fish is a resource-node yield with a *varying* sell price - a wide
+// spread from a few-gold minnow to a prized several-hundred-gold catch, so a
+// deep-water haul is a real reward. Roughly a third are edible: those are
+// `Consumable`s that heal and/or restore resource, scaling with the fish's
+// prestige, and a handful of the rarest carry a "special" - a well-fed
+// `HealOverTime` (see `fish_well_fed` / `use_item`) that makes a legendary
+// fish genuinely worth eating rather than only selling. The rest are pure
+// `Valuable` sell loot. Everything resolves through `item(id)`.
+
+/// Base id for the Sunderlakes fish catalog.
+pub const FISH_BASE: u32 = 4600;
+/// Number of distinct fish species.
+pub const FISH_COUNT: u32 = 40;
+
+/// A fish species definition, compiled into the catalog. `heal`/`restore` of 0
+/// means a pure `Valuable` (sell-only); non-zero makes it an edible
+/// `Consumable`. `well_fed` (if set) is the per-tick well-fed regen a special
+/// fish grants when eaten (see `fish_well_fed`).
+struct FishDef {
+    /// Offset from `FISH_BASE`; also the species' place in the catalog.
+    slot: u32,
+    name: &'static str,
+    desc: &'static str,
+    rarity: Rarity,
+    price: i64,
+    heal: i32,
+    restore: i32,
+    well_fed: i32,
+}
+
+#[allow(clippy::too_many_arguments)]
+const fn fishdef(
+    slot: u32,
+    name: &'static str,
+    desc: &'static str,
+    rarity: Rarity,
+    price: i64,
+    heal: i32,
+    restore: i32,
+    well_fed: i32,
+) -> FishDef {
+    FishDef {
+        slot,
+        name,
+        desc,
+        rarity,
+        price,
+        heal,
+        restore,
+        well_fed,
+    }
+}
+
+/// The forty fish of the Sunderlakes, ordered roughly by the Fishing level and
+/// zone depth at which they are caught: small shallow-water fish first, prized
+/// deep-water and drowned-valley catches last. Slots are contiguous 0..40.
+#[rustfmt::skip]
+const FISH_DEFS: [FishDef; 40] = [
+    // --- Shallow reed-water: cheap, plentiful, a few humble edibles ---------
+    fishdef(0,  "Silver Minnow",       "A palmful of quicksilver, barely worth the hook - but they shoal in their thousands.", Rarity::Common, 8,   0,  0,  0),
+    fishdef(1,  "Reed Perch",          "A striped little perch that hangs in the reed-shadows. Bony, but honest eating.",        Rarity::Common, 14,  10, 0,  0),
+    fishdef(2,  "Mudsnout Carp",       "A whiskered bottom-feeder the colour of the mire it grubs in.",                          Rarity::Common, 18,  0,  0,  0),
+    fishdef(3,  "Copperscale Roach",   "A common roach that flashes copper when it turns in the shallows.",                      Rarity::Common, 22,  0,  0,  0),
+    fishdef(4,  "Marsh Bream",         "A broad, slab-sided bream that fights well above its weight in the weed.",               Rarity::Common, 30,  16, 0,  0),
+    fishdef(5,  "Bristle Loach",       "A spiny loach that clings to the stones; the meres are thick with them.",                Rarity::Common, 26,  0,  0,  0),
+    fishdef(6,  "Fenwater Tench",      "A stubborn olive tench, slick with the healing slime the fen-folk prize.",               Rarity::Uncommon, 44, 24, 8,  0),
+    fishdef(7,  "Islet Rudd",          "A red-finned rudd that patrols the island shallows in bright, wary schools.",            Rarity::Common, 34,  0,  0,  0),
+    // --- Open meres & flooded caverns: mid-value, sturdier fish -------------
+    fishdef(8,  "Blue Mere Trout",     "A cold-water trout gone deep blue in the still meres. A fine table fish.",               Rarity::Uncommon, 60, 34, 0,  0),
+    fishdef(9,  "Ghost Grayling",      "A pale, half-translucent grayling that seems to swim through the water like smoke.",     Rarity::Uncommon, 72, 0,  0,  0),
+    fishdef(10, "Cavern Blindfish",    "An eyeless white fish of the flooded caves, feeling its way through the dark.",          Rarity::Uncommon, 88, 0,  0,  0),
+    fishdef(11, "Reedmace Pike",       "A lean ambush-pike that lies like a green log among the reeds.",                         Rarity::Uncommon, 96, 40, 0,  0),
+    fishdef(12, "Sunken Char",         "A deep-dwelling char, its belly banded rose and gold from the cold dark.",               Rarity::Uncommon, 110, 46, 12, 0),
+    fishdef(13, "Drowned Valley Eel",  "A long muscular eel that threads the flooded orchards of the drowned valleys.",          Rarity::Uncommon, 84, 0,  0,  0),
+    fishdef(14, "Lanternjaw",          "A cave-fish that dangles a wisp of cold blue light before its own gaping mouth.",        Rarity::Rare, 140, 0,  0,  0),
+    fishdef(15, "Silt-Gilded Barbel",  "A big golden barbel that roots the deep silt, its scales edged like beaten coin.",       Rarity::Rare, 165, 0,  0,  0),
+    // --- Deep water & mere-hearts: rarer, richer, restorative catches -------
+    fishdef(16, "Moonpale Salmon",     "A salmon that runs the deep channels only by moonlight, its flesh rich and pink.",       Rarity::Rare, 185, 60, 18, 0),
+    fishdef(17, "Glasswater Sturgeon", "An armoured sturgeon of the clearest deeps, old as the meres themselves.",               Rarity::Rare, 210, 0,  0,  0),
+    fishdef(18, "Meregleam Tench",     "A tench whose scales hold a faint inner glow, drawn up from lightless water.",           Rarity::Rare, 175, 55, 20, 0),
+    fishdef(19, "Stormfin Bass",       "A powerful bass that feeds hardest under a breaking storm, thick and fighting-fit.",     Rarity::Rare, 155, 0,  0,  0),
+    fishdef(20, "Hollow-Cavern Ray",   "A pale freshwater ray that glides the drowned cavern-halls like a slow ghost.",          Rarity::Rare, 230, 0,  0,  0),
+    fishdef(21, "Bittern's Bane",      "A vicious spined predator the marsh-birds have learned to leave well alone.",            Rarity::Rare, 195, 0,  0,  0),
+    fishdef(22, "Amberweed Golden",    "A goldfish grown huge and lordly in the amber weed-beds, worth a merchant's smile.",     Rarity::Rare, 260, 0,  0,  0),
+    fishdef(23, "Frostmere Whitefish", "A silver whitefish of the highest, coldest meres, its meat firm and clean.",             Rarity::Rare, 205, 70, 24, 0),
+    // --- The prized deeps: the trophy fish anglers boast of ------------------
+    fishdef(24, "Kingfisher's Prize",  "The great striped perch every angler swears is a myth until the line goes taut.",        Rarity::Epic, 320, 0,  0,  0),
+    fishdef(25, "Deep Meregold",       "A slab of living gold from the mere-hearts; a single scale would buy supper.",           Rarity::Epic, 380, 0,  0,  0),
+    fishdef(26, "Silverback Salmon",   "A monster salmon, silver-backed and heavy as a hound, that runs the sunken falls.",      Rarity::Epic, 340, 95, 30, 0),
+    fishdef(27, "Drowned-God Carp",    "A vast, slow, ancient carp the fen-shrines were raised to honour. Uncanny to hold.",     Rarity::Epic, 420, 0,  0,  0),
+    fishdef(28, "Voidmere Sturgeon",   "A black sturgeon from the deepest drowned trench, scaled like old iron.",                Rarity::Epic, 460, 0,  0,  0),
+    fishdef(29, "Ghostlight Pike",     "A pike lit from within by a drowned corpse-glow; the old anglers make a warding sign.",  Rarity::Epic, 390, 0,  0,  0),
+    fishdef(30, "Tempest Marlin",      "A freshwater marlin that leaps the storm-swells, its bill sharp as a boarding-pike.",    Rarity::Epic, 440, 110, 34, 0),
+    fishdef(31, "Abyss Anglerfish",    "A horror of the lightless deep, all teeth and a single cold luring lamp.",               Rarity::Epic, 405, 0,  0,  0),
+    // --- Legends of the Sunderlakes: the specials worth eating --------------
+    fishdef(32, "Sunderlake Leviathan","A young leviathan of the drowned deeps; men have retired on a single one.",              Rarity::Legendary, 540, 0,   0,  0),
+    fishdef(33, "The Mere-Mother",     "A carp so old and so vast the fen-folk name her a minor goddess. To land her is a saga.", Rarity::Legendary, 620, 150, 50, 5),
+    fishdef(34, "Moonscale Royal",     "The true moonscale, silver-white and shining; a bite of it mends flesh and spirit both.", Rarity::Legendary, 580, 140, 45, 4),
+    fishdef(35, "Drowned Crown Bass",  "A bass that wears a crown-crest of gold spines, king of some sunken lake-court.",         Rarity::Legendary, 560, 0,   0,  0),
+    fishdef(36, "Heartglow Trout",     "A trout that burns a warm gold from within; eaten fresh it fills you with lasting vigour.",Rarity::Legendary, 600, 135, 55, 5),
+    fishdef(37, "The Fathom-King",     "A titan eel of the deepest trench, black and endless; a trophy beyond price.",           Rarity::Legendary, 660, 0,   0,  0),
+    fishdef(38, "Weeping Silverfin",   "A shimmering fish the drowned-valley shrines wept over; its flesh is said to be blessed.", Rarity::Legendary, 590, 160, 60, 6),
+    fishdef(39, "The First Fish",      "Grey and eyeless and older than the meres, from water that has never seen the sky. Sacred.",Rarity::Legendary, 700, 0,   0,  0),
+];
+
+fn build_fish() -> Vec<Item> {
+    FISH_DEFS
+        .iter()
+        .map(|f| {
+            let id = FISH_BASE + f.slot;
+            let kind = if f.heal != 0 || f.restore != 0 {
+                ItemKind::Consumable {
+                    heal: f.heal,
+                    restore: f.restore,
+                }
+            } else {
+                ItemKind::Valuable
+            };
+            Item {
+                id,
+                name: f.name,
+                desc: f.desc,
+                kind,
+                rarity: f.rarity,
+                mods: StatMods {
+                    attack: 0,
+                    max_hp: 0,
+                    armor: 0,
+                },
+                price: f.price,
+                class_hint: None,
+            }
+        })
+        .collect()
+}
+
+/// The Sunderlakes fish catalog, built once and reused for `item` lookups.
+pub fn fish() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_fish)
+}
+
+/// The per-tick well-fed regen a special (legendary) fish grants when eaten, if
+/// it carries one - reuses the same `HealOverTime` self-effect as cooked food
+/// (see `use_item`). `None` for ordinary fish.
+pub fn fish_well_fed(id: u32) -> Option<i32> {
+    if !(FISH_BASE..FISH_BASE + FISH_COUNT).contains(&id) {
+        return None;
+    }
+    FISH_DEFS
+        .iter()
+        .find(|f| FISH_BASE + f.slot == id)
+        .filter(|f| f.well_fed > 0)
+        .map(|f| f.well_fed)
+}
+
 pub fn item(id: u32) -> Option<&'static Item> {
     ITEMS
         .iter()
@@ -1408,6 +1571,7 @@ pub fn item(id: u32) -> Option<&'static Item> {
         .or_else(|| kaelmyr_items().iter().find(|i| i.id == id))
         .or_else(|| materials().iter().find(|i| i.id == id))
         .or_else(|| crafted().iter().find(|i| i.id == id))
+        .or_else(|| fish().iter().find(|i| i.id == id))
 }
 
 // ---- Generated catalogs (Frontier and Sundered Reaches) ------------------
@@ -1804,6 +1968,7 @@ mod tests {
             .chain(kaelmyr_items().iter())
             .chain(materials().iter())
             .chain(crafted().iter())
+            .chain(fish().iter())
             .map(|i| i.id)
             .collect();
         ids.sort_unstable();
@@ -1876,6 +2041,72 @@ mod tests {
                 c.id
             );
         }
+    }
+
+    #[test]
+    fn fish_catalog_is_a_clean_band_of_sell_and_edible_species() {
+        let all = fish();
+        assert_eq!(all.len() as u32, FISH_COUNT, "forty fish species");
+        let mut edible = 0;
+        let mut sell_only = 0;
+        let mut specials = 0;
+        let mut min_price = i64::MAX;
+        let mut max_price = 0;
+        for f in all {
+            assert!(
+                f.id >= FISH_BASE && f.id < FISH_BASE + 100,
+                "fish {} sits in the 4600 band",
+                f.id
+            );
+            // Clear of every other catalog band.
+            assert!(f.id >= 4600, "fish must not collide with materials/crafted");
+            assert!(item(f.id).is_some(), "fish {} is not findable", f.id);
+            assert!(f.sell_price() >= 1, "every fish is worth something");
+            min_price = min_price.min(f.price);
+            max_price = max_price.max(f.price);
+            match f.kind {
+                ItemKind::Consumable { heal, restore } => {
+                    edible += 1;
+                    assert!(heal > 0 || restore > 0, "an edible fish must do something");
+                    if fish_well_fed(f.id).is_some() {
+                        specials += 1;
+                    }
+                }
+                ItemKind::Valuable => sell_only += 1,
+                ItemKind::Equipment(_) => panic!("no fish is equipment"),
+            }
+        }
+        // Roughly a third edible, the rest pure sell loot.
+        assert!(
+            (10..=16).contains(&edible),
+            "about a third of fish should be edible, got {edible}"
+        );
+        assert_eq!(
+            edible + sell_only,
+            FISH_COUNT as i32,
+            "no third kind of fish"
+        );
+        assert!(specials >= 3, "a few rare fish carry a well-fed special");
+        // A wide price spread: cheap minnows to prized several-hundred-gold catches.
+        assert!(
+            min_price <= 15,
+            "there are a few-gold minnows, got {min_price}"
+        );
+        assert!(
+            max_price >= 500,
+            "there are prized catches, got {max_price}"
+        );
+        // Only fish carry a well-fed special outside the food catalog.
+        for f in all {
+            if let Some(regen) = fish_well_fed(f.id) {
+                assert!(regen > 0 && regen <= 10, "special regen is modest");
+                assert!(
+                    matches!(f.kind, ItemKind::Consumable { .. }),
+                    "a special fish must be edible"
+                );
+            }
+        }
+        assert_eq!(fish_well_fed(FISH_BASE + FISH_COUNT + 1), None);
     }
 
     #[test]
