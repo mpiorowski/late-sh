@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-07-03 (bartender sells drinks for Late Chips: grounded JSON order flow in `ai/ghost.rs`, floor-guarded debit + `user_drinks` buzz tracking, drunk-level glow under username labels here and on chat author labels. Previously: opened to everyone: admin gate removed, `0` joins the top nav and Tab cycle, sessions land here on connect; AI bartender greeting with scripted fallback; bartender banner top-left; shared multiplayer lobby, spawn-in-seat, speech bubbles replace the embedded chat panel, emotes, door ambience, dog petting, first-visit tutorial)
+- Last updated: 2026-07-03 (bartender sells drinks for Late Chips: grounded JSON order flow in `ai/ghost.rs`, floor-guarded debit + `user_drinks` buzz tracking, drunk-level glow under username labels here and on chat author labels)
 - Status: Active
 
 ## 1. Summary
@@ -103,7 +103,10 @@ room is the chat surface, and the full history lives in #lounge on Home.
   AI-generated in his voice when the AI service is up, falling back to a
   scripted line on disabled AI, errors, or a 6s timeout
   (`ghost::bartender_tutorial_greeting`); either way it must tell them to
-  press `i`. Then `SendOff` lists the landmarks and Ctrl+O.
+  press `i`. Then `SendOff` lists the walkable landmarks (arcade 2, heavy
+  door 3, easel 4) plus Ctrl+Q (the Lobby modal) and Ctrl+G (the hub); its
+  Enter finishes the tour and drops the player onto the dashboard (#lounge
+  on Home, page 1) so they land in the chat.
 - Enter advances popups (`tutorial_capturing_keys`); Esc anywhere skips
   (arm in `dispatch_escape`). Completion persists once via
   `ProfileService::set_clubhouse_tutorial_done` (fire-and-forget, failure

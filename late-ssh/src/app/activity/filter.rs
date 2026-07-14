@@ -70,14 +70,19 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             ActivityGame::Mud => false,
             // Per-hand gambling wins are pure noise; the sit is the story.
             ActivityGame::Blackjack | ActivityGame::Poker => false,
-            // Solo arcade solves: high volume, no second player to invite.
+            // Daily-puzzle solves: `GameWon` fires only in daily mode (never
+            // for personal/practice runs), so these are once-per-day-per-board
+            // finishes, not high-volume grind — a small "someone beat today's
+            // puzzle" story worth sharing.
             ActivityGame::LeWord
             | ActivityGame::Minesweeper
             | ActivityGame::Nonogram
             | ActivityGame::RubiksCube
             | ActivityGame::Solitaire
-            | ActivityGame::Sudoku
-            | ActivityGame::Lateris
+            | ActivityGame::Sudoku => true,
+            // Score-run games have no daily-win concept; their final scores
+            // ride the hidden `GameScored` quest signal, not `GameWon`.
+            ActivityGame::Lateris
             | ActivityGame::TwentyFortyEight
             | ActivityGame::Snake
             | ActivityGame::Traffic => false,

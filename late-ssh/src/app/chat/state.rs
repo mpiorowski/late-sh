@@ -378,6 +378,12 @@ pub struct ChatState {
     pub(crate) active_polls: HashMap<Uuid, ActiveChatPoll>,
     pinned_messages: Vec<ChatMessage>,
     lounge_room_id: Option<Uuid>,
+    /// Recent #lounge system-feed lines (see `activity/lounge.rs`), newest
+    /// first, capped at `ACTIVITY_TICKER_CAP`. System messages are diverted
+    /// here at every ingestion point instead of being stored as chat rows;
+    /// the UI packs these left-to-right into the one-row activity ticker
+    /// above the composer. IRC and persistence are unaffected.
+    activity_ticker: Vec<ActivityTickerEntry>,
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
@@ -583,6 +589,7 @@ impl ChatState {
             active_polls: HashMap::new(),
             pinned_messages: Vec::new(),
             lounge_room_id: None,
+            activity_ticker: Vec::new(),
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
@@ -3167,6 +3174,12 @@ impl ChatState {
         &self.pinned_messages
     }
 
+    /// Recent #lounge system-feed lines for the activity ticker row,
+    /// newest first.
+    pub fn activity_ticker(&self) -> &[ActivityTickerEntry] {
+        &self.activity_ticker
+    }
+
     pub fn usernames(&self) -> &HashMap<Uuid, String> {
         &self.usernames
     }
@@ -3288,6 +3301,9 @@ impl ChatState {
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
         self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
+        for (_, messages) in &snapshot.chat_rooms {
+            self.note_activity_ticker_from(messages);
+        }
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.lounge_room_id = snapshot.lounge_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
@@ -3865,6 +3881,18 @@ impl ChatState {
             return;
         }
 
+        // System-feed lines never become chat rows: they feed the activity
+        // ticker instead. Unread counts already exclude the system author at
+        // the SQL layer, so there is no cursor to keep aligned here.
+        if let Some(text) = system_line_text_in(&self.usernames, &message) {
+            self.note_activity_ticker(ActivityTickerEntry {
+                id: message.id,
+                text,
+                at: created,
+            });
+            return;
+        }
+
         let is_viewing_room = Some(room_id) == self.visible_room_id;
         if self.message_is_ignored(&message) {
             if is_viewing_room {
@@ -3928,6 +3956,7 @@ impl ChatState {
     }
 
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
+        self.note_activity_ticker_from(&messages);
         let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
             return;
         };
@@ -3943,9 +3972,13 @@ impl ChatState {
         merged.truncate(500);
 
         let ignored = &self.ignored_user_ids;
+        let usernames = &self.usernames;
         *stored = merged
             .into_iter()
-            .filter(|message| !message_is_ignored_in(ignored, message))
+            .filter(|message| {
+                !message_is_ignored_in(ignored, message)
+                    && system_line_text_in(usernames, message).is_none()
+            })
             .collect();
     }
 
@@ -4050,8 +4083,27 @@ impl ChatState {
     fn filter_messages(&self, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         messages
             .into_iter()
-            .filter(|message| !self.message_is_ignored(message))
+            .filter(|message| {
+                !self.message_is_ignored(message)
+                    && system_line_text_in(&self.usernames, message).is_none()
+            })
             .collect()
+    }
+
+    fn note_activity_ticker(&mut self, entry: ActivityTickerEntry) {
+        note_ticker_entry(&mut self.activity_ticker, entry);
+    }
+
+    fn note_activity_ticker_from(&mut self, messages: &[ChatMessage]) {
+        for message in messages {
+            if let Some(text) = system_line_text_in(&self.usernames, message) {
+                self.note_activity_ticker(ActivityTickerEntry {
+                    id: message.id,
+                    text,
+                    at: message.created,
+                });
+            }
+        }
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
@@ -4067,6 +4119,42 @@ impl ChatState {
         }
         self.sync_selection();
     }
+}
+
+/// One diverted #lounge system line held for the activity ticker.
+pub struct ActivityTickerEntry {
+    pub id: Uuid,
+    pub text: String,
+    pub at: DateTime<Utc>,
+}
+
+/// The ticker queue length: enough that packing left to right always fills
+/// the row on any sane terminal width, without hoarding history.
+const ACTIVITY_TICKER_CAP: usize = 10;
+
+/// Insert into the newest-first ticker queue, deduped by message id (tails
+/// and snapshots replay the same lines), capped at `ACTIVITY_TICKER_CAP`.
+fn note_ticker_entry(entries: &mut Vec<ActivityTickerEntry>, entry: ActivityTickerEntry) {
+    if entries.iter().any(|existing| existing.id == entry.id) {
+        return;
+    }
+    let pos = entries
+        .iter()
+        .position(|existing| entry.at >= existing.at)
+        .unwrap_or(entries.len());
+    entries.insert(pos, entry);
+    entries.truncate(ACTIVITY_TICKER_CAP);
+}
+
+/// The #lounge system-feed check (author is the `system` bot AND the body
+/// carries the `· ` prefix — same spoof guard as `ui.rs::is_system_author`).
+/// Returns the display text when the message is a system line.
+fn system_line_text_in(usernames: &HashMap<Uuid, String>, message: &ChatMessage) -> Option<String> {
+    usernames
+        .get(&message.user_id)
+        .filter(|name| crate::app::activity::lounge::is_system_username(name))
+        .and_then(|_| super::ui_text::parse_system_line(&message.body))
+        .map(str::to_string)
 }
 
 /// A message is ignored if its author is ignored, or if it is a bot/automated
@@ -6731,6 +6819,66 @@ mod tests {
             reply_to_message_id: Some(reply_to_message_id),
             ..make_msg(id)
         }
+    }
+
+    #[test]
+    fn system_line_text_requires_system_author_and_prefix() {
+        let system_id = Uuid::from_u128(1);
+        let mut usernames = HashMap::new();
+        usernames.insert(system_id, "system".to_string());
+        usernames.insert(Uuid::from_u128(3), "mira".to_string());
+
+        let mut line = make_msg(Uuid::from_u128(10));
+        line.user_id = system_id;
+        line.body = "· mira sat down at poker".to_string();
+        assert_eq!(
+            system_line_text_in(&usernames, &line),
+            Some("mira sat down at poker".to_string())
+        );
+
+        // The system author without the prefix stays a normal message...
+        let mut no_prefix = make_msg(Uuid::from_u128(11));
+        no_prefix.user_id = system_id;
+        no_prefix.body = "hello".to_string();
+        assert_eq!(system_line_text_in(&usernames, &no_prefix), None);
+
+        // ...and so does a non-system author pasting the prefix.
+        let mut spoof = make_msg(Uuid::from_u128(12));
+        spoof.user_id = Uuid::from_u128(3);
+        spoof.body = "· fake activity".to_string();
+        assert_eq!(system_line_text_in(&usernames, &spoof), None);
+    }
+
+    #[test]
+    fn ticker_queue_dedupes_orders_newest_first_and_caps() {
+        let base = chrono::Utc::now();
+        let entry = |n: u128, offset_secs: i64| ActivityTickerEntry {
+            id: Uuid::from_u128(n),
+            text: format!("event {n}"),
+            at: base + chrono::Duration::seconds(offset_secs),
+        };
+
+        let mut entries = Vec::new();
+        // Tails replay out of order; the queue must still end newest-first.
+        note_ticker_entry(&mut entries, entry(1, 10));
+        note_ticker_entry(&mut entries, entry(2, 30));
+        note_ticker_entry(&mut entries, entry(3, 20));
+        assert_eq!(
+            entries.iter().map(|e| e.id).collect::<Vec<_>>(),
+            vec![Uuid::from_u128(2), Uuid::from_u128(3), Uuid::from_u128(1)]
+        );
+
+        // A snapshot replaying an already-seen message is a no-op.
+        note_ticker_entry(&mut entries, entry(2, 30));
+        assert_eq!(entries.len(), 3);
+
+        // Overflow drops the oldest, never the newest.
+        for n in 4..=12 {
+            note_ticker_entry(&mut entries, entry(n, 30 + n as i64));
+        }
+        assert_eq!(entries.len(), ACTIVITY_TICKER_CAP);
+        assert_eq!(entries[0].id, Uuid::from_u128(12));
+        assert!(!entries.iter().any(|e| e.id == Uuid::from_u128(1)));
     }
 
     #[test]

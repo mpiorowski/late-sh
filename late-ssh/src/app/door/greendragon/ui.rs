@@ -1228,9 +1228,12 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         ),
     ]));
     lines.push(Line::from(Span::styled(
-        "Hunt the forest, train against the masters, gear up, and slay the Green Dragon. Your character persists.",
+        "Hunt the forest, out-duel the masters, gear up, and end your run on the Green Dragon's hoard. Your character persists between visits.",
         Style::default().fg(theme::TEXT_DIM()),
     )));
+    lines.push(legend_credentials());
+    lines.push(Line::raw(""));
+    lines.push(loop_strip());
     lines.push(Line::raw(""));
     lines.push(landing::heading("The Loop"));
     lines.push(landing::stat(
@@ -1248,6 +1251,20 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         "reach level 15, then end the run in glory",
         10,
     ));
+    lines.push(Line::raw(""));
+    lines.push(flavor_headline());
+    lines.push(flavor_quote());
+    lines.push(Line::raw(""));
+    lines.push(landing::heading("Rewards"));
+    lines.push(landing::stat(
+        "Green Dragon slain",
+        "10,000 chips + GDS badge, once per account",
+        20,
+    ));
+    lines.push(Line::from(Span::styled(
+        "  Slay again for titles and dragon points, but the chip payout is a lifetime claim.",
+        Style::default().fg(theme::TEXT_FAINT()),
+    )));
     lines.push(Line::raw(""));
     lines.push(landing::heading("Enter"));
     lines.push(landing::action(
@@ -1295,11 +1312,18 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
 
 fn title_art() -> Vec<Line<'static>> {
     [
-        "  ___                      ___                         ",
-        " / __|_ _ ___ ___ _ _    |   \\ _ _ __ _ __ _ ___ _ _  ",
-        "| (_ | '_/ -_) -_) ' \\   | |) | '_/ _` / _` / _ \\ ' \\ ",
-        " \\___|_| \\___\\___|_||_|  |___/|_| \\__,_\\__, \\___/_||_|",
-        "                                       |___/          ",
+        "██████╗   ██████╗  ███████╗ ███████╗ ███╗   ██╗",
+        "██╔════╝  ██╔══██╗ ██╔════╝ ██╔════╝ ████╗  ██║",
+        "██║  ███╗ ██████╔╝ █████╗   █████╗   ██╔██╗ ██║",
+        "██║   ██║ ██╔══██╗ ██╔══╝   ██╔══╝   ██║╚██╗██║",
+        "╚██████╔╝ ██║  ██║ ███████╗ ███████╗ ██║ ╚████║",
+        " ╚═════╝  ╚═╝  ╚═╝ ╚══════╝ ╚══════╝ ╚═╝  ╚═══╝",
+        "██████╗  ██████╗   █████╗  ██████╗    ██████╗  ███╗   ██╗",
+        "██╔══██╗ ██╔══██╗ ██╔══██╗ ██╔════╝  ██╔═══██╗ ████╗  ██║",
+        "██║  ██║ ██████╔╝ ███████║ ██║  ███╗ ██║   ██║ ██╔██╗ ██║",
+        "██║  ██║ ██╔══██╗ ██╔══██║ ██║   ██║ ██║   ██║ ██║╚██╗██║",
+        "██████╔╝ ██║  ██║ ██║  ██║ ╚██████╔╝ ╚██████╔╝ ██║ ╚████║",
+        "╚═════╝  ╚═╝  ╚═╝ ╚═╝  ╚═╝  ╚═════╝   ╚═════╝  ╚═╝  ╚═══╝",
     ]
     .into_iter()
     .map(|line| {
@@ -1311,4 +1335,51 @@ fn title_art() -> Vec<Line<'static>> {
         ))
     })
     .collect()
+}
+
+/// The pedigree line under the description (mirrors NetHack's "Born 1987..."):
+/// this door is a remake of the genre-defining BBS game.
+fn legend_credentials() -> Line<'static> {
+    Line::from(Span::styled(
+        "LORD, 1989 \u{b7} the most-played door game of the BBS era \u{b7} reborn open-source",
+        Style::default().fg(theme::AMBER_DIM()),
+    ))
+}
+
+/// Marketing flavor, matching NetHack's headline/quote pair: bold weight without
+/// amber (which the section headings own), then a faint-italic nostalgia line.
+fn flavor_headline() -> Line<'static> {
+    Line::from(Span::styled(
+        "  The door game that ate the BBS scene: dial in nightly, grind the forest, kill the Dragon.",
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn flavor_quote() -> Line<'static> {
+    Line::from(Span::styled(
+        "  \"You aren't strong enough to face the Dragon yet.\"  (every BBS kid, 1994)",
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    ))
+}
+
+/// A one-line, colored sketch of the run's arc, village to the dragon's cave,
+/// the way NetHack's landing shows a scrap of dungeon. Flavor, not a live map.
+fn loop_strip() -> Line<'static> {
+    let arrow = || Span::styled("  →  ", Style::default().fg(theme::TEXT_FAINT()));
+    let leg =
+        |w: &'static str, c| Span::styled(w, Style::default().fg(c).add_modifier(Modifier::BOLD));
+    Line::from(vec![
+        Span::raw("  "),
+        leg("village", theme::TEXT_BRIGHT()),
+        arrow(),
+        leg("forest", theme::SUCCESS()),
+        arrow(),
+        leg("masters", theme::AMBER()),
+        arrow(),
+        leg("the Green Dragon", theme::ERROR()),
+    ])
 }

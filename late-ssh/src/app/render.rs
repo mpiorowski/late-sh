@@ -488,6 +488,7 @@ impl App {
                     food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
                     water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
                 }),
+                activity_ticker: self.chat.activity_ticker(),
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
                 image_modal,
@@ -611,6 +612,7 @@ impl App {
             // The pet lives in the Lounge only (DashboardChatView above);
             // every other room and tab renders without the strip.
             pet_strip: None,
+            activity_ticker: self.chat.activity_ticker(),
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
             feeds_unread_count: self.chat.feeds.unread_count(),

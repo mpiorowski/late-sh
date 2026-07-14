@@ -664,12 +664,13 @@ fn arcade_help_lines() -> Vec<String> {
         "  [LA]      Lateris (Tetris)",
         "  [24#]     2048",
         "  [SN]      Snake",
-        "  The Lateania and NetHack badges are one-off feats, shown with no rank digit.",
+        "  The Lateania, NetHack, and Green Dragon badges are one-off feats, shown with no rank digit.",
         "  [LMG]     Lateania Archdemon",
         "  [LKN]     Lateania Frontier King",
         "  [LYS]     Lateania Sundering Deep",
         "  [NHA]     NetHack Amulet",
         "  [NHY]     NetHack Ascension",
+        "  [GDS]     Green Dragon Slayer",
     ]
     .into_iter()
     .map(str::to_string)

@@ -197,6 +197,15 @@ fn draw_match(
     );
 
     let finished = !detail.is_active();
+    // A finished match is a static win/lose board nobody can move on. Render
+    // the final position in ASCII: the terminal PNG pieces go stale the moment
+    // we stop re-pushing their placements (they linger as broken ghosts on
+    // protocols with no delete-by-id), so the graphics path is wrong here.
+    let render_mode = if finished {
+        ChessPieceRenderMode::Ascii
+    } else {
+        board.piece_render_mode
+    };
     let board_ctx = BoardCtx {
         orientation,
         cursor: my_turn.then_some(board.cursor),
@@ -217,8 +226,8 @@ fn draw_match(
         board.match_id,
         image_protocol,
         terminal_images,
-        board.piece_render_mode,
-        finished,
+        render_mode,
+        false,
     );
     if let Some(board_area) = board_area {
         board.board_geometry.set(Some((board_area, tier)));

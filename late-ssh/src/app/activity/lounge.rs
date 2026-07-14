@@ -1,9 +1,10 @@
 //! The #lounge system feed: one background task drains the global activity
 //! broadcast, keeps the events `filter::lounge_includes` approves, and posts
 //! each as a persisted chat message authored by the `system` bot user. The
-//! chat renderer shows these as authorless single rows (see
-//! `chat/ui_text.rs::parse_system_line`); IRC clients see ordinary PRIVMSGs
-//! from the `system` nick.
+//! TUI never shows these as chat rows: `ChatState` diverts them (see
+//! `chat/state.rs::system_line_text_in`) into the one-row activity ticker
+//! rendered in the composer-gap row. IRC clients see ordinary PRIVMSGs from
+//! the `system` nick, and #lounge history keeps every line.
 //!
 //! Bodies never contain `@`, so the mention pipeline stays quiet, and the
 //! system author is excluded from unread counts at the SQL layer
@@ -41,11 +42,16 @@ pub const SYSTEM_FINGERPRINT: &str = "system-fp-000";
 pub const SYSTEM_USERNAME: &str = "system";
 
 /// Body prefix marking a system line. Deliberately readable: IRC clients see
-/// it verbatim (`<system> · mira joined`). The TUI only styles a message as
-/// a system row when the body carries this prefix AND the author is the
+/// it verbatim (`<system> · mira joined`). The TUI only treats a message as
+/// a system line when the body carries this prefix AND the author is the
 /// feed bot, so neither a human squatting the nick nor a pasted `· ` can
-/// spoof the authorless style.
+/// spoof it.
 pub const SYSTEM_LINE_PREFIX: &str = "· ";
+
+/// The author half of the system-line check (see `SYSTEM_LINE_PREFIX`).
+pub fn is_system_username(name: &str) -> bool {
+    name.trim().eq_ignore_ascii_case(SYSTEM_USERNAME)
+}
 
 /// Same user re-sitting at the same table (or re-triggering any one event
 /// shape) within this window is dropped: seat toggling must not fill the
@@ -124,7 +130,13 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::BossSlain { game, boss } => format!("boss:{}:{boss}", game.key()),
         ActivityKind::SatDown { game } => format!("sat:{}", game.key()),
         ActivityKind::DailyResult { game, match_id } => format!("daily:{game}:{match_id}"),
-        ActivityKind::GameWon { game, .. } => format!("won:{}", game.key()),
+        // Daily-puzzle wins ride `GameWon` and carry the board (difficulty) in
+        // `detail`, so two distinct same-game boards (Sudoku easy + hard) inside
+        // the window must post separately; keep `detail` in the key so only an
+        // exact re-emit of the same board collapses.
+        ActivityKind::GameWon { game, detail, .. } => {
+            format!("won:{}:{}", game.key(), detail.as_deref().unwrap_or_default())
+        }
         ActivityKind::GameEvent { game, detail } => format!("event:{}:{detail}", game.key()),
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),
         ActivityKind::BonsaiWatered => "bonsai-watered".to_string(),
@@ -171,13 +183,13 @@ mod tests {
     fn daily_results_dedupe_per_match_not_per_game() {
         let mut recent = HashMap::new();
         let winner = Uuid::now_v7();
-        let first = ActivityEvent::daily_win(winner, "mira", "bob", "Chess", Uuid::now_v7());
+        let first = ActivityEvent::daily_win(winner, "mira", "Chess", Uuid::now_v7());
         assert!(!is_repeat(&mut recent, &first));
         // A re-emit of the same finished match stays deduped...
         assert!(is_repeat(&mut recent, &first));
         // ...but a second match the same winner finishes at the same game is
         // its own line: the contract is one announcement per match.
-        let second = ActivityEvent::daily_win(winner, "mira", "carol", "Chess", Uuid::now_v7());
+        let second = ActivityEvent::daily_win(winner, "mira", "Chess", Uuid::now_v7());
         assert!(!is_repeat(&mut recent, &second));
     }
 
