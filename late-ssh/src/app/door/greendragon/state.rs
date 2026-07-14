@@ -110,10 +110,10 @@ pub enum Mode {
     Outhouse,
     /// After the stall: wash up or slip out. `true` = the paid private stall.
     OuthouseWash(bool),
-    /// The Dark Horse Tavern, stumbled on in the forest (`darkhorse.php`);
+    /// The Crooked Wheel, stumbled on in the forest (`darkhorse.php`);
     /// its sub-views (the games) live in [`TavernView`].
     Tavern,
-    /// The Dark Horse barman's counter (`darkhorse.php`'s bartender): the
+    /// The Crooked Wheel barman's counter (`darkhorse.php`'s bartender): the
     /// way to his paid word on your enemies.
     TavernBartender,
     /// Picking whose name to buy: typed on the talk line, then the matches
@@ -293,7 +293,7 @@ pub struct ListPage {
     pub pages: usize,
 }
 
-/// Which corner of the Dark Horse the session is in (all under
+/// Which corner of the Crooked Wheel the session is in (all under
 /// [`Mode::Tavern`]): the taproom, or one of the gambler's games mid-hand.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TavernView {
@@ -406,7 +406,7 @@ pub struct State {
     encounter: Option<Encounter>,
     /// The forest event awaiting an accept/decline choice, while in [`Mode::Event`].
     pending_event: Option<ForestEvent>,
-    /// Crazy Audrey is in the square this visit (`crazyaudrey`'s 20%
+    /// Mad Juna is in the square this visit (`crazyaudrey`'s 20%
     /// village-desc roll, re-rolled on every entry to the village).
     audrey_here: bool,
     /// A fresh petting bought a look at the baskets (upstream offers the
@@ -414,7 +414,7 @@ pub struct State {
     /// square, playing, or running.
     zoo_baskets_open: bool,
     /// The pending [`ForestEvent::PettingZoo`] was opened from the village
-    /// (Audrey's zoo) rather than the forest: playing marks the daily flag
+    /// (Juna's zoo) rather than the forest: playing marks the daily flag
     /// and the outcome lands back in the square.
     zoo_from_village: bool,
     /// Days back the news view is showing (0 = today).
@@ -423,7 +423,7 @@ pub struct State {
     news_rx: Option<tokio::sync::watch::Receiver<NewsLoad>>,
     /// The loaded news page for `news_offset`, newest first.
     news_lines: Option<std::sync::Arc<Vec<String>>>,
-    /// Which corner of the Dark Horse is open while in [`Mode::Tavern`].
+    /// Which corner of the Crooked Wheel is open while in [`Mode::Tavern`].
     tavern_view: TavernView,
     /// The Five Sixes pot as last read (for the signboard), if known.
     fivesix_pot: Option<u64>,
@@ -730,7 +730,7 @@ impl State {
         self.pending_event
     }
 
-    /// The pending event is Audrey's *village* basket game, so the panel
+    /// The pending event is Juna's *village* basket game, so the panel
     /// frames the square rather than a forest clearing.
     pub fn zoo_village_pending(&self) -> bool {
         self.zoo_from_village && self.pending_event == Some(ForestEvent::PettingZoo)
@@ -1110,7 +1110,7 @@ impl State {
         self.mode = mode;
         self.cursor = 0;
         if mode == Mode::Village {
-            // Crazy Audrey sets up in the square 20% of visits
+            // Mad Juna sets up in the square 20% of visits
             // (`crazyaudrey`'s village-desc hook, `e_rand(1,100) <= 20`
             // rolled on every village pageview); a fresh visit also closes
             // any basket offer left from the last petting (upstream's nav
@@ -1134,7 +1134,7 @@ impl State {
     /// Pet the zoo (`crazyaudrey_run` op=pet): 5 gold buys a few minutes with
     /// the animals and a 5-round defense x1.05 calm; an empty purse wanders
     /// off sadly, free. A pet re-offers the basket game unless it's already
-    /// been played today, in which case Audrey recognizes you and screams.
+    /// been played today, in which case Juna recognizes you and screams.
     fn pet_zoo(&mut self) {
         let c = self.character.as_mut().unwrap();
         if c.gold < model::ZOO_PET_COST {
@@ -1148,13 +1148,13 @@ impl State {
         c.apply_persistent_buff(model::zoo_buff());
         let played = c.zoo_played_today;
         self.push_log(format!(
-            "You drop {} gold in Crazy Audrey's basket and spend a few minutes petting \
+            "You drop {} gold in Mad Juna's basket and spend a few minutes petting \
              her kittens. A soft, warm calm settles over you.",
             model::ZOO_PET_COST
         ));
         if played {
             self.push_log(
-                "You sidle toward her lidded baskets, but Audrey shrieks: \"I recognize \
+                "You sidle toward her lidded baskets, but Juna shrieks: \"I recognize \
                  you! You've already played with my kittens today!\" You retreat to a \
                  safe distance."
                     .into(),
@@ -1215,8 +1215,8 @@ impl State {
         let rows = village_menu(c, self.audrey_here, self.zoo_baskets_open);
         match rows[self.cursor].0.as_str() {
             s if s.starts_with("The Forest") => self.goto(Mode::Forest),
-            s if s.starts_with("Pet Crazy Audrey's") => self.pet_zoo(),
-            s if s.starts_with("Look at Crazy Audrey's baskets") => {
+            s if s.starts_with("Pet Mad Juna's") => self.pet_zoo(),
+            s if s.starts_with("Look at Mad Juna's baskets") => {
                 // The village basket game (`crazyaudrey_run` op=baskets):
                 // the same three baskets as the forest event, but playing
                 // burns the daily flag and the outcome lands in the square.
@@ -1550,7 +1550,7 @@ impl State {
             return Selection::Stay;
         };
         let accepted = self.cursor == 0;
-        // Stepping into the Dark Horse opens the real room (the games, the
+        // Stepping into the Crooked Wheel opens the real room (the games, the
         // pot) rather than an instant effect.
         if event == ForestEvent::Tavern && accepted {
             self.enter_tavern();
@@ -1587,7 +1587,7 @@ impl State {
     }
 
     /// Land somewhere sensible after an event: the graveyard if it killed you
-    /// (the mine cave-in, the stream), the village square if it was Audrey's
+    /// (the mine cave-in, the stream), the village square if it was Juna's
     /// zoo game, otherwise back to the forest to hunt on.
     fn after_event(&mut self) {
         self.pending_event = None;
@@ -3510,6 +3510,7 @@ impl State {
                 &mut rng,
                 player,
                 enc.foes[target].combatant,
+                enc.foes[target].hp,
                 &mut enc.buffs,
                 if bench { &mut benched } else { &mut c.companions },
             )
@@ -4827,15 +4828,15 @@ impl State {
         Selection::Stay
     }
 
-    // --- the Dark Horse Tavern --------------------------------------------------
+    // --- the Crooked Wheel --------------------------------------------------
 
-    /// Step into the Dark Horse (the accepted forest event): open the taproom
+    /// Step into the Crooked Wheel (the accepted forest event): open the taproom
     /// and start the pot signboard loading.
     fn enter_tavern(&mut self) {
         self.tavern_view = TavernView::Hub;
         self.fivesix_pot_rx = Some(self.svc.load_fivesix_pot());
         self.push_log(
-            "You push into the Dark Horse. Dice rattle somewhere back in the smoke.".into(),
+            "You push into the Crooked Wheel. Dice rattle somewhere back in the smoke.".into(),
         );
         self.goto(Mode::Tavern);
     }
@@ -5084,17 +5085,17 @@ impl State {
         if sixes >= 5 {
             self.push_log(format!("FIVE SIXES! The whole pot of {win} gold is yours!"));
             self.news(format!(
-                "{who} rolled five sixes at the Dark Horse Tavern and swept the pot of {win} gold."
+                "{who} rolled five sixes at the Crooked Wheel and swept the pot of {win} gold."
             ));
         } else if sixes == 4 {
             self.push_log(format!("Four sixes! A tenth of the pot: +{win} gold."));
             self.news(format!(
-                "{who} rolled four sixes at the Dark Horse Tavern and won {win} gold."
+                "{who} rolled four sixes at the Crooked Wheel and won {win} gold."
             ));
         } else {
             self.push_log(format!("Three sixes pay a sliver of the pot: +{win} gold."));
             self.news(format!(
-                "{who} rolled three sixes at the Dark Horse Tavern and won {win} gold."
+                "{who} rolled three sixes at the Crooked Wheel and won {win} gold."
             ));
         }
         self.save();
@@ -6296,19 +6297,19 @@ fn village_menu(c: &Character, audrey_here: bool, baskets_open: bool) -> Vec<(St
             c.level < data::MAX_LEVEL && c.experience >= c.exp_for_next_level(),
         ),
     ];
-    // Crazy Audrey's petting zoo, when she's about (`crazyaudrey`'s village
+    // Mad Juna's petting zoo, when she's about (`crazyaudrey`'s village
     // hook; the gold check is the pet's own, a free sad refusal). A fresh
     // petting opens the basket row (upstream's transient pet-page nav).
     if audrey_here {
         rows.push((
             format!(
-                "Pet Crazy Audrey's kittens ({} gold)",
+                "Pet Mad Juna's kittens ({} gold)",
                 model::ZOO_PET_COST
             ),
             true,
         ));
         if baskets_open {
-            rows.push(("Look at Crazy Audrey's baskets".into(), true));
+            rows.push(("Look at Mad Juna's baskets".into(), true));
         }
     }
     if c.specialty == Specialty::None {
@@ -7461,7 +7462,7 @@ fn bet_amount(cursor: usize, gold: u64) -> Option<u64> {
     }
 }
 
-/// The Dark Horse (`darkhorse.php` + the three game modules), by view.
+/// The Crooked Wheel (`darkhorse.php` + the three game modules), by view.
 fn tavern_menu(
     c: &Character,
     view: TavernView,

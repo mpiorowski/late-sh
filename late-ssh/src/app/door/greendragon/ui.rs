@@ -181,8 +181,8 @@ fn draw_main(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
 
 fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     let title = if state.zoo_village_pending() {
-        // The basket game launched from Audrey's zoo isn't a forest happening.
-        "Crazy Audrey's Baskets"
+        // The basket game launched from Juna's zoo isn't a forest happening.
+        "Mad Juna's Baskets"
     } else {
         panel_title(state.mode())
     };
@@ -296,10 +296,10 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     {
         lines.push(Line::raw(""));
         if state.zoo_village_pending() {
-            // Audrey's village game reframes the same baskets in the square
+            // Juna's village game reframes the same baskets in the square
             // (`crazyaudrey_baskets` op=baskets vs the forest wording).
             for line in [
-                "You reach for the lid of one of Crazy Audrey's baskets while she seems",
+                "You reach for the lid of one of Mad Juna's baskets while she seems",
                 "distracted - but she appears out of nowhere, ranting about colored",
                 "kittens, and pulls the baskets close. Questioned, she turns suddenly",
                 "lucid: three baskets, four kittens in each. Two alike and you'll have",
@@ -1122,7 +1122,7 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Romance => "The Corner Table",
         Mode::Outhouse => "The Outhouse",
         Mode::OuthouseWash(_) => "The Rain Barrel",
-        Mode::Tavern => "The Dark Horse Tavern",
+        Mode::Tavern => "The Crooked Wheel",
         Mode::TavernBartender => "The Barman's Counter",
         Mode::IntelTarget => "Naming an Enemy",
         Mode::IntelSheet => "The Barman's Word",

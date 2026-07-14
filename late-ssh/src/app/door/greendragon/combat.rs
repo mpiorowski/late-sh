@@ -257,17 +257,31 @@ fn roll_damage(
     enemy: Combatant,
     m: Mods,
 ) -> (i32, i32, bool, f64) {
+    roll_damage_raw(rng, player.attack as f64, player.defense as f64, enemy, m)
+}
+
+/// The core `rolldamage` over raw f64 attack/defense stats, so a fractional
+/// combatant (a skeleton companion's `.5` block) rolls at full precision. The
+/// player path passes its integer stats straight through [`roll_damage`];
+/// companions call this directly (`rollcompaniondamage`, `lib/extended-battle.php`).
+fn roll_damage_raw(
+    rng: &mut impl Rng,
+    atk_stat: f64,
+    def_stat: f64,
+    enemy: Combatant,
+    m: Mods,
+) -> (i32, i32, bool, f64) {
     let adjusted_creature_def =
         m.badguydefmod * enemy.defense as f64 / (m.adjustment * m.adjustment);
     let creature_attack = enemy.attack as f64 * m.badguyatkmod;
-    let adjusted_self_def = player.defense as f64 * m.adjustment * m.defmod;
+    let adjusted_self_def = def_stat * m.adjustment * m.defmod;
 
     let mut creaturedmg;
     let mut selfdmg;
     let mut crit;
     let mut patkroll;
     loop {
-        let mut atk = player.attack as f64 * m.atkmod;
+        let mut atk = atk_stat * m.atkmod;
         crit = rng.gen_range(1..=20) == 1;
         if crit {
             atk *= 3.0;
@@ -436,14 +450,19 @@ pub struct BuffedOutcome {
 
 /// Resolve one round with `buffs` and `companions` applied: stat multipliers
 /// adjust the combat roll, then post-round effects (regen/lifetap heals, minion
-/// hits, the lightning damage-shield, companion attacks) layer on. Companions
-/// strike the enemy and can themselves be struck down (dead ones are removed,
-/// their dying flavor collected). Buffs tick down and expired ones are removed.
-/// Mirrors how LoGD threads buff/companion hooks through `rolldamage`.
+/// hits, the lightning damage-shield, companion attacks) layer on. `enemy_hp`
+/// is the foe's health entering the round, so companions neither pile onto a
+/// corpse nor get struck by a foe an earlier blow already felled (upstream
+/// gates the companion loop on `creaturehealth`). Each fighting companion
+/// trades blows with the foe in its own paired exchange and can be struck down
+/// (dead ones are removed, their dying flavor collected). Buffs tick down and
+/// expired ones are removed. Mirrors how LoGD threads buff/companion hooks
+/// through `rolldamage`/`rollcompaniondamage`.
 pub fn resolve_round_buffed(
     rng: &mut impl Rng,
     player: Combatant,
     enemy: Combatant,
+    enemy_hp: u32,
     buffs: &mut Vec<Buff>,
     companions: &mut Vec<Companion>,
 ) -> BuffedOutcome {
@@ -467,46 +486,66 @@ pub fn resolve_round_buffed(
     let mut heal = 0u32;
     let mut messages = Vec::new();
 
-    // Companions strike the enemy (positive contributions only). A healer's
-    // roll never lands on the foe — upstream's heal-ability branch rolls but
-    // discards `damage_done` (`lib/extended-battle.php`); fight and defend
-    // branches apply it.
-    let eff_enemy_def = m.badguydefmod * enemy.defense as f64 / (m.adjustment * m.adjustment);
-    for comp in companions.iter() {
-        if comp.hitpoints == 0 || matches!(comp.ability, CompanionAbility::Heal(_)) {
+    // Companions join the fray. Each living companion trades blows with the
+    // foe in its own paired exchange, exactly as upstream's
+    // `report_companion_move`/`rollcompaniondamage` (`lib/extended-battle.php`):
+    // it swings (a negative roll rebounds on itself, the foe's riposte), and —
+    // only while the foe still stands — the foe swings back at *that* companion
+    // (a negative return is the companion turning the blow into the foe). Every
+    // fighting companion is answered, not just one. The companion-specific mods
+    // (`compatkmod`/`compdefmod`/`compdmgmod`) are 1.0 for every stock
+    // companion, so the shared roller with the player mods neutralised and the
+    // enemy mods kept reproduces the roll. A healer never lands its own swing
+    // (upstream's heal branch discards `creaturedmg`) but is still in reach of
+    // the foe. Upstream's `defend` only suppresses the foe's bonus double-attack
+    // — which we don't model — so it collapses to an ordinary fighter here.
+    let comp_mods = Mods {
+        atkmod: 1.0,
+        defmod: 1.0,
+        dmgmod: 1.0,
+        badguyatkmod: m.badguyatkmod,
+        badguydefmod: m.badguydefmod,
+        badguydmgmod: m.badguydmgmod,
+        adjustment: m.adjustment,
+        invulnerable: false,
+    };
+    let mut foe_hp_running = enemy_hp as i32 - damage_to_enemy;
+    for comp in companions.iter_mut() {
+        if foe_hp_running <= 0 {
+            break;
+        }
+        if comp.hitpoints == 0 {
             continue;
         }
-        let dmg = trunc(bell_rand(rng, comp.attack) - bell_rand(rng, eff_enemy_def));
-        if dmg > 0 {
-            damage_to_enemy += dmg;
-            messages.push(format!("{} strikes your foe for {dmg}.", comp.name));
-        }
-    }
-
-    // The enemy lashes out at one living companion (so they can fall). A
-    // defender interposes itself (LoGD's `defend` ability: one companion
-    // soaks the round); otherwise the target is random.
-    let living: Vec<usize> = companions
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.hitpoints > 0)
-        .map(|(i, _)| i)
-        .collect();
-    if !living.is_empty() {
-        let pick = living
-            .iter()
-            .copied()
-            .find(|&i| companions[i].ability == CompanionAbility::Defend)
-            .unwrap_or_else(|| living[rng.gen_range(0..living.len())]);
-        let eatk = bell_rand(rng, enemy.attack as f64 * m.badguyatkmod);
-        let cdef = bell_rand(rng, companions[pick].defense);
-        let dmg = trunc(eatk - cdef).max(0) as u32;
-        if dmg > 0 {
-            let comp = &mut companions[pick];
-            comp.hitpoints = comp.hitpoints.saturating_sub(dmg);
-            if comp.hitpoints == 0 {
-                messages.push(comp.dying_text.clone());
+        let is_heal = matches!(comp.ability, CompanionAbility::Heal(_));
+        let (cdmg, sdmg, _crit, _roll) =
+            roll_damage_raw(rng, comp.attack, comp.defense, enemy, comp_mods);
+        // The companion's swing (healers never apply theirs).
+        if !is_heal {
+            if cdmg > 0 {
+                damage_to_enemy += cdmg;
+                foe_hp_running -= cdmg;
+                messages.push(format!("{} strikes your foe for {cdmg}.", comp.name));
+            } else if cdmg < 0 {
+                comp.hitpoints = comp.hitpoints.saturating_sub((-cdmg) as u32);
+                messages.push(format!("{} overreaches; the foe ripostes for {}.", comp.name, -cdmg));
             }
+        }
+        // The foe answers this companion, but only if it survived the swing.
+        if foe_hp_running >= 0 {
+            if sdmg > 0 {
+                comp.hitpoints = comp.hitpoints.saturating_sub(sdmg as u32);
+            } else if sdmg < 0 {
+                damage_to_enemy += -sdmg;
+                foe_hp_running -= -sdmg;
+                messages.push(format!(
+                    "{} turns the blow aside and gores your foe for {}.",
+                    comp.name, -sdmg
+                ));
+            }
+        }
+        if comp.hitpoints == 0 {
+            messages.push(comp.dying_text.clone());
         }
     }
 
@@ -718,13 +757,13 @@ mod tests {
             attack: 5,
             defense: 5,
         };
-        let r1 = resolve_round_buffed(&mut rng, p, e, &mut buffs, &mut comps);
+        let r1 = resolve_round_buffed(&mut rng, p, e, 1000, &mut buffs, &mut comps);
         assert_eq!(r1.player_heal, 5);
         assert_eq!(buffs.len(), 1);
-        let r2 = resolve_round_buffed(&mut rng, p, e, &mut buffs, &mut comps);
+        let r2 = resolve_round_buffed(&mut rng, p, e, 1000, &mut buffs, &mut comps);
         assert_eq!(r2.player_heal, 5);
         assert!(buffs.is_empty());
-        let r3 = resolve_round_buffed(&mut rng, p, e, &mut buffs, &mut comps);
+        let r3 = resolve_round_buffed(&mut rng, p, e, 1000, &mut buffs, &mut comps);
         assert_eq!(r3.player_heal, 0);
     }
 
@@ -745,7 +784,7 @@ mod tests {
             let mut none: Vec<Buff> = vec![];
             let mut nc = Vec::new();
             let mut r1 = StdRng::seed_from_u64(seed);
-            let d = resolve_round_buffed(&mut r1, p, e, &mut none, &mut nc).damage_to_player;
+            let d = resolve_round_buffed(&mut r1, p, e, 1000, &mut none, &mut nc).damage_to_player;
             plain_total += d.max(0) as i64;
 
             let mut curse = Buff::new("Curse", 5);
@@ -753,7 +792,7 @@ mod tests {
             let mut cursed = vec![curse];
             let mut cc = Vec::new();
             let mut r2 = StdRng::seed_from_u64(seed);
-            let d = resolve_round_buffed(&mut r2, p, e, &mut cursed, &mut cc).damage_to_player;
+            let d = resolve_round_buffed(&mut r2, p, e, 1000, &mut cursed, &mut cc).damage_to_player;
             cursed_total += d.max(0) as i64;
         }
         assert!(cursed_total > 0);
@@ -788,7 +827,7 @@ mod tests {
         }];
         let mut fell = false;
         for _ in 0..50 {
-            resolve_round_buffed(&mut rng, p, e, &mut buffs, &mut comps);
+            resolve_round_buffed(&mut rng, p, e, 10_000, &mut buffs, &mut comps);
             if comps.is_empty() {
                 fell = true;
                 break;
