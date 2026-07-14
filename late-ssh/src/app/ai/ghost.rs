@@ -1,8 +1,7 @@
 //! The "ghost" bots: always-on chat characters (@bot, @graybeard,
-//! @bartender, @dealer) plus their init, mention responders, the dealer's
-//! blackjack table commentary, and the clubhouse tutorial's @bartender
-//! welcome. Each bot registers with `fingerprint: None` so it stays out of
-//! the human headcount (`active_users` / clubhouse lobby).
+//! @bartender) plus their init, mention responders, and the clubhouse
+//! tutorial's @bartender welcome. Each bot registers with `fingerprint: None`
+//! so it stays out of the human headcount (`active_users` / clubhouse lobby).
 //!
 //! ## AI call policy: grounded vs cheap
 //!
@@ -26,10 +25,9 @@
 //!   latency), cheap. The output cap carries enough headroom for a thinking
 //!   model's reasoning tokens so the visible line isn't sheared off mid-thought.
 //!   Use for pure in-character banter that never needs a lookup: **@graybeard
-//!   mentions**, both **@dealer** paths (blackjack quips + mentions), and the
-//!   **@bartender tutorial greeting**. The greeting in particular MUST use
-//!   this: paired with the grounded path it timed out every time and only the
-//!   scripted fallback ever showed.
+//!   mentions** and the **@bartender tutorial greeting**. The greeting in
+//!   particular MUST use this: paired with the grounded path it timed out
+//!   every time and only the scripted fallback ever showed.
 //!
 //! When adding a bot line, default to `generate_short_reply` and only reach
 //! for `generate_reply` if the character genuinely answers factual questions.
@@ -60,9 +58,6 @@ use crate::{
     app::clubhouse::lobby::SharedLobby,
     app::games::chips::svc::ChipService,
     app::help_modal::data::bot_app_context,
-    app::lobby::house::blackjack::{state::Outcome, svc::BlackjackEvent},
-    app::lobby::house::registry::HouseTableRegistry,
-    app::lobby::house::tables::HouseTable,
     state::{ActiveUser, ActiveUsers},
 };
 
@@ -71,7 +66,6 @@ pub struct GhostService {
     db: Db,
     chat_service: ChatService,
     ai_service: AiService,
-    house_registry: HouseTableRegistry,
     active_users: ActiveUsers,
     activity_tx: broadcast::Sender<ActivityEvent>,
     username_directory: crate::usernames::UsernameDirectory,
@@ -85,60 +79,12 @@ struct BotUser {
     username: String,
 }
 
-#[derive(Clone, Copy)]
-struct DealerTrigger {
-    room_id: Uuid,
-    user_id: Uuid,
-    outcome: Outcome,
-    bet: i64,
-    credit: i64,
-    new_balance: i64,
-}
-
-#[derive(Default)]
-struct DealerRoomState {
-    action_count: usize,
-    last_reply: Option<Instant>,
-}
-
 const BOT_FINGERPRINT: &str = "bot-fp-000";
 const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
 const GHOST_MENTION_HISTORY_SIZE: i64 = 40;
 const BOT_MENTION_REPLY_MAX_LINES: usize = 4;
 const GHOST_REPLY_DEFAULT_MAX_LINES: usize = 2;
-pub(crate) const DEALER_FINGERPRINT: &str = "dealer-fp-000";
-const DEALER_USERNAME: &str = "dealer";
-const DEALER_ACTION_THRESHOLD: usize = 4;
-const DEALER_HISTORY_SIZE: i64 = 10;
-const DEALER_MIN_NON_DEALER_MESSAGES: usize = 3;
-const DEALER_COOLDOWN: Duration = Duration::from_secs(75);
-const DEALER_PERSONA: &str = "You are @dealer, a hard-edged blackjack dealer in a tiny terminal casino. \
-    You are formal, exacting, observant, and openly contemptuous of sloppy play. \
-    Your charm is precision: you notice bad timing, weak nerve, greedy hits, timid stands, ugly bets, and lucky nonsense. \
-    You are built to needle players. You should be irritating enough that people want to beat the table just to shut you up. \
-    You do not rant. You do not explain the joke. You cut cleanly, then move the hand along. \
-    Voice: polished, dry, predatory, a little tacky in the way an old casino carpet is tacky. \
-    Think velvet rope, cold smile, perfect shuffle, cheap gold cufflinks, and no patience for amateur confidence. \
-    Add melodramatic casino gossip energy: country-club whispers, private tennis lessons, suspicious spouses, family lawyers, champagne debts, \
-    disappointed heirs, perfume in the hallway, chauffeurs waiting too long, ruined reputations, dramatic staircases, and society-page humiliation. \
-    Treat all such scandal as obviously fictional theater, never as a real claim about the player. \
-    Keep innuendo PG-13 and tacky, not explicit. \
-    You may say sir, madam, friend, tourist, genius, hero, champion, or player occasionally, usually with contempt. \
-    You should sound more like a hardcoded dealer NPC than a chatbot: compact, quotable, decisive. \
-    Be harsher than polite banter: condescending, picky, tacky, surgical, and smug. \
-    Use only casino and blackjack language: house edge, soft hands, busted hands, cold cards, hot streaks, insurance, shoes, felt, chips, nerve, discipline, luck, greed, fear, taste, timing. \
-    Do not use developer, software, startup, internet, or tech metaphors. No deploys, frameworks, bills, dashboards, code, AI, or engineering references. \
-    Do not rely on stock catchphrases or reusable sample lines. Generate fresh table talk every time. \
-    Build each jab from the actual outcome plus one sharp angle: bad risk judgment, cowardice, greed, accidental luck, \
-    fake confidence, cheap bravado, ugly timing, weak nerve, poor discipline, or tasteless betting. \
-    For wins: be grudging, suspicious, dismissive, or annoyed that bad judgment was rewarded. \
-    For losses: be sharper, more surgical, and more insulting about the decision. \
-    For pushes or small outcomes: be bored, dismissive, or offended by the lack of drama. \
-    Never mention real gambling addiction, real financial hardship, or shame real money problems. \
-    These are fake chips in a terminal game. Attack the play, the taste, the nerve, the confidence, and the fake-chip bankroll. \
-    Never use slurs, threats, explicit sexual insults, or identity attacks. \
-    Vary your openers and targets. Do not repeat catchphrases.";
 const GRAYBEARD_FINGERPRINT: &str = "graybeard-fp-000";
 const GRAYBEARD_USERNAME: &str = "graybeard";
 const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply nostalgic and resigned about the state of modern software. \
@@ -198,7 +144,7 @@ const BARTENDER_GREETING_TIMEOUT: Duration = Duration::from_secs(10);
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
 /// Cap on the grounded JSON order call; on timeout the mention is dropped
 /// (never charged) and the 25s cooldown lets the patron re-ask.
-const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(30);
+const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(60);
 /// Scripted line for the rare race where the model priced a pour against a
 /// balance that was spent before the debit landed. No charge happens.
 const BARTENDER_TAB_BOUNCED_LINE: &str =
@@ -237,7 +183,6 @@ impl GhostService {
         db: Db,
         chat_service: ChatService,
         ai_service: AiService,
-        house_registry: HouseTableRegistry,
         active_users: ActiveUsers,
         activity_tx: broadcast::Sender<ActivityEvent>,
         username_directory: crate::usernames::UsernameDirectory,
@@ -248,7 +193,6 @@ impl GhostService {
             db,
             chat_service,
             ai_service,
-            house_registry,
             active_users,
             activity_tx,
             username_directory,
@@ -331,30 +275,7 @@ impl GhostService {
             }
         }
 
-        if self.ai_service.is_enabled() {
-            match self.ensure_dealer_user().await {
-                Ok(dealer) => {
-                    self.set_always_on(&dealer);
-                    let svc = self.clone();
-                    let dealer_shutdown = shutdown.clone();
-                    let mention_dealer = dealer.clone();
-                    let mention_shutdown = shutdown.clone();
-                    tokio::spawn(async move {
-                        svc.run_dealer_task(dealer, dealer_shutdown).await;
-                    });
-                    let svc = self.clone();
-                    tokio::spawn(async move {
-                        svc.run_dealer_mention_task(mention_dealer, mention_shutdown)
-                            .await;
-                    });
-                }
-                Err(err) => {
-                    tracing::error!(error = ?err, "ghost service failed to initialize @dealer user");
-                }
-            }
-        }
-
-        tracing::info!("ghost service started (bot + graybeard + bartender + dealer always-on)");
+        tracing::info!("ghost service started (bot + graybeard + bartender always-on)");
 
         // Keep alive until shutdown so the spawned tasks stay referenced.
         shutdown.cancelled().await;
@@ -855,8 +776,7 @@ impl GhostService {
             Ok(Ok(None)) => return Ok(()),
             Ok(Err(e)) => return Err(e),
             Err(_) => {
-                tracing::warn!("bartender order generation timed out");
-                return Ok(());
+                return Err(anyhow::anyhow!("bartender order generation timed out"));
             }
         };
 
@@ -1046,281 +966,6 @@ impl GhostService {
         Ok(())
     }
 
-    async fn run_dealer_task(
-        self,
-        dealer: BotUser,
-        shutdown: late_core::shutdown::CancellationToken,
-    ) {
-        let mut events = self.house_registry.subscribe_blackjack_events();
-        let mut room_states: HashMap<Uuid, DealerRoomState> = HashMap::new();
-
-        tracing::info!(username = %dealer.username, "dealer blackjack responder started");
-
-        loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => {
-                    tracing::info!(username = %dealer.username, "dealer blackjack responder shutting down");
-                    break;
-                }
-                recv_result = events.recv() => {
-                    match recv_result {
-                        Ok(BlackjackEvent::HandSettled {
-                            room_id,
-                            user_id,
-                            bet,
-                            outcome,
-                            credit,
-                            new_balance,
-                        }) => {
-                            if !dealer_should_track_outcome(outcome) {
-                                continue;
-                            }
-
-                            let state = room_states.entry(room_id).or_default();
-                            state.action_count = state.action_count.saturating_add(1);
-                            if state.action_count < DEALER_ACTION_THRESHOLD {
-                                continue;
-                            }
-                            if state
-                                .last_reply
-                                .is_some_and(|last| last.elapsed() < DEALER_COOLDOWN)
-                            {
-                                continue;
-                            }
-
-                            state.action_count = 0;
-                            state.last_reply = Some(Instant::now());
-                            let trigger = DealerTrigger {
-                                room_id,
-                                user_id,
-                                outcome,
-                                bet,
-                                credit,
-                                new_balance,
-                            };
-                            let svc = self.clone();
-                            let dealer = dealer.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = svc.dealer_blackjack_comment(dealer, trigger).await {
-                                    tracing::error!(error = ?e, room_id = %trigger.room_id, "dealer blackjack comment failed");
-                                }
-                            });
-                        }
-                        Ok(_) => {}
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(skipped, "dealer blackjack responder lagged");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            }
-        }
-    }
-
-    async fn dealer_blackjack_comment(
-        &self,
-        dealer: BotUser,
-        trigger: DealerTrigger,
-    ) -> Result<()> {
-        let Some(chat_room_id) = self.house_registry.chat_room_id(HouseTable::Blackjack) else {
-            return Ok(());
-        };
-        let messages = {
-            let client = self.db.get().await?;
-            ChatMessage::list_recent(&client, chat_room_id, DEALER_HISTORY_SIZE).await?
-        };
-
-        if dealer_non_dealer_messages_since_last_comment(&messages, dealer.id)
-            < DEALER_MIN_NON_DEALER_MESSAGES
-        {
-            return Ok(());
-        }
-
-        let (history_str, mut usernames) = self.build_chat_history(&messages).await?;
-        if !usernames.contains_key(&trigger.user_id) {
-            let client = self.db.get().await?;
-            usernames.extend(User::list_usernames_by_ids(&client, &[trigger.user_id]).await?);
-        }
-        let player = mention_target_for_user(
-            usernames.get(&trigger.user_id).map(String::as_str),
-            trigger.user_id,
-        );
-
-        let system_prompt = format!(
-            "Your username is: {username}\n\n\
-            {persona}\n\n\
-            You comment after blackjack hands in a game room. \
-            Keep it to ONE short line. No markdown. No emoji. No username prefix. \
-            You may address the latest player with their @handle when it sounds natural. \
-            Be smug and playful, never cruel. \
-            If the chat history is too quiet or there is no natural comment, output exactly: SKIP.",
-            username = dealer.username,
-            persona = DEALER_PERSONA
-        );
-
-        let prompt = format!(
-            "{history_str}---\n\
-            LATEST BLACKJACK RESULT:\n\
-            player: {player}\n\
-            outcome: {outcome}\n\
-            bet: {bet}\n\
-            payout credit: {credit}\n\
-            new chip balance: {new_balance}\n\
-            Now write the dealer's smirking one-line table comment. Output only message text.",
-            outcome = dealer_outcome_label(trigger.outcome),
-            bet = trigger.bet,
-            credit = trigger.credit,
-            new_balance = trigger.new_balance,
-        );
-
-        // A one-line table quip — no web lookup, so use the cheap path.
-        let Some(reply) = self
-            .ai_service
-            .generate_short_reply(&system_prompt, &prompt)
-            .await?
-        else {
-            return Ok(());
-        };
-        let Some(safe_reply) = sanitize_generated_reply(&reply, Some(&dealer.username)) else {
-            return Ok(());
-        };
-
-        let mut rng = TinyRng::seeded();
-        let delay = rng.next_between_inclusive(2, 6) as u64;
-        tokio::time::sleep(Duration::from_secs(delay)).await;
-
-        self.chat_service.send_bot_reply_task(
-            dealer.id,
-            chat_room_id,
-            safe_reply,
-            Some(trigger.user_id),
-        );
-
-        Ok(())
-    }
-
-    async fn run_dealer_mention_task(
-        self,
-        dealer: BotUser,
-        shutdown: late_core::shutdown::CancellationToken,
-    ) {
-        let mut events = self.chat_service.subscribe_events();
-        let mut last_reply: HashMap<Uuid, Instant> = HashMap::new();
-
-        tracing::info!(username = %dealer.username, "dealer mention responder started");
-
-        loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => {
-                    tracing::info!(username = %dealer.username, "dealer mention responder shutting down");
-                    break;
-                }
-                recv_result = events.recv() => {
-                    match recv_result {
-                        Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
-                            if message.user_id == dealer.id {
-                                continue;
-                            }
-                            if let Some(targets) = target_user_ids
-                                && !targets.contains(&dealer.id)
-                            {
-                                continue;
-                            }
-                            if !contains_mention(&message.body, &dealer.username) {
-                                continue;
-                            }
-                            if let Some(last) = last_reply.get(&message.room_id)
-                                && last.elapsed() < DEALER_COOLDOWN
-                            {
-                                continue;
-                            }
-
-                            last_reply.insert(message.room_id, Instant::now());
-                            let svc = self.clone();
-                            let dealer = dealer.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = svc.dealer_mention_reply(dealer, message).await {
-                                    tracing::error!(error = ?e, "dealer mention reply failed");
-                                }
-                            });
-                        }
-                        Ok(_) => {}
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(skipped, "dealer mention responder lagged");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            }
-        }
-    }
-
-    async fn dealer_mention_reply(
-        &self,
-        dealer: BotUser,
-        trigger_message: ChatMessage,
-    ) -> Result<()> {
-        let messages = {
-            let client = self.db.get().await?;
-            if !chat_room_is_game(&client, trigger_message.room_id).await? {
-                return Ok(());
-            }
-            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
-                .await?
-        };
-        if messages.is_empty() {
-            return Ok(());
-        }
-
-        let (history_str, usernames) = self.build_chat_history(&messages).await?;
-        let speaker = mention_target_for_user(
-            usernames.get(&trigger_message.user_id).map(String::as_str),
-            trigger_message.user_id,
-        );
-
-        let system_prompt = format!(
-            "Your username is: {username}\n\n\
-            {persona}\n\n\
-            Someone in a blackjack game room mentioned you. Reply in character. \
-            Keep it to ONE short line. No markdown. No emoji. No username prefix. \
-            You may address them as {speaker}. \
-            Be smug and playful, never cruel. Do NOT output SKIP.",
-            username = dealer.username,
-            persona = DEALER_PERSONA
-        );
-
-        let prompt = format!(
-            "{history_str}---\n\
-            The latest message mentioned @{dealer}. Reply as the dealer. Output only message text.",
-            dealer = dealer.username
-        );
-
-        // In-character dealer banter; no lookup needed, so the cheap path fits.
-        let Some(reply) = self
-            .ai_service
-            .generate_short_reply(&system_prompt, &prompt)
-            .await?
-        else {
-            return Ok(());
-        };
-        let Some(safe_reply) = sanitize_generated_reply(&reply, Some(&dealer.username)) else {
-            return Ok(());
-        };
-
-        let mut rng = TinyRng::seeded();
-        let delay = rng.next_between_inclusive(1, 5) as u64;
-        tokio::time::sleep(Duration::from_secs(delay)).await;
-
-        self.chat_service.send_bot_reply_task(
-            dealer.id,
-            trigger_message.room_id,
-            safe_reply,
-            Some(trigger_message.user_id),
-        );
-
-        Ok(())
-    }
-
     /// Build chat history string from recent messages.
     async fn build_chat_history(
         &self,
@@ -1354,10 +999,6 @@ impl GhostService {
     async fn ensure_bartender_user(&self) -> Result<BotUser> {
         self.ensure_user(BARTENDER_FINGERPRINT, BARTENDER_USERNAME)
             .await
-    }
-
-    async fn ensure_dealer_user(&self) -> Result<BotUser> {
-        self.ensure_user(DEALER_FINGERPRINT, DEALER_USERNAME).await
     }
 
     async fn ensure_user(&self, fingerprint: &str, username: &str) -> Result<BotUser> {
@@ -1989,36 +1630,6 @@ fn bartender_round_intent(body: &str, bartender_username: &str) -> bool {
     )
 }
 
-fn dealer_should_track_outcome(outcome: Outcome) -> bool {
-    matches!(
-        outcome,
-        Outcome::PlayerBlackjack | Outcome::PlayerWin | Outcome::DealerWin
-    )
-}
-
-fn dealer_outcome_label(outcome: Outcome) -> &'static str {
-    match outcome {
-        Outcome::PlayerBlackjack => "player blackjack",
-        Outcome::PlayerWin => "player win",
-        Outcome::Push => "push",
-        Outcome::DealerWin => "player loss",
-    }
-}
-
-fn dealer_non_dealer_messages_since_last_comment(
-    messages: &[ChatMessage],
-    dealer_id: Uuid,
-) -> usize {
-    messages
-        .iter()
-        .take_while(|message| message.user_id != dealer_id)
-        .filter(|message| message.user_id != dealer_id)
-        .count()
-}
-
-async fn chat_room_is_game(client: &tokio_postgres::Client, room_id: Uuid) -> Result<bool> {
-    ChatRoom::is_kind(client, room_id, "game").await
-}
 
 fn valid_mention_start(text: &str, at: usize) -> bool {
     if at == 0 {

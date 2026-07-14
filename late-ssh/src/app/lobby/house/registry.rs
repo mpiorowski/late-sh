@@ -63,8 +63,8 @@ pub struct HouseTableRegistry {
     /// Shared seat-join stream across all four tables; `room_id` on the
     /// event is the fixed `HouseTable::table_id`.
     event_tx: broadcast::Sender<RoomGameEvent>,
-    /// Blackjack's own event stream, created eagerly so listeners (the
-    /// @dealer ghost) can subscribe before anyone sits down.
+    /// Blackjack's own event stream, forwarded onto the shared seat-activity
+    /// stream by `forward_blackjack_seat_joins`.
     blackjack_event_tx: broadcast::Sender<BlackjackEvent>,
     poker: Arc<Mutex<Option<PokerService>>>,
     blackjack: Arc<Mutex<Option<BlackjackService>>>,
@@ -346,12 +346,6 @@ impl HouseTableRegistry {
             )
         })
         .clone()
-    }
-
-    /// Every blackjack event across the singleton's lifetime, whoever is
-    /// seated. Safe to call before the service exists.
-    pub fn subscribe_blackjack_events(&self) -> broadcast::Receiver<BlackjackEvent> {
-        self.blackjack_event_tx.subscribe()
     }
 
     fn blackjack_service(&self) -> BlackjackService {

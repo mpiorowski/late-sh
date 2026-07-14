@@ -22,7 +22,7 @@ Locked shape (owner decisions):
 | `mod.rs` | Declarations only. |
 | `tables.rs` | `HouseTable` roster enum: fixed `table_id` (stable per-variant UUID; there is no DB row), display name, tagline, chat slug (`poker`/`blackjack`/`maze`/`tron`), `game_kind` (chat-room kind string), seat capacity, fixed settings constructors. |
 | `types.rs` | Runtime-shared types (`InputAction`, `RoomTitleDetails`, `GameDrawCtx`, `RoomGameEvent`), inherited from the rooms-era `rooms/backend.rs`. |
-| `registry.rs` | `HouseTableRegistry`, process-global: one lazy singleton service per variant, `ensure_chat_rooms` startup seeding (chat room + enabled voice channel per table, idempotent like `ensure_lounge`), `start_seat_activity_task` (the house `SatDown` choke point), an eagerly-created blackjack event channel (`subscribe_blackjack_events`, the @dealer ghost's feed), `occupancy`, `is_user_seated`, `enter` → `HouseTableClient`. |
+| `registry.rs` | `HouseTableRegistry`, process-global: one lazy singleton service per variant, `ensure_chat_rooms` startup seeding (chat room + enabled voice channel per table, idempotent like `ensure_lounge`), `start_seat_activity_task` (the house `SatDown` choke point), an eagerly-created blackjack event channel (`blackjack_event_tx`, forwarded onto the shared seat-activity stream), `occupancy`, `is_user_seated`, `enter` → `HouseTableClient`. |
 | `state.rs` | Per-session `HouseState` (open table, return screen, kept client, chat-join flag) and `HouseTableClient` — the closed enum over the four per-game client states with exhaustive delegation (tick/keys/arrows/draw/height/chip sync). Asterion drops on leave (frees its hero slot); the others keep the client so re-entering restores chip selection and cursors. |
 | `input.rs` | `Screen::HouseTable` routing: chat-first split copied from the daily board (`i`/`j`/`k`/Ctrl+D/Ctrl+U always chat; message-action keys while a table-chat message is selected; arrows game-first), backtick continues the lobby cycle, `q`/Esc → `close_table` (back to the modal). |
 | `ui.rs` | Screen renderer: game area (`preferred_game_height`) + rule + embedded chat, same vertical split as the old active room. |
@@ -37,9 +37,9 @@ Locked shape (owner decisions):
 - **Activity.** Sit-downs ONLY (owner decision 2026-07-13, see the FRD): poker/asterion/tron publish `RoomGameEvent::SeatJoined` onto the registry's shared channel; blackjack's `BlackjackEvent::SeatJoined` is translated by a forwarder; `start_seat_activity_task` turns those into `ActivityEvent::sat_down`. The runtimes publish NO other activity — their `game_won`/`game_played` emitters were deleted (quests are arcade-only, migration 110) and the services no longer hold an `ActivityPublisher`. Chip payouts are unchanged and were never event-driven: direct `ChipService` calls (asterion daily escape, tron cooldown payouts, poker/blackjack settlements).
 - **Chip balance sync.** `App::tick` reads `HouseTableClient::chip_balance()` into `App::chip_balance` and mirrors external balance changes in via `sync_external_chip_balance`, gated on `can_sync_external_chip_balance` — same contract the rooms backend had.
 
-## 4. The @dealer feed
+## 4. The blackjack event feed
 
-The blackjack event channel is created eagerly in `HouseTableRegistry::new` (not lazily with the service) so `GhostService`'s @dealer can subscribe at startup, before anyone sits down; the lazy `BlackjackService` is handed the same sender when first created. The dealer resolves the table's chat room via `registry.chat_room_id(HouseTable::Blackjack)`.
+The blackjack event channel is created eagerly in `HouseTableRegistry::new` (not lazily with the service) so `forward_blackjack_seat_joins` can subscribe at startup, before anyone sits down, and relay seat joins onto the shared seat-activity stream; the lazy `BlackjackService` is handed the same sender when first created.
 
 ## 5. UI surfaces
 

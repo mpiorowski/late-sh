@@ -139,7 +139,7 @@ Cross-module touchpoints (outside this folder):
 
 - **Your-turn desktop notify**: `DailyState` holds a cloned `notify::Notifier` and pushes `Notification::daily_your_turn(opponent)` (`Kind::GameEvents`) on the became-my-turn edge while connected. Edge detection: `turn_notified_match_ids` is seeded from the login snapshot (connecting never notifies; the panel's glow + your-turn rows are the on-login nudge) and pruned when the turn passes away, so a turn coming back is a fresh edge.
 - **Finish banners**: `MatchFinished` banners all three outcomes for connected players — winner `Banner::success` with the payout, loser `Banner::info` (`you lost the match (timeout)`), draw `Banner::info`. `Banner::info` / `BannerKind::Info` (amber, `•` icon) was added for exactly this: bad news isn't an error. Offline players are covered by the durable result rows (§4), not by banners. There is deliberately no finish desktop notification in v1; the lingering row is the nudge.
-- **#lounge result line**: added — a finished match posts one system line to #lounge via the standard activity path (`ActivityKind::DailyResult` → `filter::lounge_includes` → `activity/lounge.rs`), NOT a bespoke `DailyEvent`/@dealer path. See §1. Only finishes publish; posting and claiming stay silent, and there is still no quest wiring.
+- **#lounge result line**: added — a finished match posts one system line to #lounge via the standard activity path (`ActivityKind::DailyResult` → `filter::lounge_includes` → `activity/lounge.rs`), NOT a bespoke `DailyEvent`/ghost-bot path. See §1. Only finishes publish; posting and claiming stay silent, and there is still no quest wiring.
 
 ---
 

@@ -410,8 +410,8 @@ impl App {
         let message_reactions = self.chat.message_reactions();
         let voice_snapshot = self.voice.snapshot();
         // Count humans only: the always-on bots (@bartender, @graybeard,
-        // @dealer, @bot) register with no fingerprint and are excluded from
-        // the clubhouse headcount, so exclude them here too or the two
+        // @bot) register with no fingerprint and are excluded from the
+        // clubhouse headcount, so exclude them here too or the two
         // "people online" numbers disagree.
         let online_count = self
             .active_users

@@ -300,7 +300,6 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         chat_service.clone(),
         ai_service.clone(),
-        house_registry.clone(),
         active_users.clone(),
         activity_tx.clone(),
         username_directory.clone(),
