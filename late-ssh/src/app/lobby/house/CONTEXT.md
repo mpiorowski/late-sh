@@ -49,6 +49,6 @@ The blackjack event channel is created eagerly in `HouseTableRegistry::new` (not
 
 ## 6. Known gaps / deferred
 
-- No your-turn desktop notification for house poker/blackjack while off-screen (the rooms-era scan died with the demolition; re-add on the singletons if it's ever missed).
+- Your-turn desktop notify (poker/blackjack) is edge-detected in `HouseState::notify_turn_edges` (every tick, off-screen included) against `HouseTableRegistry::awaiting_action(table, user_id)`, which reads the live singleton snapshots for ALL seated tables (not only the open client). Seeded silent on the first tick; asterion/tron have no turn concept.
 - No occupancy-driven repaint: modal occupancy is read per frame, which is fine at the render cadence.
 - Table state is not durable across restart (accepted).

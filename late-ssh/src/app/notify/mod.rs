@@ -79,6 +79,14 @@ impl Notification {
         }
     }
 
+    pub(crate) fn house_your_turn(game: &str) -> Self {
+        Self {
+            kind: Kind::GameEvents,
+            title: format!("{game}: your turn"),
+            body: "the table is waiting on your move".to_string(),
+        }
+    }
+
     pub(crate) fn poll_started(question: &str) -> Self {
         Self {
             kind: Kind::GameEvents,

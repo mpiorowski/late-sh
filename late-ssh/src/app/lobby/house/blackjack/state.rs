@@ -544,10 +544,6 @@ impl State {
             .is_some_and(|seat| seat.phase == SeatPhase::Playing)
     }
 
-    pub fn awaiting_action(&self) -> bool {
-        self.snapshot.phase == Phase::PlayerTurn && self.can_act()
-    }
-
     pub fn user_seat(&self) -> Option<&BlackjackSeat> {
         self.snapshot
             .seats

@@ -292,6 +292,49 @@ impl HouseTableRegistry {
         }
     }
 
+    /// Whether the game at `table` is currently blocked on `user_id`'s
+    /// action (their poker or blackjack turn). Read from the live singleton
+    /// snapshot so it holds while the player is off-screen; drives the
+    /// your-turn desktop notification. Asterion/Tron have no turn concept.
+    pub fn awaiting_action(&self, table: HouseTable, user_id: Uuid) -> bool {
+        use crate::app::lobby::house::{
+            blackjack::state::{Phase as BlackjackPhase, SeatPhase},
+            poker::svc::PokerPhase,
+        };
+        match table {
+            HouseTable::Poker => {
+                let Some(svc) = self.poker.lock_recover().clone() else {
+                    return false;
+                };
+                let snapshot = svc.current_snapshot();
+                let action_phase = matches!(
+                    snapshot.phase,
+                    PokerPhase::PreFlop
+                        | PokerPhase::Flop
+                        | PokerPhase::Turn
+                        | PokerPhase::River
+                );
+                action_phase
+                    && snapshot
+                        .active_seat
+                        .and_then(|seat| snapshot.seats.get(seat))
+                        .and_then(|seat| seat.user_id)
+                        == Some(user_id)
+            }
+            HouseTable::Blackjack => {
+                let Some(svc) = self.blackjack.lock_recover().clone() else {
+                    return false;
+                };
+                let snapshot = svc.current_snapshot();
+                snapshot.phase == BlackjackPhase::PlayerTurn
+                    && snapshot.seats.iter().any(|seat| {
+                        seat.user_id == Some(user_id) && seat.phase == SeatPhase::Playing
+                    })
+            }
+            HouseTable::Asterion | HouseTable::Tron => false,
+        }
+    }
+
     fn poker_service(&self) -> PokerService {
         let mut slot = self.poker.lock_recover();
         slot.get_or_insert_with(|| {

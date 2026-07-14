@@ -1114,7 +1114,11 @@ impl App {
             repaint_signal: None,
             lobby: crate::app::lobby::state::LobbyState::new(&daily),
             daily,
-            house: crate::app::lobby::house::state::HouseState::new(config.user_id, config.house_registry),
+            house: crate::app::lobby::house::state::HouseState::new(
+                config.user_id,
+                config.house_registry,
+                notifier.clone(),
+            ),
             twenty_forty_eight_state,
             tetris_state,
             snake_state,

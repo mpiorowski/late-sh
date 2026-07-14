@@ -3,11 +3,14 @@
 //! service. `HouseTableClient` is a closed enum over the four runtimes —
 //! no trait objects; every delegation is an exhaustive match.
 
+use std::collections::HashSet;
+
 use ratatui::{Frame, layout::Rect};
 use uuid::Uuid;
 
 use crate::app::common::primitives::Screen;
 use crate::app::lobby::house::{registry::HouseTableRegistry, tables::HouseTable, types::InputAction};
+use crate::app::notify::{Notification, Notifier};
 use crate::usernames::UsernameLookup;
 
 pub enum HouseTableClient {
@@ -42,17 +45,6 @@ impl HouseTableClient {
             Self::Blackjack(state) => state.touch_activity(),
             Self::Asterion(state) => state.touch_activity(),
             Self::Tron(state) => state.touch_activity(),
-        }
-    }
-
-    /// True while the game is blocked on this user (their poker or
-    /// blackjack hand). Drives the your-turn desktop notification.
-    pub fn awaiting_my_action(&self) -> bool {
-        match self {
-            Self::Poker(state) => state.awaiting_action(),
-            Self::Blackjack(state) => state.awaiting_action(),
-            Self::Asterion(_) => false,
-            Self::Tron(_) => false,
         }
     }
 
@@ -190,10 +182,17 @@ pub struct HouseState {
     client: Option<HouseTableClient>,
     /// One-time idempotent chat join fired from `App::tick`.
     pub chat_join_requested: bool,
+    /// Off-screen your-turn desktop notify: producer handle plus the set of
+    /// tables whose current turn already fired, edge-detected each tick.
+    notifier: Notifier,
+    turn_notified: HashSet<HouseTable>,
+    /// False until the first tick seeds the baseline, so reconnecting
+    /// mid-hand never notifies for a turn that was already yours.
+    turn_notify_seeded: bool,
 }
 
 impl HouseState {
-    pub fn new(user_id: Uuid, registry: HouseTableRegistry) -> Self {
+    pub(crate) fn new(user_id: Uuid, registry: HouseTableRegistry, notifier: Notifier) -> Self {
         Self {
             user_id,
             registry,
@@ -201,6 +200,9 @@ impl HouseState {
             return_screen: Screen::Dashboard,
             client: None,
             chat_join_requested: false,
+            notifier,
+            turn_notified: HashSet::new(),
+            turn_notify_seeded: false,
         }
     }
 
@@ -250,6 +252,33 @@ impl HouseState {
     pub fn tick(&mut self) {
         if let Some(client) = self.client.as_mut() {
             client.tick();
+        }
+        self.notify_turn_edges();
+    }
+
+    /// One desktop notification per table that just became this user's turn,
+    /// across every table they hold a seat at (not only the open one). Reads
+    /// the process-global singletons so it fires while off-screen; runs every
+    /// tick regardless of screen, since the terminal window may be unfocused.
+    fn notify_turn_edges(&mut self) {
+        let awaiting: Vec<HouseTable> = HouseTable::ALL
+            .into_iter()
+            .filter(|table| self.registry.awaiting_action(*table, self.user_id))
+            .collect();
+        // First tick only establishes the baseline: a turn already yours on
+        // connect must not notify.
+        if !self.turn_notify_seeded {
+            self.turn_notify_seeded = true;
+            self.turn_notified = awaiting.into_iter().collect();
+            return;
+        }
+        // Drop tables whose turn has passed so a turn coming back re-notifies.
+        self.turn_notified.retain(|table| awaiting.contains(table));
+        for table in awaiting {
+            if self.turn_notified.insert(table) {
+                self.notifier
+                    .push(Notification::house_your_turn(table.display_name()));
+            }
         }
     }
 
