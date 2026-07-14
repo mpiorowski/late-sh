@@ -628,6 +628,67 @@ pub const FURNITURE: &[Furniture] = &[
         16,
         "A coarse coir mat at the threshold, the word WELCOME picked out in faded red, meaning every letter.",
     ),
+    // ---- Adventurer's hall: hard-won trophies & prestige pieces ----
+    f(
+        "trophy_wall",
+        "a mounted trophy wall",
+        520,
+        "A long oak board hung with the spoils of a life on the road: a cracked boss-fang, a notched blade, a scorched banner. Every piece a story you lived to tell.",
+    ),
+    f(
+        "war_table",
+        "a campaigner's war table",
+        640,
+        "A great table under a map of all the known world, its every region weighted down with carved markers - the taken cities, the drowned isles, the ashen reach - moved by a hand that has walked them.",
+    ),
+    f(
+        "wyrm_skull_mount",
+        "a mounted wyrm skull",
+        900,
+        "A vast reptilian skull bolted above the hearth, sockets big enough to put your fist in. Guests go quiet when they notice it is real.",
+    ),
+    f(
+        "training_dummy",
+        "a padded training dummy",
+        140,
+        "A straw-stuffed pell on a stout post, its canvas hide split and mended a hundred times. It never hits back, and it never complains.",
+    ),
+    f(
+        "relic_cabinet",
+        "a glass relic cabinet",
+        480,
+        "A locked cabinet of leaded glass displaying the odd treasures no merchant would price: a tide-king's pearl, a heartwood fetish, a shard of the sundering wound.",
+    ),
+    f(
+        "champions_banner",
+        "a champion's banner",
+        300,
+        "A tall standard on a gilded pole, its device your own, hung from a home that a nobody could never have afforded. You are not a nobody.",
+    ),
+    f(
+        "hearthstone_forge",
+        "a small hearthstone forge",
+        420,
+        "A compact home forge with bellows and a cooling-trough, just the thing for a smith who would rather work by their own fire than the public one.",
+    ),
+    f(
+        "star_orrery",
+        "a brass star-orrery",
+        760,
+        "A delicate clockwork of the heavens, its planets creeping on brass arms. Wind it and the whole slow dance of the sky turns in your parlour.",
+    ),
+    f(
+        "memorial_candle",
+        "an everburning memorial candle",
+        160,
+        "A fat beeswax candle in a shrine-niche that the draughts never seem to reach, lit for the friends the road took. It has not gone out yet.",
+    ),
+    f(
+        "grand_hearth",
+        "a great roaring hearth",
+        700,
+        "A vast fieldstone fireplace big enough to stand in, throwing heat and amber light into every corner. A home is only ever as warm as its fire, and this one is an inferno of welcome.",
+    ),
 ];
 
 /// Look up a furnishing by its stable key.
