@@ -135,7 +135,11 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // the window must post separately; keep `detail` in the key so only an
         // exact re-emit of the same board collapses.
         ActivityKind::GameWon { game, detail, .. } => {
-            format!("won:{}:{}", game.key(), detail.as_deref().unwrap_or_default())
+            format!(
+                "won:{}:{}",
+                game.key(),
+                detail.as_deref().unwrap_or_default()
+            )
         }
         ActivityKind::GameEvent { game, detail } => format!("event:{}:{detail}", game.key()),
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),

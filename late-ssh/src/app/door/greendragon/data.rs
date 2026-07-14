@@ -969,7 +969,12 @@ mod tests {
         assert_eq!(dk_title_pair(99, &mut rng).0, "The Deathless");
         // One rung per kill 0..=31, upstream's 32-row seed.
         assert_eq!(TITLES.len(), 32);
-        assert!(TITLES.iter().enumerate().all(|(i, (dk, _, _))| *dk == i as u32));
+        assert!(
+            TITLES
+                .iter()
+                .enumerate()
+                .all(|(i, (dk, _, _))| *dk == i as u32)
+        );
     }
 
     #[test]

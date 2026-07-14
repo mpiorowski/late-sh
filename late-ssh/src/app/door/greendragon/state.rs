@@ -2927,7 +2927,11 @@ impl State {
             // (it can revive the dead, so pick the hub after it settles).
             self.settle_dawn();
             let alive = self.character.as_ref().unwrap().alive;
-            self.goto(if alive { Mode::Village } else { Mode::Graveyard });
+            self.goto(if alive {
+                Mode::Village
+            } else {
+                Mode::Graveyard
+            });
         }
         Selection::Stay
     }
@@ -2953,7 +2957,11 @@ impl State {
         // dead, so pick the hub after it settles.
         self.settle_dawn();
         let alive = self.character.as_ref().unwrap().alive;
-        self.goto(if alive { Mode::Village } else { Mode::Graveyard });
+        self.goto(if alive {
+            Mode::Village
+        } else {
+            Mode::Graveyard
+        });
         Selection::Stay
     }
 
@@ -2966,8 +2974,7 @@ impl State {
     /// bank. Quiet when nothing is owed.
     fn settle_dawn(&mut self) {
         let mut rng = rand::thread_rng();
-        let interest =
-            rng.gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
+        let interest = rng.gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
         let spirits = rng.gen_range(-1..=1) + rng.gen_range(-1..=1);
         let today = super::svc::today();
         let rolled = {
@@ -3005,7 +3012,9 @@ impl State {
             self.push_log(format!(
                 "{partner} wakes cold beside you and walks out. The marriage is over."
             ));
-            self.news(format!("{partner} has left {who} to pursue other interests."));
+            self.news(format!(
+                "{partner} has left {who} to pursue other interests."
+            ));
         }
         self.save();
     }
@@ -3512,7 +3521,11 @@ impl State {
                 enc.foes[target].combatant,
                 enc.foes[target].hp,
                 &mut enc.buffs,
-                if bench { &mut benched } else { &mut c.companions },
+                if bench {
+                    &mut benched
+                } else {
+                    &mut c.companions
+                },
             )
         };
 
@@ -6230,7 +6243,11 @@ impl State {
                 // revive the dead, so pick the hub after it settles).
                 self.settle_dawn();
                 let alive = self.character.as_ref().unwrap().alive;
-                self.goto(if alive { Mode::Village } else { Mode::Graveyard });
+                self.goto(if alive {
+                    Mode::Village
+                } else {
+                    Mode::Graveyard
+                });
             }
         }
         self.save();
@@ -6302,10 +6319,7 @@ fn village_menu(c: &Character, audrey_here: bool, baskets_open: bool) -> Vec<(St
     // petting opens the basket row (upstream's transient pet-page nav).
     if audrey_here {
         rows.push((
-            format!(
-                "Pet Mad Juna's kittens ({} gold)",
-                model::ZOO_PET_COST
-            ),
+            format!("Pet Mad Juna's kittens ({} gold)", model::ZOO_PET_COST),
             true,
         ));
         if baskets_open {
@@ -7685,9 +7699,17 @@ mod tests {
             .unwrap();
         assert!(!healer.1);
         // Dragon not offered below level 15 (a forest nav, `lib/forest.php`).
-        assert!(!forest_menu(&c).iter().any(|(l, _)| l.starts_with("Seek Out")));
+        assert!(
+            !forest_menu(&c)
+                .iter()
+                .any(|(l, _)| l.starts_with("Seek Out"))
+        );
         // Slumming's nav hides at level 1 (`lib/forest.php:15`).
-        assert!(!forest_menu(&c).iter().any(|(l, _)| l.starts_with("Go Slumming")));
+        assert!(
+            !forest_menu(&c)
+                .iter()
+                .any(|(l, _)| l.starts_with("Go Slumming"))
+        );
     }
 
     #[test]

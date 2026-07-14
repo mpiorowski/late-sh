@@ -1221,10 +1221,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     text,
                 )),
                 Line::default(),
-                Line::from(Span::styled(
-                    "arcade cabinet (2) · artboard (4)",
-                    text,
-                )),
+                Line::from(Span::styled("arcade cabinet (2) · artboard (4)", text)),
                 Line::from(Span::styled(
                     "heavy door (3): real NetHack, Green Dragon reborn",
                     text,

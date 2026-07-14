@@ -286,8 +286,8 @@ async fn finished_match_posts_a_lounge_result_line() {
         "expected a Chess DailyResult for this match, got {:?}",
         event.kind
     );
-    assert!(
-        event.action.starts_with("beat ") && event.action.ends_with("at Chess"),
+    assert_eq!(
+        event.action, "won a game of Chess",
         "unexpected result phrasing: {:?}",
         event.action
     );
