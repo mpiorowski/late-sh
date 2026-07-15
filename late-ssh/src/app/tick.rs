@@ -621,9 +621,20 @@ impl App {
 
         // Drunk glow for chat author labels: copy out of the shared lobby
         // about once a second so renders read owned state, and re-reading
-        // also lets the tint fade as the buzz decays.
+        // also lets the tint fade as the buzz decays. Username effects ride
+        // the same cadence: one Arc clone of the flair directory, resolved
+        // into paintable styles (which is also what steps shimmer at 1 Hz)
+        // and expired at read.
         if self.marquee_tick.is_multiple_of(15) {
             self.drunk_levels = self.clubhouse.drunk_levels();
+            if let Some(directory) = &self.flair_directory {
+                let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
+                self.name_styles = crate::app::common::username_effect::resolve_all(
+                    &crate::app::common::username_effect::snapshot(directory),
+                    phase,
+                    chrono::Utc::now(),
+                );
+            }
         }
 
         // Leaderboard

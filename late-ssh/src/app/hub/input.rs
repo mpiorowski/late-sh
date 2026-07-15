@@ -68,5 +68,10 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
 }
 
 pub fn handle_escape(app: &mut App) {
+    // A bare Esc arrives via `dispatch_escape`, not `handle_input`, so the
+    // shop's pending picker/confirm must be peeled here too.
+    if crate::app::hub::shop::input::handle_escape(app) {
+        return;
+    }
     app.show_hub_modal = false;
 }

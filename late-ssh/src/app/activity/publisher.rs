@@ -124,6 +124,20 @@ impl ActivityPublisher {
         });
     }
 
+    pub fn username_effect_task(
+        &self,
+        user_id: Uuid,
+        effect: late_core::models::username_effect::UsernameEffect,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher.tx.send(ActivityEvent::username_effect_applied(
+                user_id, username, effect,
+            ));
+        });
+    }
+
     pub fn game_scored_task(
         &self,
         user_id: Uuid,

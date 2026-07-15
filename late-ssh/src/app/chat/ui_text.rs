@@ -5,23 +5,28 @@ use ratatui::{
 
 use crate::app::chat::action::parse_action_body;
 use crate::app::chat::svc::ReportKind;
+use crate::app::common::username_effect::{NameStyle, char_color};
 use crate::app::common::{markdown::render_body_to_lines, theme};
 use late_core::models::{article::NEWS_MARKER, chat_message_reaction::ChatMessageReactionSummary};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const NEWS_SEPARATOR: &str = " || ";
 
-/// A background tint painted under the bare username inside the author
-/// header (the tavern drunk glow). `range` is the username's byte range
-/// within the prefix string, so badges and flags stay untinted. `word` is the
-/// drunk state printed after the header (e.g. "wasted"), present only once the
-/// drinker is soused enough to earn a label; the glow alone carries lighter
-/// states.
+/// The flair painted over the bare username inside the author header:
+/// the tavern drunk glow as a background tint and/or a bought 24h username
+/// effect as per-character foreground color. `range` is the username's byte
+/// range within the prefix string, so badges and flags stay untouched.
+/// `word` is the drunk state printed after the header (e.g. "wasted"),
+/// present only once the drinker is soused enough to earn a label; the glow
+/// alone carries lighter states. The effect fg deliberately overrides the
+/// base author fg (own amber, friend gold, default) while keeping its bg and
+/// modifiers, so a bought effect always wins the color of the name.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AuthorTint {
     pub range: (usize, usize),
-    pub bg: Color,
+    pub bg: Option<Color>,
     pub word: Option<&'static str>,
+    pub name_style: Option<NameStyle>,
 }
 
 /// The trailing ` (word)` span appended after the author header for a drinker
@@ -37,8 +42,12 @@ fn drunk_word_span(word: &str) -> Span<'static> {
 }
 
 /// The author header's prefix spans: one span when untinted (byte-identical
-/// to the historical output), three when a drunk tint splits the username
-/// out. Falls back to the single span on any out-of-bounds range.
+/// to the historical output), split when drunk tint and/or a username effect
+/// paints the name. Falls back to the single span on any out-of-bounds range.
+///
+/// A username effect emits one span per character so gradients and shimmer
+/// interpolate across the name; the country-flag emoji inside the range
+/// ignores fg color, which is fine — the readable characters carry the look.
 fn push_author_prefix_spans(
     spans: &mut Vec<Span<'static>>,
     prefix: &str,
@@ -55,10 +64,20 @@ fn push_author_prefix_spans(
             if start > 0 {
                 spans.push(Span::styled(prefix[..start].to_string(), author_style));
             }
-            spans.push(Span::styled(
-                prefix[start..end].to_string(),
-                author_style.bg(tint.bg),
-            ));
+            let name = &prefix[start..end];
+            let name_base = match tint.bg {
+                Some(bg) => author_style.bg(bg),
+                None => author_style,
+            };
+            match tint.name_style {
+                Some(style) => {
+                    let len = name.chars().count();
+                    spans.extend(name.chars().enumerate().map(|(index, ch)| {
+                        Span::styled(ch.to_string(), name_base.fg(char_color(style, index, len)))
+                    }));
+                }
+                None => spans.push(Span::styled(name.to_string(), name_base)),
+            }
             if end < prefix.len() {
                 spans.push(Span::styled(prefix[end..].to_string(), author_style));
             }
@@ -948,8 +967,9 @@ mod tests {
     fn wrap_message_author_tint_splits_only_the_username() {
         let tint = AuthorTint {
             range: (4, 9), // "alice" inside "★ alice 🌱" ("★" is 3 bytes)
-            bg: Color::Rgb(10, 20, 30),
+            bg: Some(Color::Rgb(10, 20, 30)),
             word: None,
+            name_style: None,
         };
         let lines = wrap_message_to_lines(
             "hello",
@@ -988,8 +1008,9 @@ mod tests {
     fn wrap_message_author_tint_ignores_bad_ranges() {
         let tint = AuthorTint {
             range: (0, 99),
-            bg: Color::Rgb(10, 20, 30),
+            bg: Some(Color::Rgb(10, 20, 30)),
             word: None,
+            name_style: None,
         };
         let lines = wrap_message_to_lines(
             "hello",
@@ -1007,11 +1028,50 @@ mod tests {
     }
 
     #[test]
+    fn wrap_message_name_style_paints_per_char_over_drunk_bg() {
+        let tint = AuthorTint {
+            range: (0, 5),
+            bg: Some(Color::Rgb(10, 20, 30)),
+            word: None,
+            name_style: Some(NameStyle::Solid(Color::Rgb(255, 200, 80))),
+        };
+        let author_style = Style::default()
+            .fg(Color::Rgb(1, 2, 3))
+            .add_modifier(Modifier::BOLD);
+        let lines = wrap_message_to_lines(
+            "hello",
+            "12:04",
+            "alice",
+            80,
+            author_style,
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + 5 per-char spans + stamp
+        let header = &lines[0];
+        assert_eq!(header.spans.len(), 7);
+        let name: String = header.spans[1..6]
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(name, "alice");
+        for span in &header.spans[1..6] {
+            // Effect fg wins over the author fg; drunk bg and BOLD survive.
+            assert_eq!(span.style.fg, Some(Color::Rgb(255, 200, 80)));
+            assert_eq!(span.style.bg, Some(Color::Rgb(10, 20, 30)));
+            assert!(span.style.add_modifier.contains(Modifier::BOLD));
+        }
+    }
+
+    #[test]
     fn wrap_message_prints_drunk_word_between_name_and_stamp() {
         let tint = AuthorTint {
             range: (0, 5),
-            bg: Color::Rgb(10, 20, 30),
+            bg: Some(Color::Rgb(10, 20, 30)),
             word: Some("wasted"),
+            name_style: None,
         };
         let lines = wrap_message_to_lines(
             "hello",
@@ -1042,8 +1102,9 @@ mod tests {
         // The glow can be present with no word (light buzz): header stays lean.
         let tint = AuthorTint {
             range: (0, 5),
-            bg: Color::Rgb(10, 20, 30),
+            bg: Some(Color::Rgb(10, 20, 30)),
             word: None,
+            name_style: None,
         };
         let lines = wrap_message_to_lines(
             "hello",

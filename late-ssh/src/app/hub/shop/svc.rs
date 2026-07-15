@@ -16,12 +16,14 @@ use late_core::{
             CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND, ConsumableUseStatus,
             DYNAMIC_BONSAI_SKU, EquipStatus, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
             PurchaseStatus, SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL,
-            ULTIMATE_SPELL_KIND, UserPurchase, adjust_aquarium_fish_active_by_sku,
-            aquarium_is_hungry, consume_aquarium_food_pinch, equip_owned_item_by_sku,
-            list_marketplace_items_for_admin, listen_for_shop_changes,
-            purchase_item_by_sku_with_chat_effect, unequip_slot, update_marketplace_item_for_admin,
+            ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
+            adjust_aquarium_fish_active_by_sku, aquarium_is_hungry, consume_aquarium_food_pinch,
+            equip_owned_item_by_sku, list_marketplace_items_for_admin, listen_for_shop_changes,
+            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_username_effect,
+            unequip_slot, update_marketplace_item_for_admin,
         },
         shop_consumable_effect::ShopConsumableEffect,
+        username_effect::{USERNAME_EFFECT_KIND, UsernameEffect},
     },
 };
 use tokio::sync::{broadcast, watch};
@@ -30,6 +32,7 @@ use uuid::Uuid;
 
 use super::catalog::is_chat_badge_slot;
 use super::entitlements::ShopEntitlements;
+use crate::app::common::username_effect::{NameFlair, NameFlairDirectory};
 
 #[derive(Clone, Debug, Default)]
 pub struct ShopSnapshot {
@@ -39,6 +42,15 @@ pub struct ShopSnapshot {
     pub entitlements: ShopEntitlements,
     pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
     pub aquarium_hungry: bool,
+    /// The user's live 24h username effect, if any (detail pane shows the
+    /// style and remaining time).
+    pub active_username_effect: Option<ActiveUsernameEffect>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActiveUsernameEffect {
+    pub effect: UsernameEffect,
+    pub ends_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -74,6 +86,9 @@ pub struct ShopCatalogItem {
     pub effect_kind: Option<String>,
     pub requires_room: bool,
     pub daily_limited: bool,
+    /// For `username_effect` items: which style family the item sells
+    /// ("glow" | "gradient" | "shimmer"), from the item payload.
+    pub username_effect_variant: Option<String>,
 }
 
 impl ShopCatalogItem {
@@ -111,6 +126,10 @@ impl ShopCatalogItem {
     pub fn is_ultimate_spell(&self) -> bool {
         self.item_kind == ULTIMATE_SPELL_KIND
     }
+
+    pub fn is_username_effect(&self) -> bool {
+        self.item_kind == USERNAME_EFFECT_ITEM_KIND
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -124,6 +143,11 @@ pub struct ShopService {
     db: Db,
     snapshot_txs: Arc<Mutex<HashMap<Uuid, watch::Sender<ShopSnapshot>>>>,
     evt_tx: broadcast::Sender<ShopEvent>,
+    /// Live username effects, written through on purchase and refreshed from
+    /// the `shop_user_changed` notify; sessions resolve it in their tick.
+    flair_directory: Option<NameFlairDirectory>,
+    /// Announces username-effect purchases to the #lounge ticker.
+    activity: Option<crate::app::activity::publisher::ActivityPublisher>,
 }
 
 impl ShopService {
@@ -133,7 +157,75 @@ impl ShopService {
             db,
             snapshot_txs: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
+            flair_directory: None,
+            activity: None,
         }
+    }
+
+    pub fn with_flair_directory(mut self, flair_directory: NameFlairDirectory) -> Self {
+        self.flair_directory = Some(flair_directory);
+        self
+    }
+
+    pub fn with_activity(
+        mut self,
+        activity: crate::app::activity::publisher::ActivityPublisher,
+    ) -> Self {
+        self.activity = Some(activity);
+        self
+    }
+
+    /// Replace the flair directory with the live effect rows. Runs after
+    /// every LISTEN registration (startup and reconnects), so effects bought
+    /// on other replicas while this listener was down still land here.
+    async fn reconcile_flair_directory(&self) -> Result<()> {
+        let Some(directory) = &self.flair_directory else {
+            return Ok(());
+        };
+        let entries = self.load_flair_entries().await?;
+        crate::app::common::username_effect::set_all(directory, entries);
+        Ok(())
+    }
+
+    async fn load_flair_entries(&self) -> Result<Vec<(Uuid, NameFlair)>> {
+        let client = self.db.get().await?;
+        let rows = ShopConsumableEffect::active_user_effects(&client, USERNAME_EFFECT_KIND).await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| match UsernameEffect::from_payload(&row.payload) {
+                Some(effect) => Some((
+                    row.user_id,
+                    NameFlair {
+                        effect,
+                        ends_at: row.ends_at,
+                    },
+                )),
+                None => {
+                    tracing::warn!(sku = %row.source_sku, user_id = %row.user_id, "skipping unparseable username effect payload");
+                    None
+                }
+            })
+            .collect())
+    }
+
+    /// Refresh one user's flair from the DB (LISTEN/NOTIFY path, so effects
+    /// bought on another replica land here too).
+    async fn refresh_user_flair(&self, user_id: Uuid) -> Result<()> {
+        let Some(directory) = &self.flair_directory else {
+            return Ok(());
+        };
+        let client = self.db.get().await?;
+        let row =
+            ShopConsumableEffect::active_user_effect_for_user(&client, user_id, USERNAME_EFFECT_KIND)
+                .await?;
+        let flair = row.and_then(|row| {
+            UsernameEffect::from_payload(&row.payload).map(|effect| NameFlair {
+                effect,
+                ends_at: row.ends_at,
+            })
+        });
+        crate::app::common::username_effect::set_user(directory, user_id, flair);
+        Ok(())
     }
 
     pub fn subscribe_snapshot(&self, user_id: Uuid) -> watch::Receiver<ShopSnapshot> {
@@ -202,10 +294,19 @@ impl ShopService {
         });
     }
 
-    pub fn purchase_item_task(&self, user_id: Uuid, sku: String, room_id: Option<Uuid>) {
+    pub fn purchase_item_task(
+        &self,
+        user_id: Uuid,
+        sku: String,
+        room_id: Option<Uuid>,
+        username_effect: Option<UsernameEffect>,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
-            match svc.purchase_item(user_id, &sku, room_id).await {
+            match svc
+                .purchase_item(user_id, &sku, room_id, username_effect)
+                .await
+            {
                 Ok(message) => svc.publish_event(ShopEvent::ActionCompleted { user_id, message }),
                 Err(error) => {
                     tracing::warn!(error = ?error, user_id = %user_id, sku, "shop purchase failed");
@@ -323,14 +424,43 @@ impl ShopService {
         user_id: Uuid,
         sku: &str,
         room_id: Option<Uuid>,
+        username_effect: Option<UsernameEffect>,
     ) -> Result<String> {
         let mut client = self.db.get().await?;
-        let purchase =
-            purchase_item_by_sku_with_chat_effect(&mut client, user_id, sku, room_id).await?;
+        let purchase = match username_effect {
+            Some(effect) => {
+                purchase_item_by_sku_with_username_effect(&mut client, user_id, sku, effect).await?
+            }
+            None => purchase_item_by_sku_with_chat_effect(&mut client, user_id, sku, room_id).await?,
+        };
+
+        // A username effect that actually activated goes live immediately for
+        // every session on this replica, and its story ships to the ticker.
+        // Other replicas catch up from the purchase's shop_user_changed notify.
+        if let (Some(effect), Some(row)) = (username_effect, &purchase.username_effect) {
+            if let Some(directory) = &self.flair_directory {
+                crate::app::common::username_effect::set_user(
+                    directory,
+                    user_id,
+                    Some(NameFlair {
+                        effect,
+                        ends_at: row.ends_at,
+                    }),
+                );
+            }
+            if let Some(activity) = &self.activity {
+                activity.username_effect_task(user_id, effect);
+            }
+        }
 
         let message = match &purchase.purchase {
             None => "Item is not available".to_string(),
             Some(result) => match result.status {
+                PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
+                    if result.item.item_kind == USERNAME_EFFECT_ITEM_KIND =>
+                {
+                    format!("Activated {} (24h)", result.item.name)
+                }
                 PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
                     format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
@@ -518,6 +648,15 @@ impl ShopService {
                 });
         }
         let aquarium_hungry = aquarium_is_hungry(&client, user_id).await?;
+        let active_username_effect =
+            ShopConsumableEffect::active_user_effect_for_user(&client, user_id, USERNAME_EFFECT_KIND)
+                .await?
+                .and_then(|row| {
+                    UsernameEffect::from_payload(&row.payload).map(|effect| ActiveUsernameEffect {
+                        effect,
+                        ends_at: row.ends_at,
+                    })
+                });
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
@@ -580,6 +719,14 @@ impl ShopService {
                     .get("daily_limit")
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false);
+                let username_effect_variant = (item_kind == USERNAME_EFFECT_ITEM_KIND)
+                    .then(|| {
+                        item.payload
+                            .get("variant")
+                            .and_then(|value| value.as_str())
+                            .map(ToOwned::to_owned)
+                    })
+                    .flatten();
                 ShopCatalogItem {
                     sku: item.sku,
                     item_kind,
@@ -602,6 +749,7 @@ impl ShopService {
                     effect_kind,
                     requires_room,
                     daily_limited,
+                    username_effect_variant,
                 }
             })
             .collect();
@@ -613,6 +761,7 @@ impl ShopService {
             entitlements: ShopEntitlements::from_owned_skus(owned_skus),
             active_room_effects,
             aquarium_hungry,
+            active_username_effect,
         })
     }
 
@@ -657,6 +806,11 @@ impl ShopService {
             }
         }
 
+        // LISTEN is registered; notifications now buffer on the connection,
+        // so a full snapshot here cannot race a concurrent purchase. On error
+        // the caller reconnects and reconciles again.
+        self.reconcile_flair_directory().await?;
+
         loop {
             let Some(message) = poll_fn(|cx| connection.poll_message(cx)).await else {
                 return Ok(());
@@ -669,7 +823,19 @@ impl ShopService {
     async fn handle_async_message(&self, message: AsyncMessage) -> Result<()> {
         match message {
             AsyncMessage::Notification(notification) => match notification.channel() {
-                SHOP_USER_CHANGED_CHANNEL | CHIP_USER_CHANGED_CHANNEL => {
+                SHOP_USER_CHANGED_CHANNEL => {
+                    if let Ok(user_id) = notification.payload().parse::<Uuid>() {
+                        // Flair refreshes unconditionally: an effect is
+                        // visible to every session, not only shop viewers.
+                        // Chip notifies stay out of this path on purpose;
+                        // they fire far too often for a per-notify query.
+                        // Errors propagate so the listener reconnects and
+                        // reconciles instead of dropping the update.
+                        self.refresh_user_flair(user_id).await?;
+                        self.refresh_user_if_active(user_id).await?;
+                    }
+                }
+                CHIP_USER_CHANGED_CHANNEL => {
                     if let Ok(user_id) = notification.payload().parse::<Uuid>() {
                         self.refresh_user_if_active(user_id).await?;
                     }

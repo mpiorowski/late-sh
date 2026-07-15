@@ -90,6 +90,9 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // Finished daily correspondence matches: one line per match (win/loss
         // or draw). Rare and human-vs-human, so a genuine story.
         ActivityKind::DailyResult { .. } => true,
+        // A bought username effect: being seen is the whole product, so the
+        // purchase is a story by design.
+        ActivityKind::UsernameEffectApplied { .. } => true,
         // Quest-only grind signals, never surfaced anywhere public.
         ActivityKind::GameScored { .. } => false,
         // The bonsai is a private ritual: neither the daily watering nor the
@@ -111,5 +114,19 @@ mod tests {
         let event = ActivityEvent::joined(Uuid::nil(), "user");
 
         assert!(ActivityFilter::dashboard().includes(&event));
+    }
+
+    #[test]
+    fn lounge_includes_username_effects() {
+        use late_core::models::username_effect::{GlowColor, UsernameEffect};
+
+        let event = ActivityEvent::username_effect_applied(
+            Uuid::nil(),
+            "user",
+            UsernameEffect::Glow(GlowColor::Gold),
+        );
+
+        assert!(lounge_includes(&event));
+        assert_eq!(event.action, "is glowing (24h)");
     }
 }

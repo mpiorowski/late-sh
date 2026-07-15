@@ -444,6 +444,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
+        flair_directory: Some(state.flair_directory.clone()),
         activity_feed_rx,
         initial_announcements,
         user_id,

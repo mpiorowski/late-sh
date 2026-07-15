@@ -229,6 +229,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         clubhouse_lobby: late_ssh::app::clubhouse::lobby::SharedLobby::with_seed(7),
         afk_users,
         username_directory,
+        flair_directory: late_ssh::app::common::username_effect::new_directory(),
         config,
         db: db.clone(),
         audio_service: late_ssh::app::audio::svc::AudioService::new(
@@ -458,6 +459,7 @@ fn make_app_with_chat_service_and_permissions(
         show_aquarium_tray: false,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
+        flair_directory: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,
@@ -624,6 +626,7 @@ pub fn make_app_with_paired_client(
         show_aquarium_tray: false,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
+        flair_directory: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,

@@ -121,6 +121,85 @@ impl ShopConsumableEffect {
         Ok(Self::from(row))
     }
 
+    /// Activate a user-scoped effect (`room_id IS NULL`), deactivating every
+    /// prior active effect of the same kind for the user in the same
+    /// transaction. Keyed on `effect_kind`, not sku, so rebuying any username
+    /// effect replaces the previous one and resets its clock. Expired rows
+    /// are deactivated too, keeping them out of the active partial index.
+    pub async fn activate_user_effect_in_tx(
+        tx: &tokio_postgres::Transaction<'_>,
+        user_id: Uuid,
+        effect_kind: &str,
+        source_sku: &str,
+        duration_secs: i64,
+        payload: Value,
+    ) -> Result<Self> {
+        let duration_secs = duration_secs.max(1);
+        tx.execute(
+            "UPDATE shop_consumable_effects
+             SET active = false, updated = current_timestamp
+             WHERE user_id = $1
+               AND effect_kind = $2
+               AND room_id IS NULL
+               AND active = true",
+            &[&user_id, &effect_kind],
+        )
+        .await?;
+
+        let ends_at = Utc::now() + Duration::seconds(duration_secs);
+        let row = tx
+            .query_one(
+                "INSERT INTO shop_consumable_effects
+                    (user_id, room_id, effect_kind, source_sku, payload, ends_at)
+                 VALUES ($1, NULL, $2, $3, $4, $5)
+                 RETURNING *",
+                &[&user_id, &effect_kind, &source_sku, &payload, &ends_at],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    /// All live user-scoped effects of one kind, for seeding the in-process
+    /// flair directory at startup.
+    pub async fn active_user_effects(client: &Client, effect_kind: &str) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT *
+                 FROM shop_consumable_effects
+                 WHERE room_id IS NULL
+                   AND effect_kind = $1
+                   AND active = true
+                   AND ends_at > current_timestamp
+                 ORDER BY user_id, ends_at DESC",
+                &[&effect_kind],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// The single live user-scoped effect of one kind for one user, if any.
+    pub async fn active_user_effect_for_user(
+        client: &Client,
+        user_id: Uuid,
+        effect_kind: &str,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT *
+                 FROM shop_consumable_effects
+                 WHERE user_id = $1
+                   AND room_id IS NULL
+                   AND effect_kind = $2
+                   AND active = true
+                   AND ends_at > current_timestamp
+                 ORDER BY ends_at DESC
+                 LIMIT 1",
+                &[&user_id, &effect_kind],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     pub async fn active_room_effects(client: &Client) -> Result<Vec<Self>> {
         let rows = client
             .query(

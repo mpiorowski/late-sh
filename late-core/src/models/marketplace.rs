@@ -4,7 +4,11 @@ use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::{chips::INITIAL_CHIP_BALANCE, shop_consumable_effect::ShopConsumableEffect};
+use super::{
+    chips::INITIAL_CHIP_BALANCE,
+    shop_consumable_effect::ShopConsumableEffect,
+    username_effect::{USERNAME_EFFECT_DURATION_SECS, USERNAME_EFFECT_KIND, UsernameEffect},
+};
 
 pub const PET_COMPANION_SKU: &str = "pet_companion";
 pub const DYNAMIC_BONSAI_SKU: &str = "dynamic_bonsai";
@@ -15,6 +19,7 @@ pub const AQUARIUM_MAX_FISH: i32 = 20;
 pub const AQUARIUM_FOOD_SKU: &str = "aquarium_food";
 pub const AQUARIUM_HUNGER_AFTER_HOURS: i64 = 24;
 pub const CHAT_CONSUMABLE_ITEM_KIND: &str = "chat_consumable";
+pub const USERNAME_EFFECT_ITEM_KIND: &str = "username_effect";
 pub const CHAT_BADGE_SLOT: &str = "chat_badge";
 pub const CHAT_FLAG_SLOT: &str = "chat_flag";
 pub const COMPANION_CONSUMABLE_ITEM_KIND: &str = "companion_consumable";
@@ -280,6 +285,9 @@ pub struct PurchaseResult {
 pub struct PurchaseWithEffectResult {
     pub purchase: Option<PurchaseResult>,
     pub refresh_all_active_users: bool,
+    /// The user-scoped username-effect row activated by this purchase, when
+    /// the bought item is a `username_effect`.
+    pub username_effect: Option<ShopConsumableEffect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,7 +328,7 @@ pub async fn purchase_durable_item_by_sku(
     user_id: Uuid,
     sku: &str,
 ) -> Result<Option<PurchaseResult>> {
-    Ok(purchase_item_by_sku_inner(client, user_id, sku, None)
+    Ok(purchase_item_by_sku_inner(client, user_id, sku, None, None)
         .await?
         .purchase)
 }
@@ -331,7 +339,16 @@ pub async fn purchase_item_by_sku_with_chat_effect(
     sku: &str,
     room_id: Option<Uuid>,
 ) -> Result<PurchaseWithEffectResult> {
-    purchase_item_by_sku_inner(client, user_id, sku, Some(room_id)).await
+    purchase_item_by_sku_inner(client, user_id, sku, Some(room_id), None).await
+}
+
+pub async fn purchase_item_by_sku_with_username_effect(
+    client: &mut Client,
+    user_id: Uuid,
+    sku: &str,
+    effect: UsernameEffect,
+) -> Result<PurchaseWithEffectResult> {
+    purchase_item_by_sku_inner(client, user_id, sku, None, Some(effect)).await
 }
 
 async fn purchase_item_by_sku_inner(
@@ -339,6 +356,7 @@ async fn purchase_item_by_sku_inner(
     user_id: Uuid,
     sku: &str,
     chat_effect_room_id: Option<Option<Uuid>>,
+    username_effect: Option<UsernameEffect>,
 ) -> Result<PurchaseWithEffectResult> {
     let tx = client.transaction().await?;
 
@@ -359,6 +377,7 @@ async fn purchase_item_by_sku_inner(
         return Ok(PurchaseWithEffectResult {
             purchase: None,
             refresh_all_active_users: false,
+            username_effect: None,
         });
     };
     let item = MarketplaceItem::from(item_row);
@@ -398,6 +417,7 @@ async fn purchase_item_by_sku_inner(
                     active_quantity: 0,
                 }),
                 refresh_all_active_users: false,
+                username_effect: None,
             });
         }
     }
@@ -416,6 +436,7 @@ async fn purchase_item_by_sku_inner(
                     active_quantity,
                 }),
                 refresh_all_active_users: false,
+                username_effect: None,
             });
         }
 
@@ -430,6 +451,7 @@ async fn purchase_item_by_sku_inner(
                     active_quantity,
                 }),
                 refresh_all_active_users: false,
+                username_effect: None,
             });
         }
 
@@ -444,6 +466,7 @@ async fn purchase_item_by_sku_inner(
                     active_quantity,
                 }),
                 refresh_all_active_users: false,
+                username_effect: None,
             });
         }
 
@@ -478,6 +501,8 @@ async fn purchase_item_by_sku_inner(
         .await?;
         let refresh_all_active_users =
             activate_chat_consumable_in_tx(&tx, user_id, &item, chat_effect_room_id).await?;
+        let activated_username_effect =
+            activate_username_effect_in_tx(&tx, user_id, &item, username_effect).await?;
         let payload = user_id.to_string();
         tx.execute(
             "SELECT pg_notify($1, $2)",
@@ -501,6 +526,7 @@ async fn purchase_item_by_sku_inner(
                 active_quantity,
             }),
             refresh_all_active_users,
+            username_effect: activated_username_effect,
         });
     }
 
@@ -515,6 +541,7 @@ async fn purchase_item_by_sku_inner(
                 active_quantity: 0,
             }),
             refresh_all_active_users: false,
+            username_effect: None,
         });
     }
 
@@ -529,6 +556,7 @@ async fn purchase_item_by_sku_inner(
                 active_quantity: 0,
             }),
             refresh_all_active_users: false,
+            username_effect: None,
         });
     }
 
@@ -580,6 +608,8 @@ async fn purchase_item_by_sku_inner(
 
     let refresh_all_active_users =
         activate_chat_consumable_in_tx(&tx, user_id, &item, chat_effect_room_id).await?;
+    let activated_username_effect =
+        activate_username_effect_in_tx(&tx, user_id, &item, username_effect).await?;
     let payload = user_id.to_string();
     tx.execute(
         "SELECT pg_notify($1, $2)",
@@ -604,6 +634,7 @@ async fn purchase_item_by_sku_inner(
             active_quantity,
         }),
         refresh_all_active_users,
+        username_effect: activated_username_effect,
     })
 }
 
@@ -1119,7 +1150,10 @@ async fn aquarium_fish_active_quantity_in_tx(
 fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
     matches!(
         item.item_kind.as_str(),
-        AQUARIUM_FISH_ITEM_KIND | CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND
+        AQUARIUM_FISH_ITEM_KIND
+            | CHAT_CONSUMABLE_ITEM_KIND
+            | COMPANION_CONSUMABLE_ITEM_KIND
+            | USERNAME_EFFECT_ITEM_KIND
     )
 }
 
@@ -1175,6 +1209,49 @@ async fn activate_chat_consumable_in_tx(
     )
     .await?;
     Ok(true)
+}
+
+/// Activates the username effect bought in this transaction. A username
+/// effect purchase must carry the buyer's style choice, and the choice must
+/// belong to the bought item's variant; failing the transaction means the
+/// buyer is never charged for an effect that could not activate. Any prior
+/// live username effect is replaced (one active effect per user).
+async fn activate_username_effect_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item: &MarketplaceItem,
+    choice: Option<UsernameEffect>,
+) -> Result<Option<ShopConsumableEffect>> {
+    if item.item_kind != USERNAME_EFFECT_ITEM_KIND {
+        return Ok(None);
+    }
+    let Some(choice) = choice else {
+        bail!("username effect {} requires a style choice", item.sku);
+    };
+    let variant = item.payload.get("variant").and_then(|value| value.as_str());
+    if variant != Some(choice.variant_key()) {
+        bail!(
+            "username effect {} does not accept style {}",
+            item.sku,
+            choice.slug()
+        );
+    }
+    let duration_secs = item
+        .payload
+        .get("duration_secs")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(USERNAME_EFFECT_DURATION_SECS);
+
+    let effect = ShopConsumableEffect::activate_user_effect_in_tx(
+        tx,
+        user_id,
+        USERNAME_EFFECT_KIND,
+        &item.sku,
+        duration_secs,
+        choice.to_payload(),
+    )
+    .await?;
+    Ok(Some(effect))
 }
 
 async fn has_reached_daily_purchase_limit(

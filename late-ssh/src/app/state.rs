@@ -256,6 +256,9 @@ pub struct SessionConfig {
     pub show_aquarium_tray: bool,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
+    /// Live 24h username effects, shared process-wide (snapshot-swap; see
+    /// `common/username_effect.rs`).
+    pub flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
@@ -364,6 +367,12 @@ pub struct App {
     /// Per-author drunk levels (1-4) copied from the shared lobby about once
     /// a second; chat author labels tint from this owned map, never the mutex.
     pub(crate) drunk_levels: HashMap<Uuid, u8>,
+    /// Resolved 24h username-effect styles, rebuilt from the flair directory
+    /// about once a second (which also steps shimmer); renderers read this
+    /// owned map, never the directory mutex.
+    pub(crate) name_styles: HashMap<Uuid, crate::app::common::username_effect::NameStyle>,
+    pub(super) flair_directory:
+        Option<crate::app::common::username_effect::NameFlairDirectory>,
     pub(super) ai_service: Option<crate::app::ai::svc::AiService>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
@@ -1011,6 +1020,8 @@ impl App {
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,
             drunk_levels: HashMap::new(),
+            name_styles: HashMap::new(),
+            flair_directory: config.flair_directory,
             ai_service: config.ai_service.clone(),
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),

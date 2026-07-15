@@ -4369,7 +4369,7 @@ pub fn SUDOKU_SAME_NUM_BG() -> Color {
 
 /// Linear blend `t` of the way from `a` to `b` (0.0 = `a`, 1.0 = `b`).
 /// Falls back to `a` for non-RGB colors (the palette backgrounds are RGB).
-fn blend_toward(a: Color, b: Color, t: f32) -> Color {
+pub(crate) fn blend_toward(a: Color, b: Color, t: f32) -> Color {
     match (a, b) {
         (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) => {
             let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;

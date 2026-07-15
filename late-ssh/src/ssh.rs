@@ -937,6 +937,7 @@ impl russh::server::Handler for ClientHandler {
             show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
+            flair_directory: Some(self.state.flair_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_announcements,
             user_id,

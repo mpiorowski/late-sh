@@ -142,6 +142,12 @@ fn repeat_key(event: &ActivityEvent) -> String {
             )
         }
         ActivityKind::GameEvent { game, detail } => format!("event:{}:{detail}", game.key()),
+        // Keyed on the full style slug: rebuying the same look inside the
+        // window stays quiet, but switching color or style re-announces
+        // because the name visibly changed.
+        ActivityKind::UsernameEffectApplied { effect } => {
+            format!("username-effect:{}", effect.slug())
+        }
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),
         ActivityKind::BonsaiWatered => "bonsai-watered".to_string(),
         ActivityKind::BonsaiLost { .. } => "bonsai-lost".to_string(),
@@ -221,5 +227,32 @@ mod tests {
             crate::app::activity::event::ActivityGame::Poker,
         );
         assert!(!is_repeat(&mut recent, &other_user));
+    }
+
+    #[test]
+    fn username_effect_repeat_keys_on_full_style_slug() {
+        use late_core::models::username_effect::{GlowColor, UsernameEffect};
+
+        let mut recent = HashMap::new();
+        let user = Uuid::now_v7();
+        let ember = ActivityEvent::username_effect_applied(
+            user,
+            "mira",
+            UsernameEffect::Glow(GlowColor::Ember),
+        );
+        assert!(!is_repeat(&mut recent, &ember));
+        // Rebuying the same look inside the window stays quiet...
+        assert!(is_repeat(&mut recent, &ember));
+        // ...but a new color or a new style visibly changed the name, so it
+        // announces again.
+        let sky = ActivityEvent::username_effect_applied(
+            user,
+            "mira",
+            UsernameEffect::Glow(GlowColor::Sky),
+        );
+        assert!(!is_repeat(&mut recent, &sky));
+        let shimmer =
+            ActivityEvent::username_effect_applied(user, "mira", UsernameEffect::Shimmer);
+        assert!(!is_repeat(&mut recent, &shimmer));
     }
 }

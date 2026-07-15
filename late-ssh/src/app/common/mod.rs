@@ -11,3 +11,4 @@ pub mod splash_tips;
 pub mod textarea_input;
 pub mod theme;
 pub mod time;
+pub mod username_effect;

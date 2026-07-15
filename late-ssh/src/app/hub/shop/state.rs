@@ -10,9 +10,15 @@ use crate::app::common::primitives::Banner;
 use super::{
     catalog::ShopCategory,
     entitlements::ShopEntitlements,
-    svc::{ActiveChatRoomEffect, ShopCatalogItem, ShopEvent, ShopService, ShopSnapshot},
+    svc::{
+        ActiveChatRoomEffect, ActiveUsernameEffect, ShopCatalogItem, ShopEvent, ShopService,
+        ShopSnapshot,
+    },
 };
-use late_core::models::marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU};
+use late_core::models::{
+    marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU},
+    username_effect::{GlowColor, GradientPair, UsernameEffect},
+};
 
 pub struct ShopState {
     user_id: Uuid,
@@ -23,6 +29,7 @@ pub struct ShopState {
     category_index: usize,
     selected_index: usize,
     pending_room_effect: Option<PendingRoomEffect>,
+    pending_username_effect: Option<PendingUsernameEffect>,
     category_rects: Cell<[Rect; ShopCategory::ALL.len()]>,
     item_rects: RefCell<Vec<(Rect, usize)>>,
 }
@@ -48,6 +55,37 @@ pub struct PendingRoomEffect {
     pub daily_limited: bool,
 }
 
+/// The style picker armed by Enter on a username-effect item: cycle through
+/// the tier's styles (each swatch previews in its real colors), Enter buys.
+#[derive(Clone, Debug)]
+pub struct PendingUsernameEffect {
+    pub sku: String,
+    pub item_name: String,
+    pub price_chips: i64,
+    pub options: Vec<UsernameEffect>,
+    pub selected: usize,
+}
+
+impl PendingUsernameEffect {
+    pub fn selected_effect(&self) -> Option<UsernameEffect> {
+        self.options.get(self.selected).copied()
+    }
+}
+
+/// The pickable styles a username-effect item sells, from its payload
+/// variant. Unknown variants sell nothing (and the picker refuses to arm).
+fn username_effect_options(variant: Option<&str>) -> Vec<UsernameEffect> {
+    match variant {
+        Some("glow") => GlowColor::ALL.into_iter().map(UsernameEffect::Glow).collect(),
+        Some("gradient") => GradientPair::ALL
+            .into_iter()
+            .map(UsernameEffect::Gradient)
+            .collect(),
+        Some("shimmer") => vec![UsernameEffect::Shimmer],
+        _ => Vec::new(),
+    }
+}
+
 pub struct ShopTick {
     pub banner: Option<Banner>,
     pub snapshot_changed: bool,
@@ -70,6 +108,7 @@ impl ShopState {
             category_index: 0,
             selected_index: 0,
             pending_room_effect: None,
+            pending_username_effect: None,
             category_rects: Cell::new([Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()]),
             item_rects: RefCell::new(Vec::new()),
         }
@@ -129,11 +168,16 @@ impl ShopState {
 
     pub fn visible_items(&self) -> Vec<&ShopCatalogItem> {
         let category = self.selected_category();
-        self.snapshot
+        let mut items: Vec<&ShopCatalogItem> = self
+            .snapshot
             .items
             .iter()
             .filter(|item| category.matches_item(item))
-            .collect()
+            .collect();
+        // Username effects lead the list; stable, so catalog order holds
+        // within each group.
+        items.sort_by_key(|item| !item.is_username_effect());
+        items
     }
 
     pub fn active_aquarium_fish(&self) -> Vec<(String, usize)> {
@@ -157,6 +201,14 @@ impl ShopState {
 
     pub fn pending_room_effect(&self) -> Option<&PendingRoomEffect> {
         self.pending_room_effect.as_ref()
+    }
+
+    pub fn pending_username_effect(&self) -> Option<&PendingUsernameEffect> {
+        self.pending_username_effect.as_ref()
+    }
+
+    pub fn active_username_effect(&self) -> Option<ActiveUsernameEffect> {
+        self.snapshot.active_username_effect
     }
 
     pub fn pet_food_quantity(&self) -> i32 {
@@ -232,6 +284,7 @@ impl ShopState {
 
     pub fn select_next_category(&mut self) {
         self.pending_room_effect = None;
+        self.pending_username_effect = None;
         self.category_index = (self.category_index + 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
     }
@@ -245,11 +298,13 @@ impl ShopState {
             self.category_index = idx;
             self.selected_index = 0;
             self.pending_room_effect = None;
+            self.pending_username_effect = None;
         }
     }
 
     pub fn select_previous_category(&mut self) {
         self.pending_room_effect = None;
+        self.pending_username_effect = None;
         self.category_index =
             (self.category_index + ShopCategory::ALL.len() - 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
@@ -299,6 +354,7 @@ impl ShopState {
             self.category_index = index;
             self.selected_index = 0;
             self.pending_room_effect = None;
+            self.pending_username_effect = None;
         }
     }
 
@@ -306,12 +362,26 @@ impl ShopState {
         let item = self.selected_item()?.clone();
         let is_dynamic_bonsai = item.is_dynamic_bonsai();
         let current_room_id = current_room.as_ref().map(|room| room.room_id);
+        if item.is_username_effect() {
+            let options = username_effect_options(item.username_effect_variant.as_deref());
+            if options.is_empty() {
+                return Some(Banner::error("This effect is not available"));
+            }
+            self.pending_username_effect = Some(PendingUsernameEffect {
+                sku: item.sku,
+                item_name: item.name,
+                price_chips: item.price_chips,
+                options,
+                selected: 0,
+            });
+            return Some(Banner::success("Pick a style"));
+        }
         if item.is_aquarium_fish() {
             if !self.snapshot.entitlements.has_aquarium() {
                 return Some(Banner::error("Unlock Aquarium before buying fish"));
             }
             self.service
-                .purchase_item_task(self.user_id, item.sku, current_room_id);
+                .purchase_item_task(self.user_id, item.sku, current_room_id, None);
             return Some(Banner::success(&format!("Buying {}", item.name)));
         }
         if item.is_consumable() {
@@ -341,7 +411,7 @@ impl ShopState {
                 "Buying"
             };
             self.service
-                .purchase_item_task(self.user_id, item.sku, current_room_id);
+                .purchase_item_task(self.user_id, item.sku, current_room_id, None);
             return Some(Banner::success(&format!("{action} {}", item.name)));
         }
         if item.owned {
@@ -366,14 +436,14 @@ impl ShopState {
         }
 
         self.service
-            .purchase_item_task(self.user_id, item.sku, current_room_id);
+            .purchase_item_task(self.user_id, item.sku, current_room_id, None);
         Some(Banner::success(&format!("Purchasing {}", item.name)))
     }
 
     pub fn confirm_pending_room_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_room_effect.take()?;
         self.service
-            .purchase_item_task(self.user_id, pending.sku, Some(pending.room_id));
+            .purchase_item_task(self.user_id, pending.sku, Some(pending.room_id), None);
         Some(Banner::success(&format!(
             "Activating {} in {}",
             pending.item_name, pending.room_label
@@ -385,6 +455,35 @@ impl ShopState {
         Some(Banner::success(&format!(
             "Cancelled {} for {}",
             pending.item_name, pending.room_label
+        )))
+    }
+
+    pub fn cycle_pending_username_effect(&mut self, delta: isize) {
+        if let Some(pending) = &mut self.pending_username_effect {
+            let len = pending.options.len();
+            if len > 0 {
+                pending.selected =
+                    (pending.selected as isize + delta).rem_euclid(len as isize) as usize;
+            }
+        }
+    }
+
+    pub fn confirm_pending_username_effect(&mut self) -> Option<Banner> {
+        let pending = self.pending_username_effect.take()?;
+        let effect = pending.selected_effect()?;
+        self.service
+            .purchase_item_task(self.user_id, pending.sku, None, Some(effect));
+        Some(Banner::success(&format!(
+            "Activating {}",
+            pending.item_name
+        )))
+    }
+
+    pub fn cancel_pending_username_effect(&mut self) -> Option<Banner> {
+        let pending = self.pending_username_effect.take()?;
+        Some(Banner::success(&format!(
+            "Cancelled {}",
+            pending.item_name
         )))
     }
 
@@ -432,6 +531,14 @@ impl ShopState {
             }
             !effects.is_empty()
         });
+        if self
+            .snapshot
+            .active_username_effect
+            .is_some_and(|effect| effect.ends_at <= now)
+        {
+            self.snapshot.active_username_effect = None;
+            changed = true;
+        }
         changed
     }
 }
@@ -471,6 +578,7 @@ impl ShopState {
             category_index: 0,
             selected_index: 0,
             pending_room_effect: None,
+            pending_username_effect: None,
             category_rects: Cell::new([Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()]),
             item_rects: RefCell::new(Vec::new()),
         }
@@ -489,6 +597,7 @@ mod tests {
             entitlements: ShopEntitlements::default(),
             active_room_effects: HashMap::new(),
             aquarium_hungry: false,
+            active_username_effect: None,
         };
         ShopState::for_test_snapshot(snapshot)
     }
@@ -567,6 +676,129 @@ mod tests {
         let second = Vec::new();
         state.set_item_rects(second);
         assert_eq!(state.item_at_point(5, 0), None);
+    }
+
+    fn glow_item() -> ShopCatalogItem {
+        ShopCatalogItem {
+            sku: "username_glow_day".to_string(),
+            item_kind: "username_effect".to_string(),
+            slot: None,
+            name: "Name Glow".to_string(),
+            description: String::new(),
+            price_chips: 200,
+            owned: false,
+            equipped: false,
+            quantity: 0,
+            active_quantity: 0,
+            remaining_uses: None,
+            badge_emoji: None,
+            badge_tier: None,
+            aquarium_creature: None,
+            aquarium_size: None,
+            consumable_category: Some("identity".to_string()),
+            effect_kind: Some("username_effect".to_string()),
+            requires_room: false,
+            daily_limited: false,
+            username_effect_variant: Some("glow".to_string()),
+        }
+    }
+
+    fn make_state_with_glow_item() -> ShopState {
+        let snapshot = ShopSnapshot {
+            user_id: None,
+            balance: 1000,
+            items: vec![glow_item()],
+            entitlements: ShopEntitlements::default(),
+            active_room_effects: HashMap::new(),
+            aquarium_hungry: false,
+            active_username_effect: None,
+        };
+        ShopState::for_test_snapshot(snapshot)
+    }
+
+    #[test]
+    fn username_effect_enter_arms_picker_and_cycle_wraps() {
+        let mut state = make_state_with_glow_item();
+        // The Chat tab (index 0) shows username effects.
+        assert!(state.activate_selected(None).is_some());
+        let pending = state.pending_username_effect().expect("picker armed");
+        assert_eq!(pending.sku, "username_glow_day");
+        assert_eq!(pending.options.len(), 6);
+        assert_eq!(pending.selected, 0);
+
+        state.cycle_pending_username_effect(-1);
+        assert_eq!(
+            state.pending_username_effect().expect("armed").selected,
+            5,
+            "cycling left from 0 wraps to the last option"
+        );
+        state.cycle_pending_username_effect(1);
+        assert_eq!(state.pending_username_effect().expect("armed").selected, 0);
+    }
+
+    #[test]
+    fn username_effect_picker_clears_on_cancel_and_category_switch() {
+        let mut state = make_state_with_glow_item();
+        state.activate_selected(None);
+        assert!(state.pending_username_effect().is_some());
+        assert!(state.cancel_pending_username_effect().is_some());
+        assert!(state.pending_username_effect().is_none());
+
+        state.activate_selected(None);
+        assert!(state.pending_username_effect().is_some());
+        state.select_next_category();
+        assert!(state.pending_username_effect().is_none());
+    }
+
+    #[test]
+    fn visible_items_lead_with_username_effects() {
+        let confetti = ShopCatalogItem {
+            sku: "chat_confetti".to_string(),
+            item_kind: "chat_consumable".to_string(),
+            username_effect_variant: None,
+            ..glow_item()
+        };
+        let snapshot = ShopSnapshot {
+            user_id: None,
+            balance: 1000,
+            items: vec![confetti, glow_item()],
+            entitlements: ShopEntitlements::default(),
+            active_room_effects: HashMap::new(),
+            aquarium_hungry: false,
+            active_username_effect: None,
+        };
+        let state = ShopState::for_test_snapshot(snapshot);
+        let skus: Vec<&str> = state
+            .visible_items()
+            .iter()
+            .map(|item| item.sku.as_str())
+            .collect();
+        assert_eq!(skus, vec!["username_glow_day", "chat_confetti"]);
+    }
+
+    #[test]
+    fn username_effect_options_map_variants() {
+        assert_eq!(username_effect_options(Some("glow")).len(), 6);
+        assert_eq!(username_effect_options(Some("gradient")).len(), 6);
+        assert_eq!(
+            username_effect_options(Some("shimmer")),
+            vec![UsernameEffect::Shimmer]
+        );
+        assert!(username_effect_options(Some("sparkle")).is_empty());
+        assert!(username_effect_options(None).is_empty());
+    }
+
+    #[test]
+    fn expired_username_effect_prunes_and_flags_change() {
+        let mut state = make_state_with_glow_item();
+        state.snapshot.active_username_effect = Some(ActiveUsernameEffect {
+            effect: UsernameEffect::Shimmer,
+            ends_at: Utc::now() - chrono::Duration::seconds(1),
+        });
+        assert!(state.prune_expired_effects(Utc::now()));
+        assert!(state.snapshot.active_username_effect.is_none());
+        // Nothing left to prune: quiet second pass.
+        assert!(!state.prune_expired_effects(Utc::now()));
     }
 
     #[test]
