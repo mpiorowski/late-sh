@@ -201,21 +201,20 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
     ])
 }
 
+/// `ctrl+q · \` toggle` — the two keys that front the Lobby: `ctrl+q` opens
+/// the modal, and the backtick toggles you through the games waiting on you
+/// (boards on your move, seated tables, unfinished dailies) and back to chat.
+/// Constant chrome, both keys always shown.
 fn hints_line() -> Line<'static> {
+    let key_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let sep_style = Style::default().fg(theme::TEXT_FAINT());
     Line::from(vec![
-        Span::styled(
-            "ctrl+q",
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
-        Span::styled(
-            "/challenge",
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("ctrl+q", key_style),
+        Span::styled(" · ", sep_style),
+        Span::styled("`", key_style.fg(theme::AMBER())),
+        Span::styled(" toggle", Style::default().fg(theme::TEXT_DIM())),
     ])
 }
 
@@ -328,6 +327,13 @@ mod tests {
         assert!(texts[1].trim_end().ends_with("you lost"));
         assert!(texts[2].starts_with("► kal"));
         assert!(texts[2].trim_end().ends_with("draw"));
+    }
+
+    #[test]
+    fn hints_line_shows_both_lobby_keys() {
+        let props = props_with(Vec::new(), 0);
+        let hint = line_text(&daily_panel_lines(21, &props)[5]);
+        assert_eq!(hint.trim_end(), "ctrl+q · ` toggle");
     }
 
     #[test]

@@ -176,6 +176,22 @@ pub fn bot_app_context() -> String {
     out
 }
 
+/// Trimmed app context for @bartender: navigation only, not the full guide.
+/// He is house furniture, not the help desk — @bot owns explaining features
+/// in depth, so anything past "which screen / which key" should route there.
+pub fn bartender_app_context() -> String {
+    "APP CONTEXT (basic navigation):\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games), 3 Games hub (Lateania, NetHack, Green Dragon, dopewars, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar), 6 World Cup (live scores).\n\
+    - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
+    - Ctrl+O opens Settings from anywhere. Ctrl+G opens Hub (Quests, Shop, Leaderboard, Events). Ctrl+Q opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron).\n\
+    - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
+    - Home's room rail also holds RSS, News, Voice, Mentions, and Discover.\n\
+    - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
+    - Pressing ? anywhere opens the full in-app guide, with a tab per topic.\n\
+    - For anything past basic directions — commands, game rules, settings, IRC, account stuff — don't guess: tell the patron to go ask @bot, that's what he's for.\n"
+        .to_string()
+}
+
 fn is_restricted_bot_context_line(line: &str) -> bool {
     let line = line.to_lowercase();
     [

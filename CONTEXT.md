@@ -26,7 +26,7 @@ This file is the primary working context for the entire late.sh project.
 - Remove obsolete notes
 - After any crash/incident investigation, add a dated entry to the Incident log (§10.5) — that is the one place a running log belongs
 - Read `late-ssh/assets/splash_tips/new_and_returning_users_tip_pool.json` and `late-ssh/assets/splash_tips/returning_users_tip_pool.json` to keep splash tips aligned with any feature/key changes
-- On any bigger feature/keybinding/screen change, update `late-ssh/src/app/help_modal/data.rs` — it backs both the in-app global guide (`?`) AND the `bot_app_context()` string fed to the AI bots (@bot, @bartender, @graybeard). Stale help lines there mislead users and the bots alike.
+- On any bigger feature/keybinding/screen change, update `late-ssh/src/app/help_modal/data.rs` — it backs the in-app global guide (`?`), the `bot_app_context()` string fed to @bot (the full guide, since explaining features in depth is his job), and the much smaller `bartender_app_context()` fed to @bartender (navigation only — @bartender points deeper questions at @bot rather than answering them himself). @graybeard gets neither; he only riffs on chat history. Stale help lines there mislead users and the bots alike.
 
 ### Freshness target
 - Re-review this file regularly (every 2 weeks) to prevent context drift.
