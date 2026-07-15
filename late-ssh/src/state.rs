@@ -133,6 +133,9 @@ pub struct State {
     pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
     pub afk_users: AfkUsers,
     pub username_directory: UsernameDirectory,
+    /// Live 24h username effects (snapshot-swap; seeded and written by
+    /// `ShopService`, resolved per session in the tick loop).
+    pub flair_directory: crate::app::common::username_effect::NameFlairDirectory,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,
     pub radio_meta_rx:

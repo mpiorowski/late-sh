@@ -1,6 +1,6 @@
 use late_core::models::marketplace::{
     AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND,
-    CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU,
+    CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU, USERNAME_EFFECT_ITEM_KIND,
 };
 
 use super::svc::ShopCatalogItem;
@@ -42,7 +42,10 @@ impl ShopCategory {
                 item.item_kind == "feature_unlock"
                     || item.item_kind == COMPANION_CONSUMABLE_ITEM_KIND
             }
-            Self::Chat => item.item_kind == CHAT_CONSUMABLE_ITEM_KIND,
+            Self::Chat => {
+                item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
+                    || item.item_kind == USERNAME_EFFECT_ITEM_KIND
+            }
             Self::Aquarium => item.item_kind == AQUARIUM_FISH_ITEM_KIND,
             Self::Badges => item.is_chat_badge() && !item.is_flag_badge(),
             Self::Flags => item.is_flag_badge(),

@@ -163,6 +163,8 @@ struct DrawContext<'a> {
     worldcup_state: &'a crate::app::worldcup::state::State,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
+    /// Resolved 24h username-effect styles for clubhouse name labels.
+    clubhouse_name_styles: &'a std::collections::HashMap<uuid::Uuid, crate::app::common::username_effect::NameStyle>,
     /// The #lounge tail for clubhouse speech bubbles; empty off that screen.
     clubhouse_lounge_messages: &'a [late_core::models::chat_message::ChatMessage],
     /// Staff bot ids so their #lounge lines bubble over their sprites.
@@ -522,6 +524,7 @@ impl App {
                 chat_badges,
                 profile_award_badges,
                 drunk_levels: &self.drunk_levels,
+                name_styles: &self.name_styles,
                 active_room_effects: dashboard_room_effects,
                 active_poll: dashboard_active_poll,
                 inline_images: &self.chat.inline_image_cache,
@@ -662,6 +665,7 @@ impl App {
             chat_badges,
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
+            name_styles: &self.name_styles,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -735,6 +739,7 @@ impl App {
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
+                name_styles: &self.name_styles,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -787,6 +792,7 @@ impl App {
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
+                name_styles: &self.name_styles,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -936,6 +942,7 @@ impl App {
                         worldcup_state: &self.worldcup,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
+                        clubhouse_name_styles: &self.name_styles,
                         clubhouse_lounge_messages,
                         clubhouse_graybeard_id: self.clubhouse_graybeard_id,
                         clubhouse_composer,
@@ -1354,6 +1361,7 @@ impl App {
                 crate::app::clubhouse::ui::ClubhouseView {
                     state: ctx.clubhouse_state,
                     own_username: ctx.clubhouse_own_username,
+                    name_styles: ctx.clubhouse_name_styles,
                     now_playing: ctx.now_playing,
                     lounge_messages: ctx.clubhouse_lounge_messages,
                     graybeard_user_id: ctx.clubhouse_graybeard_id,

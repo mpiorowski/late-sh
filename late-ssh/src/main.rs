@@ -281,7 +281,11 @@ async fn main() -> anyhow::Result<()> {
     let quest_service = late_ssh::app::QuestService::new(db.clone(), activity_tx.clone());
     let _quest_activity_task = quest_service.start_activity_task();
     let _quest_listener_task = quest_service.start_listener_task(config.db.clone());
-    let shop_service = late_ssh::app::ShopService::new(db.clone());
+    let flair_directory = late_ssh::app::common::username_effect::new_directory();
+    let shop_service = late_ssh::app::ShopService::new(db.clone())
+        .with_flair_directory(flair_directory.clone())
+        .with_activity(activity_publisher.clone());
+    shop_service.seed_flair_directory().await;
     let _shop_listener_task = shop_service.start_listener_task(config.db.clone());
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {
@@ -357,6 +361,7 @@ async fn main() -> anyhow::Result<()> {
         clubhouse_lobby,
         afk_users,
         username_directory: username_directory.clone(),
+        flair_directory: flair_directory.clone(),
         activity_feed: activity_tx,
         now_playing_rx: now_playing_rx.clone(),
         radio_meta_rx: radio_meta_rx.clone(),

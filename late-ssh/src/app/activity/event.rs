@@ -59,6 +59,11 @@ pub enum ActivityKind {
         game: String,
         match_id: Uuid,
     },
+    /// A bought 24h username effect went live ("mat is glowing (24h)").
+    /// Shown in #lounge: the whole point of the purchase is being seen.
+    UsernameEffectApplied {
+        effect: late_core::models::username_effect::UsernameEffect,
+    },
     BonsaiWatered,
     BonsaiLost {
         survived_days: i32,
@@ -68,7 +73,7 @@ pub enum ActivityKind {
 impl ActivityKind {
     pub fn category(&self) -> ActivityCategory {
         match self {
-            Self::UserJoined => ActivityCategory::Session,
+            Self::UserJoined | Self::UsernameEffectApplied { .. } => ActivityCategory::Session,
             Self::GameWon { .. }
             | Self::GameEvent { .. }
             | Self::GameStarted { .. }
@@ -318,6 +323,28 @@ impl ActivityEvent {
             username,
             ActivityKind::SatDown { game },
             action,
+        )
+    }
+
+    /// A bought 24h username effect went live. The action names the style,
+    /// not the color: "is glowing (24h)" reads as a story, and the name
+    /// itself shows the color everywhere it renders.
+    pub fn username_effect_applied(
+        user_id: Uuid,
+        username: impl Into<String>,
+        effect: late_core::models::username_effect::UsernameEffect,
+    ) -> Self {
+        use late_core::models::username_effect::UsernameEffect;
+        let action = match effect {
+            UsernameEffect::Glow(_) => "is glowing (24h)",
+            UsernameEffect::Gradient(_) => "went gradient (24h)",
+            UsernameEffect::Shimmer => "is shimmering (24h)",
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::UsernameEffectApplied { effect },
+            action.to_string(),
         )
     }
 

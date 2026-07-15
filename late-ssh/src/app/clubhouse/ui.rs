@@ -20,6 +20,7 @@ use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
 
 use crate::app::common::theme;
+use crate::app::common::username_effect::{NameStyle, char_color};
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
@@ -43,6 +44,8 @@ const BUBBLE_MAX_LINES: usize = 3;
 pub(crate) struct ClubhouseView<'a> {
     pub state: &'a State,
     pub own_username: &'a str,
+    /// Resolved 24h username-effect styles; painted over name labels.
+    pub name_styles: &'a std::collections::HashMap<Uuid, NameStyle>,
     pub now_playing: Option<&'a NowPlaying>,
     /// The #lounge tail, for speech bubbles.
     pub lounge_messages: &'a [ChatMessage],
@@ -709,6 +712,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
             style,
             &who.username,
             label_style,
+            view.name_styles.get(&who.user_id).copied(),
             who.drunk_level,
         );
         anchors.insert(who.user_id, anchor);
@@ -769,6 +773,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
         own_style,
         view.own_username,
         own_label_style,
+        view.name_styles.get(&own_id).copied(),
         own_drunk_level,
     );
     anchors.insert(own_id, anchor);
@@ -792,6 +797,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
 /// Draw one person at their placement and return their bubble anchor (the
 /// row above their name label) plus a map-space clickable box `(x0, y0, x1,
 /// y1)` spanning their figure and name label, for profile-on-click.
+#[allow(clippy::too_many_arguments)]
 fn draw_presence(
     cells: &mut Cells,
     placement: Placement,
@@ -799,6 +805,7 @@ fn draw_presence(
     style: Style,
     username: &str,
     label_style: Style,
+    name_style: Option<NameStyle>,
     drunk_level: u8,
 ) -> ((u16, u16), (u16, u16, u16, u16)) {
     let passed_out = is_passed_out(drunk_level);
@@ -823,12 +830,13 @@ fn draw_presence(
             } else {
                 head_y.saturating_sub(1).max(1)
             };
-            put_label(
+            put_label_styled(
                 cells,
                 seat.x,
                 label_y,
                 &truncate_name(username),
                 label_style,
+                name_style,
             );
             let (lx0, lx1) = label_span(seat.x);
             let hit = (
@@ -854,7 +862,14 @@ fn draw_presence(
                 draw_figure(cells, x, y, head, style);
             }
             let label_y = y.saturating_sub(3).max(1);
-            put_label(cells, x, label_y, &truncate_name(username), label_style);
+            put_label_styled(
+                cells,
+                x,
+                label_y,
+                &truncate_name(username),
+                label_style,
+                name_style,
+            );
             let (lx0, lx1) = label_span(x);
             // Figure body is `x-1..=x+1`; the box unions it with the label.
             let hit = (lx0.min(x.saturating_sub(1)), label_y, lx1.max(x + 1), y);
@@ -1470,14 +1485,33 @@ fn put_if_floor(cells: &mut Cells, x: u16, y: u16, ch: char, color: ratatui::sty
 
 /// Write a name centered on `x_center`, clamped inside the walls.
 fn put_label(cells: &mut Cells, x_center: u16, y: u16, label: &str, style: Style) {
+    put_label_styled(cells, x_center, y, label, style, None);
+}
+
+/// `put_label` with an optional 24h username effect: per-character fg from
+/// the effect, everything else (drunk bg, modifiers) from `style`.
+fn put_label_styled(
+    cells: &mut Cells,
+    x_center: u16,
+    y: u16,
+    label: &str,
+    style: Style,
+    name_style: Option<NameStyle>,
+) {
     if y == 0 || y >= map::MAP_H - 1 {
         return;
     }
-    let len = label.chars().count() as u16;
-    let max_start = map::MAP_W.saturating_sub(len + 1);
-    let start = x_center.saturating_sub(len / 2).clamp(1, max_start.max(1));
+    let len = label.chars().count();
+    let max_start = map::MAP_W.saturating_sub(len as u16 + 1);
+    let start = x_center
+        .saturating_sub(len as u16 / 2)
+        .clamp(1, max_start.max(1));
     for (i, ch) in label.chars().enumerate() {
-        set(cells, start + i as u16, y, ch, style);
+        let cell_style = match name_style {
+            Some(name_style) => style.fg(char_color(name_style, i, len)),
+            None => style,
+        };
+        set(cells, start + i as u16, y, ch, cell_style);
     }
 }
 

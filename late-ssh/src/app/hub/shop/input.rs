@@ -8,6 +8,36 @@ use crate::app::{
 };
 
 pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
+    if app.shop_state.pending_username_effect().is_some() {
+        match event {
+            ParsedInput::Arrow(b'D')
+            | ParsedInput::Byte(b'h' | b'H' | b'k' | b'K')
+            | ParsedInput::Char('h' | 'H' | 'k' | 'K') => {
+                app.shop_state.cycle_pending_username_effect(-1);
+                return true;
+            }
+            ParsedInput::Arrow(b'C')
+            | ParsedInput::Byte(b'l' | b'L' | b'j' | b'J')
+            | ParsedInput::Char('l' | 'L' | 'j' | 'J') => {
+                app.shop_state.cycle_pending_username_effect(1);
+                return true;
+            }
+            ParsedInput::Byte(b'\r' | b'\n' | b'y' | b'Y') | ParsedInput::Char('y' | 'Y') => {
+                if let Some(banner) = app.shop_state.confirm_pending_username_effect() {
+                    app.banner = Some(banner);
+                }
+                return true;
+            }
+            ParsedInput::Byte(0x1B | b'n' | b'N' | b'q' | b'Q')
+            | ParsedInput::Char('n' | 'N' | 'q' | 'Q') => {
+                if let Some(banner) = app.shop_state.cancel_pending_username_effect() {
+                    app.banner = Some(banner);
+                }
+                return true;
+            }
+            _ => return true,
+        }
+    }
     if app.shop_state.pending_room_effect().is_some() {
         match event {
             ParsedInput::Byte(b'\r' | b'\n' | b'y' | b'Y') | ParsedInput::Char('y' | 'Y') => {
