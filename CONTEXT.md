@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-15 (backtick workspace cycle now includes unfinished Arcade daily puzzles — today's boards with at least one player move, not yet solved — after seated house tables (`arcade/workspace.rs::ArcadeStop`); Rubik's Cube daily progress now persists across sessions in `rubiks_cube_games` (migration 113); also merged main's 24h username effects — see `late-ssh/src/app/hub/CONTEXT.md`)
+- Last updated: 2026-07-15 (chat message search: `?query` mode in the global Ctrl+/ modal, `/search` composer command, and Mentions Enter opening a single-message preview; migration 114 adds a `pg_trgm` GIN index on `chat_messages.body` — see `late-ssh/src/app/chat/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -26,6 +26,7 @@ This file is the primary working context for the entire late.sh project.
 - Remove obsolete notes
 - After any crash/incident investigation, add a dated entry to the Incident log (§10.5) — that is the one place a running log belongs
 - Read `late-ssh/assets/splash_tips/new_and_returning_users_tip_pool.json` and `late-ssh/assets/splash_tips/returning_users_tip_pool.json` to keep splash tips aligned with any feature/key changes
+- On any bigger feature/keybinding/screen change, update `late-ssh/src/app/help_modal/data.rs` — it backs both the in-app global guide (`?`) AND the `bot_app_context()` string fed to the AI bots (@bot, @bartender, @graybeard). Stale help lines there mislead users and the bots alike.
 
 ### Freshness target
 - Re-review this file regularly (every 2 weeks) to prevent context drift.

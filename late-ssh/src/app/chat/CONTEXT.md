@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-07-12 (report-only `#bugs`/`#suggestions`: `/bug` and `/suggest` post marker-bodied report cards; free text there is staff-only)
+- Last updated: 2026-07-15 (message search: `?query` mode in the Ctrl+/ modal with a 4-either-side context window on the selected hit, `/search` command, Mentions Enter opens a single-message preview (Enter again jumps); trigram-indexed ILIKE over joined rooms)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -96,6 +96,7 @@ Important constants in `svc.rs`:
 - `PINNED_MESSAGES_LIMIT = 100`
 - `CHAT_REFRESH_INTERVAL = 10s`
 - `USERNAME_DIRECTORY_TTL = 30s`
+- `SEARCH_RESULTS_LIMIT = 50`, `SEARCH_MIN_CHARS = 3`, `SEARCH_CONTEXT_EACH_SIDE = 4` (message search)
 
 Normal display flow:
 1. `ChatState::new` subscribes to chat events/usernames and calls `ChatService::start_user_refresh_task`.
@@ -192,6 +193,7 @@ Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
 - `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`. Jumping to the already selected room/synthetic entry still re-runs the entry's read/list side effects so stale unread badges clear.
 - Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for RSS, News, Mentions, and custom room browse. Showcase/Projects and Work/Profiles live on Directory page 7 instead. Results are ordered favorites first, then unread entries, then latest message/activity; typed `@` and `#` prefixes filter to DMs or rooms while keeping that ordering.
+- A leading `?` flips the same modal into message search (`app/room_search_modal`): `?query` searches every joined room, `?#room query` scopes to one room, `?@user query` to one DM (scope tokens resolve against joined rooms only; an unresolved scope never fires). Searches are debounced 300ms, need `SEARCH_MIN_CHARS` (3) chars, run one-at-a-time latest-wins by request id through `ChatService::search_messages_task` (`read_permits`-gated, `SEARCH_RESULTS_LIMIT` 50 newest hits). The SQL (`ChatMessage::search_for_user`) is a LIKE-escaped ILIKE join on `chat_room_members` (membership is the auth boundary), excluding game rooms, system-feed authors, and the caller's ignored users; migration 114 adds the `pg_trgm` GIN index that makes it indexed. Results live in `ChatState.message_search` (snippets precomputed around the first match at drain time); the modal renders hits plus a fixed-height detail pane showing the full body with a context window of up to 4 messages either side (dim `author: body` rows around the highlighted hit). Context loads lazily per selected hit through `ChatService::load_message_context_task` (`ChatMessage::list_around`: `(created, id)` cursors both directions, membership checked, system-feed and ignored authors excluded), cached by message id with a single in-flight slot so fast scrolling converges instead of fanning out; a failed fetch caches an empty window rather than refiring every tick. The pane uses fixed slots, so the hit row never moves while context fills in. Enter lands in the hit's room and selects the message if it is in the loaded tail, else registers `pending_search_jump`, resolved (or dropped with a banner) when the tail lands. `Ctrl+Y` copies the selected hit. `/search [query]` opens the modal pre-filled with `?query`.
 - While composing on Home, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
 - Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`, `work_selected`), not `selected_room_id`.
 
@@ -270,6 +272,7 @@ User commands:
 - `/icons` opens the icon picker (same as `Ctrl+]`).
 - `/poll` opens a modal for the currently visible real room. Polls are room-scoped, support two or three options, can run for 10, 20, or 30 minutes, and are limited to one active poll per room. Active polls render at the top of the room message pane; while one is visible, `va`, `vb`, and `vc` vote for poll options. `v1`, `v2`, and `v3` remain music stream/station selectors. Failed starts show the remaining active wait in the banner.
 - `/roll [NdM ...]` rolls dice into the current room; bare `/roll` defaults to `d20`, caps are 100 dice per group and 1000 sides.
+- `/search [query]` opens the Ctrl+/ modal in message-search mode, pre-filled with `?query`. Parsed in `submit_composer`, drained via `take_requested_message_search` in `handle_post_submit_requests` (the modal is App-owned).
 - `/voice` joins the enabled voice channel for the active room; `/mute` toggles paired-CLI mic mute.
 - `/ultimate` opens owned Ultimate Spells.
 - Staff-only `/audio`, `/audio fallback`, and `/audio skip` route trusted music controls.
@@ -359,7 +362,7 @@ Keys:
 - `Ctrl+D` / `Ctrl+U` move by an approximate half-page in message units.
 - `r` replies.
 - `e` edits.
-- `d` deletes and moves selection to an adjacent message.
+- `d` deletes (double-press `dd` to confirm; first press arms and banners `Press d again to delete`, any selection change disarms) and moves selection to an adjacent message.
 - `p` opens the selected author's read-only profile modal.
 - `c` copies the selected message body.
 - Enter jumps from a reply to its loaded target.
@@ -444,7 +447,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Snapshot is user-targeted; consumers must ignore snapshots where `snapshot.user_id != current_user`.
 - List and unread queries exclude notifications whose actor is in `users.settings.ignored_user_ids`.
 - Selecting Mentions lists notifications and marks all read optimistically; re-selecting Mentions through room-jump or mouse does the same.
-- Enter jumps to the referenced room/message when possible.
+- Enter always opens the Ctrl+/ modal as a single-message preview (the mention with its 4-either-side context window), whatever the mention's age; Enter inside the modal performs the actual jump, so going to the room is Enter-Enter. The preview path: `ChatState::start_message_preview` fires `ChatService::load_message_preview_task` (`ChatMessage::get_for_viewer` (members always; public non-game rooms readable by anyone, since public-room mentions can target non-members — Enter-jump from such a preview banners toward Discover instead of selecting an unjoined room)), which reuses the `MessageSearchLoaded` pipeline to show the full message in the modal's detail pane; from there Enter jumps (selecting the message when it is in the loaded tail, else via `pending_search_jump`) and Ctrl+Y copies.
 
 ### Discover
 
@@ -517,7 +520,7 @@ Cache:
 | `Esc` | Cancel compose/overlay/autocomplete/room jump |
 | `r` | Reply to selected message |
 | `e` | Edit selected own/admin message |
-| `d` | Delete selected own/admin message or News article |
+| `d` | Delete selected own/admin message (press `dd` to confirm) or News article |
 | `p` | Open selected author's read-only profile |
 | `c` | Copy selected message body |
 | `f` | Favorite/unfavorite the selected real room |
@@ -574,7 +577,7 @@ modals and the icon picker). Username profile-opens are debounced via
 | News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
 | Directory Projects | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Directory Profiles | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
-| Mentions | `j/k` navigate, Enter jump to referenced room/message |
+| Mentions | `j/k` navigate, Enter open the Ctrl+/ single-message preview (Enter again jumps to the room) |
 | Discover | `j/k` navigate, Enter join selected public room, `/` open slug filter (type to narrow, Enter join, `Esc` clear) |
 
 Directory Projects and Profiles reshuffle their listing on page/tab entry. News keeps its chronological order — only mine-only filtering applies. The slash-command composer in `app/input.rs` skips itself when News is selected so `/` reaches the synthetic-entry handler; Directory page 7 routes `/` directly to Projects/Profiles filtering.
@@ -631,6 +634,8 @@ Landed/scoped-loading state:
 - Discover metadata loads only when Discover is selected.
 - Events patch local state and tail loads merge with already-applied live events.
 
+Message search stays cheap by construction: debounce + 3-char minimum + one in-flight latest-wins request per session + `read_permits` + `LIMIT 50` + the migration-114 trigram index. Do not add unbounded result paging; refining the query is the pagination.
+
 Known risks:
 - `ChatRowsCache` fingerprint still hashes visible message bodies and metadata. Keep row cache invalidation correct if changing wrapping/reactions/badges/AFK state.
 - Summary snapshot merge clones preserved message vectors for rooms with empty incoming message lists.
@@ -650,7 +655,7 @@ Repo-wide rule from root context still applies:
 
 Existing integration coverage:
 - `tests/chat/announcements.rs`: login #announcements loading, read cursor behavior, paging.
-- `tests/chat/svc.rs`: send, reactions, pins, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore.
+- `tests/chat/svc.rs`: send, reactions, pins, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore, message search (membership/game-room/ignored exclusions, room scoping, LIKE-metacharacter escaping, context-window ordering).
 - `tests/chat/news.rs`: article snapshots, empty list, author resolution, duplicate URL failure, direct DB inserts appearing after list refresh.
 - `tests/chat/sheet.rs`: character sheet model/upsert plus `open_sheet_task`/`save_sheet_task` room-scoped authorization.
 - `tests/chat/showcase.rs`: create event/snapshot, non-owner update failure, admin delete, unread cursor behavior.

@@ -818,6 +818,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     if is_room_search_shortcut(&event) {
         if app.room_search_modal_state.is_open() {
             app.room_search_modal_state.close();
+            app.chat.message_search.clear();
         } else {
             open_room_search_modal_globally(app);
         }
@@ -2268,6 +2269,7 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
+        app.chat.message_search.clear();
         return;
     }
     if app.booth_modal_state.is_open() {
@@ -3291,7 +3293,16 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
+    app.chat.message_search.clear();
     app.room_search_modal_state.open();
+}
+
+/// Open the Ctrl+/ modal pre-filled in message-search mode (`?query`).
+/// Backs the `/search [query]` composer command.
+pub(crate) fn open_message_search_modal_globally(app: &mut App, query: &str) {
+    open_room_search_modal_globally(app);
+    app.room_search_modal_state
+        .open_with_query(format!("?{}", query.trim()));
 }
 
 fn open_settings_modal_globally(app: &mut App) {

@@ -242,6 +242,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }
+    if let Some(query) = app.chat.take_requested_message_search() {
+        crate::app::input::open_message_search_modal_globally(app, &query);
+    }
     if let Some(request) = app.chat.take_requested_petname() {
         app.banner = Some(apply_petname_request(app, request));
     }

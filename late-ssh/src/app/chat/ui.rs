@@ -4033,7 +4033,7 @@ fn draw_selected_content(
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER()));
         let hint_text = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter jump to room",
+            " j/k navigate · Enter preview message",
             Style::default().fg(theme::TEXT_DIM()),
         )))
         .block(hint_block);

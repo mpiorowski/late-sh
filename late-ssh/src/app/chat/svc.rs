@@ -58,6 +58,13 @@ const POLL_FINALIZER_RECOVERY_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const POLL_FINALIZER_BATCH_LIMIT: i64 = 25;
 pub(crate) const GIFT_MAX_AMOUNT: i64 = 1_000_000;
 const GIFT_COOLDOWN: Duration = Duration::from_secs(30);
+const SEARCH_RESULTS_LIMIT: i64 = 50;
+/// Minimum query length before a message search fires; also the trigram
+/// index floor, so shorter queries would seq-scan anyway.
+pub(crate) const SEARCH_MIN_CHARS: usize = 3;
+/// Messages fetched on each side of a selected search hit for the modal's
+/// context window.
+const SEARCH_CONTEXT_EACH_SIDE: i64 = 4;
 
 /// The two report-only rooms. `#bugs` and `#suggestions` accept only
 /// `/bug` / `/suggest` report cards from regular users; free-text posting is
@@ -576,6 +583,30 @@ pub enum ChatEvent {
     DiscoverRoomsFailed {
         user_id: Uuid,
         message: String,
+    },
+    MessageSearchLoaded {
+        user_id: Uuid,
+        request_id: Uuid,
+        messages: Vec<ChatMessage>,
+        usernames: HashMap<Uuid, String>,
+    },
+    MessageSearchFailed {
+        user_id: Uuid,
+        request_id: Uuid,
+        message: String,
+    },
+    MessageContextLoaded {
+        user_id: Uuid,
+        request_id: Uuid,
+        message_id: Uuid,
+        before: Vec<ChatMessage>,
+        after: Vec<ChatMessage>,
+        usernames: HashMap<Uuid, String>,
+    },
+    MessageContextFailed {
+        user_id: Uuid,
+        request_id: Uuid,
+        message_id: Uuid,
     },
     MessageReactionsUpdated {
         room_id: Uuid,
@@ -1507,6 +1538,223 @@ impl ChatService {
                 "chat.load_room_tail_task",
                 user_id = %user_id,
                 room_id = %room_id
+            )),
+        );
+    }
+
+    #[tracing::instrument(skip(self, query, exclude_user_ids), fields(user_id = %user_id))]
+    async fn search_messages(
+        &self,
+        user_id: Uuid,
+        room_id: Option<Uuid>,
+        query: String,
+        exclude_user_ids: Vec<Uuid>,
+    ) -> Result<(Vec<ChatMessage>, HashMap<Uuid, String>)> {
+        if query.chars().count() < SEARCH_MIN_CHARS {
+            anyhow::bail!("search query too short");
+        }
+        let _permit = self.read_permits.acquire().await?;
+        let client = self.db.get().await?;
+        let messages = ChatMessage::search_for_user(
+            &client,
+            user_id,
+            &query,
+            room_id,
+            &exclude_user_ids,
+            SEARCH_RESULTS_LIMIT,
+        )
+        .await?;
+        let author_ids: Vec<Uuid> = messages.iter().map(|message| message.user_id).collect();
+        let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
+        Ok((messages, usernames))
+    }
+
+    /// Load up to `SEARCH_CONTEXT_EACH_SIDE` messages either side of a search
+    /// hit (`MessageContextLoaded`, user-targeted, keyed by request id) for
+    /// the modal's detail-pane context window. Membership-gated; system-feed
+    /// lines and the caller's ignored users are excluded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_message_context_task(
+        &self,
+        user_id: Uuid,
+        request_id: Uuid,
+        room_id: Uuid,
+        message_id: Uuid,
+        created: DateTime<Utc>,
+        exclude_user_ids: Vec<Uuid>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<(Vec<ChatMessage>, Vec<ChatMessage>, HashMap<Uuid, String>)> =
+                    async {
+                        let _permit = service.read_permits.acquire().await?;
+                        let client = service.db.get().await?;
+                        // Same read boundary as `get_for_viewer`: members
+                        // always, public non-game rooms for everyone (mention
+                        // previews can reference rooms the user never joined).
+                        if !ChatRoomMember::is_member(&client, room_id, user_id).await? {
+                            let public_readable =
+                                ChatRoom::get(&client, room_id).await?.is_some_and(|room| {
+                                    room.visibility == "public" && room.kind != "game"
+                                });
+                            if !public_readable {
+                                anyhow::bail!("user cannot read this room");
+                            }
+                        }
+                        let (before, after) = ChatMessage::list_around(
+                            &client,
+                            room_id,
+                            created,
+                            message_id,
+                            &exclude_user_ids,
+                            SEARCH_CONTEXT_EACH_SIDE,
+                        )
+                        .await?;
+                        let author_ids: Vec<Uuid> = before
+                            .iter()
+                            .chain(after.iter())
+                            .map(|message| message.user_id)
+                            .collect();
+                        let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
+                        Ok((before, after, usernames))
+                    }
+                    .await;
+                match result {
+                    Ok((before, after, usernames)) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageContextLoaded {
+                            user_id,
+                            request_id,
+                            message_id,
+                            before,
+                            after,
+                            usernames,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageContextFailed {
+                            user_id,
+                            request_id,
+                            message_id,
+                        });
+                        late_core::error_span!(
+                            "chat_message_context_failed",
+                            error = ?e,
+                            "failed to load chat message context"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.load_message_context_task",
+                user_id = %user_id,
+                message_id = %message_id
+            )),
+        );
+    }
+
+    /// Fetch one membership-gated message as a single-hit search result
+    /// (`MessageSearchLoaded`). Backs the Mentions fallback: previewing a
+    /// mention whose message is older than the loaded room history.
+    pub fn load_message_preview_task(&self, user_id: Uuid, request_id: Uuid, message_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<Option<(ChatMessage, HashMap<Uuid, String>)>> = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    let Some(message) =
+                        ChatMessage::get_for_viewer(&client, message_id, user_id).await?
+                    else {
+                        return Ok(None);
+                    };
+                    let usernames =
+                        User::list_usernames_by_ids(&client, &[message.user_id]).await?;
+                    Ok(Some((message, usernames)))
+                }
+                .await;
+                match result {
+                    Ok(Some((message, usernames))) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchLoaded {
+                            user_id,
+                            request_id,
+                            messages: vec![message],
+                            usernames,
+                        });
+                    }
+                    Ok(None) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchFailed {
+                            user_id,
+                            request_id,
+                            message: "message is no longer available".to_string(),
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchFailed {
+                            user_id,
+                            request_id,
+                            message: "preview failed, try again".to_string(),
+                        });
+                        late_core::error_span!(
+                            "chat_message_preview_failed",
+                            error = ?e,
+                            "failed to load chat message preview"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.load_message_preview_task",
+                user_id = %user_id,
+                message_id = %message_id
+            )),
+        );
+    }
+
+    /// Fire-and-forget message search. Results come back as a user-targeted
+    /// `MessageSearchLoaded` keyed by `request_id`; consumers drop results
+    /// whose request id is no longer current (latest wins).
+    pub fn search_messages_task(
+        &self,
+        user_id: Uuid,
+        request_id: Uuid,
+        room_id: Option<Uuid>,
+        query: String,
+        exclude_user_ids: Vec<Uuid>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                match service
+                    .search_messages(user_id, room_id, query, exclude_user_ids)
+                    .await
+                {
+                    Ok((messages, usernames)) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchLoaded {
+                            user_id,
+                            request_id,
+                            messages,
+                            usernames,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchFailed {
+                            user_id,
+                            request_id,
+                            message: "search failed, try again".to_string(),
+                        });
+                        late_core::error_span!(
+                            "chat_search_messages_failed",
+                            error = ?e,
+                            "failed to search chat messages"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.search_messages_task",
+                user_id = %user_id,
+                request_id = %request_id
             )),
         );
     }

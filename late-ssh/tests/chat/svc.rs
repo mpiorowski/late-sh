@@ -3448,3 +3448,227 @@ async fn send_message_task_applies_server_slow_to_public_rooms_but_not_dms() {
     assert!(saw_created);
     assert!(saw_success);
 }
+
+#[tokio::test]
+async fn message_search_respects_membership_scope_and_exclusions() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let searcher = create_test_user(&test_db.db, "search_searcher").await;
+    let author = create_test_user(&test_db.db, "search_author").await;
+    let ignored = create_test_user(&test_db.db, "search_ignored").await;
+
+    let joined_room = ChatRoom::get_or_create_public_room(&client, "search-joined")
+        .await
+        .expect("joined room");
+    let other_room = ChatRoom::get_or_create_public_room(&client, "search-other")
+        .await
+        .expect("other room");
+    let game_room = ChatRoom::get_or_create_game_room(
+        &client,
+        late_core::models::game_room::GameKind::Poker,
+        "poker",
+    )
+    .await
+    .expect("game room");
+
+    for user_id in [searcher.id, author.id, ignored.id] {
+        ChatRoomMember::join(&client, joined_room.id, user_id)
+            .await
+            .expect("join joined room");
+        ChatRoomMember::join(&client, game_room.id, user_id)
+            .await
+            .expect("join game room");
+    }
+    ChatRoomMember::join(&client, other_room.id, author.id)
+        .await
+        .expect("author joins other room");
+
+    for (room_id, user_id, body) in [
+        (joined_room.id, author.id, "the deploy failed at midnight"),
+        (joined_room.id, ignored.id, "my deploy also failed"),
+        (joined_room.id, author.id, "unrelated chatter"),
+        (
+            other_room.id,
+            author.id,
+            "deploy failed where searcher is not a member",
+        ),
+        (game_room.id, author.id, "deploy failed in game room"),
+    ] {
+        ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id,
+                user_id,
+                body: body.to_string(),
+            },
+        )
+        .await
+        .expect("create message");
+    }
+
+    let request_id = Uuid::now_v7();
+    service.search_messages_task(
+        searcher.id,
+        request_id,
+        None,
+        "DEPLOY FAILED".to_string(),
+        vec![ignored.id],
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("search event timeout")
+        .expect("search event");
+    match event {
+        ChatEvent::MessageSearchLoaded {
+            user_id,
+            request_id: loaded_request_id,
+            messages,
+            usernames,
+        } => {
+            assert_eq!(user_id, searcher.id);
+            assert_eq!(loaded_request_id, request_id);
+            assert_eq!(messages.len(), 1, "only the joined-room hit survives");
+            assert_eq!(messages[0].body, "the deploy failed at midnight");
+            assert_eq!(
+                usernames.get(&author.id).map(String::as_str),
+                Some("search_author")
+            );
+        }
+        other => panic!("unexpected search event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn message_search_scopes_to_room_and_escapes_like_metacharacters() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let searcher = create_test_user(&test_db.db, "scoped_searcher").await;
+    let room_a = ChatRoom::get_or_create_public_room(&client, "scoped-a")
+        .await
+        .expect("room a");
+    let room_b = ChatRoom::get_or_create_public_room(&client, "scoped-b")
+        .await
+        .expect("room b");
+    ChatRoomMember::join(&client, room_a.id, searcher.id)
+        .await
+        .expect("join a");
+    ChatRoomMember::join(&client, room_b.id, searcher.id)
+        .await
+        .expect("join b");
+
+    for (room_id, body) in [
+        (room_a.id, "progress is 50% done"),
+        (room_a.id, "progress is 50x done"),
+        (room_b.id, "progress is 50% done elsewhere"),
+    ] {
+        ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id,
+                user_id: searcher.id,
+                body: body.to_string(),
+            },
+        )
+        .await
+        .expect("create message");
+    }
+
+    let request_id = Uuid::now_v7();
+    service.search_messages_task(
+        searcher.id,
+        request_id,
+        Some(room_a.id),
+        "50% done".to_string(),
+        Vec::new(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("search event timeout")
+        .expect("search event");
+    match event {
+        ChatEvent::MessageSearchLoaded { messages, .. } => {
+            assert_eq!(
+                messages.len(),
+                1,
+                "% must match literally and room b must be filtered out"
+            );
+            assert_eq!(messages[0].body, "progress is 50% done");
+        }
+        other => panic!("unexpected search event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn message_context_window_surrounds_hit_chronologically() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let author = create_test_user(&test_db.db, "context_author").await;
+    let ignored = create_test_user(&test_db.db, "context_ignored").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "context-room")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, author.id)
+        .await
+        .expect("join author");
+    ChatRoomMember::join(&client, room.id, ignored.id)
+        .await
+        .expect("join ignored");
+
+    let mut created_messages = Vec::new();
+    for index in 0..9 {
+        // Message 4 from the ignored user must be skipped by the window.
+        let user_id = if index == 4 { ignored.id } else { author.id };
+        let message = ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id: room.id,
+                user_id,
+                body: format!("context message {index}"),
+            },
+        )
+        .await
+        .expect("create message");
+        created_messages.push(message);
+    }
+
+    let hit = &created_messages[5];
+    let (before, after) =
+        ChatMessage::list_around(&client, room.id, hit.created, hit.id, &[ignored.id], 3)
+            .await
+            .expect("list around");
+
+    let before_bodies: Vec<&str> = before.iter().map(|m| m.body.as_str()).collect();
+    let after_bodies: Vec<&str> = after.iter().map(|m| m.body.as_str()).collect();
+    assert_eq!(
+        before_bodies,
+        vec![
+            "context message 1",
+            "context message 2",
+            "context message 3"
+        ],
+        "chronological, skipping the ignored author's message 4"
+    );
+    assert_eq!(
+        after_bodies,
+        vec![
+            "context message 6",
+            "context message 7",
+            "context message 8"
+        ]
+    );
+}

@@ -450,6 +450,10 @@ pub struct ChatState {
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub(crate) voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
     pub(crate) selected_message_id: Option<Uuid>,
+    /// Armed by a first `d` press on a message; a second `d` on the same
+    /// still-selected message confirms the delete. Any selection change or
+    /// clear disarms it so a stale confirm can't reap the wrong message.
+    pub(crate) pending_delete_message_id: Option<Uuid>,
     pub(crate) reaction_leader_active: bool,
     pub(crate) highlighted_message_id: Option<Uuid>,
     pub(crate) edited_message_id: Option<Uuid>,
@@ -468,6 +472,13 @@ pub struct ChatState {
     pub(crate) notifications: notifications::state::State,
     pub(crate) discover_selected: bool,
     pub(crate) discover: discover::state::State,
+    /// Message-search results for the Ctrl+/ modal's `?` mode. Owned here
+    /// (not on the modal) because ChatState owns the chat event receiver.
+    pub(crate) message_search: MessageSearch,
+    /// A search hit the user asked to jump to before its room tail was
+    /// loaded: `(room_id, message_id)`. Resolved (or dropped with a banner)
+    /// when that room's tail lands.
+    pending_search_jump: Option<(Uuid, Uuid)>,
     pub(crate) showcase_selected: bool,
     pub(crate) showcase: showcase::state::State,
     pub(crate) work_selected: bool,
@@ -483,6 +494,9 @@ pub struct ChatState {
     requested_ultimate_modal: bool,
     requested_daily_challenge: Option<DailyChallengeRequest>,
     requested_icon_picker: bool,
+    /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
+    /// modal pre-filled with `?query`.
+    requested_message_search: Option<String>,
     requested_petname: Option<PetnameRequest>,
     requested_open_profile: Option<(Uuid, String)>,
     requested_open_sheet: Option<SheetOpenRequest>,
@@ -631,6 +645,7 @@ impl ChatState {
             message_reactions: HashMap::new(),
             voice_channels_by_room_id: HashMap::new(),
             selected_message_id: None,
+            pending_delete_message_id: None,
             reaction_leader_active: false,
             highlighted_message_id: None,
             edited_message_id: None,
@@ -645,6 +660,8 @@ impl ChatState {
             notifications: notifications::state::State::new(notification_service, user_id),
             discover_selected: false,
             discover: discover::state::State::new(),
+            message_search: MessageSearch::default(),
+            pending_search_jump: None,
             showcase_selected: false,
             showcase: showcase::state::State::new(
                 showcase_service,
@@ -661,6 +678,7 @@ impl ChatState {
             requested_ultimate_modal: false,
             requested_daily_challenge: None,
             requested_icon_picker: false,
+            requested_message_search: None,
             requested_petname: None,
             requested_open_profile: None,
             requested_open_sheet: None,
@@ -948,6 +966,10 @@ impl ChatState {
         std::mem::take(&mut self.requested_icon_picker)
     }
 
+    pub(crate) fn take_requested_message_search(&mut self) -> Option<String> {
+        self.requested_message_search.take()
+    }
+
     pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String)> {
         self.requested_open_profile.take()
     }
@@ -1065,6 +1087,7 @@ impl ChatState {
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
         self.reaction_leader_active = false;
+        self.pending_delete_message_id = None;
         if ids.is_empty() {
             self.selected_message_id = None;
             return;
@@ -1098,11 +1121,13 @@ impl ChatState {
 
     pub fn clear_message_selection(&mut self) {
         self.reaction_leader_active = false;
+        self.pending_delete_message_id = None;
         self.selected_message_id = None;
     }
 
     pub fn focus_message_in_room(&mut self, room_id: Uuid, message_id: Uuid) {
         self.reaction_leader_active = false;
+        self.pending_delete_message_id = None;
         self.room_jump_active = false;
         self.feeds_selected = false;
         self.news_selected = false;
@@ -1232,10 +1257,18 @@ impl ChatState {
     }
 
     /// Delete the selected message if owned by user (or if admin).
-    /// Moves selection to the adjacent message (prefer the next/older one,
-    /// fall back to the previous/newer one) so pressing `d` repeatedly
-    /// cleanly reaps a run of own messages without the cursor jumping
-    /// back to the newest every time.
+    ///
+    /// Requires a confirming double-press: the first `d` arms the delete and
+    /// asks for a second press; a second `d` on the same still-selected
+    /// message goes through. Any selection change disarms it (see
+    /// `select_from_ids` / `clear_message_selection`), so after a delete the
+    /// cursor lands on the adjacent message disarmed and the next `d` re-arms
+    /// rather than reaping it — you still walk a run of own messages, just
+    /// `dd` per message instead of a single `d`.
+    ///
+    /// Selection moves to the adjacent message (prefer the next/older one,
+    /// fall back to the previous/newer one) so the cursor doesn't jump back to
+    /// the newest every time.
     pub fn delete_selected_message_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
         let selected_id = self.selected_message_id?;
         let msg_user_id = self
@@ -1245,6 +1278,11 @@ impl ChatState {
         if !is_own && !self.permissions.can_moderate() {
             return Some(Banner::error("Can only delete your own messages"));
         }
+        if self.pending_delete_message_id != Some(selected_id) {
+            self.pending_delete_message_id = Some(selected_id);
+            return Some(Banner::info("Press d again to delete"));
+        }
+        self.pending_delete_message_id = None;
         self.service
             .delete_message_task(self.user_id, selected_id, self.permissions);
         self.selected_message_id = self
@@ -1322,9 +1360,79 @@ impl ChatState {
         }
         self.reaction_leader_active = false;
         self.highlighted_message_id = None;
+        self.pending_delete_message_id = None;
         let changed = self.selected_message_id != Some(message_id);
         self.selected_message_id = Some(message_id);
         changed
+    }
+
+    /// Whether a message is present in the locally loaded tail for a room.
+    pub(crate) fn message_is_loaded_in_room(&self, room_id: Uuid, message_id: Uuid) -> bool {
+        self.find_message_in_room(room_id, message_id).is_some()
+    }
+
+    /// Fire a message search through the service, superseding any in-flight
+    /// request (latest wins: stale results are dropped by request id).
+    pub(crate) fn start_message_search(&mut self, room_id: Option<Uuid>, query: String) {
+        let request_id = Uuid::now_v7();
+        self.message_search.begin(request_id, query.clone());
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.search_messages_task(
+            self.user_id,
+            request_id,
+            room_id,
+            query,
+            exclude_user_ids,
+        );
+    }
+
+    /// Remember a search hit to select once its room tail loads. Used when
+    /// jumping from the Ctrl+/ message search to a room whose history is not
+    /// loaded yet.
+    pub(crate) fn set_pending_search_jump(&mut self, room_id: Uuid, message_id: Uuid) {
+        self.pending_search_jump = Some((room_id, message_id));
+    }
+
+    /// Lazily fetch the context window (3 messages either side) for a search
+    /// hit if it is not cached and no other context fetch is running. Called
+    /// from the modal's tick for the currently selected hit; the single
+    /// in-flight slot makes fast scrolling converge instead of fanning out.
+    pub(crate) fn ensure_search_hit_context(&mut self, message_id: Uuid) {
+        if self.message_search.context.contains_key(&message_id)
+            || self.message_search.context_in_flight.is_some()
+        {
+            return;
+        }
+        let Some(hit) = self
+            .message_search
+            .hits
+            .iter()
+            .find(|hit| hit.message.id == message_id)
+        else {
+            return;
+        };
+        let request_id = Uuid::now_v7();
+        self.message_search.context_in_flight = Some((request_id, message_id));
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_message_context_task(
+            self.user_id,
+            request_id,
+            hit.message.room_id,
+            message_id,
+            hit.message.created,
+            exclude_user_ids,
+        );
+    }
+
+    /// Load one message as a single-hit search preview (the Mentions
+    /// fallback for messages older than the loaded history). The result
+    /// arrives through the same latest-wins search pipeline, so typing a
+    /// real `?` query afterwards simply replaces the preview.
+    pub(crate) fn start_message_preview(&mut self, message_id: Uuid) {
+        let request_id = Uuid::now_v7();
+        self.message_search.begin(request_id, String::new());
+        self.service
+            .load_message_preview_task(self.user_id, request_id, message_id);
     }
 
     /// Drop the user into compose mode in `room_id` (if not already) and
@@ -1927,6 +2035,15 @@ impl ChatState {
         if body.trim() == "/icons" {
             self.clear_composer_after_submit();
             self.requested_icon_picker = true;
+            return None;
+        }
+
+        if let Some(rest) = body.trim().strip_prefix("/search")
+            && (rest.is_empty() || rest.starts_with(' '))
+        {
+            let query = rest.trim().to_string();
+            self.clear_composer_after_submit();
+            self.requested_message_search = Some(query);
             return None;
         }
 
@@ -3465,9 +3582,26 @@ impl ChatState {
                     if self.visible_room_id == Some(room_id) {
                         self.mark_room_read(room_id);
                     }
+                    if let Some((jump_room_id, message_id)) = self.pending_search_jump
+                        && jump_room_id == room_id
+                    {
+                        self.pending_search_jump = None;
+                        if self.message_is_loaded_in_room(room_id, message_id) {
+                            self.select_message_by_id_in_room(room_id, message_id);
+                        } else {
+                            banner =
+                                Some(Banner::error("Message is older than the loaded history"));
+                        }
+                    }
                 }
                 ChatEvent::RoomTailLoadFailed { user_id, room_id } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
+                    if self
+                        .pending_search_jump
+                        .is_some_and(|(id, _)| id == room_id)
+                    {
+                        self.pending_search_jump = None;
+                    }
                 }
                 ChatEvent::SendFailed {
                     user_id,
@@ -3644,6 +3778,73 @@ impl ChatState {
                 ChatEvent::DiscoverRoomsFailed { user_id, message } if self.user_id == user_id => {
                     self.discover.finish_loading();
                     banner = Some(Banner::error(&message));
+                }
+                ChatEvent::MessageSearchLoaded {
+                    user_id,
+                    request_id,
+                    messages,
+                    usernames,
+                } if self.user_id == user_id => {
+                    if !self.message_search.is_current(request_id) {
+                        continue;
+                    }
+                    self.usernames.extend(usernames);
+                    let query = self.message_search.query.clone();
+                    let hits = messages
+                        .into_iter()
+                        .filter(|message| !self.message_is_ignored(message))
+                        .map(|message| {
+                            let (snippet_prefix, snippet_match, snippet_suffix) =
+                                build_search_snippet(&message.body, &query);
+                            MessageSearchHit {
+                                message,
+                                snippet_prefix,
+                                snippet_match,
+                                snippet_suffix,
+                            }
+                        })
+                        .collect();
+                    self.message_search.finish(hits);
+                }
+                ChatEvent::MessageSearchFailed {
+                    user_id,
+                    request_id,
+                    message,
+                } if self.user_id == user_id => {
+                    if self.message_search.is_current(request_id) {
+                        self.message_search.fail(sentence_case(&message));
+                    }
+                }
+                ChatEvent::MessageContextLoaded {
+                    user_id,
+                    request_id,
+                    message_id,
+                    before,
+                    after,
+                    usernames,
+                } if self.user_id == user_id => {
+                    if self.message_search.context_in_flight != Some((request_id, message_id)) {
+                        continue;
+                    }
+                    self.message_search.context_in_flight = None;
+                    self.usernames.extend(usernames);
+                    self.message_search
+                        .context
+                        .insert(message_id, MessageContext { before, after });
+                }
+                ChatEvent::MessageContextFailed {
+                    user_id,
+                    request_id,
+                    message_id,
+                } if self.user_id == user_id => {
+                    if self.message_search.context_in_flight == Some((request_id, message_id)) {
+                        self.message_search.context_in_flight = None;
+                        // Cache an empty window so a persistent failure does
+                        // not refire every tick; the hit still renders alone.
+                        self.message_search
+                            .context
+                            .insert(message_id, MessageContext::default());
+                    }
                 }
                 ChatEvent::MessageReactionsUpdated {
                     room_id: _,
@@ -5091,6 +5292,142 @@ fn modal_author_label(username: Option<&str>, user_id: Uuid) -> String {
         .filter(|name| !name.is_empty())
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| short_user_id(user_id))
+}
+
+/// Message-search state backing the Ctrl+/ modal's `?` mode. Owned by
+/// `ChatState` because it owns the chat event receiver; the modal reads it.
+#[derive(Default)]
+pub(crate) struct MessageSearch {
+    /// In-flight or last-completed request id. Results carrying any other id
+    /// are stale and dropped (latest wins).
+    request_id: Option<Uuid>,
+    /// Query text the current request was fired with; snippets are built
+    /// against it when results land.
+    query: String,
+    pub(crate) loading: bool,
+    pub(crate) error: Option<String>,
+    pub(crate) hits: Vec<MessageSearchHit>,
+    /// Context windows (3 messages either side) keyed by hit message id,
+    /// fetched lazily as hits are selected. Bounded in practice: filled only
+    /// while the modal is open and reset with `clear()` when it closes.
+    pub(crate) context: HashMap<Uuid, MessageContext>,
+    /// The one in-flight context fetch: `(request_id, message_id)`. A single
+    /// slot, so scrolling through hits fetches sequentially instead of
+    /// fanning out one query per keypress.
+    context_in_flight: Option<(Uuid, Uuid)>,
+}
+
+/// Messages immediately around a search hit, both sides chronological.
+#[derive(Default)]
+pub(crate) struct MessageContext {
+    pub before: Vec<ChatMessage>,
+    pub after: Vec<ChatMessage>,
+}
+
+impl MessageSearch {
+    fn begin(&mut self, request_id: Uuid, query: String) {
+        self.request_id = Some(request_id);
+        self.query = query;
+        self.loading = true;
+        self.error = None;
+    }
+
+    fn is_current(&self, request_id: Uuid) -> bool {
+        self.request_id == Some(request_id)
+    }
+
+    fn finish(&mut self, hits: Vec<MessageSearchHit>) {
+        self.loading = false;
+        self.error = None;
+        self.hits = hits;
+    }
+
+    fn fail(&mut self, message: String) {
+        self.loading = false;
+        self.error = Some(message);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+pub(crate) struct MessageSearchHit {
+    pub message: ChatMessage,
+    /// Precomputed one-row snippet, split around the first case-insensitive
+    /// query match so render can highlight it without rescanning the body.
+    pub snippet_prefix: String,
+    pub snippet_match: String,
+    pub snippet_suffix: String,
+}
+
+/// Chars of context kept before the match in a snippet.
+const SNIPPET_LEAD_CHARS: usize = 24;
+/// Total snippet char budget; render truncates further by column width.
+const SNIPPET_TOTAL_CHARS: usize = 160;
+
+/// Split a message body into `(prefix, match, suffix)` around the first
+/// case-insensitive occurrence of `query`, windowed so the match stays
+/// visible in a one-row snippet. Newlines flatten to spaces and a leading
+/// `---WORD---` card marker (news/report cards) is dropped so snippets read
+/// as text. Falls back to a head-of-body snippet with an empty match part.
+pub(crate) fn build_search_snippet(body: &str, query: &str) -> (String, String, String) {
+    let flat = strip_card_marker(body).replace(['\n', '\r'], " ");
+    let chars: Vec<char> = flat.chars().collect();
+    let lower: Vec<char> = flat.to_lowercase().chars().collect();
+    let needle: Vec<char> = query.to_lowercase().chars().collect();
+
+    // `to_lowercase` can change char counts for some scripts; if the lowered
+    // text no longer lines up with the original, skip highlighting rather
+    // than slice at wrong offsets.
+    let match_at = if needle.is_empty() || lower.len() != chars.len() {
+        None
+    } else {
+        lower
+            .windows(needle.len())
+            .position(|window| window == needle.as_slice())
+    };
+
+    let Some(start) = match_at else {
+        let mut head: String = chars.iter().take(SNIPPET_TOTAL_CHARS).collect();
+        if chars.len() > SNIPPET_TOTAL_CHARS {
+            head.push('…');
+        }
+        return (head, String::new(), String::new());
+    };
+
+    let window_start = start.saturating_sub(SNIPPET_LEAD_CHARS);
+    let match_end = start + needle.len();
+    let window_end = chars
+        .len()
+        .min(match_end + SNIPPET_TOTAL_CHARS.saturating_sub(match_end - window_start));
+
+    let mut prefix: String = chars[window_start..start].iter().collect();
+    if window_start > 0 {
+        prefix.insert(0, '…');
+    }
+    let matched: String = chars[start..match_end].iter().collect();
+    let mut suffix: String = chars[match_end..window_end].iter().collect();
+    if window_end < chars.len() {
+        suffix.push('…');
+    }
+    (prefix, matched, suffix)
+}
+
+/// Drop a leading `---WORD--- ` card marker (news/bug/suggestion cards) so
+/// search snippets show the card's text instead of its wire marker.
+fn strip_card_marker(body: &str) -> &str {
+    let trimmed = body.trim_start();
+    let Some(rest) = trimmed.strip_prefix("---") else {
+        return body;
+    };
+    let Some((word, rest)) = rest.split_once("---") else {
+        return body;
+    };
+    if word.is_empty() || !word.chars().all(|ch| ch.is_ascii_uppercase()) {
+        return body;
+    }
+    rest.trim_start()
 }
 
 fn resolve_room_jump_target(targets: &[(u8, RoomSlot)], byte: u8) -> Option<RoomSlot> {
@@ -6847,6 +7184,50 @@ mod tests {
         spoof.user_id = Uuid::from_u128(3);
         spoof.body = "· fake activity".to_string();
         assert_eq!(system_line_text_in(&usernames, &spoof), None);
+    }
+
+    #[test]
+    fn search_snippet_windows_around_match() {
+        let body = format!("{}the deploy failed at midnight", "padding ".repeat(10));
+        let (prefix, matched, suffix) = build_search_snippet(&body, "deploy failed");
+        assert!(prefix.starts_with('…'), "long lead-in is trimmed");
+        assert!(prefix.ends_with("the "));
+        assert_eq!(matched, "deploy failed");
+        assert_eq!(suffix, " at midnight");
+    }
+
+    #[test]
+    fn search_snippet_matches_case_insensitively_and_across_newlines() {
+        let (prefix, matched, suffix) = build_search_snippet("one\nDEPLOY two", "deploy");
+        assert_eq!(prefix, "one ");
+        assert_eq!(matched, "DEPLOY");
+        assert_eq!(suffix, " two");
+    }
+
+    #[test]
+    fn search_snippet_without_match_falls_back_to_head() {
+        let (prefix, matched, suffix) = build_search_snippet("short body", "absent");
+        assert_eq!(prefix, "short body");
+        assert!(matched.is_empty());
+        assert!(suffix.is_empty());
+
+        let (empty_query_prefix, empty_query_match, _) = build_search_snippet("preview", "");
+        assert_eq!(empty_query_prefix, "preview");
+        assert!(empty_query_match.is_empty());
+    }
+
+    #[test]
+    fn search_snippet_strips_card_markers() {
+        let (prefix, matched, _) = build_search_snippet(
+            "---NEWS--- rust 2.0 released || summary || https://example.com",
+            "rust 2.0",
+        );
+        assert!(!prefix.contains("---NEWS---"));
+        assert_eq!(matched, "rust 2.0");
+
+        // A fake marker that is not all-uppercase stays untouched.
+        let (prefix, _, _) = build_search_snippet("---not a marker--- text", "text");
+        assert!(prefix.starts_with("---not a marker---"));
     }
 
     #[test]
