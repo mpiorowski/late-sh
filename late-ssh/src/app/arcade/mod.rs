@@ -11,3 +11,4 @@ pub mod tetris;
 pub mod traffic;
 pub mod twenty_forty_eight;
 pub mod ui;
+pub mod workspace;

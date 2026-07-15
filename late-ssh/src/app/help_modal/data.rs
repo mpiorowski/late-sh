@@ -152,7 +152,7 @@ pub fn bot_app_context() -> String {
         - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free.\n\
         - \"@bartender round\" (or \"@bartender round for everyone\") buys the whole house a round: a flat 5000 chips on the buyer's tab pours an ale to every human online, payer included.\n\
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. The printed word only shows from buzzed (level 2) up; tipsy just glows quietly. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
-        - The buzz sobers up on its own over time, no action needed: it decays 300 points an hour, so even a maxed-out binge is fully sober again well within a day.\n\
+        - The buzz sobers up on its own over time, no action needed: it decays 150 points an hour, so even a maxed-out binge is fully sober again in about a day.\n\
         - Drunk level tints the username label's background everywhere it appears (the Clubhouse floor and chat author labels alike), light green through yellow and orange to red as the level climbs.\n\
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Directory (5), and World Cup (6).\n\
         - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, Green Dragon, dopewars, and Rebels; each is launched from there, not from its own top-level page.\n\
@@ -649,7 +649,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  j / k or ↑ / ↓   browse games",
         "  Enter             play selected game",
         "  Esc / q           leave current game",
-        "  `                 return to Dashboard while a run is active",
+        "  `                 in a daily puzzle: hop games waiting on you (boards, tables, dailies)",
         "",
         "Notes",
         "  Game-specific controls appear inside the Arcade page.",
@@ -690,7 +690,7 @@ fn lobby_help_lines() -> Vec<String> {
         "Daily matches",
         "  /challenge [@user] post a chess, battleship, or connect4 challenge",
         "  24h per move; boards live outside the Tab cycle, Esc returns to the Lobby",
-        "  `                 hop Home chat, boards on your move, and seated tables",
+        "  `                 hop Home chat, boards on your move, seated tables, unfinished dailies",
         "",
         "House tables",
         "  Poker, Blackjack, Asterion, and Tron: one fixed table each, no setup forms",
@@ -819,7 +819,7 @@ fn overview_lines() -> Vec<String> {
         "  f                 favorite / unfavorite the selected room",
         "  [ / ]             move the selected favorite up / down",
         "  favorites appear first in the room rail and room picker",
-        "  `                 hop Home chat and daily matches waiting on your move",
+        "  `                 hop Home chat and games waiting on you (boards, tables, dailies)",
         "",
         "Hub",
         "  Ctrl+G            open Quests, Shop, Leaderboard, Events",

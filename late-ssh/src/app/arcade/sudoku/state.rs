@@ -194,6 +194,37 @@ impl State {
         DIFFICULTIES[self.selected_difficulty]
     }
 
+    /// Index of the first daily difficulty with player marks on the board and
+    /// no win yet: the live board when it is the active daily, the stored
+    /// snapshot otherwise. Untouched generated boards never match.
+    pub fn first_unfinished_daily(&self) -> Option<usize> {
+        DIFFICULTIES.iter().enumerate().find_map(|(index, dk)| {
+            let started = if self.mode == Mode::Daily && index == self.selected_difficulty {
+                !self.is_game_over
+                    && board_has_player_marks(&self.grid, &self.fixed_mask, &self.notes)
+            } else {
+                self.daily_snapshots.get(*dk).is_some_and(|snapshot| {
+                    !snapshot.is_game_over
+                        && board_has_player_marks(
+                            &snapshot.grid,
+                            &snapshot.fixed_mask,
+                            &snapshot.notes,
+                        )
+                })
+            };
+            started.then_some(index)
+        })
+    }
+
+    /// Jump straight to a daily board: the backtick workspace entry path.
+    pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.clear_reset_pending();
+        self.store_active_snapshot();
+        self.mode = Mode::Daily;
+        self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
+        self.load_mode_snapshot_for_selected_difficulty();
+    }
+
     pub fn show_personal(&mut self) {
         self.clear_reset_pending();
         self.store_active_snapshot();
@@ -615,6 +646,10 @@ fn snapshot_from_game(game: &Game) -> BoardSnapshot {
         notes: [[0; 9]; 9],
         is_game_over: game.is_game_over,
     }
+}
+
+fn board_has_player_marks(grid: &Grid, fixed_mask: &Mask, notes: &Notes) -> bool {
+    (0..9).any(|r| (0..9).any(|c| (!fixed_mask[r][c] && grid[r][c] != 0) || notes[r][c] != 0))
 }
 
 fn is_current_daily_game(puzzle_date: Option<NaiveDate>, today: NaiveDate) -> bool {

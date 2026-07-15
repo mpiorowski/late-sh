@@ -154,8 +154,8 @@ const BARTENDER_TAB_BOUNCED_LINE: &str =
 /// `@bartender round` command can spend it, never the model.
 const BARTENDER_ROUND_PRICE: i64 = 5_000;
 /// Buzz each patron gets from a round; lands them squarely in "buzzed"
-/// (level 2 spans 500..1500).
-const BARTENDER_ROUND_POINTS: i64 = 1_000;
+/// (level 2 spans 300..1000).
+const BARTENDER_ROUND_POINTS: i64 = 600;
 /// Ledger label for the round debit.
 const BARTENDER_ROUND_DRINK: &str = "round of house ale";
 /// How often the DB-backed drunk levels are re-seeded into the shared lobby.

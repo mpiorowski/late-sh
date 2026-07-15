@@ -1,4 +1,5 @@
 use chrono::{NaiveDate, Utc};
+use late_core::models::rubiks_cube::{Game, GameParams};
 use uuid::Uuid;
 
 use super::svc::RubiksCubeService;
@@ -59,8 +60,23 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(user_id: Uuid, svc: RubiksCubeService) -> Self {
-        Self::new_for_date(user_id, svc, Utc::now().date_naive())
+    pub fn new(user_id: Uuid, svc: RubiksCubeService, saved_game: Option<Game>) -> Self {
+        let today = Utc::now().date_naive();
+        let mut state = Self::new_for_date(user_id, svc, today);
+        // Restore a saved cube only for today's scramble: stale rows are from
+        // an older daily and the fresh scramble already replaced them.
+        if let Some(game) = saved_game
+            && game.puzzle_date == today
+            && let Some(stickers) = stickers_from_string(&game.stickers)
+        {
+            state.stickers = stickers;
+            state.user_moves = game.user_moves.max(0) as u32;
+            state.solved_reported = state.is_solved();
+            if state.has_started() {
+                state.message = format!("Daily cube {} restored.", state.daily_label());
+            }
+        }
+        state
     }
 
     fn new_for_date(user_id: Uuid, svc: RubiksCubeService, puzzle_date: NaiveDate) -> Self {
@@ -128,10 +144,16 @@ impl State {
             .all(|face| face.iter().all(|sticker| *sticker == face[0]))
     }
 
+    /// Today's cube has at least one player move on it and is not yet solved.
+    pub fn has_unfinished_daily(&self) -> bool {
+        self.puzzle_date == Utc::now().date_naive() && self.has_started() && !self.is_solved()
+    }
+
     pub fn reset(&mut self) {
         self.reset_pending = false;
         self.apply_daily_scramble();
         self.message = format!("Daily cube {} reset.", self.daily_label());
+        self.save_async();
     }
 
     pub fn ensure_current_daily(&mut self) {
@@ -187,6 +209,21 @@ impl State {
         } else {
             format!("Move {label}")
         };
+        self.save_async();
+    }
+
+    fn save_async(&self) {
+        // Pure unit tests drive moves without a tokio runtime; skip the
+        // fire-and-forget save there instead of panicking in spawn.
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        self.svc.save_game_task(GameParams {
+            user_id: self.user_id,
+            puzzle_date: self.puzzle_date,
+            stickers: stickers_to_string(&self.stickers),
+            user_moves: self.user_moves.min(i32::MAX as u32) as i32,
+        });
     }
 
     fn record_solved(&mut self) {
@@ -231,6 +268,51 @@ impl State {
             }
         }
         self.stickers = next;
+    }
+}
+
+/// Serialize the cube as 54 face chars (U D L R F B faces in `Face::index`
+/// order, 9 stickers each), the format stored in `rubiks_cube_games`.
+fn stickers_to_string(stickers: &[[Sticker; 9]; 6]) -> String {
+    stickers
+        .iter()
+        .flat_map(|face| face.iter().map(|sticker| sticker.as_char()))
+        .collect()
+}
+
+fn stickers_from_string(value: &str) -> Option<[[Sticker; 9]; 6]> {
+    let mut chars = value.chars();
+    let mut stickers = solved_stickers();
+    for face in &mut stickers {
+        for slot in face.iter_mut() {
+            *slot = Sticker::from_char(chars.next()?)?;
+        }
+    }
+    chars.next().is_none().then_some(stickers)
+}
+
+impl Sticker {
+    fn as_char(self) -> char {
+        match self {
+            Sticker::White => 'W',
+            Sticker::Yellow => 'Y',
+            Sticker::Orange => 'O',
+            Sticker::Red => 'R',
+            Sticker::Green => 'G',
+            Sticker::Blue => 'B',
+        }
+    }
+
+    fn from_char(value: char) -> Option<Self> {
+        match value {
+            'W' => Some(Sticker::White),
+            'Y' => Some(Sticker::Yellow),
+            'O' => Some(Sticker::Orange),
+            'R' => Some(Sticker::Red),
+            'G' => Some(Sticker::Green),
+            'B' => Some(Sticker::Blue),
+            _ => None,
+        }
     }
 }
 
@@ -624,6 +706,30 @@ mod tests {
             message: String::new(),
             svc,
         }
+    }
+
+    #[test]
+    fn sticker_string_round_trips() {
+        let mut state = solved_state();
+        state.apply_move(CubeMove {
+            face: Face::Right,
+            inverse: false,
+        });
+        state.apply_move(CubeMove {
+            face: Face::Up,
+            inverse: true,
+        });
+        let encoded = stickers_to_string(&state.stickers);
+        assert_eq!(encoded.len(), 54);
+        assert_eq!(stickers_from_string(&encoded), Some(state.stickers));
+    }
+
+    #[test]
+    fn sticker_string_rejects_bad_input() {
+        assert_eq!(stickers_from_string(""), None);
+        assert_eq!(stickers_from_string(&"W".repeat(53)), None);
+        assert_eq!(stickers_from_string(&"W".repeat(55)), None);
+        assert_eq!(stickers_from_string(&"X".repeat(54)), None);
     }
 
     #[test]

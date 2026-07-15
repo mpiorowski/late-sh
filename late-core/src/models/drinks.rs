@@ -20,16 +20,16 @@ pub const DRINK_PRICE_MAX: i64 = 1_000;
 /// exactly on the first drunk level so the welcome round already glows.
 pub const WELCOME_DRINK_POINTS: i64 = 100;
 /// How fast the buzz wears off, in drunk points (= chips) per hour.
-pub const DRUNK_DECAY_PER_HOUR: i64 = 300;
+pub const DRUNK_DECAY_PER_HOUR: i64 = 150;
 /// Hard cap on stored points so one binge can't glow for days. At the decay
-/// rate above a maxed-out patron is fully sober in 20 hours.
-pub const MAX_DRUNK_POINTS: i64 = 6_000;
+/// rate above a maxed-out patron is fully sober in about 27 hours.
+pub const MAX_DRUNK_POINTS: i64 = 4_000;
 
 /// Level thresholds on effective (decayed) points. Level 0 renders nothing;
-/// level 4 ("fully wasted") lands at 3000, three top-shelf pours deep. Level 1
+/// level 4 ("fully wasted") lands at 2000, two top-shelf pours deep. Level 1
 /// (the welcome round) glows without a word; the printed drunk label only kicks
-/// in at level 2, i.e. 500 points, so a first sip stays quiet.
-const DRUNK_LEVEL_THRESHOLDS: [i64; 4] = [1, 500, 1_500, 3_000];
+/// in at level 2, i.e. 300 points, so a first sip stays quiet.
+const DRUNK_LEVEL_THRESHOLDS: [i64; 4] = [1, 300, 1_000, 2_000];
 
 /// Lowest level that earns a printed "(word)" label next to the name. Below it,
 /// the glow carries the state on its own.
@@ -199,7 +199,7 @@ impl UserDrinks {
             .query(
                 "SELECT * FROM user_drinks
                  WHERE drunk_points > 0
-                   AND last_drink_at > current_timestamp - interval '24 hours'",
+                   AND last_drink_at > current_timestamp - interval '36 hours'",
                 &[],
             )
             .await?;
@@ -226,8 +226,9 @@ mod tests {
     #[test]
     fn decayed_points_wears_off_linearly() {
         assert_eq!(decayed_points(600, 0), 600);
-        assert_eq!(decayed_points(600, 3600), 300);
-        assert_eq!(decayed_points(600, 7200), 0);
+        assert_eq!(decayed_points(600, 3600), 450);
+        assert_eq!(decayed_points(600, 7200), 300);
+        assert_eq!(decayed_points(600, 14400), 0);
         assert_eq!(decayed_points(600, 36000), 0);
     }
 
@@ -245,18 +246,18 @@ mod tests {
         assert_eq!(drunk_level(1), 1);
         // The welcome round lands on level 1: a glow, but no printed word yet.
         assert_eq!(drunk_level(WELCOME_DRINK_POINTS), 1);
-        assert_eq!(drunk_level(499), 1);
-        assert_eq!(drunk_level(500), 2);
-        assert_eq!(drunk_level(1499), 2);
-        assert_eq!(drunk_level(1500), 3);
-        assert_eq!(drunk_level(2999), 3);
-        assert_eq!(drunk_level(3000), 4);
+        assert_eq!(drunk_level(299), 1);
+        assert_eq!(drunk_level(300), 2);
+        assert_eq!(drunk_level(999), 2);
+        assert_eq!(drunk_level(1000), 3);
+        assert_eq!(drunk_level(1999), 3);
+        assert_eq!(drunk_level(2000), 4);
         assert_eq!(drunk_level(MAX_DRUNK_POINTS), 4);
     }
 
     #[test]
     fn drunk_label_word_starts_at_level_two() {
-        // Below 500 points the glow stands alone; from level 2 up a word prints.
+        // Below 300 points the glow stands alone; from level 2 up a word prints.
         assert_eq!(drunk_label_word(0), None);
         assert_eq!(drunk_label_word(1), None);
         assert_eq!(drunk_label_word(drunk_level(WELCOME_DRINK_POINTS)), None);
@@ -266,10 +267,10 @@ mod tests {
     }
 
     #[test]
-    fn max_cap_dries_out_within_a_day() {
-        // The 24h window in all_active must cover the slowest sober-up.
-        let hours_to_sober = MAX_DRUNK_POINTS / DRUNK_DECAY_PER_HOUR;
-        assert!(hours_to_sober <= 24);
+    fn max_cap_dries_out_within_active_window() {
+        // The 36h window in all_active must cover the slowest sober-up.
+        let hours_to_sober = (MAX_DRUNK_POINTS + DRUNK_DECAY_PER_HOUR - 1) / DRUNK_DECAY_PER_HOUR;
+        assert!(hours_to_sober <= 36);
         assert_eq!(decayed_points(MAX_DRUNK_POINTS, hours_to_sober * 3600), 0);
     }
 
@@ -283,7 +284,7 @@ mod tests {
             drink_count: 1,
             last_drink_at: now - chrono::Duration::hours(1),
         };
-        assert_eq!(drinks.effective_points(now), 300);
-        assert_eq!(drinks.level(now), 1);
+        assert_eq!(drinks.effective_points(now), 450);
+        assert_eq!(drinks.level(now), 2);
     }
 }

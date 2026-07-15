@@ -212,6 +212,41 @@ impl State {
         }
     }
 
+    /// Index of the first daily difficulty whose deal has been touched (any
+    /// move from the deterministic fresh deal counts) and is not yet won:
+    /// the live board when it is the active daily, the stored snapshot
+    /// otherwise.
+    pub fn first_unfinished_daily(&self) -> Option<usize> {
+        DIFFICULTIES.iter().enumerate().find_map(|(index, dk)| {
+            let started = if self.mode == Mode::Daily && index == self.selected_difficulty {
+                !self.is_game_over && !self.is_fresh_deal()
+            } else {
+                self.daily_snapshots.get(*dk).is_some_and(|snapshot| {
+                    !snapshot.is_game_over && !snapshot_is_fresh_deal(snapshot)
+                })
+            };
+            started.then_some(index)
+        })
+    }
+
+    /// The live board still matches the untouched deal for its seed.
+    fn is_fresh_deal(&self) -> bool {
+        let fresh = snapshot_from_seed(self.seed);
+        self.stock == fresh.stock
+            && self.waste == fresh.waste
+            && self.foundations == fresh.foundations
+            && self.tableau == fresh.tableau
+    }
+
+    /// Jump straight to a daily board: the backtick workspace entry path.
+    pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.clear_reset_pending();
+        self.store_active_snapshot();
+        self.mode = Mode::Daily;
+        self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
+        self.load_mode_snapshot_for_selected_difficulty();
+    }
+
     pub fn show_daily(&mut self) {
         self.clear_reset_pending();
         self.store_active_snapshot();
@@ -877,6 +912,14 @@ fn puzzle_date_for_mode(mode: Mode, today: NaiveDate) -> Option<NaiveDate> {
         Mode::Daily => Some(today),
         Mode::Personal => None,
     }
+}
+
+fn snapshot_is_fresh_deal(snapshot: &Snapshot) -> bool {
+    let fresh = snapshot_from_seed(snapshot.seed);
+    snapshot.stock == fresh.stock
+        && snapshot.waste == fresh.waste
+        && snapshot.foundations == fresh.foundations
+        && snapshot.tableau == fresh.tableau
 }
 
 fn is_current_daily_game(saved_date: Option<NaiveDate>, today: NaiveDate) -> bool {

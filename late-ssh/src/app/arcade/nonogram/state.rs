@@ -224,6 +224,35 @@ impl State {
         Some(row_col_statuses(puzzle, &self.player_grid))
     }
 
+    /// Index of the first daily difficulty with player marks on the grid and
+    /// no win yet: the live grid when it is the active daily, the stored
+    /// snapshot otherwise.
+    pub fn first_unfinished_daily(&self) -> Option<usize> {
+        DIFFICULTIES
+            .iter()
+            .enumerate()
+            .find_map(|(index, difficulty)| {
+                let started = if self.mode == Mode::Daily && index == self.selected_difficulty {
+                    !self.is_game_over && grid_has_player_marks(&self.player_grid)
+                } else {
+                    self.daily_snapshots
+                        .get(difficulty.key)
+                        .is_some_and(|snapshot| {
+                            !snapshot.is_game_over && grid_has_player_marks(&snapshot.player_grid)
+                        })
+                };
+                started.then_some(index)
+            })
+    }
+
+    /// Jump straight to a daily board: the backtick workspace entry path.
+    pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.store_active_snapshot();
+        self.mode = Mode::Daily;
+        self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
+        self.load_mode_snapshot_for_selected_pack();
+    }
+
     pub fn show_personal(&mut self) {
         self.store_active_snapshot();
         self.mode = Mode::Personal;
@@ -674,6 +703,11 @@ fn snapshot_from_game(game: &Game, pack: &NonogramPack) -> Option<PuzzleSnapshot
         player_grid,
         is_game_over: game.is_game_over,
     })
+}
+
+fn grid_has_player_marks(grid: &[Vec<u8>]) -> bool {
+    grid.iter()
+        .any(|row| row.iter().any(|cell| *cell != CELL_EMPTY))
 }
 
 fn is_current_daily_game(puzzle_date: Option<NaiveDate>, today: NaiveDate) -> bool {
