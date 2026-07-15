@@ -175,20 +175,16 @@ impl ShopService {
         self
     }
 
-    /// One-time startup seed of the flair directory from the live effect
-    /// rows; afterwards purchases write through and notifies refresh.
-    pub async fn seed_flair_directory(&self) {
+    /// Replace the flair directory with the live effect rows. Runs after
+    /// every LISTEN registration (startup and reconnects), so effects bought
+    /// on other replicas while this listener was down still land here.
+    async fn reconcile_flair_directory(&self) -> Result<()> {
         let Some(directory) = &self.flair_directory else {
-            return;
+            return Ok(());
         };
-        let entries = match self.load_flair_entries().await {
-            Ok(entries) => entries,
-            Err(error) => {
-                tracing::warn!(error = ?error, "failed to seed username effect directory");
-                return;
-            }
-        };
+        let entries = self.load_flair_entries().await?;
         crate::app::common::username_effect::set_all(directory, entries);
+        Ok(())
     }
 
     async fn load_flair_entries(&self) -> Result<Vec<(Uuid, NameFlair)>> {
@@ -810,6 +806,11 @@ impl ShopService {
             }
         }
 
+        // LISTEN is registered; notifications now buffer on the connection,
+        // so a full snapshot here cannot race a concurrent purchase. On error
+        // the caller reconnects and reconciles again.
+        self.reconcile_flair_directory().await?;
+
         loop {
             let Some(message) = poll_fn(|cx| connection.poll_message(cx)).await else {
                 return Ok(());
@@ -828,9 +829,9 @@ impl ShopService {
                         // visible to every session, not only shop viewers.
                         // Chip notifies stay out of this path on purpose;
                         // they fire far too often for a per-notify query.
-                        if let Err(error) = self.refresh_user_flair(user_id).await {
-                            tracing::warn!(error = ?error, user_id = %user_id, "failed to refresh username effect");
-                        }
+                        // Errors propagate so the listener reconnects and
+                        // reconciles instead of dropping the update.
+                        self.refresh_user_flair(user_id).await?;
                         self.refresh_user_if_active(user_id).await?;
                     }
                 }

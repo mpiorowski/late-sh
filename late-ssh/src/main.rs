@@ -285,7 +285,6 @@ async fn main() -> anyhow::Result<()> {
     let shop_service = late_ssh::app::ShopService::new(db.clone())
         .with_flair_directory(flair_directory.clone())
         .with_activity(activity_publisher.clone());
-    shop_service.seed_flair_directory().await;
     let _shop_listener_task = shop_service.start_listener_task(config.db.clone());
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {

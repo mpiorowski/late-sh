@@ -121,10 +121,11 @@ impl ShopConsumableEffect {
         Ok(Self::from(row))
     }
 
-    /// Activate a user-scoped effect (`room_id IS NULL`), deactivating any
-    /// prior live effect of the same kind for the user in the same
+    /// Activate a user-scoped effect (`room_id IS NULL`), deactivating every
+    /// prior active effect of the same kind for the user in the same
     /// transaction. Keyed on `effect_kind`, not sku, so rebuying any username
-    /// effect replaces the previous one and resets its clock.
+    /// effect replaces the previous one and resets its clock. Expired rows
+    /// are deactivated too, keeping them out of the active partial index.
     pub async fn activate_user_effect_in_tx(
         tx: &tokio_postgres::Transaction<'_>,
         user_id: Uuid,
@@ -140,8 +141,7 @@ impl ShopConsumableEffect {
              WHERE user_id = $1
                AND effect_kind = $2
                AND room_id IS NULL
-               AND active = true
-               AND ends_at > current_timestamp",
+               AND active = true",
             &[&user_id, &effect_kind],
         )
         .await?;

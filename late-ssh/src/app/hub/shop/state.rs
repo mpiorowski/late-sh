@@ -168,11 +168,16 @@ impl ShopState {
 
     pub fn visible_items(&self) -> Vec<&ShopCatalogItem> {
         let category = self.selected_category();
-        self.snapshot
+        let mut items: Vec<&ShopCatalogItem> = self
+            .snapshot
             .items
             .iter()
             .filter(|item| category.matches_item(item))
-            .collect()
+            .collect();
+        // Username effects lead the list; stable, so catalog order holds
+        // within each group.
+        items.sort_by_key(|item| !item.is_username_effect());
+        items
     }
 
     pub fn active_aquarium_fish(&self) -> Vec<(String, usize)> {
@@ -743,6 +748,32 @@ mod tests {
         assert!(state.pending_username_effect().is_some());
         state.select_next_category();
         assert!(state.pending_username_effect().is_none());
+    }
+
+    #[test]
+    fn visible_items_lead_with_username_effects() {
+        let confetti = ShopCatalogItem {
+            sku: "chat_confetti".to_string(),
+            item_kind: "chat_consumable".to_string(),
+            username_effect_variant: None,
+            ..glow_item()
+        };
+        let snapshot = ShopSnapshot {
+            user_id: None,
+            balance: 1000,
+            items: vec![confetti, glow_item()],
+            entitlements: ShopEntitlements::default(),
+            active_room_effects: HashMap::new(),
+            aquarium_hungry: false,
+            active_username_effect: None,
+        };
+        let state = ShopState::for_test_snapshot(snapshot);
+        let skus: Vec<&str> = state
+            .visible_items()
+            .iter()
+            .map(|item| item.sku.as_str())
+            .collect();
+        assert_eq!(skus, vec!["username_glow_day", "chat_confetti"]);
     }
 
     #[test]

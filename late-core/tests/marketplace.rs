@@ -1046,6 +1046,32 @@ async fn username_effect_expired_rows_are_excluded_from_active_queries() {
             .expect("query")
             .is_none()
     );
+
+    // Rebuying after natural expiry deactivates the stale row, so expired
+    // effects do not accumulate in the active partial index.
+    purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Glow(GlowColor::Lime),
+    )
+    .await
+    .expect("rebuy");
+    let stale_active: i64 = client
+        .query_one(
+            "SELECT count(*)
+             FROM shop_consumable_effects
+             WHERE user_id = $1
+               AND effect_kind = $2
+               AND active = true
+               AND ends_at <= current_timestamp",
+            &[&user.id, &USERNAME_EFFECT_KIND],
+        )
+        .await
+        .expect("stale count")
+        .get(0);
+    assert_eq!(stale_active, 0);
+    assert_eq!(active_username_effect_rows(&client, user.id).await.len(), 1);
 }
 
 #[tokio::test]

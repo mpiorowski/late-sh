@@ -7,6 +7,25 @@ use crate::app::{
     state::App,
 };
 
+/// Peel one shop layer off a bare Esc: an open style picker or room-effect
+/// confirm cancels and the hub stays up. Returns false when there is nothing
+/// to peel, letting the caller close the hub.
+pub fn handle_escape(app: &mut App) -> bool {
+    if app.shop_state.pending_username_effect().is_some() {
+        if let Some(banner) = app.shop_state.cancel_pending_username_effect() {
+            app.banner = Some(banner);
+        }
+        return true;
+    }
+    if app.shop_state.pending_room_effect().is_some() {
+        if let Some(banner) = app.shop_state.cancel_pending_room_effect() {
+            app.banner = Some(banner);
+        }
+        return true;
+    }
+    false
+}
+
 pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
     if app.shop_state.pending_username_effect().is_some() {
         match event {
