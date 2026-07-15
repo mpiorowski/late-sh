@@ -49,6 +49,10 @@ use crate::usernames::UsernameDirectory;
 
 use super::commands::RoomScopedCommand;
 
+/// Messages before and after a search hit, plus a username lookup for their
+/// authors, as loaded by `load_message_context_task`.
+type MessageContext = (Vec<ChatMessage>, Vec<ChatMessage>, HashMap<Uuid, String>);
+
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
 const PINNED_MESSAGES_LIMIT: i64 = 100;
@@ -1586,40 +1590,38 @@ impl ChatService {
         let service = self.clone();
         tokio::spawn(
             async move {
-                let result: Result<(Vec<ChatMessage>, Vec<ChatMessage>, HashMap<Uuid, String>)> =
-                    async {
-                        let _permit = service.read_permits.acquire().await?;
-                        let client = service.db.get().await?;
-                        // Same read boundary as `get_for_viewer`: members
-                        // always, public non-game rooms for everyone (mention
-                        // previews can reference rooms the user never joined).
-                        if !ChatRoomMember::is_member(&client, room_id, user_id).await? {
-                            let public_readable =
-                                ChatRoom::get(&client, room_id).await?.is_some_and(|room| {
-                                    room.visibility == "public" && room.kind != "game"
-                                });
-                            if !public_readable {
-                                anyhow::bail!("user cannot read this room");
-                            }
+                let result: Result<MessageContext> = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    // Same read boundary as `get_for_viewer`: members
+                    // always, public non-game rooms for everyone (mention
+                    // previews can reference rooms the user never joined).
+                    if !ChatRoomMember::is_member(&client, room_id, user_id).await? {
+                        let public_readable = ChatRoom::get(&client, room_id)
+                            .await?
+                            .is_some_and(|room| room.visibility == "public" && room.kind != "game");
+                        if !public_readable {
+                            anyhow::bail!("user cannot read this room");
                         }
-                        let (before, after) = ChatMessage::list_around(
-                            &client,
-                            room_id,
-                            created,
-                            message_id,
-                            &exclude_user_ids,
-                            SEARCH_CONTEXT_EACH_SIDE,
-                        )
-                        .await?;
-                        let author_ids: Vec<Uuid> = before
-                            .iter()
-                            .chain(after.iter())
-                            .map(|message| message.user_id)
-                            .collect();
-                        let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
-                        Ok((before, after, usernames))
                     }
-                    .await;
+                    let (before, after) = ChatMessage::list_around(
+                        &client,
+                        room_id,
+                        created,
+                        message_id,
+                        &exclude_user_ids,
+                        SEARCH_CONTEXT_EACH_SIDE,
+                    )
+                    .await?;
+                    let author_ids: Vec<Uuid> = before
+                        .iter()
+                        .chain(after.iter())
+                        .map(|message| message.user_id)
+                        .collect();
+                    let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
+                    Ok((before, after, usernames))
+                }
+                .await;
                 match result {
                     Ok((before, after, usernames)) => {
                         let _ = service.evt_tx.send(ChatEvent::MessageContextLoaded {
