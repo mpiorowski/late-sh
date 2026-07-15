@@ -2234,7 +2234,20 @@ impl App {
     pub(crate) fn force_full_repaint(&mut self) {
         let mut shared = self.shared.clone();
         let _ = shared.write_all(terminal_string_terminator());
-        let _ = self.terminal.clear();
+        // Physically clear the client screen, then arm a full redraw.
+        //
+        // We can't use `Terminal::clear()` here: since ratatui 0.30.1 it
+        // snapshots the cursor via `crossterm::cursor::position()`, which reads
+        // the controlling tty. Our backend writes to a one-way SSH `SharedBuffer`
+        // with no readable tty, so that query errors and `clear()` bails *before*
+        // resetting the back buffer — leaving the next `draw()` to emit an empty
+        // diff (a blank frame). Do the two things `clear()` gave us by hand:
+        // emit the clear escape, and reset both diff buffers so the next `draw()`
+        // re-emits every cell. Two `swap_buffers()` calls reset each buffer and
+        // restore the original current index without touching the cursor.
+        let _ = crossterm::execute!(shared, terminal::Clear(ClearType::All));
+        self.terminal.swap_buffers();
+        self.terminal.swap_buffers();
         if self.terminal_image_protocol == Some(TerminalImageProtocol::Kitty) {
             self.pending_terminal_commands
                 .extend(kitty_cleanup_commands());
