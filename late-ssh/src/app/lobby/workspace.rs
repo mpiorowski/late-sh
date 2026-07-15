@@ -6,7 +6,7 @@
 use uuid::Uuid;
 
 use crate::app::{
-    arcade::workspace::{ArcadeStop, open_stop, unfinished_daily_stops},
+    arcade::workspace::{ArcadeStop, active_daily_stop, open_stop, unfinished_daily_stops},
     common::primitives::{Banner, Screen},
     lobby::house::tables::HouseTable,
     state::App,
@@ -38,12 +38,10 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             Some(table) => GameWorkspace::HouseTable(table),
             None => GameWorkspace::Dashboard,
         },
-        Screen::Arcade => {
-            match (app.is_playing_game).then(|| ArcadeStop::for_selection(app.game_selection)) {
-                Some(Some(stop)) => GameWorkspace::Arcade(stop),
-                _ => return false,
-            }
-        }
+        Screen::Arcade => match app.is_playing_game.then(|| active_daily_stop(app)).flatten() {
+            Some(stop) => GameWorkspace::Arcade(stop),
+            None => return false,
+        },
         _ => return false,
     };
     let my_turn_ids: Vec<Uuid> = app

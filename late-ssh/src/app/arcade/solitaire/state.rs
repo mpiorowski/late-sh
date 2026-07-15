@@ -229,6 +229,12 @@ impl State {
         })
     }
 
+    /// True while the active board is a daily (not a personal board). The
+    /// backtick workspace cycle only counts daily boards as stops.
+    pub fn is_daily_active(&self) -> bool {
+        self.mode == Mode::Daily
+    }
+
     /// The live board still matches the untouched deal for its seed.
     fn is_fresh_deal(&self) -> bool {
         let fresh = snapshot_from_seed(self.seed);

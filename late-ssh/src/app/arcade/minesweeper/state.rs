@@ -211,6 +211,12 @@ impl State {
         })
     }
 
+    /// True while the active board is a daily (not a personal board). The
+    /// backtick workspace cycle only counts daily boards as stops.
+    pub fn is_daily_active(&self) -> bool {
+        self.mode == Mode::Daily
+    }
+
     /// Jump straight to a daily board: the backtick workspace entry path.
     pub fn open_daily(&mut self, difficulty_index: usize) {
         self.clear_reset_pending();
