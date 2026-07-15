@@ -191,3 +191,97 @@ async fn chat_message_reactions_toggle_and_summarize() {
     assert_eq!(owners[1].icon, kaomoji);
     assert_eq!(owners[1].user_ids, vec![viewer.id]);
 }
+
+/// Search and context windows must skip bot replies directed at an ignored
+/// user, not just messages the ignored user authored (the cannot-be-heard-
+/// by-proxy invariant).
+#[tokio::test]
+async fn search_and_context_exclude_replies_to_ignored_users() {
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let room = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge");
+
+    let mut users = Vec::new();
+    for (fingerprint, username) in [
+        ("ignore-viewer", "iviewer"),
+        ("ignore-target", "itarget"),
+        ("ignore-bot", "ibot"),
+    ] {
+        users.push(
+            User::create(
+                &client,
+                UserParams {
+                    fingerprint: fingerprint.to_string(),
+                    username: username.to_string(),
+                    settings: serde_json::json!({}),
+                },
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let (viewer, ignored, bot) = (&users[0], &users[1], &users[2]);
+    ChatRoomMember::join(&client, room.id, viewer.id)
+        .await
+        .unwrap();
+
+    let plain = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: bot.id,
+            body: "deploy finished".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let reply_to_ignored = ChatMessage::create_with_reply_targets(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: bot.id,
+            body: "deploy failed for you".to_string(),
+        },
+        None,
+        Some(ignored.id),
+    )
+    .await
+    .unwrap();
+    let anchor = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: bot.id,
+            body: "deploy anchor".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let hits = ChatMessage::search_for_user(&client, viewer.id, "deploy", None, &[ignored.id], 50)
+        .await
+        .unwrap();
+    let hit_ids: Vec<_> = hits.iter().map(|m| m.id).collect();
+    assert!(hit_ids.contains(&plain.id));
+    assert!(hit_ids.contains(&anchor.id));
+    assert!(!hit_ids.contains(&reply_to_ignored.id));
+
+    let (before, after) = ChatMessage::list_around(
+        &client,
+        room.id,
+        anchor.created,
+        anchor.id,
+        &[ignored.id],
+        10,
+    )
+    .await
+    .unwrap();
+    let window_ids: Vec<_> = before.iter().chain(after.iter()).map(|m| m.id).collect();
+    assert!(window_ids.contains(&plain.id));
+    assert!(!window_ids.contains(&reply_to_ignored.id));
+}

@@ -100,6 +100,11 @@ fn submit_message_jump(app: &mut App) {
         app.chat.select_message_by_id_in_room(room_id, message_id);
     } else {
         app.chat.set_pending_search_jump(room_id, message_id);
+        // `sync_visible_chat_room` only requests a tail when the visible room
+        // changed; if the hit's room was already on screen no load would fire
+        // and the pending jump would never resolve. Request one explicitly so
+        // the jump either selects the message or reports it as too old.
+        app.chat.request_room_tail(room_id);
     }
 }
 

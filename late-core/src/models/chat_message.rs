@@ -166,9 +166,10 @@ impl ChatMessage {
 
     /// Up to `limit_each` messages immediately before and after a message in
     /// its room, both in chronological order. System-feed authors and
-    /// `exclude_user_ids` (the caller's ignored users) are skipped so the
-    /// window shows conversation, not feed noise. Callers must verify room
-    /// membership first; used for the search-hit context window.
+    /// `exclude_user_ids` (the caller's ignored users, as authors or as
+    /// bot-reply targets) are skipped so the window shows conversation, not
+    /// feed noise. Callers must verify room membership first; used for the
+    /// search-hit context window.
     pub async fn list_around(
         client: &Client,
         room_id: Uuid,
@@ -185,6 +186,8 @@ impl ChatMessage {
                  WHERE msg.room_id = $1
                    AND (msg.created, msg.id) < ($2, $3)
                    AND msg.user_id <> ALL($4::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
                    AND COALESCE((author.settings->>'system')::boolean, false) = false
                  ORDER BY msg.created DESC, msg.id DESC
                  LIMIT $5",
@@ -202,6 +205,8 @@ impl ChatMessage {
                  WHERE msg.room_id = $1
                    AND (msg.created, msg.id) > ($2, $3)
                    AND msg.user_id <> ALL($4::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
                    AND COALESCE((author.settings->>'system')::boolean, false) = false
                  ORDER BY msg.created ASC, msg.id ASC
                  LIMIT $5",
@@ -248,7 +253,9 @@ impl ChatMessage {
     /// first. Game rooms are excluded to match their invisibility elsewhere,
     /// and system-feed bot lines (users.settings.system) are excluded so the
     /// #lounge activity feed cannot drown real results. `exclude_user_ids`
-    /// carries the caller's ignored users. `room_id` scopes to one room.
+    /// carries the caller's ignored users, excluded both as authors and as
+    /// bot-reply targets (an ignored user cannot be heard by proxy).
+    /// `room_id` scopes to one room.
     pub async fn search_for_user(
         client: &Client,
         user_id: Uuid,
@@ -270,6 +277,8 @@ impl ChatMessage {
                    AND room.kind <> 'game'
                    AND ($3::uuid IS NULL OR msg.room_id = $3)
                    AND msg.user_id <> ALL($4::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
                    AND COALESCE((author.settings->>'system')::boolean, false) = false
                  ORDER BY msg.created DESC, msg.id DESC
                  LIMIT $5",
