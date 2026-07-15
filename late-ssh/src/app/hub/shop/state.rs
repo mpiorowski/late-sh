@@ -76,7 +76,10 @@ impl PendingUsernameEffect {
 /// variant. Unknown variants sell nothing (and the picker refuses to arm).
 fn username_effect_options(variant: Option<&str>) -> Vec<UsernameEffect> {
     match variant {
-        Some("glow") => GlowColor::ALL.into_iter().map(UsernameEffect::Glow).collect(),
+        Some("glow") => GlowColor::ALL
+            .into_iter()
+            .map(UsernameEffect::Glow)
+            .collect(),
         Some("gradient") => GradientPair::ALL
             .into_iter()
             .map(UsernameEffect::Gradient)
@@ -481,10 +484,7 @@ impl ShopState {
 
     pub fn cancel_pending_username_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_username_effect.take()?;
-        Some(Banner::success(&format!(
-            "Cancelled {}",
-            pending.item_name
-        )))
+        Some(Banner::success(&format!("Cancelled {}", pending.item_name)))
     }
 
     pub fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {

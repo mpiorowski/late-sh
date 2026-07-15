@@ -164,7 +164,8 @@ struct DrawContext<'a> {
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     /// Resolved 24h username-effect styles for clubhouse name labels.
-    clubhouse_name_styles: &'a std::collections::HashMap<uuid::Uuid, crate::app::common::username_effect::NameStyle>,
+    clubhouse_name_styles:
+        &'a std::collections::HashMap<uuid::Uuid, crate::app::common::username_effect::NameStyle>,
     /// The #lounge tail for clubhouse speech bubbles; empty off that screen.
     clubhouse_lounge_messages: &'a [late_core::models::chat_message::ChatMessage],
     /// Staff bot ids so their #lounge lines bubble over their sprites.
@@ -739,7 +740,7 @@ impl App {
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
-                name_styles: &self.name_styles,
+                    name_styles: &self.name_styles,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -792,7 +793,7 @@ impl App {
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
-                name_styles: &self.name_styles,
+                    name_styles: &self.name_styles,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),

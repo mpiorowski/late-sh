@@ -371,8 +371,7 @@ pub struct App {
     /// about once a second (which also steps shimmer); renderers read this
     /// owned map, never the directory mutex.
     pub(crate) name_styles: HashMap<Uuid, crate::app::common::username_effect::NameStyle>,
-    pub(super) flair_directory:
-        Option<crate::app::common::username_effect::NameFlairDirectory>,
+    pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
     pub(super) ai_service: Option<crate::app::ai::svc::AiService>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,

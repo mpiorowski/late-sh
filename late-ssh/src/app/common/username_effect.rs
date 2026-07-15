@@ -161,9 +161,7 @@ pub fn styled_name_spans(name: &str, style: NameStyle, base: Style) -> Vec<Span<
     let len = name.chars().count();
     name.chars()
         .enumerate()
-        .map(|(index, ch)| {
-            Span::styled(ch.to_string(), base.fg(char_color(style, index, len)))
-        })
+        .map(|(index, ch)| Span::styled(ch.to_string(), base.fg(char_color(style, index, len))))
         .collect()
 }
 
@@ -195,14 +193,16 @@ mod tests {
             let NameStyle::TwoTone(from, to) = resolve(UsernameEffect::Shimmer, phase) else {
                 panic!("shimmer must resolve to a two-tone style");
             };
-            let NameStyle::TwoTone(next_from, _) =
-                resolve(UsernameEffect::Shimmer, phase + 1)
+            let NameStyle::TwoTone(next_from, _) = resolve(UsernameEffect::Shimmer, phase + 1)
             else {
                 panic!("shimmer must resolve to a two-tone style");
             };
             // The trailing endpoint becomes the next phase's leading one.
             assert_eq!(to, next_from);
-            assert_eq!(resolve(UsernameEffect::Shimmer, phase + 6), NameStyle::TwoTone(from, to));
+            assert_eq!(
+                resolve(UsernameEffect::Shimmer, phase + 6),
+                NameStyle::TwoTone(from, to)
+            );
         }
     }
 
@@ -240,7 +240,10 @@ mod tests {
 
         let resolved = resolve_all(&snapshot(&directory), 0, now);
         assert!(resolved.contains_key(&user));
-        assert!(!resolved.contains_key(&other), "expired flair must be skipped");
+        assert!(
+            !resolved.contains_key(&other),
+            "expired flair must be skipped"
+        );
 
         set_user(&directory, user, None);
         assert!(snapshot(&directory).is_empty() || !snapshot(&directory).contains_key(&user));

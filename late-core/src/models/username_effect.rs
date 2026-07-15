@@ -147,8 +147,10 @@ mod tests {
     use super::*;
 
     fn all_effects() -> Vec<UsernameEffect> {
-        let mut effects: Vec<UsernameEffect> =
-            GlowColor::ALL.into_iter().map(UsernameEffect::Glow).collect();
+        let mut effects: Vec<UsernameEffect> = GlowColor::ALL
+            .into_iter()
+            .map(UsernameEffect::Glow)
+            .collect();
         effects.extend(GradientPair::ALL.into_iter().map(UsernameEffect::Gradient));
         effects.push(UsernameEffect::Shimmer);
         effects
@@ -188,7 +190,10 @@ mod tests {
             UsernameEffect::from_payload(&json!({"variant": "glow", "color": "mauve"})),
             None
         );
-        assert_eq!(UsernameEffect::from_payload(&json!({"variant": "glow"})), None);
+        assert_eq!(
+            UsernameEffect::from_payload(&json!({"variant": "glow"})),
+            None
+        );
         assert_eq!(UsernameEffect::from_payload(&json!({})), None);
     }
 
@@ -196,7 +201,11 @@ mod tests {
     fn slugs_are_unique_across_all_effects() {
         let mut seen = std::collections::HashSet::new();
         for effect in all_effects() {
-            assert!(seen.insert(effect.slug()), "duplicate slug {}", effect.slug());
+            assert!(
+                seen.insert(effect.slug()),
+                "duplicate slug {}",
+                effect.slug()
+            );
         }
     }
 }

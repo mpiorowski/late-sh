@@ -1039,7 +1039,11 @@ async fn username_effect_expired_rows_are_excluded_from_active_queries() {
         .await
         .expect("force expiry");
 
-    assert!(active_username_effect_rows(&client, user.id).await.is_empty());
+    assert!(
+        active_username_effect_rows(&client, user.id)
+            .await
+            .is_empty()
+    );
     assert!(
         ShopConsumableEffect::active_user_effect_for_user(&client, user.id, USERNAME_EFFECT_KIND)
             .await
@@ -1102,8 +1106,15 @@ async fn username_effect_mismatched_style_fails_without_charging() {
     let chips = UserChips::ensure(&client, user.id)
         .await
         .expect("chips row");
-    assert_eq!(chips.balance, starting_balance, "failed buy must not charge");
-    assert!(active_username_effect_rows(&client, user.id).await.is_empty());
+    assert_eq!(
+        chips.balance, starting_balance,
+        "failed buy must not charge"
+    );
+    assert!(
+        active_username_effect_rows(&client, user.id)
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]

@@ -211,7 +211,11 @@ fn draw_item_detail(
     } else if item.equipped {
         "displaying"
     } else if item.is_username_effect() {
-        if effect_active { "active" } else { "pick a style" }
+        if effect_active {
+            "active"
+        } else {
+            "pick a style"
+        }
     } else if item.is_consumable() {
         consumable_action_label(item, Some(chat_consumable_active(item, state)))
     } else if item.is_aquarium_fish() && !has_aquarium {
@@ -642,7 +646,10 @@ fn username_effect_option_label(effect: UsernameEffect) -> &'static str {
 
 /// Compact remaining-time label for an active effect: "17h left", "45m
 /// left", "1m left" (floors at one minute so it never reads as already over).
-fn remaining_label(ends_at: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) -> String {
+fn remaining_label(
+    ends_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
     let minutes = (ends_at - now).num_minutes().max(1);
     if minutes >= 60 {
         format!("{}h left", minutes / 60)
@@ -779,22 +786,20 @@ fn item_row(
     let active_chat_consumable = item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
         && !chat_room_bump_item(item)
         && chat_consumable_active(item, state);
-    let status_style = if active_chat_consumable
-        || item.equipped
-        || username_effect_active(item, state)
-    {
-        Style::default()
-            .fg(theme::SUCCESS())
-            .add_modifier(Modifier::BOLD)
-    } else if item.is_consumable() || item.is_username_effect() {
-        Style::default().fg(theme::AMBER())
-    } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
-        Style::default().fg(theme::SUCCESS())
-    } else if item.is_aquarium_fish() {
-        Style::default().fg(theme::AMBER())
-    } else {
-        Style::default().fg(theme::TEXT_FAINT())
-    };
+    let status_style =
+        if active_chat_consumable || item.equipped || username_effect_active(item, state) {
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD)
+        } else if item.is_consumable() || item.is_username_effect() {
+            Style::default().fg(theme::AMBER())
+        } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
+            Style::default().fg(theme::SUCCESS())
+        } else if item.is_aquarium_fish() {
+            Style::default().fg(theme::AMBER())
+        } else {
+            Style::default().fg(theme::TEXT_FAINT())
+        };
     let display_name = if category == ShopCategory::Flags && item.is_flag_badge() {
         flag_display_name(item)
     } else if item.is_chat_badge() {

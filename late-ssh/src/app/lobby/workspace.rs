@@ -38,7 +38,11 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             Some(table) => GameWorkspace::HouseTable(table),
             None => GameWorkspace::Dashboard,
         },
-        Screen::Arcade => match app.is_playing_game.then(|| active_daily_stop(app)).flatten() {
+        Screen::Arcade => match app
+            .is_playing_game
+            .then(|| active_daily_stop(app))
+            .flatten()
+        {
             Some(stop) => GameWorkspace::Arcade(stop),
             None => return false,
         },

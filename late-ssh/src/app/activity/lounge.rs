@@ -251,8 +251,7 @@ mod tests {
             UsernameEffect::Glow(GlowColor::Sky),
         );
         assert!(!is_repeat(&mut recent, &sky));
-        let shimmer =
-            ActivityEvent::username_effect_applied(user, "mira", UsernameEffect::Shimmer);
+        let shimmer = ActivityEvent::username_effect_applied(user, "mira", UsernameEffect::Shimmer);
         assert!(!is_repeat(&mut recent, &shimmer));
     }
 }

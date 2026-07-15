@@ -215,9 +215,12 @@ impl ShopService {
             return Ok(());
         };
         let client = self.db.get().await?;
-        let row =
-            ShopConsumableEffect::active_user_effect_for_user(&client, user_id, USERNAME_EFFECT_KIND)
-                .await?;
+        let row = ShopConsumableEffect::active_user_effect_for_user(
+            &client,
+            user_id,
+            USERNAME_EFFECT_KIND,
+        )
+        .await?;
         let flair = row.and_then(|row| {
             UsernameEffect::from_payload(&row.payload).map(|effect| NameFlair {
                 effect,
@@ -431,7 +434,9 @@ impl ShopService {
             Some(effect) => {
                 purchase_item_by_sku_with_username_effect(&mut client, user_id, sku, effect).await?
             }
-            None => purchase_item_by_sku_with_chat_effect(&mut client, user_id, sku, room_id).await?,
+            None => {
+                purchase_item_by_sku_with_chat_effect(&mut client, user_id, sku, room_id).await?
+            }
         };
 
         // A username effect that actually activated goes live immediately for
@@ -648,15 +653,18 @@ impl ShopService {
                 });
         }
         let aquarium_hungry = aquarium_is_hungry(&client, user_id).await?;
-        let active_username_effect =
-            ShopConsumableEffect::active_user_effect_for_user(&client, user_id, USERNAME_EFFECT_KIND)
-                .await?
-                .and_then(|row| {
-                    UsernameEffect::from_payload(&row.payload).map(|effect| ActiveUsernameEffect {
-                        effect,
-                        ends_at: row.ends_at,
-                    })
-                });
+        let active_username_effect = ShopConsumableEffect::active_user_effect_for_user(
+            &client,
+            user_id,
+            USERNAME_EFFECT_KIND,
+        )
+        .await?
+        .and_then(|row| {
+            UsernameEffect::from_payload(&row.payload).map(|effect| ActiveUsernameEffect {
+                effect,
+                ends_at: row.ends_at,
+            })
+        });
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
