@@ -1,9 +1,9 @@
 //! Full-screen daily reversi board: one 8x8 grid with a cell cursor, legal
 //! squares hinted for the side to move, and a ghost disc under the cursor.
 //! Shares the daily board chrome — status line, player bars, pinned key hints
-//! — with the chess, battleship, and connect four renderers. Black discs are
-//! the solid square stone, white the square-with-a-hole, both bright — the
-//! same solid-vs-ring pair as the cramped tier's `●` vs `○`.
+//! — with the chess, battleship, and connect four renderers. Discs are the
+//! shared square stone coloured per side: ember red for black, ivory for
+//! white; the cramped tier's `●`/`○` glyphs wear the same colours.
 
 use chrono::Utc;
 use ratatui::{
@@ -19,7 +19,7 @@ use crate::app::{
     common::theme,
     lobby::daily::{
         board_ui::{
-            CellTier, PUCK_HOLLOW, PUCK_SOLID, cell_text, draw_center_message, hint_cell, name_for,
+            CellTier, PUCK_SOLID, cell_text, draw_center_message, hint_cell, name_for,
             pick_cell_tier, piece_cell, result_banner,
         },
         reversi::{self, DailyReversiState, Disc},
@@ -171,12 +171,12 @@ fn disc_glyph(disc: Disc) -> char {
     }
 }
 
-/// Solid vs the square-with-a-hole: the art-tier `●`/`○`, full contrast on
-/// any palette.
-fn disc_art(disc: Disc) -> [&'static str; 2] {
+/// Ember vs ivory: one stone, coloured per side (smoke-vs-ivory was too
+/// close, and a hollow "white" renders as a slab with a slit).
+fn disc_fg(disc: Disc) -> ratatui::style::Color {
     match disc {
-        Disc::Black => PUCK_SOLID,
-        Disc::White => PUCK_HOLLOW,
+        Disc::Black => theme::ERROR(),
+        Disc::White => theme::TEXT_BRIGHT(),
     }
 }
 
@@ -222,8 +222,8 @@ fn board_lines(
                 }
                 let span = match grid[row][col] {
                     Some(disc) => Span::styled(
-                        piece_cell(disc_art(disc), disc_glyph(disc), tier, sub),
-                        style.fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD),
+                        piece_cell(PUCK_SOLID, disc_glyph(disc), tier, sub),
+                        style.fg(disc_fg(disc)).add_modifier(Modifier::BOLD),
                     ),
                     // Playable squares wear a corner frame; under the cursor
                     // it brightens (the amber cell background marks the spot).
@@ -379,7 +379,7 @@ fn draw_player_bar(
         Span::styled(
             format!("{} ", disc.label()),
             Style::default()
-                .fg(theme::TEXT_BRIGHT())
+                .fg(disc_fg(disc))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(name, Style::default().fg(theme::TEXT())),
@@ -464,11 +464,11 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyReversiState) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
-            Span::styled("● black  ", Style::default().fg(theme::TEXT_BRIGHT())),
+            Span::styled("● black  ", Style::default().fg(disc_fg(Disc::Black))),
             Span::styled(format!("{black}"), Style::default().fg(theme::TEXT())),
         ]),
         Line::from(vec![
-            Span::styled("○ white  ", Style::default().fg(theme::TEXT_BRIGHT())),
+            Span::styled("○ white  ", Style::default().fg(disc_fg(Disc::White))),
             Span::styled(format!("{white}"), Style::default().fg(theme::TEXT())),
         ]),
     ];

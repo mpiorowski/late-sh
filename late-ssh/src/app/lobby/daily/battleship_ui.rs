@@ -18,7 +18,7 @@ use crate::app::{
     lobby::daily::{
         battleship::{self, DailyBattleshipState, Shot},
         board_ui::{
-            CellTier, PUCK_HOLLOW, PUCK_SOLID, cell_text, draw_center_message, hint_cell, name_for,
+            CellTier, PUCK_SOLID, cell_text, draw_center_message, hint_cell, name_for,
             pick_cell_tier, piece_cell, result_banner,
         },
         state::{BattleshipDetail, DailyBoardState, DailyMatchDetail, DailyState, format_deadline},
@@ -193,9 +193,9 @@ const INFO_RAIL_WIDTH: u16 = 24;
 const INFO_RAIL_MIN_EXTRA: u16 = 8;
 
 /// Their waters: your shots, the cursor, and (once the match ends) whatever
-/// survived of their fleet. Shots speak the shared stone language — a hit is
-/// the solid square stone in signal red, a miss the hollow one in smoke —
-/// and the cursor is the corner frame on whatever water it hovers. The
+/// survived of their fleet. Shots speak the shared stone language — one
+/// square stone, signal red for a hit, smoke for a miss — and the cursor is
+/// the corner frame on whatever water it hovers. The
 /// cramped tier keeps the old marks: an `X` on a solid red tile (a lone red
 /// glyph is too faint) and the `[ ]` bracket crosshair.
 fn target_grid_lines(
@@ -273,7 +273,7 @@ fn target_grid_lines(
                         }
                     }
                     Some(Shot { hit: false, .. }) => Span::styled(
-                        piece_cell(PUCK_HOLLOW, 'x', tier, sub),
+                        piece_cell(PUCK_SOLID, 'x', tier, sub),
                         base.fg(theme::TEXT_MUTED()).add_modifier(Modifier::BOLD),
                     ),
                     None if finished && enemy_ship => {
@@ -344,7 +344,7 @@ fn fleet_grid_lines(state: &DailyBattleshipState, me: usize, tier: CellTier) -> 
                         Style::default().fg(theme::TEXT_DIM()),
                     ),
                     (false, Some(_)) => Span::styled(
-                        piece_cell(PUCK_HOLLOW, 'x', tier, sub),
+                        piece_cell(PUCK_SOLID, 'x', tier, sub),
                         checker(row, col)
                             .fg(theme::TEXT_MUTED())
                             .add_modifier(Modifier::BOLD),
@@ -408,7 +408,7 @@ fn spectate_waters_lines(
                         }
                     }
                     Some(Shot { hit: false, .. }) => Span::styled(
-                        piece_cell(PUCK_HOLLOW, 'x', tier, sub),
+                        piece_cell(PUCK_SOLID, 'x', tier, sub),
                         checker(row, col)
                             .fg(theme::TEXT_MUTED())
                             .add_modifier(Modifier::BOLD),

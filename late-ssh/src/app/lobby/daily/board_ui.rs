@@ -79,14 +79,12 @@ pub(super) fn cell_text(glyph: char, width: u16) -> String {
     format!("{glyph:^0$}", width as usize)
 }
 
-// The piece shape: a compact two-row square stone for the 2-row tier.
-// Straddling both sub-rows is what centres it vertically — a lone glyph can
-// only sit above or below the cell's midline. One silhouette, two fills
-// (solid and hollow — the `●`/`○` pair of the art tier), coloured per
-// side/role by each game.
+// The one piece shape: a compact two-row square stone for the 2-row tier,
+// coloured per side/role by each game. Straddling both sub-rows is what
+// centres it vertically — a lone glyph can only sit above or below the
+// cell's midline. Keep it the half-block pair: full-row variants (hollow
+// squares, quadrant art) render as tall slabs, not stones.
 pub(super) const PUCK_SOLID: [&str; 2] = ["▄▄", "▀▀"];
-/// The square with a hole: same silhouette, hollow centre.
-pub(super) const PUCK_HOLLOW: [&str; 2] = ["▛▜", "▙▟"];
 
 /// One sub-row of a piece cell: the square stone when the tier is two rows
 /// tall, the single `glyph` centered on the glyph row otherwise.
