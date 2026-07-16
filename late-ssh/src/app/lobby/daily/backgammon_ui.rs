@@ -54,15 +54,17 @@ fn color_fg(color: Color) -> TermColor {
     }
 }
 
-fn die_face(n: u8) -> char {
-    match n {
-        1 => '⚀',
-        2 => '⚁',
-        3 => '⚂',
-        4 => '⚃',
-        5 => '⚄',
-        _ => '⚅',
-    }
+/// One die as a numbered tile. The die-face glyphs (⚀..⚅) are unreadably
+/// small at terminal font sizes, so the roll reads as a bold numeral on a
+/// lit tile instead.
+fn die_tile(n: u8) -> Span<'static> {
+    Span::styled(
+        format!(" {n} "),
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::AMBER_DIM())
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 pub(crate) fn draw(
@@ -266,9 +268,11 @@ fn number_line(ctx: &GridCtx, half: usize) -> Line<'static> {
     let mut spans = Vec::new();
     for col in 0..SLOT_COLS {
         let slot = half * SLOT_COLS + col;
+        // The bar column wears the divider glyph, not a word: "bar" jammed
+        // between two-digit point numbers reads as one blob.
         let (label, code) = match slot_target(slot, ctx.seat).expect("column within the slot grid")
         {
-            BgTarget::Bar => ("bar".to_string(), backgammon::BAR),
+            BgTarget::Bar => ("│".to_string(), backgammon::BAR),
             BgTarget::Off => ("off".to_string(), backgammon::OFF),
             BgTarget::Point(p) => (point_name(ctx.seat, p as u8), p as u8),
         };
@@ -368,25 +372,28 @@ fn gap_line(ctx: &GridCtx, row: usize) -> Line<'static> {
     };
     let bar_count = ctx.view.bar[off_idx(bar_color)];
 
-    // Left half: the dice, on the top gap row only.
-    let left = if row == 0 {
-        match ctx.roll {
-            Some(roll) => format!("{} {}", die_face(roll[0]), die_face(roll[1])),
-            None => "rolling…".to_string(),
+    // Left half: the roll as dice tiles, on the top gap row only.
+    let mut spans = Vec::new();
+    match (row, ctx.roll) {
+        (0, Some(roll)) => {
+            let pad = side_w.saturating_sub(7); // two 3-wide tiles + the gap
+            spans.push(Span::raw(" ".repeat(pad - pad / 2)));
+            spans.push(die_tile(roll[0]));
+            spans.push(Span::raw(" "));
+            spans.push(die_tile(roll[1]));
+            spans.push(Span::raw(" ".repeat(pad / 2)));
         }
-    } else {
-        String::new()
-    };
+        (0, None) => spans.push(Span::styled(
+            format!("{:^side_w$}", "rolling…"),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        _ => spans.push(Span::raw(" ".repeat(side_w))),
+    }
     // Right half: the hops still owed this turn, mover only.
     let right = match (row, ctx.hops_left) {
         (0, Some(left)) if left > 0 => format!("{left} to play"),
         _ => String::new(),
     };
-
-    let mut spans = vec![Span::styled(
-        format!("{left:^side_w$}"),
-        Style::default().fg(theme::AMBER()),
-    )];
     let bar_bg = ctx.column_bg(row, BAR_COL);
     let bar_text = if bar_count > 0 {
         format!("{CHECKER}{bar_count}")
@@ -642,7 +649,31 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyBackgammonState) {
         )),
         side(Color::White),
         side(Color::Red),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "How to".to_string(),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )),
     ];
+    for text in [
+        "Your checkers run 24→1.",
+        "Each die moves one",
+        "checker that many pips.",
+        "Lift a lit point, then",
+        "pick a landing.",
+        "A lone enemy checker is",
+        "hit to the bar; it must",
+        "re-enter first.",
+        "Bear off all fifteen",
+        "once everyone is home.",
+    ] {
+        lines.push(Line::from(Span::styled(
+            text.to_string(),
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
+    }
     let bars = (
         view.bar[off_idx(Color::White)],
         view.bar[off_idx(Color::Red)],
