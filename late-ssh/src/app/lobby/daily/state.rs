@@ -19,8 +19,10 @@ use crate::app::{
 
 use super::{
     battleship::DailyBattleshipState,
+    checkers::DailyCheckersState,
     connect4::DailyConnect4State,
     games::DailyGame,
+    reversi::DailyReversiState,
     svc::{
         DAILY_MAX_ACTIVE_ENTRIES, DailyChallengeItem, DailyChessState, DailyEvent,
         DailyFinishedItem, DailyMatchItem, DailyService, DailySnapshot,
@@ -114,6 +116,8 @@ pub enum DailyGameDetail {
     Chess(ChessDetail),
     Battleship(BattleshipDetail),
     Connect4(Connect4Detail),
+    Reversi(ReversiDetail),
+    Checkers(CheckersDetail),
 }
 
 impl DailyGameDetail {
@@ -123,6 +127,8 @@ impl DailyGameDetail {
             Self::Chess(_) => DailyGame::Chess,
             Self::Battleship(_) => DailyGame::Battleship,
             Self::Connect4(_) => DailyGame::ConnectFour,
+            Self::Reversi(_) => DailyGame::Reversi,
+            Self::Checkers(_) => DailyGame::Checkers,
         }
     }
 }
@@ -147,6 +153,24 @@ pub struct Connect4Detail {
     /// A drop left this session and hasn't come back via reload yet; blocks
     /// dropping again until the canonical row lands.
     pub drop_in_flight: bool,
+}
+
+pub struct ReversiDetail {
+    pub state: DailyReversiState,
+    /// A move left this session and hasn't come back via reload yet; blocks
+    /// moving again until the canonical row lands.
+    pub move_in_flight: bool,
+}
+
+pub struct CheckersDetail {
+    pub state: DailyCheckersState,
+    /// The in-progress move path as cell indices (source first) while the
+    /// player builds a slide or a multi-jump click by click; empty when
+    /// nothing is selected.
+    pub pending: Vec<usize>,
+    /// A move left this session and hasn't come back via reload yet; blocks
+    /// moving again until the canonical row lands.
+    pub move_in_flight: bool,
 }
 
 impl ChessDetail {
@@ -187,6 +211,15 @@ impl DailyMatchDetail {
                 state: DailyConnect4State::parse(&row.state).map_err(|e| e.to_string())?,
                 drop_in_flight: false,
             }),
+            Some(DailyGame::Reversi) => DailyGameDetail::Reversi(ReversiDetail {
+                state: DailyReversiState::parse(&row.state).map_err(|e| e.to_string())?,
+                move_in_flight: false,
+            }),
+            Some(DailyGame::Checkers) => DailyGameDetail::Checkers(CheckersDetail {
+                state: DailyCheckersState::parse(&row.state).map_err(|e| e.to_string())?,
+                pending: Vec::new(),
+                move_in_flight: false,
+            }),
             None => return Err(format!("unknown daily game: {}", row.game_kind)),
         };
         Ok(Self { row, game })
@@ -216,6 +249,20 @@ impl DailyMatchDetail {
     pub fn connect4(&self) -> Option<&Connect4Detail> {
         match &self.game {
             DailyGameDetail::Connect4(connect4) => Some(connect4),
+            _ => None,
+        }
+    }
+
+    pub fn reversi(&self) -> Option<&ReversiDetail> {
+        match &self.game {
+            DailyGameDetail::Reversi(reversi) => Some(reversi),
+            _ => None,
+        }
+    }
+
+    pub fn checkers(&self) -> Option<&CheckersDetail> {
+        match &self.game {
+            DailyGameDetail::Checkers(checkers) => Some(checkers),
             _ => None,
         }
     }
@@ -602,6 +649,9 @@ impl DailyState {
                 DailyGame::Battleship => 44,
                 // The connect4 cursor is a column, not a cell.
                 DailyGame::ConnectFour => 3,
+                // Cell cursors near the middle; row 0 drawn at the top.
+                DailyGame::Reversi => 27,
+                DailyGame::Checkers => 28,
             },
             selected: None,
             piece_render_mode: ChessPieceRenderMode::Graphics,
@@ -764,6 +814,15 @@ impl DailyState {
                 let max = super::connect4::COLS as isize - 1;
                 board.cursor = (board.cursor as isize + dx).clamp(0, max) as usize;
             }
+            Some(DailyGameDetail::Reversi(_)) | Some(DailyGameDetail::Checkers(_)) => {
+                // 2D cell cursor, row 0 drawn at the top (like battleship): so
+                // "up" (dy=1) moves toward row 0. Both boards are 8x8.
+                let size = super::reversi::SIZE as isize;
+                let col = (board.cursor % super::reversi::SIZE) as isize + dx;
+                let row = (board.cursor / super::reversi::SIZE) as isize - dy;
+                let max = size - 1;
+                board.cursor = (row.clamp(0, max) * size + col.clamp(0, max)) as usize;
+            }
             _ => {
                 board.cursor = cursor::move_cursor(board.cursor, orientation, dx, dy);
             }
@@ -815,6 +874,8 @@ impl DailyState {
             DailyGame::Chess => Self::chess_select_or_move(board, user_id, &svc),
             DailyGame::Battleship => Self::battleship_fire(board, user_id, &svc),
             DailyGame::ConnectFour => Self::connect4_drop(board, user_id, &svc),
+            DailyGame::Reversi => Self::reversi_place(board, user_id, &svc),
+            DailyGame::Checkers => Self::checkers_select(board, user_id, &svc),
         }
     }
 
@@ -923,6 +984,109 @@ impl DailyState {
         svc.play_move_task(user_id, board.match_id, column, column);
     }
 
+    /// Place your disc at the cursor cell. Applies optimistically (reversi
+    /// hides nothing, so the flips are known locally); `move_in_flight` blocks
+    /// a second move until the reload reconciles.
+    fn reversi_place(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let row_turn = detail.row.turn_user_id;
+        let DailyGameDetail::Reversi(reversi) = &mut detail.game else {
+            return;
+        };
+        if reversi.move_in_flight || row_turn != Some(user_id) {
+            return;
+        }
+        let Some(disc) = reversi.state.disc_of(user_id) else {
+            return;
+        };
+        if reversi.state.turn() != disc {
+            return;
+        }
+        let cell = board.cursor;
+        let (row, col) = (cell / 8, cell % 8);
+        if reversi.state.apply_move(row, col).is_err() {
+            return; // illegal square — a silent no-op, like an illegal chess move
+        }
+        reversi.move_in_flight = true;
+        // `turn()` resolves any forced pass, so this can point back at us.
+        detail.row.turn_user_id = Some(reversi.state.user_of(reversi.state.turn()));
+        svc.play_move_task(user_id, board.match_id, cell, cell);
+    }
+
+    /// Build and play a checkers move by cursor/click. The first pick selects a
+    /// source that starts a legal move; each further pick extends the path
+    /// while it stays a prefix of some legal move, and plays it the moment the
+    /// path matches a complete legal move (so a multi-jump chains click by
+    /// click). Re-picking the current head cancels; picking another own source
+    /// restarts. Applies optimistically and hands the full path to the server.
+    fn checkers_select(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let row_turn = detail.row.turn_user_id;
+        let match_id = board.match_id;
+        let cursor = board.cursor;
+        let DailyGameDetail::Checkers(checkers) = &mut detail.game else {
+            return;
+        };
+        if checkers.move_in_flight || row_turn != Some(user_id) {
+            return;
+        }
+        let Some(color) = checkers.state.color_of(user_id) else {
+            return;
+        };
+        if checkers.state.turn() != color {
+            return;
+        }
+        // Legal complete moves as cell-index paths (source first).
+        let legal: Vec<Vec<usize>> = checkers
+            .state
+            .legal_moves(color)
+            .into_iter()
+            .map(|path| path.into_iter().map(|(row, col)| row * 8 + col).collect())
+            .collect();
+
+        // Nothing selected yet: the pick must start some legal move.
+        if checkers.pending.is_empty() {
+            if legal.iter().any(|path| path.first() == Some(&cursor)) {
+                checkers.pending = vec![cursor];
+            }
+            return;
+        }
+        // Re-picking the current head cancels the selection.
+        if checkers.pending.last() == Some(&cursor) {
+            checkers.pending.clear();
+            return;
+        }
+        // Try to extend the path by one square.
+        let mut candidate = checkers.pending.clone();
+        candidate.push(cursor);
+        let extends = legal
+            .iter()
+            .any(|path| path.len() >= candidate.len() && path[..candidate.len()] == candidate[..]);
+        if !extends {
+            // Not a continuation: restart on another own source, else drop it.
+            checkers.pending = if legal.iter().any(|path| path.first() == Some(&cursor)) {
+                vec![cursor]
+            } else {
+                Vec::new()
+            };
+            return;
+        }
+        checkers.pending = candidate;
+        // Complete move? Play it optimistically and send the whole path.
+        if legal.iter().any(|path| *path == checkers.pending) {
+            let cells: Vec<(usize, usize)> =
+                checkers.pending.iter().map(|&i| (i / 8, i % 8)).collect();
+            if checkers.state.apply_move(&cells).is_ok() {
+                let path = std::mem::take(&mut checkers.pending);
+                checkers.move_in_flight = true;
+                detail.row.turn_user_id = Some(checkers.state.user_of(checkers.state.turn()));
+                svc.play_checkers_move_task(user_id, match_id, path);
+            } else {
+                checkers.pending.clear();
+            }
+        }
+    }
+
     fn apply_optimistic_move(detail: &mut DailyMatchDetail, from: usize, to: usize) {
         let Some(chess) = detail.chess_mut() else {
             return;
@@ -951,6 +1115,24 @@ impl DailyState {
         chess.legal_moves.clear();
         let next = chess.state.user_for_color(chess.turn);
         detail.row.turn_user_id = Some(next);
+    }
+
+    /// Esc while building a checkers move clears the in-progress path instead
+    /// of closing the board. Returns whether anything was cleared.
+    pub fn cancel_checkers_pending(&mut self) -> bool {
+        let Some(board) = &mut self.board else {
+            return false;
+        };
+        let Some(detail) = &mut board.detail else {
+            return false;
+        };
+        if let DailyGameDetail::Checkers(checkers) = &mut detail.game
+            && !checkers.pending.is_empty()
+        {
+            checkers.pending.clear();
+            return true;
+        }
+        false
     }
 
     pub fn board_resign(&mut self) {
@@ -1022,6 +1204,8 @@ pub fn result_phrase(result: &str) -> &'static str {
         DailyMatch::RESULT_TIMEOUT => "timeout",
         DailyMatch::RESULT_FLEET_SUNK => "fleet sunk",
         DailyMatch::RESULT_FOUR_IN_A_ROW => "four in a row",
+        DailyMatch::RESULT_MOST_DISCS => "most discs",
+        DailyMatch::RESULT_NO_MOVES => "no moves left",
         _ => "finished",
     }
 }

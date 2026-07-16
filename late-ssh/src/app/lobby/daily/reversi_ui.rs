@@ -1,13 +1,15 @@
-//! Full-screen daily connect four board: one gravity grid with the cursor
-//! sliding along the columns and a landing preview in the hovered one.
-//! Shares the daily board chrome — status line, player bars, pinned key
-//! hints — with the chess and battleship renderers.
+//! Full-screen daily reversi board: one 8x8 grid with a cell cursor, legal
+//! squares hinted for the side to move, and a ghost disc under the cursor.
+//! Shares the daily board chrome — status line, player bars, pinned key hints
+//! — with the chess, battleship, and connect four renderers. Black discs are
+//! solid (`●`), white discs are rings (`○`), so the two read apart on any
+//! palette.
 
 use chrono::Utc;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -20,26 +22,25 @@ use crate::app::{
             CellTier, PUCK_RING, PUCK_SOLID, cell_text, draw_center_message, name_for,
             pick_cell_tier, piece_cell, result_banner,
         },
-        connect4::{self, DailyConnect4State, Disc},
-        state::{Connect4Detail, DailyBoardState, DailyMatchDetail, DailyState, format_deadline},
+        reversi::{self, DailyReversiState, Disc},
+        state::{DailyBoardState, DailyMatchDetail, DailyState, ReversiDetail, format_deadline},
     },
 };
 
-/// column header + drop indicator + board rows + drop count.
+/// header row + board rows + summary row.
 fn grid_rows(tier: CellTier) -> u16 {
-    2 + connect4::ROWS as u16 * tier.ch + 1
+    1 + reversi::SIZE as u16 * tier.ch + 1
 }
 
-/// row labels (3) + 7 cells.
+/// row labels (3) + 8 cells.
 fn grid_width(tier: CellTier) -> u16 {
-    3 + connect4::COLS as u16 * tier.cw
+    3 + reversi::SIZE as u16 * tier.cw
 }
 
 /// status + two player bars + key hints around the grid.
 const CHROME_ROWS: u16 = 4;
 
 const INFO_RAIL_WIDTH: u16 = 24;
-/// Breathing room required around the grid before the rail appears.
 const INFO_RAIL_MIN_EXTRA: u16 = 8;
 
 pub(crate) fn draw(
@@ -48,7 +49,7 @@ pub(crate) fn draw(
     daily: &DailyState,
     board: &DailyBoardState,
     detail: &DailyMatchDetail,
-    connect4: &Connect4Detail,
+    reversi: &ReversiDetail,
 ) {
     let tier = pick_cell_tier(|tier| {
         grid_width(tier) <= area.width && grid_rows(tier) + CHROME_ROWS <= area.height
@@ -57,19 +58,16 @@ pub(crate) fn draw(
         draw_center_message(frame, area, "The board needs more room.");
         return;
     }
-    let state = &connect4.state;
-    // Spectators aren't a player; default them to red's perspective (red on
-    // the bottom bar). Connect four hides nothing, so the view is complete
-    // and the ghost preview never draws (a spectator's cursor stays off).
-    let my_disc = state.disc_of(daily.user_id()).unwrap_or(Disc::Red);
+    let state = &reversi.state;
+    // Spectators aren't a player; default them to black's perspective. Reversi
+    // hides nothing, so the view is complete and the cursor never shows.
+    let my_disc = state.disc_of(daily.user_id()).unwrap_or(Disc::Black);
 
-    // Same shape as the other boards: the drop rail splits off the right
-    // edge when there is room, everything else centres in what remains.
     let show_rail = area.width >= grid_width(tier) + INFO_RAIL_WIDTH + INFO_RAIL_MIN_EXTRA;
     let content = if show_rail {
         let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(INFO_RAIL_WIDTH)])
             .split(area);
-        draw_info_rail(frame, cols[1], daily, board, state);
+        draw_info_rail(frame, cols[1], state);
         cols[0]
     } else {
         area
@@ -94,11 +92,9 @@ pub(crate) fn draw(
     let finished = !detail.is_active();
     let my_turn = detail.is_active()
         && detail.row.turn_user_id == Some(daily.user_id())
-        && !connect4.drop_in_flight;
+        && !reversi.move_in_flight;
 
     let grid_x = grid_row.x + grid_row.width.saturating_sub(grid_width(tier)) / 2;
-    // Player bars hug the grid, not the screen edges — the same
-    // centred-stack rule as the other boards.
     let over_grid = |row: Rect| Rect {
         x: grid_x,
         y: row.y,
@@ -107,7 +103,7 @@ pub(crate) fn draw(
     };
 
     frame.render_widget(
-        Paragraph::new(status_line(daily, board, detail, connect4)).alignment(Alignment::Center),
+        Paragraph::new(status_line(daily, board, detail, reversi)).alignment(Alignment::Center),
         status_row,
     );
     draw_player_bar(
@@ -136,12 +132,12 @@ pub(crate) fn draw(
         )),
         grid_rect,
     );
-    // Cells begin after the header + indicator rows and the row labels.
+    // Cells begin after the header row and the row labels; row 0 is at the top.
     board.target_geometry.set(Some(Rect {
         x: grid_rect.x + 3,
-        y: grid_rect.y + 2,
-        width: connect4::COLS as u16 * tier.cw,
-        height: connect4::ROWS as u16 * tier.ch,
+        y: grid_rect.y + 1,
+        width: reversi::SIZE as u16 * tier.cw,
+        height: reversi::SIZE as u16 * tier.ch,
     }));
 
     draw_player_bar(
@@ -159,87 +155,7 @@ pub(crate) fn draw(
     );
 }
 
-fn disc_color(disc: Disc) -> Color {
-    match disc {
-        Disc::Red => theme::ERROR(),
-        Disc::Yellow => theme::AMBER(),
-    }
-}
-
-/// The board: header letters, the drop indicator, six rows bottom-up, and
-/// the running drop count. The winning line lights up as solid tiles. Each
-/// board row is `tier.ch` text lines; the glyph and row label sit on the
-/// middle one, the rest just carry the cell background.
-fn board_lines(
-    state: &DailyConnect4State,
-    cursor: Option<usize>,
-    my_disc: Disc,
-    finished: bool,
-    tier: CellTier,
-) -> Vec<Line<'static>> {
-    let grid = state.grid();
-    let last = state.last_drop();
-    let winning = finished
-        .then(|| state.winning_line())
-        .flatten()
-        .unwrap_or_default();
-    // Where the hovered column would take a disc, for the ghost preview.
-    let landing = cursor.and_then(|col| (0..connect4::ROWS).find(|&row| grid[row][col].is_none()));
-
-    let mut lines = vec![header_line(cursor, tier), indicator_line(cursor, tier)];
-    for row in (0..connect4::ROWS).rev() {
-        for sub in 0..tier.ch {
-            let glyph_row = sub == tier.glyph_sub();
-            let mut spans = vec![if glyph_row {
-                row_label(row, landing == Some(row))
-            } else {
-                Span::raw("   ")
-            }];
-            for (col, cell) in grid[row].iter().enumerate() {
-                let span = match *cell {
-                    Some(disc) if winning.contains(&(row, col)) => Span::styled(
-                        // The line that ended it: dark discs on solid tiles.
-                        piece_cell(PUCK_SOLID, '●', tier, sub),
-                        Style::default()
-                            .fg(theme::BG_CANVAS())
-                            .bg(disc_color(disc))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Some(disc) if last == Some((row, col)) => Span::styled(
-                        piece_cell(PUCK_SOLID, '●', tier, sub),
-                        Style::default()
-                            .fg(disc_color(disc))
-                            .bg(theme::BG_SELECTION())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Some(disc) => Span::styled(
-                        piece_cell(PUCK_SOLID, '●', tier, sub),
-                        checker(row, col).fg(disc_color(disc)),
-                    ),
-                    None if cursor == Some(col) && landing == Some(row) => Span::styled(
-                        // The ghost landing disc is the ring.
-                        piece_cell(PUCK_RING, '◌', tier, sub),
-                        checker(row, col)
-                            .fg(disc_color(my_disc))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    None if glyph_row => Span::styled(
-                        cell_text('·', tier.cw),
-                        checker(row, col).fg(theme::BORDER_DIM()),
-                    ),
-                    None => Span::styled(" ".repeat(tier.cw as usize), checker(row, col)),
-                };
-                spans.push(span);
-            }
-            lines.push(Line::from(spans));
-        }
-    }
-    lines.push(summary_line(format!("{} drops", state.move_count()), tier));
-    lines
-}
-
-/// Alternating cell background — the checkerboard is what makes the grid
-/// readable at a glance without drawing actual rules.
+/// Alternating cell background so the grid reads at a glance.
 fn checker(row: usize, col: usize) -> Style {
     if (row + col).is_multiple_of(2) {
         Style::default().bg(theme::BG_HIGHLIGHT())
@@ -248,10 +164,95 @@ fn checker(row: usize, col: usize) -> Style {
     }
 }
 
-/// `hot_col` lights up the cursor's column letter as a crosshair.
+fn disc_glyph(disc: Disc) -> char {
+    match disc {
+        Disc::Black => '●',
+        Disc::White => '○',
+    }
+}
+
+/// Solid vs ring, the art-tier version of `●` vs `○`.
+fn disc_art(disc: Disc) -> [&'static str; 2] {
+    match disc {
+        Disc::Black => PUCK_SOLID,
+        Disc::White => PUCK_RING,
+    }
+}
+
+/// The board: header letters then eight rows top-down (row 0 at the top),
+/// with legal squares hinted and a ghost disc under the cursor. Each board
+/// row is `tier.ch` text lines; the glyph and row label sit on the middle
+/// one, the rest just carry the cell background.
+fn board_lines(
+    state: &DailyReversiState,
+    cursor: Option<usize>,
+    my_disc: Disc,
+    _finished: bool,
+    tier: CellTier,
+) -> Vec<Line<'static>> {
+    let grid = state.grid();
+    let last = state.last_move();
+    let cursor_rc = cursor.map(|i| (i / reversi::SIZE, i % reversi::SIZE));
+    // Legal squares to hint, only while it's a real move to make.
+    let legal = if cursor.is_some() {
+        state.legal_moves(my_disc)
+    } else {
+        Vec::new()
+    };
+
+    let mut lines = vec![header_line(cursor_rc.map(|(_, col)| col), tier)];
+    for row in 0..reversi::SIZE {
+        for sub in 0..tier.ch {
+            let glyph_row = sub == tier.glyph_sub();
+            let mut spans = vec![if glyph_row {
+                row_label(row)
+            } else {
+                Span::raw("   ")
+            }];
+            for col in 0..reversi::SIZE {
+                let is_cursor = cursor_rc == Some((row, col));
+                let is_legal = legal.contains(&(row, col));
+                let mut style = checker(row, col);
+                if last == Some((row, col)) {
+                    style = style.bg(theme::BG_SELECTION());
+                }
+                if is_cursor {
+                    style = style.bg(theme::AMBER_DIM());
+                }
+                let span = match grid[row][col] {
+                    Some(disc) => Span::styled(
+                        piece_cell(disc_art(disc), disc_glyph(disc), tier, sub),
+                        style.fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD),
+                    ),
+                    // The ghost previews the disc you would place.
+                    None if is_cursor && is_legal => Span::styled(
+                        piece_cell(disc_art(my_disc), '◌', tier, sub),
+                        style.fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD),
+                    ),
+                    None if is_legal && glyph_row => {
+                        Span::styled(cell_text('·', tier.cw), style.fg(theme::AMBER()))
+                    }
+                    None if glyph_row => {
+                        Span::styled(cell_text('·', tier.cw), style.fg(theme::BORDER_DIM()))
+                    }
+                    None => Span::styled(" ".repeat(tier.cw as usize), style),
+                };
+                spans.push(span);
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+    let (black, white) = state.disc_counts();
+    lines.push(summary_line(
+        format!("● {black}   ○ {white}   {} moves", state.move_count()),
+        tier,
+    ));
+    lines
+}
+
 fn header_line(hot_col: Option<usize>, tier: CellTier) -> Line<'static> {
     let mut spans = vec![Span::raw("   ")];
-    for col in 0..connect4::COLS {
+    for col in 0..reversi::SIZE {
         let style = if hot_col == Some(col) {
             Style::default()
                 .fg(theme::AMBER())
@@ -260,41 +261,18 @@ fn header_line(hot_col: Option<usize>, tier: CellTier) -> Line<'static> {
             Style::default().fg(theme::TEXT_FAINT())
         };
         spans.push(Span::styled(
-            cell_text(connect4::column_label(col), tier.cw),
+            cell_text((b'a' + col as u8) as char, tier.cw),
             style,
         ));
     }
     Line::from(spans)
 }
 
-/// The `▼` hovering over the cursor column. Blank off-turn: the row keeps
-/// its slot so the grid never shifts.
-fn indicator_line(hot_col: Option<usize>, tier: CellTier) -> Line<'static> {
-    let mut spans = vec![Span::raw("   ")];
-    for col in 0..connect4::COLS {
-        if hot_col == Some(col) {
-            spans.push(Span::styled(
-                cell_text('▼', tier.cw),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            spans.push(Span::raw(" ".repeat(tier.cw as usize)));
-        }
-    }
-    Line::from(spans)
-}
-
-fn row_label(row: usize, hot: bool) -> Span<'static> {
-    let style = if hot {
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_FAINT())
-    };
-    Span::styled(format!("{:>2} ", row + 1), style)
+fn row_label(row: usize) -> Span<'static> {
+    Span::styled(
+        format!("{:>2} ", row + 1),
+        Style::default().fg(theme::TEXT_FAINT()),
+    )
 }
 
 fn summary_line(text: String, tier: CellTier) -> Line<'static> {
@@ -305,25 +283,11 @@ fn summary_line(text: String, tier: CellTier) -> Line<'static> {
     ))
 }
 
-/// `(user, "d3")` for the most recent drop.
-fn last_drop_feed(state: &DailyConnect4State) -> Option<(Uuid, String)> {
-    let (row, col) = state.last_drop()?;
-    let disc = if (state.move_count() - 1).is_multiple_of(2) {
-        Disc::Red
-    } else {
-        Disc::Yellow
-    };
-    Some((
-        state.user_of(disc),
-        format!("{}{}", connect4::column_label(col), row + 1),
-    ))
-}
-
 fn status_line(
     daily: &DailyState,
     board: &DailyBoardState,
     detail: &DailyMatchDetail,
-    connect4: &Connect4Detail,
+    reversi: &ReversiDetail,
 ) -> Line<'static> {
     if board.resign_confirm {
         return Line::from(Span::styled(
@@ -335,16 +299,16 @@ fn status_line(
     }
     let mut spans = Vec::new();
     if detail.is_active() {
-        if connect4.drop_in_flight {
+        if reversi.move_in_flight {
             spans.push(Span::styled(
-                "Drop away…",
+                "Placing…",
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ));
         } else if detail.row.turn_user_id == Some(daily.user_id()) {
             spans.push(Span::styled(
-                "Your drop",
+                "Your move",
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
@@ -373,28 +337,17 @@ fn status_line(
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
-    if let Some((by, spot)) = last_drop_feed(&connect4.state) {
-        let who = if by == daily.user_id() {
-            "you".to_string()
-        } else {
-            name_for(board, by)
-        };
-        spans.push(Span::styled(
-            format!("   last {who} {spot}"),
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-    }
     Line::from(spans)
 }
 
-/// `● red mira`, with the running deadline on the mover's bar.
+/// `● black mira · 12`, with the running deadline on the mover's bar.
 fn draw_player_bar(
     frame: &mut Frame,
     rect: Rect,
     daily: &DailyState,
     board: &DailyBoardState,
     detail: &DailyMatchDetail,
-    state: &DailyConnect4State,
+    state: &DailyReversiState,
     disc: Disc,
 ) {
     if rect.height == 0 {
@@ -412,16 +365,29 @@ fn draw_player_bar(
     } else {
         name_for(board, user_id)
     };
+    let (black, white) = state.disc_counts();
+    let count = match disc {
+        Disc::Black => black,
+        Disc::White => white,
+    };
+    let swatch = match disc {
+        Disc::Black => "\u{25CF} ",
+        Disc::White => "\u{25CB} ",
+    };
     let left = vec![
         Span::raw("  "),
-        Span::styled("\u{25CF} ", Style::default().fg(dot_color)),
+        Span::styled(swatch.to_string(), Style::default().fg(dot_color)),
         Span::styled(
             format!("{} ", disc.label()),
             Style::default()
-                .fg(disc_color(disc))
+                .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(name, Style::default().fg(theme::TEXT())),
+        Span::styled(
+            format!("   {count}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
     ];
     let deadline = on_turn
         .then_some(detail.row.turn_deadline_at)
@@ -461,8 +427,8 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
             Style::default().fg(theme::TEXT_DIM()),
         ));
     } else if detail.is_active() {
-        hint(&mut spans, "arrows/wasd", "choose column");
-        hint(&mut spans, "Space/Enter", "drop");
+        hint(&mut spans, "arrows/wasd", "move cursor");
+        hint(&mut spans, "Space/Enter", "place");
         hint(&mut spans, "r", "resign");
     }
     if !board.spectating && detail.row.chat_room_id.is_some() {
@@ -476,83 +442,36 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
     Line::from(spans)
 }
 
-/// Drop history rail: every disc in play order, newest at the bottom, same
-/// slot the chess move list occupies.
-fn draw_info_rail(
-    frame: &mut Frame,
-    area: Rect,
-    daily: &DailyState,
-    board: &DailyBoardState,
-    state: &DailyConnect4State,
-) {
-    let mut lines = vec![
+fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyReversiState) {
+    let (black, white) = state.disc_counts();
+    let lines = vec![
         Line::from(Span::styled(
-            "Correspondence connect four".to_string(),
+            "Correspondence reversi".to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),
         )),
         Line::from(Span::styled(
-            "four in a row wins".to_string(),
+            "most discs wins".to_string(),
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
         )),
         Line::raw(""),
         Line::from(Span::styled(
-            "Drops".to_string(),
+            "Discs".to_string(),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         )),
+        Line::from(vec![
+            Span::styled("● black  ", Style::default().fg(theme::TEXT_BRIGHT())),
+            Span::styled(format!("{black}"), Style::default().fg(theme::TEXT())),
+        ]),
+        Line::from(vec![
+            Span::styled("○ white  ", Style::default().fg(theme::TEXT_BRIGHT())),
+            Span::styled(format!("{white}"), Style::default().fg(theme::TEXT())),
+        ]),
     ];
-
-    // Replay the history to recover each drop's landing row and disc.
-    let mut heights = [0usize; connect4::COLS];
-    let mut drops: Vec<(Disc, String)> = Vec::with_capacity(state.drops.len());
-    for (index, &col) in state.drops.iter().enumerate() {
-        let col = col as usize;
-        let disc = if index.is_multiple_of(2) {
-            Disc::Red
-        } else {
-            Disc::Yellow
-        };
-        drops.push((
-            disc,
-            format!("{}{}", connect4::column_label(col), heights[col] + 1),
-        ));
-        heights[col] += 1;
-    }
-
-    let budget = (area.height as usize).saturating_sub(lines.len());
-    if drops.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "no drops yet",
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        )));
-    } else {
-        if drops.len() > budget && budget > 0 {
-            lines.push(Line::from(Span::styled(
-                "  \u{22EE}",
-                Style::default().fg(theme::TEXT_FAINT()),
-            )));
-            let skip = drops.len() - (budget - 1);
-            drops.drain(..skip);
-        }
-        for (disc, spot) in drops {
-            let who = if state.user_of(disc) == daily.user_id() {
-                "you".to_string()
-            } else {
-                name_for(board, state.user_of(disc))
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{who:<9}"), Style::default().fg(theme::TEXT())),
-                Span::styled(format!("{spot:<4}"), Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("●".to_string(), Style::default().fg(disc_color(disc))),
-            ]));
-        }
-    }
     frame.render_widget(Paragraph::new(lines), area);
 }

@@ -260,6 +260,7 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
         }
         DailyGame::Battleship => format!("{} shots", item.move_count),
         DailyGame::ConnectFour => format!("{} drops", item.move_count),
+        DailyGame::Reversi | DailyGame::Checkers => format!("{} moves", item.move_count),
     };
 
     let mut spans = vec![marker_span(selected)];
@@ -417,6 +418,7 @@ fn spectate_line(item: &DailyMatchItem, selected: bool) -> Line<'static> {
         DailyGame::Chess => format!("{} moves", item.move_count),
         DailyGame::Battleship => format!("{} shots", item.move_count),
         DailyGame::ConnectFour => format!("{} drops", item.move_count),
+        DailyGame::Reversi | DailyGame::Checkers => format!("{} moves", item.move_count),
     };
     // The versus pair is two usernames wide, so it takes the name and game
     // columns together and the game rides with the progress instead.

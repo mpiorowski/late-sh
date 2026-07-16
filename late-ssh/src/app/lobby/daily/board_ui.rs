@@ -37,6 +37,70 @@ const CHAT_MIN_AREA_HEIGHT: u16 = 27;
 const CHAT_MIN_HEIGHT: u16 = 9;
 const CHAT_MAX_HEIGHT: u16 = 13;
 
+// ── Cell sizing for the grid games ────────────────────────────────────
+//
+// Battleship, reversi, and checkers draw plain character grids; each
+// renderer picks the biggest cell footprint its area affords — the same
+// idea as the chess renderer's `Tier`. The mouse hit-test never sees the
+// tier: it derives the cell size from the render-recorded
+// `target_geometry` rect, which is always an exact multiple of the grid.
+
+#[derive(Clone, Copy)]
+pub(super) struct CellTier {
+    /// Terminal columns per board cell.
+    pub cw: u16,
+    /// Terminal rows per board cell.
+    pub ch: u16,
+}
+
+impl CellTier {
+    /// The sub-row of a cell that carries the glyph (and the row label):
+    /// the middle row, rounding up for even heights — glyphs hang low in
+    /// their character box, so the upper-middle row reads as centred.
+    pub fn glyph_sub(self) -> u16 {
+        (self.ch - 1) / 2
+    }
+}
+
+/// Biggest first; the last is the cramped fallback. The big tier is 5 wide
+/// so the 3-wide piece art and single-char marks both centre exactly.
+const CELL_TIERS: [CellTier; 2] = [CellTier { cw: 5, ch: 2 }, CellTier { cw: 3, ch: 1 }];
+
+/// The biggest cell tier whose full board layout `fits` the area.
+pub(super) fn pick_cell_tier(fits: impl Fn(CellTier) -> bool) -> CellTier {
+    CELL_TIERS
+        .into_iter()
+        .find(|tier| fits(*tier))
+        .unwrap_or(CELL_TIERS[CELL_TIERS.len() - 1])
+}
+
+/// `glyph` centered in a `width`-column cell.
+pub(super) fn cell_text(glyph: char, width: u16) -> String {
+    format!("{glyph:^0$}", width as usize)
+}
+
+// Two-row block-art pieces (`[top, bottom]`, 3 cols each) for the 2-row
+// tier. Straddling both sub-rows is what centres a piece vertically — a
+// lone glyph can only sit above or below the cell's midline.
+/// A solid disc with clipped corners.
+pub(super) const PUCK_SOLID: [&str; 2] = ["▟█▙", "▜█▛"];
+/// A hollow ring, the `○`/`◌` of the art tier.
+pub(super) const PUCK_RING: [&str; 2] = ["▞▀▚", "▚▄▞"];
+/// A crowned disc: two peaks over a solid body (checkers kings).
+pub(super) const PUCK_CROWN: [&str; 2] = ["▙▄▟", "▜█▛"];
+
+/// One sub-row of a piece cell: block art when the tier is two rows tall,
+/// the single `glyph` centered on the glyph row otherwise.
+pub(super) fn piece_cell(art: [&'static str; 2], glyph: char, tier: CellTier, sub: u16) -> String {
+    if tier.ch == 2 {
+        format!("{:^1$}", art[sub as usize], tier.cw as usize)
+    } else if sub == tier.glyph_sub() {
+        cell_text(glyph, tier.cw)
+    } else {
+        " ".repeat(tier.cw as usize)
+    }
+}
+
 pub(crate) fn draw(
     frame: &mut Frame,
     area: Rect,
@@ -136,6 +200,14 @@ fn draw_match(
         }
         DailyGameDetail::Connect4(connect4) => {
             super::connect4_ui::draw(frame, area, daily, board, detail, connect4);
+            return;
+        }
+        DailyGameDetail::Reversi(reversi) => {
+            super::reversi_ui::draw(frame, area, daily, board, detail, reversi);
+            return;
+        }
+        DailyGameDetail::Checkers(checkers) => {
+            super::checkers_ui::draw(frame, area, daily, board, detail, checkers);
             return;
         }
     };
@@ -376,6 +448,10 @@ pub(super) fn result_banner(
             winner_text(detail.row.winner_user_id),
             color,
         ),
+        DailyMatch::RESULT_MOST_DISCS => {
+            ("Most discs", winner_text(detail.row.winner_user_id), color)
+        }
+        DailyMatch::RESULT_NO_MOVES => ("Game over", winner_text(detail.row.winner_user_id), color),
         DailyMatch::RESULT_TIMEOUT => (
             "Timeout",
             format!(
