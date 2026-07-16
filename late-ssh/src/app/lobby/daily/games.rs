@@ -7,8 +7,9 @@
 use late_core::models::{
     daily_match::DailyMatch,
     reward::{
-        DAILY_BATTLESHIP_WIN_REWARD_KEY, DAILY_CHECKERS_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY,
-        DAILY_CONNECT4_WIN_REWARD_KEY, DAILY_REVERSI_WIN_REWARD_KEY,
+        DAILY_BACKGAMMON_WIN_REWARD_KEY, DAILY_BATTLESHIP_WIN_REWARD_KEY,
+        DAILY_CHECKERS_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY, DAILY_CONNECT4_WIN_REWARD_KEY,
+        DAILY_REVERSI_WIN_REWARD_KEY,
     },
 };
 
@@ -19,16 +20,18 @@ pub enum DailyGame {
     ConnectFour,
     Reversi,
     Checkers,
+    Backgammon,
 }
 
 impl DailyGame {
     /// Roster order: pickers, help copy, and usage strings follow it.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Chess,
         Self::Battleship,
         Self::ConnectFour,
         Self::Reversi,
         Self::Checkers,
+        Self::Backgammon,
     ];
 
     /// The persisted `daily_matches.game_kind` value.
@@ -39,6 +42,7 @@ impl DailyGame {
             Self::ConnectFour => DailyMatch::GAME_KIND_CONNECTFOUR,
             Self::Reversi => DailyMatch::GAME_KIND_REVERSI,
             Self::Checkers => DailyMatch::GAME_KIND_CHECKERS,
+            Self::Backgammon => DailyMatch::GAME_KIND_BACKGAMMON,
         }
     }
 
@@ -51,6 +55,7 @@ impl DailyGame {
             Self::ConnectFour => "connect4",
             Self::Reversi => "reversi",
             Self::Checkers => "checkers",
+            Self::Backgammon => "backgammon",
         }
     }
 
@@ -64,6 +69,7 @@ impl DailyGame {
             Self::ConnectFour => "Connect Four",
             Self::Reversi => "Reversi",
             Self::Checkers => "Checkers",
+            Self::Backgammon => "Backgammon",
         }
     }
 
@@ -76,6 +82,7 @@ impl DailyGame {
             Self::ConnectFour => 400,
             Self::Reversi => 400,
             Self::Checkers => 400,
+            Self::Backgammon => 400,
         }
     }
 
@@ -86,6 +93,7 @@ impl DailyGame {
             Self::ConnectFour => DAILY_CONNECT4_WIN_REWARD_KEY,
             Self::Reversi => DAILY_REVERSI_WIN_REWARD_KEY,
             Self::Checkers => DAILY_CHECKERS_WIN_REWARD_KEY,
+            Self::Backgammon => DAILY_BACKGAMMON_WIN_REWARD_KEY,
         }
     }
 
@@ -96,6 +104,7 @@ impl DailyGame {
             Self::ConnectFour => "daily_connect4_win",
             Self::Reversi => "daily_reversi_win",
             Self::Checkers => "daily_checkers_win",
+            Self::Backgammon => "daily_backgammon_win",
         }
     }
 
@@ -107,6 +116,7 @@ impl DailyGame {
             Self::ConnectFour => "one drop per day · four in a row wins",
             Self::Reversi => "one move per day · most discs wins",
             Self::Checkers => "one move per day · capture or block to win",
+            Self::Backgammon => "one roll per day · bear off all fifteen",
         }
     }
 
@@ -150,6 +160,9 @@ mod tests {
 
     #[test]
     fn usage_lists_every_game() {
-        assert_eq!(DailyGame::usage_labels(), "chess|battleship|connect4");
+        assert_eq!(
+            DailyGame::usage_labels(),
+            "chess|battleship|connect4|reversi|checkers|backgammon"
+        );
     }
 }

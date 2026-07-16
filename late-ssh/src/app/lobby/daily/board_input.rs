@@ -49,8 +49,9 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             return true;
         }
     }
-    // Esc peels a half-built checkers move before it closes the board.
-    if byte == 0x1B && app.daily.cancel_checkers_pending() {
+    // Esc peels a half-built checkers or backgammon move before it closes
+    // the board.
+    if byte == 0x1B && app.daily.cancel_pending_move() {
         return true;
     }
     match byte {
@@ -142,6 +143,14 @@ fn handle_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
                 let col = ((x - grid.x) / (grid.width / side).max(1)) as usize;
                 let row = ((y - grid.y) / (grid.height / side).max(1)) as usize;
                 row * crate::app::lobby::daily::reversi::SIZE + col
+            }
+            // Backgammon: the 2x14 visual slot grid (points, bar, off tray).
+            Some(DailyGame::Backgammon) => {
+                let cols = crate::app::lobby::daily::backgammon::SLOT_COLS as u16;
+                let rows = crate::app::lobby::daily::backgammon::SLOT_ROWS as u16;
+                let col = ((x - grid.x) / (grid.width / cols).max(1)) as usize;
+                let row = ((y - grid.y) / (grid.height / rows).max(1)) as usize;
+                row * crate::app::lobby::daily::backgammon::SLOT_COLS + col
             }
             _ => return false,
         };

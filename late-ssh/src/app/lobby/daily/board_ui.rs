@@ -225,6 +225,10 @@ fn draw_match(
             super::checkers_ui::draw(frame, area, daily, board, detail, checkers);
             return;
         }
+        DailyGameDetail::Backgammon(backgammon) => {
+            super::backgammon_ui::draw(frame, area, daily, board, detail, backgammon);
+            return;
+        }
     };
 
     let show_sidebar = area.width >= INFO_SIDEBAR_MIN_WIDTH;
@@ -467,6 +471,9 @@ pub(super) fn result_banner(
             ("Most discs", winner_text(detail.row.winner_user_id), color)
         }
         DailyMatch::RESULT_NO_MOVES => ("Game over", winner_text(detail.row.winner_user_id), color),
+        DailyMatch::RESULT_BORNE_OFF => {
+            ("Borne off", winner_text(detail.row.winner_user_id), color)
+        }
         DailyMatch::RESULT_TIMEOUT => (
             "Timeout",
             format!(

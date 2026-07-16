@@ -18,6 +18,7 @@ use crate::app::{
 };
 
 use super::{
+    backgammon::{self, DailyBackgammonState},
     battleship::DailyBattleshipState,
     checkers::DailyCheckersState,
     connect4::DailyConnect4State,
@@ -118,6 +119,7 @@ pub enum DailyGameDetail {
     Connect4(Connect4Detail),
     Reversi(ReversiDetail),
     Checkers(CheckersDetail),
+    Backgammon(BackgammonDetail),
 }
 
 impl DailyGameDetail {
@@ -129,6 +131,7 @@ impl DailyGameDetail {
             Self::Connect4(_) => DailyGame::ConnectFour,
             Self::Reversi(_) => DailyGame::Reversi,
             Self::Checkers(_) => DailyGame::Checkers,
+            Self::Backgammon(_) => DailyGame::Backgammon,
         }
     }
 }
@@ -169,6 +172,19 @@ pub struct CheckersDetail {
     /// nothing is selected.
     pub pending: Vec<usize>,
     /// A move left this session and hasn't come back via reload yet; blocks
+    /// moving again until the canonical row lands.
+    pub move_in_flight: bool,
+}
+
+pub struct BackgammonDetail {
+    pub state: DailyBackgammonState,
+    /// Hops of the in-progress turn, built hop by hop while they stay a
+    /// prefix of some legal turn; the turn is sent when they match one whole.
+    pub pending: Vec<backgammon::Hop>,
+    /// The picked-up checker's origin (a point index or `BAR`) while the
+    /// player is choosing where the next hop lands.
+    pub selected: Option<u8>,
+    /// A turn left this session and hasn't come back via reload yet; blocks
     /// moving again until the canonical row lands.
     pub move_in_flight: bool,
 }
@@ -220,6 +236,12 @@ impl DailyMatchDetail {
                 pending: Vec::new(),
                 move_in_flight: false,
             }),
+            Some(DailyGame::Backgammon) => DailyGameDetail::Backgammon(BackgammonDetail {
+                state: DailyBackgammonState::parse(&row.state).map_err(|e| e.to_string())?,
+                pending: Vec::new(),
+                selected: None,
+                move_in_flight: false,
+            }),
             None => return Err(format!("unknown daily game: {}", row.game_kind)),
         };
         Ok(Self { row, game })
@@ -263,6 +285,13 @@ impl DailyMatchDetail {
     pub fn checkers(&self) -> Option<&CheckersDetail> {
         match &self.game {
             DailyGameDetail::Checkers(checkers) => Some(checkers),
+            _ => None,
+        }
+    }
+
+    pub fn backgammon(&self) -> Option<&BackgammonDetail> {
+        match &self.game {
+            DailyGameDetail::Backgammon(backgammon) => Some(backgammon),
             _ => None,
         }
     }
@@ -652,6 +681,9 @@ impl DailyState {
                 // Cell cursors near the middle; row 0 drawn at the top.
                 DailyGame::Reversi => 27,
                 DailyGame::Checkers => 28,
+                // A visual slot on the 2x14 board grid: bottom row, in the
+                // player's own home quadrant.
+                DailyGame::Backgammon => backgammon::SLOT_COLS + 9,
             },
             selected: None,
             piece_render_mode: ChessPieceRenderMode::Graphics,
@@ -823,6 +855,15 @@ impl DailyState {
                 let max = size - 1;
                 board.cursor = (row.clamp(0, max) * size + col.clamp(0, max)) as usize;
             }
+            Some(DailyGameDetail::Backgammon(_)) => {
+                // The 2x14 visual slot grid (points, bar, off tray); "up"
+                // (dy=1) moves to the top row.
+                let cols = backgammon::SLOT_COLS as isize;
+                let col = (board.cursor % backgammon::SLOT_COLS) as isize + dx;
+                let row = (board.cursor / backgammon::SLOT_COLS) as isize - dy;
+                board.cursor = (row.clamp(0, backgammon::SLOT_ROWS as isize - 1) * cols
+                    + col.clamp(0, cols - 1)) as usize;
+            }
             _ => {
                 board.cursor = cursor::move_cursor(board.cursor, orientation, dx, dy);
             }
@@ -876,6 +917,7 @@ impl DailyState {
             DailyGame::ConnectFour => Self::connect4_drop(board, user_id, &svc),
             DailyGame::Reversi => Self::reversi_place(board, user_id, &svc),
             DailyGame::Checkers => Self::checkers_select(board, user_id, &svc),
+            DailyGame::Backgammon => Self::backgammon_select(board, user_id, &svc),
         }
     }
 
@@ -1087,6 +1129,87 @@ impl DailyState {
         }
     }
 
+    /// Build and play a backgammon turn by cursor/click. The cursor walks
+    /// visual slots; each is resolved to a point, the bar, or the off tray
+    /// from the player's seat. The first pick lifts a checker whose hop can
+    /// start some legal continuation, the second lands it; hops accumulate in
+    /// `pending` while they stay a prefix of a legal turn and the whole turn
+    /// is sent the moment they match one completely (the maximal-dice rule
+    /// means a shorter sequence is never a finished turn). Re-picking the
+    /// lifted checker puts it down; Esc clears the whole pending turn.
+    fn backgammon_select(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let row_turn = detail.row.turn_user_id;
+        let match_id = board.match_id;
+        let cursor = board.cursor;
+        let DailyGameDetail::Backgammon(bg) = &mut detail.game else {
+            return;
+        };
+        if bg.move_in_flight || row_turn != Some(user_id) {
+            return;
+        }
+        let Some(color) = bg.state.color_of(user_id) else {
+            return;
+        };
+        if bg.state.turn() != color {
+            return;
+        }
+        // Empty while the server's roll is in flight or nothing is playable
+        // (the server records forced passes itself, so that never sticks).
+        let legal = bg.state.legal_turns();
+        if legal.is_empty() {
+            return;
+        }
+        let Some(target) = backgammon::slot_target(cursor, color) else {
+            return;
+        };
+        let code = target.code();
+
+        // The hops that can come next, given what's already pending.
+        let next_hops: Vec<backgammon::Hop> = legal
+            .iter()
+            .filter(|turn| {
+                turn.len() > bg.pending.len() && turn[..bg.pending.len()] == bg.pending[..]
+            })
+            .map(|turn| turn[bg.pending.len()])
+            .collect();
+
+        let Some(from) = bg.selected else {
+            if next_hops.iter().any(|&(from, _)| from == code) {
+                bg.selected = Some(code);
+            }
+            return;
+        };
+        // Re-picking the lifted checker puts it down.
+        if from == code {
+            bg.selected = None;
+            return;
+        }
+        if !next_hops.contains(&(from, code)) {
+            // Not a landing for this checker: lift another instead, if the
+            // pick starts a hop of its own.
+            bg.selected = next_hops
+                .iter()
+                .any(|&(from, _)| from == code)
+                .then_some(code);
+            return;
+        }
+        bg.pending.push((from, code));
+        bg.selected = None;
+        // A complete legal turn? Apply optimistically and send it. The
+        // optimistic apply records the turn but never rolls: the opponent's
+        // dice are the server's to produce, so `next_roll` stays empty until
+        // the reload brings the canonical row.
+        if legal.iter().any(|turn| turn[..] == bg.pending[..]) {
+            let hops = std::mem::take(&mut bg.pending);
+            if bg.state.apply_turn(&hops).is_ok() {
+                bg.move_in_flight = true;
+                detail.row.turn_user_id = Some(bg.state.user_of(bg.state.turn()));
+                svc.play_backgammon_move_task(user_id, match_id, hops);
+            }
+        }
+    }
+
     fn apply_optimistic_move(detail: &mut DailyMatchDetail, from: usize, to: usize) {
         let Some(chess) = detail.chess_mut() else {
             return;
@@ -1117,22 +1240,30 @@ impl DailyState {
         detail.row.turn_user_id = Some(next);
     }
 
-    /// Esc while building a checkers move clears the in-progress path instead
-    /// of closing the board. Returns whether anything was cleared.
-    pub fn cancel_checkers_pending(&mut self) -> bool {
+    /// Esc while building a checkers path or a backgammon turn clears the
+    /// in-progress input instead of closing the board. Returns whether
+    /// anything was cleared.
+    pub fn cancel_pending_move(&mut self) -> bool {
         let Some(board) = &mut self.board else {
             return false;
         };
         let Some(detail) = &mut board.detail else {
             return false;
         };
-        if let DailyGameDetail::Checkers(checkers) = &mut detail.game
-            && !checkers.pending.is_empty()
-        {
-            checkers.pending.clear();
-            return true;
+        match &mut detail.game {
+            DailyGameDetail::Checkers(checkers) if !checkers.pending.is_empty() => {
+                checkers.pending.clear();
+                true
+            }
+            DailyGameDetail::Backgammon(bg)
+                if bg.selected.is_some() || !bg.pending.is_empty() =>
+            {
+                bg.selected = None;
+                bg.pending.clear();
+                true
+            }
+            _ => false,
         }
-        false
     }
 
     pub fn board_resign(&mut self) {
@@ -1206,6 +1337,7 @@ pub fn result_phrase(result: &str) -> &'static str {
         DailyMatch::RESULT_FOUR_IN_A_ROW => "four in a row",
         DailyMatch::RESULT_MOST_DISCS => "most discs",
         DailyMatch::RESULT_NO_MOVES => "no moves left",
+        DailyMatch::RESULT_BORNE_OFF => "borne off",
         _ => "finished",
     }
 }

@@ -1,3 +1,5 @@
+pub mod backgammon;
+pub mod backgammon_ui;
 pub mod battleship;
 pub mod battleship_ui;
 pub mod board_input;
