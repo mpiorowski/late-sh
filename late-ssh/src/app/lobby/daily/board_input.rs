@@ -50,7 +50,9 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
         }
     }
     // Esc peels a half-built checkers or backgammon move before it closes
-    // the board.
+    // the board. A real bare Esc arrives via input.rs::dispatch_escape
+    // (which mirrors this ordering); this byte path covers synthesized
+    // 0x1B events, same as the chat-selection clear above.
     if byte == 0x1B && app.daily.cancel_pending_move() {
         return true;
     }
