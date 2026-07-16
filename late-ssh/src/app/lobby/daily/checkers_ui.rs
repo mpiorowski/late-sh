@@ -1,8 +1,9 @@
 //! Full-screen daily checkers board: one 8x8 grid on the dark squares, a cell
 //! cursor, the in-progress move path lit up, and legal next squares hinted so
 //! multi-jumps can be built click by click. Shares the daily board chrome —
-//! status line, player bars, pinned key hints — with the other renderers. Men
-//! are `●`, kings `◉`; red is warm, white is bright.
+//! status line, player bars, pinned key hints — with the other renderers.
+//! Pieces are the shared square stone, red warm / white bright, kings with a
+//! gold top half; the cramped tier falls back to `●` men and `◉` kings.
 
 use std::collections::HashSet;
 
@@ -20,7 +21,7 @@ use crate::app::{
     common::theme,
     lobby::daily::{
         board_ui::{
-            CellTier, PUCK_CROWN, PUCK_SOLID, cell_text, draw_center_message, name_for,
+            CellTier, PUCK_SOLID, cell_text, draw_center_message, hint_cell, name_for,
             pick_cell_tier, piece_cell, result_banner,
         },
         checkers::{self, Color, DailyCheckersState, Piece},
@@ -189,11 +190,6 @@ fn piece_glyph(piece: Piece) -> char {
     if piece.king { '◉' } else { '●' }
 }
 
-/// Men are solid discs, kings wear the crown.
-fn piece_art(piece: Piece) -> [&'static str; 2] {
-    if piece.king { PUCK_CROWN } else { PUCK_SOLID }
-}
-
 /// The board: header letters then eight rows top-down (row 0 at the top). Only
 /// the dark squares are in play; the move path is lit and legal next squares
 /// are hinted. Each board row is `tier.ch` text lines; the glyph and row label
@@ -245,17 +241,24 @@ fn board_lines(
                     style = style.bg(theme::AMBER_DIM());
                 }
                 let span = match grid[row][col] {
-                    Some(piece) => Span::styled(
-                        piece_cell(piece_art(piece), piece_glyph(piece), tier, sub),
-                        style.fg(color_fg(piece.color)).add_modifier(Modifier::BOLD),
-                    ),
-                    None if next_steps.contains(&index) && glyph_row => Span::styled(
-                        cell_text('·', tier.cw),
+                    Some(piece) => {
+                        // A king is the same square with a gold top half —
+                        // the crown is a colour, not a shape.
+                        let fg = if piece.king && tier.ch == 2 && sub == 0 {
+                            theme::AMBER()
+                        } else {
+                            color_fg(piece.color)
+                        };
+                        Span::styled(
+                            piece_cell(PUCK_SOLID, piece_glyph(piece), tier, sub),
+                            style.fg(fg).add_modifier(Modifier::BOLD),
+                        )
+                    }
+                    // The next squares of a move wear the corner frame.
+                    None if next_steps.contains(&index) => Span::styled(
+                        hint_cell('·', tier, sub),
                         style.fg(theme::AMBER()).add_modifier(Modifier::BOLD),
                     ),
-                    None if playable && glyph_row => {
-                        Span::styled(cell_text('·', tier.cw), style.fg(theme::BORDER_DIM()))
-                    }
                     None => Span::styled(" ".repeat(tier.cw as usize), style),
                 };
                 spans.push(span);

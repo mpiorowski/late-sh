@@ -62,9 +62,9 @@ impl CellTier {
     }
 }
 
-/// Biggest first; the last is the cramped fallback. The big tier is 5 wide
-/// so the 3-wide piece art and single-char marks both centre exactly.
-const CELL_TIERS: [CellTier; 2] = [CellTier { cw: 5, ch: 2 }, CellTier { cw: 3, ch: 1 }];
+/// Biggest first; the last is the cramped fallback. The big tier is 4 wide
+/// so the 2-wide piece art centres exactly.
+const CELL_TIERS: [CellTier; 2] = [CellTier { cw: 4, ch: 2 }, CellTier { cw: 3, ch: 1 }];
 
 /// The biggest cell tier whose full board layout `fits` the area.
 pub(super) fn pick_cell_tier(fits: impl Fn(CellTier) -> bool) -> CellTier {
@@ -79,21 +79,38 @@ pub(super) fn cell_text(glyph: char, width: u16) -> String {
     format!("{glyph:^0$}", width as usize)
 }
 
-// Two-row block-art pieces (`[top, bottom]`, 3 cols each) for the 2-row
-// tier. Straddling both sub-rows is what centres a piece vertically — a
-// lone glyph can only sit above or below the cell's midline.
-/// A solid disc with clipped corners.
-pub(super) const PUCK_SOLID: [&str; 2] = ["▟█▙", "▜█▛"];
-/// A hollow ring, the `○`/`◌` of the art tier.
-pub(super) const PUCK_RING: [&str; 2] = ["▞▀▚", "▚▄▞"];
-/// A crowned disc: two peaks over a solid body (checkers kings).
-pub(super) const PUCK_CROWN: [&str; 2] = ["▙▄▟", "▜█▛"];
+// The piece shape: a compact two-row square stone for the 2-row tier.
+// Straddling both sub-rows is what centres it vertically — a lone glyph can
+// only sit above or below the cell's midline. One silhouette, two fills
+// (solid and hollow — the `●`/`○` pair of the art tier), coloured per
+// side/role by each game.
+pub(super) const PUCK_SOLID: [&str; 2] = ["▄▄", "▀▀"];
+/// The square with a hole: same silhouette, hollow centre.
+pub(super) const PUCK_HOLLOW: [&str; 2] = ["▛▜", "▙▟"];
 
-/// One sub-row of a piece cell: block art when the tier is two rows tall,
-/// the single `glyph` centered on the glyph row otherwise.
+/// One sub-row of a piece cell: the square stone when the tier is two rows
+/// tall, the single `glyph` centered on the glyph row otherwise.
 pub(super) fn piece_cell(art: [&'static str; 2], glyph: char, tier: CellTier, sub: u16) -> String {
     if tier.ch == 2 {
         format!("{:^1$}", art[sub as usize], tier.cw as usize)
+    } else if sub == tier.glyph_sub() {
+        cell_text(glyph, tier.cw)
+    } else {
+        " ".repeat(tier.cw as usize)
+    }
+}
+
+/// One sub-row of a "playable here" marker: light rounded corner brackets
+/// framing the cell on the 2-row tier, the single fallback `glyph` centered
+/// on the glyph row in the cramped tier (corners need two rows to read).
+pub(super) fn hint_cell(glyph: char, tier: CellTier, sub: u16) -> String {
+    if tier.ch == 2 {
+        let (l, r) = if sub == 0 {
+            ('╭', '╮')
+        } else {
+            ('╰', '╯')
+        };
+        format!("{l}{}{r}", " ".repeat((tier.cw as usize).saturating_sub(2)))
     } else if sub == tier.glyph_sub() {
         cell_text(glyph, tier.cw)
     } else {

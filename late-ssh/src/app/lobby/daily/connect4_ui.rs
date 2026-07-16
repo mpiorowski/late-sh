@@ -17,7 +17,7 @@ use crate::app::{
     common::theme,
     lobby::daily::{
         board_ui::{
-            CellTier, PUCK_RING, PUCK_SOLID, cell_text, draw_center_message, name_for,
+            CellTier, PUCK_SOLID, cell_text, draw_center_message, hint_cell, name_for,
             pick_cell_tier, piece_cell, result_banner,
         },
         connect4::{self, DailyConnect4State, Disc},
@@ -217,15 +217,12 @@ fn board_lines(
                         checker(row, col).fg(disc_color(disc)),
                     ),
                     None if cursor == Some(col) && landing == Some(row) => Span::styled(
-                        // The ghost landing disc is the ring.
-                        piece_cell(PUCK_RING, '◌', tier, sub),
+                        // Where the drop would land: the corner frame in
+                        // your colour.
+                        hint_cell('◌', tier, sub),
                         checker(row, col)
                             .fg(disc_color(my_disc))
                             .add_modifier(Modifier::BOLD),
-                    ),
-                    None if glyph_row => Span::styled(
-                        cell_text('·', tier.cw),
-                        checker(row, col).fg(theme::BORDER_DIM()),
                     ),
                     None => Span::styled(" ".repeat(tier.cw as usize), checker(row, col)),
                 };

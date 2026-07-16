@@ -2,8 +2,8 @@
 //! squares hinted for the side to move, and a ghost disc under the cursor.
 //! Shares the daily board chrome — status line, player bars, pinned key hints
 //! — with the chess, battleship, and connect four renderers. Black discs are
-//! solid (`●`), white discs are rings (`○`), so the two read apart on any
-//! palette.
+//! the solid square stone, white the square-with-a-hole, both bright — the
+//! same solid-vs-ring pair as the cramped tier's `●` vs `○`.
 
 use chrono::Utc;
 use ratatui::{
@@ -19,7 +19,7 @@ use crate::app::{
     common::theme,
     lobby::daily::{
         board_ui::{
-            CellTier, PUCK_RING, PUCK_SOLID, cell_text, draw_center_message, name_for,
+            CellTier, PUCK_HOLLOW, PUCK_SOLID, cell_text, draw_center_message, hint_cell, name_for,
             pick_cell_tier, piece_cell, result_banner,
         },
         reversi::{self, DailyReversiState, Disc},
@@ -171,11 +171,12 @@ fn disc_glyph(disc: Disc) -> char {
     }
 }
 
-/// Solid vs ring, the art-tier version of `●` vs `○`.
+/// Solid vs the square-with-a-hole: the art-tier `●`/`○`, full contrast on
+/// any palette.
 fn disc_art(disc: Disc) -> [&'static str; 2] {
     match disc {
         Disc::Black => PUCK_SOLID,
-        Disc::White => PUCK_RING,
+        Disc::White => PUCK_HOLLOW,
     }
 }
 
@@ -224,16 +225,14 @@ fn board_lines(
                         piece_cell(disc_art(disc), disc_glyph(disc), tier, sub),
                         style.fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD),
                     ),
-                    // The ghost previews the disc you would place.
+                    // Playable squares wear a corner frame; under the cursor
+                    // it brightens (the amber cell background marks the spot).
                     None if is_cursor && is_legal => Span::styled(
-                        piece_cell(disc_art(my_disc), '◌', tier, sub),
+                        hint_cell('◌', tier, sub),
                         style.fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD),
                     ),
-                    None if is_legal && glyph_row => {
-                        Span::styled(cell_text('·', tier.cw), style.fg(theme::AMBER()))
-                    }
-                    None if glyph_row => {
-                        Span::styled(cell_text('·', tier.cw), style.fg(theme::BORDER_DIM()))
+                    None if is_legal => {
+                        Span::styled(hint_cell('·', tier, sub), style.fg(theme::AMBER()))
                     }
                     None => Span::styled(" ".repeat(tier.cw as usize), style),
                 };

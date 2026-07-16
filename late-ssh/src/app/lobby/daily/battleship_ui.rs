@@ -18,7 +18,8 @@ use crate::app::{
     lobby::daily::{
         battleship::{self, DailyBattleshipState, Shot},
         board_ui::{
-            CellTier, cell_text, draw_center_message, name_for, pick_cell_tier, result_banner,
+            CellTier, PUCK_HOLLOW, PUCK_SOLID, cell_text, draw_center_message, hint_cell, name_for,
+            pick_cell_tier, piece_cell, result_banner,
         },
         state::{BattleshipDetail, DailyBoardState, DailyMatchDetail, DailyState, format_deadline},
     },
@@ -191,28 +192,12 @@ const INFO_RAIL_WIDTH: u16 = 24;
 /// Breathing room required around the grids before the rail appears.
 const INFO_RAIL_MIN_EXTRA: u16 = 8;
 
-/// One sub-row of one cell: `fill` cells repeat their glyph across every
-/// sub-row, the rest centre it on the glyph row and pad the others (the
-/// style's background still paints them).
-fn cell_span(
-    mid: char,
-    fill: bool,
-    glyph_row: bool,
-    style: Style,
-    tier: CellTier,
-) -> Span<'static> {
-    let text = if fill {
-        mid.to_string().repeat(tier.cw as usize)
-    } else if glyph_row {
-        cell_text(mid, tier.cw)
-    } else {
-        " ".repeat(tier.cw as usize)
-    };
-    Span::styled(text, style)
-}
-
 /// Their waters: your shots, the cursor, and (once the match ends) whatever
-/// survived of their fleet.
+/// survived of their fleet. Shots speak the shared stone language — a hit is
+/// the solid square stone in signal red, a miss the hollow one in smoke —
+/// and the cursor is the corner frame on whatever water it hovers. The
+/// cramped tier keeps the old marks: an `X` on a solid red tile (a lone red
+/// glyph is too faint) and the `[ ]` bracket crosshair.
 fn target_grid_lines(
     state: &DailyBattleshipState,
     me: usize,
@@ -244,56 +229,67 @@ fn target_grid_lines(
                     .ships
                     .iter()
                     .any(|ship| ship.cells.contains(&(cell as u8)));
-                let hit = matches!(shot, Some(Shot { hit: true, .. }));
-                let (mid, fill, style) = match shot {
-                    // A solid red tile with a dark cross — readable from across
-                    // the room, unlike a lone red mark on black.
-                    Some(Shot { hit: true, .. }) => ('X', false, hit_style()),
-                    Some(Shot { hit: false, .. }) => (
-                        'x',
-                        false,
-                        checker(row, col)
-                            .fg(theme::TEXT_MUTED())
-                            .add_modifier(Modifier::BOLD),
+                let is_cursor = cursor == Some(cell);
+
+                if is_cursor && tier.ch == 1 {
+                    // The one-row crosshair: brackets around the cell content.
+                    let (mid, style) = match shot {
+                        Some(Shot { hit: true, .. }) => {
+                            // The hit tile's dark-on-red inverts to
+                            // red-on-selection so the cross stays legible.
+                            ('X', hit_style().fg(theme::ERROR()))
+                        }
+                        Some(Shot { hit: false, .. }) => {
+                            ('x', checker(row, col).fg(theme::TEXT_MUTED()))
+                        }
+                        None => (' ', checker(row, col)),
+                    };
+                    let bracket = Style::default()
+                        .fg(theme::AMBER())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD);
+                    spans.push(Span::styled("[", bracket));
+                    spans.push(Span::styled(
+                        mid.to_string(),
+                        style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::styled("]", bracket));
+                    continue;
+                }
+
+                let mut base = checker(row, col);
+                if is_cursor {
+                    base = base.bg(theme::AMBER_DIM());
+                }
+                let span = match shot {
+                    Some(Shot { hit: true, .. }) => {
+                        if tier.ch == 2 {
+                            Span::styled(
+                                piece_cell(PUCK_SOLID, 'X', tier, sub),
+                                base.fg(theme::ERROR()).add_modifier(Modifier::BOLD),
+                            )
+                        } else {
+                            Span::styled(cell_text('X', tier.cw), hit_style())
+                        }
+                    }
+                    Some(Shot { hit: false, .. }) => Span::styled(
+                        piece_cell(PUCK_HOLLOW, 'x', tier, sub),
+                        base.fg(theme::TEXT_MUTED()).add_modifier(Modifier::BOLD),
                     ),
                     None if finished && enemy_ship => {
                         // The reveal: ships you never found.
-                        ('░', true, checker(row, col).fg(theme::TEXT_MUTED()))
+                        Span::styled("░".repeat(tier.cw as usize), base.fg(theme::TEXT_MUTED()))
                     }
-                    None => ('·', false, checker(row, col).fg(theme::BORDER_DIM())),
+                    // The fire-here frame on the hovered water.
+                    None if is_cursor => Span::styled(
+                        hint_cell('◌', tier, sub),
+                        base.fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+                    ),
+                    // Open water is just the checkerboard; the shot record
+                    // is the only ink on it.
+                    None => Span::styled(" ".repeat(tier.cw as usize), base),
                 };
-                if cursor == Some(cell) {
-                    if glyph_row {
-                        let bracket = Style::default()
-                            .fg(theme::AMBER())
-                            .bg(theme::BG_SELECTION())
-                            .add_modifier(Modifier::BOLD);
-                        let mut mid_style =
-                            style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
-                        if hit {
-                            // The hit tile's dark-on-red inverts to red-on-selection
-                            // under the cursor so the cross stays legible.
-                            mid_style = mid_style.fg(theme::ERROR());
-                        }
-                        spans.push(Span::styled("[", bracket));
-                        spans.push(Span::styled(
-                            format!("{mid:^0$}", tier.cw as usize - 2),
-                            mid_style,
-                        ));
-                        spans.push(Span::styled("]", bracket));
-                    } else {
-                        // The cursor cell's other sub-rows keep the selection tint.
-                        spans.push(cell_span(
-                            if fill { mid } else { ' ' },
-                            fill,
-                            glyph_row,
-                            style.bg(theme::BG_SELECTION()),
-                            tier,
-                        ));
-                    }
-                } else {
-                    spans.push(cell_span(mid, fill, glyph_row, style, tier));
-                }
+                spans.push(span);
             }
             lines.push(Line::from(spans));
         }
@@ -307,6 +303,8 @@ fn target_grid_lines(
 }
 
 /// Your fleet: ships, the hits they've taken, and their misses around them.
+/// A struck segment turns the ship fill signal red on the art tier; the
+/// cramped tier keeps the `X` on the red tile.
 fn fleet_grid_lines(state: &DailyBattleshipState, me: usize, tier: CellTier) -> Vec<Line<'static>> {
     let them = DailyBattleshipState::opponent_index(me);
     let mut lines = vec![grid_title("your fleet", tier), header_line(None, tier)];
@@ -330,19 +328,30 @@ fn fleet_grid_lines(state: &DailyBattleshipState, me: usize, tier: CellTier) -> 
                     .ships
                     .iter()
                     .any(|ship| ship.cells.contains(&(cell as u8)));
-                let (mid, fill, style) = match (my_ship, shot) {
-                    (true, Some(Shot { hit: true, .. })) => ('X', false, hit_style()),
-                    (true, _) => ('█', true, Style::default().fg(theme::TEXT_DIM())),
-                    (false, Some(_)) => (
-                        'x',
-                        false,
+                let span = match (my_ship, shot) {
+                    (true, Some(Shot { hit: true, .. })) => {
+                        if tier.ch == 2 {
+                            Span::styled(
+                                "█".repeat(tier.cw as usize),
+                                Style::default().fg(theme::ERROR()),
+                            )
+                        } else {
+                            Span::styled(cell_text('X', tier.cw), hit_style())
+                        }
+                    }
+                    (true, _) => Span::styled(
+                        "█".repeat(tier.cw as usize),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ),
+                    (false, Some(_)) => Span::styled(
+                        piece_cell(PUCK_HOLLOW, 'x', tier, sub),
                         checker(row, col)
                             .fg(theme::TEXT_MUTED())
                             .add_modifier(Modifier::BOLD),
                     ),
-                    (false, None) => ('·', false, checker(row, col).fg(theme::BORDER_DIM())),
+                    (false, None) => Span::styled(" ".repeat(tier.cw as usize), checker(row, col)),
                 };
-                spans.push(cell_span(mid, fill, glyph_row, style, tier));
+                spans.push(span);
             }
             lines.push(Line::from(spans));
         }
@@ -385,17 +394,28 @@ fn spectate_waters_lines(
                     .shots
                     .iter()
                     .find(|shot| shot.cell as usize == cell);
-                let (mid, style) = match shot {
-                    Some(Shot { hit: true, .. }) => ('X', hit_style()),
-                    Some(Shot { hit: false, .. }) => (
-                        'x',
+                let span = match shot {
+                    Some(Shot { hit: true, .. }) => {
+                        if tier.ch == 2 {
+                            Span::styled(
+                                piece_cell(PUCK_SOLID, 'X', tier, sub),
+                                checker(row, col)
+                                    .fg(theme::ERROR())
+                                    .add_modifier(Modifier::BOLD),
+                            )
+                        } else {
+                            Span::styled(cell_text('X', tier.cw), hit_style())
+                        }
+                    }
+                    Some(Shot { hit: false, .. }) => Span::styled(
+                        piece_cell(PUCK_HOLLOW, 'x', tier, sub),
                         checker(row, col)
                             .fg(theme::TEXT_MUTED())
                             .add_modifier(Modifier::BOLD),
                     ),
-                    None => ('·', checker(row, col).fg(theme::BORDER_DIM())),
+                    None => Span::styled(" ".repeat(tier.cw as usize), checker(row, col)),
                 };
-                spans.push(cell_span(mid, false, glyph_row, style, tier));
+                spans.push(span);
             }
             lines.push(Line::from(spans));
         }
