@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::app::lobby::house::{
     blackjack::settings::BlackjackTableSettings,
     poker::settings::{PokerPace, PokerTableSettings},
+    ssnake::settings::{SsnakeSpeed, SsnakeTableSettings},
     tron::settings::{TronMode, TronSpeed, TronTableSettings},
 };
 use late_core::models::game_room::GameKind;
@@ -24,11 +25,18 @@ pub enum HouseTable {
     Blackjack,
     Asterion,
     Tron,
+    Ssnake,
 }
 
 impl HouseTable {
     /// Roster order: the Lobby modal section and startup seeding follow it.
-    pub const ALL: [Self; 4] = [Self::Poker, Self::Blackjack, Self::Asterion, Self::Tron];
+    pub const ALL: [Self; 5] = [
+        Self::Poker,
+        Self::Blackjack,
+        Self::Asterion,
+        Self::Tron,
+        Self::Ssnake,
+    ];
 
     /// Stable per-variant runtime id. House tables have no `game_rooms` row;
     /// the singleton services still need a table id for snapshots and client
@@ -39,6 +47,7 @@ impl HouseTable {
             Self::Blackjack => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0002),
             Self::Asterion => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0003),
             Self::Tron => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0004),
+            Self::Ssnake => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0005),
         }
     }
 
@@ -48,6 +57,7 @@ impl HouseTable {
             Self::Blackjack => "Blackjack",
             Self::Asterion => "Asterion",
             Self::Tron => "Tron",
+            Self::Ssnake => "Super Snake",
         }
     }
 
@@ -58,6 +68,7 @@ impl HouseTable {
             Self::Blackjack => "house shoe · 10-chip stake",
             Self::Asterion => "escape the maze, dodge the minotaur",
             Self::Tron => "light cycles · quick · glitch",
+            Self::Ssnake => "snake arena · warp tunnels · dos classic",
         }
     }
 
@@ -68,6 +79,7 @@ impl HouseTable {
             Self::Blackjack => "blackjack",
             Self::Asterion => "maze",
             Self::Tron => "tron",
+            Self::Ssnake => "ssnake",
         }
     }
 
@@ -80,6 +92,7 @@ impl HouseTable {
             Self::Blackjack => GameKind::Blackjack,
             Self::Asterion => GameKind::Asterion,
             Self::Tron => GameKind::Tron,
+            Self::Ssnake => GameKind::Ssnake,
         }
     }
 
@@ -89,12 +102,15 @@ impl HouseTable {
             Self::Blackjack => 4,
             Self::Asterion => 12,
             Self::Tron => 4,
+            Self::Ssnake => 4,
         }
     }
 
     /// Fixed house settings. Poker: 1k stack, 10/20 blinds, standard pace.
     /// Blackjack: the 10-chip stake, standard pace. Tron: quick speed,
-    /// glitch mode (owner-preserved). Asterion has no settings.
+    /// glitch mode (owner-preserved). Super Snake: classic speed, all four
+    /// seats, random arena (seated players cycle it between matches).
+    /// Asterion has no settings.
     pub fn poker_settings() -> PokerTableSettings {
         PokerTableSettings {
             pace: PokerPace::Standard,
@@ -111,6 +127,14 @@ impl HouseTable {
         TronTableSettings {
             speed: TronSpeed::Quick,
             mode: TronMode::Glitch,
+        }
+    }
+
+    pub fn ssnake_settings() -> SsnakeTableSettings {
+        SsnakeTableSettings {
+            speed: SsnakeSpeed::Classic,
+            level: None,
+            seats: 4,
         }
     }
 
@@ -157,5 +181,10 @@ mod tests {
         let tron = HouseTable::tron_settings();
         assert_eq!(tron.speed, TronSpeed::Quick);
         assert_eq!(tron.mode, TronMode::Glitch);
+
+        let ssnake = HouseTable::ssnake_settings();
+        assert_eq!(ssnake.speed, SsnakeSpeed::Classic);
+        assert_eq!(ssnake.level, None);
+        assert_eq!(ssnake.seats, 4);
     }
 }

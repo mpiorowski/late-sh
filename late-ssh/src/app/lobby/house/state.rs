@@ -20,6 +20,7 @@ pub enum HouseTableClient {
     Blackjack(crate::app::lobby::house::blackjack::state::State),
     Asterion(crate::app::lobby::house::asterion::state::State),
     Tron(Box<crate::app::lobby::house::tron::state::State>),
+    Ssnake(Box<crate::app::lobby::house::ssnake::state::State>),
 }
 
 impl HouseTableClient {
@@ -29,6 +30,7 @@ impl HouseTableClient {
             Self::Blackjack(_) => HouseTable::Blackjack,
             Self::Asterion(_) => HouseTable::Asterion,
             Self::Tron(_) => HouseTable::Tron,
+            Self::Ssnake(_) => HouseTable::Ssnake,
         }
     }
 
@@ -38,6 +40,7 @@ impl HouseTableClient {
             Self::Blackjack(state) => state.tick(),
             Self::Asterion(state) => state.tick(),
             Self::Tron(state) => state.tick(),
+            Self::Ssnake(state) => state.tick(),
         }
     }
 
@@ -47,6 +50,7 @@ impl HouseTableClient {
             Self::Blackjack(state) => state.touch_activity(),
             Self::Asterion(state) => state.touch_activity(),
             Self::Tron(state) => state.touch_activity(),
+            Self::Ssnake(state) => state.touch_activity(),
         }
     }
 
@@ -77,6 +81,7 @@ impl HouseTableClient {
                 crate::app::lobby::house::asterion::input::handle_key(state, byte)
             }
             Self::Tron(state) => crate::app::lobby::house::tron::input::handle_key(state, byte),
+            Self::Ssnake(state) => crate::app::lobby::house::ssnake::input::handle_key(state, byte),
         }
     }
 
@@ -90,6 +95,9 @@ impl HouseTableClient {
                 crate::app::lobby::house::asterion::input::handle_arrow(state, key)
             }
             Self::Tron(state) => crate::app::lobby::house::tron::input::handle_arrow(state, key),
+            Self::Ssnake(state) => {
+                crate::app::lobby::house::ssnake::input::handle_arrow(state, key)
+            }
         }
     }
 
@@ -113,6 +121,9 @@ impl HouseTableClient {
             }
             Self::Asterion(_) => area.height.saturating_mul(7).saturating_div(10).max(1),
             Self::Tron(_) => crate::app::lobby::house::tron::ui::preferred_height(area),
+            Self::Ssnake(state) => {
+                crate::app::lobby::house::ssnake::ui::preferred_height(state, area)
+            }
         }
     }
 
@@ -132,6 +143,9 @@ impl HouseTableClient {
             Self::Tron(state) => {
                 crate::app::lobby::house::tron::ui::draw_game(frame, area, state, usernames);
             }
+            Self::Ssnake(state) => {
+                crate::app::lobby::house::ssnake::ui::draw_game(frame, area, state, usernames);
+            }
         }
     }
 
@@ -144,6 +158,7 @@ impl HouseTableClient {
             Self::Blackjack(_) => false,
             Self::Asterion(_) => true,
             Self::Tron(_) => false,
+            Self::Ssnake(_) => false,
         }
     }
 
@@ -153,6 +168,7 @@ impl HouseTableClient {
             Self::Blackjack(state) => Some(state.balance()),
             Self::Asterion(_) => None,
             Self::Tron(_) => None,
+            Self::Ssnake(_) => None,
         }
     }
 
@@ -164,6 +180,7 @@ impl HouseTableClient {
             }
             Self::Asterion(_) => false,
             Self::Tron(_) => false,
+            Self::Ssnake(_) => false,
         }
     }
 
@@ -173,6 +190,7 @@ impl HouseTableClient {
             Self::Blackjack(state) => state.set_balance(balance),
             Self::Asterion(_) => {}
             Self::Tron(_) => {}
+            Self::Ssnake(_) => {}
         }
     }
 }

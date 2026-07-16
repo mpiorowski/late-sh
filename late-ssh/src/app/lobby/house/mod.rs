@@ -10,6 +10,7 @@ pub mod image_render;
 pub mod input;
 pub mod poker;
 pub mod registry;
+pub mod ssnake;
 pub mod state;
 pub mod tables;
 pub mod tron;
