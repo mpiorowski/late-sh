@@ -1,5 +1,5 @@
 //! Shared horizontal marquee for rows too long for their rail. Used by the
-//! Activity panel's event rows and the music stage's now-playing rows.
+//! music stage's now-playing rows and the core block's connected-friends row.
 
 /// Render `text` into a `width`-column window. Text that fits is returned
 /// unchanged; longer text scrolls back and forth so the whole thing can be
