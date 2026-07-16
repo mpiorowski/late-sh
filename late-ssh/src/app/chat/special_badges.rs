@@ -12,7 +12,7 @@ const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("kirii.md", &[MODERATOR, ARTIST]),
     ("kirii.exe", &[MODERATOR, ARTIST]),
     ("ricott1", &[DEVELOPER]),
-    ("odd", &[MODERATOR]),
+    ("odd", &[DEVELOPER, MODERATOR]),
     ("tasmania", &[MODERATOR, DEVELOPER]),
 ];
 

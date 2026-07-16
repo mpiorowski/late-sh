@@ -17,19 +17,30 @@ use crate::app::{
     common::theme,
     lobby::daily::{
         battleship::{self, DailyBattleshipState, Shot},
-        board_ui::{draw_center_message, name_for, result_banner},
+        board_ui::{
+            CellTier, PUCK_SOLID, cell_text, draw_center_message, hint_cell, name_for,
+            pick_cell_tier, piece_cell, result_banner,
+        },
         state::{BattleshipDetail, DailyBoardState, DailyMatchDetail, DailyState, format_deadline},
     },
 };
 
-/// title + column header + 10 rows + fleet summary.
-const GRID_ROWS: u16 = 13;
-/// Terminal columns per board cell; the mouse hit-test divides by this.
-pub(crate) const CELL_W: u16 = 3;
+/// title + column header + 10 board rows + fleet summary.
+fn grid_rows(tier: CellTier) -> u16 {
+    3 + battleship::GRID as u16 * tier.ch
+}
+
 /// row labels (3) + 10 cells.
-const GRID_WIDTH: u16 = 3 + (battleship::GRID as u16) * CELL_W;
+fn grid_width(tier: CellTier) -> u16 {
+    3 + battleship::GRID as u16 * tier.cw
+}
+
 const GRID_GAP: u16 = 6;
-const GRIDS_WIDTH: u16 = GRID_WIDTH * 2 + GRID_GAP;
+
+fn grids_width(tier: CellTier) -> u16 {
+    grid_width(tier) * 2 + GRID_GAP
+}
+
 /// status + two player bars + key hints around the grids.
 const CHROME_ROWS: u16 = 4;
 
@@ -41,7 +52,10 @@ pub(crate) fn draw(
     detail: &DailyMatchDetail,
     battleship: &BattleshipDetail,
 ) {
-    if area.width < GRIDS_WIDTH || area.height < GRID_ROWS + CHROME_ROWS {
+    let tier = pick_cell_tier(|tier| {
+        grids_width(tier) <= area.width && grid_rows(tier) + CHROME_ROWS <= area.height
+    });
+    if area.width < grids_width(tier) || area.height < grid_rows(tier) + CHROME_ROWS {
         draw_center_message(frame, area, "The board needs more room.");
         return;
     }
@@ -56,7 +70,7 @@ pub(crate) fn draw(
 
     // Same shape as the chess board: the salvo rail splits off the right
     // edge when there is room, everything else centres in what remains.
-    let show_rail = area.width >= GRIDS_WIDTH + INFO_RAIL_WIDTH + INFO_RAIL_MIN_EXTRA;
+    let show_rail = area.width >= grids_width(tier) + INFO_RAIL_WIDTH + INFO_RAIL_MIN_EXTRA;
     let content = if show_rail {
         let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(INFO_RAIL_WIDTH)])
             .split(area);
@@ -67,16 +81,16 @@ pub(crate) fn draw(
     };
     let area = content;
 
-    let stack_h = GRID_ROWS + CHROME_ROWS;
+    let stack_h = grid_rows(tier) + CHROME_ROWS;
     let top_pad = area.height.saturating_sub(stack_h) / 2;
     let rows = Layout::vertical([
         Constraint::Length(top_pad),
-        Constraint::Length(1),         // status
-        Constraint::Length(1),         // opponent bar
-        Constraint::Length(GRID_ROWS), // the two grids
-        Constraint::Length(1),         // own bar
-        Constraint::Min(0),            // slack, pushing the hints to the floor
-        Constraint::Length(1),         // key hints
+        Constraint::Length(1),               // status
+        Constraint::Length(1),               // opponent bar
+        Constraint::Length(grid_rows(tier)), // the two grids
+        Constraint::Length(1),               // own bar
+        Constraint::Min(0),                  // slack, pushing the hints to the floor
+        Constraint::Length(1),               // key hints
     ])
     .split(area);
     let (status_row, top_bar, grids_row, bottom_bar, hint_row) =
@@ -87,13 +101,13 @@ pub(crate) fn draw(
         && detail.row.turn_user_id == Some(daily.user_id())
         && !battleship.shot_in_flight;
 
-    let grids_x = grids_row.x + grids_row.width.saturating_sub(GRIDS_WIDTH) / 2;
+    let grids_x = grids_row.x + grids_row.width.saturating_sub(grids_width(tier)) / 2;
     // Player bars hug the grids block, not the screen edges — the same
     // centred-stack rule as the chess board's `centered_x` bars.
     let over_grids = |row: Rect| Rect {
         x: grids_x,
         y: row.y,
-        width: GRIDS_WIDTH.min(row.width),
+        width: grids_width(tier).min(row.width),
         height: row.height,
     };
 
@@ -114,33 +128,35 @@ pub(crate) fn draw(
     let target_rect = Rect {
         x: grids_x,
         y: grids_row.y,
-        width: GRID_WIDTH,
-        height: GRID_ROWS,
+        width: grid_width(tier),
+        height: grid_rows(tier),
     };
     let fleet_rect = Rect {
-        x: grids_x + GRID_WIDTH + GRID_GAP,
+        x: grids_x + grid_width(tier) + GRID_GAP,
         y: grids_row.y,
-        width: GRID_WIDTH,
-        height: GRID_ROWS,
+        width: grid_width(tier),
+        height: grid_rows(tier),
     };
     // A player sees their shots on the enemy (left) beside their own fleet
     // taking fire (right). A spectator sees both players' waters charted by
     // hits and misses only — the fleets stay hidden.
     let (left_lines, right_lines) = match me {
         Some(me) => (
-            target_grid_lines(state, me, my_turn.then_some(board.cursor), finished),
-            fleet_grid_lines(state, me),
+            target_grid_lines(state, me, my_turn.then_some(board.cursor), finished, tier),
+            fleet_grid_lines(state, me, tier),
         ),
         None => (
             spectate_waters_lines(
                 state,
                 top_side,
                 name_for(board, state.side(top_side).user_id),
+                tier,
             ),
             spectate_waters_lines(
                 state,
                 bottom_side,
                 name_for(board, state.side(bottom_side).user_id),
+                tier,
             ),
         ),
     };
@@ -152,8 +168,8 @@ pub(crate) fn draw(
         board.target_geometry.set(Some(Rect {
             x: target_rect.x + 3,
             y: target_rect.y + 2,
-            width: (battleship::GRID as u16) * CELL_W,
-            height: battleship::GRID as u16,
+            width: battleship::GRID as u16 * tier.cw,
+            height: battleship::GRID as u16 * tier.ch,
         }));
     }
 
@@ -177,115 +193,177 @@ const INFO_RAIL_WIDTH: u16 = 24;
 const INFO_RAIL_MIN_EXTRA: u16 = 8;
 
 /// Their waters: your shots, the cursor, and (once the match ends) whatever
-/// survived of their fleet.
+/// survived of their fleet. Shots speak the shared stone language — one
+/// square stone, signal red for a hit, smoke for a miss — and the cursor is
+/// the corner frame on whatever water it hovers. The
+/// cramped tier keeps the old marks: an `X` on a solid red tile (a lone red
+/// glyph is too faint) and the `[ ]` bracket crosshair.
 fn target_grid_lines(
     state: &DailyBattleshipState,
     me: usize,
     cursor: Option<usize>,
     finished: bool,
+    tier: CellTier,
 ) -> Vec<Line<'static>> {
     let them = DailyBattleshipState::opponent_index(me);
     let hot_col = cursor.map(|cell| cell % battleship::GRID);
     let hot_row = cursor.map(|cell| cell / battleship::GRID);
-    let mut lines = vec![grid_title("their waters"), header_line(hot_col)];
+    let mut lines = vec![grid_title("their waters", tier), header_line(hot_col, tier)];
     for row in 0..battleship::GRID {
-        let mut spans = vec![row_label(row, hot_row == Some(row))];
-        for col in 0..battleship::GRID {
-            let cell = row * battleship::GRID + col;
-            let shot = state
-                .side(me)
-                .shots
-                .iter()
-                .find(|shot| shot.cell as usize == cell);
-            let enemy_ship = state
-                .side(them)
-                .ships
-                .iter()
-                .any(|ship| ship.cells.contains(&(cell as u8)));
-            let hit = matches!(shot, Some(Shot { hit: true, .. }));
-            let (full, mid, style) = match shot {
-                // A solid red tile with a dark cross — readable from across
-                // the room, unlike a lone red mark on black.
-                Some(Shot { hit: true, .. }) => (" X ", 'X', hit_style()),
-                Some(Shot { hit: false, .. }) => (
-                    " x ",
-                    'x',
-                    checker(row, col)
-                        .fg(theme::TEXT_MUTED())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                None if finished && enemy_ship => {
-                    // The reveal: ships you never found.
-                    ("░░░", '░', checker(row, col).fg(theme::TEXT_MUTED()))
-                }
-                None => (" · ", '·', checker(row, col).fg(theme::BORDER_DIM())),
-            };
-            if cursor == Some(cell) {
-                let bracket = Style::default()
-                    .fg(theme::AMBER())
-                    .bg(theme::BG_SELECTION())
-                    .add_modifier(Modifier::BOLD);
-                let mut mid_style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
-                if hit {
-                    // The hit tile's dark-on-red inverts to red-on-selection
-                    // under the cursor so the cross stays legible.
-                    mid_style = mid_style.fg(theme::ERROR());
-                }
-                spans.push(Span::styled("[", bracket));
-                spans.push(Span::styled(mid.to_string(), mid_style));
-                spans.push(Span::styled("]", bracket));
+        for sub in 0..tier.ch {
+            let glyph_row = sub == tier.glyph_sub();
+            let mut spans = vec![if glyph_row {
+                row_label(row, hot_row == Some(row))
             } else {
-                spans.push(Span::styled(full.to_string(), style));
+                Span::raw("   ")
+            }];
+            for col in 0..battleship::GRID {
+                let cell = row * battleship::GRID + col;
+                let shot = state
+                    .side(me)
+                    .shots
+                    .iter()
+                    .find(|shot| shot.cell as usize == cell);
+                let enemy_ship = state
+                    .side(them)
+                    .ships
+                    .iter()
+                    .any(|ship| ship.cells.contains(&(cell as u8)));
+                let is_cursor = cursor == Some(cell);
+
+                if is_cursor && tier.ch == 1 {
+                    // The one-row crosshair: brackets around the cell content.
+                    let (mid, style) = match shot {
+                        Some(Shot { hit: true, .. }) => {
+                            // The hit tile's dark-on-red inverts to
+                            // red-on-selection so the cross stays legible.
+                            ('X', hit_style().fg(theme::ERROR()))
+                        }
+                        Some(Shot { hit: false, .. }) => {
+                            ('x', checker(row, col).fg(theme::TEXT_MUTED()))
+                        }
+                        None => (' ', checker(row, col)),
+                    };
+                    let bracket = Style::default()
+                        .fg(theme::AMBER())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD);
+                    spans.push(Span::styled("[", bracket));
+                    spans.push(Span::styled(
+                        mid.to_string(),
+                        style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::styled("]", bracket));
+                    continue;
+                }
+
+                let mut base = checker(row, col);
+                if is_cursor {
+                    base = base.bg(theme::AMBER_DIM());
+                }
+                let span = match shot {
+                    Some(Shot { hit: true, .. }) => {
+                        if tier.ch == 2 {
+                            Span::styled(
+                                piece_cell(PUCK_SOLID, 'X', tier, sub),
+                                base.fg(theme::ERROR()).add_modifier(Modifier::BOLD),
+                            )
+                        } else {
+                            Span::styled(cell_text('X', tier.cw), hit_style())
+                        }
+                    }
+                    Some(Shot { hit: false, .. }) => Span::styled(
+                        piece_cell(PUCK_SOLID, 'x', tier, sub),
+                        base.fg(theme::TEXT_MUTED()).add_modifier(Modifier::BOLD),
+                    ),
+                    None if finished && enemy_ship => {
+                        // The reveal: ships you never found.
+                        Span::styled("░".repeat(tier.cw as usize), base.fg(theme::TEXT_MUTED()))
+                    }
+                    // The fire-here frame on the hovered water.
+                    None if is_cursor => Span::styled(
+                        hint_cell('◌', tier, sub),
+                        base.fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+                    ),
+                    // Open water is just the checkerboard; the shot record
+                    // is the only ink on it.
+                    None => Span::styled(" ".repeat(tier.cw as usize), base),
+                };
+                spans.push(span);
             }
+            lines.push(Line::from(spans));
         }
-        lines.push(Line::from(spans));
     }
     let sunk = battleship::FLEET_LENGTHS.len() - state.ships_afloat_against(me);
-    lines.push(summary_line(format!(
-        "sunk {sunk}/{}",
-        battleship::FLEET_LENGTHS.len()
-    )));
+    lines.push(summary_line(
+        format!("sunk {sunk}/{}", battleship::FLEET_LENGTHS.len()),
+        tier,
+    ));
     lines
 }
 
 /// Your fleet: ships, the hits they've taken, and their misses around them.
-fn fleet_grid_lines(state: &DailyBattleshipState, me: usize) -> Vec<Line<'static>> {
+/// A struck segment turns the ship fill signal red on the art tier; the
+/// cramped tier keeps the `X` on the red tile.
+fn fleet_grid_lines(state: &DailyBattleshipState, me: usize, tier: CellTier) -> Vec<Line<'static>> {
     let them = DailyBattleshipState::opponent_index(me);
-    let mut lines = vec![grid_title("your fleet"), header_line(None)];
+    let mut lines = vec![grid_title("your fleet", tier), header_line(None, tier)];
     for row in 0..battleship::GRID {
-        let mut spans = vec![row_label(row, false)];
-        for col in 0..battleship::GRID {
-            let cell = row * battleship::GRID + col;
-            let shot = state
-                .side(them)
-                .shots
-                .iter()
-                .find(|shot| shot.cell as usize == cell);
-            let my_ship = state
-                .side(me)
-                .ships
-                .iter()
-                .any(|ship| ship.cells.contains(&(cell as u8)));
-            let (glyph, style) = match (my_ship, shot) {
-                (true, Some(Shot { hit: true, .. })) => (" X ", hit_style()),
-                (true, _) => ("███", Style::default().fg(theme::TEXT_DIM())),
-                (false, Some(_)) => (
-                    " x ",
-                    checker(row, col)
-                        .fg(theme::TEXT_MUTED())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                (false, None) => (" · ", checker(row, col).fg(theme::BORDER_DIM())),
-            };
-            spans.push(Span::styled(glyph.to_string(), style));
+        for sub in 0..tier.ch {
+            let glyph_row = sub == tier.glyph_sub();
+            let mut spans = vec![if glyph_row {
+                row_label(row, false)
+            } else {
+                Span::raw("   ")
+            }];
+            for col in 0..battleship::GRID {
+                let cell = row * battleship::GRID + col;
+                let shot = state
+                    .side(them)
+                    .shots
+                    .iter()
+                    .find(|shot| shot.cell as usize == cell);
+                let my_ship = state
+                    .side(me)
+                    .ships
+                    .iter()
+                    .any(|ship| ship.cells.contains(&(cell as u8)));
+                let span = match (my_ship, shot) {
+                    (true, Some(Shot { hit: true, .. })) => {
+                        if tier.ch == 2 {
+                            Span::styled(
+                                "█".repeat(tier.cw as usize),
+                                Style::default().fg(theme::ERROR()),
+                            )
+                        } else {
+                            Span::styled(cell_text('X', tier.cw), hit_style())
+                        }
+                    }
+                    (true, _) => Span::styled(
+                        "█".repeat(tier.cw as usize),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ),
+                    (false, Some(_)) => Span::styled(
+                        piece_cell(PUCK_SOLID, 'x', tier, sub),
+                        checker(row, col)
+                            .fg(theme::TEXT_MUTED())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    (false, None) => Span::styled(" ".repeat(tier.cw as usize), checker(row, col)),
+                };
+                spans.push(span);
+            }
+            lines.push(Line::from(spans));
         }
-        lines.push(Line::from(spans));
     }
-    lines.push(summary_line(format!(
-        "afloat {}/{}",
-        state.ships_afloat_against(them),
-        battleship::FLEET_LENGTHS.len()
-    )));
+    lines.push(summary_line(
+        format!(
+            "afloat {}/{}",
+            state.ships_afloat_against(them),
+            battleship::FLEET_LENGTHS.len()
+        ),
+        tier,
+    ));
     lines
 }
 
@@ -297,42 +375,61 @@ fn spectate_waters_lines(
     state: &DailyBattleshipState,
     defender: usize,
     title: String,
+    tier: CellTier,
 ) -> Vec<Line<'static>> {
     let attacker = DailyBattleshipState::opponent_index(defender);
-    let mut lines = vec![grid_title(&title), header_line(None)];
+    let mut lines = vec![grid_title(&title, tier), header_line(None, tier)];
     for row in 0..battleship::GRID {
-        let mut spans = vec![row_label(row, false)];
-        for col in 0..battleship::GRID {
-            let cell = row * battleship::GRID + col;
-            let shot = state
-                .side(attacker)
-                .shots
-                .iter()
-                .find(|shot| shot.cell as usize == cell);
-            let (glyph, style) = match shot {
-                Some(Shot { hit: true, .. }) => (" X ", hit_style()),
-                Some(Shot { hit: false, .. }) => (
-                    " x ",
-                    checker(row, col)
-                        .fg(theme::TEXT_MUTED())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                None => (" · ", checker(row, col).fg(theme::BORDER_DIM())),
-            };
-            spans.push(Span::styled(glyph.to_string(), style));
+        for sub in 0..tier.ch {
+            let glyph_row = sub == tier.glyph_sub();
+            let mut spans = vec![if glyph_row {
+                row_label(row, false)
+            } else {
+                Span::raw("   ")
+            }];
+            for col in 0..battleship::GRID {
+                let cell = row * battleship::GRID + col;
+                let shot = state
+                    .side(attacker)
+                    .shots
+                    .iter()
+                    .find(|shot| shot.cell as usize == cell);
+                let span = match shot {
+                    Some(Shot { hit: true, .. }) => {
+                        if tier.ch == 2 {
+                            Span::styled(
+                                piece_cell(PUCK_SOLID, 'X', tier, sub),
+                                checker(row, col)
+                                    .fg(theme::ERROR())
+                                    .add_modifier(Modifier::BOLD),
+                            )
+                        } else {
+                            Span::styled(cell_text('X', tier.cw), hit_style())
+                        }
+                    }
+                    Some(Shot { hit: false, .. }) => Span::styled(
+                        piece_cell(PUCK_SOLID, 'x', tier, sub),
+                        checker(row, col)
+                            .fg(theme::TEXT_MUTED())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    None => Span::styled(" ".repeat(tier.cw as usize), checker(row, col)),
+                };
+                spans.push(span);
+            }
+            lines.push(Line::from(spans));
         }
-        lines.push(Line::from(spans));
     }
     let sunk = battleship::FLEET_LENGTHS.len() - state.ships_afloat_against(attacker);
-    lines.push(summary_line(format!(
-        "sunk {sunk}/{}",
-        battleship::FLEET_LENGTHS.len()
-    )));
+    lines.push(summary_line(
+        format!("sunk {sunk}/{}", battleship::FLEET_LENGTHS.len()),
+        tier,
+    ));
     lines
 }
 
-fn grid_title(title: &str) -> Line<'static> {
-    let pad = (GRID_WIDTH as usize).saturating_sub(title.chars().count()) / 2;
+fn grid_title(title: &str, tier: CellTier) -> Line<'static> {
+    let pad = (grid_width(tier) as usize).saturating_sub(title.chars().count()) / 2;
     Line::from(Span::styled(
         format!("{}{title}", " ".repeat(pad)),
         Style::default()
@@ -360,7 +457,7 @@ fn hit_style() -> Style {
 }
 
 /// `hot_col` lights up the cursor's column letter as a crosshair.
-fn header_line(hot_col: Option<usize>) -> Line<'static> {
+fn header_line(hot_col: Option<usize>, tier: CellTier) -> Line<'static> {
     let mut spans = vec![Span::raw("   ")];
     for col in 0..battleship::GRID {
         let letter = (b'A' + col as u8) as char;
@@ -371,7 +468,7 @@ fn header_line(hot_col: Option<usize>) -> Line<'static> {
         } else {
             Style::default().fg(theme::TEXT_FAINT())
         };
-        spans.push(Span::styled(format!(" {letter} "), style));
+        spans.push(Span::styled(cell_text(letter, tier.cw), style));
     }
     Line::from(spans)
 }
@@ -387,8 +484,8 @@ fn row_label(row: usize, hot: bool) -> Span<'static> {
     Span::styled(format!("{:>2} ", row + 1), style)
 }
 
-fn summary_line(text: String) -> Line<'static> {
-    let pad = (GRID_WIDTH as usize).saturating_sub(text.chars().count()) / 2;
+fn summary_line(text: String, tier: CellTier) -> Line<'static> {
+    let pad = (grid_width(tier) as usize).saturating_sub(text.chars().count()) / 2;
     Line::from(Span::styled(
         format!("{}{text}", " ".repeat(pad)),
         Style::default().fg(theme::TEXT_FAINT()),

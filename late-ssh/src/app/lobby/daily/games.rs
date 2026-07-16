@@ -7,7 +7,9 @@
 use late_core::models::{
     daily_match::DailyMatch,
     reward::{
-        DAILY_BATTLESHIP_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY, DAILY_CONNECT4_WIN_REWARD_KEY,
+        DAILY_BACKGAMMON_WIN_REWARD_KEY, DAILY_BATTLESHIP_WIN_REWARD_KEY,
+        DAILY_CHECKERS_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY, DAILY_CONNECT4_WIN_REWARD_KEY,
+        DAILY_REVERSI_WIN_REWARD_KEY,
     },
 };
 
@@ -16,11 +18,21 @@ pub enum DailyGame {
     Chess,
     Battleship,
     ConnectFour,
+    Reversi,
+    Checkers,
+    Backgammon,
 }
 
 impl DailyGame {
     /// Roster order: pickers, help copy, and usage strings follow it.
-    pub const ALL: [Self; 3] = [Self::Chess, Self::Battleship, Self::ConnectFour];
+    pub const ALL: [Self; 6] = [
+        Self::Chess,
+        Self::Battleship,
+        Self::ConnectFour,
+        Self::Reversi,
+        Self::Checkers,
+        Self::Backgammon,
+    ];
 
     /// The persisted `daily_matches.game_kind` value.
     pub const fn kind(self) -> &'static str {
@@ -28,6 +40,9 @@ impl DailyGame {
             Self::Chess => DailyMatch::GAME_KIND_CHESS,
             Self::Battleship => DailyMatch::GAME_KIND_BATTLESHIP,
             Self::ConnectFour => DailyMatch::GAME_KIND_CONNECTFOUR,
+            Self::Reversi => DailyMatch::GAME_KIND_REVERSI,
+            Self::Checkers => DailyMatch::GAME_KIND_CHECKERS,
+            Self::Backgammon => DailyMatch::GAME_KIND_BACKGAMMON,
         }
     }
 
@@ -38,6 +53,9 @@ impl DailyGame {
             Self::Chess => "chess",
             Self::Battleship => "battleship",
             Self::ConnectFour => "connect4",
+            Self::Reversi => "reversi",
+            Self::Checkers => "checkers",
+            Self::Backgammon => "backgammon",
         }
     }
 
@@ -49,6 +67,9 @@ impl DailyGame {
             Self::Chess => "Chess",
             Self::Battleship => "Battleship",
             Self::ConnectFour => "Connect Four",
+            Self::Reversi => "Reversi",
+            Self::Checkers => "Checkers",
+            Self::Backgammon => "Backgammon",
         }
     }
 
@@ -59,6 +80,9 @@ impl DailyGame {
             Self::Chess => 500,
             Self::Battleship => 300,
             Self::ConnectFour => 400,
+            Self::Reversi => 400,
+            Self::Checkers => 400,
+            Self::Backgammon => 400,
         }
     }
 
@@ -67,6 +91,9 @@ impl DailyGame {
             Self::Chess => DAILY_CHESS_WIN_REWARD_KEY,
             Self::Battleship => DAILY_BATTLESHIP_WIN_REWARD_KEY,
             Self::ConnectFour => DAILY_CONNECT4_WIN_REWARD_KEY,
+            Self::Reversi => DAILY_REVERSI_WIN_REWARD_KEY,
+            Self::Checkers => DAILY_CHECKERS_WIN_REWARD_KEY,
+            Self::Backgammon => DAILY_BACKGAMMON_WIN_REWARD_KEY,
         }
     }
 
@@ -75,6 +102,9 @@ impl DailyGame {
             Self::Chess => "daily_chess_win",
             Self::Battleship => "daily_battleship_win",
             Self::ConnectFour => "daily_connect4_win",
+            Self::Reversi => "daily_reversi_win",
+            Self::Checkers => "daily_checkers_win",
+            Self::Backgammon => "daily_backgammon_win",
         }
     }
 
@@ -84,6 +114,9 @@ impl DailyGame {
             Self::Chess => "one move per day",
             Self::Battleship => "one salvo per day · a hit fires again",
             Self::ConnectFour => "one drop per day · four in a row wins",
+            Self::Reversi => "one move per day · most discs wins",
+            Self::Checkers => "one move per day · capture or block to win",
+            Self::Backgammon => "one roll per day · bear off all fifteen",
         }
     }
 
@@ -127,6 +160,9 @@ mod tests {
 
     #[test]
     fn usage_lists_every_game() {
-        assert_eq!(DailyGame::usage_labels(), "chess|battleship|connect4");
+        assert_eq!(
+            DailyGame::usage_labels(),
+            "chess|battleship|connect4|reversi|checkers|backgammon"
+        );
     }
 }

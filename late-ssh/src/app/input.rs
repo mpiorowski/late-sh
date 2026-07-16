@@ -2342,9 +2342,10 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
-    // Esc from the daily board peels chat state first (mirroring the active
-    // room): a selected match-chat message deselects, then Esc drops back to
-    // the Daily Games modal on the screen it was opened from.
+    // Esc from the daily board peels state in layers (mirroring the active
+    // room): a selected match-chat message deselects, then a half-built
+    // checkers/backgammon move clears, then Esc drops back to the Daily
+    // Games modal on the screen it was opened from.
     if ctx.screen == Screen::DailyMatch {
         if let Some(chat_room_id) = app.daily.board_chat_room_id()
             && app
@@ -2353,6 +2354,9 @@ fn dispatch_escape(app: &mut App) {
                 .is_some()
         {
             app.chat.clear_message_selection();
+            return;
+        }
+        if app.daily.cancel_pending_move() {
             return;
         }
         crate::app::lobby::daily::board_input::close_board(app);

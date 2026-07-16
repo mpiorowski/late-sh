@@ -99,7 +99,7 @@ const COMMANDS: &[Command] = &[
     global("bug", "report a bug to #bugs"),
     global(
         "challenge",
-        "post daily challenge (chess, battleship, connect4)",
+        "post daily challenge (chess, battleship, connect4, reversi, checkers, backgammon)",
     ),
     global("coffee", "post coffee cup"),
     global("dm", "open DM"),

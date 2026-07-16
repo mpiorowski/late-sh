@@ -177,6 +177,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         props.afk,
         props.online_count,
         props.active_friend_names,
+        props.marquee_tick,
     );
     i += 1;
 
@@ -329,6 +330,7 @@ fn draw_core_block(
     afk: Option<&str>,
     online_count: usize,
     active_friend_names: &[String],
+    tick: usize,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -415,7 +417,7 @@ fn draw_core_block(
                 ),
                 Span::raw(" "),
                 Span::styled(
-                    compact_friend_names(active_friend_names, area.width as usize),
+                    friend_names_text(active_friend_names, area.width as usize, tick),
                     Style::default()
                         .fg(theme::TEXT_BRIGHT())
                         .add_modifier(Modifier::BOLD),
@@ -427,20 +429,20 @@ fn draw_core_block(
 }
 
 const ACTIVE_FRIEND_MARKER: &str = "★";
-const ACTIVE_FRIEND_NAME_LIMIT: usize = 4;
 
-fn compact_friend_names(names: &[String], width: usize) -> String {
-    let mut pieces: Vec<String> = names
+/// Every connected friend on the one reserved row, most recent login first.
+/// The list scrolls (marquee) when it overruns the rail instead of stopping
+/// at the few names that happen to fit, so the whole crowd can be read.
+fn friend_names_text(names: &[String], width: usize, tick: usize) -> String {
+    let joined = names
         .iter()
-        .take(ACTIVE_FRIEND_NAME_LIMIT)
-        .map(|name| format!("@{}", truncate_chars(name, 10)))
-        .collect();
-    if names.len() > ACTIVE_FRIEND_NAME_LIMIT {
-        pieces.push(format!("+{}", names.len() - ACTIVE_FRIEND_NAME_LIMIT));
-    }
-    truncate_chars(
-        &pieces.join(" "),
+        .map(|name| format!("@{name}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    crate::app::common::marquee::marquee_text(
+        &joined,
         width.saturating_sub(ACTIVE_FRIEND_MARKER.chars().count() + 1),
+        tick,
     )
 }
 
@@ -1139,6 +1141,21 @@ mod tests {
     fn sidebar_clock_text_falls_back_to_utc_when_timezone_missing() {
         let clock = sidebar_clock_text(None);
         assert!(clock.starts_with("UTC "));
+    }
+
+    #[test]
+    fn friend_names_text_keeps_every_name_when_the_row_is_wide() {
+        let names = vec!["ada".to_string(), "bob".to_string()];
+        assert_eq!(friend_names_text(&names, 40, 0), "@ada @bob");
+    }
+
+    #[test]
+    fn friend_names_text_scrolls_past_the_names_that_do_not_fit() {
+        let names = vec!["ada".to_string(), "bob".to_string(), "cyd".to_string()];
+        // Marker plus its space leave 10 columns of the 12-wide rail.
+        assert_eq!(friend_names_text(&names, 12, 0), "@ada @bob ");
+        // Held at the start, then scrolled to the end: the tail is readable.
+        assert_eq!(friend_names_text(&names, 12, 40), " @bob @cyd");
     }
 
     fn line_text(line: &Line<'_>) -> String {

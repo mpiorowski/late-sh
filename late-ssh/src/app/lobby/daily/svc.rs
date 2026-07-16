@@ -26,7 +26,11 @@ use crate::app::games::{
     chips::svc::ChipService,
 };
 
-use super::{battleship::DailyBattleshipState, connect4::DailyConnect4State, games::DailyGame};
+use super::{
+    backgammon::DailyBackgammonState, battleship::DailyBattleshipState,
+    checkers::DailyCheckersState, connect4::DailyConnect4State, games::DailyGame,
+    reversi::DailyReversiState,
+};
 
 // The cap exceeds the sidebar panel's 4 match slots on purpose: with up to 10
 // entries not all fit, so the panel shows the 4 most actionable (your-turn
@@ -505,6 +509,25 @@ impl DailyService {
                 let first = state.red;
                 (serde_json::to_value(state)?, first)
             }
+            DailyGame::Reversi => {
+                // `new` flips the coin for who's black, and black moves first.
+                let state = DailyReversiState::new(challenge.challenger_id, user_id);
+                let first = state.black;
+                (serde_json::to_value(state)?, first)
+            }
+            DailyGame::Checkers => {
+                // `new` flips the coin for who's red, and red moves first.
+                let state = DailyCheckersState::new(challenge.challenger_id, user_id);
+                let first = state.red;
+                (serde_json::to_value(state)?, first)
+            }
+            DailyGame::Backgammon => {
+                // `new` flips the coin for who's white, and white plays the
+                // server-rolled opening (stored in the state as `next_roll`).
+                let state = DailyBackgammonState::new(challenge.challenger_id, user_id);
+                let first = state.white;
+                (serde_json::to_value(state)?, first)
+            }
         };
         // Usernames for the voice channel label, loaded before the claim
         // transaction opens.
@@ -568,24 +591,24 @@ impl DailyService {
         Ok(())
     }
 
-    pub async fn play_move(
+    /// Shared move prelude: load the active row and enforce turn + the 24h
+    /// clock on the move path itself, not only in the 60s sweeper (a move
+    /// landing after flag fall must be rejected and must not reset the clock;
+    /// the sweeper stays the forfeit executor). Both the single-cell
+    /// `play_move` and checkers' path channel go through this.
+    async fn move_prelude(
         &self,
+        client: &tokio_postgres::Client,
         user_id: Uuid,
         match_id: Uuid,
-        from: usize,
-        to: usize,
-    ) -> Result<()> {
-        let client = self.db.get().await?;
-        let row = DailyMatch::get(&client, match_id)
+    ) -> Result<(DailyMatch, DailyGame)> {
+        let row = DailyMatch::get(client, match_id)
             .await?
             .filter(|row| row.status == DailyMatch::STATUS_ACTIVE)
             .ok_or_else(|| anyhow::anyhow!("match is not active"))?;
         if row.turn_user_id != Some(user_id) {
             bail!("not your turn");
         }
-        // Enforce the 24h clock on the move path itself, not only in the 60s
-        // sweeper: a move landing after flag fall must be rejected (and must
-        // not reset the deadline). The sweeper stays the forfeit executor.
         if row
             .turn_deadline_at
             .is_some_and(|deadline| deadline <= Utc::now())
@@ -594,13 +617,92 @@ impl DailyService {
         }
         let game = DailyGame::from_kind(&row.game_kind)
             .ok_or_else(|| anyhow::anyhow!("unknown daily game: {}", row.game_kind))?;
+        Ok((row, game))
+    }
+
+    /// Single-cell move channel: chess `from`/`to`, or one square in `to` for
+    /// the games where a move is a single cell/column. Checkers is the one
+    /// game whose move is a variable-length path, so it uses
+    /// `play_checkers_move` instead.
+    pub async fn play_move(
+        &self,
+        user_id: Uuid,
+        match_id: Uuid,
+        from: usize,
+        to: usize,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
         match game {
             DailyGame::Chess => self.play_chess_move(&client, row, user_id, from, to).await,
             // A battleship "move" is one square; `to` carries the target cell.
             DailyGame::Battleship => self.play_battleship_shot(&client, row, user_id, to).await,
             // A connect-four "move" is one column; `to` carries it.
             DailyGame::ConnectFour => self.play_connect4_drop(&client, row, user_id, to).await,
+            // A reversi "move" is one square; `to` carries the target cell.
+            DailyGame::Reversi => self.play_reversi_move(&client, row, user_id, to).await,
+            // Checkers routes through `play_checkers_move` (a path won't fit in
+            // two usizes); this arm is defensive and never reached in practice.
+            DailyGame::Checkers => bail!("checkers moves use the path channel"),
+            // Backgammon likewise: a turn is up to four hops.
+            DailyGame::Backgammon => bail!("backgammon moves use the turn channel"),
         }
+    }
+
+    /// Checkers move channel: the full path (start plus each landing square, as
+    /// `row * 8 + col` indices). A variable-length jump chain can't ride the
+    /// two-usize `play_move`, and the server must re-validate the whole path.
+    pub fn play_checkers_move_task(&self, user_id: Uuid, match_id: Uuid, path: Vec<usize>) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.play_checkers_move(user_id, match_id, path).await {
+                tracing::error!(error = ?e, %user_id, %match_id, "failed to play daily checkers move");
+                svc.send_error(user_id, &e);
+            }
+        });
+    }
+
+    pub async fn play_checkers_move(
+        &self,
+        user_id: Uuid,
+        match_id: Uuid,
+        path: Vec<usize>,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
+        ensure!(game == DailyGame::Checkers, "not a checkers match");
+        self.play_checkers(&client, row, user_id, &path).await
+    }
+
+    /// Backgammon turn channel: the full turn as `(from, to)` hops (point
+    /// indices with the `BAR`/`OFF` sentinels). Like checkers, a
+    /// variable-length turn can't ride the two-usize `play_move`, and the
+    /// server re-validates the whole sequence against the stored roll.
+    pub fn play_backgammon_move_task(
+        &self,
+        user_id: Uuid,
+        match_id: Uuid,
+        hops: Vec<super::backgammon::Hop>,
+    ) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.play_backgammon_move(user_id, match_id, hops).await {
+                tracing::error!(error = ?e, %user_id, %match_id, "failed to play daily backgammon move");
+                svc.send_error(user_id, &e);
+            }
+        });
+    }
+
+    pub async fn play_backgammon_move(
+        &self,
+        user_id: Uuid,
+        match_id: Uuid,
+        hops: Vec<super::backgammon::Hop>,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
+        ensure!(game == DailyGame::Backgammon, "not a backgammon match");
+        self.play_backgammon(&client, row, user_id, &hops).await
     }
 
     async fn play_chess_move(
@@ -841,6 +943,265 @@ impl DailyService {
             }
             None => {
                 let next_turn = state.user_of(disc.other());
+                let updated = DailyMatch::update_state(
+                    client,
+                    match_id,
+                    &state_value,
+                    user_id,
+                    next_turn,
+                    Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+            }
+        }
+        self.publish(client).await?;
+        Ok(())
+    }
+
+    /// One disc at `cell`. The turn passes to whoever can move next — a forced
+    /// pass is resolved by `state.turn()`, so the mover can come back up at
+    /// once. Holding the most discs when neither side can move finishes the
+    /// match; an equal split draws it.
+    async fn play_reversi_move(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        user_id: Uuid,
+        cell: usize,
+    ) -> Result<()> {
+        let match_id = row.id;
+        let mut state = DailyReversiState::parse(&row.state)?;
+        let disc = state
+            .disc_of(user_id)
+            .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
+        ensure!(state.turn() == disc, "not your turn");
+        let base_revision = state.revision as i64;
+        state.revision = state.revision.saturating_add(1);
+        let (move_row, move_col) = (cell / super::reversi::SIZE, cell % super::reversi::SIZE);
+        let outcome = state.apply_move(move_row, move_col)?;
+        let label = outcome.label(move_row, move_col);
+        let state_value = serde_json::to_value(&state)?;
+
+        let finished = outcome.finished.then(|| {
+            let result = if outcome.draw {
+                DailyMatch::RESULT_DRAW
+            } else {
+                DailyMatch::RESULT_MOST_DISCS
+            };
+            (outcome.winner.map(|disc| state.user_of(disc)), result)
+        });
+        match finished {
+            Some((winner, result)) => {
+                let updated = DailyMatch::finish(
+                    client,
+                    match_id,
+                    winner,
+                    result,
+                    &state_value,
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+                self.finish_events(
+                    match_id,
+                    DailyGame::Reversi,
+                    row.challenger_id,
+                    row.opponent_id,
+                    winner,
+                    result,
+                );
+            }
+            None => {
+                // `turn()` already skips a blocked opponent, so this can point
+                // back at the mover for another move.
+                let next_turn = state.user_of(state.turn());
+                let updated = DailyMatch::update_state(
+                    client,
+                    match_id,
+                    &state_value,
+                    user_id,
+                    next_turn,
+                    Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+            }
+        }
+        self.publish(client).await?;
+        Ok(())
+    }
+
+    /// One move path (a slide or a full jump chain, as `row * 8 + col` cell
+    /// indices). Blocking or capturing every enemy piece finishes the match;
+    /// the forty-move rule draws it. The turn always passes — checkers has no
+    /// forced pass, a side with no move simply loses.
+    async fn play_checkers(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        user_id: Uuid,
+        path: &[usize],
+    ) -> Result<()> {
+        let match_id = row.id;
+        let mut state = DailyCheckersState::parse(&row.state)?;
+        let color = state
+            .color_of(user_id)
+            .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
+        ensure!(state.turn() == color, "not your turn");
+        let base_revision = state.revision as i64;
+        state.revision = state.revision.saturating_add(1);
+        let cells: Vec<(usize, usize)> = path
+            .iter()
+            .map(|&i| (i / super::checkers::SIZE, i % super::checkers::SIZE))
+            .collect();
+        let outcome = state.apply_move(&cells)?;
+        let label = outcome.label(&cells);
+        let state_value = serde_json::to_value(&state)?;
+
+        let finished = outcome.finished.then(|| {
+            let result = if outcome.draw {
+                DailyMatch::RESULT_DRAW
+            } else {
+                DailyMatch::RESULT_NO_MOVES
+            };
+            (outcome.winner.map(|color| state.user_of(color)), result)
+        });
+        match finished {
+            Some((winner, result)) => {
+                let updated = DailyMatch::finish(
+                    client,
+                    match_id,
+                    winner,
+                    result,
+                    &state_value,
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+                self.finish_events(
+                    match_id,
+                    DailyGame::Checkers,
+                    row.challenger_id,
+                    row.opponent_id,
+                    winner,
+                    result,
+                );
+            }
+            None => {
+                let next_turn = state.user_of(state.turn());
+                let updated = DailyMatch::update_state(
+                    client,
+                    match_id,
+                    &state_value,
+                    user_id,
+                    next_turn,
+                    Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+            }
+        }
+        self.publish(client).await?;
+        Ok(())
+    }
+
+    /// One full turn (up to four `(from, to)` hops with the stored roll).
+    /// The state validates the hops, records the turn, and the service rolls
+    /// for the next mover — forced passes are recorded server-side, so the
+    /// turn can bounce straight back to the mover. Bearing off all fifteen
+    /// finishes the match; the defensive stall cap draws it.
+    async fn play_backgammon(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        user_id: Uuid,
+        hops: &[super::backgammon::Hop],
+    ) -> Result<()> {
+        let match_id = row.id;
+        let mut state = DailyBackgammonState::parse(&row.state)?;
+        let color = state
+            .color_of(user_id)
+            .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
+        ensure!(state.turn() == color, "not your turn");
+        let base_revision = state.revision as i64;
+        state.revision = state.revision.saturating_add(1);
+        let outcome = state.apply_turn(hops)?;
+        let label = outcome.label(hops);
+        // Roll for the next mover (recording any forced passes); the stall
+        // cap can finish the match here even though the turn itself didn't.
+        if !outcome.finished {
+            state.roll_next();
+        }
+        let state_value = serde_json::to_value(&state)?;
+
+        let finished = state.is_finished().then(|| {
+            match state.status() {
+                super::backgammon::BackgammonStatus::Win(winner) => {
+                    (Some(state.user_of(winner)), DailyMatch::RESULT_BORNE_OFF)
+                }
+                // The stall cap: nobody wins, nobody is paid.
+                _ => (None, DailyMatch::RESULT_DRAW),
+            }
+        });
+        match finished {
+            Some((winner, result)) => {
+                let updated = DailyMatch::finish(
+                    client,
+                    match_id,
+                    winner,
+                    result,
+                    &state_value,
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+                self.finish_events(
+                    match_id,
+                    DailyGame::Backgammon,
+                    row.challenger_id,
+                    row.opponent_id,
+                    winner,
+                    result,
+                );
+            }
+            None => {
+                // `turn()` reflects any recorded passes, so this can point
+                // back at the mover for another roll.
+                let next_turn = state.user_of(state.turn());
                 let updated = DailyMatch::update_state(
                     client,
                     match_id,
@@ -1117,6 +1478,39 @@ impl DailyService {
                             state
                                 .as_ref()
                                 .map(DailyConnect4State::move_count)
+                                .unwrap_or(0),
+                        )
+                    }
+                    DailyGame::Reversi => {
+                        let state = DailyReversiState::parse(&row.state).ok();
+                        (
+                            None,
+                            None,
+                            state
+                                .as_ref()
+                                .map(DailyReversiState::move_count)
+                                .unwrap_or(0),
+                        )
+                    }
+                    DailyGame::Checkers => {
+                        let state = DailyCheckersState::parse(&row.state).ok();
+                        (
+                            None,
+                            None,
+                            state
+                                .as_ref()
+                                .map(DailyCheckersState::move_count)
+                                .unwrap_or(0),
+                        )
+                    }
+                    DailyGame::Backgammon => {
+                        let state = DailyBackgammonState::parse(&row.state).ok();
+                        (
+                            None,
+                            None,
+                            state
+                                .as_ref()
+                                .map(DailyBackgammonState::move_count)
                                 .unwrap_or(0),
                         )
                     }

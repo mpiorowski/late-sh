@@ -49,6 +49,13 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             return true;
         }
     }
+    // Esc peels a half-built checkers or backgammon move before it closes
+    // the board. A real bare Esc arrives via input.rs::dispatch_escape
+    // (which mirrors this ordering); this byte path covers synthesized
+    // 0x1B events, same as the chat-selection clear above.
+    if byte == 0x1B && app.daily.cancel_pending_move() {
+        return true;
+    }
     match byte {
         // `j`/`k` belong to chat message selection (routed above); the board
         // cursor keeps wasd + arrows, same as table chess.
@@ -113,20 +120,39 @@ fn handle_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
     let x = mouse.x.saturating_sub(1);
     let y = mouse.y.saturating_sub(1);
 
-    // Battleship / connect4: hit-test the render-recorded target grid.
-    // Battleship clicks resolve to a cell, connect4 clicks to a column.
+    // Battleship / connect4 / reversi / checkers: hit-test the render-recorded
+    // target grid. The rect is always an exact multiple of the grid, so the
+    // cell size falls out of it — whatever cell tier the renderer picked.
+    // Battleship and the 8x8 games resolve to a cell, connect4 to a column.
     if let Some(grid) = board.target_geometry.get() {
         if x < grid.x || y < grid.y || x >= grid.x + grid.width || y >= grid.y + grid.height {
             return false;
         }
         let target = match board.detail.as_ref().map(|detail| detail.game.kind()) {
             Some(DailyGame::Battleship) => {
-                let col = ((x - grid.x) / crate::app::lobby::daily::battleship_ui::CELL_W) as usize;
-                let row = (y - grid.y) as usize;
+                let side = crate::app::lobby::daily::battleship::GRID as u16;
+                let col = ((x - grid.x) / (grid.width / side).max(1)) as usize;
+                let row = ((y - grid.y) / (grid.height / side).max(1)) as usize;
                 row * crate::app::lobby::daily::battleship::GRID + col
             }
             Some(DailyGame::ConnectFour) => {
-                ((x - grid.x) / crate::app::lobby::daily::connect4_ui::CELL_W) as usize
+                let cols = crate::app::lobby::daily::connect4::COLS as u16;
+                ((x - grid.x) / (grid.width / cols).max(1)) as usize
+            }
+            // Reversi / checkers: an 8x8 cell grid, row 0 drawn at the top.
+            Some(DailyGame::Reversi) | Some(DailyGame::Checkers) => {
+                let side = crate::app::lobby::daily::reversi::SIZE as u16;
+                let col = ((x - grid.x) / (grid.width / side).max(1)) as usize;
+                let row = ((y - grid.y) / (grid.height / side).max(1)) as usize;
+                row * crate::app::lobby::daily::reversi::SIZE + col
+            }
+            // Backgammon: the 2x14 visual slot grid (points, bar, off tray).
+            Some(DailyGame::Backgammon) => {
+                let cols = crate::app::lobby::daily::backgammon::SLOT_COLS as u16;
+                let rows = crate::app::lobby::daily::backgammon::SLOT_ROWS as u16;
+                let col = ((x - grid.x) / (grid.width / cols).max(1)) as usize;
+                let row = ((y - grid.y) / (grid.height / rows).max(1)) as usize;
+                row * crate::app::lobby::daily::backgammon::SLOT_COLS + col
             }
             _ => return false,
         };
