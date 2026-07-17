@@ -16,6 +16,7 @@ use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
 
 use super::{
+    appearance,
     classes::Class,
     state::{Panel, State},
     svc::{LogKind, PlayerView},
@@ -896,7 +897,12 @@ fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView) {
 
 /// Left column: portrait, identity headline, and vitals as filled meters.
 fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
-    let mut lines = class_portrait(&view.class_name, accent);
+    let mut lines = composed_portrait(
+        &view.class_key,
+        &view.class_name,
+        &view.appearance_idx,
+        accent,
+    );
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         format!("Lv {} {}", view.level, view.class_name),
@@ -1189,6 +1195,13 @@ fn primary_label(class_name: &str) -> &'static str {
     }
 }
 
+/// The display name for a stable class key (empty string if unknown).
+fn class_name_of(class_key: &str) -> String {
+    Class::from_key(class_key)
+        .map(|c| c.name().to_string())
+        .unwrap_or_default()
+}
+
 /// The accent colour that tints a class's portrait and headline.
 fn class_accent(class_name: &str) -> Color {
     match class_name {
@@ -1214,27 +1227,71 @@ fn class_emblem(class_name: &str) -> &'static str {
         "Cleric" => "✚ Cleric",
         "Rogue" => "† Rogue",
         "Ranger" => "➹ Ranger",
+        "Beastlord" => "❦ Beastlord",
+        "Skald" => "♪ Skald",
+        "Runemaster" => "ᛟ Runemaster",
+        "Valewalker" => "⚑ Valewalker",
+        "Spiritmaster" => "✵ Spiritmaster",
         _ => "Adventurer",
     }
 }
 
-/// A small ASCII portrait bust, accent-tinted, with the class emblem below it.
-/// The bust art is shared; the emblem and colour give each class its identity.
-fn class_portrait(class_name: &str, accent: Color) -> Vec<Line<'static>> {
-    const BUST: [&str; 6] = [
-        "  ▄█████▄ ",
-        " ██▀───▀██",
-        " █  ◉ ◉  █",
-        " █   ▾   █",
-        " ██  ◡  ██",
-        "  ▀█████▀ ",
-    ];
-    let mut lines: Vec<Line<'static>> = BUST
+/// A hair-colour tint for the portrait fringe, from the Hair option index.
+fn hair_tint(idx: u8) -> Color {
+    match idx {
+        3 | 9 => theme::TEXT_DIM(),   // silver-streaked / salt-and-pepper
+        5 => theme::TEXT_BRIGHT(),    // raven-dark (near-black reads as bright ink)
+        6 => theme::ERROR(),          // fire-red
+        7 | 8 => theme::BADGE_GOLD(), // sun-bleached / ash-blond
+        _ => theme::AMBER_DIM(),
+    }
+}
+
+/// An eye-colour tint for the portrait, from the Eyes option index.
+fn eye_tint(idx: u8) -> Color {
+    match idx {
+        1 | 3 | 9 => theme::AMBER(), // warm brown / amber / hazel
+        2 | 10 => theme::MENTION(),  // pale blue / ice-pale
+        7 => theme::SUCCESS(),       // glass-green
+        6 => theme::TEXT_DIM(),      // storm-dark
+        11 => theme::BADGE_GOLD(),   // gold-flecked
+        _ => theme::TEXT_BRIGHT(),
+    }
+}
+
+/// A composed ASCII portrait bust built from the player's own appearance choices
+/// (build/hair/eyes/bearing) plus a class-flavoured headpiece, tinted with the
+/// class accent and per-feature colours. Falls back cleanly when indices are
+/// missing (old/absent selections). The class emblem is shown below the bust.
+fn composed_portrait(
+    class_key: &str,
+    class_name: &str,
+    sel: &[u8],
+    accent: Color,
+) -> Vec<Line<'static>> {
+    // Pad/clamp the selection to a full field set.
+    let mut idx = [0u8; appearance::N_FIELDS];
+    for (i, slot) in idx.iter_mut().enumerate() {
+        *slot = sel.get(i).copied().unwrap_or(0);
+    }
+    let rows = appearance::portrait(class_key, &idx);
+    // Row roles: 0 adornment (accent), 1 hair (hair tint), 3 eyes (eye tint),
+    // the rest the neutral face frame.
+    let hair = hair_tint(idx[1]);
+    let eyes = eye_tint(idx[2]);
+    let mut lines: Vec<Line<'static>> = rows
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(i, row)| {
+            let (color, weight) = match i {
+                0 => (accent, Modifier::BOLD),
+                1 => (hair, Modifier::empty()),
+                3 => (eyes, Modifier::BOLD),
+                _ => (theme::TEXT_BRIGHT(), Modifier::empty()),
+            };
             Line::from(Span::styled(
-                (*row).to_string(),
-                Style::default().fg(accent),
+                row.clone(),
+                Style::default().fg(color).add_modifier(weight),
             ))
         })
         .collect();
@@ -2048,6 +2105,18 @@ fn appearance_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         )),
         Line::raw(""),
     ];
+    // A live portrait of the current choices, so players can preview how each
+    // change reshapes their character before committing.
+    if view.classed {
+        let accent = class_accent(&view.class_name);
+        lines.extend(composed_portrait(
+            &view.class_key,
+            &view.class_name,
+            &view.appearance_idx,
+            accent,
+        ));
+        lines.push(Line::raw(""));
+    }
     for (i, (label, value)) in view.appearance.iter().enumerate() {
         let selected = i == cursor;
         let marker = if selected { ">" } else { " " };
@@ -2598,18 +2667,38 @@ fn follow_panel(
             tag,
         ));
     }
-    // Profile the highlighted adventurer: show their chosen bio.
-    if let Some(occ) = view.occupants.get(cursor)
-        && !occ.bio.is_empty()
-    {
-        lines.push(Line::raw(""));
-        for l in wrap_plain(&occ.bio, 30) {
+    // Profile the highlighted adventurer: show their composed portrait, then bio.
+    if let Some(occ) = view.occupants.get(cursor) {
+        if !occ.class_key.is_empty() {
+            lines.push(Line::raw(""));
+            let name = usernames
+                .get(&occ.user_id)
+                .cloned()
+                .unwrap_or_else(|| "adventurer".to_string());
+            let accent = class_accent(&class_name_of(&occ.class_key));
+            lines.extend(composed_portrait(
+                &occ.class_key,
+                &class_name_of(&occ.class_key),
+                &occ.appearance_idx,
+                accent,
+            ));
             lines.push(Line::from(Span::styled(
-                l,
+                format!(" {name}"),
                 Style::default()
-                    .fg(theme::TEXT())
-                    .add_modifier(Modifier::ITALIC),
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
             )));
+        }
+        if !occ.bio.is_empty() {
+            lines.push(Line::raw(""));
+            for l in wrap_plain(&occ.bio, 30) {
+                lines.push(Line::from(Span::styled(
+                    l,
+                    Style::default()
+                        .fg(theme::TEXT())
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            }
         }
     }
     lines.push(Line::raw(""));

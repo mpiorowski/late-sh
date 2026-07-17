@@ -170,9 +170,151 @@ pub fn compose_bio(sel: &[u8; N_FIELDS]) -> String {
     )
 }
 
+// ---- Composed portrait ----------------------------------------------------
+//
+// A little ASCII bust assembled from the player's own appearance choices plus
+// their class, so every character looks distinct and made by them. This produces
+// the *plain* rows (glyphs only); `ui.rs::portrait_lines` tints them with the
+// class accent and per-feature colours from the theme palette. Kept free of any
+// rendering/theme dependency so it stays pure and testable.
+
+/// Field indices into `FIELDS`, named for readability.
+const F_BUILD: usize = 0;
+const F_HAIR: usize = 1;
+const F_EYES: usize = 2;
+const F_BEARING: usize = 3;
+
+/// Number of rows in an assembled portrait bust. Every row is non-empty; the
+/// class accent and per-feature colours are applied by the renderer.
+pub const PORTRAIT_ROWS: usize = 7;
+
+/// A class-flavoured headpiece (top adornment) for the portrait, keyed by the
+/// stable class key. Warpaint/helm/hood/circlet give the bust its calling.
+fn head_adornment(class_key: &str) -> &'static str {
+    match class_key {
+        // Iron helm for the plate-wearers.
+        "warrior" | "paladin" | "berserker" | "valewalker" => "▟█████▙",
+        // Pointed hood/cowl for the shadow callings.
+        "rogue" | "necromancer" | "warlock" | "spiritmaster" => "╱▔▔▔▔▔╲",
+        // Circlet/wizard's brim for the casters.
+        "mage" | "cleric" | "runemaster" => "◇═════◇",
+        // Feathered/wild band for the wilds-folk.
+        "ranger" | "druid" | "beastlord" => "≈≈≈≈≈≈≈",
+        // Singer's laurel.
+        "bard" | "skald" => "❀─────❀",
+        // Ascetic's bare brow.
+        _ => "───────",
+    }
+}
+
+/// The hair fringe glyphs (just under the adornment), chosen by the Hair field.
+/// Length/style reads from the option index.
+fn hair_fringe(idx: u8) -> &'static str {
+    // 12 hair options; map each to a distinct fringe texture.
+    match idx {
+        0 => "‚‚‚‚‚‚‚",  // close-cropped
+        1 => "≀≀≀≀≀≀≀",  // long and braided
+        2 => "ϟϟϟϟϟϟϟ",  // wild and unkempt
+        3 => "╌╌╌╌╌╌╌",  // silver-streaked
+        4 => "       ",  // shaven-headed (bare)
+        5 => "▚▚▚▚▚▚▚",  // raven-dark
+        6 => "^^^^^^^",  // fire-red
+        7 => "″″″″″″″",  // sun-bleached
+        8 => "'''''''",  // ash-blond
+        9 => "╍╍╍╍╍╍╍",  // salt-and-pepper
+        10 => "ςςςςςςς", // tightly curled
+        _ => "⌐‾‾‾‾‾¬",  // topknotted
+    }
+}
+
+/// The eye glyph pair from the Eyes field.
+fn eye_glyphs(idx: u8) -> (&'static str, &'static str) {
+    match idx {
+        4 => ("x", "◉"), // scarred and one-eyed
+        5 => ("◉", "○"), // mismatched
+        _ => ("◉", "◉"),
+    }
+}
+
+/// The mouth/expression glyph from the Bearing field.
+fn mouth_glyph(idx: u8) -> &'static str {
+    match idx {
+        1 | 7 => "◡",  // easy and grinning / bold (a grin)
+        2 | 5 => "▔",  // grim / haunted (a hard line)
+        9 | 11 => "‿", // sly / dangerous (a slight smirk)
+        3 => "~",      // restless
+        _ => "─",      // neutral set
+    }
+}
+
+/// The cheek/frame side glyphs from the Build field: a wider frame reads broader.
+fn frame_sides(idx: u8) -> (char, char) {
+    // Broad/heavy builds get a heavier jaw frame; slight ones a lighter one.
+    match idx {
+        1 | 3 | 6 | 9 | 11 => ('█', '█'), // broad/towering/heavyset/barrel/iron-hard
+        5 | 10 => ('▏', '▕'),             // willowy / slight
+        _ => ('▌', '▐'),                  // the middling builds
+    }
+}
+
+/// Compose the plain portrait rows (glyphs only) from a class key and the
+/// appearance selections. Always returns `PORTRAIT_ROWS` non-empty bust rows.
+/// Colour (class accent + feature tints) is layered on by the renderer.
+pub fn portrait(class_key: &str, sel: &[u8; N_FIELDS]) -> Vec<String> {
+    let adorn = head_adornment(class_key);
+    let hair = hair_fringe(sel[F_HAIR]);
+    let (le, re) = eye_glyphs(sel[F_EYES]);
+    let mouth = mouth_glyph(sel[F_BEARING]);
+    let (ls, rs) = frame_sides(sel[F_BUILD]);
+    vec![
+        format!("  {adorn}  "),
+        format!("  {hair}  "),
+        format!(" {ls}▁▁▁▁▁{rs} "),
+        format!(" {ls} {le} {re} {rs} "),
+        format!(" {ls}  ‸  {rs} "),
+        format!(" {ls} {mouth}{mouth}{mouth} {rs} "),
+        format!("  ╲▁▁▁▁▁╱  "),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portrait_renders_non_empty_and_varies_with_choices() {
+        // Every class key yields a full, non-empty portrait.
+        for key in [
+            "warrior",
+            "mage",
+            "cleric",
+            "rogue",
+            "ranger",
+            "druid",
+            "necromancer",
+            "bard",
+            "monk",
+            "paladin",
+            "warlock",
+            "berserker",
+            "beastlord",
+            "skald",
+            "runemaster",
+            "valewalker",
+            "spiritmaster",
+        ] {
+            let rows = portrait(key, &[0; N_FIELDS]);
+            assert_eq!(rows.len(), PORTRAIT_ROWS, "{key} bust height");
+            assert!(rows.iter().all(|r| !r.is_empty()), "{key} rows non-empty");
+        }
+        // Different appearance choices produce a visibly different portrait.
+        let plain = portrait("warrior", &[0, 0, 0, 0, 0, 0, 0]);
+        let fancy = portrait("warrior", &[3, 2, 4, 7, 0, 0, 0]);
+        assert_ne!(plain, fancy, "features change the portrait");
+        // ...and a different class changes the headpiece too.
+        let mage = portrait("mage", &[0, 0, 0, 0, 0, 0, 0]);
+        assert_ne!(mage[0], plain[0], "class changes the head adornment");
+    }
 
     #[test]
     fn every_field_has_options_and_composes() {

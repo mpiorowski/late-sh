@@ -374,6 +374,10 @@ pub struct OccupantView {
     pub alive: bool,
     /// The adventurer's composed bio, shown when you profile them.
     pub bio: String,
+    /// This adventurer's stable class key (empty if unclassed), for their portrait.
+    pub class_key: String,
+    /// This adventurer's raw appearance selections, for composing their portrait.
+    pub appearance_idx: Vec<u8>,
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -561,6 +565,8 @@ pub struct PlayerView {
     pub joined: bool,
     pub classed: bool,
     pub class_name: String,
+    /// Stable class key (e.g. "warrior"), for the composed portrait.
+    pub class_key: String,
     pub trait_name: String,
     pub trait_desc: String,
     pub resource_name: String,
@@ -612,6 +618,8 @@ pub struct PlayerView {
     pub bio: String,
     /// The appearance/bio builder rows: (field label, chosen option).
     pub appearance: Vec<(String, String)>,
+    /// The raw appearance selection indices, for composing the portrait.
+    pub appearance_idx: Vec<u8>,
     pub log: Vec<LogLine>,
     pub respawning: bool,
     /// True while this player is a corpse (fallen, awaiting rez or release).
@@ -658,6 +666,7 @@ impl PlayerView {
             joined: false,
             classed: false,
             class_name: String::new(),
+            class_key: String::new(),
             trait_name: String::new(),
             trait_desc: String::new(),
             resource_name: String::new(),
@@ -697,6 +706,7 @@ impl PlayerView {
             portal: None,
             bio: String::new(),
             appearance: Vec::new(),
+            appearance_idx: Vec::new(),
             log: Vec::new(),
             respawning: false,
             dead: false,
@@ -6506,6 +6516,11 @@ impl WorldState {
                     in_combat: other.target.is_some(),
                     alive: !other.dead,
                     bio: appearance::compose_bio(&other.appearance),
+                    class_key: other
+                        .class
+                        .map(|c| c.as_key().to_string())
+                        .unwrap_or_default(),
+                    appearance_idx: other.appearance.to_vec(),
                 })
                 .collect();
             let corpse_here = occupants.iter().any(|o| !o.alive);
@@ -6658,22 +6673,25 @@ impl WorldState {
                     .map(|m| m.spawn.name.to_string())
             });
 
-            let (classed, class_name, trait_name, trait_desc, resource_name) = match player.class {
-                Some(c) => (
-                    true,
-                    c.name().to_string(),
-                    c.trait_name().to_string(),
-                    c.trait_desc().to_string(),
-                    c.resource().label().to_string(),
-                ),
-                None => (
-                    false,
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                ),
-            };
+            let (classed, class_name, class_key, trait_name, trait_desc, resource_name) =
+                match player.class {
+                    Some(c) => (
+                        true,
+                        c.name().to_string(),
+                        c.as_key().to_string(),
+                        c.trait_name().to_string(),
+                        c.trait_desc().to_string(),
+                        c.resource().label().to_string(),
+                    ),
+                    None => (
+                        false,
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    ),
+                };
 
             let abilities: Vec<AbilityView> = match player.class {
                 Some(c) => unlocked_for(c, player.level)
@@ -6940,6 +6958,7 @@ impl WorldState {
                     joined: true,
                     classed,
                     class_name,
+                    class_key,
                     trait_name,
                     trait_desc,
                     resource_name,
@@ -6986,6 +7005,7 @@ impl WorldState {
                             )
                         })
                         .collect(),
+                    appearance_idx: player.appearance.to_vec(),
                     log: player.log.clone(),
                     respawning: player.respawn_at.is_some(),
                     dead: player.dead,
