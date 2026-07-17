@@ -244,7 +244,7 @@ check: .env
 	$(CHECK_DB_START); \
 	cargo fmt $(CHECK_PACKAGES) -- --check; \
 	$(CHECK_CARGO_ENV) cargo clippy $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run $(CHECK_PACKAGES) --all-targets --no-fail-fast
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run $(CHECK_PACKAGES) --all-targets --no-fail-fast --failure-output final
 
 .PHONY: checkci
 checkci: .env
@@ -253,7 +253,7 @@ checkci: .env
 	$(CHECK_DB_START); \
 	cargo fmt --all -- --check; \
 	$(CHECK_CARGO_ENV) cargo clippy --workspace --all-targets --features otel -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --workspace --all-targets
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --workspace --all-targets --failure-output final
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build

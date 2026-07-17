@@ -21,10 +21,6 @@ pub enum ActivityKind {
         detail: Option<String>,
         score: Option<i32>,
     },
-    GamePlayed {
-        game: ActivityGame,
-        detail: Option<String>,
-    },
     GameScored {
         game: ActivityGame,
         score: i32,
@@ -37,8 +33,7 @@ pub enum ActivityKind {
         game: ActivityGame,
         detail: String,
     },
-    /// A player entered a game world (door games). Distinct from
-    /// `GamePlayed` (quest-only grind signal): this is the "come join me"
+    /// A player entered a game world (door games): the "come join me"
     /// invitation shown in #lounge.
     GameStarted {
         game: ActivityGame,
@@ -55,7 +50,7 @@ pub enum ActivityKind {
         game: ActivityGame,
     },
     /// A finished daily correspondence match. `action` carries the full
-    /// match-level phrase ("beat bob at Chess" / "drew with bob at Connect
+    /// match-level phrase ("won a game of Chess" / "drew with bob at Connect
     /// Four"); `game` and `match_id` exist only for #lounge repeat-throttling:
     /// keying on the match lets one player finish two same-game matches back
     /// to back (one line per match) while a re-emit of the same match dedupes.
@@ -63,6 +58,11 @@ pub enum ActivityKind {
     DailyResult {
         game: String,
         match_id: Uuid,
+    },
+    /// A bought 24h username effect went live ("mat is glowing (24h)").
+    /// Shown in #lounge: the whole point of the purchase is being seen.
+    UsernameEffectApplied {
+        effect: late_core::models::username_effect::UsernameEffect,
     },
     BonsaiWatered,
     BonsaiLost {
@@ -73,14 +73,14 @@ pub enum ActivityKind {
 impl ActivityKind {
     pub fn category(&self) -> ActivityCategory {
         match self {
-            Self::UserJoined => ActivityCategory::Session,
+            Self::UserJoined | Self::UsernameEffectApplied { .. } => ActivityCategory::Session,
             Self::GameWon { .. }
             | Self::GameEvent { .. }
             | Self::GameStarted { .. }
             | Self::BossSlain { .. }
             | Self::SatDown { .. }
             | Self::DailyResult { .. } => ActivityCategory::Game,
-            Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
+            Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
         }
     }
@@ -100,6 +100,7 @@ pub enum ActivityGame {
     Poker,
     RubiksCube,
     Sshattrick,
+    Ssnake,
     Solitaire,
     Sudoku,
     TicTacToe,
@@ -125,6 +126,7 @@ impl ActivityGame {
             Self::Poker => "poker",
             Self::RubiksCube => "rubiks_cube",
             Self::Sshattrick => "sshattrick",
+            Self::Ssnake => "ssnake",
             Self::Solitaire => "solitaire",
             Self::Sudoku => "sudoku",
             Self::TicTacToe => "tictactoe",
@@ -150,6 +152,7 @@ impl ActivityGame {
             Self::Poker => "Poker",
             Self::RubiksCube => "Rubik's Cube",
             Self::Sshattrick => "ssHattrick",
+            Self::Ssnake => "Super Snake",
             Self::Solitaire => "Solitaire",
             Self::Sudoku => "Sudoku",
             Self::TicTacToe => "Tic-Tac-Toe",
@@ -221,6 +224,7 @@ impl ActivityEvent {
             ActivityGame::Poker => "won Poker hand",
             ActivityGame::RubiksCube => "solved Rubik's Cube",
             ActivityGame::Sshattrick => "won ssHattrick match",
+            ActivityGame::Ssnake => "won Super Snake match",
             ActivityGame::Solitaire => "won Solitaire",
             ActivityGame::Sudoku => "solved Sudoku",
             ActivityGame::TicTacToe => "won Tic-Tac-Toe",
@@ -281,6 +285,7 @@ impl ActivityEvent {
             | ActivityGame::Poker
             | ActivityGame::RubiksCube
             | ActivityGame::Sshattrick
+            | ActivityGame::Ssnake
             | ActivityGame::Solitaire
             | ActivityGame::Sudoku
             | ActivityGame::TicTacToe
@@ -326,13 +331,35 @@ impl ActivityEvent {
         )
     }
 
-    /// A finished daily match with a decisive result, attributed to the winner.
-    /// `loser` names the other player; the line reads "{winner} beat {loser} at
-    /// {game}".
+    /// A bought 24h username effect went live. The action names the style,
+    /// not the color: "is glowing (24h)" reads as a story, and the name
+    /// itself shows the color everywhere it renders.
+    pub fn username_effect_applied(
+        user_id: Uuid,
+        username: impl Into<String>,
+        effect: late_core::models::username_effect::UsernameEffect,
+    ) -> Self {
+        use late_core::models::username_effect::UsernameEffect;
+        let action = match effect {
+            UsernameEffect::Glow(_) => "is glowing (24h)",
+            UsernameEffect::Gradient(_) => "went gradient (24h)",
+            UsernameEffect::Shimmer => "is shimmering (24h)",
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::UsernameEffectApplied { effect },
+            action.to_string(),
+        )
+    }
+
+    /// A finished daily match with a winner. The line names only the winner and
+    /// the game — "{winner} won a game of {game}" — never the loser: a friendly
+    /// clubhouse feed, not a scoreboard that shames whoever lost. `match_id`
+    /// keys the #lounge repeat throttle.
     pub fn daily_win(
         winner_id: Uuid,
         winner: impl Into<String>,
-        loser: impl AsRef<str>,
         game_label: &str,
         match_id: Uuid,
     ) -> Self {
@@ -343,13 +370,14 @@ impl ActivityEvent {
                 game: game_label.to_string(),
                 match_id,
             },
-            format!("beat {} at {game_label}", loser.as_ref()),
+            format!("won a game of {game_label}"),
         )
     }
 
     /// A finished daily match that ended in a draw. Attributed to `player_a`
     /// (arbitrary — the line names both): "{player_a} drew with {player_b} at
-    /// {game}".
+    /// {game}". Unlike [`Self::daily_win`], a draw shames no one, so naming both
+    /// players is fair game.
     pub fn daily_draw(
         player_a_id: Uuid,
         player_a: impl Into<String>,
@@ -365,25 +393,6 @@ impl ActivityEvent {
                 match_id,
             },
             format!("drew with {} at {game_label}", player_b.as_ref()),
-        )
-    }
-
-    pub fn game_played(
-        user_id: Uuid,
-        username: impl Into<String>,
-        game: ActivityGame,
-        detail: Option<String>,
-    ) -> Self {
-        let base_action = format!("played {} round", game.label());
-        let action = match detail.as_deref() {
-            Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),
-            _ => base_action,
-        };
-        Self::new(
-            Some(user_id),
-            username,
-            ActivityKind::GamePlayed { game, detail },
-            action,
         )
     }
 

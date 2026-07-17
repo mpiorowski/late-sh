@@ -16,7 +16,7 @@ use crate::app::door::landing;
 use super::commentary::{self, CommentRoom};
 use super::data;
 use super::model::{self, Character, Specialty};
-use super::state::{FoeKind, Mode, PvpVenue, State};
+use super::state::{BankOp, FoeKind, Mode, PvpVenue, State};
 
 /// Draw the live Green Dragon game (called when a character is loaded).
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
@@ -180,8 +180,14 @@ fn draw_main(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
 }
 
 fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
+    let title = if state.zoo_village_pending() {
+        // The basket game launched from Juna's zoo isn't a forest happening.
+        "Mad Juna's Baskets"
+    } else {
+        panel_title(state.mode())
+    };
     let mut lines = vec![Line::from(Span::styled(
-        panel_title(state.mode()),
+        title,
         Style::default()
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
@@ -289,11 +295,28 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         && let Some(event) = state.pending_event()
     {
         lines.push(Line::raw(""));
-        for line in event.present(c).intro {
-            lines.push(Line::from(Span::styled(
-                line,
-                Style::default().fg(theme::TEXT_DIM()),
-            )));
+        if state.zoo_village_pending() {
+            // Juna's village game reframes the same baskets in the square
+            // (`crazyaudrey_baskets` op=baskets vs the forest wording).
+            for line in [
+                "You reach for the lid of one of Mad Juna's baskets while she seems",
+                "distracted - but she appears out of nowhere, ranting about colored",
+                "kittens, and pulls the baskets close. Questioned, she turns suddenly",
+                "lucid: three baskets, four kittens in each. Two alike and you'll have",
+                "a salve of energy; none alike, and it's early to bed for you.",
+            ] {
+                lines.push(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(theme::TEXT_DIM()),
+                )));
+            }
+        } else {
+            for line in event.present(c).intro {
+                lines.push(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(theme::TEXT_DIM()),
+                )));
+            }
         }
     }
 
@@ -562,6 +585,40 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
                 ),
                 dim,
             )));
+        }
+        if let Some(input) = state.talk_line() {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("how much gold? {input}_"),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )));
+        }
+    }
+
+    // The teller's counter: the holdings in question, and the amount line.
+    if let Mode::BankAmount(op) = state.mode() {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        if let Some(c) = state.character() {
+            let terms = match op {
+                BankOp::Deposit => format!(
+                    "\"How much goes in? You carry {} gold. Leave the line \
+                     blank to deposit it all.\"",
+                    c.gold
+                ),
+                BankOp::Withdraw => format!(
+                    "\"How much comes out? Your balance is {} gold. Leave the \
+                     line blank to withdraw it all.\"",
+                    c.gold_in_bank.max(0)
+                ),
+                BankOp::Borrow => format!(
+                    "\"How much do you need in hand? Balance and credit \
+                     together, the bank can give you {} gold. Anything past \
+                     your balance is a loan, and debt gathers interest daily.\"",
+                    c.borrow_available()
+                ),
+            };
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(terms, dim)));
         }
         if let Some(input) = state.talk_line() {
             lines.push(Line::raw(""));
@@ -938,7 +995,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     if state.mode() == Mode::ChooseRace {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
-            "A new day stirs old memories. Whose blood runs in your veins? The choice is permanent, and each people carries its own gift.",
+            "A new day stirs old memories. Whose blood runs in your veins? The choice holds for this life, and each people carries its own gift.",
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
@@ -946,7 +1003,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     if state.mode() == Mode::ChooseSpecialty {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
-            "Choose the craft you'll hone against the forest. The choice is permanent; you'll spend daily \"uses\" on its skills mid-fight.",
+            "Choose the craft you'll hone against the forest this life. You'll spend daily \"uses\" on its skills mid-fight.",
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
@@ -987,6 +1044,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
             Mode::BountyTarget => "type a name   Enter check his book   Esc never mind",
             Mode::IntelTarget => "type a name   Enter ask him   Esc never mind",
             Mode::BountyAmount => "type an amount   Enter slide the coins over   Esc never mind",
+            Mode::BankAmount(_) => "type an amount   Enter settle it   Esc never mind",
             Mode::BankTransferTarget => "type a name   Enter check the ledger   Esc never mind",
             Mode::BankTransferAmount => "type an amount   Enter send the note   Esc never mind",
             Mode::Haunt => "type a name   Enter whisper it   Esc never mind",
@@ -1036,11 +1094,13 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Loading => "Entering the realm...",
         Mode::Village => "The village of Duskmere",
         Mode::Forest => "The Forest",
+        Mode::DragonApproach => "The Dragon's Cave",
         Mode::Fight => "Battle!",
         Mode::WeaponShop => "Ironroost Weapons",
         Mode::ArmorShop => "Duskmail Armoury",
         Mode::Healer => "The Mendery",
         Mode::Bank => "The Coinvault",
+        Mode::BankAmount(_) => "The Teller's Counter",
         Mode::BankTransferTarget => "The Transfer Ledger",
         Mode::BankTransferAmount => "Writing the Note",
         Mode::Training => "The Proving Yard",
@@ -1062,7 +1122,7 @@ fn panel_title(mode: Mode) -> &'static str {
         Mode::Romance => "The Corner Table",
         Mode::Outhouse => "The Outhouse",
         Mode::OuthouseWash(_) => "The Rain Barrel",
-        Mode::Tavern => "The Dark Horse Tavern",
+        Mode::Tavern => "The Crooked Wheel",
         Mode::TavernBartender => "The Barman's Counter",
         Mode::IntelTarget => "Naming an Enemy",
         Mode::IntelSheet => "The Barman's Word",
@@ -1168,9 +1228,12 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         ),
     ]));
     lines.push(Line::from(Span::styled(
-        "Hunt the forest, train against the masters, gear up, and slay the Green Dragon. Your character persists.",
+        "Hunt the forest, out-duel the masters, gear up, and end your run on the Green Dragon's hoard. Your character persists between visits.",
         Style::default().fg(theme::TEXT_DIM()),
     )));
+    lines.push(legend_credentials());
+    lines.push(Line::raw(""));
+    lines.push(loop_strip());
     lines.push(Line::raw(""));
     lines.push(landing::heading("The Loop"));
     lines.push(landing::stat(
@@ -1188,6 +1251,20 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         "reach level 15, then end the run in glory",
         10,
     ));
+    lines.push(Line::raw(""));
+    lines.push(flavor_headline());
+    lines.push(flavor_quote());
+    lines.push(Line::raw(""));
+    lines.push(landing::heading("Rewards"));
+    lines.push(landing::stat(
+        "Green Dragon slain",
+        "10,000 chips + GDS badge, once per account",
+        20,
+    ));
+    lines.push(Line::from(Span::styled(
+        "  Slay again for titles and dragon points, but the chip payout is a lifetime claim.",
+        Style::default().fg(theme::TEXT_FAINT()),
+    )));
     lines.push(Line::raw(""));
     lines.push(landing::heading("Enter"));
     lines.push(landing::action(
@@ -1235,11 +1312,18 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
 
 fn title_art() -> Vec<Line<'static>> {
     [
-        "  ___                      ___                         ",
-        " / __|_ _ ___ ___ _ _    |   \\ _ _ __ _ __ _ ___ _ _  ",
-        "| (_ | '_/ -_) -_) ' \\   | |) | '_/ _` / _` / _ \\ ' \\ ",
-        " \\___|_| \\___\\___|_||_|  |___/|_| \\__,_\\__, \\___/_||_|",
-        "                                       |___/          ",
+        "██████╗   ██████╗  ███████╗ ███████╗ ███╗   ██╗",
+        "██╔════╝  ██╔══██╗ ██╔════╝ ██╔════╝ ████╗  ██║",
+        "██║  ███╗ ██████╔╝ █████╗   █████╗   ██╔██╗ ██║",
+        "██║   ██║ ██╔══██╗ ██╔══╝   ██╔══╝   ██║╚██╗██║",
+        "╚██████╔╝ ██║  ██║ ███████╗ ███████╗ ██║ ╚████║",
+        " ╚═════╝  ╚═╝  ╚═╝ ╚══════╝ ╚══════╝ ╚═╝  ╚═══╝",
+        "██████╗  ██████╗   █████╗  ██████╗    ██████╗  ███╗   ██╗",
+        "██╔══██╗ ██╔══██╗ ██╔══██╗ ██╔════╝  ██╔═══██╗ ████╗  ██║",
+        "██║  ██║ ██████╔╝ ███████║ ██║  ███╗ ██║   ██║ ██╔██╗ ██║",
+        "██║  ██║ ██╔══██╗ ██╔══██║ ██║   ██║ ██║   ██║ ██║╚██╗██║",
+        "██████╔╝ ██║  ██║ ██║  ██║ ╚██████╔╝ ╚██████╔╝ ██║ ╚████║",
+        "╚═════╝  ╚═╝  ╚═╝ ╚═╝  ╚═╝  ╚═════╝   ╚═════╝  ╚═╝  ╚═══╝",
     ]
     .into_iter()
     .map(|line| {
@@ -1251,4 +1335,51 @@ fn title_art() -> Vec<Line<'static>> {
         ))
     })
     .collect()
+}
+
+/// The pedigree line under the description (mirrors NetHack's "Born 1987..."):
+/// this door is a remake of the genre-defining BBS game.
+fn legend_credentials() -> Line<'static> {
+    Line::from(Span::styled(
+        "LORD, 1989 \u{b7} the most-played door game of the BBS era \u{b7} reborn open-source",
+        Style::default().fg(theme::AMBER_DIM()),
+    ))
+}
+
+/// Marketing flavor, matching NetHack's headline/quote pair: bold weight without
+/// amber (which the section headings own), then a faint-italic nostalgia line.
+fn flavor_headline() -> Line<'static> {
+    Line::from(Span::styled(
+        "  The door game that ate the BBS scene: dial in nightly, grind the forest, kill the Dragon.",
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn flavor_quote() -> Line<'static> {
+    Line::from(Span::styled(
+        "  \"You aren't strong enough to face the Dragon yet.\"  (every BBS kid, 1994)",
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    ))
+}
+
+/// A one-line, colored sketch of the run's arc, village to the dragon's cave,
+/// the way NetHack's landing shows a scrap of dungeon. Flavor, not a live map.
+fn loop_strip() -> Line<'static> {
+    let arrow = || Span::styled("  →  ", Style::default().fg(theme::TEXT_FAINT()));
+    let leg =
+        |w: &'static str, c| Span::styled(w, Style::default().fg(c).add_modifier(Modifier::BOLD));
+    Line::from(vec![
+        Span::raw("  "),
+        leg("village", theme::TEXT_BRIGHT()),
+        arrow(),
+        leg("forest", theme::SUCCESS()),
+        arrow(),
+        leg("masters", theme::AMBER()),
+        arrow(),
+        leg("the Green Dragon", theme::ERROR()),
+    ])
 }

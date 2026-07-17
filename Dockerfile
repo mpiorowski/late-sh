@@ -7,7 +7,7 @@
 # Build Web:  docker build --target runtime-web -t late-web .
 # Run:        docker run -p 2222:2222 late-ssh
 
-ARG RUST_VERSION=1.92
+ARG RUST_VERSION=1.97
 ARG DEBIAN_VERSION=bookworm
 
 # ==============================================================================

@@ -20,16 +20,12 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
-use crate::app::dashboard::state::{DashboardRoomJoinHistory, DashboardRoomJoinSender};
 use crate::app::games::chips::svc::ChipService;
 use crate::app::hub::dailies::svc::QuestService;
 use crate::app::hub::shop::svc::ShopService;
 use crate::app::hub::svc::LeaderboardService;
 use crate::app::pet::svc::PetService;
 use crate::app::profile::svc::ProfileService;
-use crate::app::rooms::blackjack::manager::BlackjackTableManager;
-use crate::app::rooms::registry::RoomGameRegistry;
-use crate::app::rooms::svc::RoomsService;
 use crate::app::voice::svc::VoiceService;
 use crate::config::Config;
 use crate::paired_clients::PairedClientRegistry;
@@ -122,10 +118,8 @@ pub struct State {
     pub chip_service: ChipService,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
-    pub daily_service: crate::app::daily::svc::DailyService,
-    pub rooms_service: RoomsService,
-    pub blackjack_table_manager: BlackjackTableManager,
-    pub room_game_registry: RoomGameRegistry,
+    pub daily_service: crate::app::lobby::daily::svc::DailyService,
+    pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
     pub leaderboard_service: LeaderboardService,
@@ -139,9 +133,10 @@ pub struct State {
     pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
     pub afk_users: AfkUsers,
     pub username_directory: UsernameDirectory,
+    /// Live 24h username effects (snapshot-swap; seeded and written by
+    /// `ShopService`, resolved per session in the tick loop).
+    pub flair_directory: crate::app::common::username_effect::NameFlairDirectory,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
-    pub room_join_feed: DashboardRoomJoinSender,
-    pub room_join_history: DashboardRoomJoinHistory,
     pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,
     pub radio_meta_rx:
         watch::Receiver<HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>>,

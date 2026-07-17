@@ -7,13 +7,19 @@ use late_core::{
             CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND,
             ConsumableUseStatus, DYNAMIC_BONSAI_SKU, FishActiveStatus, MARKETPLACE_SOURCE_KIND,
             MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus, SHOP_PURCHASE_REASON,
-            THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, UserPurchase, WONDERLAND_ULTIMATE_SKU,
-            adjust_aquarium_fish_active_by_sku, aquarium_is_hungry, consume_aquarium_food_pinch,
-            equip_owned_item_by_sku, purchase_durable_item_by_sku, unequip_slot,
+            THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
+            WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku, aquarium_is_hungry,
+            consume_aquarium_food_pinch, equip_owned_item_by_sku, purchase_durable_item_by_sku,
+            purchase_item_by_sku_with_username_effect, unequip_slot,
         },
         pet::PetCompanion,
+        shop_consumable_effect::ShopConsumableEffect,
         ultimate_cooldown::UltimateCastCooldown,
         user::User,
+        username_effect::{
+            GlowColor, GradientPair, USERNAME_EFFECT_KIND, USERNAME_GLOW_SKU,
+            USERNAME_GRADIENT_SKU, USERNAME_SHIMMER_SKU, UsernameEffect,
+        },
     },
     test_utils::{create_test_user, test_db},
 };
@@ -848,4 +854,300 @@ async fn durable_purchase_is_idempotent_for_owned_item() {
         .expect("ledger count")
         .get::<_, i64>("count");
     assert_eq!(debit_count, 1);
+}
+
+const USERNAME_GLOW_PRICE: i64 = 200;
+const USERNAME_GRADIENT_PRICE: i64 = 500;
+const USERNAME_SHIMMER_PRICE: i64 = 1_000;
+
+#[tokio::test]
+async fn seeded_catalog_contains_username_effects() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let items = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("list items");
+    let expectations = [
+        (USERNAME_GLOW_SKU, "Name Glow", USERNAME_GLOW_PRICE, "glow"),
+        (
+            USERNAME_GRADIENT_SKU,
+            "Name Gradient",
+            USERNAME_GRADIENT_PRICE,
+            "gradient",
+        ),
+        (
+            USERNAME_SHIMMER_SKU,
+            "Name Shimmer",
+            USERNAME_SHIMMER_PRICE,
+            "shimmer",
+        ),
+    ];
+    for (sku, name, price, variant) in expectations {
+        let item = items
+            .iter()
+            .find(|item| item.sku == sku)
+            .unwrap_or_else(|| panic!("missing {sku}"));
+        assert_eq!(item.item_kind, USERNAME_EFFECT_ITEM_KIND);
+        assert_eq!(item.name, name);
+        assert_eq!(item.price_chips, price);
+        assert_eq!(item.payload["variant"], variant);
+        assert_eq!(item.payload["duration_secs"], 86_400);
+        assert!(item.active);
+    }
+}
+
+async fn active_username_effect_rows(
+    client: &tokio_postgres::Client,
+    user_id: uuid::Uuid,
+) -> Vec<ShopConsumableEffect> {
+    ShopConsumableEffect::active_user_effects(client, USERNAME_EFFECT_KIND)
+        .await
+        .expect("active effects")
+        .into_iter()
+        .filter(|row| row.user_id == user_id)
+        .collect()
+}
+
+#[tokio::test]
+async fn username_effect_purchase_debits_and_activates_one_row() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "username-effect-buy").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let starting_balance = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips row")
+        .balance;
+
+    let before = chrono::Utc::now();
+    let result = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Glow(GlowColor::Ember),
+    )
+    .await
+    .expect("purchase");
+    let purchase = result.purchase.expect("item available");
+    assert_eq!(purchase.status, PurchaseStatus::Purchased);
+    assert_eq!(purchase.balance, starting_balance - USERNAME_GLOW_PRICE);
+
+    let row = result.username_effect.expect("activated effect row");
+    assert_eq!(row.user_id, user.id);
+    assert_eq!(row.room_id, None);
+    assert_eq!(row.effect_kind, USERNAME_EFFECT_KIND);
+    assert_eq!(row.source_sku, USERNAME_GLOW_SKU);
+    assert_eq!(
+        UsernameEffect::from_payload(&row.payload),
+        Some(UsernameEffect::Glow(GlowColor::Ember))
+    );
+    let expected_end = before + chrono::Duration::seconds(86_400);
+    assert!(row.ends_at >= expected_end - chrono::Duration::seconds(60));
+    assert!(row.ends_at <= expected_end + chrono::Duration::seconds(60));
+
+    let rows = active_username_effect_rows(&client, user.id).await;
+    assert_eq!(rows.len(), 1);
+    let for_user =
+        ShopConsumableEffect::active_user_effect_for_user(&client, user.id, USERNAME_EFFECT_KIND)
+            .await
+            .expect("query")
+            .expect("live effect");
+    assert_eq!(for_user.id, row.id);
+}
+
+#[tokio::test]
+async fn username_effect_rebuy_replaces_the_live_effect() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "username-effect-rebuy").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::add_bonus(
+        &client,
+        user.id,
+        USERNAME_GLOW_PRICE * 2 + USERNAME_GRADIENT_PRICE,
+    )
+    .await
+    .expect("fund chips");
+
+    let first = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Glow(GlowColor::Ember),
+    )
+    .await
+    .expect("first buy")
+    .username_effect
+    .expect("first row");
+
+    // Same item, new color: exactly one live row, fresh clock.
+    let second = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Glow(GlowColor::Sky),
+    )
+    .await
+    .expect("second buy")
+    .username_effect
+    .expect("second row");
+    let rows = active_username_effect_rows(&client, user.id).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, second.id);
+    assert!(second.ends_at >= first.ends_at);
+
+    // Different effect item: still one live row (one active effect per user).
+    let third = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GRADIENT_SKU,
+        UsernameEffect::Gradient(GradientPair::Ocean),
+    )
+    .await
+    .expect("third buy")
+    .username_effect
+    .expect("third row");
+    let rows = active_username_effect_rows(&client, user.id).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, third.id);
+    assert_eq!(
+        UsernameEffect::from_payload(&rows[0].payload),
+        Some(UsernameEffect::Gradient(GradientPair::Ocean))
+    );
+}
+
+#[tokio::test]
+async fn username_effect_expired_rows_are_excluded_from_active_queries() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "username-effect-expired").await;
+    let mut client = test_db.db.get().await.expect("db client");
+
+    purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Glow(GlowColor::Lime),
+    )
+    .await
+    .expect("buy");
+    client
+        .execute(
+            "UPDATE shop_consumable_effects
+             SET ends_at = current_timestamp - interval '1 minute'
+             WHERE user_id = $1 AND effect_kind = $2",
+            &[&user.id, &USERNAME_EFFECT_KIND],
+        )
+        .await
+        .expect("force expiry");
+
+    assert!(
+        active_username_effect_rows(&client, user.id)
+            .await
+            .is_empty()
+    );
+    assert!(
+        ShopConsumableEffect::active_user_effect_for_user(&client, user.id, USERNAME_EFFECT_KIND)
+            .await
+            .expect("query")
+            .is_none()
+    );
+
+    // Rebuying after natural expiry deactivates the stale row, so expired
+    // effects do not accumulate in the active partial index.
+    purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Glow(GlowColor::Lime),
+    )
+    .await
+    .expect("rebuy");
+    let stale_active: i64 = client
+        .query_one(
+            "SELECT count(*)
+             FROM shop_consumable_effects
+             WHERE user_id = $1
+               AND effect_kind = $2
+               AND active = true
+               AND ends_at <= current_timestamp",
+            &[&user.id, &USERNAME_EFFECT_KIND],
+        )
+        .await
+        .expect("stale count")
+        .get(0);
+    assert_eq!(stale_active, 0);
+    assert_eq!(active_username_effect_rows(&client, user.id).await.len(), 1);
+}
+
+#[tokio::test]
+async fn username_effect_mismatched_style_fails_without_charging() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "username-effect-mismatch").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let starting_balance = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips row")
+        .balance;
+
+    // A gradient choice against the glow item aborts the transaction.
+    let error = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Gradient(GradientPair::Dusk),
+    )
+    .await
+    .expect_err("mismatched variant must fail");
+    let message = error.to_string();
+    assert!(
+        message.starts_with(char::is_lowercase),
+        "error should be lowercase: {message}"
+    );
+
+    let chips = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips row");
+    assert_eq!(
+        chips.balance, starting_balance,
+        "failed buy must not charge"
+    );
+    assert!(
+        active_username_effect_rows(&client, user.id)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn username_effect_insufficient_funds_creates_no_effect_row() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "username-effect-broke").await;
+    let mut client = test_db.db.get().await.expect("db client");
+
+    // The initial grant covers exactly one shimmer; the second buy is broke.
+    let first = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_SHIMMER_SKU,
+        UsernameEffect::Shimmer,
+    )
+    .await
+    .expect("first buy");
+    assert_eq!(
+        first.purchase.expect("item").status,
+        PurchaseStatus::Purchased
+    );
+
+    let second = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_SHIMMER_SKU,
+        UsernameEffect::Shimmer,
+    )
+    .await
+    .expect("second buy");
+    let purchase = second.purchase.expect("item");
+    assert_eq!(purchase.status, PurchaseStatus::InsufficientFunds);
+    assert!(second.username_effect.is_none());
+    // The first effect stays live; the failed rebuy neither reset nor cleared it.
+    assert_eq!(active_username_effect_rows(&client, user.id).await.len(), 1);
 }

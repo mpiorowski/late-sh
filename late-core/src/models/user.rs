@@ -166,7 +166,7 @@ impl RightSidebarComponent {
     /// flexible panel and absorbs leftover rows. Stale stored keys (e.g. the
     /// retired "activity" panel) are dropped on read by `from_key`.
     pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
-        [Self::Visualizer, Self::Music, Self::Daily, Self::Bonsai];
+        [Self::Daily, Self::Visualizer, Self::Music, Self::Bonsai];
 
     pub fn as_str(self) -> &'static str {
         match self {

@@ -134,16 +134,39 @@ impl WebviewPlaybackController {
         &mut self,
         source: PairAudioSource,
         embedded_webview_enabled: bool,
+        muted: bool,
+        volume_percent: u8,
     ) -> Result<()> {
         match (source, embedded_webview_enabled) {
-            (PairAudioSource::Youtube, true) => self.enter_youtube(),
+            (PairAudioSource::Youtube, true) => self.enter_youtube(muted, volume_percent),
             (PairAudioSource::Youtube, false) => self.enter_browser_youtube(),
             (PairAudioSource::Icecast, _) => self.enter_icecast(),
             (PairAudioSource::Radio, _) => self.enter_radio(),
         }
     }
 
-    fn enter_youtube(&mut self) -> Result<()> {
+    /// Heartbeat-tick watchdog: respawn the helper when the user is on
+    /// YouTube and the child died. Without this the parent only notices a
+    /// dead helper on the next SetPlaybackSource, which may never arrive
+    /// (the server can miss the helper's disconnect entirely on a half-open
+    /// TCP drop and then never replays the playback source).
+    pub(super) fn maintain_helper(&mut self, muted: bool, volume_percent: u8) {
+        if !self.wants_youtube || self.helper_is_running() {
+            return;
+        }
+        // Quiet backoff pre-check: enter_youtube's backoff probe warns on
+        // every call, which is too loud at a 1s cadence.
+        if let Some(until) = self.disabled_until
+            && Instant::now() < until
+        {
+            return;
+        }
+        if let Err(err) = self.enter_youtube(muted, volume_percent) {
+            warn!(error = %err, "failed to respawn embedded YouTube webview helper");
+        }
+    }
+
+    fn enter_youtube(&mut self, muted: bool, volume_percent: u8) -> Result<()> {
         self.wants_youtube = true;
         if self.helper_is_running() {
             return Ok(());
@@ -196,6 +219,13 @@ impl WebviewPlaybackController {
         let mut command = Command::new(webview_helper_program());
         command
             .env("LATE_API_BASE_URL", &self.api_base_url)
+            // Hand the session's current mute/volume to the helper so a
+            // respawn mid-session comes back muted if the user muted, instead
+            // of the helper's unmuted default. The parent tracks the same
+            // toggle_mute/volume controls the helper receives, so these
+            // atomics mirror the helper's last state.
+            .env("LATE_WEBVIEW_INITIAL_MUTED", if muted { "1" } else { "0" })
+            .env("LATE_WEBVIEW_INITIAL_VOLUME", volume_percent.to_string())
             // The helper is an undecorated media surface, not an accessibility
             // target. Opting out avoids host AT-SPI bridge crashes from stale
             // at-spi-bus-launcher/dbus state while leaving the terminal app's
@@ -644,6 +674,10 @@ pub(super) async fn run_viz_ws(
                     last_icecast_output_available = current_icecast_output_available;
                     send_client_state(&mut ws, client, playback).await?;
                 }
+                webview.maintain_helper(
+                    playback.muted.load(Ordering::Relaxed),
+                    playback.volume_percent.load(Ordering::Relaxed),
+                );
             }
             _ = voice_state_heartbeat.tick(), if voice.joined => {
                 send_voice_state(&mut ws, voice).await?;
@@ -776,7 +810,12 @@ async fn handle_pair_control(
                     "applied playback source change"
                 );
             }
-            webview.apply_playback_source(source, embedded_webview_enabled)?;
+            webview.apply_playback_source(
+                source,
+                embedded_webview_enabled,
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            )?;
             Ok(false)
         }
         PairControlMessage::RequestClipboardImage { request_id } => {

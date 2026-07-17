@@ -499,8 +499,22 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         .await;
                                     }
                                 }
-                                if !applied_initial_mute
-                                    && (start_with_music_muted == muted
+                                if !applied_initial_mute {
+                                    // Webview helpers align to the session's
+                                    // current runtime mute (the live CLI
+                                    // entry, which receives the same mute
+                                    // controls), not the boot preference: a
+                                    // helper respawn or reconnect mid-session
+                                    // must not unmute a muted session.
+                                    let desired_muted = if ssh_mode == ClientSshMode::Webview {
+                                        state
+                                            .paired_client_registry
+                                            .cli_muted(&token)
+                                            .unwrap_or(start_with_music_muted)
+                                    } else {
+                                        start_with_music_muted
+                                    };
+                                    if desired_muted == muted
                                         || send_json_ws(
                                             &mut socket,
                                             &crate::paired_clients::PairControlMessage::ToggleMute,
@@ -508,9 +522,10 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                             "initial mute alignment",
                                         )
                                         .await
-                                        .is_ok())
-                                {
-                                    applied_initial_mute = true;
+                                        .is_ok()
+                                    {
+                                        applied_initial_mute = true;
+                                    }
                                 }
                                 continue;
                             }

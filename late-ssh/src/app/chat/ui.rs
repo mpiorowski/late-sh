@@ -22,6 +22,7 @@ use crate::app::common::{
     composer::composer_line_count,
     overlay::{Overlay, draw_overlay},
     theme,
+    username_effect::NameStyle,
 };
 use crate::app::files::{
     inline_image::InlineImagePreview,
@@ -40,7 +41,10 @@ use super::state::{
 use super::ui_text::{AuthorTint, reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
+/// The gap between messages and composer: a blank breather row on top so the
+/// ticker doesn't read as one more chat line, then the ticker row itself
+/// hugging the composer. Two rows, always present, so the chrome never moves.
+const CHAT_COMPOSER_GAP_HEIGHT: u16 = 2;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
 const AFK_BADGE: &str = "🌙";
@@ -48,7 +52,7 @@ const AFK_BADGE: &str = "🌙";
 fn is_bot_author(username: &str) -> bool {
     matches!(
         username.trim().to_ascii_lowercase().as_str(),
-        "bot" | "graybeard" | "dealer" | "bartender"
+        "bot" | "graybeard" | "bartender"
     )
 }
 
@@ -56,9 +60,7 @@ fn is_bot_author(username: &str) -> bool {
 /// Checked together with the body prefix before a message renders as an
 /// authorless system row.
 fn is_system_author(username: &str) -> bool {
-    username
-        .trim()
-        .eq_ignore_ascii_case(crate::app::activity::lounge::SYSTEM_USERNAME)
+    crate::app::activity::lounge::is_system_username(username)
 }
 
 // ── Dashboard chat card ─────────────────────────────────────
@@ -67,6 +69,9 @@ pub struct DashboardChatView<'a> {
     /// When present, the 3-row pet strip renders between the messages and
     /// the composer (pet entitlement + tweak resolved by the caller).
     pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
+    /// Recent #lounge system-feed lines (newest first), packed left to
+    /// right into the composer-gap row.
+    pub activity_ticker: &'a [super::state::ActivityTickerEntry],
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
@@ -98,6 +103,9 @@ pub struct DashboardChatView<'a> {
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
+    /// Resolved 24h username-effect styles per author (see
+    /// `common/username_effect.rs`); fg painted over the bare name only.
+    pub name_styles: &'a HashMap<Uuid, NameStyle>,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
@@ -534,25 +542,86 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
 }
 
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
-    let (messages, _, composer) = split_chat_pet_strip_and_composer(area, composer_height, 0);
+    let (messages, _, _, composer) = split_chat_pet_strip_and_composer(area, composer_height, 0);
     (messages, composer)
 }
 
-/// Vertical layout for a chat surface: messages fill, then a 1-row gap, then
-/// an optional pet strip (0 rows when absent) directly above the composer.
+/// Vertical layout for a chat surface: messages fill, then a blank breather,
+/// then an optional pet strip (0 rows when absent), then the one-row activity
+/// ticker hugging the composer. With the pet absent this collapses to the same
+/// two-row gap (blank + ticker) as before, so the chrome never moves.
 fn split_chat_pet_strip_and_composer(
     area: Rect,
     composer_height: u16,
     pet_strip_height: u16,
-) -> (Rect, Rect, Rect) {
+) -> (Rect, Rect, Rect, Rect) {
     let layout = Layout::vertical([
         Constraint::Fill(1),
-        Constraint::Length(CHAT_COMPOSER_GAP_HEIGHT),
+        Constraint::Length(CHAT_COMPOSER_GAP_HEIGHT.saturating_sub(1)),
         Constraint::Length(pet_strip_height),
+        Constraint::Length(1),
         Constraint::Length(composer_height),
     ])
     .split(area);
-    (layout[0], layout[2], layout[3])
+    (layout[0], layout[3], layout[2], layout[4])
+}
+
+/// The one-row #lounge activity ticker rendered in the composer gap. The
+/// queue packs left to right, newest first — each event as `text (5m)` with
+/// faint `·` separators — until the row is full; whatever doesn't fit is
+/// simply not shown (the queue is sized to outfill the row). It gets its own
+/// one-row slot hugging the composer (below the pet strip when that is shown),
+/// with a blank breather higher up. The slot always exists, so the chrome
+/// never moves; an empty queue just leaves it blank.
+fn draw_activity_ticker(
+    frame: &mut Frame,
+    area: Rect,
+    entries: &[super::state::ActivityTickerEntry],
+) {
+    if entries.is_empty() || area.is_empty() {
+        return;
+    }
+    // Paint only the bottom row of the gap; the row(s) above stay blank.
+    let area = Rect {
+        y: area.bottom().saturating_sub(1),
+        height: 1,
+        ..area
+    };
+    let text_style = Style::default()
+        .fg(theme::TEXT_DIM())
+        .add_modifier(Modifier::ITALIC);
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let width = area.width as usize;
+
+    let mut spans = vec![Span::raw(" "), Span::styled("· ", faint)];
+    let mut used = 3usize;
+    for (i, entry) in entries.iter().enumerate() {
+        let stamp = format!(
+            " ({})",
+            crate::app::common::primitives::format_relative_time_short(entry.at)
+        );
+        let cost = entry.text.chars().count() + stamp.chars().count();
+        if i > 0 {
+            if used + 3 + cost > width {
+                break;
+            }
+            spans.push(Span::styled(" · ", faint)); // sep
+            used += 3;
+        }
+        // The newest entry always shows, truncated to fit if it must.
+        let budget = width.saturating_sub(used + stamp.chars().count());
+        let text: String = if i == 0 && entry.text.chars().count() > budget && budget > 1 {
+            let mut cut: String = entry.text.chars().take(budget - 1).collect();
+            cut.push('…');
+            cut
+        } else {
+            entry.text.clone()
+        };
+        used += text.chars().count() + stamp.chars().count();
+        spans.push(Span::styled(text, text_style));
+        spans.push(Span::styled(stamp, faint));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_room_page_effects(frame: &mut Frame, area: Rect, effects: &[ActiveChatRoomEffect]) {
@@ -995,8 +1064,9 @@ pub fn draw_dashboard_chat_card(
     } else {
         0
     };
-    let (mut messages_area, pet_strip_area, composer_area) =
+    let (mut messages_area, ticker_area, pet_strip_area, composer_area) =
         split_chat_pet_strip_and_composer(area, composer_height, pet_strip_height);
+    draw_activity_ticker(frame, ticker_area, view.activity_ticker);
     if let Some(pet_strip) = &view.pet_strip {
         crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
     }
@@ -1049,6 +1119,7 @@ pub fn draw_dashboard_chat_card(
                 inline_images: view.inline_images,
                 unread_marker: view.unread_marker,
                 drunk_levels: view.drunk_levels,
+                name_styles: view.name_styles,
             },
         );
         let visible = visible_chat_rows(
@@ -1131,6 +1202,8 @@ struct ChatRowsContext<'a> {
     unread_marker: Option<DateTime<Utc>>,
     /// Per-author drunk levels (1-4) for the tavern glow under usernames.
     drunk_levels: &'a HashMap<Uuid, u8>,
+    /// Resolved 24h username-effect styles per author.
+    name_styles: &'a HashMap<Uuid, NameStyle>,
 }
 
 // ── Mouse hit-test types ────────────────────────────────────
@@ -1263,6 +1336,9 @@ fn chat_rows_fingerprint(
         ctx.chat_badges.get(&msg.user_id).hash(&mut hasher);
         ctx.profile_award_badges.get(&msg.user_id).hash(&mut hasher);
         ctx.drunk_levels.get(&msg.user_id).hash(&mut hasher);
+        // Resolved name style (not the raw effect): shimmer's phase step
+        // lands here, so an animated name re-renders at most once a second.
+        ctx.name_styles.get(&msg.user_id).hash(&mut hasher);
         ctx.message_reactions.get(&msg.id).hash(&mut hasher);
         if let Some(lines) = ctx.inline_images.get(&msg.id) {
             true.hash(&mut hasher);
@@ -1410,15 +1486,17 @@ fn ensure_chat_rows_cache(
             profile_award_badges,
             afk_badge,
         );
-        let author_tint = ctx
+        let drunk = ctx
             .drunk_levels
             .get(&msg.user_id)
-            .and_then(|level| theme::DRUNK_LABEL_BG(*level).map(|bg| (*level, bg)))
-            .map(|(level, bg)| AuthorTint {
-                range: author_range,
-                bg,
-                word: late_core::models::drinks::drunk_label_word(level),
-            });
+            .and_then(|level| theme::DRUNK_LABEL_BG(*level).map(|bg| (*level, bg)));
+        let name_style = ctx.name_styles.get(&msg.user_id).copied();
+        let author_tint = (drunk.is_some() || name_style.is_some()).then(|| AuthorTint {
+            range: author_range,
+            bg: drunk.map(|(_, bg)| bg),
+            word: drunk.and_then(|(level, _)| late_core::models::drinks::drunk_label_word(level)),
+            name_style,
+        });
 
         let reactions = ctx
             .message_reactions
@@ -2283,6 +2361,9 @@ pub struct ChatRenderInput<'a> {
     /// When present, the 3-row pet strip renders between the messages and
     /// the composer (pet entitlement + tweak resolved by the caller).
     pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
+    /// Recent #lounge system-feed lines (newest first), packed left to
+    /// right into the composer-gap row.
+    pub activity_ticker: &'a [super::state::ActivityTickerEntry],
     pub feeds_selected: bool,
     pub feeds_processing: bool,
     pub feeds_unread_count: i64,
@@ -2335,6 +2416,9 @@ pub struct ChatRenderInput<'a> {
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
+    /// Resolved 24h username-effect styles per author (see
+    /// `common/username_effect.rs`); fg painted over the bare name only.
+    pub name_styles: &'a HashMap<Uuid, NameStyle>,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -2445,6 +2529,9 @@ pub struct EmbeddedRoomChatView<'a> {
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
+    /// Resolved 24h username-effect styles per author (see
+    /// `common/username_effect.rs`); fg painted over the bare name only.
+    pub name_styles: &'a HashMap<Uuid, NameStyle>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -2530,6 +2617,7 @@ pub fn draw_embedded_room_chat(
             inline_images: view.inline_images,
             unread_marker: view.unread_marker,
             drunk_levels: view.drunk_levels,
+            name_styles: view.name_styles,
         },
     );
     let visible = visible_chat_rows(
@@ -3758,8 +3846,9 @@ pub fn draw_chat_center(
     } else {
         0
     };
-    let (messages_area, pet_strip_area, composer_area) =
+    let (messages_area, ticker_area, pet_strip_area, composer_area) =
         split_chat_pet_strip_and_composer(area, selection_mode.composer_height(), pet_strip_height);
+    draw_activity_ticker(frame, ticker_area, view.activity_ticker);
     if let Some(pet_strip) = &view.pet_strip {
         crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
     }
@@ -3868,6 +3957,7 @@ fn draw_selected_content(
                     inline_images: view.inline_images,
                     unread_marker: view.room_unread_markers.get(&room.id).copied().flatten(),
                     drunk_levels: view.drunk_levels,
+                    name_styles: view.name_styles,
                 },
             );
             let visible = visible_chat_rows(
@@ -3943,7 +4033,7 @@ fn draw_selected_content(
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER()));
         let hint_text = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter jump to room",
+            " j/k navigate · Enter preview message",
             Style::default().fg(theme::TEXT_DIM()),
         )))
         .block(hint_block);
@@ -4085,9 +4175,8 @@ mod tests {
     fn is_bot_author_matches_all_ghost_users() {
         assert!(is_bot_author("bot"));
         assert!(is_bot_author("graybeard"));
-        assert!(is_bot_author("dealer"));
-        assert!(is_bot_author(" Dealer "));
         assert!(is_bot_author("bartender"));
+        assert!(is_bot_author(" Bartender "));
         assert!(!is_bot_author("mat"));
     }
 
@@ -4181,6 +4270,7 @@ mod tests {
         let inline_images = HashMap::new();
         let profile_award_badges = HashMap::new();
         let drunk_levels = HashMap::new();
+        let name_styles = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
 
         let messages = vec![&message];
@@ -4198,6 +4288,7 @@ mod tests {
             inline_images: &inline_images,
             unread_marker: None,
             drunk_levels: &drunk_levels,
+            name_styles: &name_styles,
         };
 
         theme::set_current_by_id("late");
@@ -4236,6 +4327,7 @@ mod tests {
         let inline_images = HashMap::new();
         let profile_award_badges = HashMap::new();
         let drunk_levels = HashMap::new();
+        let name_styles = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
         let messages = vec![&message];
         let active_afk_user_ids = HashSet::from([author_id]);
@@ -4255,6 +4347,7 @@ mod tests {
             inline_images: &inline_images,
             unread_marker: None,
             drunk_levels: &drunk_levels,
+            name_styles: &name_styles,
         };
         let inactive_ctx = ChatRowsContext {
             current_user_id,
@@ -4270,6 +4363,7 @@ mod tests {
             inline_images: &inline_images,
             unread_marker: None,
             drunk_levels: &drunk_levels,
+            name_styles: &name_styles,
         };
 
         assert_ne!(
@@ -4307,6 +4401,7 @@ mod tests {
         let messages = vec![&message];
         let sober = HashMap::new();
         let wasted = HashMap::from([(author_id, 4u8)]);
+        let name_styles = HashMap::new();
 
         let ctx = |drunk_levels| ChatRowsContext {
             current_user_id,
@@ -4322,11 +4417,89 @@ mod tests {
             inline_images: &inline_images,
             unread_marker: None,
             drunk_levels,
+            name_styles: &name_styles,
         };
 
         assert_ne!(
             chat_rows_fingerprint(&messages, &ctx(&sober), 80),
             chat_rows_fingerprint(&messages, &ctx(&wasted), 80)
+        );
+    }
+
+    #[test]
+    fn chat_rows_fingerprint_changes_with_name_style() {
+        let room_id = Uuid::from_u128(1);
+        let current_user_id = Uuid::from_u128(2);
+        let author_id = Uuid::from_u128(3);
+        let message = ChatMessage {
+            id: Uuid::from_u128(4),
+            created: Utc::now(),
+            updated: Utc::now(),
+            pinned: false,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            room_id,
+            user_id: author_id,
+            body: "hello".to_string(),
+        };
+        let usernames = HashMap::from([(author_id, "bob".to_string())]);
+        let countries = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
+        let friend_user_ids = HashSet::new();
+        let afk_user_ids = HashSet::new();
+        let message_reactions = HashMap::new();
+        let inline_images = HashMap::new();
+        let profile_award_badges = HashMap::new();
+        let drunk_levels = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
+        let messages = vec![&message];
+        let plain = HashMap::new();
+        let glowing = HashMap::from([(
+            author_id,
+            crate::app::common::username_effect::NameStyle::Solid(Color::Rgb(255, 200, 80)),
+        )]);
+        // Two shimmer phases resolve to different two-tones: the fingerprint
+        // must move so the animated name actually repaints.
+        let phase_a = HashMap::from([(
+            author_id,
+            crate::app::common::username_effect::resolve(
+                late_core::models::username_effect::UsernameEffect::Shimmer,
+                0,
+            ),
+        )]);
+        let phase_b = HashMap::from([(
+            author_id,
+            crate::app::common::username_effect::resolve(
+                late_core::models::username_effect::UsernameEffect::Shimmer,
+                1,
+            ),
+        )]);
+
+        let ctx = |name_styles| ChatRowsContext {
+            current_user_id,
+            afk_user_ids: &afk_user_ids,
+            show_flag_fallback: false,
+            usernames: &username_lookup,
+            countries: &countries,
+            friend_user_ids: &friend_user_ids,
+            bonsai_glyphs: &bonsai_glyphs,
+            chat_badges: &chat_badges,
+            profile_award_badges: &profile_award_badges,
+            message_reactions: &message_reactions,
+            inline_images: &inline_images,
+            unread_marker: None,
+            drunk_levels: &drunk_levels,
+            name_styles,
+        };
+
+        assert_ne!(
+            chat_rows_fingerprint(&messages, &ctx(&plain), 80),
+            chat_rows_fingerprint(&messages, &ctx(&glowing), 80)
+        );
+        assert_ne!(
+            chat_rows_fingerprint(&messages, &ctx(&phase_a), 80),
+            chat_rows_fingerprint(&messages, &ctx(&phase_b), 80)
         );
     }
 
@@ -4418,9 +4591,11 @@ mod tests {
         static ROOM_UNREAD_MARKERS: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
             OnceLock::new();
         static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
+        static NAME_STYLES: OnceLock<HashMap<Uuid, NameStyle>> = OnceLock::new();
 
         ChatRenderInput {
             pet_strip: None,
+            activity_ticker: &[],
             feeds_selected: false,
             feeds_processing: false,
             feeds_unread_count: 0,
@@ -4486,6 +4661,7 @@ mod tests {
             chat_badges,
             profile_award_badges,
             drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
+            name_styles: NAME_STYLES.get_or_init(HashMap::new),
             news_composer,
             news_composing: false,
             news_processing: false,

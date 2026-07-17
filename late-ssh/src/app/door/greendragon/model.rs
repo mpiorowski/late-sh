@@ -127,7 +127,7 @@ pub const FIVESIX_COST: u64 = 5;
 /// The shared Five Sixes pot's ceiling; growth past it is pocketed by the
 /// house (`maxjackpot`).
 pub const FIVESIX_MAX_POT: u64 = 5000;
-/// The Dark Horse barman's price for a word on one enemy (`darkhorse.php`'s
+/// The Crooked Wheel barman's price for a word on one enemy (`darkhorse.php`'s
 /// bartender: a flat 100 gold per name, no bribe needed).
 pub const INTEL_COST: u64 = 100;
 /// Charm required to propose marriage (rung 7 checks `charm >= 22` directly).
@@ -391,6 +391,11 @@ pub struct Character {
     /// Dragon points earned (one per kill) but not yet allocated. While any are
     /// unspent the spend gate blocks play, exactly like LoGD's new-day gate.
     pub dragon_points_unspent: u32,
+    /// A full new day is owed as soon as the post-kill gates close: upstream's
+    /// dragon-kill reset wipes `lasthit` (`dragon.php`'s field loop), so the
+    /// very next page load runs `newday.php` in full once the spend and race
+    /// gates pass. Settled by [`Character::dawn`].
+    pub dawn_owed: bool,
     /// Gems: the second currency, found in the forest and spent advancing your
     /// specialty (LoGD's gem economy). Distinct from gold.
     pub gems: u64,
@@ -403,7 +408,8 @@ pub struct Character {
     pub soulpoints: u32,
     /// Favor with the death overlord (LoGD `deathpower`): earned tormenting
     /// souls while dead, spent restoring the soul pool, fleeing torments, and
-    /// buying the paid resurrection. Persists across days and revivals.
+    /// buying the paid resurrection. Persists across days and revivals, but
+    /// not dragon kills (`dragon.php`'s field loop reverts it).
     pub favor: u32,
     /// Torment fights remaining today in the graveyard (LoGD `gravefights`).
     /// Refilled on a normal new day, *not* by the paid resurrection.
@@ -468,6 +474,10 @@ pub struct Character {
     pub heard_bard_today: bool,
     /// Used the forest outhouse today.
     pub used_outhouse_today: bool,
+    /// Played the petting zoo's basket game today (upstream `crazyaudrey`'s
+    /// `played` pref, reset by its newday hook). Gates only the *village*
+    /// game; the forest basket event is ungated, exactly as upstream.
+    pub zoo_played_today: bool,
     /// Five Sixes plays today (max [`FIVESIX_PLAYS_PER_DAY`]).
     pub fivesix_plays_today: u32,
     /// Bounty contracts placed today (max [`BOUNTIES_PER_DAY`]; upstream
@@ -666,6 +676,29 @@ pub fn transmute_sickness() -> PersistedBuff {
         player_def_mod: 0.75,
         survives_new_day: true,
         wearoff: "The transmutation sickness finally passes.".into(),
+        ..PersistedBuff::default()
+    }
+}
+
+/// A village visit has this chance (percent) of Mad Juna setting up her
+/// petting zoo in the square (`crazyaudrey` `villagepercent` 20, rolled
+/// `e_rand(1,100) <= 20` on every village pageview).
+pub const ZOO_CHANCE_PCT: u32 = 20;
+/// The pitch on her sign (`crazyaudrey` `cost` 5): what a petting costs.
+pub const ZOO_PET_COST: u64 = 5;
+/// Combat rounds the petting's calm lasts (`apply_buff('crazyaudrey')`).
+pub const ZOO_BUFF_ROUNDS: u32 = 5;
+
+/// The petting zoo's take-home (`crazyaudrey_run` op=pet): defense x1.05 for
+/// [`ZOO_BUFF_ROUNDS`] rounds. Slot-keyed so a second petting replaces the
+/// first, exactly upstream's `apply_buff` slot behavior.
+pub fn zoo_buff() -> PersistedBuff {
+    PersistedBuff {
+        slot: "zoo".into(),
+        name: "Soft Reassurance".into(),
+        rounds_left: ZOO_BUFF_ROUNDS,
+        player_def_mod: 1.05,
+        wearoff: "The soft reassurance of the petting zoo fades.".into(),
         ..PersistedBuff::default()
     }
 }
@@ -916,6 +949,7 @@ impl Default for Character {
             dragon_defense_bonus: 0,
             dragon_ff_bonus: 0,
             dragon_points_unspent: 0,
+            dawn_owed: false,
             gems: 0,
             charm: 0,
             // Fresh level-1 soulpoints: 50 + 5*1 (LoGD new-day formula).
@@ -943,6 +977,7 @@ impl Default for Character {
             flirted_today: false,
             heard_bard_today: false,
             used_outhouse_today: false,
+            zoo_played_today: false,
             fivesix_plays_today: 0,
             bounties_set_today: 0,
             comments_seen_before_day: 0,
@@ -1175,7 +1210,26 @@ impl Character {
             // A win unlocks the next master immediately (`train.php` clears
             // `seenmaster` on victory, `multimaster` default 1).
             self.seen_master_today = false;
+            // Companions train alongside you (`train.php` `companionslevelup`
+            // default 1): each gains its per-level growth and heals to full.
+            for comp in &mut self.companions {
+                comp.attack += comp.attack_per_level as f64;
+                comp.defense += comp.defense_per_level as f64;
+                comp.max_hitpoints += comp.hp_per_level;
+                comp.hitpoints = comp.max_hitpoints;
+            }
         }
+    }
+
+    /// Whether the master hunts you down on the next village visit
+    /// (`village.php`'s `automaster` default 1): banked experience strictly
+    /// past what the *next* level's advancement requires, with the yard
+    /// still open today.
+    pub fn truant(&self) -> bool {
+        self.alive
+            && self.level < data::MAX_LEVEL
+            && !self.seen_master_today
+            && self.experience > data::exp_to_advance(self.level + 1, self.dragon_kills)
     }
 
     /// The master fought to advance from the current level, as a combatant.
@@ -1213,12 +1267,11 @@ impl Character {
     }
 
     /// Randomly split `points` into (attack, defense, hp) flux: +1 attack or
-    /// defense per point, +5 HP per leftover point, with attack and defense each
-    /// capped at `cap`. Mirrors the buff roll shared by the dragon and masters.
-    fn partition_flux(points: u32, cap: u32, rng: &mut impl Rng) -> (u32, u32, u32) {
-        let cap = cap.min(points);
-        let atk = rng.gen_range(0..=cap);
-        let def = rng.gen_range(0..=cap.min(points - atk));
+    /// defense per point, +5 HP per leftover point (the dragon's toughening
+    /// roll, `dragon.php`).
+    fn partition_flux(points: u32, rng: &mut impl Rng) -> (u32, u32, u32) {
+        let atk = rng.gen_range(0..=points);
+        let def = rng.gen_range(0..=(points - atk));
         let hp = (points - atk - def) * 5;
         (atk, def, hp)
     }
@@ -1227,7 +1280,7 @@ impl Character {
     /// 45/25/300 plus a random flux over `round(investment * 0.75)` points.
     pub fn scaled_dragon(&self, rng: &mut impl Rng) -> (u32, u32, u32) {
         let points = (self.investment_points() as f64 * 0.75).round() as u32;
-        let (a, d, h) = Self::partition_flux(points, points, rng);
+        let (a, d, h) = Self::partition_flux(points, rng);
         (
             data::DRAGON_ATTACK + a,
             data::DRAGON_DEFENSE + d,
@@ -1242,7 +1295,12 @@ impl Character {
         let (master, base, hp) = self.current_master()?;
         let points = (self.investment_points() as f64 * 0.33).round() as u32;
         let cap = (points as f64 * 0.25).round() as u32;
-        let (a, d, h) = Self::partition_flux(points, cap, rng);
+        // Upstream rolls over the whole budget and *clamps* each share to the
+        // quarter cap (`min(e_rand(0,dk), round(dk*.25))`, `train.php`) — a
+        // spike at the cap, not a uniform pick beneath it.
+        let a = rng.gen_range(0..=points).min(cap);
+        let d = rng.gen_range(0..=(points - a)).min(cap);
+        let h = (points - a - d) * 5;
         Some((
             master,
             Combatant {
@@ -1669,6 +1727,22 @@ impl Character {
         self.armor_tier = 0;
         self.seen_dragon = false;
         self.alive = true;
+        // The account reset (`dragon.php`'s field loop reverts every column
+        // outside its preserve list) reaches further than the pocket: the
+        // bank balance (debt included), the death overlord's favor, and any
+        // haunt mark all revert to their column defaults, and race and
+        // specialty are re-chosen every run — their gates re-arm.
+        self.gold_in_bank = 0;
+        self.favor = 0;
+        self.haunted_by.clear();
+        self.race = Race::None;
+        self.specialty = Specialty::None;
+        // The loop also wipes `recentcomments`, so every comment reads as
+        // new on the post-kill day (the next dawn re-stamps it normally).
+        self.comments_seen_before_day = 0;
+        // Upstream also wipes `lasthit`, so the next page load runs a full
+        // new day once the spend/race gates close ([`Character::dawn`]).
+        self.dawn_owed = true;
         // The specialty path is kept, but its skill/uses restart (LoGD's
         // per-module dragonkill hook fires for every specialty, benched ones
         // included).
@@ -1704,19 +1778,38 @@ impl Character {
             return None;
         }
         // The new-post watermark rolls forward to the previous dawn's day
-        // (`newday.php`: `recentcomments = lasthit`, `lasthit = now`).
-        self.comments_seen_before_day = self.last_day;
+        // (`newday.php`: `recentcomments = lasthit`, `lasthit = now`) — unless
+        // a dragon kill wiped `lasthit` and no dawn has run since, in which
+        // case everything reads as new, exactly as upstream's epoch stamp.
+        self.comments_seen_before_day = if self.dawn_owed { 0 } else { self.last_day };
         self.last_day = today;
-        // The run grows a day older, and a dead character greeting the dawn
-        // counts a revival (`newday.php`: `age++` unconditionally,
+        // A dead character greeting the dawn counts a revival (`newday.php`:
         // `resurrections++` while not alive).
-        self.age += 1;
         if !self.alive {
             self.resurrections += 1;
         }
         // Interest is settled before turns refill, so it can read how many of
         // yesterday's turns went unused (LoGD's "work for it" gate).
         self.apply_new_day_interest(interest_percent);
+        let fx = self.dawn(spirits, rng);
+        self.alive = true;
+        Some(fx)
+    }
+
+    /// The dawn proper — everything a non-resurrection `newday.php` run does
+    /// once its gates pass: the run ages a day (`age++` unconditionally),
+    /// turns are assembled (base + ff dragon points + race bonus + the day's
+    /// spirits), the daily module effects fire, specialty uses refresh, the
+    /// once-per-day dragon seek re-arms, the soul pool / grave fights / PvP
+    /// pool refill (`newday.php` skips those three only when `resurrection`),
+    /// and you wake fully healed. Runs inside [`Character::roll_new_day`],
+    /// and solo as the forced day a dragon kill owes ([`Character::slay_dragon`]
+    /// sets `dawn_owed`; upstream wipes `lasthit` so the next page load is a
+    /// full `newday.php` run) — the freshly wiped bank makes that day's
+    /// interest a no-op, so the forced path skips the interest roll.
+    pub fn dawn(&mut self, spirits: i32, rng: &mut impl Rng) -> NewDayFx {
+        self.dawn_owed = false;
+        self.age += 1;
         let turns = TURNS_PER_DAY as i32
             + self.dragon_ff_bonus as i32
             + self.race.daily_forest_bonus() as i32
@@ -1724,17 +1817,14 @@ impl Character {
         self.turns = turns.max(0) as u32;
         let fx = self.newday_shared_effects(rng);
         self.refresh_specialty_uses();
-        self.alive = true;
         // The dragon may be sought once per day (`newday.php` clears
         // `seendragon` daily): a fled attempt doesn't lock out the run.
         self.seen_dragon = false;
         self.soulpoints = self.max_soulpoints();
         self.grave_fights = GRAVE_FIGHTS_PER_DAY;
-        // The day's PvP pool refills with the grave fights — and like them,
-        // only here: `newday.php` skips `playerfights` when `resurrection`.
         self.player_fights = PVP_FIGHTS_PER_DAY;
         self.hitpoints = self.max_hitpoints();
-        Some(fx)
+        fx
     }
 
     /// The daily effects shared by every kind of new day (upstream's newday
@@ -1766,6 +1856,7 @@ impl Character {
         self.flirted_today = false;
         self.heard_bard_today = false;
         self.used_outhouse_today = false;
+        self.zoo_played_today = false;
         self.fivesix_plays_today = 0;
         self.bounties_set_today = 0;
         // The bank's transfer counters (`newday.php` zeroes both
@@ -2150,8 +2241,11 @@ impl Character {
             name: merc.name.to_string(),
             hitpoints: hp,
             max_hitpoints: hp,
-            attack: merc.attack.0 + merc.attack.1 * level,
-            defense: merc.defense.0 + merc.defense.1 * level,
+            attack: (merc.attack.0 + merc.attack.1 * level) as f64,
+            defense: (merc.defense.0 + merc.defense.1 * level) as f64,
+            attack_per_level: merc.attack.1,
+            defense_per_level: merc.defense.1,
+            hp_per_level: merc.hp.1,
             dying_text: merc.dying_text.to_string(),
             ability: merc.ability,
             ignore_limit: false,
@@ -2344,8 +2438,11 @@ mod tests {
             name: "Shadow".into(),
             hitpoints: 5,
             max_hitpoints: 5,
-            attack: 1,
-            defense: 1,
+            attack: 1.0,
+            defense: 1.0,
+            attack_per_level: 0,
+            defense_per_level: 0,
+            hp_per_level: 0,
             dying_text: String::new(),
             ability: Default::default(),
             ignore_limit: true,
@@ -2847,6 +2944,10 @@ mod tests {
         c.armor_tier = 12;
         c.experience = 99999;
         c.gold = 4000; // wiped by the reset, not retained
+        c.gold_in_bank = 90_000;
+        c.favor = 40;
+        c.haunted_by = "wraith".into();
+        c.race = Race::Plainsborn;
         c.specialty = Specialty::Mystical;
         c.specialty_skill = 12;
         c.slay_dragon(false);
@@ -2867,10 +2968,44 @@ mod tests {
         assert_eq!(c.gold, 100);
         // First kill is below the gem threshold (kills-7).
         assert_eq!(c.gems, 0);
-        // Specialty path kept, skill/uses restart.
-        assert_eq!(c.specialty, Specialty::Mystical);
+        // dragon.php's field loop reverts everything outside its preserve
+        // list: bank, favor, haunt mark, race, specialty all reset, and a
+        // full new day is owed once the gates close.
+        assert_eq!(c.gold_in_bank, 0);
+        assert_eq!(c.favor, 0);
+        assert!(c.haunted_by.is_empty());
+        assert_eq!(c.race, Race::None);
+        assert_eq!(c.specialty, Specialty::None);
         assert_eq!(c.specialty_skill, 0);
+        assert!(c.dawn_owed);
         assert!(!c.seen_dragon);
+    }
+
+    #[test]
+    fn the_owed_dawn_rolls_a_full_day_without_a_calendar_change() {
+        // dragon.php wipes `lasthit`, so the very next page load runs a full
+        // newday.php once the gates pass — same game day or not.
+        let mut c = Character::new("hero", 10);
+        c.level = 15;
+        c.turns = 2;
+        c.soulpoints = 1;
+        c.grave_fights = 0;
+        c.player_fights = 0;
+        c.slay_dragon(false);
+        c.spend_dragon_point(DragonPointKind::ForestFights);
+        c.race = Race::Plainsborn;
+        let fx = c.dawn(0, &mut rand::thread_rng());
+        assert!(!c.dawn_owed);
+        // A fresh run's first day: base 10 + 1 ff point + 2 race bonus.
+        assert_eq!(c.turns, TURNS_PER_DAY + 1 + 2);
+        assert_eq!(c.age, 1);
+        assert_eq!(c.soulpoints, c.max_soulpoints());
+        assert_eq!(c.grave_fights, GRAVE_FIGHTS_PER_DAY);
+        assert_eq!(c.player_fights, PVP_FIGHTS_PER_DAY);
+        assert_eq!(c.hitpoints, c.max_hitpoints());
+        // `last_day` untouched: the real next dawn still rolls normally.
+        assert_eq!(c.last_day, 10);
+        assert!(!fx.divorced);
     }
 
     #[test]

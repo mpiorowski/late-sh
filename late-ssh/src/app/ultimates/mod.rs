@@ -274,6 +274,7 @@ mod tests {
             effect_kind: None,
             requires_room: false,
             daily_limited: false,
+            username_effect_variant: None,
         }
     }
 }

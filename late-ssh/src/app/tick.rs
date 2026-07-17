@@ -47,6 +47,8 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        // Fire a debounced message search for the Ctrl+/ modal's `?` mode.
+        crate::app::room_search_modal::state::tick_message_search(self);
         if let Some(room_id) = self.chat.take_requested_poll_room() {
             let allow_poll_modal = self.screen == Screen::Dashboard;
             crate::app::chat::input::open_requested_poll_modal(self, room_id, allow_poll_modal);
@@ -267,14 +269,34 @@ impl App {
                 _ => (),
             }
         }
-        if let Some(active_room_game) = &mut self.active_room_game {
-            active_room_game.tick();
-        }
-        if let Some(b) = self.tick_rooms() {
-            self.banner = Some(b);
-        }
         if let Some(b) = self.daily.tick() {
             self.banner = Some(b);
+        }
+        // Modal cursor, pending claim, and glow follow the daily snapshot.
+        self.lobby.sync(&self.daily);
+        // The match chat room id only becomes known once the board's row
+        // loads, so the visible-room sync (read marker + tail) and the
+        // one-time idempotent join both key off the loaded detail here
+        // rather than off the screen switch.
+        if self.screen == crate::app::common::primitives::Screen::DailyMatch {
+            self.sync_visible_chat_room();
+            if let Some(chat_room_id) = self.daily.board_chat_room_id()
+                && let Some(board) = self.daily.board.as_mut()
+                && !board.chat_join_requested
+            {
+                board.chat_join_requested = true;
+                self.chat.join_game_room_chat(chat_room_id);
+            }
+        }
+        self.house.tick();
+        if self.screen == crate::app::common::primitives::Screen::HouseTable {
+            self.sync_visible_chat_room();
+            if let Some(chat_room_id) = self.house.chat_room_id()
+                && !self.house.chat_join_requested
+            {
+                self.house.chat_join_requested = true;
+                self.chat.join_game_room_chat(chat_room_id);
+            }
         }
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
@@ -595,19 +617,26 @@ impl App {
                 let _ = state.save();
             }
         }
-        if let Some(balance) = self
-            .active_room_game
-            .as_ref()
-            .and_then(|game| game.chip_balance())
-        {
+        if let Some(balance) = self.house.client().and_then(|client| client.chip_balance()) {
             self.chip_balance = balance;
         }
 
         // Drunk glow for chat author labels: copy out of the shared lobby
         // about once a second so renders read owned state, and re-reading
-        // also lets the tint fade as the buzz decays.
+        // also lets the tint fade as the buzz decays. Username effects ride
+        // the same cadence: one Arc clone of the flair directory, resolved
+        // into paintable styles (which is also what steps shimmer at 1 Hz)
+        // and expired at read.
         if self.marquee_tick.is_multiple_of(15) {
             self.drunk_levels = self.clubhouse.drunk_levels();
+            if let Some(directory) = &self.flair_directory {
+                let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
+                self.name_styles = crate::app::common::username_effect::resolve_all(
+                    &crate::app::common::username_effect::snapshot(directory),
+                    phase,
+                    chrono::Utc::now(),
+                );
+            }
         }
 
         // Leaderboard
@@ -617,13 +646,13 @@ impl App {
             self.leaderboard = rx.borrow_and_update().clone();
             if let Some(&balance) = self.leaderboard.user_chips.get(&self.user_id)
                 && self
-                    .active_room_game
-                    .as_ref()
-                    .is_none_or(|game| game.can_sync_external_chip_balance())
+                    .house
+                    .client()
+                    .is_none_or(|client| client.can_sync_external_chip_balance())
             {
                 self.chip_balance = balance;
-                if let Some(active_room_game) = &mut self.active_room_game {
-                    active_room_game.sync_external_chip_balance(balance);
+                if let Some(client) = self.house.client_mut() {
+                    client.sync_external_chip_balance(balance);
                 }
             }
         }
@@ -659,13 +688,14 @@ impl App {
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
             && self
-                .active_room_game
-                .as_ref()
-                .is_none_or(|game| game.can_sync_external_chip_balance())
+                .house
+                .client()
+                .is_none_or(|client| client.can_sync_external_chip_balance())
         {
             self.chip_balance = self.shop_state.balance();
-            if let Some(active_room_game) = &mut self.active_room_game {
-                active_room_game.sync_external_chip_balance(self.chip_balance);
+            let balance = self.chip_balance;
+            if let Some(client) = self.house.client_mut() {
+                client.sync_external_chip_balance(balance);
             }
         }
 

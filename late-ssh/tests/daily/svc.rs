@@ -1,16 +1,21 @@
 use late_core::{
-    models::daily_match::DailyMatch,
+    models::{
+        chat_room::ChatRoom,
+        chat_room_member::ChatRoomMember,
+        daily_match::DailyMatch,
+        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
+    },
     test_utils::{TestDb, create_test_user},
 };
 use late_ssh::app::activity::event::{ActivityEvent, ActivityKind};
 use late_ssh::app::activity::publisher::ActivityPublisher;
-use late_ssh::app::daily::battleship::DailyBattleshipState;
-use late_ssh::app::daily::connect4::DailyConnect4State;
-use late_ssh::app::daily::games::DailyGame;
-use late_ssh::app::daily::svc::{
+use late_ssh::app::games::chips::svc::ChipService;
+use late_ssh::app::lobby::daily::battleship::DailyBattleshipState;
+use late_ssh::app::lobby::daily::connect4::DailyConnect4State;
+use late_ssh::app::lobby::daily::games::DailyGame;
+use late_ssh::app::lobby::daily::svc::{
     DAILY_MAX_ACTIVE_ENTRIES, DailyChessState, DailyOutcome, DailyService,
 };
-use late_ssh::app::games::chips::svc::ChipService;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -281,8 +286,8 @@ async fn finished_match_posts_a_lounge_result_line() {
         "expected a Chess DailyResult for this match, got {:?}",
         event.kind
     );
-    assert!(
-        event.action.starts_with("beat ") && event.action.ends_with("at Chess"),
+    assert_eq!(
+        event.action, "won a game of Chess",
         "unexpected result phrasing: {:?}",
         event.action
     );
@@ -904,4 +909,138 @@ async fn finished_results_linger_until_each_player_acks() {
         .expect("winner acks");
     let snapshot = svc.subscribe_snapshot().borrow().clone();
     assert!(snapshot.finished_matches.is_empty());
+}
+
+#[tokio::test]
+async fn claim_creates_private_match_chat_with_voice() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-chat-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-chat-opponent").await;
+    let svc = daily_service(&test_db).await;
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .await
+        .expect("post challenge");
+    // An open challenge has nobody to talk to yet.
+    assert!(challenge.chat_room_id.is_none());
+
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim challenge");
+    let chat_room_id = claimed.chat_room_id.expect("claim created a chat room");
+
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::get(&client, chat_room_id)
+        .await
+        .expect("load chat room")
+        .expect("chat room exists");
+    assert_eq!(room.kind, "game");
+    assert_eq!(room.visibility, "private");
+    assert!(!room.auto_join);
+    assert_eq!(
+        room.slug.as_deref(),
+        Some(format!("daily-{}", claimed.id).as_str())
+    );
+
+    // Exactly the two players are members.
+    assert!(
+        ChatRoomMember::is_member(&client, chat_room_id, challenger.id)
+            .await
+            .expect("challenger membership")
+    );
+    assert!(
+        ChatRoomMember::is_member(&client, chat_room_id, opponent.id)
+            .await
+            .expect("opponent membership")
+    );
+
+    // The claim also wired an enabled voice channel onto the chat room.
+    let voice = VoiceChannel::find_for_target(&client, TARGET_CHAT_ROOM, chat_room_id)
+        .await
+        .expect("voice lookup")
+        .expect("voice channel exists");
+    assert!(voice.enabled);
+    assert!(
+        voice.display_name.contains("chess"),
+        "voice label names the game: {}",
+        voice.display_name
+    );
+}
+
+#[tokio::test]
+async fn stale_match_chat_rooms_are_reaped_after_30_days() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-reap-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-reap-opponent").await;
+    let svc = daily_service(&test_db).await;
+
+    let mut match_ids = Vec::new();
+    for _ in 0..3 {
+        let challenge = svc
+            .post_challenge(challenger.id, DailyGame::Chess, None)
+            .await
+            .expect("post challenge");
+        let claimed = svc
+            .claim_challenge(opponent.id, challenge.id)
+            .await
+            .expect("claim challenge");
+        match_ids.push(claimed.id);
+    }
+    let (stale_finished, fresh_finished, stale_active) = (match_ids[0], match_ids[1], match_ids[2]);
+    svc.resign(challenger.id, stale_finished)
+        .await
+        .expect("resign stale match");
+    svc.resign(challenger.id, fresh_finished)
+        .await
+        .expect("resign fresh match");
+
+    let client = test_db.db.get().await.expect("db client");
+    // Backdate one finished match and the still-active one past the window.
+    for id in [stale_finished, stale_active] {
+        client
+            .execute(
+                "UPDATE daily_matches
+                 SET updated = current_timestamp - INTERVAL '31 days'
+                 WHERE id = $1",
+                &[&id],
+            )
+            .await
+            .expect("backdate match");
+    }
+
+    let deleted = DailyMatch::delete_stale_chat_rooms(&client)
+        .await
+        .expect("reap stale chat rooms");
+    assert_eq!(deleted, 1, "only the old finished match's chat is reaped");
+
+    // The stale finished match: chat room and voice channel gone, match row
+    // kept with chat_room_id cleared by the FK.
+    let row = DailyMatch::get(&client, stale_finished)
+        .await
+        .expect("load stale match")
+        .expect("stale match row survives");
+    assert!(row.chat_room_id.is_none());
+
+    // The fresh finished match and the old-but-active match keep their chat.
+    for id in [fresh_finished, stale_active] {
+        let row = DailyMatch::get(&client, id)
+            .await
+            .expect("load match")
+            .expect("match exists");
+        let chat_room_id = row.chat_room_id.expect("chat room still attached");
+        assert!(
+            ChatRoom::get(&client, chat_room_id)
+                .await
+                .expect("load chat room")
+                .is_some()
+        );
+        assert!(
+            VoiceChannel::find_for_target(&client, TARGET_CHAT_ROOM, chat_room_id)
+                .await
+                .expect("voice lookup")
+                .is_some()
+        );
+    }
 }

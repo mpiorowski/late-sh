@@ -940,14 +940,14 @@ mod tests {
         lobby.sync(&[(id, name)]);
 
         let now = Utc::now();
-        lobby.record_drink(id, 2_000, now);
+        lobby.record_drink(id, 1_500, now);
         assert_eq!(lobby.snapshot().find(id).unwrap().drunk_level, 3);
         assert_eq!(lobby.drunk_levels().get(&id), Some(&3));
 
         // A drink from hours ago has partially worn off.
-        lobby.record_drink(id, 2_000, now - chrono::Duration::hours(5));
+        lobby.record_drink(id, 1_500, now - chrono::Duration::hours(5));
         let level = lobby.snapshot().find(id).unwrap().drunk_level;
-        assert_eq!(level, 2, "5h decay of 2000 points should read buzzed");
+        assert_eq!(level, 2, "5h decay of 1500 points should read buzzed");
 
         // Fully sober entries drop out of the chat-facing map entirely.
         lobby.record_drink(id, 100, now - chrono::Duration::hours(10));

@@ -234,7 +234,6 @@ async fn handle_socket(session: WebTunnelSession) {
             session_token,
             session_rx: None,
             activity_feed_rx: Some(state.activity_feed.subscribe()),
-            room_join_rx: Some(state.room_join_feed.subscribe()),
         },
     )
     .await;

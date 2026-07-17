@@ -5,12 +5,19 @@
 //! with `ssh_mode = "webview"`, relays inbound `load_video` / `source_changed`
 //! server messages to the webview, and forwards `player_state` events back to
 //! the server.
+//!
+//! The relay reconnects on WebSocket drops instead of exiting: the helper
+//! process (and with it the window position and mute/volume state) must
+//! survive server redeploys and network blips. Mute/volume are seeded from
+//! `LATE_WEBVIEW_INITIAL_MUTED` / `LATE_WEBVIEW_INITIAL_VOLUME`, set by the
+//! parent CLI at spawn, so a respawned helper inherits the session's current
+//! state instead of booting unmuted.
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tao::event_loop::EventLoopProxy;
 use tokio::{sync::mpsc, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -23,6 +30,14 @@ use crate::client_platform_label;
 /// browser, but distinguishes it from a real browser through `ssh_mode`.
 const CLIENT_KIND: &str = "browser";
 const DEFAULT_VOLUME_PERCENT: u8 = 30;
+
+/// Reconnect policy, mirroring the parent CLI's pair-WS loop: retry with a
+/// short delay, give up after this many consecutive failures. A connection
+/// that stayed up for `STABLE_CONNECTION` resets the counter so one long
+/// session's worth of rare drops never accumulates into a give-up.
+const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+const MAX_CONSECUTIVE_FAILURES: u32 = 10;
+const STABLE_CONNECTION: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -85,23 +100,90 @@ impl Default for AudioSettings {
     }
 }
 
+impl AudioSettings {
+    /// Seed mute/volume from the env the parent CLI sets at helper spawn, so
+    /// a respawned helper inherits the session's current state. Absent or
+    /// invalid values keep the defaults (old parents, spike mode).
+    fn from_env() -> Self {
+        initial_audio_settings(
+            std::env::var("LATE_WEBVIEW_INITIAL_MUTED").ok().as_deref(),
+            std::env::var("LATE_WEBVIEW_INITIAL_VOLUME").ok().as_deref(),
+        )
+    }
+}
+
+fn initial_audio_settings(muted: Option<&str>, volume_percent: Option<&str>) -> AudioSettings {
+    let defaults = AudioSettings::default();
+    AudioSettings {
+        muted: match muted {
+            Some("1") => true,
+            Some("0") => false,
+            _ => defaults.muted,
+        },
+        volume_percent: volume_percent
+            .and_then(|value| value.parse::<u8>().ok())
+            .filter(|value| *value <= 100)
+            .unwrap_or(defaults.volume_percent),
+    }
+}
+
+/// How one relay session over an established (or attempted) connection ended.
+enum SessionEnd {
+    /// The server closed the socket cleanly; reconnect.
+    ServerClosed,
+    /// The webview event loop side is gone; exit for good.
+    IpcClosed,
+}
+
 pub async fn run(
     api_base_url: &str,
     token: &str,
     proxy: EventLoopProxy<WebviewCommand>,
     mut ipc_rx: mpsc::UnboundedReceiver<WebviewEvent>,
 ) -> Result<()> {
-    let result = run_inner(api_base_url, token, &proxy, &mut ipc_rx).await;
+    let mut audio_settings = AudioSettings::from_env();
+    let mut consecutive_failures: u32 = 0;
+    let result = loop {
+        let attempt_started = Instant::now();
+        match run_session(
+            api_base_url,
+            token,
+            &proxy,
+            &mut ipc_rx,
+            &mut audio_settings,
+        )
+        .await
+        {
+            Ok(SessionEnd::IpcClosed) => break Ok(()),
+            Ok(SessionEnd::ServerClosed) => {
+                info!("server closed webview pair websocket; reconnecting");
+            }
+            Err(err) => {
+                warn!(error = %err, "webview pair session failed; reconnecting");
+            }
+        }
+        if attempt_started.elapsed() >= STABLE_CONNECTION {
+            consecutive_failures = 0;
+        }
+        consecutive_failures += 1;
+        if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
+            break Err(anyhow::anyhow!(
+                "webview pair websocket failed {MAX_CONSECUTIVE_FAILURES} consecutive times; giving up"
+            ));
+        }
+        tokio::time::sleep(RECONNECT_DELAY).await;
+    };
     let _ = proxy.send_event(WebviewCommand::Shutdown);
     result
 }
 
-async fn run_inner(
+async fn run_session(
     api_base_url: &str,
     token: &str,
     proxy: &EventLoopProxy<WebviewCommand>,
     ipc_rx: &mut mpsc::UnboundedReceiver<WebviewEvent>,
-) -> Result<()> {
+    audio_settings: &mut AudioSettings,
+) -> Result<SessionEnd> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!("connecting webview pair websocket");
     let (mut ws, _) = tokio::time::timeout(Duration::from_secs(10), connect_async(&ws_url))
@@ -110,12 +192,14 @@ async fn run_inner(
         .context("failed to connect to pair websocket")?;
     info!("webview pair websocket established");
 
-    let mut audio_settings = AudioSettings::default();
-    send_client_state(&mut ws, audio_settings).await?;
+    send_client_state(&mut ws, *audio_settings).await?;
     let mut heartbeat = interval(Duration::from_secs(1));
     heartbeat.tick().await;
 
     let mut current_item: Option<CurrentItem> = None;
+    // Per-connection: the server resends its catch-up burst (queue_update +
+    // load_video) on reconnect, so the one-shot live-position seek applies to
+    // the first load of every connection, not just the process's first.
     let mut initial_sync = InitialYoutubeSync::new();
     // Latest server snapshot for the playing item. Unlike the one-shot initial
     // sync, this is kept current across track changes so unmute can resume at
@@ -132,8 +216,15 @@ async fn run_inner(
             event = ipc_rx.recv() => {
                 let Some(event) = event else {
                     debug!("webview ipc channel closed; stopping pair task");
-                    break;
+                    return Ok(SessionEnd::IpcClosed);
                 };
+                if matches!(event, WebviewEvent::Ready) {
+                    // The page just finished loading. Seed it with the
+                    // session's current mute/volume before the first
+                    // load_video plays, so a muted session's respawned
+                    // helper never blasts audio from a fresh page.
+                    send_audio_settings(proxy, *audio_settings);
+                }
                 if let Err(err) =
                     handle_webview_event(&mut ws, event, current_item.as_ref()).await
                 {
@@ -141,35 +232,32 @@ async fn run_inner(
                 }
             }
             inbound = ws.next() => {
-                let Some(inbound) = inbound else { break; };
+                let Some(inbound) = inbound else { return Ok(SessionEnd::ServerClosed); };
                 match inbound? {
                     Message::Text(text) => {
                         let result = handle_server_text(
                             text.as_str(),
                             proxy,
-                            &mut audio_settings,
+                            audio_settings,
                             &mut initial_sync,
                             &mut current_snapshot,
                             current_item.as_ref(),
                         ).await;
                         if result.send_client_state {
-                            send_client_state(&mut ws, audio_settings).await?;
+                            send_client_state(&mut ws, *audio_settings).await?;
                         }
                         if let Some(item) = result.current_item {
                             current_item = Some(item);
                         }
                     }
                     Message::Close(_) => {
-                        info!("server closed webview pair websocket");
-                        break;
+                        return Ok(SessionEnd::ServerClosed);
                     }
                     _ => {}
                 }
             }
         }
     }
-
-    Ok(())
 }
 
 #[derive(Default)]
@@ -898,5 +986,33 @@ mod tests {
     #[test]
     fn resume_command_without_current_item_is_noop() {
         assert!(resume_command_at(None, None, Some(40_000)).is_none());
+    }
+
+    #[test]
+    fn initial_audio_settings_seed_from_parent_values() {
+        let settings = initial_audio_settings(Some("1"), Some("55"));
+        assert!(settings.muted);
+        assert_eq!(settings.volume_percent, 55);
+
+        let settings = initial_audio_settings(Some("0"), Some("0"));
+        assert!(!settings.muted);
+        assert_eq!(settings.volume_percent, 0);
+    }
+
+    #[test]
+    fn initial_audio_settings_fall_back_to_defaults_on_missing_or_invalid_values() {
+        let defaults = AudioSettings::default();
+
+        let settings = initial_audio_settings(None, None);
+        assert_eq!(settings.muted, defaults.muted);
+        assert_eq!(settings.volume_percent, defaults.volume_percent);
+
+        let settings = initial_audio_settings(Some("yes"), Some("150"));
+        assert_eq!(settings.muted, defaults.muted);
+        assert_eq!(settings.volume_percent, defaults.volume_percent);
+
+        let settings = initial_audio_settings(Some("1"), Some("banana"));
+        assert!(settings.muted);
+        assert_eq!(settings.volume_percent, defaults.volume_percent);
     }
 }

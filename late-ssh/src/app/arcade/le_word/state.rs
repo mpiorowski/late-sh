@@ -79,6 +79,14 @@ impl State {
         state
     }
 
+    /// Today's word has at least one submitted guess and the run is not over.
+    pub fn has_unfinished_daily(&self) -> bool {
+        self.daily_word_loaded
+            && !self.guesses.is_empty()
+            && !self.is_game_over
+            && self.puzzle_date == self.svc.today()
+    }
+
     pub fn guess_number(&self) -> usize {
         self.guesses
             .len()

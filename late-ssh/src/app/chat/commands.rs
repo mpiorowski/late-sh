@@ -99,7 +99,7 @@ const COMMANDS: &[Command] = &[
     global("bug", "report a bug to #bugs"),
     global(
         "challenge",
-        "post daily challenge (chess, battleship, connect4)",
+        "post daily challenge (chess, battleship, connect4, reversi, checkers, backgammon)",
     ),
     global("coffee", "post coffee cup"),
     global("dm", "open DM"),
@@ -123,6 +123,7 @@ const COMMANDS: &[Command] = &[
     global("profile", "view user profile"),
     global("public", "open public room for everyone"),
     global("roll", "roll dice (e.g. /roll 3d6)"),
+    global("search", "search messages (?query in Ctrl+/)"),
     global("settings", "open settings"),
     global("suggest", "send a suggestion to #suggestions"),
     global("tea", "post tea cup"),

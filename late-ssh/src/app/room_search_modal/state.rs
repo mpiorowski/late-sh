@@ -1,8 +1,14 @@
+use std::time::{Duration, Instant};
+
 use chrono::{DateTime, Utc};
 use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
 
 use crate::app::chat::state::{ChatState, RoomSlot, is_chat_list_room, room_activity_at};
+use crate::app::chat::svc::SEARCH_MIN_CHARS;
+
+/// Quiet time after the last keystroke before a message search fires.
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RoomSearchItem {
@@ -19,6 +25,12 @@ pub(crate) struct RoomSearchModalState {
     open: bool,
     query: String,
     selected: usize,
+    /// Time of the last query edit; message searches fire only after
+    /// `SEARCH_DEBOUNCE` of quiet.
+    last_edit: Option<Instant>,
+    /// The `(scope, text)` of the last fired search, so an unchanged query
+    /// never refires.
+    last_fired_key: Option<(Option<Uuid>, String)>,
 }
 
 impl RoomSearchModalState {
@@ -26,12 +38,28 @@ impl RoomSearchModalState {
         self.open = true;
         self.query.clear();
         self.selected = 0;
+        self.last_edit = None;
+        self.last_fired_key = None;
+    }
+
+    /// Open pre-filled (the `/search` command path). The debounce timestamp
+    /// is set so the search fires on its own shortly after the modal opens.
+    pub(crate) fn open_with_query(&mut self, query: String) {
+        self.open();
+        self.query = query;
+        self.last_edit = Some(
+            Instant::now()
+                .checked_sub(SEARCH_DEBOUNCE)
+                .unwrap_or_else(Instant::now),
+        );
     }
 
     pub(crate) fn close(&mut self) {
         self.open = false;
         self.query.clear();
         self.selected = 0;
+        self.last_edit = None;
+        self.last_fired_key = None;
     }
 
     pub(crate) fn is_open(&self) -> bool {
@@ -50,12 +78,14 @@ impl RoomSearchModalState {
         if !ch.is_control() {
             self.query.push(ch);
             self.selected = 0;
+            self.last_edit = Some(Instant::now());
         }
     }
 
     pub(crate) fn backspace(&mut self) {
         self.query.pop();
         self.selected = 0;
+        self.last_edit = Some(Instant::now());
     }
 
     pub(crate) fn delete_word_left(&mut self) {
@@ -70,6 +100,20 @@ impl RoomSearchModalState {
             self.query.pop();
         }
         self.selected = 0;
+        self.last_edit = Some(Instant::now());
+    }
+
+    fn debounce_elapsed(&self) -> bool {
+        self.last_edit
+            .is_some_and(|at| at.elapsed() >= SEARCH_DEBOUNCE)
+    }
+
+    /// Whether the query was edited within the debounce window, meaning a
+    /// search is about to fire. Render uses this to show "Searching..."
+    /// instead of a premature "No matching messages".
+    pub(crate) fn query_recently_edited(&self) -> bool {
+        self.last_edit
+            .is_some_and(|at| at.elapsed() < SEARCH_DEBOUNCE)
     }
 
     pub(crate) fn move_selection(&mut self, delta: isize, len: usize) {
@@ -281,6 +325,144 @@ fn normalize_text(input: &str) -> String {
     input.trim().trim_start_matches(['#', '@']).to_lowercase()
 }
 
+/// What the modal's query line currently means. A leading `?` flips from
+/// room jumping to message search; inside message search, the familiar `#`
+/// and `@` prefixes scope to one room or one DM.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ModalQuery {
+    Rooms,
+    Messages(MessageQuery),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MessageQuery {
+    pub scope: Option<MessageScope>,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MessageScope {
+    Room(String),
+    Dm(String),
+}
+
+pub(crate) fn parse_modal_query(input: &str) -> ModalQuery {
+    let Some(rest) = input.trim_start().strip_prefix('?') else {
+        return ModalQuery::Rooms;
+    };
+    let rest = rest.trim_start();
+    let (scope, text) = if let Some(rest) = rest.strip_prefix('#') {
+        let (token, text) = split_first_token(rest);
+        (Some(MessageScope::Room(token.to_lowercase())), text)
+    } else if let Some(rest) = rest.strip_prefix('@') {
+        let (token, text) = split_first_token(rest);
+        (Some(MessageScope::Dm(token.to_lowercase())), text)
+    } else {
+        (None, rest)
+    };
+    ModalQuery::Messages(MessageQuery {
+        scope,
+        text: text.trim().to_string(),
+    })
+}
+
+fn split_first_token(input: &str) -> (&str, &str) {
+    match input.find(char::is_whitespace) {
+        Some(at) => (&input[..at], input[at..].trim_start()),
+        None => (input, ""),
+    }
+}
+
+/// Resolve a `#slug` / `@user` search scope against the user's joined rooms.
+/// `None` means the token does not name a joined room/DM (yet), so the
+/// search must not fire.
+pub(crate) fn resolve_message_scope(
+    chat: &ChatState,
+    current_user_id: Uuid,
+    scope: &MessageScope,
+) -> Option<Uuid> {
+    match scope {
+        MessageScope::Room(slug) => {
+            if slug.is_empty() {
+                return None;
+            }
+            chat.rooms.iter().find_map(|(room, _)| {
+                (room.kind != "dm"
+                    && is_chat_list_room(room)
+                    && room_label(room, current_user_id, &chat.usernames)
+                        .trim_start_matches('#')
+                        .eq_ignore_ascii_case(slug))
+                .then_some(room.id)
+            })
+        }
+        MessageScope::Dm(name) => {
+            if name.is_empty() {
+                return None;
+            }
+            chat.rooms.iter().find_map(|(room, _)| {
+                (room.kind == "dm"
+                    && dm_peer_label(room, current_user_id, &chat.usernames)
+                        .eq_ignore_ascii_case(name))
+                .then_some(room.id)
+            })
+        }
+    }
+}
+
+/// Display label (`#slug` / `@peer`) for a search hit's room, resolved from
+/// the user's joined-room list.
+pub(crate) fn hit_room_label(chat: &ChatState, current_user_id: Uuid, room_id: Uuid) -> String {
+    chat.rooms
+        .iter()
+        .find(|(room, _)| room.id == room_id)
+        .map(|(room, _)| room_label(room, current_user_id, &chat.usernames))
+        .unwrap_or_else(|| "#?".to_string())
+}
+
+/// Per-frame driver for the modal's message-search mode: once the query has
+/// sat unchanged for `SEARCH_DEBOUNCE`, is long enough, and any scope token
+/// resolves, fire one search through `ChatState` (latest wins; an unchanged
+/// query never refires). Called from `App::tick`.
+pub(crate) fn tick_message_search(app: &mut crate::app::state::App) {
+    if !app.room_search_modal_state.is_open() {
+        return;
+    }
+    let ModalQuery::Messages(query) = parse_modal_query(app.room_search_modal_state.query()) else {
+        return;
+    };
+    // Context window for the selected hit, independent of the query gates
+    // below so it also covers the Mentions single-message preview (empty
+    // query text).
+    let hits = &app.chat.message_search.hits;
+    if !hits.is_empty() {
+        let selected = app
+            .room_search_modal_state
+            .selected()
+            .min(hits.len().saturating_sub(1));
+        let message_id = hits[selected].message.id;
+        app.chat.ensure_search_hit_context(message_id);
+    }
+    if query.text.chars().count() < SEARCH_MIN_CHARS {
+        return;
+    }
+    let scope_room_id = match &query.scope {
+        Some(scope) => match resolve_message_scope(&app.chat, app.user_id, scope) {
+            Some(room_id) => Some(room_id),
+            None => return,
+        },
+        None => None,
+    };
+    if !app.room_search_modal_state.debounce_elapsed() {
+        return;
+    }
+    let key = (scope_room_id, query.text.clone());
+    if app.room_search_modal_state.last_fired_key.as_ref() == Some(&key) {
+        return;
+    }
+    app.chat.start_message_search(scope_room_id, query.text);
+    app.room_search_modal_state.last_fired_key = Some(key);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +551,53 @@ mod tests {
             &item("@bob", "direct message", 0),
             &query
         ));
+    }
+
+    #[test]
+    fn bare_query_stays_in_rooms_mode() {
+        assert_eq!(parse_modal_query("lounge"), ModalQuery::Rooms);
+        assert_eq!(parse_modal_query("#rust"), ModalQuery::Rooms);
+        assert_eq!(parse_modal_query("@alice"), ModalQuery::Rooms);
+    }
+
+    #[test]
+    fn question_mark_enters_message_mode() {
+        assert_eq!(
+            parse_modal_query("?deploy failed"),
+            ModalQuery::Messages(MessageQuery {
+                scope: None,
+                text: "deploy failed".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn message_mode_scopes_to_room_or_dm() {
+        assert_eq!(
+            parse_modal_query("?#rust lifetimes"),
+            ModalQuery::Messages(MessageQuery {
+                scope: Some(MessageScope::Room("rust".to_string())),
+                text: "lifetimes".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_modal_query("?@Alice that link"),
+            ModalQuery::Messages(MessageQuery {
+                scope: Some(MessageScope::Dm("alice".to_string())),
+                text: "that link".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn message_mode_mid_scope_token_has_empty_text() {
+        assert_eq!(
+            parse_modal_query("?#ru"),
+            ModalQuery::Messages(MessageQuery {
+                scope: Some(MessageScope::Room("ru".to_string())),
+                text: String::new(),
+            })
+        );
     }
 
     #[test]

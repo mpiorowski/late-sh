@@ -29,11 +29,11 @@ pub enum ForestEvent {
     Fairy,
     /// A glowing stream: drink for a high-variance outcome (`glowingstream`).
     GlowingStream,
-    /// Crazy Audrey's basket game, a forest-fight gamble (`crazyaudrey`).
+    /// Mad Juna's basket game, a forest-fight gamble (`crazyaudrey`).
     PettingZoo,
-    /// Foilwench, who trades a gem for specialty training (`foilwench`).
-    Foilwench,
-    /// The Dark Horse Tavern (`darkhorse`): accepting opens the real room —
+    /// Lady Filigree, who trades a gem for specialty training (`foilwench`).
+    Filigree,
+    /// The Crooked Wheel (`darkhorse`): accepting opens the real room —
     /// the gambler's games — via the state machine, not this resolver.
     Tavern,
 }
@@ -46,7 +46,7 @@ pub const ALL: [ForestEvent; 8] = [
     ForestEvent::Fairy,
     ForestEvent::GlowingStream,
     ForestEvent::PettingZoo,
-    ForestEvent::Foilwench,
+    ForestEvent::Filigree,
     ForestEvent::Tavern,
 ];
 
@@ -80,9 +80,9 @@ impl ForestEvent {
             ForestEvent::GoldMine => "The Abandoned Mine",
             ForestEvent::Fairy => "A Fairy in the Glade",
             ForestEvent::GlowingStream => "The Glowing Stream",
-            ForestEvent::PettingZoo => "Crazy Audrey's Baskets",
-            ForestEvent::Foilwench => "Foilwench's Hut",
-            ForestEvent::Tavern => "The Dark Horse Tavern",
+            ForestEvent::PettingZoo => "Mad Juna's Baskets",
+            ForestEvent::Filigree => "Lady Filigree's Hut",
+            ForestEvent::Tavern => "The Crooked Wheel",
         }
     }
 
@@ -139,7 +139,7 @@ impl ForestEvent {
                 ],
                 choice: Some(("Play her game", "Back away")),
             },
-            ForestEvent::Foilwench => {
+            ForestEvent::Filigree => {
                 if ch.specialty == Specialty::None {
                     // No specialty to train: a pure flavor dead-end, matching the
                     // module's "you have no direction in the world" branch.
@@ -198,7 +198,7 @@ impl ForestEvent {
             ForestEvent::Fairy => self.resolve_fairy(accepted, ch, rng),
             ForestEvent::GlowingStream => self.resolve_stream(accepted, ch, rng),
             ForestEvent::PettingZoo => self.resolve_baskets(accepted, ch, rng),
-            ForestEvent::Foilwench => self.resolve_foilwench(accepted, ch),
+            ForestEvent::Filigree => self.resolve_filigree(accepted, ch),
             ForestEvent::Tavern => self.resolve_tavern(accepted, ch),
         }
     }
@@ -371,7 +371,7 @@ impl ForestEvent {
         // 1-in-20 jackpot forces all three to match (the "hedgehogs!" case).
         if rng.gen_range(1..=20) == 1 {
             ch.turns = ch.turns.saturating_add(5);
-            return vec!["All three baskets burst open with the same creature! Audrey shrieks with joy and drops a whole BAG of salve. You gain FIVE forest fights!".into()];
+            return vec!["All three baskets burst open with the same creature! Juna shrieks with joy and drops a whole BAG of salve. You gain FIVE forest fights!".into()];
         }
         let (c1, c2, c3): (u8, u8, u8) = (
             rng.gen_range(0..4),
@@ -380,21 +380,21 @@ impl ForestEvent {
         );
         if c1 == c2 && c2 == c3 {
             ch.turns = ch.turns.saturating_add(2);
-            vec!["All three match! Audrey grudgingly grants you two salves. You gain TWO forest fights!".into()]
+            vec!["All three match! Juna grudgingly grants you two salves. You gain TWO forest fights!".into()]
         } else if c1 == c2 || c2 == c3 || c1 == c3 {
             ch.turns = ch.turns.saturating_add(1);
-            vec!["Two of a kind! Audrey hands over a single salve. You gain a forest fight!".into()]
+            vec!["Two of a kind! Juna hands over a single salve. You gain a forest fight!".into()]
         } else if ch.turns > 0 {
             ch.turns -= 1;
-            vec!["No two alike. \"Off to bed early for you!\" Audrey cackles, and you lose a forest fight.".into()]
+            vec!["No two alike. \"Off to bed early for you!\" Juna cackles, and you lose a forest fight.".into()]
         } else {
             // No fight left to dock: upstream takes a charm point instead.
             ch.charm = ch.charm.saturating_sub(1);
-            vec!["No two alike, and no fight left to lose. Audrey settles for mocking you until your pride stings (-1 charm).".into()]
+            vec!["No two alike, and no fight left to lose. Juna settles for mocking you until your pride stings (-1 charm).".into()]
         }
     }
 
-    fn resolve_foilwench(self, accepted: bool, ch: &mut Character) -> Vec<String> {
+    fn resolve_filigree(self, accepted: bool, ch: &mut Character) -> Vec<String> {
         use super::model::Specialty;
         if ch.specialty == Specialty::None {
             return vec!["The crone has nothing to teach someone with no direction.".into()];

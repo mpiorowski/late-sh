@@ -25,6 +25,15 @@ use super::svc::{
 };
 use super::tavern;
 
+/// Which counter transaction the typed amount settles (`bank.php`'s
+/// deposit / withdraw / borrow forms).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BankOp {
+    Deposit,
+    Withdraw,
+    Borrow,
+}
+
 /// Which Green Dragon screen the session is looking at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -34,6 +43,9 @@ pub enum Mode {
     Village,
     /// The forest: choose a hunting intensity.
     Forest,
+    /// The cave mouth (`forest.php` op=dragon): enter, or run for the inn.
+    /// Reaching it spends the day's seek (upstream sets `seendragon` here).
+    DragonApproach,
     /// An active fight (creature, master, or the dragon).
     Fight,
     /// Ironroost Weapons.
@@ -44,6 +56,9 @@ pub enum Mode {
     Healer,
     /// The Coinvault (bank).
     Bank,
+    /// Typing a sum at the bank counter (`bank.php`'s deposit / withdraw /
+    /// borrow forms all take a typed amount; 0 or blank means everything).
+    BankAmount(BankOp),
     /// The vault's transfer window (`bank.php` op=transfer): picking the
     /// recipient — a name typed on the talk line, then the matches as rows.
     BankTransferTarget,
@@ -95,10 +110,10 @@ pub enum Mode {
     Outhouse,
     /// After the stall: wash up or slip out. `true` = the paid private stall.
     OuthouseWash(bool),
-    /// The Dark Horse Tavern, stumbled on in the forest (`darkhorse.php`);
+    /// The Crooked Wheel, stumbled on in the forest (`darkhorse.php`);
     /// its sub-views (the games) live in [`TavernView`].
     Tavern,
-    /// The Dark Horse barman's counter (`darkhorse.php`'s bartender): the
+    /// The Crooked Wheel barman's counter (`darkhorse.php`'s bartender): the
     /// way to his paid word on your enemies.
     TavernBartender,
     /// Picking whose name to buy: typed on the talk line, then the matches
@@ -278,7 +293,7 @@ pub struct ListPage {
     pub pages: usize,
 }
 
-/// Which corner of the Dark Horse the session is in (all under
+/// Which corner of the Crooked Wheel the session is in (all under
 /// [`Mode::Tavern`]): the taproom, or one of the gambler's games mid-hand.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TavernView {
@@ -391,13 +406,24 @@ pub struct State {
     encounter: Option<Encounter>,
     /// The forest event awaiting an accept/decline choice, while in [`Mode::Event`].
     pending_event: Option<ForestEvent>,
+    /// Mad Juna is in the square this visit (`crazyaudrey`'s 20%
+    /// village-desc roll, re-rolled on every entry to the village).
+    audrey_here: bool,
+    /// A fresh petting bought a look at the baskets (upstream offers the
+    /// basket nav only on the pet page itself): cleared by leaving the
+    /// square, playing, or running.
+    zoo_baskets_open: bool,
+    /// The pending [`ForestEvent::PettingZoo`] was opened from the village
+    /// (Juna's zoo) rather than the forest: playing marks the daily flag
+    /// and the outcome lands back in the square.
+    zoo_from_village: bool,
     /// Days back the news view is showing (0 = today).
     news_offset: i64,
     /// The in-flight news page load, drained by [`State::tick`].
     news_rx: Option<tokio::sync::watch::Receiver<NewsLoad>>,
     /// The loaded news page for `news_offset`, newest first.
     news_lines: Option<std::sync::Arc<Vec<String>>>,
-    /// Which corner of the Dark Horse is open while in [`Mode::Tavern`].
+    /// Which corner of the Crooked Wheel is open while in [`Mode::Tavern`].
     tavern_view: TavernView,
     /// The Five Sixes pot as last read (for the signboard), if known.
     fivesix_pot: Option<u64>,
@@ -549,6 +575,9 @@ impl State {
             log: VecDeque::new(),
             encounter: None,
             pending_event: None,
+            audrey_here: false,
+            zoo_baskets_open: false,
+            zoo_from_village: false,
             news_offset: 0,
             news_rx: None,
             news_lines: None,
@@ -701,6 +730,12 @@ impl State {
         self.pending_event
     }
 
+    /// The pending event is Juna's *village* basket game, so the panel
+    /// frames the square rather than a forest clearing.
+    pub fn zoo_village_pending(&self) -> bool {
+        self.zoo_from_village && self.pending_event == Some(ForestEvent::PettingZoo)
+    }
+
     /// The news page being viewed: `(days back, lines)`. `None` lines mean the
     /// page is still loading.
     pub fn news_page(&self) -> (i64, Option<&[String]>) {
@@ -720,12 +755,14 @@ impl State {
             return Vec::new();
         };
         match self.mode {
-            Mode::Village => village_menu(c),
+            Mode::Village => village_menu(c, self.audrey_here, self.zoo_baskets_open),
             Mode::Forest => forest_menu(c),
+            Mode::DragonApproach => dragon_approach_menu(),
             Mode::WeaponShop => shop_menu(c, true),
             Mode::ArmorShop => shop_menu(c, false),
             Mode::Healer => healer_menu(c),
             Mode::Bank => bank_menu(c, self.transfer_rx.is_none()),
+            Mode::BankAmount(op) => bank_amount_menu(op),
             Mode::BankTransferTarget => self.transfer_target_menu(),
             Mode::BankTransferAmount => self.transfer_amount_menu(),
             Mode::Training => training_menu(c),
@@ -826,10 +863,12 @@ impl State {
         match self.mode {
             Mode::Village => self.select_village(),
             Mode::Forest => self.select_forest(),
+            Mode::DragonApproach => self.select_dragon_approach(),
             Mode::WeaponShop => self.buy_gear(true),
             Mode::ArmorShop => self.buy_gear(false),
             Mode::Healer => self.select_healer(),
             Mode::Bank => self.select_bank(),
+            Mode::BankAmount(op) => self.select_bank_amount(op),
             Mode::BankTransferTarget => self.select_transfer_target(),
             Mode::BankTransferAmount => self.select_transfer_amount(),
             Mode::Training => self.select_training(),
@@ -890,16 +929,37 @@ impl State {
             // running from a warrior you chose to attack (`pvp.php` turns
             // `run` into a fought round: "your pride prevents you").
             Mode::Fight => {
-                if self
-                    .encounter
-                    .as_ref()
-                    .is_some_and(|e| e.kind == FoeKind::Pvp)
-                {
-                    self.push_log("Your pride will not let you run from this.".into());
-                    self.attack_round();
-                } else {
-                    self.attempt_flee();
+                match self.encounter.as_ref().map(|e| e.kind) {
+                    Some(FoeKind::Pvp) => {
+                        self.push_log("Your pride will not let you run from this.".into());
+                        self.attack_round();
+                    }
+                    // No running from the dragon (`dragon.php` turns `op=run`
+                    // into a fought round: the tail blocks the exit).
+                    Some(FoeKind::Dragon) => {
+                        self.push_log(
+                            "The dragon's tail sweeps across the only way out of the lair!".into(),
+                        );
+                        self.attack_round();
+                    }
+                    // Nor from your master (`train.php`'s `op=run`: "your
+                    // pride prevents you from running").
+                    Some(FoeKind::Master) => {
+                        self.push_log(
+                            "Your pride will not let you run from your own master.".into(),
+                        );
+                        self.attack_round();
+                    }
+                    _ => self.attempt_flee(),
                 }
+                Selection::Stay
+            }
+            // The cave mouth: Esc slips quietly back into the forest — free,
+            // as upstream keeps its other navs clickable there (the day's
+            // seek is already spent); the charm cost belongs to the
+            // run-for-the-inn row alone.
+            Mode::DragonApproach => {
+                self.goto(Mode::Forest);
                 Selection::Stay
             }
             Mode::Event => {
@@ -1033,6 +1093,12 @@ impl State {
                 self.leave_transfer();
                 Selection::Stay
             }
+            // The counter's amount line backs out to the counter.
+            Mode::BankAmount(_) => {
+                self.talk_input = None;
+                self.goto(Mode::Bank);
+                Selection::Stay
+            }
             _ => {
                 self.goto(Mode::Village);
                 Selection::Stay
@@ -1043,18 +1109,124 @@ impl State {
     fn goto(&mut self, mode: Mode) {
         self.mode = mode;
         self.cursor = 0;
+        if mode == Mode::Village {
+            // Mad Juna sets up in the square 20% of visits
+            // (`crazyaudrey`'s village-desc hook, `e_rand(1,100) <= 20`
+            // rolled on every village pageview); a fresh visit also closes
+            // any basket offer left from the last petting (upstream's nav
+            // lives on the pet page alone).
+            self.audrey_here =
+                rand::thread_rng().gen_range(1..=100) <= model::ZOO_CHANCE_PCT as i32;
+            self.zoo_baskets_open = false;
+        }
+        // Masters hunt down truant students (`village.php`, `automaster`
+        // default 1): stepping into the square holding more experience than
+        // the *next* level's advancement requires forces the fight, with a
+        // courtesy heal first. Upstream redirects on every village pageview.
+        if mode == Mode::Village
+            && self.encounter.is_none()
+            && self.character.as_ref().is_some_and(|c| c.truant())
+        {
+            self.start_truant_master_fight();
+        }
+    }
+
+    /// Pet the zoo (`crazyaudrey_run` op=pet): 5 gold buys a few minutes with
+    /// the animals and a 5-round defense x1.05 calm; an empty purse wanders
+    /// off sadly, free. A pet re-offers the basket game unless it's already
+    /// been played today, in which case Juna recognizes you and screams.
+    fn pet_zoo(&mut self) {
+        let c = self.character.as_mut().unwrap();
+        if c.gold < model::ZOO_PET_COST {
+            self.push_log(format!(
+                "Not having {} gold, you wander sadly away from the pen of soft, mewling kittens.",
+                model::ZOO_PET_COST
+            ));
+            return;
+        }
+        c.gold -= model::ZOO_PET_COST;
+        c.apply_persistent_buff(model::zoo_buff());
+        let played = c.zoo_played_today;
+        self.push_log(format!(
+            "You drop {} gold in Mad Juna's basket and spend a few minutes petting \
+             her kittens. A soft, warm calm settles over you.",
+            model::ZOO_PET_COST
+        ));
+        if played {
+            self.push_log(
+                "You sidle toward her lidded baskets, but Juna shrieks: \"I recognize \
+                 you! You've already played with my kittens today!\" You retreat to a \
+                 safe distance."
+                    .into(),
+            );
+        } else {
+            self.zoo_baskets_open = true;
+        }
+        self.save();
+    }
+
+    /// The truant's forced challenge (`train.php` op=autochallenge): healed
+    /// to full ("being a fair person, your master gives you a healing
+    /// potion"), news posted, and straight into the yard — no way to refuse.
+    fn start_truant_master_fight(&mut self) {
+        let c = self.character.as_ref().unwrap();
+        let Some((master, foe, hp)) = c.scaled_master(&mut rand::thread_rng()) else {
+            return;
+        };
+        let c = self.character.as_mut().unwrap();
+        c.hitpoints = c.max_hitpoints();
+        // The forced challenge is still the day's challenge (upstream's
+        // fight runs through the same op=challenge that stamps seenmaster).
+        c.seen_master_today = true;
+        let level = c.level;
+        let name = c.name.clone();
+        self.save();
+        self.encounter = Some(Encounter::single(
+            Foe {
+                name: master.name.to_string(),
+                weapon: master.weapon.to_string(),
+                combatant: foe,
+                hp,
+                max_hp: hp,
+                reward_gold: 0,
+                reward_exp: 0,
+                level,
+                bandit: false,
+            },
+            FoeKind::Master,
+        ));
+        self.push_log(format!(
+            "{} has heard you think yourself above the Proving Yard, and has come to \
+             collect. A pressed healing potion later, the fight is on.",
+            master.name
+        ));
+        self.news(format!(
+            "{name} was hunted down by their master, {}, for being truant.",
+            master.name
+        ));
+        self.mode = Mode::Fight;
+        self.cursor = 0;
     }
 
     // --- village ------------------------------------------------------------
 
     fn select_village(&mut self) -> Selection {
         let c = self.character.as_ref().unwrap();
-        let rows = village_menu(c);
+        let rows = village_menu(c, self.audrey_here, self.zoo_baskets_open);
         match rows[self.cursor].0.as_str() {
             s if s.starts_with("The Forest") => self.goto(Mode::Forest),
+            s if s.starts_with("Pet Mad Juna's") => self.pet_zoo(),
+            s if s.starts_with("Look at Mad Juna's baskets") => {
+                // The village basket game (`crazyaudrey_run` op=baskets):
+                // the same three baskets as the forest event, but playing
+                // burns the daily flag and the outcome lands in the square.
+                self.zoo_baskets_open = false;
+                self.zoo_from_village = true;
+                self.pending_event = Some(ForestEvent::PettingZoo);
+                self.goto(Mode::Event);
+            }
             s if s.starts_with("Choose a Specialty") => self.goto(Mode::ChooseSpecialty),
             s if s.starts_with("The Proving Yard") => self.goto(Mode::Training),
-            s if s.starts_with("Seek Out the Green Dragon") => self.start_dragon(),
             s if s.starts_with("Ironroost") => self.goto(Mode::WeaponShop),
             s if s.starts_with("Duskmail") => self.goto(Mode::ArmorShop),
             s if s.starts_with("The Mendery") => {
@@ -1127,17 +1299,17 @@ impl State {
     // --- forest -------------------------------------------------------------
 
     fn select_forest(&mut self) -> Selection {
-        let hunt = match self.cursor {
-            0 => ForestHunt::Slumming,
-            1 => ForestHunt::Hunt,
-            2 => ForestHunt::Thrillseeking,
-            3 => {
-                self.goto(Mode::Outhouse);
-                return Selection::Stay;
+        let rows = forest_menu(self.character.as_ref().unwrap());
+        match rows[self.cursor].0.as_str() {
+            s if s.starts_with("Go Slumming") => self.start_forest_fight(ForestHunt::Slumming),
+            s if s.starts_with("Look for Something") => self.start_forest_fight(ForestHunt::Hunt),
+            s if s.starts_with("Go Thrillseeking") => {
+                self.start_forest_fight(ForestHunt::Thrillseeking)
             }
-            _ => return Selection::Stay,
-        };
-        self.start_forest_fight(hunt);
+            s if s.starts_with("Seek Out the Green Dragon") => self.start_dragon(),
+            s if s.starts_with("The Outhouse") => self.goto(Mode::Outhouse),
+            _ => {}
+        }
         Selection::Stay
     }
 
@@ -1294,9 +1466,10 @@ impl State {
         let Some(enc) = self.encounter.as_mut() else {
             return;
         };
-        // Buffs can't follow beyond the grave (Torment) or into PvP —
-        // nothing stock sets `allowinpvp`, so `suspend_buffs` shelves them
-        // all; the mount stays stabled too.
+        // Buffs can't follow beyond the grave (Torment) or into PvP — the
+        // only stock buff with `allowinpvp` is the elf/troll racial one,
+        // which ours folds into the stat derivation instead, so
+        // `suspend_buffs` shelves everything here; the mount stays stabled.
         if matches!(enc.kind, FoeKind::Torment | FoeKind::Pvp) {
             return;
         }
@@ -1377,11 +1550,17 @@ impl State {
             return Selection::Stay;
         };
         let accepted = self.cursor == 0;
-        // Stepping into the Dark Horse opens the real room (the games, the
+        // Stepping into the Crooked Wheel opens the real room (the games, the
         // pot) rather than an instant effect.
         if event == ForestEvent::Tavern && accepted {
             self.enter_tavern();
             return Selection::Stay;
+        }
+        // Playing the *village* basket game burns the daily flag (upstream
+        // sets `played` only on the module-internal play; running away keeps
+        // it clear, and the forest event never touches it).
+        if self.zoo_from_village && event == ForestEvent::PettingZoo && accepted {
+            self.character.as_mut().unwrap().zoo_played_today = true;
         }
         let mut rng = rand::thread_rng();
         let lines = event.resolve(accepted, self.character.as_mut().unwrap(), &mut rng);
@@ -1408,11 +1587,19 @@ impl State {
     }
 
     /// Land somewhere sensible after an event: the graveyard if it killed you
-    /// (the mine cave-in, the stream), otherwise back to the forest to hunt on.
+    /// (the mine cave-in, the stream), the village square if it was Juna's
+    /// zoo game, otherwise back to the forest to hunt on.
     fn after_event(&mut self) {
         self.pending_event = None;
+        let from_village = std::mem::take(&mut self.zoo_from_village);
         let alive = self.character.as_ref().unwrap().alive;
-        self.goto(if alive { Mode::Forest } else { Mode::Graveyard });
+        self.goto(if !alive {
+            Mode::Graveyard
+        } else if from_village {
+            Mode::Village
+        } else {
+            Mode::Forest
+        });
         self.save();
     }
 
@@ -1619,7 +1806,7 @@ impl State {
             | Mode::IntelTarget
             | Mode::BankTransferTarget => SEARCH_QUERY_BUDGET,
             // Gold amounts only: digits, capped well under any purse.
-            Mode::BountyAmount | Mode::BankTransferAmount => {
+            Mode::BountyAmount | Mode::BankTransferAmount | Mode::BankAmount(_) => {
                 if !ch.is_ascii_digit() {
                     return;
                 }
@@ -1685,6 +1872,10 @@ impl State {
         }
         if self.mode == Mode::BountyAmount {
             self.submit_bounty_amount();
+            return;
+        }
+        if let Mode::BankAmount(op) = self.mode {
+            self.submit_bank_amount(op);
             return;
         }
         if self.mode == Mode::BankTransferTarget {
@@ -2724,18 +2915,24 @@ impl State {
         let c = self.character.as_mut().unwrap();
         c.style = style;
         c.reroll_title(&mut rand::thread_rng());
-        let (title, race, alive) = (c.title.clone(), c.race, c.alive);
+        let (title, race) = (c.title.clone(), c.race);
         self.push_log(format!(
             "So it is settled: the realm will know you as {title} and its like."
         ));
         self.save();
-        self.goto(if race == Race::None {
-            Mode::ChooseRace
-        } else if alive {
-            Mode::Village
+        if race == Race::None {
+            self.goto(Mode::ChooseRace);
         } else {
-            Mode::Graveyard
-        });
+            // The last gate just closed: the deferred/owed day rolls now
+            // (it can revive the dead, so pick the hub after it settles).
+            self.settle_dawn();
+            let alive = self.character.as_ref().unwrap().alive;
+            self.goto(if alive {
+                Mode::Village
+            } else {
+                Mode::Graveyard
+            });
+        }
         Selection::Stay
     }
 
@@ -2750,18 +2947,76 @@ impl State {
         };
         let c = self.character.as_mut().unwrap();
         c.race = race;
-        let alive = c.alive;
         self.push_log(format!(
             "You remember who you are: {} blood runs in your veins.",
             race.name()
         ));
         self.save();
+        // The race gate is the last one (`newday.php`: points → race →
+        // the day): the deferred/owed day rolls now, and it can revive the
+        // dead, so pick the hub after it settles.
+        self.settle_dawn();
+        let alive = self.character.as_ref().unwrap().alive;
         self.goto(if alive {
             Mode::Village
         } else {
             Mode::Graveyard
         });
         Selection::Stay
+    }
+
+    /// Settle any day owed once the post-load / post-kill gates close
+    /// (`newday.php` rolls the day only after its spend and race gates pass).
+    /// A calendar rollover deferred while the gates were up lands as a regular
+    /// [`Character::roll_new_day`]; a dragon kill's forced day (`dawn_owed`,
+    /// same calendar day — upstream wipes `lasthit` in the kill reset) rolls
+    /// [`Character::dawn`] directly, its interest a no-op on the freshly wiped
+    /// bank. Quiet when nothing is owed.
+    fn settle_dawn(&mut self) {
+        let mut rng = rand::thread_rng();
+        let interest = rng.gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
+        let spirits = rng.gen_range(-1..=1) + rng.gen_range(-1..=1);
+        let today = super::svc::today();
+        let rolled = {
+            let c = self.character.as_mut().unwrap();
+            if let Some(fx) = c.roll_new_day(today, interest, spirits, &mut rng) {
+                Some((fx, c.turns))
+            } else if c.dawn_owed {
+                let fx = c.dawn(spirits, &mut rng);
+                Some((fx, c.turns))
+            } else {
+                None
+            }
+        };
+        let Some((fx, turns)) = rolled else {
+            return;
+        };
+        self.push_log(format!(
+            "A new day dawns over Duskmere; you wake refreshed with {turns} turns."
+        ));
+        if fx.hangover {
+            self.push_log(
+                "You wake hungover from last night's drinking; it costs you a turn.".into(),
+            );
+        }
+        if let Some(haunter) = fx.haunted_by.as_ref() {
+            self.push_log(format!(
+                "{haunter} haunted your dreams in the night; the fright costs you a forest fight today."
+            ));
+        }
+        if fx.divorced {
+            let (partner, who) = {
+                let c = self.character.as_ref().unwrap();
+                (data::partner(c.style), c.titled_name())
+            };
+            self.push_log(format!(
+                "{partner} wakes cold beside you and walks out. The marriage is over."
+            ));
+            self.news(format!(
+                "{partner} has left {who} to pursue other interests."
+            ));
+        }
+        self.save();
     }
 
     // --- specialty chooser --------------------------------------------------
@@ -2945,7 +3200,8 @@ impl State {
             },
             FoeKind::Master,
         ));
-        self.inject_persistent_buffs();
+        // No persistent buffs in the yard: upstream suspends every stock
+        // buff for the fight (`suspend_buffs('allowintrain', ...)`).
         self.push_log(format!("{} steps forward to test you!", master.name));
         self.goto(Mode::Fight);
         Selection::Stay
@@ -2953,6 +3209,9 @@ impl State {
 
     // --- dragon -------------------------------------------------------------
 
+    /// The cave mouth (`forest.php` op=dragon): the approach screen. Even
+    /// looking spends the day's seek — upstream sets `seendragon` at the
+    /// approach, not on entering the cave.
     fn start_dragon(&mut self) {
         let c = self.character.as_mut().unwrap();
         if !c.can_seek_dragon() {
@@ -2960,6 +3219,28 @@ impl State {
             return;
         }
         c.seen_dragon = true;
+        self.push_log(
+            "The trees thin into scorched stumps, and a cave mouth in the cliffside breathes \
+             a slow rhythm of sulfurous smoke over a ramp of old bones."
+                .into(),
+        );
+        self.push_log("Every instinct you have is screaming at you to run.".into());
+        self.goto(Mode::DragonApproach);
+        // Persist `seen_dragon` now so the once-per-day dragon seek can't be
+        // retried by disconnecting at the cave mouth.
+        self.save();
+    }
+
+    fn select_dragon_approach(&mut self) -> Selection {
+        match self.cursor {
+            0 => self.enter_dragon_cave(),
+            _ => self.flee_dragon_approach(),
+        }
+        Selection::Stay
+    }
+
+    fn enter_dragon_cave(&mut self) {
+        let c = self.character.as_ref().unwrap();
         let level = c.level;
         let (attack, defense, hp) = c.scaled_dragon(&mut rand::thread_rng());
         self.encounter = Some(Encounter::single(
@@ -2979,8 +3260,22 @@ impl State {
         self.inject_persistent_buffs();
         self.push_log("You step into the dragon's lair. The air turns to fire.".into());
         self.goto(Mode::Fight);
-        // Persist `seen_dragon` now so the once-per-run dragon seek can't be
-        // retried by disconnecting before the fight resolves.
+        self.save();
+    }
+
+    /// Bolting from the cave mouth (`inn.php` op=fleedragon): you land in the
+    /// inn and the cowardice costs a charm point (floored at 0).
+    fn flee_dragon_approach(&mut self) {
+        let c = self.character.as_mut().unwrap();
+        if c.charm > 0 {
+            c.charm -= 1;
+        }
+        self.push_log(
+            "You bolt for the inn and don't stop until the hearth is at your back. \
+             Your sweetheart catches your eye, then looks away in disgust: -1 charm."
+                .into(),
+        );
+        self.goto(Mode::Inn);
         self.save();
     }
 
@@ -3203,14 +3498,15 @@ impl State {
         };
         let mut rng = rand::thread_rng();
         let (player, player_max) = self.player_fight_stats(enc.kind);
-        // Companions sit PvP out entirely (`suspend_companions`: nothing
-        // stock is `allowinpvp`) — no bandaging, no swings, no getting hit.
-        let pvp = enc.kind == FoeKind::Pvp;
-        if !pvp {
+        // Companions sit PvP *and* master fights out entirely
+        // (`suspend_companions`: nothing stock is `allowinpvp` or
+        // `allowintrain`) — no bandaging, no swings, no getting hit. The
+        // graveyard keeps them: the stock hires are `allowinshades`.
+        let bench = matches!(enc.kind, FoeKind::Pvp | FoeKind::Master);
+        if !bench {
             // Field-medics bandage before the blades cross (upstream
             // activates `heal` first each round): the player first, then the
-            // most wounded companion, then themselves. They still swing in
-            // the resolver below.
+            // most wounded companion, then themselves.
             self.companion_heals(player_max);
         }
         // Companions live on the character and fight each round; the resolver
@@ -3223,8 +3519,13 @@ impl State {
                 &mut rng,
                 player,
                 enc.foes[target].combatant,
+                enc.foes[target].hp,
                 &mut enc.buffs,
-                if pvp { &mut benched } else { &mut c.companions },
+                if bench {
+                    &mut benched
+                } else {
+                    &mut c.companions
+                },
             )
         };
 
@@ -3390,12 +3691,27 @@ impl State {
             FoeKind::Master => {
                 let c = self.character.as_mut().unwrap();
                 c.advance_level();
+                // A master's lesson also sharpens the craft (`train.php`'s
+                // victory calls `increment_specialty`).
+                let skill_up = c.increment_specialty();
+                let trained = !c.companions.is_empty();
                 let lvl = c.level;
                 let who = c.titled_name();
                 self.push_log(format!(
                     "You defeat {}! You advance to level {} and are fully healed.",
                     enc.foes[0].name, lvl
                 ));
+                if let Some(skill) = skill_up {
+                    self.push_log(format!(
+                        "The lesson sticks: your specialty skill rises to {skill}."
+                    ));
+                }
+                if trained {
+                    self.push_log(
+                        "Your companions trained alongside you and stand stronger, wounds mended."
+                            .into(),
+                    );
+                }
                 // Level-ups make the paper (`train.php`'s victory addnews).
                 self.news(format!(
                     "{who} bested {} at the Proving Yard and rose to level {lvl}.",
@@ -3493,7 +3809,6 @@ impl State {
                 let c = self.character.as_mut().unwrap();
                 c.slay_dragon(flawless);
                 // Every kill re-rolls the title off the ladder (`dragon.php`).
-                let old_title = std::mem::take(&mut c.title);
                 c.reroll_title(&mut rand::thread_rng());
                 let (kills, title) = (c.dragon_kills, c.title.clone());
                 let mut msg = format!(
@@ -3503,9 +3818,9 @@ impl State {
                     msg.push_str(" Flawless - not a scratch on you! Bonus gold and a gem.");
                 }
                 self.push_log(msg);
-                if title != old_title {
-                    self.push_log(format!("The realm knows you now as {title}."));
-                }
+                // Announced every kill, changed or not (`dragon.php:238-242`
+                // fires its title addnews unconditionally).
+                self.push_log(format!("The realm knows you now as {title}."));
                 // The kill and the earned title both make the paper
                 // (`dragon.php`'s two addnews calls).
                 let who = self.character.as_ref().unwrap().titled_name();
@@ -3517,9 +3832,9 @@ impl State {
                         "{who} has slain the terrible Green Dragon! It is their dragon kill #{kills}."
                     ));
                 }
-                if title != old_title {
-                    self.news(format!("{name} has earned the title {title}."));
-                }
+                self.news(format!(
+                    "{name} has earned the title {title} for their deeds against the dragon."
+                ));
                 // Any price on the slayer's head dies with the old life:
                 // open bounties close to the house (`dag`'s dragonkill hook).
                 self.svc.close_bounties_on(self.user_id);
@@ -3683,69 +3998,154 @@ impl State {
     // --- healer -------------------------------------------------------------
 
     fn select_healer(&mut self) -> Selection {
-        let c = self.character.as_mut().unwrap();
-        if c.hitpoints >= c.max_hitpoints() {
-            self.push_log("You are already at full health.".into());
-            return Selection::Stay;
-        }
-        // Rows run 100%, 90%, ... 10% (healer.php's potion shelf).
-        let pct = 100u32.saturating_sub(self.cursor as u32 * 10);
-        if !(10..=100).contains(&pct) {
-            return Selection::Stay;
-        }
-        let cost = c.heal_cost(pct);
-        match c.buy_heal(pct) {
-            Some(healed) => {
-                self.push_log(format!(
-                    "The healer's draught knits {healed} HP back for {cost} gold."
-                ));
-                self.save();
+        // Rows run 100%, 90%, ... 10% (healer.php's potion shelf), then a
+        // mend row per wounded companion (healer.php heals them too).
+        if self.cursor < 10 {
+            let c = self.character.as_mut().unwrap();
+            if c.hitpoints >= c.max_hitpoints() {
+                self.push_log("You are already at full health.".into());
+                return Selection::Stay;
             }
-            None => self.push_log("You can't afford that draught.".into()),
+            let pct = 100u32.saturating_sub(self.cursor as u32 * 10);
+            let cost = c.heal_cost(pct);
+            match c.buy_heal(pct) {
+                Some(healed) => {
+                    self.push_log(format!(
+                        "The healer's draught knits {healed} HP back for {cost} gold."
+                    ));
+                    self.save();
+                }
+                None => self.push_log("You can't afford that draught.".into()),
+            }
+            return Selection::Stay;
+        }
+        let wounded = wounded_companions(self.character.as_ref().unwrap());
+        let Some(&idx) = wounded.get(self.cursor - 10) else {
+            return Selection::Stay;
+        };
+        let c = self.character.as_mut().unwrap();
+        if let Some(cost) = c.heal_companion(idx) {
+            let name = c.companions[idx].name.clone();
+            self.push_log(format!(
+                "The healer's foul potion knits {name} back to full for {cost} gold."
+            ));
+            self.save();
+        } else {
+            self.push_log("You can't afford that draught.".into());
         }
         Selection::Stay
     }
 
     // --- bank ---------------------------------------------------------------
 
+    /// The counter rows open the typed-amount line (`bank.php`'s three
+    /// forms); the transfer row opens its own window.
     fn select_bank(&mut self) -> Selection {
-        let c = self.character.as_mut().unwrap();
-        match self.cursor {
-            0 => {
-                let amount = c.gold;
-                c.deposit(amount);
-                if c.gold_in_bank < 0 {
-                    let debt = -c.gold_in_bank;
-                    self.push_log(format!(
-                        "You pay {amount} gold toward your debt ({debt} still owed)."
-                    ));
-                } else {
-                    self.push_log(format!("You deposit {amount} gold."));
-                }
-            }
-            1 => {
-                let amount = c.gold_in_bank.max(0) as u64;
-                c.withdraw(amount);
-                self.push_log(format!("You withdraw {amount} gold."));
-            }
-            2 => {
-                let amount = c.borrow(c.borrow_available());
-                if amount > 0 {
-                    self.push_log(format!(
-                        "The banker counts out a loan of {amount} gold. Debt gathers interest daily."
-                    ));
-                } else {
-                    self.push_log("The bank won't extend you any more credit.".into());
-                }
-            }
+        let op = match self.cursor {
+            0 => BankOp::Deposit,
+            1 => BankOp::Withdraw,
+            2 => BankOp::Borrow,
             3 => {
                 self.open_transfer();
                 return Selection::Stay;
             }
             _ => return Selection::Stay,
-        }
-        self.save();
+        };
+        self.talk_input = Some(String::new());
+        self.goto(Mode::BankAmount(op));
         Selection::Stay
+    }
+
+    fn select_bank_amount(&mut self, _op: BankOp) -> Selection {
+        match self.cursor {
+            0 => self.talk_input = Some(String::new()),
+            _ => {
+                self.talk_input = None;
+                self.goto(Mode::Bank);
+            }
+        }
+        Selection::Stay
+    }
+
+    /// Settle the typed sum at the counter (`bank.php` depositfinish /
+    /// withdrawfinish): 0 or blank means everything; asking beyond your
+    /// holdings gets the teller's arithmetic lesson, not a clamp. The
+    /// borrow form is upstream's withdraw-with-borrow: the request is gold
+    /// in hand, drawn from the balance first with the remainder borrowed
+    /// against the level's credit (blank takes everything the bank will
+    /// give — ours; upstream's blank-borrow default is its own oddity).
+    fn submit_bank_amount(&mut self, op: BankOp) {
+        let raw = self.talk_input.take().unwrap_or_default();
+        let typed: u64 = raw.trim().parse().unwrap_or(0);
+        let c = self.character.as_mut().unwrap();
+        let line = match op {
+            BankOp::Deposit => {
+                let amount = if typed == 0 { c.gold } else { typed };
+                if amount > c.gold {
+                    format!(
+                        "The banker eyes your purse. \"You carry {} gold, not {amount}. \
+                         Perhaps a course in basic arithmetic first.\"",
+                        c.gold
+                    )
+                } else if amount == 0 {
+                    "You jingle an empty purse at the banker.".to_string()
+                } else {
+                    c.deposit(amount);
+                    if c.gold_in_bank < 0 {
+                        format!(
+                            "You pay {amount} gold toward your debt ({} still owed).",
+                            -c.gold_in_bank
+                        )
+                    } else {
+                        format!(
+                            "You deposit {amount} gold. Your balance stands at {}.",
+                            c.gold_in_bank
+                        )
+                    }
+                }
+            }
+            BankOp::Withdraw => {
+                let balance = c.gold_in_bank.max(0) as u64;
+                let amount = if typed == 0 { balance } else { typed };
+                if amount > balance {
+                    format!(
+                        "The banker blinks slowly. \"Your balance is {balance} gold. \
+                         Perhaps a course in basic arithmetic first.\""
+                    )
+                } else if amount == 0 {
+                    "There is nothing in your account to withdraw.".to_string()
+                } else {
+                    c.withdraw(amount);
+                    format!("You withdraw {amount} gold.")
+                }
+            }
+            BankOp::Borrow => {
+                let available = c.borrow_available();
+                let amount = if typed == 0 { available } else { typed };
+                if amount > available {
+                    format!(
+                        "The banker runs her figures. \"Balance and credit together, \
+                         the bank will put no more than {available} gold in your hand.\""
+                    )
+                } else if amount == 0 {
+                    "The bank won't extend you any more credit.".to_string()
+                } else {
+                    c.borrow(amount);
+                    if c.gold_in_bank < 0 {
+                        format!(
+                            "You take {amount} gold from the counter; your account now \
+                             shows a debt of {}. Debt gathers interest daily.",
+                            -c.gold_in_bank
+                        )
+                    } else {
+                        format!("You draw {amount} gold against your balance.")
+                    }
+                }
+            }
+        };
+        self.push_log(line);
+        self.goto(Mode::Bank);
+        self.save();
     }
 
     // --- the transfer window ------------------------------------------------
@@ -4441,15 +4841,15 @@ impl State {
         Selection::Stay
     }
 
-    // --- the Dark Horse Tavern --------------------------------------------------
+    // --- the Crooked Wheel --------------------------------------------------
 
-    /// Step into the Dark Horse (the accepted forest event): open the taproom
+    /// Step into the Crooked Wheel (the accepted forest event): open the taproom
     /// and start the pot signboard loading.
     fn enter_tavern(&mut self) {
         self.tavern_view = TavernView::Hub;
         self.fivesix_pot_rx = Some(self.svc.load_fivesix_pot());
         self.push_log(
-            "You push into the Dark Horse. Dice rattle somewhere back in the smoke.".into(),
+            "You push into the Crooked Wheel. Dice rattle somewhere back in the smoke.".into(),
         );
         self.goto(Mode::Tavern);
     }
@@ -4698,17 +5098,17 @@ impl State {
         if sixes >= 5 {
             self.push_log(format!("FIVE SIXES! The whole pot of {win} gold is yours!"));
             self.news(format!(
-                "{who} rolled five sixes at the Dark Horse Tavern and swept the pot of {win} gold."
+                "{who} rolled five sixes at the Crooked Wheel and swept the pot of {win} gold."
             ));
         } else if sixes == 4 {
             self.push_log(format!("Four sixes! A tenth of the pot: +{win} gold."));
             self.news(format!(
-                "{who} rolled four sixes at the Dark Horse Tavern and won {win} gold."
+                "{who} rolled four sixes at the Crooked Wheel and won {win} gold."
             ));
         } else {
             self.push_log(format!("Three sixes pay a sliver of the pot: +{win} gold."));
             self.news(format!(
-                "{who} rolled three sixes at the Dark Horse Tavern and won {win} gold."
+                "{who} rolled three sixes at the Crooked Wheel and won {win} gold."
             ));
         }
         self.save();
@@ -5824,25 +6224,31 @@ impl State {
         };
         let c = self.character.as_mut().unwrap();
         if !c.spend_dragon_point(kind) {
+            self.settle_dawn();
             self.goto(Mode::Village);
             return Selection::Stay;
         }
         let left = c.dragon_points_unspent;
-        let alive = c.alive;
         let race = c.race;
         let style = c.style;
         self.push_log(format!("Dragon point spent: {}.", kind.label()));
         if left == 0 {
-            // The next gate in upstream's order: style, race, then play.
-            self.goto(if style == model::AddressStyle::Unchosen {
-                Mode::ChooseStyle
+            // The next gate in upstream's order: style, race, then the day.
+            if style == model::AddressStyle::Unchosen {
+                self.goto(Mode::ChooseStyle);
             } else if race == Race::None {
-                Mode::ChooseRace
-            } else if alive {
-                Mode::Village
+                self.goto(Mode::ChooseRace);
             } else {
-                Mode::Graveyard
-            });
+                // All gates closed: the deferred/owed day rolls now (it can
+                // revive the dead, so pick the hub after it settles).
+                self.settle_dawn();
+                let alive = self.character.as_ref().unwrap().alive;
+                self.goto(if alive {
+                    Mode::Village
+                } else {
+                    Mode::Graveyard
+                });
+            }
         }
         self.save();
         Selection::Stay
@@ -5898,7 +6304,7 @@ pub enum Selection {
 
 // --- menu builders (pure, so they can be unit-tested) -----------------------
 
-fn village_menu(c: &Character) -> Vec<(String, bool)> {
+fn village_menu(c: &Character, audrey_here: bool, baskets_open: bool) -> Vec<(String, bool)> {
     let mut rows = vec![
         (format!("The Forest ({} turns left)", c.turns), c.turns > 0),
         (
@@ -5908,17 +6314,27 @@ fn village_menu(c: &Character) -> Vec<(String, bool)> {
             c.level < data::MAX_LEVEL && c.experience >= c.exp_for_next_level(),
         ),
     ];
+    // Mad Juna's petting zoo, when she's about (`crazyaudrey`'s village
+    // hook; the gold check is the pet's own, a free sad refusal). A fresh
+    // petting opens the basket row (upstream's transient pet-page nav).
+    if audrey_here {
+        rows.push((
+            format!("Pet Mad Juna's kittens ({} gold)", model::ZOO_PET_COST),
+            true,
+        ));
+        if baskets_open {
+            rows.push(("Look at Mad Juna's baskets".into(), true));
+        }
+    }
     if c.specialty == Specialty::None {
         rows.push(("Choose a Specialty".into(), true));
-    }
-    if c.can_seek_dragon() {
-        rows.push(("Seek Out the Green Dragon".into(), true));
     }
     rows.push(("Ironroost Weapons".into(), true));
     rows.push(("Duskmail Armoury".into(), true));
     rows.push((
         "The Mendery (healer)".into(),
-        c.hitpoints != c.max_hitpoints(),
+        // Open for your own wounds or a companion's (`healer.php` mends both).
+        c.hitpoints != c.max_hitpoints() || !wounded_companions(c).is_empty(),
     ));
     rows.push(("The Coinvault (bank)".into(), true));
     rows.push(("The Stables (mounts)".into(), true));
@@ -6062,12 +6478,17 @@ fn build_clan_detail_page(clan: &ClanRow, members: &[ClanMemberRow], page: usize
         .skip(page * ROSTER_PAGE_SIZE)
         .take(ROSTER_PAGE_SIZE)
         .map(|m| {
+            // Upstream's columns: rank / name / dragon kills / join date
+            // (`lib/clan/detail.php` — no level column).
+            let joined = chrono::DateTime::from_timestamp(m.joined_at, 0)
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "-".into());
             format!(
-                "{:<9}  {:<24.24}  {:>2}  {:>4}",
+                "{:<9}  {:<24.24}  {:>4}  {}",
                 model::clan_rank_name(m.rank),
                 m.name,
-                m.level,
-                m.dragon_kills
+                m.dragon_kills,
+                joined
             )
         })
         .collect();
@@ -6075,8 +6496,8 @@ fn build_clan_detail_page(clan: &ClanRow, members: &[ClanMemberRow], page: usize
     ListPage {
         heading,
         header: Some(format!(
-            "{:<9}  {:<24}  {:>2}  {:>4}",
-            "Rank", "Name", "Lv", "DKs"
+            "{:<9}  {:<24}  {:>4}  {}",
+            "Rank", "Name", "DKs", "Joined"
         )),
         rows,
         foot: vec![format!(
@@ -6552,15 +6973,32 @@ fn news_menu(days_back: i64) -> Vec<(String, bool)> {
 
 fn forest_menu(c: &Character) -> Vec<(String, bool)> {
     let has_turns = c.turns > 0;
+    let mut rows = Vec::new();
+    // Slumming's nav only shows past level 1 (`lib/forest.php:15`).
+    if c.level > 1 {
+        rows.push(("Go Slumming (weaker prey)".into(), has_turns));
+    }
+    rows.push(("Look for Something to Kill".into(), has_turns));
+    rows.push(("Go Thrillseeking (deadlier prey)".into(), has_turns));
+    // The dragon's cave is a forest nav (`lib/forest.php:23`), gated on
+    // level 15 and the daily `seendragon` flag.
+    if c.can_seek_dragon() {
+        rows.push(("Seek Out the Green Dragon".into(), true));
+    }
+    // The outhouse (`modules/outhouse.php`): a forest amenity, once a day.
+    rows.push((
+        "The Outhouse (a smell among the trees)".into(),
+        !c.used_outhouse_today,
+    ));
+    rows
+}
+
+/// The cave mouth's two choices (`forest.php` op=dragon: enter, or run for
+/// the inn at the cost of a charm point).
+fn dragon_approach_menu() -> Vec<(String, bool)> {
     vec![
-        ("Go Slumming (weaker prey)".into(), has_turns),
-        ("Look for Something to Kill".into(), has_turns),
-        ("Go Thrillseeking (deadlier prey)".into(), has_turns),
-        // The outhouse (`modules/outhouse.php`): a forest amenity, once a day.
-        (
-            "The Outhouse (a smell among the trees)".into(),
-            !c.used_outhouse_today,
-        ),
+        ("Enter the cave".into(), true),
+        ("Turn and run for the inn".into(), true),
     ]
 }
 
@@ -6572,6 +7010,13 @@ fn fight_menu(c: &Character, kind: FoeKind) -> Vec<(String, bool)> {
     // honor prevents it") and no way out ("your pride prevents it") —
     // `pvp.php` strips both.
     if kind == FoeKind::Pvp {
+        return vec![("Attack".into(), true)];
+    }
+    // The master's yard bans everything too (`train.php`: `fightnav(false,
+    // false)` — no skills, no run — with every stock buff and companion
+    // suspended; only the elf/troll racial buff sets `allowintrain`, and
+    // ours rides the stat derivation instead).
+    if kind == FoeKind::Master {
         return vec![("Attack".into(), true)];
     }
     let mut rows = vec![("Attack".into(), true)];
@@ -6590,7 +7035,12 @@ fn fight_menu(c: &Character, kind: FoeKind) -> Vec<(String, bool)> {
             ));
         }
     }
-    rows.push(("Flee".into(), true));
+    // There is no running from the dragon: its lair has one exit and the
+    // tail blocks it (`dragon.php` hides the run nav, `fightnav(true,false)`,
+    // and converts a forced `op=run` into a fought round).
+    if kind != FoeKind::Dragon {
+        rows.push(("Flee".into(), true));
+    }
     rows
 }
 
@@ -6687,22 +7137,33 @@ fn healer_menu(c: &Character) -> Vec<(String, bool)> {
             needs && c.gold >= c.heal_cost(pct),
         ));
     }
+    // Companions mend here too (`healer.php`'s Heal Companions navs), at
+    // the same fee the camp's sawbones charges.
+    for i in wounded_companions(c) {
+        let cost = c.companion_heal_cost(i).unwrap();
+        rows.push((
+            format!("Mend {} ({cost} gold)", c.companions[i].name),
+            c.gold >= cost,
+        ));
+    }
     rows
 }
 
 fn bank_menu(c: &Character, transfer_idle: bool) -> Vec<(String, bool)> {
+    // Each counter row opens a typed-amount line (`bank.php`'s forms take a
+    // sum; 0 or blank means all), not an all-or-nothing button.
     let balance_row = if c.gold_in_bank < 0 {
         (
-            format!("Pay down debt ({} owed) with all gold", -c.gold_in_bank),
+            format!("Pay down debt ({} owed)", -c.gold_in_bank),
             c.gold > 0,
         )
     } else {
-        (format!("Deposit all ({} gold)", c.gold), c.gold > 0)
+        (format!("Deposit gold ({} on hand)", c.gold), c.gold > 0)
     };
     vec![
         balance_row,
         (
-            format!("Withdraw all ({} gold)", c.gold_in_bank.max(0)),
+            format!("Withdraw gold ({} banked)", c.gold_in_bank.max(0)),
             c.gold_in_bank > 0,
         ),
         (
@@ -6717,6 +7178,17 @@ fn bank_menu(c: &Character, transfer_idle: bool) -> Vec<(String, bool)> {
             c.can_transfer() && transfer_idle,
         ),
     ]
+}
+
+/// The counter's typed-amount step: a confirm row under the talk line, and
+/// the way back.
+fn bank_amount_menu(op: BankOp) -> Vec<(String, bool)> {
+    let go = match op {
+        BankOp::Deposit => "Count the coins onto the counter",
+        BankOp::Withdraw => "Sign the withdrawal slip",
+        BankOp::Borrow => "Take the loan",
+    };
+    vec![(go.into(), true), ("Think better of it".into(), true)]
 }
 
 /// The forced dragon-point allocation gate (LoGD's new-day spend screen).
@@ -7004,7 +7476,7 @@ fn bet_amount(cursor: usize, gold: u64) -> Option<u64> {
     }
 }
 
-/// The Dark Horse (`darkhorse.php` + the three game modules), by view.
+/// The Crooked Wheel (`darkhorse.php` + the three game modules), by view.
 fn tavern_menu(
     c: &Character,
     view: TavernView,
@@ -7217,7 +7689,7 @@ mod tests {
     fn village_menu_gates_on_state() {
         let mut c = lvl(1);
         c.turns = 0;
-        let rows = village_menu(&c);
+        let rows = village_menu(&c, false, false);
         // Forest row disabled with no turns.
         assert!(!rows[0].1);
         // Healer disabled at full health.
@@ -7226,15 +7698,30 @@ mod tests {
             .find(|(l, _)| l.starts_with("The Mendery"))
             .unwrap();
         assert!(!healer.1);
-        // Dragon not offered below level 15.
-        assert!(!rows.iter().any(|(l, _)| l.starts_with("Seek Out")));
+        // Dragon not offered below level 15 (a forest nav, `lib/forest.php`).
+        assert!(
+            !forest_menu(&c)
+                .iter()
+                .any(|(l, _)| l.starts_with("Seek Out"))
+        );
+        // Slumming's nav hides at level 1 (`lib/forest.php:15`).
+        assert!(
+            !forest_menu(&c)
+                .iter()
+                .any(|(l, _)| l.starts_with("Go Slumming"))
+        );
     }
 
     #[test]
     fn dragon_offered_at_max_level() {
         let c = lvl(15);
-        let rows = village_menu(&c);
+        let rows = forest_menu(&c);
         assert!(rows.iter().any(|(l, _)| l.starts_with("Seek Out")));
+        // The dragon fight offers no Flee row; skills stay
+        // (`dragon.php` `fightnav(true, false)`).
+        let rows = fight_menu(&c, FoeKind::Dragon);
+        assert!(!rows.iter().any(|(l, _)| l == "Flee"));
+        assert!(rows.len() > 1 || c.specialty == Specialty::None);
     }
 
     #[test]
@@ -7485,7 +7972,7 @@ mod tests {
     fn village_menu_lists_the_talk_rooms() {
         let mut c = lvl(3);
         c.gold = 0;
-        let rows = village_menu(&c);
+        let rows = village_menu(&c, false, false);
         assert!(rows.iter().any(|(l, _)| l.starts_with("The Town Square")));
         assert!(rows.iter().any(|(l, _)| l.starts_with("The Gardens")));
         assert!(
@@ -7500,7 +7987,7 @@ mod tests {
         assert!(gypsy.0.contains("60 gold"));
         assert!(!gypsy.1);
         c.gold = 60;
-        let rows = village_menu(&c);
+        let rows = village_menu(&c, false, false);
         assert!(
             rows.iter()
                 .find(|(l, _)| l.starts_with("The Gypsy's Tent"))
@@ -7648,7 +8135,7 @@ mod tests {
     #[test]
     fn village_menu_offers_the_hunt() {
         let c = lvl(3);
-        let row = village_menu(&c)
+        let row = village_menu(&c, false, false)
             .into_iter()
             .find(|(l, _)| l.starts_with("Slay Other Warriors"))
             .unwrap();
@@ -7963,7 +8450,7 @@ mod tests {
 
     #[test]
     fn village_menu_lists_the_rosters() {
-        let rows = village_menu(&lvl(1));
+        let rows = village_menu(&lvl(1), false, false);
         assert!(rows.iter().any(|(l, _)| l == "List Warriors"));
         assert!(rows.iter().any(|(l, _)| l == "The Hall of Fame"));
     }

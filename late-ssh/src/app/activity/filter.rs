@@ -46,6 +46,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             | ActivityGame::Poker
             | ActivityGame::RubiksCube
             | ActivityGame::Sshattrick
+            | ActivityGame::Ssnake
             | ActivityGame::Solitaire
             | ActivityGame::Sudoku
             | ActivityGame::TicTacToe
@@ -60,6 +61,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             ActivityGame::Asterion
             | ActivityGame::Chess
             | ActivityGame::Sshattrick
+            | ActivityGame::Ssnake
             | ActivityGame::TicTacToe
             | ActivityGame::Tron => true,
             // Door-game wins are milestone-gated at the source (dragon
@@ -70,14 +72,19 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             ActivityGame::Mud => false,
             // Per-hand gambling wins are pure noise; the sit is the story.
             ActivityGame::Blackjack | ActivityGame::Poker => false,
-            // Solo arcade solves: high volume, no second player to invite.
+            // Daily-puzzle solves: `GameWon` fires only in daily mode (never
+            // for personal/practice runs), so these are once-per-day-per-board
+            // finishes, not high-volume grind — a small "someone beat today's
+            // puzzle" story worth sharing.
             ActivityGame::LeWord
             | ActivityGame::Minesweeper
             | ActivityGame::Nonogram
             | ActivityGame::RubiksCube
             | ActivityGame::Solitaire
-            | ActivityGame::Sudoku
-            | ActivityGame::Lateris
+            | ActivityGame::Sudoku => true,
+            // Score-run games have no daily-win concept; their final scores
+            // ride the hidden `GameScored` quest signal, not `GameWon`.
+            ActivityGame::Lateris
             | ActivityGame::TwentyFortyEight
             | ActivityGame::Snake
             | ActivityGame::Traffic => false,
@@ -85,8 +92,11 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // Finished daily correspondence matches: one line per match (win/loss
         // or draw). Rare and human-vs-human, so a genuine story.
         ActivityKind::DailyResult { .. } => true,
+        // A bought username effect: being seen is the whole product, so the
+        // purchase is a story by design.
+        ActivityKind::UsernameEffectApplied { .. } => true,
         // Quest-only grind signals, never surfaced anywhere public.
-        ActivityKind::GamePlayed { .. } | ActivityKind::GameScored { .. } => false,
+        ActivityKind::GameScored { .. } => false,
         // The bonsai is a private ritual: neither the daily watering nor the
         // death after N dry days belongs in the public feed.
         ActivityKind::BonsaiWatered => false,
@@ -106,5 +116,19 @@ mod tests {
         let event = ActivityEvent::joined(Uuid::nil(), "user");
 
         assert!(ActivityFilter::dashboard().includes(&event));
+    }
+
+    #[test]
+    fn lounge_includes_username_effects() {
+        use late_core::models::username_effect::{GlowColor, UsernameEffect};
+
+        let event = ActivityEvent::username_effect_applied(
+            Uuid::nil(),
+            "user",
+            UsernameEffect::Glow(GlowColor::Gold),
+        );
+
+        assert!(lounge_includes(&event));
+        assert_eq!(event.action, "is glowing (24h)");
     }
 }

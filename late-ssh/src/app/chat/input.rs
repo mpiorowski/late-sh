@@ -242,6 +242,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }
+    if let Some(query) = app.chat.take_requested_message_search() {
+        crate::app::input::open_message_search_modal_globally(app, &query);
+    }
     if let Some(request) = app.chat.take_requested_petname() {
         app.banner = Some(apply_petname_request(app, request));
     }
@@ -351,6 +354,45 @@ fn move_selected_favorite(app: &mut App, delta: isize) -> bool {
     app.chat
         .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
     true
+}
+
+/// Keys the embedded chat always wins over the game/board on a split
+/// screen (active room, daily board, house table): reaction-leader
+/// followups, `i` compose, `j`/`k` selection, Ctrl+D/Ctrl+U half-page.
+/// Route these to `handle_message_action_in_room` before the game handler.
+pub fn chat_priority_key(app: &App, byte: u8) -> bool {
+    if app.chat.is_reaction_leader_active() {
+        return true;
+    }
+    matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15)
+}
+
+/// Message-action keys that route to chat only while a message in
+/// `chat_room_id` is selected; otherwise the game keeps them (poker `f`
+/// fold / `r` raise, chess `r` resign, Enter plays, ...).
+pub fn selected_chat_key(app: &App, chat_room_id: Uuid, byte: u8) -> bool {
+    let selected_in_room = app
+        .chat
+        .selected_message_body_in_room(chat_room_id)
+        .is_some();
+    selected_in_room
+        && matches!(
+            byte,
+            b'd' | b'D'
+                | b'r'
+                | b'R'
+                | b'e'
+                | b'E'
+                | b'p'
+                | b'c'
+                | b'f'
+                | b'F'
+                | b'g'
+                | b'G'
+                | b'\r'
+                | b'\n'
+                | 0x10
+        )
 }
 
 /// Shared message-list navigation and actions. Consumed by both the chat page

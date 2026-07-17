@@ -87,14 +87,14 @@ pub const CREATURES: [CreatureTier; 16] = [
         hp: 53,
         attack: 9,
         defense: 7,
-        gold: 198,
+        gold: 199,
         exp: 55,
     },
     CreatureTier {
         hp: 64,
         attack: 11,
         defense: 8,
-        gold: 234,
+        gold: 233,
         exp: 66,
     },
     CreatureTier {
@@ -539,7 +539,7 @@ pub const BARD: &str = "Alder";
 pub const BARMAID: &str = "Wren";
 /// The ostler who runs the stables.
 pub const OSTLER: &str = "Fenwick";
-/// The one-eyed gambler at the Dark Horse Tavern (the "old man").
+/// The one-eyed gambler at the Crooked Wheel (the "old man").
 pub const GAMBLER: &str = "the one-eyed gambler";
 /// The bounty broker sulking in the inn's darkest booth (the Dag
 /// Durnick-analog; upstream's name is theirs, this one is ours).
@@ -806,8 +806,9 @@ pub const DEEPFOLK_BEAR: Mercenary = Mercenary {
 /// the highest threshold at or below the character's kills, picking randomly
 /// among rows that share it (upstream supports several per threshold). The
 /// two columns are keyed by [`super::model::AddressStyle`] where upstream
-/// keys male/female. **All title strings are original to late.sh** — the
-/// upstream Farmboy-to-Undergod ladder is theirs.
+/// keys male/female. One rung per kill 0..=31, exactly upstream's 32-row
+/// seed — the tier count and thresholds are mechanics; **all title strings
+/// are original to late.sh** (the upstream Farmboy-to-God ladder is theirs).
 pub const TITLES: &[(u32, &str, &str)] = &[
     (0, "Mudfoot", "Mudlark"),
     (1, "Wyrmscarred", "Wyrmscarred"),
@@ -815,10 +816,32 @@ pub const TITLES: &[(u32, &str, &str)] = &[
     (3, "Scalebreaker", "Scalebreaker"),
     (4, "Greenbane", "Greenbane"),
     (5, "Wyrmreaper", "Wyrmreaper"),
+    (6, "Fangtaker", "Fangtaker"),
     (7, "Ashlord", "Ashlady"),
+    (8, "Emberknight", "Emberknight"),
+    (9, "Scorchwarden", "Scorchwarden"),
     (10, "Dragonlord", "Dragonlady"),
+    (11, "Hoardtaker", "Hoardtaker"),
+    (12, "Cavemaster", "Cavemistress"),
+    (13, "Flamebroker", "Flamebroker"),
+    (14, "Smokeherald", "Smokeherald"),
     (15, "Doomscale", "Doomscale"),
+    (16, "Pyre Prince", "Pyre Princess"),
+    (17, "Cinder King", "Cinder Queen"),
+    (18, "Wyrm Emperor", "Wyrm Empress"),
+    (19, "Duskhallowed", "Duskhallowed"),
     (20, "Wrath of Duskmere", "Wrath of Duskmere"),
+    (21, "Stormhallowed", "Stormhallowed"),
+    (22, "Skyrender", "Skyrender"),
+    (23, "Starclad", "Starclad"),
+    (24, "Moonshadowed", "Moonshadowed"),
+    (25, "Sunforged", "Sunforged"),
+    (26, "Worldwalker", "Worldwalker"),
+    (27, "Fateweaver", "Fateweaver"),
+    (28, "Godling", "Godling"),
+    (29, "Titanheart", "Titanheart"),
+    (30, "Worldscourge", "Worldscourge"),
+    (31, "The Deathless", "The Deathless"),
 ];
 
 /// Pick the `(first-style, second-style)` title pair for `dragon_kills`: the
@@ -940,14 +963,18 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
         // Fresh characters get the threshold-0 pair.
         assert_eq!(dk_title_pair(0, &mut rng), ("Mudfoot", "Mudlark"));
-        // Between thresholds the last earned one holds (5 covers 5..7).
-        assert_eq!(dk_title_pair(6, &mut rng).0, "Wyrmreaper");
-        // Exact thresholds and the open top end.
+        // Exact thresholds and the open top end (past 31 the top rung holds).
+        assert_eq!(dk_title_pair(6, &mut rng).0, "Fangtaker");
         assert_eq!(dk_title_pair(10, &mut rng), ("Dragonlord", "Dragonlady"));
-        assert_eq!(dk_title_pair(99, &mut rng).0, "Wrath of Duskmere");
-        // The ladder starts at 0 and rises monotonically.
-        assert_eq!(TITLES[0].0, 0);
-        assert!(TITLES.windows(2).all(|w| w[0].0 <= w[1].0));
+        assert_eq!(dk_title_pair(99, &mut rng).0, "The Deathless");
+        // One rung per kill 0..=31, upstream's 32-row seed.
+        assert_eq!(TITLES.len(), 32);
+        assert!(
+            TITLES
+                .iter()
+                .enumerate()
+                .all(|(i, (dk, _, _))| *dk == i as u32)
+        );
     }
 
     #[test]

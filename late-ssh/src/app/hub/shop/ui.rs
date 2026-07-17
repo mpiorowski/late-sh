@@ -10,14 +10,17 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use late_core::models::username_effect::UsernameEffect;
+
 use crate::app::{
     common::theme,
+    common::username_effect::{resolve, styled_name_spans},
     hub::aquarium::creature::{CreatureDef, load_default_creatures},
 };
 
 use super::{
     catalog::ShopCategory,
-    state::{PendingRoomEffect, ShopState},
+    state::{PendingRoomEffect, PendingUsernameEffect, ShopState},
     svc::ShopCatalogItem,
 };
 
@@ -40,6 +43,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str)
     draw_footer(frame, sections[5], state, pet_species);
     if let Some(pending) = state.pending_room_effect() {
         draw_room_effect_confirm(frame, area, pending);
+    }
+    if let Some(pending) = state.pending_username_effect() {
+        draw_username_effect_confirm(frame, area, pending);
     }
 }
 
@@ -197,12 +203,19 @@ fn draw_item_detail(
 
     let chat_effect_active =
         item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state);
+    let effect_active = username_effect_active(item, state);
     let action = if item.is_dynamic_bonsai() && item.equipped {
         "dynamic"
     } else if item.is_dynamic_bonsai() && item.owned {
         "classic"
     } else if item.equipped {
         "displaying"
+    } else if item.is_username_effect() {
+        if effect_active {
+            "active"
+        } else {
+            "pick a style"
+        }
     } else if item.is_consumable() {
         consumable_action_label(item, Some(chat_consumable_active(item, state)))
     } else if item.is_aquarium_fish() && !has_aquarium {
@@ -222,7 +235,10 @@ fn draw_item_detail(
     } else {
         "buy"
     };
-    let status = if chat_effect_active || (item.owned && !item.is_consumable()) {
+    let status = if chat_effect_active
+        || effect_active
+        || (item.owned && !item.is_consumable() && !item.is_username_effect())
+    {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
@@ -256,11 +272,40 @@ fn draw_item_detail(
         ]),
         Line::from(vec![Span::raw("  state  "), Span::styled(action, status)]),
     ];
-    if item.owned && item.quantity > 0 && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND {
+    if item.owned
+        && item.quantity > 0
+        && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND
+        && !item.is_username_effect()
+    {
         lines.push(Line::from(vec![
             Span::raw("  owned  "),
             Span::styled(
                 item.quantity.to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    if item.is_username_effect() {
+        if let Some(active) = state
+            .active_username_effect()
+            .filter(|_| username_effect_active(item, state))
+        {
+            let mut style_line = vec![Span::raw("  style  ")];
+            style_line.extend(styled_name_spans(
+                username_effect_option_label(active.effect),
+                resolve(active.effect, 0),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            style_line.push(Span::styled(
+                format!("   {}", remaining_label(active.ends_at, chrono::Utc::now())),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+            lines.push(Line::from(style_line));
+        }
+        lines.push(Line::from(vec![
+            Span::raw("  lasts  "),
+            Span::styled(
+                "24 hours, rebuy replaces the active style",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
@@ -479,6 +524,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
         "buy one"
+    } else if selected.is_some_and(|item| item.is_username_effect()) {
+        "pick style"
     } else if let Some(item) = selected.filter(|item| item.is_consumable()) {
         consumable_footer_label(item)
     } else if selected.is_some_and(|item| item.owned && item.slot.is_some()) {
@@ -587,6 +634,118 @@ fn draw_room_effect_confirm(frame: &mut Frame, area: Rect, pending: &PendingRoom
     );
 }
 
+/// The short label for one pickable style: the color name for glow and
+/// gradient swatches, "shimmer" for the animated tier.
+fn username_effect_option_label(effect: UsernameEffect) -> &'static str {
+    match effect {
+        UsernameEffect::Glow(color) => color.slug(),
+        UsernameEffect::Gradient(pair) => pair.slug(),
+        UsernameEffect::Shimmer => "shimmer",
+    }
+}
+
+/// Compact remaining-time label for an active effect: "17h left", "45m
+/// left", "1m left" (floors at one minute so it never reads as already over).
+fn remaining_label(
+    ends_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let minutes = (ends_at - now).num_minutes().max(1);
+    if minutes >= 60 {
+        format!("{}h left", minutes / 60)
+    } else {
+        format!("{minutes}m left")
+    }
+}
+
+/// True when the user's live username effect is the one this item sells.
+fn username_effect_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
+    item.is_username_effect()
+        && state.active_username_effect().is_some_and(|active| {
+            item.username_effect_variant.as_deref() == Some(active.effect.variant_key())
+        })
+}
+
+fn draw_username_effect_confirm(frame: &mut Frame, area: Rect, pending: &PendingUsernameEffect) {
+    let popup = centered_rect(58, 10, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Pick a Style ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
+        .style(Style::default().bg(theme::BG_CANVAS()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    // Each swatch previews in its real colors; the selected one is bracketed.
+    let mut style_spans = vec![Span::raw("  style    ")];
+    for (index, option) in pending.options.iter().copied().enumerate() {
+        let selected = index == pending.selected;
+        let base = if selected {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        style_spans.push(Span::styled(
+            if selected { "[" } else { " " }.to_string(),
+            Style::default().fg(theme::AMBER_DIM()),
+        ));
+        style_spans.extend(styled_name_spans(
+            username_effect_option_label(option),
+            resolve(option, 0),
+            base,
+        ));
+        style_spans.push(Span::styled(
+            if selected { "]" } else { " " }.to_string(),
+            Style::default().fg(theme::AMBER_DIM()),
+        ));
+    }
+
+    let lines = vec![
+        Line::from(vec![
+            Span::raw("  activate "),
+            Span::styled(
+                pending.item_name.clone(),
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(style_spans),
+        Line::from(vec![
+            Span::raw("  price    "),
+            Span::styled(
+                format!("{} chips", pending.price_chips),
+                Style::default().fg(theme::AMBER()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  lasts    "),
+            Span::styled("24 hours", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("←/→", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" style    ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Enter/y", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" buy    ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc/n", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::BG_CANVAS())),
+        inner,
+    );
+}
+
 fn item_row(
     category: ShopCategory,
     selected: bool,
@@ -607,6 +766,12 @@ fn item_row(
         "classic"
     } else if item.equipped {
         "displaying"
+    } else if item.is_username_effect() {
+        if username_effect_active(item, state) {
+            "active"
+        } else {
+            "buy"
+        }
     } else if item.is_consumable() {
         consumable_row_status(item, state)
     } else if item.is_aquarium_fish() && item.quantity > 0 {
@@ -621,19 +786,20 @@ fn item_row(
     let active_chat_consumable = item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
         && !chat_room_bump_item(item)
         && chat_consumable_active(item, state);
-    let status_style = if active_chat_consumable || item.equipped {
-        Style::default()
-            .fg(theme::SUCCESS())
-            .add_modifier(Modifier::BOLD)
-    } else if item.is_consumable() {
-        Style::default().fg(theme::AMBER())
-    } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
-        Style::default().fg(theme::SUCCESS())
-    } else if item.is_aquarium_fish() {
-        Style::default().fg(theme::AMBER())
-    } else {
-        Style::default().fg(theme::TEXT_FAINT())
-    };
+    let status_style =
+        if active_chat_consumable || item.equipped || username_effect_active(item, state) {
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD)
+        } else if item.is_consumable() || item.is_username_effect() {
+            Style::default().fg(theme::AMBER())
+        } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
+            Style::default().fg(theme::SUCCESS())
+        } else if item.is_aquarium_fish() {
+            Style::default().fg(theme::AMBER())
+        } else {
+            Style::default().fg(theme::TEXT_FAINT())
+        };
     let display_name = if category == ShopCategory::Flags && item.is_flag_badge() {
         flag_display_name(item)
     } else if item.is_chat_badge() {
@@ -830,5 +996,18 @@ mod tests {
         assert_eq!(UnicodeWidthStr::width(padded.as_str()), 6);
         let padded = pad_display_width("🐱", 6);
         assert_eq!(UnicodeWidthStr::width(padded.as_str()), 6);
+    }
+
+    #[test]
+    fn remaining_label_floors_at_one_minute() {
+        use chrono::{Duration, Utc};
+        let now = Utc::now();
+        assert_eq!(remaining_label(now + Duration::hours(17), now), "17h left");
+        assert_eq!(
+            remaining_label(now + Duration::minutes(59), now),
+            "59m left"
+        );
+        assert_eq!(remaining_label(now + Duration::seconds(5), now), "1m left");
+        assert_eq!(remaining_label(now - Duration::minutes(3), now), "1m left");
     }
 }

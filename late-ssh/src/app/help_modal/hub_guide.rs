@@ -67,8 +67,8 @@ fn quest_sections() -> Vec<GuideSection> {
         title: "Quests",
         body: vec![
             "Hub Quests draws two daily quests and one weekly quest on UTC boundaries.".to_string(),
-            "Daily slot 1 is always an Arcade quest.".to_string(),
-            "Daily slot 2 is always a multiplayer room-game quest.".to_string(),
+            "Daily slot 1 is an easy Arcade quest; slot 2 is a medium one.".to_string(),
+            "The weekly slot is a hard Arcade quest.".to_string(),
             "Quest rewards pay automatically when the progress target completes.".to_string(),
             "Finishing any one daily quest advances your daily streak.".to_string(),
             format!(

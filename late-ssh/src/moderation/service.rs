@@ -10,12 +10,11 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chat_slow_mode::{ChatSlowMode, ChatSlowModeListItem},
-        game_room::GameRoom,
         moderation_audit_log::{ModerationAuditLog, ModerationAuditLogListItem},
         room_ban::{RoomBan, RoomBanListItem},
         server_ban::{ServerBan, ServerBanActivation, ServerBanListItem},
         user::{User, sanitize_username_input},
-        voice_channel::{TARGET_CHAT_ROOM, TARGET_GAME_ROOM, VoiceChannel},
+        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
 };
 use serde_json::json;
@@ -308,7 +307,7 @@ impl ModerationService {
         let room = find_room_by_mod_slug(&client, slug).await?;
         let member_count = ChatRoomMember::count_for_room(&client, room.id).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
-        let voice_target = voice_target_for_room(&client, &room).await?;
+        let voice_target = voice_target_for_room(&room).await?;
         let voice_is_enabled = VoiceChannel::find_for_target(
             &client,
             voice_target.target_kind,
@@ -549,9 +548,6 @@ impl ModerationService {
         if updated == 0 {
             anyhow::bail!("room not found: #{old_slug}");
         }
-        if room.kind == "game" {
-            GameRoom::rename_by_chat_room_id(&tx, room.id, &new_slug).await?;
-        }
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(false),
@@ -584,7 +580,7 @@ impl ModerationService {
         let mut client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, &slug).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
-        let voice_target = voice_target_for_room(&client, &room).await?;
+        let voice_target = voice_target_for_room(&room).await?;
         let current_enabled = VoiceChannel::find_for_target(
             &client,
             voice_target.target_kind,
@@ -715,7 +711,7 @@ impl ModerationService {
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
         let affected_voice_channel =
             if matches!(request.action, RoomModAction::Kick | RoomModAction::Ban) {
-                let voice_target = voice_target_for_room(&client, &room).await?;
+                let voice_target = voice_target_for_room(&room).await?;
                 VoiceChannel::find_for_target(
                     &client,
                     voice_target.target_kind,
@@ -1880,21 +1876,7 @@ struct RoomVoiceTarget {
     display_name: String,
 }
 
-async fn voice_target_for_room(
-    client: &tokio_postgres::Client,
-    room: &ChatRoom,
-) -> Result<RoomVoiceTarget> {
-    if room.kind == "game" {
-        let game_room = GameRoom::find_by_chat_room_id(client, room.id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("game room not found for chat room {}", room.id))?;
-        return Ok(RoomVoiceTarget {
-            target_kind: TARGET_GAME_ROOM,
-            target_id: game_room.id,
-            display_name: game_room.display_name,
-        });
-    }
-
+async fn voice_target_for_room(room: &ChatRoom) -> Result<RoomVoiceTarget> {
     Ok(RoomVoiceTarget {
         target_kind: TARGET_CHAT_ROOM,
         target_id: room.id,

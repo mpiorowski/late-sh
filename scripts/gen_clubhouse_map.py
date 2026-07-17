@@ -214,7 +214,7 @@ stamp(33, 28, ['╭─╮', '╰┬╯', ' │', ' ┴'], transparent=True)
 EAS_X, EAS_Y = 4, 30
 easel = [
     '╔════════════╗',
-    '║ ARTBOARD·5 ║',
+    '║ ARTBOARD·4 ║',
     '║  ~   ·   ° ║',
     '║ °   *   ·  ║',
     '╚════════════╝',
@@ -254,7 +254,7 @@ POK_X, POK_Y = 146, 13
 PW = 32
 felt_edge = '▒' * 20
 mid = list('▒' * 28)
-text = 'TABLES·4'
+text = 'LOBBY'
 start = (28 - len(text)) // 2
 for i, ch in enumerate(text):
     mid[start + i] = ch

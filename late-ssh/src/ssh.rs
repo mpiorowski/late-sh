@@ -26,7 +26,6 @@ use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
 use crate::app::activity::event::ActivityEvent;
-use crate::app::dashboard::state::DashboardRoomJoinReceiver;
 use crate::app::{
     common::theme,
     state::{App, SessionConfig},
@@ -84,7 +83,6 @@ struct ClientHandler {
 
     /// Activity feed
     activity_feed_rx: Option<tokio::sync::broadcast::Receiver<ActivityEvent>>,
-    room_join_rx: Option<DashboardRoomJoinReceiver>,
 
     /// Session bindings
     channel: Option<Channel<Msg>>,
@@ -291,7 +289,6 @@ impl Server {
             user: None,
             is_new_user: false,
             activity_feed_rx: None,
-            room_join_rx: None,
             transport_peer_addr,
             peer_addr: effective_peer_addr,
             peer_ip,
@@ -622,7 +619,6 @@ impl russh::server::Handler for ClientHandler {
 
         self.user = Some(user);
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
-        self.room_join_rx = Some(self.state.room_join_feed.subscribe());
         let _ = self
             .state
             .activity_feed
@@ -731,6 +727,7 @@ impl russh::server::Handler for ClientHandler {
             initial_traffic_high_score,
             initial_le_word_daily_word,
             initial_le_word_game,
+            initial_rubiks_cube_game,
             initial_sudoku_games,
             initial_nonogram_games,
             initial_solitaire_games,
@@ -855,6 +852,7 @@ impl russh::server::Handler for ClientHandler {
             snake_service: self.state.snake_service.clone(),
             traffic_service: self.state.traffic_service.clone(),
             rubiks_cube_service: self.state.rubiks_cube_service.clone(),
+            initial_rubiks_cube_game,
             initial_tetris_game,
             initial_snake_game,
             initial_tetris_high_score,
@@ -875,8 +873,7 @@ impl russh::server::Handler for ClientHandler {
             lateania_service: self.state.lateania_service.clone(),
             greendragon_service: self.state.greendragon_service.clone(),
             daily_service: self.state.daily_service.clone(),
-            rooms_service: self.state.rooms_service.clone(),
-            room_game_registry: self.state.room_game_registry.clone(),
+            house_registry: self.state.house_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
             dartboard_provenance: self.state.dartboard_provenance.clone(),
             artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
@@ -940,9 +937,8 @@ impl russh::server::Handler for ClientHandler {
             show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
+            flair_directory: Some(self.state.flair_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
-            room_join_rx: self.room_join_rx.take(),
-            initial_room_joins: self.state.room_join_history.lock_recover().clone(),
             initial_announcements,
             user_id,
             permissions,

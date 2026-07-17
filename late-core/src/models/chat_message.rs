@@ -164,6 +164,131 @@ impl ChatMessage {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
+    /// Up to `limit_each` messages immediately before and after a message in
+    /// its room, both in chronological order. System-feed authors and
+    /// `exclude_user_ids` (the caller's ignored users, as authors or as
+    /// bot-reply targets) are skipped so the window shows conversation, not
+    /// feed noise. Callers must verify room membership first; used for the
+    /// search-hit context window.
+    pub async fn list_around(
+        client: &Client,
+        room_id: Uuid,
+        created: DateTime<Utc>,
+        id: Uuid,
+        exclude_user_ids: &[Uuid],
+        limit_each: i64,
+    ) -> Result<(Vec<Self>, Vec<Self>)> {
+        let before_rows = client
+            .query(
+                "SELECT msg.*
+                 FROM chat_messages msg
+                 JOIN users author ON author.id = msg.user_id
+                 WHERE msg.room_id = $1
+                   AND (msg.created, msg.id) < ($2, $3)
+                   AND msg.user_id <> ALL($4::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
+                   AND COALESCE((author.settings->>'system')::boolean, false) = false
+                 ORDER BY msg.created DESC, msg.id DESC
+                 LIMIT $5",
+                &[&room_id, &created, &id, &exclude_user_ids, &limit_each],
+            )
+            .await?;
+        let mut before: Vec<Self> = before_rows.into_iter().map(Self::from).collect();
+        before.reverse();
+
+        let after_rows = client
+            .query(
+                "SELECT msg.*
+                 FROM chat_messages msg
+                 JOIN users author ON author.id = msg.user_id
+                 WHERE msg.room_id = $1
+                   AND (msg.created, msg.id) > ($2, $3)
+                   AND msg.user_id <> ALL($4::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
+                   AND COALESCE((author.settings->>'system')::boolean, false) = false
+                 ORDER BY msg.created ASC, msg.id ASC
+                 LIMIT $5",
+                &[&room_id, &created, &id, &exclude_user_ids, &limit_each],
+            )
+            .await?;
+        let after: Vec<Self> = after_rows.into_iter().map(Self::from).collect();
+
+        Ok((before, after))
+    }
+
+    /// Fetch one message the viewer is allowed to preview: any message in a
+    /// room they are a member of, or in a public non-game room (Discover
+    /// already shows recent messages of those to non-members). Used by the
+    /// Ctrl+/ modal to preview a mention whose message is older than the
+    /// loaded history; public-room mentions can target non-members, so
+    /// membership alone would wrongly reject them.
+    pub async fn get_for_viewer(
+        client: &Client,
+        message_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT msg.*
+                 FROM chat_messages msg
+                 JOIN chat_rooms room ON room.id = msg.room_id
+                 WHERE msg.id = $1
+                   AND (
+                     (room.visibility = 'public' AND room.kind <> 'game')
+                     OR EXISTS (
+                        SELECT 1 FROM chat_room_members mem
+                        WHERE mem.room_id = msg.room_id AND mem.user_id = $2
+                     )
+                   )",
+                &[&message_id, &user_id],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
+    /// Substring search over message bodies across every room the user is a
+    /// member of (the membership join is the authorization boundary), newest
+    /// first. Game rooms are excluded to match their invisibility elsewhere,
+    /// and system-feed bot lines (users.settings.system) are excluded so the
+    /// #lounge activity feed cannot drown real results. `exclude_user_ids`
+    /// carries the caller's ignored users, excluded both as authors and as
+    /// bot-reply targets (an ignored user cannot be heard by proxy).
+    /// `room_id` scopes to one room.
+    pub async fn search_for_user(
+        client: &Client,
+        user_id: Uuid,
+        query: &str,
+        room_id: Option<Uuid>,
+        exclude_user_ids: &[Uuid],
+        limit: i64,
+    ) -> Result<Vec<Self>> {
+        let pattern = format!("%{}%", escape_like_pattern(query));
+        let rows = client
+            .query(
+                "SELECT msg.*
+                 FROM chat_messages msg
+                 JOIN chat_room_members mem
+                   ON mem.room_id = msg.room_id AND mem.user_id = $1
+                 JOIN chat_rooms room ON room.id = msg.room_id
+                 JOIN users author ON author.id = msg.user_id
+                 WHERE msg.body ILIKE $2 ESCAPE '\\'
+                   AND room.kind <> 'game'
+                   AND ($3::uuid IS NULL OR msg.room_id = $3)
+                   AND msg.user_id <> ALL($4::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
+                   AND COALESCE((author.settings->>'system')::boolean, false) = false
+                 ORDER BY msg.created DESC, msg.id DESC
+                 LIMIT $5",
+                &[&user_id, &pattern, &room_id, &exclude_user_ids, &limit],
+            )
+            .await?;
+
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
     pub async fn create_with_reply_to(
         client: &impl GenericClient,
         params: ChatMessageParams,
@@ -303,5 +428,31 @@ impl ChatMessage {
             .into_iter()
             .map(|row| (row.get("room_id"), row.get("id")))
             .collect())
+    }
+}
+
+/// Escape `%`, `_`, and `\` in a user-supplied query so it matches literally
+/// inside an ILIKE `%...%` pattern (paired with `ESCAPE '\'` in the SQL).
+pub fn escape_like_pattern(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+    for ch in query.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_like_pattern;
+
+    #[test]
+    fn escape_like_pattern_escapes_metacharacters() {
+        assert_eq!(escape_like_pattern("plain query"), "plain query");
+        assert_eq!(escape_like_pattern("100%"), "100\\%");
+        assert_eq!(escape_like_pattern("snake_case"), "snake\\_case");
+        assert_eq!(escape_like_pattern("back\\slash"), "back\\\\slash");
     }
 }

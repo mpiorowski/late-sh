@@ -3,12 +3,14 @@
 //! opens the #lounge composer, and what you send floats over your head as a
 //! speech bubble; `w` waves and `x` dances for everyone; `t` at the bar
 //! pours a `@bartender ` mention into the composer. Enter next to a landmark
-//! prop follows its signpost: the arcade cabinet, the heavy door, the poker
-//! table, and the easel jump to their app pages (2/3/4/5), the jukebox opens
-//! the Music Booth, and the dog gets petted where everyone can see it.
+//! prop follows its signpost: the arcade cabinet, the heavy door, and the
+//! easel jump to their app pages (2/3/4), the poker table opens the Lobby
+//! modal, the jukebox opens the Music Booth, and the dog gets petted where
+//! everyone can see it.
 //! Returns `false` for anything it does not own so global keys (numbers,
-//! Tab, `q`, `?`, `v` music chords, ...) keep working, and returns `false`
-//! outright while composing so the shared composer pipeline gets the bytes.
+//! Tab, `q`, `?`, `v` music chords, ...) keep working. Composing and
+//! chat-overlay input never reaches this handler: the shared composer and
+//! overlay gates in `app/input.rs` intercept first (`screen_composes_chat`).
 
 use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
@@ -18,15 +20,6 @@ use super::lobby::Emote;
 use super::map::Interactive;
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
-    // While typing, the global composer pipeline owns every byte.
-    if app.chat.is_composing() {
-        return false;
-    }
-    // Chat overlays opened elsewhere are handled by the shared overlay path.
-    if app.chat.has_overlay() {
-        return false;
-    }
-
     // A left click on a patron opens their profile, the same view as
     // `/profile <name>`. Other mouse events (scroll) fall through to the
     // global handlers.
@@ -40,6 +33,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         if matches!(byte, b'\r' | b'\n') && app.clubhouse.tutorial_capturing_keys() {
             if app.clubhouse.tutorial_advance() {
                 app.persist_clubhouse_tutorial_done();
+                // The last box sends them off to the chat: land on the
+                // dashboard (#lounge on Home), page 1.
+                app.set_screen(Screen::Dashboard);
             }
             return true;
         }
@@ -84,7 +80,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                     // The landmark props are signposts: Enter walks through.
                     Some(Interactive::Arcade) => app.set_screen(Screen::Arcade),
                     Some(Interactive::Doors) => app.set_screen(Screen::Games),
-                    Some(Interactive::Poker) => app.set_screen(Screen::Rooms),
+                    Some(Interactive::Poker) => {
+                        crate::app::input::open_daily_modal_globally(app);
+                    }
                     Some(Interactive::Easel) => app.set_screen(Screen::Artboard),
                     _ => {
                         if let Some(lounge_id) = app.chat.lounge_room_id() {

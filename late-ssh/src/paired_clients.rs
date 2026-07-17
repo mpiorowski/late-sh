@@ -362,6 +362,20 @@ impl PairedClientRegistry {
             .map(|entry| entry.state.clone())
     }
 
+    /// Muted state of the most recently registered CLI entry on `token`, if
+    /// any. Used to align a connecting webview helper to the session's
+    /// current runtime mute instead of the boot preference: helper respawns
+    /// and pair-WS reconnects mid-session must not unmute a muted session.
+    pub fn cli_muted(&self, token: &str) -> Option<bool> {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)?
+            .iter()
+            .rev()
+            .find(|entry| entry.state.client_kind == ClientKind::Cli)
+            .map(|entry| entry.state.muted)
+    }
+
     /// True when any paired native CLI on `token` advertises voice support.
     /// This intentionally scans every paired entry because `snapshot` prefers
     /// browser/webview entries for music UI state.
@@ -744,6 +758,68 @@ mod tests {
             ClientKind::Browser
         );
         assert!(registry.has_voice_cli("tok1"));
+    }
+
+    #[test]
+    fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
+        let user_id = Uuid::now_v7();
+
+        assert_eq!(registry.cli_muted("tok1"), None);
+
+        let (webview_tx, _webview_rx) = tokio::sync::mpsc::unbounded_channel();
+        let webview_id = registry.register(
+            "tok1".to_string(),
+            webview_tx,
+            user_id,
+            AudioSource::Youtube,
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            webview_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Webview,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["youtube".to_string()],
+                muted: true,
+                volume_percent: 30,
+                ..Default::default()
+            },
+        );
+        assert_eq!(registry.cli_muted("tok1"), None);
+
+        let (cli_tx, _cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Youtube);
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["youtube".to_string()],
+                muted: true,
+                volume_percent: 30,
+                ..Default::default()
+            },
+        );
+        assert_eq!(registry.cli_muted("tok1"), Some(true));
+
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["youtube".to_string()],
+                muted: false,
+                volume_percent: 30,
+                ..Default::default()
+            },
+        );
+        assert_eq!(registry.cli_muted("tok1"), Some(false));
     }
 
     #[test]

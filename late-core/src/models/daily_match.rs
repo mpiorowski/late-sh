@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -21,6 +22,7 @@ crate::model! {
         pub state: Value,
         pub challenger_result_seen_at: Option<DateTime<Utc>>,
         pub opponent_result_seen_at: Option<DateTime<Utc>>,
+        pub chat_room_id: Option<Uuid>,
     }
 }
 
@@ -36,10 +38,16 @@ impl DailyMatch {
     pub const RESULT_TIMEOUT: &'static str = "timeout";
     pub const RESULT_FLEET_SUNK: &'static str = "fleet_sunk";
     pub const RESULT_FOUR_IN_A_ROW: &'static str = "four_in_a_row";
+    pub const RESULT_MOST_DISCS: &'static str = "most_discs";
+    pub const RESULT_NO_MOVES: &'static str = "no_moves";
+    pub const RESULT_BORNE_OFF: &'static str = "borne_off";
 
     pub const GAME_KIND_CHESS: &'static str = "chess";
     pub const GAME_KIND_BATTLESHIP: &'static str = "battleship";
     pub const GAME_KIND_CONNECTFOUR: &'static str = "connect4";
+    pub const GAME_KIND_REVERSI: &'static str = "reversi";
+    pub const GAME_KIND_CHECKERS: &'static str = "checkers";
+    pub const GAME_KIND_BACKGAMMON: &'static str = "backgammon";
 
     /// Open challenges posted by the user plus active matches they play in.
     pub async fn count_active_entries(client: &Client, user_id: Uuid) -> Result<i64> {
@@ -80,8 +88,10 @@ impl DailyMatch {
 
     /// Claim an open challenge. Guarded so two simultaneous claims can't both
     /// win: only one UPDATE sees `status = 'open' AND opponent_id IS NULL`.
+    /// Generic over the client so it can run inside the claim transaction
+    /// that also creates the match chat room.
     pub async fn claim(
-        client: &Client,
+        client: &impl GenericClient,
         match_id: Uuid,
         opponent_id: Uuid,
         turn_user_id: Uuid,
@@ -115,6 +125,25 @@ impl DailyMatch {
             )
             .await?;
         Ok(row.map(Self::from))
+    }
+
+    /// Attach the match's private chat room, created in the same claim
+    /// transaction. Separate from `claim` because the room row needs the
+    /// match id for its slug.
+    pub async fn set_chat_room(
+        client: &impl GenericClient,
+        match_id: Uuid,
+        chat_room_id: Uuid,
+    ) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE daily_matches
+                 SET chat_room_id = $2
+                 WHERE id = $1",
+                &[&match_id, &chat_room_id],
+            )
+            .await?;
+        Ok(updated)
     }
 
     pub async fn cancel_challenge(
@@ -326,6 +355,45 @@ impl DailyMatch {
             )
             .await?;
         Ok(updated)
+    }
+
+    /// Hard-delete match chat rooms (and their voice channels) once the
+    /// match has been finished or cancelled for over 30 days — aligned with
+    /// the unseen-result window, so chat outlives every surface that could
+    /// still point at it. Chat FK cascades remove memberships/messages;
+    /// `daily_matches.chat_room_id` goes NULL via ON DELETE SET NULL, so
+    /// match history keeps its row. Voice channels have no FK to their
+    /// polymorphic target and must be deleted alongside, mirroring the
+    /// rooms cleanup CTE.
+    pub async fn delete_stale_chat_rooms(client: &Client) -> Result<u64> {
+        let row = client
+            .query_one(
+                "WITH stale AS (
+                     SELECT chat_room_id AS id
+                     FROM daily_matches
+                     WHERE chat_room_id IS NOT NULL
+                       AND status IN ($1, $2)
+                       AND updated < current_timestamp - INTERVAL '30 days'
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING stale s
+                     WHERE v.target_kind = 'chat_room'
+                       AND v.target_id = s.id
+                     RETURNING v.id
+                 ),
+                 deleted_chats AS (
+                     DELETE FROM chat_rooms c
+                     USING stale s
+                     WHERE c.id = s.id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted_chats",
+                &[&Self::STATUS_FINISHED, &Self::STATUS_CANCELLED],
+            )
+            .await?;
+        let count: i64 = row.get("count");
+        Ok(count as u64)
     }
 
     /// Optimistic compare-and-swap guard shared by `update_state` and

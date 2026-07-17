@@ -124,6 +124,26 @@ pub fn draw_game_overlay(
     draw_game_overlay_anchored(frame, area, heading, subtitle, color, OverlayAnchor::Center);
 }
 
+fn overlay_size(heading: &str, subtitle: &str, area: Rect) -> (u16, u16) {
+    const BORDER_LINES: u16 = 2;
+    const MIN_WIDTH: u16 = 28;
+    const MAX_WIDTH: u16 = 44;
+
+    let heading_cols = (heading.chars().count() as u16).saturating_add(2);
+    let subtitle_cols = subtitle.chars().count() as u16;
+    let overlay_w = heading_cols
+        .max(subtitle_cols)
+        .saturating_add(BORDER_LINES)
+        .clamp(MIN_WIDTH, MAX_WIDTH)
+        .min(area.width);
+
+    let text_cols = overlay_w.saturating_sub(BORDER_LINES).max(1);
+    let subtitle_lines = subtitle_cols.div_ceil(text_cols).max(1);
+    let overlay_h = (BORDER_LINES + 1 + subtitle_lines).min(area.height);
+
+    (overlay_w, overlay_h)
+}
+
 pub fn draw_game_overlay_anchored(
     frame: &mut Frame,
     area: Rect,
@@ -132,8 +152,7 @@ pub fn draw_game_overlay_anchored(
     color: Color,
     anchor: OverlayAnchor,
 ) {
-    let overlay_w = 28.min(area.width);
-    let overlay_h = 4.min(area.height);
+    let (overlay_w, overlay_h) = overlay_size(heading, subtitle, area);
     let overlay_area = match anchor {
         OverlayAnchor::Center => centered_rect(area, overlay_w, overlay_h),
         OverlayAnchor::Top => {
@@ -156,6 +175,7 @@ pub fn draw_game_overlay_anchored(
         )),
     ])
     .alignment(Alignment::Center)
+    .wrap(Wrap { trim: false })
     .block(
         Block::default()
             .borders(Borders::ALL)
