@@ -408,27 +408,16 @@ fn draw_core_block(
         );
     } else if !active_friend_names.is_empty() {
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    ACTIVE_FRIEND_MARKER,
-                    Style::default()
-                        .fg(theme::BADGE_GOLD())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" "),
-                Span::styled(
-                    friend_names_text(active_friend_names, area.width as usize, tick),
-                    Style::default()
-                        .fg(theme::TEXT_BRIGHT())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])),
+            Paragraph::new(Line::from(vec![Span::styled(
+                friend_names_text(active_friend_names, area.width as usize, tick),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            )])),
             row(1),
         );
     }
 }
-
-const ACTIVE_FRIEND_MARKER: &str = "★";
 
 /// Every connected friend on the one reserved row, most recent login first.
 /// The list scrolls (marquee) when it overruns the rail instead of stopping
@@ -439,11 +428,7 @@ fn friend_names_text(names: &[String], width: usize, tick: usize) -> String {
         .map(|name| format!("@{name}"))
         .collect::<Vec<_>>()
         .join(" ");
-    crate::app::common::marquee::marquee_text(
-        &joined,
-        width.saturating_sub(ACTIVE_FRIEND_MARKER.chars().count() + 1),
-        tick,
-    )
+    crate::app::common::marquee::marquee_text(&joined, width, tick)
 }
 
 /// Section name rendered into each panel's separator rule. Keeps panel

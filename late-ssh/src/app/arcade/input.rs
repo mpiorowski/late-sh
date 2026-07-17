@@ -91,6 +91,13 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 app.is_playing_game = false;
                 return true;
             }
+            if byte == b'`' {
+                // Personal board: backtick jumps to the dashboard (the
+                // bottom-bar "dashboard" hint) rather than cycling stops.
+                app.is_playing_game = false;
+                app.set_screen(Screen::Dashboard);
+                return true;
+            }
             return super::twenty_forty_eight::input::handle_key(
                 &mut app.twenty_forty_eight_state,
                 byte,
