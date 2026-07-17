@@ -210,7 +210,7 @@ fn board_lines(
         .collect();
 
     let mut lines = vec![header_line(cursor.map(|i| i % checkers::SIZE), tier)];
-    for row in 0..checkers::SIZE {
+    for (row, rank) in grid.iter().enumerate() {
         for sub in 0..tier.ch {
             let glyph_row = sub == tier.glyph_sub();
             let mut spans = vec![if glyph_row {
@@ -218,7 +218,7 @@ fn board_lines(
             } else {
                 Span::raw("   ")
             }];
-            for col in 0..checkers::SIZE {
+            for (col, cell) in rank.iter().enumerate() {
                 let index = row * checkers::SIZE + col;
                 let playable = !(row + col).is_multiple_of(2);
                 let is_cursor = cursor == Some(index);
@@ -240,7 +240,7 @@ fn board_lines(
                 if is_cursor {
                     style = style.bg(theme::AMBER_DIM());
                 }
-                let span = match grid[row][col] {
+                let span = match *cell {
                     Some(piece) => {
                         // A king is the same square with a gold top half —
                         // the crown is a colour, not a shape.

@@ -290,7 +290,7 @@ fn cell_colors(snapshot: &SsnakeSnapshot, level: &SsnakeLevel) -> Vec<Color> {
         }
     }
     if let Some(point) = snapshot.point {
-        let blink = snapshot.tick_count % 2 == 0;
+        let blink = snapshot.tick_count.is_multiple_of(2);
         colors[point.y as usize * level.width + point.x as usize] = if snapshot.life_point {
             if blink { LIFE_POINT } else { LIFE_POINT_BLINK }
         } else {
@@ -310,7 +310,7 @@ fn cell_colors(snapshot: &SsnakeSnapshot, level: &SsnakeLevel) -> Vec<Color> {
         if let Some(head) = player.body.first().copied() {
             let color = match player.motion {
                 Motion::Dying => body_color(seat_index),
-                Motion::Idle if snapshot.tick_count % 2 == 0 => body_color(seat_index),
+                Motion::Idle if snapshot.tick_count.is_multiple_of(2) => body_color(seat_index),
                 _ => head_color(seat_index),
             };
             paint(&mut colors, level, head, color);
