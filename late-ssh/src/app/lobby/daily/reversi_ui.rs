@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use uuid::Uuid;
 
@@ -202,7 +202,7 @@ fn board_lines(
     };
 
     let mut lines = vec![header_line(cursor_rc.map(|(_, col)| col), tier)];
-    for row in 0..reversi::SIZE {
+    for (row, rank) in grid.iter().enumerate() {
         for sub in 0..tier.ch {
             let glyph_row = sub == tier.glyph_sub();
             let mut spans = vec![if glyph_row {
@@ -210,7 +210,7 @@ fn board_lines(
             } else {
                 Span::raw("   ")
             }];
-            for col in 0..reversi::SIZE {
+            for (col, cell) in rank.iter().enumerate() {
                 let is_cursor = cursor_rc == Some((row, col));
                 let is_legal = legal.contains(&(row, col));
                 let mut style = checker(row, col);
@@ -220,7 +220,7 @@ fn board_lines(
                 if is_cursor {
                     style = style.bg(theme::AMBER_DIM());
                 }
-                let span = match grid[row][col] {
+                let span = match *cell {
                     Some(disc) => Span::styled(
                         piece_cell(PUCK_SOLID, disc_glyph(disc), tier, sub),
                         style.fg(disc_fg(disc)).add_modifier(Modifier::BOLD),
@@ -445,7 +445,7 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyReversiState) {
     let (black, white) = state.disc_counts();
     let lines = vec![
         Line::from(Span::styled(
-            "Correspondence reversi".to_string(),
+            "Reversi".to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),
@@ -472,5 +472,5 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyReversiState) {
             Span::styled(format!("{white}"), Style::default().fg(theme::TEXT())),
         ]),
     ];
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }

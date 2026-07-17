@@ -23,6 +23,7 @@ use crate::app::{
             svc::{BlackjackEvent, BlackjackService},
         },
         poker::svc::PokerService,
+        ssnake::svc::{SsnakeService, SsnakeServiceContext},
         state::HouseTableClient,
         tables::HouseTable,
         tron::svc::{TronService, TronServiceContext},
@@ -70,6 +71,7 @@ pub struct HouseTableRegistry {
     blackjack: Arc<Mutex<Option<BlackjackService>>>,
     asterion: Arc<Mutex<Option<AsterionService>>>,
     tron: Arc<Mutex<Option<TronService>>>,
+    ssnake: Arc<Mutex<Option<SsnakeService>>>,
     /// Seeded permanent chat room per table, filled by `ensure_chat_rooms`.
     chat_room_ids: Arc<Mutex<HashMap<HouseTable, Uuid>>>,
 }
@@ -94,6 +96,7 @@ impl HouseTableRegistry {
             blackjack: Arc::new(Mutex::new(None)),
             asterion: Arc::new(Mutex::new(None)),
             tron: Arc::new(Mutex::new(None)),
+            ssnake: Arc::new(Mutex::new(None)),
             chat_room_ids: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -185,6 +188,9 @@ impl HouseTableRegistry {
             HouseTable::Tron => Some(HouseTableClient::Tron(Box::new(
                 crate::app::lobby::house::tron::state::State::new(self.tron_service(), user_id),
             ))),
+            HouseTable::Ssnake => Some(HouseTableClient::Ssnake(Box::new(
+                crate::app::lobby::house::ssnake::state::State::new(self.ssnake_service(), user_id),
+            ))),
         }
     }
 
@@ -262,6 +268,18 @@ impl HouseTableRegistry {
                         == crate::app::lobby::house::tron::state::TronPhase::Running,
                 }
             }
+            HouseTable::Ssnake => {
+                let Some(svc) = self.ssnake.lock_recover().clone() else {
+                    return empty;
+                };
+                let snapshot = svc.current_snapshot();
+                HouseOccupancy {
+                    seated: snapshot.seats.iter().filter(|seat| seat.is_some()).count(),
+                    capacity,
+                    in_round: snapshot.phase
+                        == crate::app::lobby::house::ssnake::state::SsnakePhase::Running,
+                }
+            }
         }
     }
 
@@ -288,6 +306,11 @@ impl HouseTableRegistry {
                 .is_some_and(|svc| !svc.is_stopped() && svc.has_session_for_user(user_id)),
             HouseTable::Tron => self
                 .tron
+                .lock_recover()
+                .clone()
+                .is_some_and(|svc| svc.current_snapshot().seats.contains(&Some(user_id))),
+            HouseTable::Ssnake => self
+                .ssnake
                 .lock_recover()
                 .clone()
                 .is_some_and(|svc| svc.current_snapshot().seats.contains(&Some(user_id))),
@@ -330,7 +353,7 @@ impl HouseTableRegistry {
                         seat.user_id == Some(user_id) && seat.phase == SeatPhase::Playing
                     })
             }
-            HouseTable::Asterion | HouseTable::Tron => false,
+            HouseTable::Asterion | HouseTable::Tron | HouseTable::Ssnake => false,
         }
     }
 
@@ -429,6 +452,21 @@ impl HouseTableRegistry {
         })
         .clone()
     }
+
+    fn ssnake_service(&self) -> SsnakeService {
+        let mut slot = self.ssnake.lock_recover();
+        slot.get_or_insert_with(|| {
+            SsnakeService::new_with_events(
+                HouseTable::Ssnake.table_id(),
+                self.chip_svc.clone(),
+                HouseTable::ssnake_settings(),
+                SsnakeServiceContext {
+                    room_event_tx: self.event_tx.clone(),
+                },
+            )
+        })
+        .clone()
+    }
 }
 
 fn activity_game_for(table: HouseTable) -> ActivityGame {
@@ -437,5 +475,6 @@ fn activity_game_for(table: HouseTable) -> ActivityGame {
         HouseTable::Blackjack => ActivityGame::Blackjack,
         HouseTable::Asterion => ActivityGame::Asterion,
         HouseTable::Tron => ActivityGame::Tron,
+        HouseTable::Ssnake => ActivityGame::Ssnake,
     }
 }

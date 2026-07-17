@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color as TermColor, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use uuid::Uuid;
 
@@ -210,7 +210,7 @@ fn board_lines(
         .collect();
 
     let mut lines = vec![header_line(cursor.map(|i| i % checkers::SIZE), tier)];
-    for row in 0..checkers::SIZE {
+    for (row, rank) in grid.iter().enumerate() {
         for sub in 0..tier.ch {
             let glyph_row = sub == tier.glyph_sub();
             let mut spans = vec![if glyph_row {
@@ -218,7 +218,7 @@ fn board_lines(
             } else {
                 Span::raw("   ")
             }];
-            for col in 0..checkers::SIZE {
+            for (col, cell) in rank.iter().enumerate() {
                 let index = row * checkers::SIZE + col;
                 let playable = !(row + col).is_multiple_of(2);
                 let is_cursor = cursor == Some(index);
@@ -240,7 +240,7 @@ fn board_lines(
                 if is_cursor {
                     style = style.bg(theme::AMBER_DIM());
                 }
-                let span = match grid[row][col] {
+                let span = match *cell {
                     Some(piece) => {
                         // A king is the same square with a gold top half —
                         // the crown is a colour, not a shape.
@@ -471,7 +471,7 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyCheckersState) {
     let (red, white) = state.piece_counts();
     let lines = vec![
         Line::from(Span::styled(
-            "Correspondence checkers".to_string(),
+            "Checkers".to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),
@@ -503,5 +503,5 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyCheckersState) {
             Style::default().fg(theme::TEXT_FAINT()),
         )),
     ];
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }

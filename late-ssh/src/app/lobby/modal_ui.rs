@@ -170,6 +170,10 @@ fn house_line(table: HouseTable, occupancy: String, selected: bool) -> Line<'sta
         col(table.tagline(), GAME_COL + DETAIL_COL),
         Style::default().fg(theme::TEXT_DIM()),
     ));
+    spans.push(Span::styled(
+        col(&table.price_label().unwrap_or_default(), PRICE_COL),
+        Style::default().fg(theme::AMBER_DIM()),
+    ));
     let occupied = !occupancy.starts_with("empty");
     spans.push(Span::styled(
         occupancy,
@@ -225,6 +229,7 @@ fn selected_line_index(
 const NAME_COL: usize = 16;
 const GAME_COL: usize = 12;
 const DETAIL_COL: usize = 25;
+const PRICE_COL: usize = 16;
 
 fn col(text: &str, width: usize) -> String {
     let chars: Vec<char> = text.chars().collect();
