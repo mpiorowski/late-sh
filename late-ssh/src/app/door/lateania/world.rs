@@ -249,6 +249,13 @@ const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
         "off the Melvanala lake",
     ),
     (
+        "Broceliande, the Greenwood",
+        22_000,
+        24_000,
+        "moderate / taming",
+        "off the Verdant Highlands",
+    ),
+    (
         "Portal Villages",
         super::archipelago::VILLAGE_BASE,
         super::archipelago::VILLAGE_BASE + 1000,
@@ -3571,6 +3578,13 @@ pub fn seed_world() -> World {
     // species caught at Fishing-gated resource nodes).
     extend_lakes(&mut rooms, &mut spawns, &mut behaviors);
 
+    // Append Broceliande, the Greenwood: a fourth ~2000-room continent (rooms
+    // 22000+) of deep-green oakwoods and steaming jungles, druid circles and
+    // briar mazes, hung off the Verdant Highlands (the Faerie Hollow) by a normal
+    // walk. A moderate green country and the home of the fifty tameable beasts of
+    // the animal-taming trade (whose roaming spots are seeded in `taming.rs`).
+    extend_broceliande(&mut rooms, &mut spawns, &mut behaviors);
+
     // Flesh out the four capitals with a district of new safe rooms each.
     extend_cities(&mut rooms);
 
@@ -4915,7 +4929,13 @@ fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
         // Kaelmyr (mob ids 960000+) rides the same endgame multipliers; its
         // authored base stats simply sit a full continent higher on the curve.
         let reaches = (REACHES_SPAWN_ID_START..KAELMYR_SPAWN_ID_START).contains(&spawn.id);
-        let kaelmyr = spawn.id >= KAELMYR_SPAWN_ID_START;
+        // Kaelmyr owns 960000+, but later peaceful/mid continents (the lakes at
+        // 980000+, Broceliande at 990000+) sit above it. The lakes and archipelago
+        // ride the endgame band with deliberately tiny base stats; Broceliande is
+        // its own moderate green continent, so it is excluded here and keeps the
+        // gentle overworld multipliers instead of the endgame ones.
+        let kaelmyr =
+            (KAELMYR_SPAWN_ID_START..BROCELIANDE_SPAWN_ID_START).contains(&spawn.id);
         let endgame = frontier || reaches || kaelmyr;
         let living_dark = is_living_dark_spawn(spawn.id);
         let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) =
@@ -6818,6 +6838,638 @@ fn lakes_fish_for_zone(z: usize) -> Vec<u32> {
     let band = maze_rank.saturating_sub(1).min(9);
     let base = super::items::FISH_BASE + (band as u32) * 4;
     (0..4).map(|i| base + i).collect()
+}
+
+// ---- Broceliande, the Greenwood (rooms 22000+) ---------------------------
+//
+//   Broceliande is a vast, verdant continent east of the Verdant Highlands: a
+//   Dark-Age-of-Camelot country of deep-green oakwoods and steaming ferny
+//   jungles, druid groves and briar mazes, standing stones and faerie rings,
+//   moss-grown keeps and vine-choked ruins. Its through-line is the old celtic
+//   dream of the enchanted wood: you enter at a safe woodward's holt on the
+//   forest eaves and wind ever deeper and greener, past the druid circles and
+//   the sleeping keeps, down into the jungle heart and the World-Oak at its
+//   centre, where the Greenwood's oldest guardian still keeps its long watch.
+//
+//   Twenty zones of ~99 rooms each (~2000 rooms), every one carved as a braided
+//   briar-maze (`carve_maze`) or an organic fern-cavern / grove-glade
+//   (`carve_cavern`) - never a uniform grid. Zones chain deepest-room ->
+//   next-entrance; mobs are behaviour-driven by maze-role (dead-ends ambush,
+//   junctions swarm, corridors patrol/skirmish). Light-to-moderate gating: the
+//   whole wood is reached by a normal walk off the Verdant Highlands (the
+//   Faerie Hollow), and the first holt is a safe haven. It is a moderate
+//   continent - tougher than the peaceful Sunderlakes but well below the
+//   endgame Kaelmyr - and it is the home of the fifty tameable beasts of the
+//   animal-taming trade (see `taming.rs`).
+
+pub const BROCELIANDE_BASE: RoomId = 22_000;
+const BROCELIANDE_W: usize = 11;
+const BROCELIANDE_H: usize = 9;
+const BROCELIANDE_ZONES: usize = BROCELIANDE_ZONES_DATA.len();
+/// Broceliande mob ids sit in a fresh band above the Sunderlakes (980000+),
+/// clear of every other region. Excluded from the endgame scaler (see
+/// `tune_spawn_balance`) so the Greenwood stays a moderate, green country.
+pub const BROCELIANDE_SPAWN_ID_START: u32 = 990_000;
+const BROCELIANDE_SEED: u64 = 0xB70C_E11A_9DE0_u64;
+/// Each zone reserves this many room ids (a `BROCELIANDE_W`×`BROCELIANDE_H`
+/// cell field).
+const BROCELIANDE_ZONE_STRIDE: u32 = (BROCELIANDE_W * BROCELIANDE_H) as u32;
+
+/// Which Broceliande zones are carved as organic caverns/glades (fern grottoes,
+/// grove-clearings, jungle sinks) rather than braided briar-mazes. The rest are
+/// mazes. Never a uniform grid.
+const fn broceliande_zone_is_cavern(z: usize) -> bool {
+    matches!(z, 2 | 5 | 8 | 11 | 14 | 17)
+}
+
+pub fn is_broceliande_room(id: RoomId) -> bool {
+    (BROCELIANDE_BASE..BROCELIANDE_BASE + BROCELIANDE_ZONES as u32 * BROCELIANDE_ZONE_STRIDE)
+        .contains(&id)
+}
+
+/// Twenty zones of Broceliande: (zone, adjective, greenery noun, a landmark
+/// feature, the creatures that haunt it, three regular mob names, the zone
+/// notable/boss). Celtic/arthurian tone throughout; `broceliande_desc` supplies
+/// the paragraph prose. Zone names must NOT start with "The " (the builder does
+/// not prepend it here, but keeps them clean for the leaked zone label).
+#[allow(clippy::type_complexity)]
+const BROCELIANDE_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+    (
+        "Woodward's Holt",
+        "sun-dappled",
+        "old green oakwood",
+        "the mossy palisade of the woodwards who keep the forest eaves",
+        "eaves-dwellers",
+        [
+            "a bristling forest-boar",
+            "a green-eyed wildcat",
+            "a briar-tangled poacher",
+        ],
+        "Aldwyn the Woodward-Reeve",
+    ),
+    (
+        "Oakheart Grove",
+        "cathedral-tall",
+        "ancient oak columns",
+        "a grove of oaks so old their crowns close out the sky",
+        "grove-wardens",
+        [
+            "a moss-antlered stag",
+            "a grove-adder",
+            "a bark-skinned wood-wight",
+        ],
+        "the Oakheart Dryad",
+    ),
+    (
+        "Fernlight Hollow",
+        "green-lit",
+        "waist-deep fern",
+        "a sunken fern-grotto where the light falls green and thick as water",
+        "hollow-things",
+        [
+            "a fern-lurking lynx",
+            "a spore-drunk boar",
+            "a pale hollow-stalker",
+        ],
+        "the Fernlight Warden",
+    ),
+    (
+        "Druid's Circle",
+        "stone-ringed",
+        "grass cropped short by rites",
+        "a great ring of moss-furred standing stones humming with old power",
+        "circle-keepers",
+        [
+            "a mistletoe druid",
+            "a stone-guardian hound",
+            "a robed circle-acolyte",
+        ],
+        "the Archdruid of the Circle",
+    ),
+    (
+        "Briarmaze Thicket",
+        "thorn-walled",
+        "impassable briar",
+        "a labyrinth of thorn twice a man's height that shifts when unwatched",
+        "briar-haunts",
+        [
+            "a thorn-crowned wolf",
+            "a bramble-wight",
+            "a lost knight-errant",
+        ],
+        "the Briar-Knight of the Thicket",
+    ),
+    (
+        "Whispering Fens",
+        "will-o-lit",
+        "green standing water",
+        "a fen where cold lights drift and the reeds whisper old names",
+        "fen-lurkers",
+        [
+            "a fen-adder",
+            "a bog-drowned reaver",
+            "a marsh-lantern wisp",
+        ],
+        "the Drowned Green Man",
+    ),
+    (
+        "Verdant Ruins",
+        "vine-choked",
+        "green-shrouded ruin",
+        "a fallen keep swallowed whole by ivy, its halls floored with leaf-mould",
+        "ruin-dwellers",
+        [
+            "an ivy-shrouded revenant",
+            "a ruin-prowling panther",
+            "a tomb-robber's ghost",
+        ],
+        "the Ivy-Crowned Castellan",
+    ),
+    (
+        "Moonshadow Glade",
+        "moon-silvered",
+        "silver-lit sward",
+        "a perfect round glade where the moon seems always to hang low and full",
+        "glade-fae",
+        [
+            "a silver-pelt hare-king",
+            "a moonshadow hound",
+            "a glamour-weaving fae",
+        ],
+        "the Lady of the Moonlit Glade",
+    ),
+    (
+        "Steaming Jungle",
+        "steam-wreathed",
+        "dripping green jungle",
+        "a hot green tangle where steam rises off the leaf-litter in slow ghosts",
+        "jungle-things",
+        [
+            "a jungle-drake",
+            "a coiling constrictor",
+            "a fever-mad huntsman",
+        ],
+        "the Jungle-Drake Matriarch",
+    ),
+    (
+        "Vine-Choked Deep",
+        "sun-starved",
+        "black-green undergrowth",
+        "a jungle deep so thick with vine that noon is a green midnight",
+        "deep-lurkers",
+        [
+            "a strangler-vine horror",
+            "a deep-jungle panther",
+            "a vine-bound wanderer",
+        ],
+        "the Strangler-Vine Sovereign",
+    ),
+    (
+        "Standing Kings",
+        "storm-crowned",
+        "windswept moorgrass",
+        "a high heath crowned with monolith-kings that were old before the wood",
+        "king-stone wraiths",
+        [
+            "a moor-wolf pack-leader",
+            "a barrow-crowned wight",
+            "a storm-called reaver",
+        ],
+        "the King in the Stone",
+    ),
+    (
+        "Barrowgreen",
+        "grave-still",
+        "grass over old barrows",
+        "a green field of burial-mounds where the dead of the wood were laid",
+        "barrow-dead",
+        [
+            "a barrow-wight",
+            "a grave-hound",
+            "a mound-crowned revenant",
+        ],
+        "the Barrow-King of the Green",
+    ),
+    (
+        "Faerie Reaches",
+        "gold-hazed",
+        "toadstool-ringed meadow",
+        "a golden-lit country of faerie-rings where time itself runs thick and slow",
+        "the fair folk",
+        [
+            "a redcap raider",
+            "a will-o'-wisp",
+            "a glamoured changeling",
+        ],
+        "the Erlking of the Reaches",
+    ),
+    (
+        "Wyrmfern Hollows",
+        "fern-drowned",
+        "giant unfurling fern",
+        "a jungle sink of tree-tall ferns where the great wyrms of the wood den",
+        "wyrm-kin",
+        [
+            "a fern-wyrmling",
+            "a hollow-denning drake",
+            "a scale-hunter gone feral",
+        ],
+        "the Fern-Wyrm of the Hollows",
+    ),
+    (
+        "Greenmantle Keep",
+        "moss-mantled",
+        "ivy-mantled stonework",
+        "a keep the forest has taken for its own, moss for banners, roots for kings",
+        "keep-haunts",
+        [
+            "a moss-mantled sentinel",
+            "a keep-warden hound",
+            "a green-armoured revenant",
+        ],
+        "the Green Warden of the Keep",
+    ),
+    (
+        "Thornwyrd Maze",
+        "blood-thorned",
+        "wicked black thorn",
+        "the deepest briar-labyrinth, its thorns dark and wet and hungry",
+        "thornwyrd-things",
+        [
+            "a thorn-wyrm",
+            "a bloodbriar stalker",
+            "a maze-lost champion",
+        ],
+        "the Thornwyrd, the Maze-that-Hungers",
+    ),
+    (
+        "Cernunmoor",
+        "antler-shadowed",
+        "wild heath under horn",
+        "a wide wild heath overhung by the antler-shadow of the Horned One's presence",
+        "the wild hunt",
+        [
+            "a hunt-hound of Cernunnos",
+            "a horn-crowned stag-lord",
+            "a spectral huntsman",
+        ],
+        "Cernunnos' Master of the Hunt",
+    ),
+    (
+        "Worldroot Deep",
+        "root-cavernous",
+        "cavern-root and pale fungus",
+        "a cavern-deep of the World-Oak's roots, floored with pale luminous fungus",
+        "root-dwellers",
+        [
+            "a root-burrowing horror",
+            "a cave-panther of the deep",
+            "a fungus-riddled wanderer",
+        ],
+        "the Rootward of the Deep",
+    ),
+    (
+        "Greenmarch Heart",
+        "hush-fallen",
+        "the wood's own green silence",
+        "the still green heart of the march, where every path of the wood at last converges",
+        "heart-guardians",
+        [
+            "a heart-oak treant",
+            "a green-warden wyrm",
+            "an old guardian of the march",
+        ],
+        "the Heart-Oak Elder",
+    ),
+    (
+        "World-Oak Crown",
+        "ageless",
+        "the crown-roots of the World-Oak",
+        "the crown of the World-Oak itself, older than the forest that grew from it",
+        "the oldest green things",
+        [
+            "an ancient forest-drake",
+            "a bark-armoured great treant",
+            "a guardian of the first wood",
+        ],
+        "Broceliande, the Green Wyrm of the World-Oak",
+    ),
+];
+
+const BROCELIANDE_PLACES: [&str; 10] = [
+    "Green Ride",
+    "Fern Path",
+    "Oak Stand",
+    "Briar Turn",
+    "Moss Hollow",
+    "Deer-Track",
+    "Root Bend",
+    "Ivy Ford",
+    "Glade-Edge",
+    "Thornway",
+];
+
+/// Broceliande's paragraph prose: a deep-green, celtic-arthurian counterpart to
+/// `frontier_desc` / `lakes_desc`. Hits the >=180-char multi-sentence bar and
+/// varies by the cell index so no two rooms read alike.
+fn broceliande_desc(adj: &str, green: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "You push through a {adj} stretch of {green}, where the light comes down in green coins through the canopy and the leaf-mould is soft and silent underfoot.",
+        "The ride winds on beneath {adj} boughs, {green} closing green on every side until the wood itself seems to lean in and listen to your passing.",
+        "Here the forest opens a little; {adj} {green} gives way to a hush of moss and fern, and old magic hangs in the still air like held breath.",
+        "A deer-track threads this {adj} tangle of {green}, hoofprints in the black earth and the smell of sap and rot and slow green growing.",
+        "The way climbs a {adj} bank of {green}, roots for a stair, and the whole wood breathes around you with a patience older than any kingdom.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Ahead through the green stands {feature}, half-lost in leaf and shadow.",
+        "Off among the trunks rises {feature}, a landmark the old woodwards steered by.",
+        "The forest has all but swallowed {feature}, and the sight of it stops the breath.",
+        "Beside the track waits {feature}, softened by moss and the long patient work of the wood.",
+        "Through a gap in the briar you glimpse {feature}, green and still and older than the roads of men.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere back in the deep green {creature} move unseen, and the wood watches you with a thousand quiet eyes.",
+        "The undergrowth is thick with life; {creature} slip through the fern, and something far older stirs at the edge of hearing.",
+        "It is a place of old power - {creature} keep their distance, and the standing stones of the druids are never truly far.",
+        "A wood-pigeon claps up from the canopy, {creature} go still to watch you pass, and the green closes again behind your heels.",
+        "The only sound is the drip of green water and {creature} far off, and the enchanted hush lies heavy on the traveller's heart.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{green}", green);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+/// A small drop table for a Broceliande zone: representative gear from the
+/// generated Frontier catalog for a matching tier, so a slain Greenwood
+/// notable/mob yields real loot that resolves through `item`. Broceliande has
+/// no gear catalog of its own; the reward here is the taming (see `taming.rs`).
+fn broceliande_loot(z: usize) -> &'static [u32] {
+    // Map the twenty zones onto a modest slice of the Frontier tiers so the wood
+    // gives useful mid gear that rises with depth, without a bespoke catalog.
+    let tier = (z / 2).min(super::items::FRONTIER_TIERS - 1);
+    super::items::frontier_loot(tier)
+}
+
+/// Build Broceliande: twenty zones of braided briar-mazes and organic
+/// fern-caverns (rooms 22000+), each carved (never a grid), chained
+/// deepest-room -> next-entrance, and hung off the Verdant Highlands (the Faerie
+/// Hollow) by a normal walk. A moderate green continent - the home of the fifty
+/// tameable beasts, whose roaming spots are seeded in `taming.rs`.
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_broceliande(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (BROCELIANDE_W, BROCELIANDE_H);
+    let n = w * h;
+    let mut spawn_id: u32 = BROCELIANDE_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, green, feature, creature, mob_names, boss)) in
+        BROCELIANDE_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = BROCELIANDE_BASE + (z as u32) * BROCELIANDE_ZONE_STRIDE;
+        // A moderate power band that rises across the zones: above the peaceful
+        // lakes, below the endgame continents. The deep jungle and the World-Oak
+        // crown are a real challenge without being Kaelmyr.
+        let tier = z as i32;
+        let mut rng =
+            MazeRng::new(BROCELIANDE_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Carve as a braided briar-maze or an organic fern-cavern (with the
+        // connectivity pass). A too-sparse cavern falls back to a maze so no
+        // zone comes out empty. No uniform grids.
+        let cavern_floor = if broceliande_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 30).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        // The zone's notable waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(zname.to_string().into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Forest Gate").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Green Heart").into_boxed_str())
+            } else {
+                Box::leak(
+                    format!("{zname} - {}", BROCELIANDE_PLACES[cell % 10]).into_boxed_str(),
+                )
+            };
+            let desc: &'static str = Box::leak(
+                broceliande_desc(adj, green, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    // Every zone's entrance gate is a safe green haven, so the
+                    // wood reads as a chain of woodward-holts between the deeps.
+                    safe: is_entrance,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            // Behaviour-driven foes by maze-role: dead-ends ambush, junctions
+            // swarm as packs, corridors patrol/skirmish. Moderate density - the
+            // wood is alive but not wall-to-wall like the endgame.
+            let (mob_name, behavior, boss_mob, hp, dmg): (&str, MobBehavior, bool, i32, i32) =
+                if is_boss {
+                    (
+                        boss,
+                        MobBehavior::Brute,
+                        true,
+                        600 + tier * 110,
+                        30 + tier * 4,
+                    )
+                } else if degree == 1 {
+                    if rng.chance(35) {
+                        continue;
+                    }
+                    (
+                        mob_names[0],
+                        MobBehavior::Ambusher,
+                        false,
+                        200 + tier * 30 + depth * 4,
+                        16 + tier + depth / 2,
+                    )
+                } else if degree >= 3 {
+                    if rng.chance(35) {
+                        continue;
+                    }
+                    (
+                        mob_names[1],
+                        MobBehavior::PackHunter,
+                        false,
+                        210 + tier * 32 + depth * 4,
+                        17 + tier + depth / 2,
+                    )
+                } else {
+                    if rng.chance(55) {
+                        continue;
+                    }
+                    let behavior = match rng.below(3) {
+                        0 => MobBehavior::Wanderer,
+                        1 => MobBehavior::Patroller,
+                        _ => MobBehavior::Skirmisher,
+                    };
+                    (
+                        mob_names[2],
+                        behavior,
+                        false,
+                        200 + tier * 30 + depth * 4,
+                        15 + tier + depth / 2,
+                    )
+                };
+            let profile = DamageProfile::new(DamageType::Physical, None, None);
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp: if boss_mob {
+                    160 + tier * 34
+                } else {
+                    36 + tier * 9 + depth * 2
+                },
+                respawn_secs: if boss_mob { 260 } else { 62 },
+                loot: broceliande_loot(z),
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior green-heart room
+        // descends to this zone's forest gate, and rises back.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang Broceliande off the Verdant Highlands (the Faerie Hollow, room 688)
+    // by a normal walk exit, so the whole continent is reachable. The first
+    // forest gate (Woodward's Holt) is a safe haven. Lightly gated - a green
+    // country meant to be entered and explored.
+    const BROCELIANDE_GATEWAY: RoomId = 688;
+    let entrance = BROCELIANDE_BASE;
+    let anchor = if rooms.contains_key(&BROCELIANDE_GATEWAY) {
+        BROCELIANDE_GATEWAY
+    } else {
+        // Fall back to a real Verdant Highlands room if the hollow moved.
+        rooms
+            .keys()
+            .copied()
+            .find(|id| (680..692).contains(id))
+            .unwrap_or(MELVANALA_SQUARE)
+    };
+    let portal = [Dir::North, Dir::South, Dir::East, Dir::West, Dir::Down]
+        .into_iter()
+        .find(|d| rooms.get(&anchor).is_some_and(|r| !r.exits.contains_key(d)))
+        .unwrap_or(Dir::North);
+    if let Some(hub) = rooms.get_mut(&anchor) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), anchor);
+    }
 }
 
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
@@ -9545,6 +10197,18 @@ mod tests {
             (900..=LAKES_ZONES * LAKES_W * LAKES_H).contains(&lakes),
             "the Sunderlakes should be ~1200 rooms, got {lakes}"
         );
+        // Broceliande, the Greenwood: a fourth continent of braided briar-mazes
+        // and organic fern-caverns (rooms 22000+). Mazes fill their cell field;
+        // caverns are sparse, so the total is a sane band rather than an exact
+        // count.
+        let broceliande = count_in(
+            BROCELIANDE_BASE,
+            BROCELIANDE_BASE + BROCELIANDE_ZONES as RoomId * BROCELIANDE_ZONE_STRIDE,
+        );
+        assert!(
+            (1600..=BROCELIANDE_ZONES * BROCELIANDE_W * BROCELIANDE_H).contains(&broceliande),
+            "Broceliande should be ~2000 rooms, got {broceliande}"
+        );
         // The Shattered Archipelago: portal villages + maze/cavern islands.
         use super::super::archipelago as arch;
         let villages = count_in(arch::VILLAGE_BASE, arch::VILLAGE_BASE + 1000);
@@ -9568,6 +10232,7 @@ mod tests {
                 + reaches
                 + kaelmyr
                 + lakes
+                + broceliande
                 + villages
                 + islands,
             "every room should belong to a known region"
@@ -9834,6 +10499,111 @@ mod tests {
         let max_gate = fish_nodes.iter().map(|nn| nn.level_req).max().unwrap();
         assert!(min_gate <= 2, "shallow fish are open to beginners");
         assert!(max_gate >= 40, "the prized deep fish need a trained angler");
+    }
+
+    #[test]
+    fn broceliande_is_mazes_and_caverns_not_grids() {
+        let world = seed_world();
+        let wood: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| is_broceliande_room(r.id))
+            .collect();
+        // A real, sizeable green continent (~2000 rooms).
+        assert!(wood.len() >= 1600, "Broceliande is a sizeable continent");
+        // A uniform grid has no dead-ends; braided briar-mazes and organic
+        // fern-caverns have many. Dead-ends + varied branching prove the shape.
+        let dead_ends = wood.iter().filter(|r| r.exits.len() == 1).count();
+        assert!(
+            dead_ends >= 20,
+            "Broceliande should wind into dead-ends, not be square blocks (got {dead_ends})"
+        );
+        let degrees: std::collections::HashSet<usize> =
+            wood.iter().map(|r| r.exits.len()).collect();
+        assert!(
+            degrees.len() >= 3,
+            "Broceliande rooms should vary in how many ways they branch (got {degrees:?})"
+        );
+    }
+
+    #[test]
+    fn broceliande_is_reachable_gated_and_behaviour_driven() {
+        let world = seed_world();
+        // Reachable by a normal walk from the start (hung off the Verdant
+        // Highlands' Faerie Hollow).
+        let mut seen = HashSet::new();
+        let mut stack = vec![world.start_room];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(r) = world.room(id) {
+                for to in r.exits.values() {
+                    stack.push(*to);
+                }
+            }
+        }
+        assert!(
+            world.rooms.keys().any(|id| is_broceliande_room(*id)),
+            "Broceliande rooms exist"
+        );
+        assert!(
+            world
+                .rooms
+                .keys()
+                .filter(|id| is_broceliande_room(**id))
+                .all(|id| seen.contains(id)),
+            "every Broceliande room must be reachable from the start"
+        );
+        // The first forest gate is a safe haven hung off a Verdant Highlands room.
+        let entrance = world
+            .room(BROCELIANDE_BASE)
+            .expect("Broceliande forest gate exists");
+        assert!(entrance.safe, "the Woodward's Holt landing is a safe haven");
+        assert!(
+            entrance
+                .exits
+                .values()
+                .any(|to| (680u32..692).contains(to)),
+            "Broceliande hangs off the Verdant Highlands by a walk"
+        );
+        // Foes are behaviour-driven with several distinct behaviours; filter by
+        // home room so nothing else can leak into the count.
+        let spawns: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| s.id >= BROCELIANDE_SPAWN_ID_START && is_broceliande_room(s.home))
+            .collect();
+        assert!(!spawns.is_empty(), "Broceliande should be populated");
+        let mut kinds = HashSet::new();
+        for s in &spawns {
+            let b = world.behavior_of(s.id);
+            assert_ne!(b, MobBehavior::Sentinel, "{} should have a behavior", s.name);
+            kinds.insert(std::mem::discriminant(&b));
+        }
+        assert!(kinds.len() >= 4, "Broceliande should field varied behaviours");
+        // Every zone has exactly one notable, and its loot all resolves.
+        let bosses = spawns.iter().filter(|s| s.boss).count();
+        assert_eq!(bosses, BROCELIANDE_ZONES, "one boss per Broceliande zone");
+        for s in &spawns {
+            for id in s.loot {
+                assert!(
+                    crate::app::door::lateania::items::item(*id).is_some(),
+                    "{} drops missing item {id}",
+                    s.name
+                );
+            }
+        }
+        // A moderate continent: gentler than the endgame Frontier king.
+        let king = world
+            .spawns
+            .iter()
+            .find(|s| s.name == "the King Who Was Promised Nothing")
+            .expect("the Frontier king spawns");
+        assert!(
+            spawns.iter().all(|s| s.damage < king.damage),
+            "Broceliande stays below the endgame king's bite"
+        );
     }
 
     #[test]
