@@ -15,9 +15,11 @@ use super::profile_award::PROFILE_AWARD_RANK_LIMIT;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioSource {
-    #[default]
     Icecast,
     Youtube,
+    /// Nightride FM direct streams. The default for users who never picked
+    /// a source, so fresh `late` sessions land on the radio.
+    #[default]
     Radio,
 }
 
@@ -33,8 +35,8 @@ impl AudioSource {
     pub fn from_settings_str(value: &str) -> Self {
         match value {
             "youtube" => Self::Youtube,
-            "radio" => Self::Radio,
-            _ => Self::Icecast,
+            "icecast" => Self::Icecast,
+            _ => Self::Radio,
         }
     }
 }
@@ -71,15 +73,21 @@ pub enum RadioStation {
     Nightride,
     Datawave,
     Spacesynth,
+    Ambient,
 }
 
 impl RadioStation {
+    /// Settings/persistence key, also used to look up live now-playing
+    /// metadata in the Nightride `/meta` feed. The feed keys stations by
+    /// their stream filename, so `Ambient` must key on `"rektify"` (its
+    /// `rektify.mp3` stream) even though its display label is `"ambient"`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Chillsynth => "chillsynth",
             Self::Nightride => "nightride",
             Self::Datawave => "datawave",
             Self::Spacesynth => "spacesynth",
+            Self::Ambient => "rektify",
         }
     }
 
@@ -88,6 +96,7 @@ impl RadioStation {
             "nightride" => Self::Nightride,
             "datawave" => Self::Datawave,
             "spacesynth" => Self::Spacesynth,
+            "rektify" => Self::Ambient,
             _ => Self::Chillsynth,
         }
     }
@@ -111,17 +120,13 @@ crate::model! {
 
 pub const USERNAME_MAX_LEN: usize = 32;
 
-/// Number of screens exposed in the custom right-sidebar picker.
-///
-/// The right sidebar is only available on the first three top-level screens:
-/// Home, Arcade, and Rooms.
-pub const RIGHT_SIDEBAR_SCREEN_COUNT: u8 = 3;
-
+/// Master on/off for the global right sidebar. The sidebar only appears on the
+/// first three top-level screens (Home, Arcade, Rooms); which panels show and
+/// in what order is governed by the component list, not by this mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarMode {
     On,
     Off,
-    Custom,
 }
 
 impl RightSidebarMode {
@@ -129,20 +134,121 @@ impl RightSidebarMode {
         match self {
             Self::On => "on",
             Self::Off => "off",
-            Self::Custom => "custom",
         }
     }
 
-    pub fn cycle(self, forward: bool) -> Self {
-        match (self, forward) {
-            (Self::On, true) => Self::Off,
-            (Self::Off, true) => Self::Custom,
-            (Self::Custom, true) => Self::On,
-            (Self::On, false) => Self::Custom,
-            (Self::Off, false) => Self::On,
-            (Self::Custom, false) => Self::Off,
+    pub fn cycle(self, _forward: bool) -> Self {
+        match self {
+            Self::On => Self::Off,
+            Self::Off => Self::On,
         }
     }
+}
+
+/// Number of reorderable/toggleable panels in the right sidebar (the clock is
+/// always pinned at the top and is not part of this list).
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 4;
+
+/// A right-sidebar panel the user can reorder and toggle. The clock is not
+/// listed here — it is always pinned at the top of the sidebar.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RightSidebarComponent {
+    Visualizer,
+    Music,
+    Bonsai,
+    Daily,
+}
+
+impl RightSidebarComponent {
+    /// Default order, top to bottom. Used when a user has no stored list and
+    /// to backfill any panels missing from a stored list. Space cuts by
+    /// shrink priority (the visualizer goes first); Bonsai is the one
+    /// flexible panel and absorbs leftover rows. Stale stored keys (e.g. the
+    /// retired "activity" panel) are dropped on read by `from_key`.
+    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
+        [Self::Visualizer, Self::Music, Self::Daily, Self::Bonsai];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Visualizer => "visualizer",
+            Self::Music => "music",
+            Self::Bonsai => "bonsai",
+            Self::Daily => "daily",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "visualizer" => Some(Self::Visualizer),
+            "music" => Some(Self::Music),
+            "bonsai" => Some(Self::Bonsai),
+            "daily" => Some(Self::Daily),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Visualizer => "Visualizer",
+            Self::Music => "Audio playback",
+            Self::Bonsai => "Bonsai",
+            Self::Daily => "Lobby",
+        }
+    }
+
+    /// Whether the panel starts enabled for users without a stored setting.
+    pub fn default_enabled(self) -> bool {
+        true
+    }
+}
+
+/// One entry in the ordered right-sidebar component list: a panel plus whether
+/// it is currently shown. List order is the render order, top to bottom.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RightSidebarComponentSetting {
+    pub component: RightSidebarComponent,
+    pub enabled: bool,
+}
+
+/// Default component list: every panel, in default order, at its default
+/// on/off state.
+pub fn default_right_sidebar_components() -> Vec<RightSidebarComponentSetting> {
+    RightSidebarComponent::ALL
+        .into_iter()
+        .map(|component| RightSidebarComponentSetting {
+            component,
+            enabled: component.default_enabled(),
+        })
+        .collect()
+}
+
+/// Drop duplicates and backfill any missing panels at the end so the list
+/// always covers every component exactly once, preserving stored order.
+///
+/// Missing panels are backfilled **enabled**, not at `default_enabled()`: a
+/// user with a stored list is an existing user whose effective state must not
+/// silently change when a new panel ships. `default_enabled()` applies only to
+/// the no-stored-list path in `default_right_sidebar_components`, i.e.
+/// genuinely new users.
+pub fn normalize_right_sidebar_components(
+    components: &[RightSidebarComponentSetting],
+) -> Vec<RightSidebarComponentSetting> {
+    let mut result: Vec<RightSidebarComponentSetting> = Vec::new();
+    for setting in components {
+        if result.iter().any(|s| s.component == setting.component) {
+            continue;
+        }
+        result.push(*setting);
+    }
+    for component in RightSidebarComponent::ALL {
+        if !result.iter().any(|s| s.component == component) {
+            result.push(RightSidebarComponentSetting {
+                component,
+                enabled: true,
+            });
+        }
+    }
+    result
 }
 
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
@@ -156,15 +262,18 @@ const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
-const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
+const TEXT_BRIGHTNESS_ADJUSTMENT_KEY: &str = "text_brightness_adjustment";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
-const RIGHT_SIDEBAR_SCREENS_KEY: &str = "right_sidebar_screens";
+const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
+const SHOW_AQUARIUM_TRAY_KEY: &str = "show_aquarium_tray";
+const SHOW_PET_STRIP_KEY: &str = "show_pet_strip";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
-const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
+const LAND_ON_HOME_KEY: &str = "land_on_home";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
+const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
@@ -238,6 +347,18 @@ impl User {
             )
             .await?;
         Ok(())
+    }
+
+    /// Seconds since the account was created, or `None` if the user is unknown.
+    /// Used by the chat link rate-limiter to pick a cooldown tier by account age.
+    pub async fn account_age_seconds(client: &Client, user_id: Uuid) -> Result<Option<i64>> {
+        let row = client
+            .query_opt(
+                "SELECT EXTRACT(EPOCH FROM (now() - created))::bigint AS age FROM users WHERE id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.map(|r| r.get::<_, i64>("age")))
     }
 
     pub async fn list_usernames_by_ids(
@@ -394,8 +515,11 @@ impl User {
                  LEFT JOIN LATERAL (
                     SELECT string_agg(
                         CASE category
-                          WHEN 'lateania_archdemon' THEN 'LAD'
-                          WHEN 'lateania_frontier_king' THEN 'LFK'
+                          WHEN 'lateania_archdemon' THEN 'LMG'
+                          WHEN 'lateania_frontier_king' THEN 'LKN'
+                          WHEN 'lateania_sundering_deep' THEN 'LYS'
+                          WHEN 'nethack_amulet' THEN 'NHA'
+                          WHEN 'nethack_ascension' THEN 'NHY'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -417,6 +541,8 @@ impl User {
                                    WHEN 'snake' THEN 4
                                    WHEN 'lateania_archdemon' THEN 10
                                    WHEN 'lateania_frontier_king' THEN 11
+                                   WHEN 'nethack_amulet' THEN 12
+                                   WHEN 'nethack_ascension' THEN 13
                                    ELSE 99
                                  END
                     ) AS badges
@@ -425,7 +551,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king')
+                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'nethack_amulet', 'nethack_ascension')
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
@@ -571,6 +697,40 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&AUDIO_SOURCE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Persist whether the aquarium tray is open so it survives reconnects.
+    pub async fn set_show_aquarium_tray(client: &Client, user_id: Uuid, shown: bool) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::bool),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&SHOW_AQUARIUM_TRAY_KEY, &shown, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Atomically mark the clubhouse first-visit tutorial as completed.
+    pub async fn set_clubhouse_tutorial_done(client: &Client, user_id: Uuid) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, true),
+                     updated = current_timestamp
+                 WHERE id = $2",
+                &[&CLUBHOUSE_TUTORIAL_DONE_KEY, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -818,10 +978,18 @@ pub struct ChatAuthorMetadata {
 
 fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
-    let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LFK");
+    // Collapse the lesser milestone when its superseding one is present:
+    // Yssgar implies the Frontier King implies the Archdemon, and an Ascension
+    // implies the Amulet. Profile views still show all; chat author labels
+    // show only the highest.
+    let has_sundering_deep = raw.split_whitespace().any(|badge| badge == "LYS");
+    let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LKN");
+    let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
     let badges = raw
         .split_whitespace()
-        .filter(|badge| !(has_frontier_king && *badge == "LAD"))
+        .filter(|badge| !(has_sundering_deep && (*badge == "LKN" || *badge == "LMG")))
+        .filter(|badge| !(has_frontier_king && *badge == "LMG"))
+        .filter(|badge| !(has_ascension && *badge == "NHA"))
         .collect::<Vec<_>>()
         .join(" ");
     (!badges.is_empty()).then_some(badges)
@@ -937,14 +1105,21 @@ pub fn extract_enable_background_color(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-pub fn extract_show_dashboard_header(settings: &Value) -> bool {
+pub fn normalize_text_brightness_adjustment(value: i32) -> i32 {
+    value.clamp(-5, 5)
+}
+
+pub fn extract_text_brightness_adjustment(settings: &Value) -> i32 {
     settings
-        .get(SHOW_DASHBOARD_HEADER_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
+        .get(TEXT_BRIGHTNESS_ADJUSTMENT_KEY)
+        .and_then(Value::as_i64)
+        .map(|value| normalize_text_brightness_adjustment(value as i32))
+        .unwrap_or(0)
 }
 
 pub fn extract_show_right_sidebar(settings: &Value) -> bool {
+    // Legacy `"custom"` predates the global component list and meant "shown";
+    // treat it as on.
     match settings
         .get(RIGHT_SIDEBAR_MODE_KEY)
         .and_then(Value::as_str)
@@ -967,9 +1142,10 @@ pub fn extract_right_sidebar_mode(settings: &Value) -> RightSidebarMode {
         .and_then(Value::as_str)
         .map(str::trim)
     {
-        Some("on") => RightSidebarMode::On,
         Some("off") => RightSidebarMode::Off,
-        Some("custom") => RightSidebarMode::Custom,
+        // Legacy per-screen `"custom"` collapses to On now that visibility is
+        // governed by the global component list.
+        Some("on" | "custom") => RightSidebarMode::On,
         _ if settings
             .get(SHOW_RIGHT_SIDEBAR_KEY)
             .and_then(Value::as_bool)
@@ -981,37 +1157,36 @@ pub fn extract_right_sidebar_mode(settings: &Value) -> RightSidebarMode {
     }
 }
 
-pub fn extract_right_sidebar_screens(settings: &Value) -> Vec<u8> {
+pub fn extract_right_sidebar_components(settings: &Value) -> Vec<RightSidebarComponentSetting> {
     let Some(values) = settings
-        .get(RIGHT_SIDEBAR_SCREENS_KEY)
+        .get(RIGHT_SIDEBAR_COMPONENTS_KEY)
         .and_then(Value::as_array)
     else {
-        return (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect();
+        return default_right_sidebar_components();
     };
 
-    let mut screens = BTreeSet::new();
+    let mut parsed: Vec<RightSidebarComponentSetting> = Vec::new();
     for value in values {
-        let Some(raw) = value.as_u64() else {
+        let Some(component) = value
+            .get("key")
+            .and_then(Value::as_str)
+            .and_then(RightSidebarComponent::from_key)
+        else {
             continue;
         };
-        if (1..=u64::from(RIGHT_SIDEBAR_SCREEN_COUNT)).contains(&raw) {
-            screens.insert(raw as u8);
-        }
+        let enabled = value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        parsed.push(RightSidebarComponentSetting { component, enabled });
     }
 
-    screens.into_iter().collect()
+    normalize_right_sidebar_components(&parsed)
 }
 
 pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
     settings
         .get(SHOW_ROOM_LIST_SIDEBAR_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-}
-
-pub fn extract_show_settings_on_connect(settings: &Value) -> bool {
-    settings
-        .get(SHOW_SETTINGS_ON_CONNECT_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }
@@ -1033,6 +1208,45 @@ pub fn extract_keep_composer_focused(settings: &Value) -> bool {
 pub fn extract_start_with_music_muted(settings: &Value) -> bool {
     settings
         .get(START_WITH_MUSIC_MUTED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Tweak: land on Home (Dashboard, page 1) instead of the Clubhouse (page 0)
+/// when a session starts. Opt-in; defaults to false so sessions land in the
+/// clubhouse tavern like today.
+pub fn extract_land_on_home(settings: &Value) -> bool {
+    settings
+        .get(LAND_ON_HOME_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Whether the aquarium tray was open when the user last toggled it; defaults
+/// to true so the tray appears as soon as the Aquarium is unlocked, the same
+/// way `show_pet_strip` reveals the companion. Rendering is gated on the
+/// entitlement, so this stays inert for everyone who does not own one.
+pub fn extract_show_aquarium_tray(settings: &Value) -> bool {
+    settings
+        .get(SHOW_AQUARIUM_TRAY_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// Tweak: show the pet strip above the chat composer (pet owners only);
+/// defaults to true so the companion appears as soon as it is unlocked.
+pub fn extract_show_pet_strip(settings: &Value) -> bool {
+    settings
+        .get(SHOW_PET_STRIP_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// True once the user has finished (or skipped) the clubhouse first-visit
+/// tutorial; defaults to false so brand-new users get the walkthrough.
+pub fn extract_clubhouse_tutorial_done(settings: &Value) -> bool {
+    settings
+        .get(CLUBHOUSE_TUTORIAL_DONE_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }
@@ -1223,24 +1437,50 @@ mod tests {
     #[test]
     fn chat_profile_award_badges_prefer_frontier_king_over_archdemon() {
         assert_eq!(
-            chat_profile_award_badges(Some("LAD LFK".to_string())).as_deref(),
-            Some("LFK")
+            chat_profile_award_badges(Some("LMG LKN".to_string())).as_deref(),
+            Some("LKN")
         );
         assert_eq!(
-            chat_profile_award_badges(Some("AW1 LAD LFK CHIP2".to_string())).as_deref(),
-            Some("AW1 LFK CHIP2")
+            chat_profile_award_badges(Some("AW1 LMG LKN CHIP2".to_string())).as_deref(),
+            Some("AW1 LKN CHIP2")
+        );
+    }
+
+    #[test]
+    fn chat_profile_award_badges_prefer_sundering_deep_over_the_lesser_crowns() {
+        assert_eq!(
+            chat_profile_award_badges(Some("LMG LKN LYS".to_string())).as_deref(),
+            Some("LYS")
+        );
+        assert_eq!(
+            chat_profile_award_badges(Some("AW1 LMG LYS CHIP2".to_string())).as_deref(),
+            Some("AW1 LYS CHIP2")
         );
     }
 
     #[test]
     fn chat_profile_award_badges_keep_archdemon_when_it_is_the_best_lateania_badge() {
         assert_eq!(
-            chat_profile_award_badges(Some("AW1 LAD CHIP2".to_string())).as_deref(),
-            Some("AW1 LAD CHIP2")
+            chat_profile_award_badges(Some("AW1 LMG CHIP2".to_string())).as_deref(),
+            Some("AW1 LMG CHIP2")
         );
         assert_eq!(
-            chat_profile_award_badges(Some("LAD".to_string())).as_deref(),
-            Some("LAD")
+            chat_profile_award_badges(Some("LMG".to_string())).as_deref(),
+            Some("LMG")
+        );
+    }
+
+    #[test]
+    fn chat_profile_award_badges_prefer_ascension_over_amulet() {
+        // Ascension implies the Amulet, so the chat label collapses NHA into NHY.
+        assert_eq!(
+            chat_profile_award_badges(Some("NHA NHY".to_string())).as_deref(),
+            Some("NHY")
+        );
+        // The Amulet alone stands on its own.
+        assert_eq!(
+            chat_profile_award_badges(Some("AW1 NHA".to_string())).as_deref(),
+            Some("AW1 NHA")
         );
     }
 
@@ -1257,27 +1497,32 @@ mod tests {
     }
 
     #[test]
-    fn extract_show_dashboard_header_defaults_to_true() {
-        let settings = json!({});
-        assert!(extract_show_dashboard_header(&settings));
-    }
-
-    #[test]
     fn extract_enable_background_color_defaults_to_true() {
         let settings = json!({});
         assert!(extract_enable_background_color(&settings));
     }
 
     #[test]
-    fn extract_enable_background_color_reads_explicit_false() {
-        let settings = json!({ "enable_background_color": false });
-        assert!(!extract_enable_background_color(&settings));
+    fn extract_text_brightness_adjustment_defaults_to_zero_and_clamps() {
+        assert_eq!(extract_text_brightness_adjustment(&json!({})), 0);
+        assert_eq!(
+            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": 2 })),
+            2
+        );
+        assert_eq!(
+            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": 9 })),
+            5
+        );
+        assert_eq!(
+            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": -9 })),
+            -5
+        );
     }
 
     #[test]
-    fn extract_show_dashboard_header_reads_explicit_false() {
-        let settings = json!({ "show_dashboard_header": false });
-        assert!(!extract_show_dashboard_header(&settings));
+    fn extract_enable_background_color_reads_explicit_false() {
+        let settings = json!({ "enable_background_color": false });
+        assert!(!extract_enable_background_color(&settings));
     }
 
     #[test]
@@ -1296,12 +1541,9 @@ mod tests {
     }
 
     #[test]
-    fn extract_right_sidebar_mode_reads_custom() {
+    fn extract_right_sidebar_mode_collapses_legacy_custom_to_on() {
         let settings = json!({ "right_sidebar_mode": "custom" });
-        assert_eq!(
-            extract_right_sidebar_mode(&settings),
-            RightSidebarMode::Custom
-        );
+        assert_eq!(extract_right_sidebar_mode(&settings), RightSidebarMode::On);
     }
 
     #[test]
@@ -1311,18 +1553,55 @@ mod tests {
     }
 
     #[test]
-    fn extract_right_sidebar_screens_defaults_to_all_screens() {
+    fn extract_right_sidebar_components_defaults_to_all_at_default_state() {
         let settings = json!({});
         assert_eq!(
-            extract_right_sidebar_screens(&settings),
-            (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect::<Vec<_>>()
+            extract_right_sidebar_components(&settings),
+            default_right_sidebar_components()
         );
+        // Every panel ships enabled.
+        for setting in default_right_sidebar_components() {
+            assert!(setting.enabled, "{:?}", setting.component);
+        }
     }
 
     #[test]
-    fn extract_right_sidebar_screens_dedupes_and_drops_invalid_values() {
-        let settings = json!({ "right_sidebar_screens": [3, 1, 3, 9, "2"] });
-        assert_eq!(extract_right_sidebar_screens(&settings), vec![1, 3]);
+    fn extract_right_sidebar_components_preserves_order_and_backfills() {
+        let settings = json!({
+            "right_sidebar_components": [
+                { "key": "bonsai", "enabled": false },
+                { "key": "music", "enabled": true },
+                { "key": "bogus", "enabled": true },
+                { "key": "activity", "enabled": true },
+            ]
+        });
+        let components = extract_right_sidebar_components(&settings);
+        // Stored order kept for known entries, unknown dropped (including
+        // the retired "pet" and "activity" keys), missing (visualizer,
+        // daily) backfilled ENABLED at the end in ALL order: an existing
+        // user's stored list predates newer panels, so they should appear
+        // rather than silently stay hidden.
+        assert_eq!(
+            components,
+            vec![
+                RightSidebarComponentSetting {
+                    component: RightSidebarComponent::Bonsai,
+                    enabled: false,
+                },
+                RightSidebarComponentSetting {
+                    component: RightSidebarComponent::Music,
+                    enabled: true,
+                },
+                RightSidebarComponentSetting {
+                    component: RightSidebarComponent::Visualizer,
+                    enabled: true,
+                },
+                RightSidebarComponentSetting {
+                    component: RightSidebarComponent::Daily,
+                    enabled: true,
+                },
+            ]
+        );
     }
 
     #[test]

@@ -32,6 +32,8 @@ pub struct HighScoreEntry {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DailyGame {
+    LeWord,
+    RubiksCube,
     Sudoku,
     Nonogram,
     Solitaire,
@@ -72,6 +74,7 @@ pub struct LeaderboardData {
     pub monthly_tetris_high_scores: Vec<HighScoreEntry>,
     pub monthly_2048_high_scores: Vec<HighScoreEntry>,
     pub monthly_snake_high_scores: Vec<HighScoreEntry>,
+    pub monthly_traffic_high_scores: Vec<HighScoreEntry>,
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {
@@ -86,6 +89,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         monthly_tetris_high_scores,
         monthly_2048_high_scores,
         monthly_snake_high_scores,
+        monthly_traffic_high_scores,
     ) = tokio::try_join!(
         fetch_today_champions(client, 10),
         fetch_today_daily_statuses(client),
@@ -97,6 +101,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_monthly_tetris_high_scores(client, 500),
         fetch_monthly_2048_high_scores(client, 500),
         fetch_monthly_snake_high_scores(client, 500),
+        fetch_monthly_traffic_high_scores(client, 500),
     )?;
 
     Ok(LeaderboardData {
@@ -110,6 +115,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         monthly_tetris_high_scores,
         monthly_2048_high_scores,
         monthly_snake_high_scores,
+        monthly_traffic_high_scores,
     })
 }
 
@@ -169,6 +175,14 @@ async fn fetch_arcade_champions(client: &Client, limit: i64) -> Result<Vec<Ranke
                 UNION ALL
                 SELECT user_id, difficulty_key
                 FROM minesweeper_daily_wins
+                WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                UNION ALL
+                SELECT user_id, 'daily' AS difficulty_key
+                FROM le_word_daily_wins
+                WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                UNION ALL
+                SELECT user_id, 'medium' AS difficulty_key
+                FROM rubiks_cube_daily_wins
                 WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
             ),
             scored AS (
@@ -302,6 +316,34 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
         });
     }
 
+    // Traffic top scores (aggregate of per-track bests)
+    let rows = client
+        .query(
+            "WITH ranked AS (
+                SELECT u.username,
+                       h.user_id,
+                       h.score,
+                       RANK() OVER (ORDER BY h.score DESC) AS rank
+                FROM traffic_high_scores h
+                JOIN users u ON u.id = h.user_id
+             )
+             SELECT username, user_id, score, rank
+             FROM ranked
+             ORDER BY rank ASC, username ASC
+             LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+    for row in rows {
+        entries.push(HighScoreEntry {
+            game: "Traffic",
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            score: row.get("score"),
+        });
+    }
+
     Ok(entries)
 }
 
@@ -331,6 +373,13 @@ async fn fetch_monthly_snake_high_scores(
     limit: i64,
 ) -> Result<Vec<HighScoreEntry>> {
     fetch_monthly_score_board(client, "Snake", "snake", "snake_high_scores", limit).await
+}
+
+async fn fetch_monthly_traffic_high_scores(
+    client: &Client,
+    limit: i64,
+) -> Result<Vec<HighScoreEntry>> {
+    fetch_monthly_score_board(client, "Traffic", "traffic", "traffic_high_scores", limit).await
 }
 
 async fn fetch_monthly_score_board(
@@ -394,6 +443,10 @@ async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<Leader
                 SELECT user_id FROM solitaire_daily_wins WHERE puzzle_date = CURRENT_DATE
                 UNION ALL
                 SELECT user_id FROM minesweeper_daily_wins WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT user_id FROM le_word_daily_wins WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT user_id FROM rubiks_cube_daily_wins WHERE puzzle_date = CURRENT_DATE
             )
             SELECT u.username, a.user_id, COUNT(*)::int AS wins
             FROM all_today a
@@ -436,6 +489,14 @@ async fn fetch_today_daily_statuses(
                 SELECT DISTINCT user_id, 'minesweeper' AS game, difficulty_key AS difficulty
                 FROM minesweeper_daily_wins
                 WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT DISTINCT user_id, 'le_word' AS game, 'daily' AS difficulty
+                FROM le_word_daily_wins
+                WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT DISTINCT user_id, 'rubiks_cube' AS game, 'daily' AS difficulty
+                FROM rubiks_cube_daily_wins
+                WHERE puzzle_date = CURRENT_DATE
             )
             SELECT user_id, game, difficulty FROM all_today",
             &[],
@@ -450,6 +511,8 @@ async fn fetch_today_daily_statuses(
             "nonogram" => DailyGame::Nonogram,
             "solitaire" => DailyGame::Solitaire,
             "minesweeper" => DailyGame::Minesweeper,
+            "le_word" => DailyGame::LeWord,
+            "rubiks_cube" => DailyGame::RubiksCube,
             _ => continue,
         };
         let difficulty: String = row.get("difficulty");

@@ -65,6 +65,10 @@ pub struct ProfileModalState {
     /// immutable `draw` path can animate and rebuild on resize.
     aquarium: RefCell<Option<AquariumState>>,
     aquarium_area: Cell<Rect>,
+    /// The modal's outer popup rect from the last render, so a click landing
+    /// outside it can dismiss the modal. Interior-mutable: published by the
+    /// immutable `draw` path.
+    popup_area: Cell<Rect>,
     profile_awards: Vec<ProfileAward>,
     tab: ProfileTab,
     snapshot_rx: Option<watch::Receiver<ProfileSnapshot>>,
@@ -101,6 +105,7 @@ impl ProfileModalState {
             aquarium_fish: Vec::new(),
             aquarium: RefCell::new(None),
             aquarium_area: Cell::new(Rect::default()),
+            popup_area: Cell::new(Rect::default()),
             profile_awards: Vec::new(),
             tab: ProfileTab::Overview,
             snapshot_rx: None,
@@ -254,6 +259,16 @@ impl ProfileModalState {
 
     pub(crate) fn aquarium_area(&self) -> &Cell<Rect> {
         &self.aquarium_area
+    }
+
+    /// Record the outer popup rect each render, so `input` can tell an inside
+    /// click from an outside one (click-outside dismisses the modal).
+    pub(crate) fn set_popup_area(&self, area: Rect) {
+        self.popup_area.set(area);
+    }
+
+    pub(crate) fn popup_area(&self) -> Rect {
+        self.popup_area.get()
     }
 
     pub(crate) fn profile_awards(&self) -> &[ProfileAward] {

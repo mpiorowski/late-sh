@@ -17,6 +17,16 @@ pub enum ModerationEvent {
         reason: String,
         notified_sessions: usize,
     },
+    RoomSlowModeChanged {
+        actor_user_id: Uuid,
+        target_user_id: Uuid,
+        room_id: Uuid,
+        room_slug: String,
+        interval_secs: Option<i32>,
+        expires_at: Option<DateTime<Utc>>,
+        reason: String,
+        notified_sessions: usize,
+    },
     RoomRenamed {
         actor_user_id: Uuid,
         room_id: Uuid,

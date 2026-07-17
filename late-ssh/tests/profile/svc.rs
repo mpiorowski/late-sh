@@ -10,7 +10,7 @@ use late_core::models::{
     chips::{INITIAL_CHIP_BALANCE, UserChips},
     profile::{Profile, ProfileParams},
     server_ban::ServerBan,
-    user::{RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, UserParams},
+    user::{RightSidebarMode, User, UserParams, default_right_sidebar_components},
 };
 use late_core::test_utils::create_test_user;
 use late_ssh::app::profile::svc::{ProfileEvent, ProfileService};
@@ -132,15 +132,16 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             notify_format: None,
             theme_id: None,
             enable_background_color: false,
-            show_dashboard_header: false,
+            text_brightness_adjustment: 0,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            right_sidebar_components: default_right_sidebar_components(),
             show_room_list_sidebar: true,
-            show_settings_on_connect: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            land_on_home: false,
             show_flag_fallback: false,
+            show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },
@@ -166,7 +167,6 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         .expect("updated profile");
 
     assert_eq!(updated.username, "night-owl");
-    assert!(!updated.show_dashboard_header);
 }
 
 #[tokio::test]
@@ -204,15 +204,16 @@ async fn edit_profile_normalizes_username_before_persisting() {
             notify_format: None,
             theme_id: None,
             enable_background_color: false,
-            show_dashboard_header: true,
+            text_brightness_adjustment: 0,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            right_sidebar_components: default_right_sidebar_components(),
             show_room_list_sidebar: true,
-            show_settings_on_connect: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            land_on_home: false,
             show_flag_fallback: false,
+            show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },
@@ -270,15 +271,16 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             notify_format: None,
             theme_id: None,
             enable_background_color: false,
-            show_dashboard_header: true,
+            text_brightness_adjustment: 0,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            right_sidebar_components: default_right_sidebar_components(),
             show_room_list_sidebar: true,
-            show_settings_on_connect: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            land_on_home: false,
             show_flag_fallback: false,
+            show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },

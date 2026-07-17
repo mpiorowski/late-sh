@@ -1,14 +1,10 @@
-use late_core::{
-    MutexRecover,
-    models::{artboard_ban::ArtboardBan, user::User},
-};
+use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
 use crate::app::activity::event::ActivityEvent;
 use crate::app::artboard::svc::ArtboardSnapshotService;
 use crate::app::common::theme;
-use crate::app::dashboard::state::DashboardRoomJoinReceiver;
 use crate::app::state::SessionConfig;
 use crate::authz::Permissions;
 use crate::session::SessionMessage;
@@ -23,7 +19,6 @@ pub struct SessionBootstrapInputs {
     pub session_token: String,
     pub session_rx: Option<mpsc::Receiver<SessionMessage>>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    pub room_join_rx: Option<DashboardRoomJoinReceiver>,
 }
 
 pub struct ArcadeSessionPreloads {
@@ -33,6 +28,11 @@ pub struct ArcadeSessionPreloads {
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
+    pub initial_traffic_track_scores: Vec<late_core::models::traffic::TrackScore>,
+    pub initial_traffic_high_score: Option<late_core::models::traffic::HighScore>,
+    pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
+    pub initial_le_word_game: Option<late_core::models::le_word::Game>,
+    pub initial_rubiks_cube_game: Option<late_core::models::rubiks_cube::Game>,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub initial_nonogram_games: Vec<late_core::models::nonogram::Game>,
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
@@ -43,6 +43,9 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
     let twenty_forty_eight_service = state.twenty_forty_eight_service.clone();
     let tetris_service = state.tetris_service.clone();
     let snake_service = state.snake_service.clone();
+    let traffic_service = state.traffic_service.clone();
+    let le_word_service = state.le_word_service.clone();
+    let rubiks_cube_service = state.rubiks_cube_service.clone();
     let sudoku_service = state.sudoku_service.clone();
     let nonogram_service = state.nonogram_service.clone();
     let solitaire_service = state.solitaire_service.clone();
@@ -55,6 +58,11 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_tetris_high_score,
         initial_snake_game,
         initial_snake_high_score,
+        initial_traffic_track_scores,
+        initial_traffic_high_score,
+        initial_le_word_daily_word,
+        initial_le_word_game,
+        initial_rubiks_cube_game,
         initial_sudoku_games,
         initial_nonogram_games,
         initial_solitaire_games,
@@ -115,6 +123,52 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
             }
         },
         async {
+            match traffic_service.load_track_scores(user_id).await {
+                Ok(scores) => scores,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load traffic track scores");
+                    Vec::new()
+                }
+            }
+        },
+        async {
+            match traffic_service.load_high_score(user_id).await {
+                Ok(score) => score,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load traffic high score");
+                    None
+                }
+            }
+        },
+        async {
+            match le_word_service.ensure_daily_word().await {
+                Ok(word) => Some(word),
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load Le Word daily word");
+                    None
+                }
+            }
+        },
+        async {
+            let today = le_word_service.today();
+            match le_word_service.load_game(user_id, today).await {
+                Ok(game) => game,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load Le Word game state");
+                    None
+                }
+            }
+        },
+        async {
+            match rubiks_cube_service.load_game(user_id).await {
+                Ok(game) => game,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load Rubik's Cube game state");
+                    None
+                }
+            }
+        },
+        async {
             match sudoku_service.load_games(user_id).await {
                 Ok(games) => games,
                 Err(e) => {
@@ -159,6 +213,11 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_tetris_high_score,
         initial_snake_game,
         initial_snake_high_score,
+        initial_traffic_track_scores,
+        initial_traffic_high_score,
+        initial_le_word_daily_word,
+        initial_le_word_game,
+        initial_rubiks_cube_game,
         initial_sudoku_games,
         initial_nonogram_games,
         initial_solitaire_games,
@@ -176,7 +235,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_rx,
         activity_feed_rx,
-        room_join_rx,
     } = inputs;
 
     let user_id = user.id;
@@ -189,6 +247,11 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_tetris_high_score,
         initial_snake_game,
         initial_snake_high_score,
+        initial_traffic_track_scores,
+        initial_traffic_high_score,
+        initial_le_word_daily_word,
+        initial_le_word_game,
+        initial_rubiks_cube_game,
         initial_sudoku_games,
         initial_nonogram_games,
         initial_solitaire_games,
@@ -300,10 +363,18 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_2048_high_score,
         tetris_service: state.tetris_service.clone(),
         snake_service: state.snake_service.clone(),
+        traffic_service: state.traffic_service.clone(),
+        rubiks_cube_service: state.rubiks_cube_service.clone(),
+        initial_rubiks_cube_game,
         initial_tetris_game,
         initial_snake_game,
         initial_tetris_high_score,
         initial_snake_high_score,
+        initial_traffic_track_scores,
+        initial_traffic_high_score,
+        le_word_service: state.le_word_service.clone(),
+        initial_le_word_daily_word,
+        initial_le_word_game,
         sudoku_service: state.sudoku_service.clone(),
         initial_sudoku_games,
         nonogram_service: state.nonogram_service.clone(),
@@ -313,8 +384,9 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         minesweeper_service: state.minesweeper_service.clone(),
         initial_minesweeper_games,
         lateania_service: state.lateania_service.clone(),
-        rooms_service: state.rooms_service.clone(),
-        room_game_registry: state.room_game_registry.clone(),
+        greendragon_service: state.greendragon_service.clone(),
+        daily_service: state.daily_service.clone(),
+        house_registry: state.house_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),
         dartboard_provenance: state.dartboard_provenance.clone(),
         artboard_snapshot_service: ArtboardSnapshotService::new(state.db.clone()),
@@ -332,25 +404,48 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         ultimate_service: state.ultimate_service.clone(),
         initial_ultimate_cooldowns,
         nonogram_library: state.nonogram_library.clone(),
+        chip_service: state.chip_service.clone(),
         initial_chip_balance,
         web_url: state.config.web_url.clone(),
         rebels_enabled: state.config.rebels_enabled,
         rebels_host: state.config.rebels_host.clone(),
         rebels_port: state.config.rebels_port,
         rebels_secret: state.config.rebels_secret.clone(),
+        nethack_enabled: state.config.nethack_enabled,
+        nethack_host: state.config.nethack_host.clone(),
+        nethack_port: state.config.nethack_port,
+        nethack_secret: state.config.nethack_secret.clone(),
+        nethack_awards: Some(crate::app::door::nethack::award::NethackAwards::new(
+            state.chip_service.clone(),
+            state.db.clone(),
+            crate::app::activity::publisher::ActivityPublisher::new(
+                state.db.clone(),
+                state.activity_feed.clone(),
+            )
+            .with_username_directory(state.username_directory.clone()),
+        )),
+        dopewars_enabled: state.config.dopewars_enabled,
+        dopewars_host: state.config.dopewars_host.clone(),
+        dopewars_port: state.config.dopewars_port,
+        dopewars_secret: state.config.dopewars_secret.clone(),
         session_token,
         session_registry: Some(state.session_registry.clone()),
         paired_client_registry: Some(state.paired_client_registry.clone()),
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
         radio_meta_rx: Some(state.radio_meta_rx.clone()),
+        worldcup_service: Some(state.worldcup_service.clone()),
         active_users: Some(state.active_users.clone()),
+        ai_service: Some(state.ai_service.clone()),
+        clubhouse_lobby: Some(state.clubhouse_lobby.clone()),
+        clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
+            &user.settings,
+        ),
+        show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
+        flair_directory: Some(state.flair_directory.clone()),
         activity_feed_rx,
-        initial_activity: state.activity_history.lock_recover().clone(),
-        room_join_rx,
-        initial_room_joins: state.room_join_history.lock_recover().clone(),
         initial_announcements,
         user_id,
         permissions,
@@ -358,6 +453,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
         leaderboard_rx: Some(state.leaderboard_service.subscribe()),
         is_new_user,
+        land_on_home: late_core::models::user::extract_land_on_home(&user.settings),
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),

@@ -146,14 +146,20 @@ pub(crate) fn build_birthday_alert(
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-fn date_for_timezone(now: DateTime<Utc>, timezone: Option<&str>) -> NaiveDate {
-    let Some(timezone) = timezone.map(str::trim).filter(|value| !value.is_empty()) else {
-        return now.date_naive();
-    };
+/// Parse an account's timezone tweak into a `chrono_tz::Tz`. `None` (unset,
+/// blank, or unparseable) means "no local zone" — callers fall back to UTC.
+pub fn parse_account_tz(timezone: Option<&str>) -> Option<chrono_tz::Tz> {
     timezone
-        .parse::<chrono_tz::Tz>()
-        .map(|tz| now.with_timezone(&tz).date_naive())
-        .unwrap_or_else(|_| now.date_naive())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<chrono_tz::Tz>().ok())
+}
+
+fn date_for_timezone(now: DateTime<Utc>, timezone: Option<&str>) -> NaiveDate {
+    match parse_account_tz(timezone) {
+        Some(tz) => now.with_timezone(&tz).date_naive(),
+        None => now.date_naive(),
+    }
 }
 
 impl ProfileService {
@@ -324,7 +330,11 @@ impl ProfileService {
     async fn do_edit_profile(&self, user_id: Uuid, mut params: ProfileParams) -> Result<()> {
         let client = self.db.get().await?;
         params.username = sanitize_username_input(&params.username);
-        let _ = Profile::update(&client, user_id, params).await?;
+        let old_username = User::get(&client, user_id)
+            .await?
+            .map(|user| user.username)
+            .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+        let profile = Profile::update(&client, user_id, params).await?;
 
         if let Ok(mut username_map) = User::list_usernames_by_ids(&client, &[user_id]).await
             && let Some(username) = username_map.remove(&user_id)
@@ -337,6 +347,11 @@ impl ProfileService {
             {
                 user.username = username;
             }
+        }
+        if old_username != profile.username
+            && let Some(registry) = &self.irc_registry
+        {
+            registry.project_username_change(user_id, &old_username, &profile.username);
         }
 
         self.find_profile(user_id);
@@ -371,6 +386,46 @@ impl ProfileService {
         self.find_profile(user_id);
         self.publish_event(ProfileEvent::Saved { user_id });
         Ok(())
+    }
+
+    /// Fire-and-forget: mark the clubhouse first-visit tutorial finished so
+    /// it never runs again for this user. No event on success; a failure is
+    /// only logged (the tutorial would simply run once more next session).
+    pub fn set_clubhouse_tutorial_done(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_clubhouse_tutorial_done(&client, user_id).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist clubhouse tutorial completion");
+                }
+            }
+            .instrument(info_span!("profile.clubhouse_tutorial_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: persist whether the aquarium tray is open so the
+    /// next session starts in the same state. No event on success; a failure
+    /// is only logged (the tray would simply start closed next session).
+    pub fn set_show_aquarium_tray(&self, user_id: Uuid, shown: bool) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_show_aquarium_tray(&client, user_id, shown).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist aquarium tray state");
+                }
+            }
+            .instrument(info_span!("profile.show_aquarium_tray_task", user_id = %user_id)),
+        );
     }
 
     pub fn delete_account(&self, user_id: Uuid) {

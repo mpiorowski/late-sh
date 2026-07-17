@@ -13,6 +13,11 @@ use late_core::models::sudoku::{Game, GameParams};
 
 pub type Grid = [[u8; 9]; 9];
 pub type Mask = [[bool; 9]; 9];
+/// Pencil marks: one bitmask per cell, bit `n-1` set means candidate `n` is
+/// noted. Player solving aid, kept alongside the board but not (yet) persisted
+/// to the DB, so notes survive mode/difficulty switches within a session but
+/// reset on reconnect.
+pub type Notes = [[u16; 9]; 9];
 
 pub const DIFFICULTIES: [&str; 3] = ["easy", "medium", "hard"];
 
@@ -31,6 +36,24 @@ impl Mode {
     }
 }
 
+/// Which destructive action a pending confirmation is armed for. Tracking the
+/// kind keeps the two reset keys distinct: pressing `n` then `r` re-arms for
+/// reset instead of firing the new-board press, and vice versa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetKind {
+    NewBoard,
+    Reset,
+}
+
+impl ResetKind {
+    pub fn confirm_tip(self) -> &'static str {
+        match self {
+            ResetKind::NewBoard => "Press again for a new board",
+            ResetKind::Reset => "Press again to reset",
+        }
+    }
+}
+
 fn difficulty_from_key(key: &str) -> Difficulty {
     match key {
         "easy" => Difficulty::Easy,
@@ -44,6 +67,7 @@ struct BoardSnapshot {
     seed: u64,
     grid: Grid,
     fixed_mask: Mask,
+    notes: Notes,
     is_game_over: bool,
 }
 
@@ -59,8 +83,12 @@ pub struct State {
     pub seed: u64,
     pub grid: Grid,
     pub fixed_mask: Mask,
+    pub notes: Notes,
+    /// When on, digit keys jot pencil marks instead of placing a value.
+    pub pencil_mode: bool,
     pub cursor: (usize, usize),
     pub is_game_over: bool,
+    pub reset_pending: Option<ResetKind>,
     daily_snapshots: HashMap<String, BoardSnapshot>,
     personal_snapshots: HashMap<String, BoardSnapshot>,
     daily_generation_rx: Option<Receiver<DailyGenerationResult>>,
@@ -107,8 +135,11 @@ impl State {
             seed: 0,
             grid: [[0; 9]; 9],
             fixed_mask: [[false; 9]; 9],
+            notes: [[0; 9]; 9],
+            pencil_mode: false,
             cursor: (0, 0),
             is_game_over: false,
+            reset_pending: None,
             daily_snapshots,
             personal_snapshots,
             daily_generation_rx: (pending_daily_generations > 0).then_some(daily_generation_rx),
@@ -163,25 +194,66 @@ impl State {
         DIFFICULTIES[self.selected_difficulty]
     }
 
+    /// Index of the first daily difficulty with player marks on the board and
+    /// no win yet: the live board when it is the active daily, the stored
+    /// snapshot otherwise. Untouched generated boards never match.
+    pub fn first_unfinished_daily(&self) -> Option<usize> {
+        DIFFICULTIES.iter().enumerate().find_map(|(index, dk)| {
+            let started = if self.mode == Mode::Daily && index == self.selected_difficulty {
+                !self.is_game_over
+                    && board_has_player_marks(&self.grid, &self.fixed_mask, &self.notes)
+            } else {
+                self.daily_snapshots.get(*dk).is_some_and(|snapshot| {
+                    !snapshot.is_game_over
+                        && board_has_player_marks(
+                            &snapshot.grid,
+                            &snapshot.fixed_mask,
+                            &snapshot.notes,
+                        )
+                })
+            };
+            started.then_some(index)
+        })
+    }
+
+    /// True while the active board is a daily (not a personal board). The
+    /// backtick workspace cycle only counts daily boards as stops.
+    pub fn is_daily_active(&self) -> bool {
+        self.mode == Mode::Daily
+    }
+
+    /// Jump straight to a daily board: the backtick workspace entry path.
+    pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.clear_reset_pending();
+        self.store_active_snapshot();
+        self.mode = Mode::Daily;
+        self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
+        self.load_mode_snapshot_for_selected_difficulty();
+    }
+
     pub fn show_personal(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Personal;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn show_daily(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn next_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty = (self.selected_difficulty + 1) % DIFFICULTIES.len();
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn prev_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty =
             (self.selected_difficulty + DIFFICULTIES.len() - 1) % DIFFICULTIES.len();
@@ -189,6 +261,7 @@ impl State {
     }
 
     pub fn new_personal_board(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         let dk = self.difficulty_key().to_string();
         let snapshot = generate_snapshot(Mode::Personal, &dk, &self.svc);
@@ -218,11 +291,13 @@ impl State {
         if self.is_game_over || self.is_loading() {
             return;
         }
+        self.clear_reset_pending();
         for r in 0..9 {
             for c in 0..9 {
                 if !self.fixed_mask[r][c] {
                     self.grid[r][c] = 0;
                 }
+                self.notes[r][c] = 0;
             }
         }
         self.cursor = (0, 0);
@@ -230,10 +305,46 @@ impl State {
         self.save_async();
     }
 
+    /// Flip pencil mode: while on, `1-9` toggle candidate marks in the current
+    /// cell instead of placing a value.
+    pub fn toggle_pencil_mode(&mut self) {
+        self.clear_reset_pending();
+        self.pencil_mode = !self.pencil_mode;
+    }
+
+    /// Toggle candidate `val` (1-9) in the cursor cell. No-op on given clues or
+    /// cells that already hold a value (a pencil mark only helps on empties).
+    pub fn toggle_note(&mut self, val: u8) {
+        if self.is_game_over || self.is_loading() || !(1..=9).contains(&val) {
+            return;
+        }
+        self.clear_reset_pending();
+        let (r, c) = self.cursor;
+        if self.fixed_mask[r][c] || self.grid[r][c] != 0 {
+            return;
+        }
+        self.notes[r][c] ^= 1 << (val - 1);
+        self.store_active_snapshot();
+    }
+
+    /// Wipe every pencil mark from the cursor cell.
+    pub fn clear_cell_notes(&mut self) {
+        if self.is_game_over || self.is_loading() {
+            return;
+        }
+        self.clear_reset_pending();
+        let (r, c) = self.cursor;
+        if self.notes[r][c] != 0 {
+            self.notes[r][c] = 0;
+            self.store_active_snapshot();
+        }
+    }
+
     pub fn move_cursor(&mut self, dr: isize, dc: isize) {
         if self.is_game_over || self.is_loading() {
             return;
         }
+        self.clear_reset_pending();
         let r = (self.cursor.0 as isize + dr).clamp(0, 8) as usize;
         let c = (self.cursor.1 as isize + dc).clamp(0, 8) as usize;
         self.cursor = (r, c);
@@ -243,6 +354,7 @@ impl State {
         if self.is_game_over || self.is_loading() {
             return;
         }
+        self.clear_reset_pending();
         let (r, c) = self.cursor;
         if self.fixed_mask[r][c] {
             return;
@@ -251,10 +363,28 @@ impl State {
         self.grid[r][c] = val;
 
         if val != 0 {
+            // A placed value settles the cell, so its pencil marks are done.
+            self.notes[r][c] = 0;
             self.check_win();
         }
         self.store_active_snapshot();
         self.save_async();
+    }
+
+    /// Arm or confirm a destructive reset. Returns `true` only when the same
+    /// `kind` was already armed (the confirming second press); a press for a
+    /// different kind re-arms for that kind instead of firing.
+    pub fn request_reset(&mut self, kind: ResetKind) -> bool {
+        if self.reset_pending == Some(kind) {
+            self.reset_pending = None;
+            return true;
+        }
+        self.reset_pending = Some(kind);
+        false
+    }
+
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = None;
     }
 
     fn check_win(&mut self) {
@@ -285,6 +415,7 @@ impl State {
         self.seed = snapshot.seed;
         self.grid = snapshot.grid;
         self.fixed_mask = snapshot.fixed_mask;
+        self.notes = snapshot.notes;
         self.is_game_over = snapshot.is_game_over;
         self.cursor = (0, 0);
     }
@@ -293,6 +424,7 @@ impl State {
         self.seed = 0;
         self.grid = [[0; 9]; 9];
         self.fixed_mask = [[false; 9]; 9];
+        self.notes = [[0; 9]; 9];
         self.is_game_over = false;
         self.cursor = (0, 0);
     }
@@ -306,6 +438,7 @@ impl State {
             seed: self.seed,
             grid: self.grid,
             fixed_mask: self.fixed_mask,
+            notes: self.notes,
             is_game_over: self.is_game_over,
         };
         let dk = self.difficulty_key().to_string();
@@ -413,6 +546,7 @@ fn generate_snapshot(mode: Mode, difficulty_key: &str, svc: &SudokuService) -> B
         seed,
         grid,
         fixed_mask,
+        notes: [[0; 9]; 9],
         is_game_over: false,
     }
 }
@@ -458,6 +592,7 @@ fn snapshot_from_puzzle(seed: u64, puzzle: &str) -> BoardSnapshot {
         seed,
         grid,
         fixed_mask,
+        notes: [[0; 9]; 9],
         is_game_over: false,
     }
 }
@@ -514,8 +649,13 @@ fn snapshot_from_game(game: &Game) -> BoardSnapshot {
         seed: game.puzzle_seed as u64,
         grid,
         fixed_mask,
+        notes: [[0; 9]; 9],
         is_game_over: game.is_game_over,
     }
+}
+
+fn board_has_player_marks(grid: &Grid, fixed_mask: &Mask, notes: &Notes) -> bool {
+    (0..9).any(|r| (0..9).any(|c| (!fixed_mask[r][c] && grid[r][c] != 0) || notes[r][c] != 0))
 }
 
 fn is_current_daily_game(puzzle_date: Option<NaiveDate>, today: NaiveDate) -> bool {
@@ -533,6 +673,33 @@ fn puzzle_date_for_mode(mode: Mode, today: NaiveDate) -> Option<NaiveDate> {
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+
+    fn test_state() -> State {
+        let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy db");
+        State::new(
+            Uuid::nil(),
+            SudokuService::new(db, tokio::sync::broadcast::channel(4).0),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn reset_confirmation_is_per_action_kind() {
+        let mut state = test_state();
+
+        // Two presses of the same key confirm and fire.
+        assert!(!state.request_reset(ResetKind::Reset));
+        assert!(state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, None);
+
+        // A press for a different kind re-arms for that kind instead of
+        // firing the originally-armed action.
+        assert!(!state.request_reset(ResetKind::NewBoard));
+        assert!(!state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, Some(ResetKind::Reset));
+        assert!(state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, None);
+    }
 
     #[test]
     fn same_seed_generates_same_board() {

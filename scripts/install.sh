@@ -129,7 +129,43 @@ verify_checksum() {
   fi
 
   actual="$($cmd "$downloaded_file" | awk '{ print $1 }')"
-  [[ "$actual" == "$expected" ]] || fail "checksum mismatch for ${LATE_BIN_NAME}"
+  [[ "$actual" == "$expected" ]] || fail "checksum mismatch for ${binary_name}"
+}
+
+# Desktop Linux ships a second binary: the late-webview YouTube helper.
+# `late` itself does not link WebKitGTK, so the CLI runs without the webview
+# libraries; the helper only needs them when embedded YouTube playback is
+# used. Missing helper downloads are warning-only so older releases still
+# install.
+install_webview_helper() {
+  local base_url="$1"
+  local prefix="$2"
+  local target="$3"
+  local tmp_dir="$4"
+  local target_dir="$5"
+  local helper_name="late-webview"
+  local helper_url dest_path
+
+  case "$target" in
+    *-unknown-linux-gnu) ;;
+    *) return ;;
+  esac
+
+  helper_url="${base_url%/}/${prefix}/${target}/${helper_name}"
+  log_verbose "helper_url=${helper_url}"
+  if ! curl -fsSL "$helper_url" -o "${tmp_dir}/${helper_name}"; then
+    log "warning: ${helper_name} unavailable at ${helper_url}; embedded YouTube playback stays disabled"
+    return
+  fi
+  chmod 755 "${tmp_dir}/${helper_name}"
+
+  if [[ -f "${tmp_dir}/sha256sums.txt" ]] \
+    && awk -v path="${target}/${helper_name}" '$2 == path { found = 1 } END { exit !found }' "${tmp_dir}/sha256sums.txt"; then
+    verify_checksum "${tmp_dir}/sha256sums.txt" "$target" "${tmp_dir}/${helper_name}" "$helper_name"
+  fi
+
+  dest_path="$(install_binary "${tmp_dir}/${helper_name}" "$target_dir" "$helper_name")"
+  log "installed ${helper_name} to ${dest_path}"
 }
 
 install_binary() {
@@ -325,6 +361,8 @@ main() {
   log_verbose "target_dir=${target_dir}"
   dest_path="$(install_binary "${tmp_dir}/${binary_name}" "$target_dir" "$binary_name")"
   log "installed ${binary_name} to ${dest_path}"
+
+  install_webview_helper "$base_url" "$prefix" "$target" "$tmp_dir" "$target_dir"
 
   case ":${PATH}:" in
     *":${target_dir}:"*)

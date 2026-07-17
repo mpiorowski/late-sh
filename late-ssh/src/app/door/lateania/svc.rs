@@ -25,8 +25,8 @@ use late_core::{
         mud_character::MudCharacter,
         mud_world_state::MudWorldState,
         profile_award::{
-            LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY, award_badge,
-            grant_lateania_boss_award,
+            LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+            LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
         },
         reward::{LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY},
         user::User,
@@ -42,24 +42,127 @@ use crate::app::{
 };
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
-use super::classes::{Class, level_for_xp, xp_for_level};
-use super::damage::{DamageType, Defense};
-use super::items::{ItemKind, Slot, item, shop_at};
+use super::appearance;
+use super::classes::{ARCHETYPE_LEVEL, ArchetypeDef, Class, level_for_xp, xp_for_level};
+use super::damage::{DamageProfile, DamageType, Defense};
+use super::housing::{self, furniture_by_key, plot_of_room};
+use super::items::{
+    CATACOMBS_RELIC_ID, CAVERNS_RELIC_ID, ItemKind, Slot, THORNWOOD_RELIC_ID, item, shop_at,
+};
 use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
+use super::pets::{Pet, pet_species_by_key};
 use super::stats::AbilityScores;
 use super::world::{
-    CritterKind, Dir, FeatureKind, MiniMap, MobSpawn, Perk, RoomId, World, critter_index,
-    critters_at, features_at, frontier_entrance_room, seed_world,
+    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RoomId, World,
+    critter_index, critters_at, features_at, frontier_entrance_room, is_frontier_room, seed_world,
 };
 
 /// World heartbeat. One combat round resolves per tick.
 const TICK_SECS: u64 = 2;
+/// First id handed out to runtime-only summoned adds, kept far clear of the
+/// authored spawn-id ranges (base game, Catacombs 800k+, Frontier 900k+).
+const SUMMON_ID_START: u32 = 990_000_000;
+/// A roamer takes a step at most this often (in ticks); at 2s/tick that is ~8s.
+const MOB_MOVE_COOLDOWN: u8 = 4;
+/// Ticks per time-of-day phase. Four phases => a ~16-minute day at 2s/tick.
+const PHASE_TICKS: u64 = 120;
+/// Ticks the weather holds before it rolls over (~3 minutes).
+const WEATHER_TICKS: u64 = 90;
+/// Fixed id for the lone wandering world boss (reaped like a summon on death).
+const WORLD_BOSS_ID: u32 = 999_000_000;
+/// The first world boss stirs this many ticks after boot (~2 minutes).
+const WORLD_BOSS_FIRST_TICK: u64 = 60;
+/// Ticks between one world boss falling and the next rising (~10 minutes).
+const WORLD_BOSS_INTERVAL: u64 = 300;
+
+fn now_unix_secs() -> u64 {
+    Utc::now().timestamp().max(0) as u64
+}
+
+/// The world clock's coarse phase, derived from the tick count. Dusk and Night
+/// count as "dark", when the dead grow bolder and stronger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeOfDay {
+    Dawn,
+    Day,
+    Dusk,
+    Night,
+}
+
+impl TimeOfDay {
+    fn from_ticks(t: u64) -> Self {
+        match (t / PHASE_TICKS) % 4 {
+            0 => Self::Dawn,
+            1 => Self::Day,
+            2 => Self::Dusk,
+            _ => Self::Night,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dawn => "dawn",
+            Self::Day => "day",
+            Self::Dusk => "dusk",
+            Self::Night => "night",
+        }
+    }
+    fn is_dark(self) -> bool {
+        matches!(self, Self::Dusk | Self::Night)
+    }
+    /// Multiplier (percent) applied to mob damage; the dark hits harder.
+    fn mob_damage_pct(self) -> i32 {
+        if self.is_dark() { 125 } else { 100 }
+    }
+}
+
+/// The current weather, derived from the tick count. Beyond flavor, fog feeds
+/// ambushers and storms charge spellcasters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Weather {
+    Clear,
+    Rain,
+    Fog,
+    Storm,
+}
+
+impl Weather {
+    fn from_ticks(t: u64) -> Self {
+        // Offset from the day phase so weather and time drift independently.
+        match (t / WEATHER_TICKS + 1) % 4 {
+            0 => Self::Clear,
+            1 => Self::Rain,
+            2 => Self::Fog,
+            _ => Self::Storm,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Clear => "clear",
+            Self::Rain => "rain",
+            Self::Fog => "fog",
+            Self::Storm => "storm",
+        }
+    }
+}
 /// A player who sends no command for this long is dropped from the world.
 const PLAYER_IDLE_TIMEOUT_SECS: u64 = 10 * 60;
-/// How long a defeated player rests before respawning at the temple.
-const PLAYER_RESPAWN_SECS: u64 = 8;
+/// How long a fallen player's spirit lingers by their corpse, waiting for a
+/// resurrection, before it is drawn back to the temple automatically. The
+/// player may also release early. (Was an 8s rest before the dead state.)
+const CORPSE_LINGER_SECS: u64 = 90;
+/// Fraction of max HP (and resource) a resurrected player rises with.
+const RESURRECT_HP_PCT: i32 = 40;
+/// Gold to feed (heal, revive, and raise the loyalty of) a companion.
+const PET_FEED_COST: i64 = 20;
+/// Fraction of a blow that splashes onto a fighting companion when its owner is
+/// struck (the pet wades in and shares the punishment).
+const PET_WOUND_PCT: i32 = 30;
+/// Resource a caster spends to perform the Resurrection rite.
+const RESURRECT_COST: i32 = 30;
+/// Monk "Iron Body": percent reduction to incoming physical blows.
+const IRON_BODY_PCT: i32 = 15;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
 /// Normal death removes this share of carried gold; banked gold is protected.
@@ -68,6 +171,17 @@ const FIRST_DUNGEON_GATE_FROM: RoomId = 30;
 const FIRST_DUNGEON_GATE_TO: RoomId = 31;
 const FIRST_DUNGEON_GATE_TITLE: &str = "Bane of the Elder Treant";
 const FRONTIER_GATE_TITLE: &str = "Bane of the Archdemon Mal'gareth";
+const CATACOMBS_GATE_TITLE: &str = "Bane of The Bonewright Lich";
+const THORNWOOD_GATE_TITLE: &str = "Bane of the Elder Dryad";
+const CAVERNS_GATE_TITLE: &str = "Bane of the Abyss-Thing";
+const FRONTIER_REQUIRED_TITLES: [&str; 4] = [
+    FRONTIER_GATE_TITLE,
+    CATACOMBS_GATE_TITLE,
+    THORNWOOD_GATE_TITLE,
+    CAVERNS_GATE_TITLE,
+];
+/// The Sundered Reaches open only to whoever has unmade the Frontier's crown.
+const REACHES_GATE_TITLE: &str = "Bane of the King Who Was Promised Nothing";
 
 /// How often the world autosaves every present character's progress.
 const AUTOSAVE_SECS: u64 = 60;
@@ -80,23 +194,41 @@ const LATEANIA_FRONTIER_KING_LEDGER_REASON: &str = "lateania_frontier_king_defea
 #[derive(Clone, Copy)]
 struct BossAchievement {
     mob_name: &'static str,
+    award_category: &'static str,
+    /// Once-per-account chip payout via a reward template. `None` means the
+    /// profile badge is the whole prize.
+    payout: Option<BossPayout>,
+}
+
+#[derive(Clone, Copy)]
+struct BossPayout {
     reward_key: &'static str,
     ledger_reason: &'static str,
-    award_category: &'static str,
 }
 
 const ARCHDEMON_ACHIEVEMENT: BossAchievement = BossAchievement {
     mob_name: "the Archdemon Mal'gareth",
-    reward_key: LATEANIA_ARCHDEMON_REWARD_KEY,
-    ledger_reason: LATEANIA_ARCHDEMON_LEDGER_REASON,
     award_category: LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+    payout: Some(BossPayout {
+        reward_key: LATEANIA_ARCHDEMON_REWARD_KEY,
+        ledger_reason: LATEANIA_ARCHDEMON_LEDGER_REASON,
+    }),
 };
 
 const FRONTIER_KING_ACHIEVEMENT: BossAchievement = BossAchievement {
     mob_name: "the King Who Was Promised Nothing",
-    reward_key: LATEANIA_FRONTIER_KING_REWARD_KEY,
-    ledger_reason: LATEANIA_FRONTIER_KING_LEDGER_REASON,
     award_category: LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+    payout: Some(BossPayout {
+        reward_key: LATEANIA_FRONTIER_KING_REWARD_KEY,
+        ledger_reason: LATEANIA_FRONTIER_KING_LEDGER_REASON,
+    }),
+};
+
+const SUNDERING_DEEP_ACHIEVEMENT: BossAchievement = BossAchievement {
+    mob_name: "Yssgar, the Sundering Deep",
+    award_category: LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
+    // The deepest crown pays no chips: the LYS badge alone marks it.
+    payout: None,
 };
 
 /// Account age (in days) at which an adventurer is a "citizen" of Lateania and
@@ -119,6 +251,7 @@ pub struct LateaniaService {
     persist_locks: Arc<StdMutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
     prepared_saves: Arc<StdMutex<HashMap<Uuid, (u64, SavedCharacter)>>>,
     character_resets: Arc<StdMutex<HashSet<Uuid>>>,
+    character_reset_versions: Arc<StdMutex<HashMap<Uuid, u64>>>,
 }
 
 // ---- Snapshot (what sessions render) -------------------------------------
@@ -151,12 +284,13 @@ pub struct MobView {
     pub boss: bool,
 }
 
-/// One Frontier zone quest and whether the player has cleared it.
+/// One quest row in the journal.
 #[derive(Clone, Debug)]
 pub struct QuestView {
     pub name: String,
     pub done: bool,
     pub reward: String,
+    pub frontier: bool,
 }
 
 /// One wild creature in the room, for the Wildlife list.
@@ -176,6 +310,10 @@ pub struct OccupantView {
     pub hp: i32,
     pub max_hp: i32,
     pub in_combat: bool,
+    /// False when this adventurer is a corpse awaiting resurrection or release.
+    pub alive: bool,
+    /// The adventurer's composed bio, shown when you profile them.
+    pub bio: String,
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -221,6 +359,67 @@ pub struct ShopEntryView {
     pub stats: String,
 }
 
+/// The player's live companion, for the room/character panels.
+#[derive(Clone, Debug)]
+pub struct PetView {
+    pub name: String,
+    pub glyph: String,
+    pub level: i32,
+    pub hp: i32,
+    pub max_hp: i32,
+    pub attack: i32,
+    pub downed: bool,
+    /// Loyalty toward the next level, 0-100.
+    pub loyalty_pct: i32,
+}
+
+/// One companion offered at a Stable.
+#[derive(Clone, Debug)]
+pub struct StableEntryView {
+    pub key: String,
+    pub name: String,
+    pub glyph: String,
+    pub price: i64,
+    pub hp: i32,
+    pub attack: i32,
+    pub desc: String,
+    pub affordable: bool,
+}
+
+/// The companion vendor, present when the player stands at a Stable.
+#[derive(Clone, Debug)]
+pub struct StableView {
+    pub entries: Vec<StableEntryView>,
+    /// Gold to feed the current companion (shown as the panel's tend action).
+    pub feed_cost: i64,
+}
+
+/// One row in the housing ledger: a deed (at the clerk) or a furnishing (inside
+/// a home you own).
+#[derive(Clone, Debug)]
+pub struct HousingEntryView {
+    pub key: String,
+    pub name: String,
+    pub price: i64,
+    /// Compact detail, e.g. "4 rooms" for a deed or the furnishing's flavour.
+    pub detail: String,
+    pub affordable: bool,
+    /// For deeds: already claimed by someone else (and not buyable).
+    pub taken: bool,
+    /// For deeds: this is the viewing player's own plot.
+    pub owned: bool,
+}
+
+/// The housing ledger panel: deeds at the clerk, or furnishings inside an owned
+/// home. `furnish` distinguishes the two modes.
+#[derive(Clone, Debug)]
+pub struct HousingView {
+    pub title: String,
+    /// False = buying deeds at the clerk; true = furnishing a home you own.
+    pub furnish: bool,
+    pub entries: Vec<HousingEntryView>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ShopView {
     pub npc_name: String,
@@ -236,6 +435,7 @@ pub struct MudSnapshot {
     pub room_id: Uuid,
     pub generation: u64,
     pub players: HashMap<Uuid, PlayerView>,
+    pub reset_versions: HashMap<Uuid, u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -274,8 +474,24 @@ pub struct PlayerView {
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
     pub shop: Option<ShopView>,
+    /// The player's live combat companion, if any.
+    pub pet: Option<PetView>,
+    /// The companion vendor, present when standing at a capital Stable.
+    pub stable: Option<StableView>,
+    /// The housing ledger, present at the clerk or inside a home you own.
+    pub housing: Option<HousingView>,
+    /// The composed character bio (from the appearance choices).
+    pub bio: String,
+    /// The appearance/bio builder rows: (field label, chosen option).
+    pub appearance: Vec<(String, String)>,
     pub log: Vec<LogLine>,
     pub respawning: bool,
+    /// True while this player is a corpse (fallen, awaiting rez or release).
+    pub dead: bool,
+    /// Whether this player's class commands the Resurrection rite.
+    pub can_resurrect: bool,
+    /// Whether a resurrectable corpse (another fallen player) is in this room.
+    pub corpse_here: bool,
     /// Rolled D&D ability scores (shown on the select screen and sheet).
     pub scores: AbilityScores,
     /// Titles earned by slaying notable foes.
@@ -293,6 +509,17 @@ pub struct PlayerView {
     pub features: Vec<FeatureView>,
     /// Overhead map of the explored neighbourhood around the player.
     pub minimap: MiniMap,
+    /// The world clock phase, e.g. "dawn"/"day"/"dusk"/"night".
+    pub time_of_day: &'static str,
+    /// The current weather, e.g. "clear"/"rain"/"fog"/"storm".
+    pub weather: &'static str,
+    /// An active escort, if any: (name, hp, max_hp, destination zone).
+    pub escort: Option<(String, i32, i32, String)>,
+    /// The chosen archetype path, as (name, role label), once selected at L10.
+    pub archetype: Option<(String, String)>,
+    /// When eligible to pick an archetype but not yet chosen, the offered paths
+    /// as (name, role label, description); empty otherwise. Drives the select UI.
+    pub archetype_choices: Vec<(String, String, String)>,
 }
 
 impl PlayerView {
@@ -330,8 +557,16 @@ impl PlayerView {
             abilities: Vec::new(),
             inventory: Vec::new(),
             shop: None,
+            pet: None,
+            stable: None,
+            housing: None,
+            bio: String::new(),
+            appearance: Vec::new(),
             log: Vec::new(),
             respawning: false,
+            dead: false,
+            can_resurrect: false,
+            corpse_here: false,
             scores: AbilityScores::default(),
             titles: Vec::new(),
             title_levels: Vec::new(),
@@ -341,6 +576,11 @@ impl PlayerView {
             resurrection_cap: 0,
             features: Vec::new(),
             minimap: MiniMap::default(),
+            time_of_day: "day",
+            weather: "clear",
+            escort: None,
+            archetype: None,
+            archetype_choices: Vec::new(),
         }
     }
 }
@@ -367,6 +607,7 @@ impl LateaniaService {
             persist_locks: Arc::new(StdMutex::new(HashMap::new())),
             prepared_saves: Arc::new(StdMutex::new(HashMap::new())),
             character_resets: Arc::new(StdMutex::new(HashSet::new())),
+            character_reset_versions: Arc::new(StdMutex::new(HashMap::new())),
         };
         svc.load_world_state_task();
         svc.start_tick_loop();
@@ -494,6 +735,10 @@ impl LateaniaService {
                 if let Some(saved) = saved {
                     state.hydrate(user_id, &saved);
                 }
+                // A player materialized in the world (fresh join, not an
+                // already-present session). The lounge feed's repeat window
+                // absorbs quick leave/rejoin ping-pong.
+                svc.activity.game_started_task(user_id, ActivityGame::Mud);
             }
             state.touch(user_id);
             svc.publish(&state);
@@ -565,6 +810,11 @@ impl LateaniaService {
 
     fn begin_character_reset(&self, user_id: Uuid) {
         self.character_resets.lock_recover().insert(user_id);
+        self.character_reset_versions
+            .lock_recover()
+            .entry(user_id)
+            .and_modify(|version| *version += 1)
+            .or_insert(1);
         let mut versions = self.persist_versions.lock_recover();
         versions
             .entry(user_id)
@@ -809,6 +1059,46 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.choose_class(user_id, class));
     }
 
+    /// Commit one of the two offered archetype paths (by 0-based menu index).
+    pub fn choose_archetype_task(&self, user_id: Uuid, choice: usize) {
+        self.mutate(user_id, move |s| s.choose_archetype(user_id, choice));
+    }
+
+    /// Release a lingering spirit to the temple (only when dead).
+    pub fn release_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.release_to_temple(user_id));
+    }
+
+    /// Perform the Resurrection rite on the nearest corpse in the room.
+    pub fn resurrect_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.resurrect_nearest(user_id));
+    }
+
+    /// Buy a companion of the given species key at the room's Stable.
+    pub fn buy_pet_task(&self, user_id: Uuid, species_key: String) {
+        self.mutate(user_id, move |s| s.buy_pet(user_id, &species_key));
+    }
+
+    /// Feed and tend the player's companion at the room's Stable.
+    pub fn feed_pet_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.feed_pet(user_id));
+    }
+
+    /// Buy the deed to a housing plot (tier index) at the clerk.
+    pub fn buy_deed_task(&self, user_id: Uuid, plot: usize) {
+        self.mutate(user_id, move |s| s.buy_deed(user_id, plot));
+    }
+
+    /// Buy a furnishing and place it in the home room the player stands in.
+    pub fn buy_furniture_task(&self, user_id: Uuid, key: String) {
+        self.mutate(user_id, move |s| s.buy_furniture(user_id, &key));
+    }
+
+    /// Cycle appearance field `field` by `delta` (+1 / -1) on the bio builder.
+    pub fn cycle_appearance_task(&self, user_id: Uuid, field: usize, delta: i8) {
+        self.mutate(user_id, move |s| s.cycle_appearance(user_id, field, delta));
+    }
+
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
         self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
@@ -946,6 +1236,9 @@ impl LateaniaService {
 
     fn publish_kill_outcome(&self, outcome: KillOutcome) {
         let Some(achievement) = outcome.achievement else {
+            // Ordinary mobs *and* the regional/sub-bosses stay dashboard/quest
+            // -only noise. Only the three named realm crowns (below) reach
+            // #lounge — the regional bosses fall so often they buried the feed.
             self.activity.game_won_task(
                 outcome.user_id,
                 ActivityGame::Mud,
@@ -954,47 +1247,61 @@ impl LateaniaService {
             );
             return;
         };
+        // The named-achievement bosses are the story tier: they ship to #lounge
+        // via the structured `BossSlain` kind.
+        self.activity
+            .boss_slain_task(outcome.user_id, ActivityGame::Mud, outcome.mob_name.clone());
 
         let chip_svc = self.chip_svc.clone();
         let activity = self.activity.clone();
         let db = self.db.clone();
         tokio::spawn(async move {
-            let payout = chip_svc
-                .credit_lifetime_reward_template(
-                    outcome.user_id,
-                    achievement.reward_key,
-                    achievement.ledger_reason,
-                )
-                .await;
-            match &payout {
-                Ok(grant) if !grant.credited => {
-                    tracing::info!(
-                        user_id = %outcome.user_id,
-                        payout = grant.amount,
-                        boss = achievement.mob_name,
-                        "suppressed Lateania boss chips because lifetime payout was already claimed"
-                    );
+            // The badge's recorded score is the chip amount for paying bosses
+            // and 0 for badge-only crowns like Yssgar.
+            let mut badge_score = 0_i64;
+            let mut grant_badge = true;
+            if let Some(pay) = achievement.payout {
+                let payout = chip_svc
+                    .credit_lifetime_reward_template(
+                        outcome.user_id,
+                        pay.reward_key,
+                        pay.ledger_reason,
+                    )
+                    .await;
+                match &payout {
+                    Ok(grant) if !grant.credited => {
+                        tracing::info!(
+                            user_id = %outcome.user_id,
+                            payout = grant.amount,
+                            boss = achievement.mob_name,
+                            "suppressed Lateania boss chips because lifetime payout was already claimed"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::error!(
+                            ?error,
+                            user_id = %outcome.user_id,
+                            boss = achievement.mob_name,
+                            "failed to credit Lateania boss chips"
+                        );
+                    }
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::error!(
-                        ?error,
-                        user_id = %outcome.user_id,
-                        boss = achievement.mob_name,
-                        "failed to credit Lateania boss chips"
-                    );
+                match &payout {
+                    Ok(grant) => badge_score = grant.amount,
+                    Err(_) => grant_badge = false,
                 }
             }
 
             let badge = award_badge(achievement.award_category, 1);
-            if let Ok(grant) = &payout {
+            if grant_badge {
                 match db.get().await {
                     Ok(client) => {
-                        if let Err(error) = grant_lateania_boss_award(
+                        if let Err(error) = grant_unique_milestone_award(
                             &client,
                             outcome.user_id,
                             achievement.award_category,
-                            grant.amount,
+                            badge_score,
                         )
                         .await
                         {
@@ -1017,19 +1324,17 @@ impl LateaniaService {
                 }
             }
 
-            let detail = match payout {
-                Ok(grant) if grant.credited => Some(format!(
-                    "defeated {} (+{} chips, badge {})",
-                    achievement.mob_name, grant.amount, badge
-                )),
-                _ => Some(format!("defeated {}", achievement.mob_name)),
-            };
+            // Keep the feed line short: chips/badge are recorded on the profile,
+            // not spelled out in the activity stream.
+            let detail = Some(format!("defeated {}", achievement.mob_name));
             activity.game_won_task(outcome.user_id, ActivityGame::Mud, detail, None);
         });
     }
 
     fn publish(&self, state: &WorldState) {
-        let _ = self.snapshot_tx.send(state.snapshot());
+        let mut snapshot = state.snapshot();
+        snapshot.reset_versions = self.character_reset_versions.lock_recover().clone();
+        let _ = self.snapshot_tx.send(snapshot);
     }
 }
 
@@ -1111,13 +1416,32 @@ struct PlayerState {
     active_title: Option<usize>,
     /// Frontier zone indices whose quest (slay the boss) the player has cleared.
     completed_quests: Vec<usize>,
+    /// Accepted board bounties and their progress: (quest id, count so far).
+    board_progress: Vec<(u32, u32)>,
+    /// Board bounty ids the player has claimed (and cannot take again).
+    board_done: Vec<u32>,
+    /// Unix time at which each repeatable bounty was last claimed (id, seconds).
+    quest_cooldowns: Vec<(u32, u64)>,
+    /// The chosen archetype path (from `ARCHETYPES`), once level 10 is reached.
+    archetype: Option<&'static ArchetypeDef>,
+    /// The combat companion bought from a Stable; travels with and fights for
+    /// the player. At most one at a time.
+    pet: Option<Pet>,
+    /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
+    appearance: [u8; appearance::N_FIELDS],
+    /// The friendly NPC the player is currently escorting, if any (transient).
+    escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
     frontier_descent_pending: bool,
     /// Veteran in-place resurrections: total this adventure and how many remain.
     resurrection_cap: u8,
     resurrections_left: u8,
     last_activity: Instant,
+    /// While dead, this is the deadline at which the corpse is auto-released to
+    /// the temple if no one resurrects the player and they don't release first.
     respawn_at: Option<Instant>,
+    /// True while the player is a corpse awaiting resurrection or release.
+    dead: bool,
     log: Vec<LogLine>,
 }
 
@@ -1136,15 +1460,31 @@ impl PlayerState {
         (attack, hp, armor)
     }
 
+    /// The chosen archetype's tuning percentages, or all-zero if none is picked.
+    /// Returns `(attack_pct, mitigation_pct, heal_pct, max_hp_pct)`.
+    fn archetype_mods(&self) -> (i32, i32, i32, i32) {
+        match self.archetype {
+            Some(a) => (a.attack_pct, a.mitigation_pct, a.heal_pct, a.max_hp_pct),
+            None => (0, 0, 0, 0),
+        }
+    }
+
     fn max_hp(&self) -> i32 {
         let (_, hp, _) = self.equipment_mods();
-        (self.base_max_hp + hp + self.scores.hp_bonus(self.level)).max(1)
+        let base = self.base_max_hp
+            + hp
+            + self.scores.hp_bonus(self.level)
+            + super::classes::milestone_hp_bonus(self.level);
+        let (_, _, _, hp_pct) = self.archetype_mods();
+        (base + base * hp_pct / 100).max(1)
     }
 
     fn attack(&self) -> i32 {
         let (atk, _, _) = self.equipment_mods();
         let stat = self.class.map(|c| self.scores.attack_bonus(c)).unwrap_or(0);
-        (self.base_attack + atk + self.empower + stat).max(1)
+        let base = self.base_attack + atk + self.empower + stat;
+        let (atk_pct, _, _, _) = self.archetype_mods();
+        (base + base * atk_pct / 100).max(1)
     }
 
     fn armor(&self) -> i32 {
@@ -1153,11 +1493,316 @@ impl PlayerState {
     }
 }
 
+/// A board-quest objective. `Reach` completes the moment the player enters any
+/// room of the named zone; the others count up to a target.
+#[derive(Clone, Copy, Debug)]
+enum Objective {
+    /// Slay foes whose name contains this fragment (e.g. "Wolf").
+    Bounty {
+        name_contains: &'static str,
+        count: u32,
+    },
+    /// Recover this many of a specific dropped item id.
+    Collect { item: u32, count: u32 },
+    /// Set foot in the named zone.
+    Reach { zone: &'static str },
+    /// Lead a friendly NPC alive into the named zone. Tracked via the player's
+    /// transient `escort` state rather than a `board_progress` counter.
+    Escort {
+        npc: &'static str,
+        dest_zone: &'static str,
+    },
+}
+
+impl Objective {
+    fn target(self) -> u32 {
+        match self {
+            Objective::Bounty { count, .. } | Objective::Collect { count, .. } => count,
+            Objective::Reach { .. } | Objective::Escort { .. } => 1,
+        }
+    }
+    fn describe(self) -> String {
+        match self {
+            Objective::Bounty {
+                name_contains,
+                count,
+            } => format!("slay {count} of {name_contains}-kind"),
+            Objective::Collect { count, .. } => format!("recover {count} relics"),
+            Objective::Reach { zone } => format!("reach {zone}"),
+            Objective::Escort { npc, dest_zone } => format!("lead {npc} to {dest_zone}"),
+        }
+    }
+}
+
+/// How often a bounty can be taken. `Once` is permanent; `Daily`/`Weekly` come
+/// back after the real elapsed time represented by a world day/week.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Repeat {
+    Once,
+    Daily,
+    Weekly,
+}
+
+/// A friendly NPC the player is currently leading (transient; not persisted).
+#[derive(Clone, Debug)]
+struct EscortState {
+    quest_id: u32,
+    name: &'static str,
+    dest_zone: &'static str,
+    hp: i32,
+    max_hp: i32,
+}
+
+/// A posted bounty: offered at `board` (a capital square) and tracked per player.
+struct BoardQuest {
+    id: u32,
+    board: RoomId,
+    title: &'static str,
+    objective: Objective,
+    reward_gold: i64,
+    reward_title: Option<&'static str>,
+    repeat: Repeat,
+    blurb: &'static str,
+}
+
+/// Ticks/seconds in a world day (four phases) and the escortee's starting health.
+const DAY_TICKS: u64 = PHASE_TICKS * 4;
+const DAY_SECS: u64 = DAY_TICKS * TICK_SECS;
+const ESCORT_HP: i32 = 80;
+
+/// The standing bounties: per capital, themed to its region. Bounties and
+/// collections are `Daily` (repeatable hunts); the one-off discoveries and
+/// escorts are `Once`.
+const BOARD_QUESTS: &[BoardQuest] = &[
+    BoardQuest {
+        id: 1,
+        board: super::world::TASMANIA_SQUARE,
+        title: "Still the Restless Dead",
+        objective: Objective::Bounty {
+            name_contains: "Skeleton",
+            count: 5,
+        },
+        reward_gold: 120,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "Skeletons walk the crypt below Tasmania. Put five back to rest.",
+    },
+    BoardQuest {
+        id: 2,
+        board: super::world::TASMANIA_SQUARE,
+        title: "Grave Relics",
+        objective: Objective::Collect {
+            item: CATACOMBS_RELIC_ID,
+            count: 3,
+        },
+        reward_gold: 150,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "The chapel will pay for three relics recovered from the Catacombs.",
+    },
+    BoardQuest {
+        id: 3,
+        board: super::world::TASMANIA_SQUARE,
+        title: "Into the Dark",
+        objective: Objective::Reach {
+            zone: "The Sunken Catacombs",
+        },
+        reward_gold: 60,
+        reward_title: Some("Crypt-Delver"),
+        repeat: Repeat::Once,
+        blurb: "No one has mapped the new crypt. Descend, and live to tell of it.",
+    },
+    BoardQuest {
+        id: 4,
+        board: super::world::MELVANALA_SQUARE,
+        title: "Thin the Pack",
+        objective: Objective::Bounty {
+            name_contains: "Wolf",
+            count: 4,
+        },
+        reward_gold: 130,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "Dire wolves harry the lake road. Cull four from the Thornwood.",
+    },
+    BoardQuest {
+        id: 5,
+        board: super::world::MELVANALA_SQUARE,
+        title: "Forest Spoils",
+        objective: Objective::Collect {
+            item: THORNWOOD_RELIC_ID,
+            count: 3,
+        },
+        reward_gold: 160,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "Bring back three spoils taken from the Thornwood Hollows.",
+    },
+    BoardQuest {
+        id: 6,
+        board: super::world::MELVANALA_SQUARE,
+        title: "Walk the Hollows",
+        objective: Objective::Reach {
+            zone: "The Thornwood Hollows",
+        },
+        reward_gold: 60,
+        reward_title: Some("Wood-Warden"),
+        repeat: Repeat::Once,
+        blurb: "Step beneath the eaves and find your way to the heart-tree's grove.",
+    },
+    BoardQuest {
+        id: 7,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Clear the Lurkers",
+        objective: Objective::Bounty {
+            name_contains: "Lurker",
+            count: 4,
+        },
+        reward_gold: 140,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "Things lie in wait in the flooded caves. Clear four of them out.",
+    },
+    BoardQuest {
+        id: 8,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Cavern Salvage",
+        objective: Objective::Collect {
+            item: CAVERNS_RELIC_ID,
+            count: 3,
+        },
+        reward_gold: 170,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "Salvage three finds from the depths of the Drowned Caverns.",
+    },
+    BoardQuest {
+        id: 9,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Sound the Deep",
+        objective: Objective::Reach {
+            zone: "The Drowned Caverns",
+        },
+        reward_gold: 70,
+        reward_title: Some("Deep-Walker"),
+        repeat: Repeat::Once,
+        blurb: "Find the tide-mouth beneath Matlatesh and enter the drowned dark.",
+    },
+    BoardQuest {
+        id: 10,
+        board: super::world::TASMANIA_SQUARE,
+        title: "Last Rites",
+        objective: Objective::Escort {
+            npc: "Brother Aldric",
+            dest_zone: "The Sunken Catacombs",
+        },
+        reward_gold: 220,
+        reward_title: Some("Crypt Shepherd"),
+        repeat: Repeat::Once,
+        blurb: "An old priest must bless the crypt. Keep him alive and see him in.",
+    },
+    BoardQuest {
+        id: 11,
+        board: super::world::MELVANALA_SQUARE,
+        title: "The Scholar's Folly",
+        objective: Objective::Escort {
+            npc: "Mira the Scholar",
+            dest_zone: "The Thornwood Hollows",
+        },
+        reward_gold: 220,
+        reward_title: Some("Wood-Shepherd"),
+        repeat: Repeat::Once,
+        blurb: "A scholar would study the heart-tree. Guard her through the Hollows.",
+    },
+    BoardQuest {
+        id: 12,
+        board: super::world::MATLATESH_SQUARE,
+        title: "The Diver's Charge",
+        objective: Objective::Escort {
+            npc: "Old Pell the Diver",
+            dest_zone: "The Drowned Caverns",
+        },
+        reward_gold: 240,
+        reward_title: Some("Tide Shepherd"),
+        repeat: Repeat::Once,
+        blurb: "Old Pell knows the tides. Bring him safe to the drowned dark.",
+    },
+    // ---- The Sundered Reaches (off Matlatesh) ----------------------------
+    BoardQuest {
+        id: 13,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Stem the Drowned Tide",
+        objective: Objective::Bounty {
+            name_contains: "drowned",
+            count: 6,
+        },
+        reward_gold: 360,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "The Reaches vomit up their dead onto the shore. Put six of the drowned down again.",
+    },
+    BoardQuest {
+        id: 14,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Lay the Revenants",
+        objective: Objective::Bounty {
+            name_contains: "revenant",
+            count: 5,
+        },
+        reward_gold: 400,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "Restless revenants stalk the sunken cities. Lay five of them to their long rest.",
+    },
+    BoardQuest {
+        id: 15,
+        board: super::world::MATLATESH_SQUARE,
+        title: "The Sea-Gate",
+        objective: Objective::Reach {
+            zone: "The Saltmarsh Shallows",
+        },
+        reward_gold: 140,
+        reward_title: Some("Reach-Walker"),
+        repeat: Repeat::Once,
+        blurb: "A drowned realm lies beyond the desert's edge. Pass the sea-gate and set foot in it.",
+    },
+    BoardQuest {
+        id: 16,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Sound the Deepest Dark",
+        objective: Objective::Reach {
+            zone: "The Sundering Deep",
+        },
+        reward_gold: 600,
+        reward_title: Some("Sounder of the Deep"),
+        repeat: Repeat::Once,
+        blurb: "Few return from the floor of all seas. Reach the Sundering Deep and prove it can be done.",
+    },
+];
+
+fn board_quest(id: u32) -> Option<&'static BoardQuest> {
+    BOARD_QUESTS.iter().find(|q| q.id == id)
+}
+
 struct MobInstance {
     spawn: MobSpawn,
     hp: i32,
     alive: bool,
     respawn_at: Option<Instant>,
+    /// What this mob does beyond standing and fighting (from `World::behaviors`).
+    behavior: MobBehavior,
+    /// Where the mob actually is right now. Roamers move; this drives which room
+    /// shows the mob and which mob a player in a room can engage. Starts at home.
+    current_room: RoomId,
+    /// The mob's home; roamers tether to it and return here on respawn.
+    leash_home: RoomId,
+    /// Ticks until this mob may take another roaming step.
+    move_cooldown: u8,
+    /// Ambushers are hidden from the room view until a player enters (then they
+    /// reveal and strike first). Always true for every other behavior.
+    revealed: bool,
+    /// Ticks until a Summoner may call another add.
+    summon_cooldown: u8,
 }
 
 struct WorldState {
@@ -1177,9 +1822,23 @@ struct WorldState {
     world_revision: u64,
     /// Hunt cooldowns for `Game` critters, keyed by global WILDLIFE index.
     hunted: HashMap<usize, Instant>,
+    /// Next id for a runtime-only summoned add (Summoner behavior). Kept well
+    /// clear of authored spawn ids so the two never collide.
+    next_summon_id: u32,
+    /// The world heartbeat, in ticks. Drives time-of-day and weather.
+    world_ticks: u64,
+    /// The active wandering world boss, if one currently roams.
+    world_boss: Option<u32>,
+    /// Tick at which the next world boss may rise.
+    next_world_boss_tick: u64,
+    /// Who holds the deed to each housing plot (keyed by tier/plot index).
+    plot_owner: HashMap<usize, Uuid>,
+    /// Furnishings placed in each home room (keyed by room id).
+    house_furniture: HashMap<RoomId, Vec<&'static super::housing::Furniture>>,
 }
 
 const LOG_CAP: usize = 60;
+const SAVED_HOUSE_FURNITURE_LIMIT: usize = 512;
 const TEMPLE_ROOM: RoomId = 4;
 /// How long a hunted game critter stays gone before it wanders back.
 const GAME_RESPAWN: Duration = Duration::from_secs(40);
@@ -1190,13 +1849,20 @@ impl WorldState {
             .spawns
             .iter()
             .map(|spawn| {
+                let behavior = world.behavior_of(spawn.id);
                 (
                     spawn.id,
                     MobInstance {
-                        spawn: spawn.clone(),
                         hp: spawn.max_hp,
                         alive: true,
                         respawn_at: None,
+                        behavior,
+                        current_room: spawn.home,
+                        leash_home: spawn.home,
+                        move_cooldown: 0,
+                        revealed: !matches!(behavior, MobBehavior::Ambusher),
+                        summon_cooldown: 0,
+                        spawn: spawn.clone(),
                     },
                 )
             })
@@ -1214,6 +1880,31 @@ impl WorldState {
             world_dirty: false,
             world_revision: 0,
             hunted: HashMap::new(),
+            next_summon_id: SUMMON_ID_START,
+            world_ticks: 0,
+            world_boss: None,
+            next_world_boss_tick: WORLD_BOSS_FIRST_TICK,
+            plot_owner: HashMap::new(),
+            house_furniture: HashMap::new(),
+        }
+    }
+
+    /// The current world clock phase.
+    fn time_of_day(&self) -> TimeOfDay {
+        TimeOfDay::from_ticks(self.world_ticks)
+    }
+
+    /// The current weather.
+    fn weather(&self) -> Weather {
+        Weather::from_ticks(self.world_ticks)
+    }
+
+    /// Push a system line to every player currently in the world (server-wide
+    /// announcements like a world boss rising or falling).
+    fn log_all(&mut self, text: String) {
+        let ids: Vec<Uuid> = self.players.keys().copied().collect();
+        for id in ids {
+            self.log_to(id, LogKind::System, text.clone());
         }
     }
 
@@ -1261,11 +1952,19 @@ impl WorldState {
             title_levels: Vec::new(),
             active_title: None,
             completed_quests: Vec::new(),
+            board_progress: Vec::new(),
+            board_done: Vec::new(),
+            quest_cooldowns: Vec::new(),
+            archetype: None,
+            pet: None,
+            appearance: [0; appearance::N_FIELDS],
+            escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
             resurrections_left: 0,
             last_activity: Instant::now(),
             respawn_at: None,
+            dead: false,
             log: Vec::new(),
         };
         push_log(
@@ -1309,6 +2008,38 @@ impl WorldState {
             LogKind::System,
             "New adventurers usually leave by the South Gate. Stranger paths from the square lead into much older danger."
                 .to_string(),
+        );
+        self.describe_room(user_id);
+    }
+
+    /// Commit an archetype path at level 10. `choice` indexes the per-class
+    /// offer list (`archetypes_for`); ignored if already chosen, unclassed, or
+    /// below the eligibility level. Re-derives HP so the bonus takes effect now.
+    fn choose_archetype(&mut self, user_id: Uuid, choice: usize) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        let Some(class) = p.class else { return };
+        if p.archetype.is_some() || p.level < ARCHETYPE_LEVEL {
+            return;
+        }
+        let offers = super::classes::archetypes_for(class);
+        let Some(def) = offers.get(choice).copied() else {
+            return;
+        };
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.archetype = Some(def);
+            // The max-HP bonus may have lifted the ceiling; top up to it.
+            p.hp = p.max_hp();
+        }
+        self.log_to(
+            user_id,
+            LogKind::System,
+            format!(
+                "You embrace the path of the {}, a {} calling.",
+                def.name,
+                def.role.label(),
+            ),
         );
         self.describe_room(user_id);
     }
@@ -1426,9 +2157,49 @@ impl WorldState {
             p.title_levels.resize(p.titles.len(), 1);
             p.active_title = saved.active_title.filter(|&i| i < p.titles.len());
             p.completed_quests = saved.completed_quests.clone();
+            p.board_progress = saved.board_progress.clone();
+            p.board_done = saved.board_done.clone();
+            p.quest_cooldowns = saved.quest_cooldowns.clone();
+            // Restore the chosen archetype (ignored if the key is unknown or no
+            // longer matches the class, e.g. a respec/rename).
+            p.archetype = saved
+                .archetype
+                .as_deref()
+                .and_then(super::classes::archetype_by_key)
+                .filter(|a| a.class == class);
+            // Restore the companion (full health; loyalty carries its level).
+            if let Some(key) = saved.pet.as_deref()
+                && pet_species_by_key(key).is_none()
+            {
+                tracing::warn!(%user_id, key, "dropping saved pet with unknown species key");
+            }
+            p.pet = saved
+                .pet
+                .as_deref()
+                .and_then(pet_species_by_key)
+                .map(|species| Pet::new(species, saved.pet_loyalty));
+            // Restore the appearance/bio choices (clamped to valid options).
+            for i in 0..appearance::N_FIELDS {
+                let v = saved.appearance.get(i).copied().unwrap_or(0);
+                p.appearance[i] = v % appearance::option_count(i).max(1) as u8;
+            }
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
+        }
+        // Re-register housing ownership + furnishings (service-side side-state).
+        if let Some(plot) = saved.owned_plot.map(|p| p as usize) {
+            if plot < housing::TIERS.len() {
+                self.plot_owner.insert(plot, user_id);
+                self.restore_saved_house_furniture(user_id, plot, &saved.house_furniture);
+            } else {
+                tracing::warn!(
+                    %user_id,
+                    plot,
+                    tiers = housing::TIERS.len(),
+                    "dropping saved home: plot index out of range"
+                );
+            }
         }
         let name = class.name();
         self.log_to(
@@ -1469,6 +2240,18 @@ impl WorldState {
             title_levels: p.title_levels.clone(),
             active_title: p.active_title,
             completed_quests: p.completed_quests.clone(),
+            board_progress: p.board_progress.clone(),
+            board_done: p.board_done.clone(),
+            quest_cooldowns: p.quest_cooldowns.clone(),
+            archetype: p.archetype.map(|a| a.key.to_string()),
+            pet: p.pet.map(|pet| pet.species.key.to_string()),
+            pet_loyalty: p.pet.map(|pet| pet.loyalty_xp).unwrap_or(0),
+            owned_plot: self.owned_plot(user_id).map(|plot| plot as u32),
+            house_furniture: self
+                .owned_plot(user_id)
+                .map(|plot| self.saved_house_furniture_for_plot(user_id, plot))
+                .unwrap_or_default(),
+            appearance: p.appearance.to_vec(),
         }))
     }
 
@@ -1477,6 +2260,73 @@ impl WorldState {
             .keys()
             .filter_map(|uid| self.export_saved(*uid).map(|s| (*uid, s)))
             .collect()
+    }
+
+    fn restore_saved_house_furniture(
+        &mut self,
+        user_id: Uuid,
+        plot: usize,
+        saved_furniture: &[(RoomId, String)],
+    ) {
+        let base = housing::plot_base(plot);
+        let end = base + housing::TIERS[plot].rooms() as RoomId;
+        for room in base..end {
+            self.house_furniture.remove(&room);
+        }
+
+        let mut seen = HashSet::new();
+        let mut restored = 0usize;
+        for (room, key) in saved_furniture {
+            if plot_of_room(*room) != Some(plot) {
+                continue;
+            }
+            if !seen.insert((*room, key.clone())) {
+                continue;
+            }
+            if restored >= SAVED_HOUSE_FURNITURE_LIMIT {
+                tracing::warn!(
+                    %user_id,
+                    plot,
+                    limit = SAVED_HOUSE_FURNITURE_LIMIT,
+                    "dropping excess saved house furniture"
+                );
+                break;
+            }
+            if let Some(furn) = furniture_by_key(key) {
+                self.house_furniture.entry(*room).or_default().push(furn);
+                restored += 1;
+            } else {
+                tracing::warn!(%user_id, key, "dropping saved furniture with unknown key");
+            }
+        }
+    }
+
+    fn saved_house_furniture_for_plot(&self, user_id: Uuid, plot: usize) -> Vec<(RoomId, String)> {
+        let base = housing::plot_base(plot);
+        let end = base + housing::TIERS[plot].rooms() as RoomId;
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for room in base..end {
+            let Some(furniture) = self.house_furniture.get(&room) else {
+                continue;
+            };
+            for furn in furniture {
+                if !seen.insert((room, furn.key)) {
+                    continue;
+                }
+                if out.len() >= SAVED_HOUSE_FURNITURE_LIMIT {
+                    tracing::warn!(
+                        %user_id,
+                        plot,
+                        limit = SAVED_HOUSE_FURNITURE_LIMIT,
+                        "dropping excess house furniture during save"
+                    );
+                    return out;
+                }
+                out.push((room, furn.key.to_string()));
+            }
+        }
+        out
     }
 
     fn export_world_saved(&self) -> SavedWorld {
@@ -1628,7 +2478,21 @@ impl WorldState {
         if !self.can_cross_progression_gate(user_id, from, dest) {
             return;
         }
-        if self.is_frontier_gateway(from, dest) {
+        let descent_warning = if self.is_frontier_gateway(from, dest) {
+            Some(format!(
+                "The way {} opens into the Frontier: older, meaner country meant for seasoned adventurers. Press {} again if you truly want to go.",
+                dir.label(),
+                dir_input_hint(dir)
+            ))
+        } else if self.is_reaches_gateway(from, dest) {
+            Some(format!(
+                "Beyond the sea-gate lie the Sundered Reaches: a drowned realm crueller than any Frontier mile. Press {} again if you truly mean to pass.",
+                dir_input_hint(dir)
+            ))
+        } else {
+            None
+        };
+        if let Some(warning) = descent_warning {
             let confirmed = self
                 .players
                 .get(&user_id)
@@ -1637,15 +2501,7 @@ impl WorldState {
                 if let Some(player) = self.players.get_mut(&user_id) {
                     player.frontier_descent_pending = true;
                 }
-                self.log_to(
-                    user_id,
-                    LogKind::System,
-                    format!(
-                        "The way {} opens into the Frontier: older, meaner country meant for seasoned adventurers. Press {} again if you truly want to go.",
-                        dir.label(),
-                        dir_input_hint(dir)
-                    ),
-                );
+                self.log_to(user_id, LogKind::System, warning);
                 return;
             }
         } else if let Some(player) = self.players.get_mut(&user_id) {
@@ -1666,6 +2522,11 @@ impl WorldState {
         from == self.world.start_room && dest == frontier_entrance_room()
     }
 
+    /// The sea-gate: stepping from Matlatesh's square into the Sundered Reaches.
+    fn is_reaches_gateway(&self, from: RoomId, dest: RoomId) -> bool {
+        from == super::world::MATLATESH_SQUARE && super::world::is_reaches_room(dest)
+    }
+
     fn can_cross_progression_gate(&mut self, user_id: Uuid, from: RoomId, dest: RoomId) -> bool {
         if from == FIRST_DUNGEON_GATE_FROM
             && dest == FIRST_DUNGEON_GATE_TO
@@ -1680,19 +2541,56 @@ impl WorldState {
             return false;
         }
 
-        if self.is_frontier_gateway(from, dest)
+        if self.is_living_dark_gateway(from, dest)
             && !self.player_has_title(user_id, FRONTIER_GATE_TITLE)
         {
             self.clear_frontier_descent_pending(user_id);
             self.log_to(
                 user_id,
                 LogKind::System,
-                "The Frontier stair stays cold and shut. Defeat the Archdemon Mal'gareth before seeking the King beyond it.".to_string(),
+                "The way recoils from you. Defeat the Archdemon Mal'gareth before entering the living dark beyond the capitals.".to_string(),
+            );
+            return false;
+        }
+
+        if self.is_frontier_gateway(from, dest)
+            && !self.player_has_required_titles(user_id, &FRONTIER_REQUIRED_TITLES)
+        {
+            let missing = self.frontier_missing_requirement_text(user_id);
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("The Frontier stair stays cold and shut. {missing}"),
+            );
+            return false;
+        }
+
+        if self.is_reaches_gateway(from, dest)
+            && !self.player_has_title(user_id, REACHES_GATE_TITLE)
+        {
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "The sea-gate stands sealed. Only one crowned Bane of the King Who Was Promised Nothing may pass into the Sundered Reaches.".to_string(),
             );
             return false;
         }
 
         true
+    }
+
+    fn is_living_dark_gateway(&self, from: RoomId, dest: RoomId) -> bool {
+        matches!(
+            (from, self.world.room(dest).map(|r| r.zone)),
+            (super::world::TASMANIA_SQUARE, Some("The Sunken Catacombs"))
+                | (
+                    super::world::MELVANALA_SQUARE,
+                    Some("The Thornwood Hollows")
+                )
+                | (super::world::MATLATESH_SQUARE, Some("The Drowned Caverns"))
+        )
     }
 
     fn player_has_title(&self, user_id: Uuid, title: &str) -> bool {
@@ -1701,9 +2599,49 @@ impl WorldState {
             .is_some_and(|p| p.titles.iter().any(|owned| owned == title))
     }
 
+    fn player_has_required_titles(&self, user_id: Uuid, required: &[&str]) -> bool {
+        self.players
+            .get(&user_id)
+            .is_some_and(|p| titles_include_all(&p.titles, required))
+    }
+
+    fn frontier_missing_requirement_text(&self, user_id: Uuid) -> String {
+        let Some(player) = self.players.get(&user_id) else {
+            return "Earn the Archdemon title and the three living-dark seals first.".to_string();
+        };
+        if !player
+            .titles
+            .iter()
+            .any(|owned| owned == FRONTIER_GATE_TITLE)
+        {
+            return "Defeat the Archdemon Mal'gareth, then claim the three living-dark seals before seeking the King beyond it."
+                .to_string();
+        }
+        let missing: Vec<&str> = [
+            (CATACOMBS_GATE_TITLE, "Sunken Catacombs"),
+            (THORNWOOD_GATE_TITLE, "Thornwood Hollows"),
+            (CAVERNS_GATE_TITLE, "Drowned Caverns"),
+        ]
+        .into_iter()
+        .filter_map(|(title, label)| {
+            (!player.titles.iter().any(|owned| owned == title)).then_some(label)
+        })
+        .collect();
+        if missing.is_empty() {
+            "The old warning holds for one more breath.".to_string()
+        } else {
+            format!(
+                "Claim the remaining living-dark seals: {}.",
+                missing.join(", ")
+            )
+        }
+    }
+
     fn exit_label(&self, from: RoomId, dir: Dir, dest: RoomId) -> String {
         if self.is_frontier_gateway(from, dest) {
             format!("{} (dangerous Frontier)", dir.label())
+        } else if self.is_reaches_gateway(from, dest) {
+            format!("{} (the Sundered Reaches)", dir.label())
         } else {
             dir.label().to_string()
         }
@@ -1729,6 +2667,12 @@ impl WorldState {
                 .map(|p| p.user_id)
                 .collect();
             for f in followers {
+                if !self.can_cross_progression_gate(f, from, dest) {
+                    if let Some(p) = self.players.get_mut(&f) {
+                        p.following = None;
+                    }
+                    continue;
+                }
                 if let Some(p) = self.players.get_mut(&f) {
                     p.previous_room = Some(from);
                     p.room = dest;
@@ -1966,11 +2910,75 @@ impl WorldState {
         self.describe_room_context(user_id, false);
     }
 
+    /// Reveal any Ambushers lurking in the player's room: they spring out and
+    /// land a free first strike. Once revealed they behave like any other foe.
+    fn reveal_ambushers(&mut self, user_id: Uuid) {
+        let room = match self.players.get(&user_id) {
+            Some(p) if p.respawn_at.is_none() => p.room,
+            _ => return,
+        };
+        let lurkers: Vec<(u32, i32, DamageType, String)> = self
+            .mobs
+            .values()
+            .filter(|m| {
+                m.alive
+                    && !m.revealed
+                    && matches!(m.behavior, MobBehavior::Ambusher)
+                    && m.current_room == room
+            })
+            .map(|m| {
+                (
+                    m.spawn.id,
+                    m.spawn.damage,
+                    m.spawn.profile.attack_type,
+                    m.spawn.name.to_string(),
+                )
+            })
+            .collect();
+        if lurkers.is_empty() {
+            return;
+        }
+        // Fog hides them better: the ambush lands half again as hard.
+        let fog = self.weather() == Weather::Fog;
+        for (id, dmg, dt, name) in lurkers {
+            if let Some(m) = self.mobs.get_mut(&id) {
+                m.revealed = true;
+            }
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("{name} lunges from the shadows and strikes first!"),
+            );
+            let dmg = if fog { dmg * 3 / 2 } else { dmg };
+            if !self.strike_player(user_id, dmg, dt, &name) {
+                break;
+            }
+        }
+        self.dirty = true;
+        self.mark_world_dirty();
+    }
+
     fn describe_room(&mut self, user_id: Uuid) {
         self.describe_room_context(user_id, true);
     }
 
     fn describe_room_context(&mut self, user_id: Uuid, announce_travel: bool) {
+        self.reveal_ambushers(user_id);
+        if !matches!(self.players.get(&user_id), Some(p) if p.respawn_at.is_none()) {
+            return;
+        }
+        // Exploration bounties: arriving in a zone can complete a "reach" quest.
+        let here_zone = self
+            .players
+            .get(&user_id)
+            .and_then(|p| self.world.room(p.room))
+            .map(|r| r.zone);
+        if let Some(here_zone) = here_zone {
+            self.bump_quests(user_id, |o| {
+                u32::from(matches!(o, Objective::Reach { zone } if zone == here_zone))
+            });
+            self.check_escort_arrival(user_id, here_zone);
+        }
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
@@ -1994,7 +3002,7 @@ impl WorldState {
         let mob_names: Vec<String> = self
             .mobs
             .values()
-            .filter(|m| m.alive && m.spawn.home == room_id)
+            .filter(|m| m.alive && m.revealed && m.current_room == room_id)
             .map(|m| m.spawn.name.to_string())
             .collect();
         let shop = shop_at(room_id);
@@ -2003,6 +3011,13 @@ impl WorldState {
         }
         self.log_to(user_id, LogKind::Room, format!("== {name} =="));
         self.log_to(user_id, LogKind::Room, desc);
+        // Furnishings set down in a home are part of the room for everyone here.
+        if let Some(furn) = self.house_furniture.get(&room_id)
+            && !furn.is_empty()
+        {
+            let listed = furn.iter().map(|f| f.name).collect::<Vec<_>>().join(", ");
+            self.log_to(user_id, LogKind::Room, format!("Here stands {listed}."));
+        }
         self.log_to(user_id, LogKind::Room, format!("Exits: {exit_text}"));
         if let Some(shop) = shop {
             self.log_to(
@@ -2072,8 +3087,236 @@ impl WorldState {
             if safe {
                 self.use_bank(user_id);
             }
+        } else if feat.kind == FeatureKind::Board {
+            self.use_board(user_id, room_id);
+        } else if feat.kind == FeatureKind::Housing {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Press n to open the housing ledger: buy a deed here, or furnish a home you own from inside it.".to_string(),
+            );
         }
         self.dirty = true;
+    }
+
+    fn board_quest_available(&self, p: &PlayerState, q: &BoardQuest) -> bool {
+        self.board_quest_available_at(p, q, now_unix_secs())
+    }
+
+    /// Whether `q` can be taken now: not already in progress, not the active
+    /// escort, and either never-done (`Once`) or off cooldown (`Daily`/`Weekly`).
+    fn board_quest_available_at(&self, p: &PlayerState, q: &BoardQuest, now_secs: u64) -> bool {
+        if p.board_progress.iter().any(|(id, _)| *id == q.id) {
+            return false;
+        }
+        if p.escort.as_ref().is_some_and(|e| e.quest_id == q.id) {
+            return false;
+        }
+        match q.repeat {
+            Repeat::Once => !p.board_done.contains(&q.id),
+            Repeat::Daily | Repeat::Weekly => {
+                let period = if q.repeat == Repeat::Weekly {
+                    DAY_SECS * 7
+                } else {
+                    DAY_SECS
+                };
+                match p.quest_cooldowns.iter().find(|(id, _)| *id == q.id) {
+                    None => true,
+                    Some((_, at)) => now_secs.saturating_sub(*at) >= period,
+                }
+            }
+        }
+    }
+
+    /// Examine a quest board: claim a finished bounty if one is ready here,
+    /// otherwise take up the next available posting for this capital's region.
+    fn use_board(&mut self, user_id: Uuid, board_room: RoomId) {
+        let (progress, level) = match self.players.get(&user_id) {
+            Some(p) => (p.board_progress.clone(), p.level),
+            None => return,
+        };
+        // 1) A finished counter-bounty for this board takes priority - claim it.
+        let claimable = progress.iter().find_map(|(id, prog)| {
+            board_quest(*id).filter(|q| q.board == board_room && *prog >= q.objective.target())
+        });
+        if let Some(q) = claimable {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.board_progress.retain(|(qid, _)| *qid != q.id);
+                p.gold += q.reward_gold;
+                // Repeatable bounties go on cooldown; one-offs are done for good.
+                if q.repeat == Repeat::Once {
+                    p.board_done.push(q.id);
+                } else {
+                    p.quest_cooldowns.retain(|(id, _)| *id != q.id);
+                    p.quest_cooldowns.push((q.id, now_unix_secs()));
+                }
+            }
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!("Bounty claimed: {} (+{} gold).", q.title, q.reward_gold),
+            );
+            if let Some(title) = q.reward_title {
+                self.award_title(user_id, title.to_string(), level);
+            }
+            self.dirty = true;
+            return;
+        }
+        // 2) Otherwise post the next available bounty for this board.
+        let next = match self.players.get(&user_id) {
+            Some(p) => BOARD_QUESTS
+                .iter()
+                .find(|q| q.board == board_room && self.board_quest_available(p, q)),
+            None => None,
+        };
+        let Some(q) = next else {
+            let pending = progress
+                .iter()
+                .any(|(id, _)| board_quest(*id).is_some_and(|qq| qq.board == board_room));
+            let msg = if pending {
+                "Every bounty here is already in your hands - go and finish them."
+            } else {
+                "The board has no new bounties for you. Come back when more are posted."
+            };
+            self.log_to(user_id, LogKind::Normal, msg.to_string());
+            return;
+        };
+        if let Objective::Escort { npc, dest_zone } = q.objective {
+            if self
+                .players
+                .get(&user_id)
+                .is_some_and(|p| p.escort.is_some())
+            {
+                self.log_to(
+                    user_id,
+                    LogKind::Normal,
+                    "You are already leading someone - see them safe first.".to_string(),
+                );
+                return;
+            }
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.escort = Some(EscortState {
+                    quest_id: q.id,
+                    name: npc,
+                    dest_zone,
+                    hp: ESCORT_HP,
+                    max_hp: ESCORT_HP,
+                });
+            }
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("{npc} falls in beside you. Lead them, alive, into {dest_zone}."),
+            );
+        } else {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.board_progress.push((q.id, 0));
+            }
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "Bounty accepted - {}: {} ({}).",
+                    q.title,
+                    q.blurb,
+                    q.objective.describe()
+                ),
+            );
+        }
+        self.dirty = true;
+    }
+
+    /// Wound the player's escortee with some chance when the player is struck;
+    /// if it falls, the escort is lost. Called from the combat round.
+    fn wound_escort(&mut self, user_id: Uuid, raw: i32) {
+        let roll = (self.generation as usize).wrapping_add(raw as usize) % 100;
+        let mut fallen: Option<&'static str> = None;
+        if let Some(p) = self.players.get_mut(&user_id)
+            && let Some(esc) = p.escort.as_mut()
+            && roll < 35
+        {
+            esc.hp -= (raw / 2).max(1);
+            if esc.hp <= 0 {
+                fallen = Some(esc.name);
+            }
+        }
+        if let Some(name) = fallen {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.escort = None;
+            }
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("{name} falls! The escort is lost - take the charge again from the board."),
+            );
+            self.dirty = true;
+        }
+    }
+
+    /// Complete an active escort if the player has reached its destination zone.
+    fn check_escort_arrival(&mut self, user_id: Uuid, here_zone: &str) {
+        let arrived = self
+            .players
+            .get(&user_id)
+            .and_then(|p| p.escort.as_ref())
+            .filter(|e| e.dest_zone == here_zone)
+            .map(|e| e.quest_id);
+        let Some(quest_id) = arrived else { return };
+        let Some(q) = board_quest(quest_id) else {
+            return;
+        };
+        let level = self.players.get(&user_id).map(|p| p.level).unwrap_or(1);
+        let npc = match q.objective {
+            Objective::Escort { npc, .. } => npc,
+            _ => "your charge",
+        };
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.escort = None;
+            p.board_done.push(quest_id);
+            p.gold += q.reward_gold;
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "{npc} is safe. Escort complete: {} (+{} gold).",
+                q.title, q.reward_gold
+            ),
+        );
+        if let Some(title) = q.reward_title {
+            self.award_title(user_id, title.to_string(), level);
+        }
+        self.dirty = true;
+    }
+
+    /// Advance any accepted bounty whose objective `inc` reports progress for.
+    /// `inc` returns how much a given objective advanced this event (0 if none).
+    fn bump_quests(&mut self, user_id: Uuid, inc: impl Fn(Objective) -> u32) {
+        let mut newly_met: Vec<&'static str> = Vec::new();
+        if let Some(p) = self.players.get_mut(&user_id) {
+            for (id, prog) in p.board_progress.iter_mut() {
+                let Some(q) = board_quest(*id) else { continue };
+                let need = q.objective.target();
+                if *prog >= need {
+                    continue;
+                }
+                let step = inc(q.objective);
+                if step > 0 {
+                    *prog = (*prog + step).min(need);
+                    if *prog >= need {
+                        newly_met.push(q.title);
+                    }
+                }
+            }
+        }
+        for title in newly_met {
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!("Objective met - {title}. Return to the board to claim your reward."),
+            );
+            self.dirty = true;
+        }
     }
 
     fn use_bank(&mut self, user_id: Uuid) {
@@ -2121,7 +3364,7 @@ impl WorldState {
         let target = self
             .mobs
             .values()
-            .find(|m| m.alive && m.spawn.home == room_id)
+            .find(|m| m.alive && m.revealed && m.current_room == room_id)
             .map(|m| m.spawn.id);
         match target {
             Some(mob_id) => {
@@ -2333,11 +3576,20 @@ impl WorldState {
                 dmg += dmg / 4;
             }
         }
+        // DPS-archetype amplification applies to every ability hit.
+        if let Some(p) = self.players.get(&user_id) {
+            let (atk_pct, _, _, _) = p.archetype_mods();
+            dmg += dmg * atk_pct / 100;
+        }
         dmg
     }
 
     fn heal_player(&mut self, user_id: Uuid, amount: i32) {
         if let Some(p) = self.players.get_mut(&user_id) {
+            // Healer-archetype amplification applies to every heal they receive
+            // (heals are self-targeted today, so caster == recipient).
+            let (_, _, heal_pct, _) = p.archetype_mods();
+            let amount = amount + amount * heal_pct / 100;
             let max = p.max_hp();
             p.hp = (p.hp + amount).min(max);
             self.dirty = true;
@@ -2433,19 +3685,39 @@ impl WorldState {
             p.target = None;
             p.xp += xp as i64;
             p.gold += gold as i64;
+            // Necromancer "Soul Harvest" takes both health and Souls from a kill;
+            // Warlock "Pact of Souls" feeds only the pact (Mana).
+            if p.class == Some(Class::Necromancer) {
+                let life = (p.max_hp() / 12).max(6);
+                let souls = (p.max_resource / 8).max(5);
+                p.hp = (p.hp + life).min(p.max_hp());
+                p.resource = (p.resource + souls).min(p.max_resource);
+            } else if p.class == Some(Class::Warlock) {
+                let mana = (p.max_resource / 8).max(5);
+                p.resource = (p.resource + mana).min(p.max_resource);
+            }
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
         self.grant_title(user_id, &mob_name, boss, mob_level);
+        // Bounty bounties: tick any accepted "slay N of X" board quest.
+        self.bump_quests(user_id, |o| {
+            u32::from(matches!(o, Objective::Bounty { name_contains, .. } if mob_name.contains(name_contains)))
+        });
         if boss && let Some(zone) = super::world::frontier_zone_of_boss(&mob_name) {
             self.complete_quest(user_id, zone, mob_level);
         }
         let achievement = boss_achievement_for(&mob_name);
         if let Some(achievement) = achievement {
+            let prize = if achievement.payout.is_some() {
+                "chips and badge"
+            } else {
+                "badge"
+            };
             self.log_to(
                 user_id,
                 LogKind::Loot,
                 format!(
-                    "First defeat of {} can award chips and badge {} once per account.",
+                    "First defeat of {} can award {prize} {} once per account.",
                     achievement.mob_name,
                     award_badge(achievement.award_category, 1)
                 ),
@@ -2552,6 +3824,10 @@ impl WorldState {
         if let Some(p) = self.players.get_mut(&user_id) {
             p.inventory.push(pick);
         }
+        // Collection bounties: tick any "recover N of this item" board quest.
+        self.bump_quests(user_id, |o| {
+            u32::from(matches!(o, Objective::Collect { item, .. } if item == pick))
+        });
         if boss {
             self.log_to(
                 user_id,
@@ -2591,18 +3867,37 @@ impl WorldState {
             p.hp = p.max_hp();
             p.resource = p.max_resource;
         }
-        self.log_to(
-            user_id,
-            LogKind::System,
-            format!("You reach level {new_level}!"),
-        );
-        // Announce any abilities gained between old and new level.
+        // Every level is a real reward: announce the concrete stat gains, any
+        // ability learned, and the named milestone at every fifth level.
+        let res_label = class.resource().label();
         for lvl in (old_level + 1)..=new_level {
+            let cur = class.stats_at(lvl);
+            let prev = class.stats_at(lvl - 1);
+            let d_hp = (cur.max_hp + super::classes::milestone_hp_bonus(lvl))
+                - (prev.max_hp + super::classes::milestone_hp_bonus(lvl - 1));
+            let d_atk = cur.attack - prev.attack;
+            let d_res = cur.max_resource - prev.max_resource;
+            let mut gains = format!("+{d_hp} max HP, +{d_atk} attack");
+            if d_res > 0 {
+                gains.push_str(&format!(", +{d_res} {res_label}"));
+            }
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Level {lvl} reached - {gains}."),
+            );
             if let Some(a) = learned_at(class, lvl) {
                 self.log_to(
                     user_id,
                     LogKind::System,
-                    format!("You learn {} (level {}): {}", a.name, lvl, a.desc),
+                    format!("  New ability: {} - {}", a.name, a.desc),
+                );
+            }
+            if let Some(name) = super::classes::level_milestone(lvl) {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    format!("  Milestone - {name}! Hard-won growth toughens you (permanent +HP)."),
                 );
             }
         }
@@ -2814,6 +4109,29 @@ impl WorldState {
         self.pending_kills.clear();
         let now = Instant::now();
 
+        // Advance the world clock (drives time-of-day and weather).
+        self.world_ticks = self.world_ticks.wrapping_add(1);
+
+        // World boss lifecycle: note when the reigning boss has fallen (before
+        // the reaper sweeps its corpse), then raise a new one when due.
+        if let Some(id) = self.world_boss
+            && !self.mobs.get(&id).is_some_and(|m| m.alive)
+        {
+            self.world_boss = None;
+            self.next_world_boss_tick = self.world_ticks + WORLD_BOSS_INTERVAL;
+        }
+
+        // Reap runtime-only summoned adds (and the dead world boss) once gone.
+        let before = self.mobs.len();
+        self.mobs.retain(|id, m| *id < SUMMON_ID_START || m.alive);
+        if self.mobs.len() != before {
+            self.mark_world_dirty();
+        }
+
+        if self.world_boss.is_none() && self.world_ticks >= self.next_world_boss_tick {
+            self.spawn_world_boss();
+        }
+
         let mut world_changed = false;
         for mob in self.mobs.values_mut() {
             if !mob.alive
@@ -2823,6 +4141,11 @@ impl WorldState {
                 mob.alive = true;
                 mob.hp = mob.spawn.max_hp;
                 mob.respawn_at = None;
+                // A respawned roamer returns home and re-hides if it ambushes.
+                mob.current_room = mob.leash_home;
+                mob.move_cooldown = 0;
+                mob.summon_cooldown = 0;
+                mob.revealed = !matches!(mob.behavior, MobBehavior::Ambusher);
                 self.dirty = true;
                 world_changed = true;
             }
@@ -2830,6 +4153,9 @@ impl WorldState {
         if world_changed {
             self.mark_world_dirty();
         }
+
+        // Roaming: move wanderers/patrollers/hunters that no one is fighting.
+        self.move_roamers();
 
         // Mob damage-over-time from player abilities.
         let dot_ids: Vec<u32> = self.mob_dots.keys().copied().collect();
@@ -2864,32 +4190,20 @@ impl WorldState {
             }
         }
 
-        // Respawn downed players.
-        let resurrecting: Vec<Uuid> = self
+        // A lingering corpse whose deadline has passed is drawn back to the
+        // temple automatically (the player never released and no one revived
+        // them in time).
+        let auto_released: Vec<Uuid> = self
             .players
             .iter()
             .filter(|(_, p)| p.respawn_at.is_some_and(|at| now >= at))
             .map(|(id, _)| *id)
             .collect();
-        for user_id in resurrecting {
-            if let Some(player) = self.players.get_mut(&user_id) {
-                player.hp = player.max_hp();
-                player.resource = player.max_resource;
-                player.previous_room = Some(player.room);
-                player.room = TEMPLE_ROOM;
-                player.target = None;
-                player.respawn_at = None;
-                player.death_save_used = false;
-                player.shield = 0;
-                player.empower = 0;
-            }
-            self.log_to(
+        for user_id in auto_released {
+            self.send_to_temple(
                 user_id,
-                LogKind::System,
-                "You wake at the Temple of the Dawn, restored.".to_string(),
+                "Your spirit slips free and you wake at the Temple of the Dawn, restored.",
             );
-            self.describe_room(user_id);
-            self.dirty = true;
         }
 
         // Per-player upkeep: regen, buff/shield/effect timers, cooldowns.
@@ -2899,6 +4213,22 @@ impl WorldState {
             if let Some(p) = self.players.get_mut(uid) {
                 if p.class.is_some() && p.respawn_at.is_none() {
                     p.resource = (p.resource + p.resource_regen).min(p.max_resource);
+                    // Bard trait "Battle Hymn": Tempo keeps perfect time and
+                    // returns faster than other resources.
+                    if p.class == Some(Class::Bard) {
+                        let beat = 2 + p.level / 10;
+                        p.resource = (p.resource + beat).min(p.max_resource);
+                    }
+                    // Druid "Nature's Renewal" and Paladin "Aura of Devotion" both
+                    // mend a little health every tick (the Druid a touch more).
+                    let mend = match p.class {
+                        Some(Class::Druid) => 2 + p.level / 8,
+                        Some(Class::Paladin) => 1 + p.level / 12,
+                        _ => 0,
+                    };
+                    if mend > 0 && p.hp < p.max_hp() {
+                        p.hp = (p.hp + mend).min(p.max_hp());
+                    }
                 }
                 if p.empower_ticks > 0 {
                     p.empower_ticks -= 1;
@@ -2942,8 +4272,19 @@ impl WorldState {
             .collect();
 
         for user_id in fighters {
-            let (mob_id, base_atk, opening) = match self.players.get(&user_id) {
-                Some(p) => (p.target, p.attack(), p.opening_strike),
+            let (mob_id, base_atk, opening, frenzy_pct, class) = match self.players.get(&user_id) {
+                Some(p) => {
+                    // Berserker "Frenzy": no bonus above half health, then up to
+                    // +50% damage as it falls from half toward death.
+                    let frenzy = if p.class == Some(Class::Berserker) {
+                        let max = p.max_hp().max(1);
+                        let missing = ((max - p.hp).max(0) * 100) / max;
+                        (missing.saturating_sub(50)).clamp(0, 50)
+                    } else {
+                        0
+                    };
+                    (p.target, p.attack(), p.opening_strike, frenzy, p.class)
+                }
                 None => continue,
             };
             let Some(mob_id) = mob_id else { continue };
@@ -2954,8 +4295,23 @@ impl WorldState {
                 }
                 continue;
             }
+            // Ranger "Hunter's Instinct": strikes against a wounded foe (below half
+            // health) bite harder, on auto-attacks as well as abilities.
+            let ranger_wounded = class == Some(Class::Ranger)
+                && self
+                    .mobs
+                    .get(&mob_id)
+                    .is_some_and(|m| m.hp * 2 < m.spawn.max_hp);
             // Opportunist: the Rogue's opening strike of a fight lands as a crit.
             let player_atk = if opening { base_atk * 2 } else { base_atk };
+            // Berserker Frenzy scales the blow up as health runs low.
+            let player_atk = player_atk * (100 + frenzy_pct) / 100;
+            // Hunter's Instinct: extra damage into the wounded foe.
+            let player_atk = if ranger_wounded {
+                player_atk + player_atk / 4
+            } else {
+                player_atk
+            };
             if opening {
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.opening_strike = false;
@@ -2988,6 +4344,35 @@ impl WorldState {
                 self.kill_mob(user_id, mob_id);
                 continue;
             }
+            // A living, fighting companion piles onto the same target. If its
+            // bite finishes the foe, the kill is credited to its owner.
+            if let Some((pet_glyph, pet_name, pet_atk)) = self
+                .players
+                .get(&user_id)
+                .and_then(|p| p.pet.as_ref())
+                .filter(|pet| !pet.downed)
+                .map(|pet| (pet.species.glyph, pet.species.name, pet.attack()))
+            {
+                let (pet_dealt, pet_dead) = {
+                    let Some(mob) = self.mobs.get_mut(&mob_id) else {
+                        continue;
+                    };
+                    let (dealt, _) = mob.spawn.profile.apply(pet_atk, DamageType::Physical);
+                    mob.hp -= dealt;
+                    self.dirty = true;
+                    (dealt, mob.hp <= 0)
+                };
+                self.mark_world_dirty();
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{pet_glyph} Your {pet_name} tears into {mob_name} for {pet_dealt}."),
+                );
+                if pet_dead {
+                    self.kill_mob(user_id, mob_id);
+                    continue;
+                }
+            }
             // Mob strikes back unless stunned.
             let stunned = self.mob_stuns.get(&mob_id).copied().unwrap_or(0) > 0;
             if let Some(v) = self.mob_stuns.get_mut(&mob_id)
@@ -3008,14 +4393,23 @@ impl WorldState {
                 .mobs
                 .get(&mob_id)
                 .map(|m| {
-                    (
-                        m.spawn.damage,
-                        m.spawn.profile.attack_type,
-                        m.spawn.name.to_string(),
-                    )
+                    // Brute: the closer to death, the harder it swings.
+                    let enraged =
+                        matches!(m.behavior, MobBehavior::Brute) && m.hp * 3 < m.spawn.max_hp;
+                    let dmg = if enraged {
+                        m.spawn.damage * 3 / 2
+                    } else {
+                        m.spawn.damage
+                    };
+                    (dmg, m.spawn.profile.attack_type, m.spawn.name.to_string())
                 })
                 .unwrap_or((0, DamageType::Physical, String::new()));
-            self.strike_player(user_id, mob_damage, mob_dtype, &mob_name);
+            if !self.strike_player(user_id, mob_damage, mob_dtype, &mob_name) {
+                continue;
+            }
+            // Resolve the rest of the mob's behavior this round (cast/pack/
+            // summon/steal/flee). No-op for plain Sentinels.
+            self.resolve_mob_behavior(user_id, mob_id);
         }
 
         // Drop idle players.
@@ -3045,10 +4439,385 @@ impl WorldState {
         }
     }
 
-    fn strike_player(&mut self, user_id: Uuid, raw: i32, dtype: DamageType, mob_name: &str) {
-        let now = Instant::now();
-        let Some(p) = self.players.get_mut(&user_id) else {
+    /// Raise the lone wandering world boss after the Frontier seals are claimed.
+    /// It hunts as a roaming boss across the living-dark and Frontier regions.
+    fn spawn_world_boss(&mut self) {
+        if !self
+            .players
+            .values()
+            .any(|p| titles_include_all(&p.titles, &FRONTIER_REQUIRED_TITLES))
+        {
+            self.next_world_boss_tick = self.world_ticks + WORLD_BOSS_INTERVAL;
             return;
+        }
+        let rooms: Vec<RoomId> = self
+            .world
+            .rooms
+            .values()
+            .filter(|r| !r.safe && (is_frontier_room(r.id) || is_living_dark_zone(r.zone)))
+            .map(|r| r.id)
+            .collect();
+        if rooms.is_empty() {
+            self.next_world_boss_tick = self.world_ticks + WORLD_BOSS_INTERVAL;
+            return;
+        }
+        let room = rooms[(self.world_ticks as usize) % rooms.len()];
+        const NAMES: [&str; 4] = [
+            "Gravelord Yorth",
+            "the Hollow Sovereign",
+            "Malrik the Unburied",
+            "Vaultwarden Sceth",
+        ];
+        let name = NAMES[(self.world_ticks / WORLD_BOSS_INTERVAL.max(1)) as usize % NAMES.len()];
+        let spawn = MobSpawn {
+            id: WORLD_BOSS_ID,
+            name,
+            home: room,
+            max_hp: 7200,
+            damage: 145,
+            xp: 1600,
+            respawn_secs: 0,
+            loot: super::items::frontier_loot(6),
+            boss: true,
+            profile: DamageProfile::new(
+                DamageType::Shadow,
+                Some(DamageType::Physical),
+                Some(DamageType::Holy),
+            ),
+        };
+        self.mobs.insert(
+            WORLD_BOSS_ID,
+            MobInstance {
+                hp: spawn.max_hp,
+                alive: true,
+                respawn_at: None,
+                behavior: MobBehavior::Hunter,
+                current_room: room,
+                leash_home: room,
+                move_cooldown: 0,
+                revealed: true,
+                summon_cooldown: 0,
+                spawn,
+            },
+        );
+        self.world_boss = Some(WORLD_BOSS_ID);
+        let zone = self
+            .world
+            .room(room)
+            .map(|r| r.zone)
+            .unwrap_or("the deep world");
+        self.log_all(format!(
+            "A chill grips Lateania: {name} rises in {zone} and begins to hunt."
+        ));
+        self.dirty = true;
+        self.mark_world_dirty();
+    }
+
+    /// Step roaming mobs (Wanderer/Patroller/Hunter) that no player is fighting,
+    /// keeping them inside their own zone and out of safe rooms. Hunters prefer a
+    /// neighbour that holds a player so they close the distance. Ordinary Hunters
+    /// only prowl after dark; the world boss roams its endgame regions at any hour.
+    fn move_roamers(&mut self) {
+        let dark = self.time_of_day().is_dark();
+        let world_boss = self.world_boss;
+        let engaged: Vec<u32> = self.players.values().filter_map(|p| p.target).collect();
+        let player_rooms: Vec<RoomId> = self
+            .players
+            .values()
+            .filter(|p| p.respawn_at.is_none())
+            .map(|p| p.room)
+            .collect();
+
+        let mut plan: Vec<(u32, RoomId)> = Vec::new();
+        let mut ticking: Vec<u32> = Vec::new();
+        for (id, m) in self.mobs.iter() {
+            let is_boss = Some(*id) == world_boss;
+            if !m.alive
+                || !m.revealed
+                || engaged.contains(id)
+                || !matches!(
+                    m.behavior,
+                    MobBehavior::Wanderer | MobBehavior::Patroller | MobBehavior::Hunter
+                )
+            {
+                continue;
+            }
+            // Ordinary Hunters keep to their lair by day and only prowl in the dark.
+            if matches!(m.behavior, MobBehavior::Hunter) && !is_boss && !dark {
+                ticking.push(*id);
+                continue;
+            }
+            if m.move_cooldown > 0 {
+                ticking.push(*id);
+                continue;
+            }
+            let Some(room) = self.world.room(m.current_room) else {
+                continue;
+            };
+            let zone = room.zone;
+            let dests: Vec<RoomId> = room
+                .exits
+                .values()
+                .copied()
+                .filter(|to| {
+                    self.world
+                        .room(*to)
+                        // The world boss may leave its spawn zone; others keep to their zone.
+                        .is_some_and(|d| !d.safe && (is_boss || d.zone == zone))
+                })
+                .collect();
+            if dests.is_empty() {
+                ticking.push(*id);
+                continue;
+            }
+            let pick = (m.spawn.id as usize).wrapping_add(self.generation as usize) % dests.len();
+            let dest = if matches!(m.behavior, MobBehavior::Hunter) {
+                dests
+                    .iter()
+                    .copied()
+                    .find(|d| player_rooms.contains(d))
+                    .unwrap_or(dests[pick])
+            } else {
+                dests[pick]
+            };
+            plan.push((*id, dest));
+        }
+
+        for id in ticking {
+            if let Some(m) = self.mobs.get_mut(&id) {
+                m.move_cooldown = m.move_cooldown.saturating_sub(1);
+            }
+        }
+        let mut moved = false;
+        for (id, dest) in plan {
+            if let Some(m) = self.mobs.get_mut(&id) {
+                m.current_room = dest;
+                m.move_cooldown = MOB_MOVE_COOLDOWN;
+                moved = true;
+            }
+        }
+        if moved {
+            self.dirty = true;
+            self.mark_world_dirty();
+        }
+    }
+
+    /// Behaviors that fire during a mob's combat turn: casters bolt, pack hunters
+    /// gang up, summoners call adds, thieves rob and run, skirmishers flee when
+    /// hurt. Called right after the mob's normal strike; a no-op for Sentinels,
+    /// Brutes (handled in the strike), and roamers.
+    fn resolve_mob_behavior(&mut self, user_id: Uuid, mob_id: u32) {
+        let (behavior, room, name, bite, hp, max_hp, summon_ready) = {
+            let Some(m) = self.mobs.get(&mob_id) else {
+                return;
+            };
+            if !m.alive {
+                return;
+            }
+            (
+                m.behavior,
+                m.current_room,
+                m.spawn.name.to_string(),
+                m.spawn.damage,
+                m.hp,
+                m.spawn.max_hp,
+                m.summon_cooldown == 0,
+            )
+        };
+        // A cheap per-round roll without threading RNG state through combat.
+        let roll = (self.generation as usize).wrapping_add(mob_id as usize) % 100;
+
+        match behavior {
+            MobBehavior::Caster(school) if roll < 40 => {
+                // A storm charges the air, so spell-bolts land half again as hard.
+                let mut bolt = bite + bite / 2;
+                if self.weather() == Weather::Storm {
+                    bolt = bolt * 3 / 2;
+                }
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{name} channels a bolt of {}!", school.label()),
+                );
+                let _ = self.strike_player(user_id, bolt, school, &name);
+            }
+            MobBehavior::PackHunter => {
+                let allies: Vec<(i32, DamageType, String)> = self
+                    .mobs
+                    .values()
+                    .filter(|o| {
+                        o.alive && o.revealed && o.current_room == room && o.spawn.id != mob_id
+                    })
+                    .map(|o| {
+                        (
+                            o.spawn.damage,
+                            o.spawn.profile.attack_type,
+                            o.spawn.name.to_string(),
+                        )
+                    })
+                    .collect();
+                if !allies.is_empty() {
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("{name} howls - the pack closes in!"),
+                    );
+                    for (dmg, dt, an) in allies {
+                        if !self.strike_player(user_id, dmg, dt, &an) {
+                            break;
+                        }
+                    }
+                }
+            }
+            MobBehavior::Summoner => {
+                if summon_ready {
+                    self.summon_add(mob_id, room);
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("{name} calls a servant from the dark!"),
+                    );
+                    if let Some(mm) = self.mobs.get_mut(&mob_id) {
+                        mm.summon_cooldown = 6;
+                    }
+                } else if let Some(mm) = self.mobs.get_mut(&mob_id) {
+                    mm.summon_cooldown = mm.summon_cooldown.saturating_sub(1);
+                }
+            }
+            MobBehavior::Thief if roll < 35 => {
+                let stolen = self
+                    .players
+                    .get(&user_id)
+                    .map(|p| (p.gold / 10).clamp(5, 50).min(p.gold))
+                    .unwrap_or(0);
+                if stolen > 0 {
+                    if let Some(p) = self.players.get_mut(&user_id) {
+                        p.gold -= stolen;
+                    }
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("{name} snatches {stolen} gold and bolts!"),
+                    );
+                    self.flee_mob(user_id, mob_id);
+                }
+            }
+            MobBehavior::Skirmisher if hp * 3 < max_hp => {
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{name} breaks away and flees into the dark!"),
+                );
+                self.flee_mob(user_id, mob_id);
+            }
+            _ => {}
+        }
+    }
+
+    /// Spawn a short-lived add for a Summoner. The add is a runtime-only mob
+    /// (id >= `SUMMON_ID_START`) that simply dies for good when killed.
+    fn summon_add(&mut self, parent_id: u32, room: RoomId) {
+        let (max_hp, damage, profile) = {
+            let Some(parent) = self.mobs.get(&parent_id) else {
+                return;
+            };
+            (
+                parent.spawn.max_hp / 3 + 20,
+                (parent.spawn.damage / 2).max(3),
+                parent.spawn.profile,
+            )
+        };
+        let id = self.next_summon_id;
+        self.next_summon_id = self.next_summon_id.wrapping_add(1);
+        let spawn = MobSpawn {
+            id,
+            name: "a Risen Servant",
+            home: room,
+            max_hp,
+            damage,
+            xp: 5,
+            respawn_secs: 0,
+            loot: &[],
+            boss: false,
+            profile,
+        };
+        self.mobs.insert(
+            id,
+            MobInstance {
+                hp: spawn.max_hp,
+                alive: true,
+                respawn_at: None,
+                behavior: MobBehavior::Sentinel,
+                current_room: room,
+                leash_home: room,
+                move_cooldown: 0,
+                revealed: true,
+                summon_cooldown: 0,
+                spawn,
+            },
+        );
+        self.dirty = true;
+        self.mark_world_dirty();
+    }
+
+    /// Move a mob to a random same-zone, non-safe neighbour and drop the player's
+    /// lock on it (Skirmisher/Thief flight). No-op if there is nowhere to run.
+    fn flee_mob(&mut self, user_id: Uuid, mob_id: u32) {
+        let dest = {
+            let Some(m) = self.mobs.get(&mob_id) else {
+                return;
+            };
+            let Some(room) = self.world.room(m.current_room) else {
+                return;
+            };
+            let zone = room.zone;
+            let dests: Vec<RoomId> = room
+                .exits
+                .values()
+                .copied()
+                .filter(|to| {
+                    self.world
+                        .room(*to)
+                        .is_some_and(|d| d.zone == zone && !d.safe)
+                })
+                .collect();
+            if dests.is_empty() {
+                None
+            } else {
+                Some(dests[(self.generation as usize).wrapping_add(mob_id as usize) % dests.len()])
+            }
+        };
+        let Some(to) = dest else { return };
+        if let Some(m) = self.mobs.get_mut(&mob_id) {
+            m.current_room = to;
+            m.move_cooldown = MOB_MOVE_COOLDOWN;
+        }
+        if let Some(p) = self.players.get_mut(&user_id)
+            && p.target == Some(mob_id)
+        {
+            p.target = None;
+        }
+        self.dirty = true;
+        self.mark_world_dirty();
+    }
+
+    /// Strike a player and return whether this mob's current attack sequence
+    /// should continue. A lethal blow, Warrior death-save, or veteran
+    /// resurrection ends the sequence so extra behavior cannot immediately hit
+    /// the same life again.
+    fn strike_player(
+        &mut self,
+        user_id: Uuid,
+        raw: i32,
+        dtype: DamageType,
+        mob_name: &str,
+    ) -> bool {
+        let now = Instant::now();
+        let escort_raw = raw;
+        // The dark emboldens the dead: every mob blow hits harder after dusk.
+        let raw = raw * self.time_of_day().mob_damage_pct() / 100;
+        let Some(p) = self.players.get_mut(&user_id) else {
+            return false;
         };
         // Armor blunts physical blows fully but only half-protects against
         // elemental and other schools, so caster foes hit harder through plate.
@@ -3059,6 +4828,15 @@ impl WorldState {
             armor / 4
         };
         let mut dmg = (raw - reduction).max(1);
+        // Monk "Iron Body": the trained body blunts physical blows.
+        if p.class == Some(Class::Monk) && dtype == DamageType::Physical {
+            dmg = (dmg - dmg * IRON_BODY_PCT / 100).max(1);
+        }
+        // Tank-archetype mitigation reduces every incoming blow.
+        let (_, mitigation_pct, _, _) = p.archetype_mods();
+        if mitigation_pct > 0 {
+            dmg = (dmg - dmg * mitigation_pct / 100).max(1);
+        }
         if p.shield > 0 {
             let absorbed = p.shield.min(dmg);
             p.shield -= absorbed;
@@ -3082,7 +4860,9 @@ impl WorldState {
                     LogKind::Combat,
                     format!("{mob_name} {verb} you to the brink."),
                 );
-                return;
+                self.wound_escort(user_id, escort_raw);
+                self.wound_pet(user_id, dmg);
+                return false;
             }
             // Veteran resurrection: a citizen of twenty days rises where they fell
             // instead of waking back at the temple. Refreshes at a capital fountain.
@@ -3104,27 +4884,444 @@ impl WorldState {
                         "{mob_name} {verb} you down - but Lateania will not have you yet. You rise where you stand. ({left} resurrection{plural} left this adventure.)"
                     ),
                 );
-                return;
+                self.wound_escort(user_id, escort_raw);
+                self.wound_pet(user_id, dmg);
+                return false;
             }
+            // No save and no charge left: the player falls and becomes a corpse
+            // where they stand. Their spirit lingers - a healer may resurrect
+            // them, or they can release to the temple - until the linger
+            // deadline draws them back automatically.
             p.hp = 0;
             p.target = None;
-            p.respawn_at = Some(now + Duration::from_secs(PLAYER_RESPAWN_SECS));
+            p.shield = 0;
+            p.empower = 0;
+            p.dead = true;
+            p.respawn_at = Some(now + Duration::from_secs(CORPSE_LINGER_SECS));
+            let lost_escort = p.escort.take().map(|e| e.name);
             let lost_gold = carried_gold_death_loss(p.gold);
             if lost_gold > 0 {
                 p.gold -= lost_gold;
             }
             let death_message = if lost_gold > 0 {
-                format!("You have fallen! Darkness takes you... You lose {lost_gold} carried gold.")
+                format!(
+                    "You have fallen! Your spirit lingers by your corpse (you lose {lost_gold} carried gold). Wait for a resurrection, or press r to release to the temple."
+                )
             } else {
-                "You have fallen! Darkness takes you...".to_string()
+                "You have fallen! Your spirit lingers by your corpse. Wait for a resurrection, or press r to release to the temple.".to_string()
             };
             self.log_to(user_id, LogKind::System, death_message);
+            if let Some(name) = lost_escort {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!("You lost {name} when you fell - the escort must be taken anew."),
+                );
+            }
+            false
         } else {
             self.log_to(
                 user_id,
                 LogKind::Combat,
                 format!("{mob_name} {verb} you for {dmg}."),
             );
+            self.wound_escort(user_id, escort_raw);
+            self.wound_pet(user_id, dmg);
+            true
+        }
+    }
+
+    /// Send a (usually dead) player to the Temple of the Dawn, fully restored,
+    /// clearing the corpse state. Shared by the auto-release tick and the manual
+    /// release action. A fallen escort cannot be led from beyond the temple.
+    fn send_to_temple(&mut self, user_id: Uuid, message: &str) {
+        let lost_escort = self
+            .players
+            .get(&user_id)
+            .and_then(|p| p.escort.as_ref())
+            .map(|e| e.name);
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.hp = player.max_hp();
+            player.resource = player.max_resource;
+            player.previous_room = Some(player.room);
+            player.room = TEMPLE_ROOM;
+            player.target = None;
+            player.respawn_at = None;
+            player.dead = false;
+            player.death_save_used = false;
+            player.shield = 0;
+            player.empower = 0;
+            player.escort = None;
+        }
+        self.log_to(user_id, LogKind::System, message.to_string());
+        if let Some(name) = lost_escort {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You lost {name} when you fell - the escort must be taken anew."),
+            );
+        }
+        self.describe_room(user_id);
+        self.dirty = true;
+    }
+
+    /// Release a lingering spirit to the temple now, instead of waiting for a
+    /// resurrection. No-op unless the player is currently a corpse.
+    fn release_to_temple(&mut self, user_id: Uuid) {
+        if !self.players.get(&user_id).is_some_and(|p| p.dead) {
+            return;
+        }
+        self.send_to_temple(
+            user_id,
+            "You release your hold on the world and wake at the Temple of the Dawn, restored.",
+        );
+    }
+
+    /// Perform the Resurrection rite: a capable, living caster calls the nearest
+    /// fallen adventurer in their room back to life where they lie. Costs
+    /// resource and revives the target at a fraction of full vitality.
+    fn resurrect_nearest(&mut self, user_id: Uuid) {
+        // The caster must be alive, classed with the rite, and able to pay.
+        let caster = match self.players.get(&user_id) {
+            Some(p) if !p.dead => p,
+            _ => return,
+        };
+        let room = caster.room;
+        let can = caster.class.is_some_and(|c| c.can_resurrect());
+        if !can {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You do not command the Resurrection rite.".to_string(),
+            );
+            return;
+        }
+        if caster.resource < RESURRECT_COST {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You need {RESURRECT_COST} to perform the rite."),
+            );
+            return;
+        }
+        // The nearest fallen adventurer in the room (deterministic by id).
+        let mut corpses: Vec<Uuid> = self
+            .players
+            .values()
+            .filter(|p| p.dead && p.room == room && p.user_id != user_id)
+            .map(|p| p.user_id)
+            .collect();
+        corpses.sort();
+        let Some(target_id) = corpses.first().copied() else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "No fallen adventurer lies here to resurrect.".to_string(),
+            );
+            return;
+        };
+        if let Some(caster) = self.players.get_mut(&user_id) {
+            caster.resource -= RESURRECT_COST;
+        }
+        if let Some(target) = self.players.get_mut(&target_id) {
+            target.dead = false;
+            target.respawn_at = None;
+            target.death_save_used = false;
+            target.shield = 0;
+            target.empower = 0;
+            let max = target.max_hp();
+            target.hp = (max * RESURRECT_HP_PCT / 100).max(1);
+            target.resource = (target.max_resource * RESURRECT_HP_PCT / 100).max(0);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            "You speak the Resurrection rite and call a fallen adventurer back to life!"
+                .to_string(),
+        );
+        self.log_to(
+            target_id,
+            LogKind::System,
+            "A surge of holy light pulls you back from death - you live again, where you fell."
+                .to_string(),
+        );
+        self.describe_room(target_id);
+        self.dirty = true;
+        self.mark_world_dirty();
+    }
+
+    /// Whether a companion Stable stands in this room.
+    fn room_has_stable(&self, room: RoomId) -> bool {
+        features_at(room)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Stable)
+    }
+
+    /// Buy a companion of `species_key` at the Stable in the player's room. A new
+    /// purchase replaces any current companion (it returns to the wild).
+    fn buy_pet(&mut self, user_id: Uuid, species_key: &str) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if !self.room_has_stable(p.room) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You must be at a stable to buy a companion.".to_string(),
+            );
+            return;
+        }
+        let Some(species) = pet_species_by_key(species_key) else {
+            return;
+        };
+        if p.gold < species.price {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "The {} costs {} gold - more than you carry.",
+                    species.name, species.price
+                ),
+            );
+            return;
+        }
+        let released = p.pet.map(|old| old.species.name);
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= species.price;
+            p.pet = Some(Pet::new(species, 0));
+        }
+        if let Some(old) = released {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {old} is set loose and pads off into the wild."),
+            );
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "{} {} answers to you now. Lead it well - feed it here to make it stronger.",
+                species.glyph, species.name
+            ),
+        );
+        self.dirty = true;
+    }
+
+    /// Feed the player's companion at a Stable: revive, heal to full, and add
+    /// loyalty (which raises its level). Costs `PET_FEED_COST` gold.
+    fn feed_pet(&mut self, user_id: Uuid) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if !self.room_has_stable(p.room) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Find a stable to feed and tend your companion.".to_string(),
+            );
+            return;
+        }
+        if p.pet.is_none() {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You have no companion to feed.".to_string(),
+            );
+            return;
+        }
+        if p.gold < PET_FEED_COST {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Feed costs {PET_FEED_COST} gold."),
+            );
+            return;
+        }
+        let mut leveled = false;
+        let mut name = String::new();
+        let mut new_level = 0;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= PET_FEED_COST;
+            if let Some(pet) = p.pet.as_mut() {
+                leveled = pet.feed();
+                name = pet.species.name.to_string();
+                new_level = pet.level();
+            }
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You feed and tend your {name}; it mends and warms to you."),
+        );
+        if leveled {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {name} grows stronger! (companion level {new_level})"),
+            );
+        }
+        self.dirty = true;
+    }
+
+    /// Splash a fraction of an incoming blow onto a fighting companion. A pet
+    /// that drops to zero is downed and stops fighting until fed.
+    fn wound_pet(&mut self, user_id: Uuid, raw: i32) {
+        let mut downed_name: Option<String> = None;
+        if let Some(p) = self.players.get_mut(&user_id)
+            && let Some(pet) = p.pet.as_mut()
+            && !pet.downed
+        {
+            pet.hp -= (raw * PET_WOUND_PCT / 100).max(1);
+            if pet.hp <= 0 {
+                pet.hp = 0;
+                pet.downed = true;
+                downed_name = Some(pet.species.name.to_string());
+            }
+        }
+        if let Some(name) = downed_name {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("Your {name} is beaten down! Feed it at a stable to rouse it."),
+            );
+            self.dirty = true;
+        }
+    }
+
+    // ---- Player housing -------------------------------------------------
+
+    /// Whether a housing clerk stands in this room.
+    fn room_has_housing_clerk(&self, room: RoomId) -> bool {
+        features_at(room)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Housing)
+    }
+
+    /// The plot (tier index) this player holds the deed to, if any.
+    fn owned_plot(&self, user_id: Uuid) -> Option<usize> {
+        self.plot_owner
+            .iter()
+            .find(|(_, owner)| **owner == user_id)
+            .map(|(plot, _)| *plot)
+    }
+
+    /// Buy the deed to tier `plot` and claim its home. Must be at the clerk, own
+    /// no home already, and the plot must be unclaimed and affordable.
+    fn buy_deed(&mut self, user_id: Uuid, plot: usize) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if !self.room_has_housing_clerk(p.room) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You can only buy a deed from the housing clerk at Hearthward Close.".to_string(),
+            );
+            return;
+        }
+        let Some(tier) = housing::TIERS.get(plot) else {
+            return;
+        };
+        if let Some(existing) = self.owned_plot(user_id) {
+            let name = housing::TIERS[existing].label;
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You already hold the deed to a {name}. One home to a name."),
+            );
+            return;
+        }
+        if self.plot_owner.contains_key(&plot) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("The {} is already spoken for. Try another.", tier.label),
+            );
+            return;
+        }
+        if p.gold < tier.price {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("The {} deed costs {} gold.", tier.label, tier.price),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= tier.price;
+        }
+        self.plot_owner.insert(plot, user_id);
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "The deed is yours - the {} at Hearthward Close is now your home. Step inside and furnish it from the clerk's catalogue.",
+                tier.label
+            ),
+        );
+        self.dirty = true;
+    }
+
+    /// Buy a furnishing and set it down in the home room the player is standing
+    /// in. Must be inside a home this player owns.
+    fn buy_furniture(&mut self, user_id: Uuid, key: &str) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        let room = p.room;
+        let Some(plot) = plot_of_room(room) else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You can only place furniture inside your own home.".to_string(),
+            );
+            return;
+        };
+        if self.plot_owner.get(&plot) != Some(&user_id) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "This is not your home to furnish.".to_string(),
+            );
+            return;
+        }
+        let Some(furn) = furniture_by_key(key) else {
+            return;
+        };
+        if p.gold < furn.price {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("{} costs {} gold.", furn.name, furn.price),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= furn.price;
+        }
+        self.house_furniture.entry(room).or_default().push(furn);
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "You set down {} - the room feels more like home.",
+                furn.name
+            ),
+        );
+        self.dirty = true;
+    }
+
+    /// Cycle one appearance/bio field forward (+1) or back (-1), wrapping.
+    fn cycle_appearance(&mut self, user_id: Uuid, field: usize, delta: i8) {
+        if field >= appearance::N_FIELDS {
+            return;
+        }
+        let count = appearance::option_count(field) as i32;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            let cur = p.appearance[field] as i32;
+            p.appearance[field] = (cur + delta as i32).rem_euclid(count) as u8;
+            self.dirty = true;
         }
     }
 
@@ -3137,6 +5334,8 @@ impl WorldState {
 
     fn snapshot(&self) -> MudSnapshot {
         let mut players = HashMap::new();
+        let time_of_day = self.time_of_day().label();
+        let weather = self.weather().label();
         for (user_id, player) in &self.players {
             let room = self.world.room(player.room);
             let (room_name, room_desc, zone, safe, exits) = match room {
@@ -3166,7 +5365,7 @@ impl WorldState {
             let mobs: Vec<MobView> = self
                 .mobs
                 .values()
-                .filter(|m| m.alive && m.spawn.home == player.room)
+                .filter(|m| m.alive && m.revealed && m.current_room == player.room)
                 .map(|m| MobView {
                     name: m.spawn.name.to_string(),
                     hp: m.hp,
@@ -3185,8 +5384,11 @@ impl WorldState {
                     hp: other.hp,
                     max_hp: other.max_hp(),
                     in_combat: other.target.is_some(),
+                    alive: !other.dead,
+                    bio: appearance::compose_bio(&other.appearance),
                 })
                 .collect();
+            let corpse_here = occupants.iter().any(|o| !o.alive);
             let now = Instant::now();
             let wildlife: Vec<WildlifeView> = critters_at(player.room)
                 .into_iter()
@@ -3302,6 +5504,78 @@ impl WorldState {
                     .collect(),
             });
 
+            let pet = player.pet.as_ref().map(|pet| PetView {
+                name: pet.species.name.to_string(),
+                glyph: pet.species.glyph.to_string(),
+                level: pet.level(),
+                hp: pet.hp,
+                max_hp: pet.max_hp(),
+                attack: pet.attack(),
+                downed: pet.downed,
+                loyalty_pct: pet.loyalty_pct(),
+            });
+            let stable = self.room_has_stable(player.room).then(|| StableView {
+                feed_cost: PET_FEED_COST,
+                entries: super::pets::PET_SPECIES
+                    .iter()
+                    .map(|s| StableEntryView {
+                        key: s.key.to_string(),
+                        name: s.name.to_string(),
+                        glyph: s.glyph.to_string(),
+                        price: s.price,
+                        hp: s.base_hp,
+                        attack: s.base_attack,
+                        desc: s.desc.to_string(),
+                        affordable: player.gold >= s.price,
+                    })
+                    .collect(),
+            });
+
+            // The housing ledger: deeds at the clerk, furnishings inside your home.
+            let housing = if self.room_has_housing_clerk(player.room) {
+                Some(HousingView {
+                    title: "Deeds of Hearthward Close".to_string(),
+                    furnish: false,
+                    entries: housing::TIERS
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            let owner = self.plot_owner.get(&i);
+                            HousingEntryView {
+                                key: t.key.to_string(),
+                                name: t.label.to_string(),
+                                price: t.price,
+                                detail: format!("{} rooms - {}", t.rooms(), t.blurb),
+                                affordable: player.gold >= t.price,
+                                taken: owner.is_some_and(|o| *o != *user_id),
+                                owned: owner == Some(user_id),
+                            }
+                        })
+                        .collect(),
+                })
+            } else if plot_of_room(player.room)
+                .is_some_and(|plot| self.plot_owner.get(&plot) == Some(user_id))
+            {
+                Some(HousingView {
+                    title: "Furnish your home".to_string(),
+                    furnish: true,
+                    entries: housing::FURNITURE
+                        .iter()
+                        .map(|f| HousingEntryView {
+                            key: f.key.to_string(),
+                            name: f.name.to_string(),
+                            price: f.price,
+                            detail: f.desc.to_string(),
+                            affordable: player.gold >= f.price,
+                            taken: false,
+                            owned: false,
+                        })
+                        .collect(),
+                })
+            } else {
+                None
+            };
+
             let xp_into = player.xp - xp_for_level(player.level);
             let xp_next = if player.level >= Class::MAX_LEVEL {
                 0
@@ -3320,15 +5594,40 @@ impl WorldState {
             let minimap =
                 self.world
                     .minimap(player.room, player.previous_room, &player.visited, 3, 2);
-            let quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
+            let mut quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
                 .filter_map(|z| {
                     super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
                         name: format!("{zname} - slay {boss}"),
                         done: player.completed_quests.contains(&z),
                         reward: format!("title: Champion of the {zname}"),
+                        frontier: true,
                     })
                 })
                 .collect();
+            // Accepted board bounties, with live progress and a claim hint.
+            for (id, prog) in &player.board_progress {
+                if let Some(q) = board_quest(*id) {
+                    let need = q.objective.target();
+                    let ready = *prog >= need;
+                    quests.push(QuestView {
+                        name: if ready {
+                            format!("{} - READY to claim", q.title)
+                        } else {
+                            format!("{} ({}/{})", q.title, prog, need)
+                        },
+                        done: ready,
+                        reward: format!(
+                            "{} gold{}",
+                            q.reward_gold,
+                            match q.reward_title {
+                                Some(t) => format!(" + title: {t}"),
+                                None => String::new(),
+                            }
+                        ),
+                        frontier: false,
+                    });
+                }
+            }
 
             players.insert(
                 *user_id,
@@ -3365,8 +5664,23 @@ impl WorldState {
                     abilities,
                     inventory,
                     shop,
+                    pet,
+                    stable,
+                    housing,
+                    bio: appearance::compose_bio(&player.appearance),
+                    appearance: (0..appearance::N_FIELDS)
+                        .map(|i| {
+                            (
+                                appearance::field_label(i).to_string(),
+                                appearance::option(i, player.appearance[i]).to_string(),
+                            )
+                        })
+                        .collect(),
                     log: player.log.clone(),
                     respawning: player.respawn_at.is_some(),
+                    dead: player.dead,
+                    can_resurrect: player.class.is_some_and(|c| c.can_resurrect()),
+                    corpse_here,
                     scores: player.scores,
                     titles: player.titles.clone(),
                     title_levels: player.title_levels.clone(),
@@ -3376,6 +5690,37 @@ impl WorldState {
                     resurrection_cap: player.resurrection_cap,
                     features,
                     minimap,
+                    time_of_day,
+                    weather,
+                    escort: player
+                        .escort
+                        .as_ref()
+                        .map(|e| (e.name.to_string(), e.hp, e.max_hp, e.dest_zone.to_string())),
+                    archetype: player
+                        .archetype
+                        .map(|a| (a.name.to_string(), a.role.label().to_string())),
+                    archetype_choices: if player.archetype.is_none()
+                        && player.class.is_some()
+                        && player.level >= ARCHETYPE_LEVEL
+                    {
+                        player
+                            .class
+                            .map(|c| {
+                                super::classes::archetypes_for(c)
+                                    .into_iter()
+                                    .map(|a| {
+                                        (
+                                            a.name.to_string(),
+                                            a.role.label().to_string(),
+                                            a.desc.to_string(),
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
                 },
             );
         }
@@ -3383,6 +5728,7 @@ impl WorldState {
             room_id: self.room_id,
             generation: self.generation,
             players,
+            reset_versions: HashMap::new(),
         }
     }
 }
@@ -3431,10 +5777,24 @@ fn title_for(mob_name: &str, boss: bool) -> String {
     format!("{capitalized}bane")
 }
 
+fn titles_include_all(titles: &[String], required: &[&str]) -> bool {
+    required
+        .iter()
+        .all(|needed| titles.iter().any(|owned| owned == *needed))
+}
+
+fn is_living_dark_zone(zone: &str) -> bool {
+    matches!(
+        zone,
+        "The Sunken Catacombs" | "The Thornwood Hollows" | "The Drowned Caverns"
+    )
+}
+
 fn boss_achievement_for(mob_name: &str) -> Option<BossAchievement> {
     match mob_name {
         "the Archdemon Mal'gareth" => Some(ARCHDEMON_ACHIEVEMENT),
         "the King Who Was Promised Nothing" => Some(FRONTIER_KING_ACHIEVEMENT),
+        "Yssgar, the Sundering Deep" => Some(SUNDERING_DEEP_ACHIEVEMENT),
         _ => None,
     }
 }
@@ -3484,6 +5844,503 @@ mod tests {
 
     fn world() -> WorldState {
         WorldState::new(uid(999), seed_world())
+    }
+
+    fn grant_frontier_unlock_titles(s: &mut WorldState, user_id: Uuid) {
+        let p = s.players.get_mut(&user_id).expect("player exists");
+        for title in FRONTIER_REQUIRED_TITLES {
+            if !p.titles.iter().any(|owned| owned == title) {
+                p.titles.push(title.to_string());
+            }
+        }
+    }
+
+    fn dir_to_zone(s: &WorldState, from: RoomId, zone: &str) -> Dir {
+        s.world
+            .room(from)
+            .expect("room exists")
+            .exits
+            .iter()
+            .find_map(|(dir, dest)| {
+                s.world
+                    .room(*dest)
+                    .is_some_and(|room| room.zone == zone)
+                    .then_some(*dir)
+            })
+            .expect("exit to zone exists")
+    }
+
+    /// Put a classed player and a single controlled mob (with `behavior`) into a
+    /// non-safe Frontier room that has same-zone neighbours to flee to, engage
+    /// it, and return (state, mob_id). The mob is given a big HP pool so the
+    /// player's opening strike can't kill it before its behavior resolves.
+    fn engaged_with(behavior: MobBehavior) -> (WorldState, u32) {
+        const ROOM: RoomId = 2001; // Frontier zone 0, interior (non-safe, has exits)
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let mob_id = *s.mobs.keys().next().expect("world has mobs");
+        {
+            let m = s.mobs.get_mut(&mob_id).unwrap();
+            m.behavior = behavior;
+            m.alive = true;
+            m.revealed = true;
+            m.current_room = ROOM;
+            m.leash_home = ROOM;
+            m.hp = 200;
+            m.spawn.max_hp = 1000;
+            m.spawn.damage = 1; // can't kill the player while we observe
+        }
+        s.players.get_mut(&uid(1)).unwrap().room = ROOM;
+        s.engage(uid(1));
+        assert_eq!(s.players[&uid(1)].target, Some(mob_id), "engaged the mob");
+        (s, mob_id)
+    }
+
+    #[test]
+    fn skirmisher_flees_when_wounded_and_breaks_the_lock() {
+        let (mut s, mob_id) = engaged_with(MobBehavior::Skirmisher);
+        let start = s.mobs[&mob_id].current_room;
+        // Wound it below a third so the flee condition trips.
+        s.mobs.get_mut(&mob_id).unwrap().hp = 100; // < 1000/3
+        s.tick();
+        assert_ne!(
+            s.mobs[&mob_id].current_room, start,
+            "a wounded skirmisher should flee to another room"
+        );
+        assert_eq!(
+            s.players[&uid(1)].target,
+            None,
+            "fleeing breaks the player's target lock"
+        );
+    }
+
+    #[test]
+    fn summoner_calls_an_add_into_the_fight() {
+        let (mut s, _mob_id) = engaged_with(MobBehavior::Summoner);
+        let before = s.mobs.len();
+        s.tick();
+        assert!(
+            s.mobs.keys().any(|id| *id >= SUMMON_ID_START),
+            "summoner should have spawned a runtime add"
+        );
+        assert!(s.mobs.len() > before, "the add joins the mob roster");
+    }
+
+    #[test]
+    fn world_clock_cycles_through_day_phases_and_weather() {
+        assert_eq!(TimeOfDay::from_ticks(0), TimeOfDay::Dawn);
+        assert_eq!(TimeOfDay::from_ticks(PHASE_TICKS), TimeOfDay::Day);
+        assert_eq!(TimeOfDay::from_ticks(PHASE_TICKS * 2), TimeOfDay::Dusk);
+        assert_eq!(TimeOfDay::from_ticks(PHASE_TICKS * 3), TimeOfDay::Night);
+        assert_eq!(TimeOfDay::from_ticks(PHASE_TICKS * 4), TimeOfDay::Dawn);
+        // The dark hits harder than the day.
+        assert_eq!(TimeOfDay::Day.mob_damage_pct(), 100);
+        assert!(TimeOfDay::Night.mob_damage_pct() > 100);
+        // Weather rolls over as the clock advances.
+        assert_ne!(
+            Weather::from_ticks(0),
+            Weather::from_ticks(WEATHER_TICKS * 2)
+        );
+    }
+
+    #[test]
+    fn world_boss_waits_for_frontier_unlock_titles() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        s.world_ticks = WORLD_BOSS_FIRST_TICK - 1;
+        s.next_world_boss_tick = WORLD_BOSS_FIRST_TICK;
+        s.tick();
+        assert_eq!(
+            s.world_boss, None,
+            "world boss should not wake before the living-dark seals"
+        );
+        assert!(
+            s.next_world_boss_tick > WORLD_BOSS_FIRST_TICK,
+            "failed wake should reschedule instead of retrying every tick"
+        );
+    }
+
+    #[test]
+    fn world_boss_rises_on_schedule_and_is_announced() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        grant_frontier_unlock_titles(&mut s, uid(1));
+        s.world_ticks = WORLD_BOSS_FIRST_TICK - 1;
+        s.next_world_boss_tick = WORLD_BOSS_FIRST_TICK;
+        s.tick();
+        assert_eq!(
+            s.world_boss,
+            Some(WORLD_BOSS_ID),
+            "a world boss should rise"
+        );
+        let boss = s
+            .mobs
+            .get(&WORLD_BOSS_ID)
+            .expect("world boss joins the roster");
+        assert!(boss.spawn.boss, "it is a boss");
+        assert!(matches!(boss.behavior, MobBehavior::Hunter), "it hunts");
+        assert!(
+            boss.spawn.loot.iter().any(|id| (3000..3200).contains(id)),
+            "post-unlock world boss should drop Frontier catalog loot"
+        );
+        assert!(
+            is_frontier_room(boss.current_room)
+                || s.world
+                    .room(boss.current_room)
+                    .is_some_and(|room| is_living_dark_zone(room.zone)),
+            "world boss should spawn in endgame regions"
+        );
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|l| l.text.contains("rises")),
+            "the rising is announced server-wide"
+        );
+    }
+
+    #[test]
+    fn board_bounty_accepts_then_pays_out_on_claim() {
+        use super::super::world::{TASMANIA_SQUARE, features_at};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = TASMANIA_SQUARE;
+        let board = features_at(TASMANIA_SQUARE)
+            .iter()
+            .position(|f| f.kind == FeatureKind::Board)
+            .expect("a board stands in the Tasmania square");
+
+        // First examine accepts the next bounty (id 1).
+        s.interact(uid(1), board);
+        assert!(
+            s.players[&uid(1)]
+                .board_progress
+                .iter()
+                .any(|(id, _)| *id == 1),
+            "examining the board accepts the next bounty"
+        );
+
+        // Force it complete, then claim on the next examine.
+        for e in s
+            .players
+            .get_mut(&uid(1))
+            .unwrap()
+            .board_progress
+            .iter_mut()
+        {
+            if e.0 == 1 {
+                e.1 = 99;
+            }
+        }
+        let gold_before = s.players[&uid(1)].gold;
+        s.interact(uid(1), board);
+        // Quest 1 is a Daily, so a claim records a cooldown rather than a
+        // permanent done-flag.
+        assert!(
+            s.players[&uid(1)]
+                .quest_cooldowns
+                .iter()
+                .any(|(id, _)| *id == 1),
+            "claiming the daily records its cooldown"
+        );
+        assert_eq!(
+            s.players[&uid(1)].gold,
+            gold_before + 120,
+            "the reward is paid on claim"
+        );
+        assert!(
+            !s.players[&uid(1)]
+                .board_progress
+                .iter()
+                .any(|(id, _)| *id == 1),
+            "a claimed bounty leaves the active list"
+        );
+    }
+
+    #[test]
+    fn reach_bounty_completes_on_entering_the_zone() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // Hold the "Into the Dark" reach bounty (id 3 -> The Sunken Catacombs).
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .board_progress
+            .push((3, 0));
+        s.players.get_mut(&uid(1)).unwrap().room = 5001; // a Catacombs room
+        s.describe_room(uid(1));
+        let prog = s.players[&uid(1)]
+            .board_progress
+            .iter()
+            .find(|(id, _)| *id == 3)
+            .map(|(_, p)| *p)
+            .expect("reach bounty still tracked");
+        assert!(
+            prog >= 1,
+            "entering the catacombs completes the reach bounty"
+        );
+    }
+
+    #[test]
+    fn escort_completes_on_reaching_its_destination_zone() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().escort = Some(EscortState {
+            quest_id: 10,
+            name: "Brother Aldric",
+            dest_zone: "The Sunken Catacombs",
+            hp: 80,
+            max_hp: 80,
+        });
+        let gold_before = s.players[&uid(1)].gold;
+        s.players.get_mut(&uid(1)).unwrap().room = 5001; // a Catacombs room
+        s.describe_room(uid(1));
+        assert!(
+            s.players[&uid(1)].escort.is_none(),
+            "the escort completes on arrival"
+        );
+        assert!(
+            s.players[&uid(1)].board_done.contains(&10),
+            "quest 10 is done"
+        );
+        assert_eq!(
+            s.players[&uid(1)].gold,
+            gold_before + 220,
+            "the escort reward is paid"
+        );
+    }
+
+    #[test]
+    fn escort_is_lost_when_the_escortee_is_slain() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().escort = Some(EscortState {
+            quest_id: 10,
+            name: "Brother Aldric",
+            dest_zone: "The Sunken Catacombs",
+            hp: 3,
+            max_hp: 80,
+        });
+        // generation is 0, so roll = raw % 100; raw=10 -> 10 < 35 -> a hit lands.
+        s.wound_escort(uid(1), 10);
+        assert!(
+            s.players[&uid(1)].escort.is_none(),
+            "a slain escortee ends the escort"
+        );
+    }
+
+    #[test]
+    fn daily_bounty_goes_on_cooldown_then_returns_after_a_day() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = super::super::world::TASMANIA_SQUARE;
+        let board = super::super::world::features_at(super::super::world::TASMANIA_SQUARE)
+            .iter()
+            .position(|f| f.kind == FeatureKind::Board)
+            .expect("board in the square");
+        // Take and finish the daily bounty (id 1), then claim it.
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .board_progress
+            .push((1, 99));
+        s.interact(uid(1), board);
+        assert!(
+            s.players[&uid(1)]
+                .quest_cooldowns
+                .iter()
+                .any(|(id, _)| *id == 1),
+            "claiming a daily records its cooldown"
+        );
+        assert!(
+            !s.players[&uid(1)].board_done.contains(&1),
+            "a daily is never permanently done"
+        );
+        let q1 = board_quest(1).unwrap();
+        let claimed_at = s.players[&uid(1)]
+            .quest_cooldowns
+            .iter()
+            .find_map(|(id, at)| (*id == 1).then_some(*at))
+            .expect("daily claim timestamp");
+        assert!(
+            !s.board_quest_available_at(&s.players[&uid(1)], q1, claimed_at),
+            "a freshly-claimed daily is unavailable"
+        );
+        assert!(
+            s.board_quest_available_at(&s.players[&uid(1)], q1, claimed_at + DAY_SECS),
+            "the daily returns once a day has passed"
+        );
+    }
+
+    #[test]
+    fn druid_regenerates_health_each_tick() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Druid);
+        s.players.get_mut(&uid(1)).unwrap().hp = 1;
+        s.tick();
+        assert!(
+            s.players[&uid(1)].hp > 1,
+            "Nature's Renewal should mend the Druid each tick"
+        );
+    }
+
+    #[test]
+    fn necromancer_harvests_health_and_souls_on_a_kill() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Necromancer);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.hp = 5;
+            p.resource = 0;
+        }
+        let mob_id = *s.mobs.keys().next().expect("world has mobs");
+        s.kill_mob(uid(1), mob_id);
+        let p = &s.players[&uid(1)];
+        assert!(p.hp > 5, "Soul Harvest restores health on a kill");
+        assert!(p.resource > 0, "Soul Harvest restores Souls on a kill");
+    }
+
+    #[test]
+    fn all_twelve_classes_can_be_chosen_with_sane_stats() {
+        for (i, class) in Class::ALL.iter().enumerate() {
+            let mut s = world();
+            let u = uid(i as u128 + 1);
+            s.join(u);
+            s.choose_class(u, *class);
+            let p = &s.players[&u];
+            assert_eq!(p.class, Some(*class), "class applied");
+            assert!(p.max_hp() > 0, "{class:?} has health");
+            assert!(p.max_resource > 0, "{class:?} has a resource pool");
+            assert_eq!(p.hp, p.max_hp(), "{class:?} starts at full health");
+        }
+    }
+
+    #[test]
+    fn archetype_is_gated_to_level_ten_then_persists_and_tunes_stats() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Too early: the choice is refused below the eligibility level.
+        s.players.get_mut(&uid(1)).unwrap().level = ARCHETYPE_LEVEL - 1;
+        s.choose_archetype(uid(1), 1); // Juggernaut (tank) at level 9
+        assert!(
+            s.players[&uid(1)].archetype.is_none(),
+            "no archetype before the gate level"
+        );
+        // At the gate, the view offers exactly the two Warrior paths.
+        s.players.get_mut(&uid(1)).unwrap().level = ARCHETYPE_LEVEL;
+        let choices = s.snapshot().players[&uid(1)].archetype_choices.clone();
+        assert_eq!(choices.len(), 2, "two paths offered at the gate");
+
+        let hp_before = s.players[&uid(1)].max_hp();
+        s.choose_archetype(uid(1), 1); // Juggernaut: tank, +12% max HP
+        let chosen = s.players[&uid(1)].archetype.expect("archetype committed");
+        assert_eq!(chosen.key, "juggernaut");
+        assert!(
+            s.players[&uid(1)].max_hp() > hp_before,
+            "the tank max-HP bonus takes effect immediately"
+        );
+        // Locked in: a second attempt is a no-op.
+        s.choose_archetype(uid(1), 0);
+        assert_eq!(s.players[&uid(1)].archetype.unwrap().key, "juggernaut");
+        // Once chosen, the offer list is empty so the gate releases.
+        assert!(s.snapshot().players[&uid(1)].archetype_choices.is_empty());
+    }
+
+    #[test]
+    fn tank_archetype_mitigates_incoming_damage() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.level = ARCHETYPE_LEVEL;
+        // Strip armor so the only difference measured is archetype mitigation.
+        let base_hp = 500;
+        p.base_max_hp = base_hp;
+        p.hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let plain = base_hp - s.players[&uid(1)].hp;
+
+        // Reset and pick the tank path, then take the identical blow.
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.choose_archetype(uid(1), 1); // Juggernaut (tank, 22% mitigation)
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let tanked = base_hp - s.players[&uid(1)].hp;
+        assert!(
+            tanked < plain,
+            "tank archetype should reduce the hit ({tanked} vs {plain})"
+        );
+    }
+
+    #[test]
+    fn monk_iron_body_blunts_physical_but_not_elemental() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Monk);
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        let base_hp = 500;
+        p.base_max_hp = base_hp;
+        p.hp = base_hp;
+        // A physical blow is blunted by Iron Body...
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let physical = base_hp - s.players[&uid(1)].hp;
+        // ...while an elemental blow of the same size lands in full.
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Fire, "test");
+        let fire = base_hp - s.players[&uid(1)].hp;
+        assert!(
+            physical < fire,
+            "Iron Body should reduce physical but not fire ({physical} vs {fire})"
+        );
+    }
+
+    #[test]
+    fn level_up_announces_concrete_gains_and_milestones() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.level = 1;
+            p.xp = xp_for_level(5); // exactly enough for level 5
+            // Pin scores to neutral so the final max-HP assertion isolates the
+            // milestone bonus from a random (possibly negative) CON roll.
+            p.scores = AbilityScores::default();
+        }
+        s.check_level_up(uid(1));
+        assert_eq!(s.players[&uid(1)].level, 5);
+        let texts: Vec<String> = s.players[&uid(1)]
+            .log
+            .iter()
+            .map(|l| l.text.clone())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("Level 5 reached")),
+            "each level is announced"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("max HP")),
+            "the concrete stat gain is shown"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("Milestone") && t.contains("Blooded")),
+            "the fifth level is a named milestone"
+        );
+        // The milestone HP bonus is real and folded into max health.
+        assert!(s.players[&uid(1)].max_hp() > Class::Warrior.stats_at(5).max_hp);
     }
 
     #[test]
@@ -3542,6 +6399,43 @@ mod tests {
     }
 
     #[test]
+    fn living_dark_regions_require_archdemon_title() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = super::super::world::TASMANIA_SQUARE;
+        let dir = dir_to_zone(
+            &s,
+            super::super::world::TASMANIA_SQUARE,
+            "The Sunken Catacombs",
+        );
+
+        s.move_player(uid(1), dir);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            super::super::world::TASMANIA_SQUARE
+        );
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("Archdemon Mal'gareth")),
+            "gate should point players at the Archdemon first"
+        );
+
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(FRONTIER_GATE_TITLE.to_string());
+        s.move_player(uid(1), dir);
+        assert_eq!(
+            s.world.room(s.players[&uid(1)].room).map(|room| room.zone),
+            Some("The Sunken Catacombs")
+        );
+    }
+
+    #[test]
     fn frontier_entrance_requires_archdemon_title_then_confirming_move() {
         let mut s = world();
         s.join(uid(1));
@@ -3562,12 +6456,35 @@ mod tests {
                 .any(|line| line.text.contains("Archdemon Mal'gareth")),
             "gate should point the player at the authored final boss"
         );
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("three living-dark seals")),
+            "gate should mention the full Frontier unlock chain"
+        );
 
         s.players
             .get_mut(&uid(1))
             .unwrap()
             .titles
             .push(FRONTIER_GATE_TITLE.to_string());
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            home,
+            "Frontier should still be locked before the living-dark bosses fall"
+        );
+        assert!(!s.players[&uid(1)].frontier_descent_pending);
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("living-dark seals")),
+            "gate should point the player at the three side regions"
+        );
+
+        grant_frontier_unlock_titles(&mut s, uid(1));
         s.move_player(uid(1), Dir::Down);
         assert_eq!(
             s.players[&uid(1)].room,
@@ -3593,11 +6510,7 @@ mod tests {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Warrior);
-        s.players
-            .get_mut(&uid(1))
-            .unwrap()
-            .titles
-            .push(FRONTIER_GATE_TITLE.to_string());
+        grant_frontier_unlock_titles(&mut s, uid(1));
 
         s.move_player(uid(1), Dir::Down);
         assert!(s.players[&uid(1)].frontier_descent_pending);
@@ -3725,17 +6638,241 @@ mod tests {
     }
 
     #[test]
+    fn buying_a_companion_costs_gold_and_sets_a_pet() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // A fresh adventurer stands in Embergate's square, which has a stable.
+        s.players.get_mut(&uid(1)).unwrap().gold = 1000;
+        s.buy_pet(uid(1), "war_hound");
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.gold, 1000 - 120, "the war hound's price is spent");
+        assert_eq!(
+            p.pet.map(|pet| pet.species.key),
+            Some("war_hound"),
+            "the companion is now at your heel"
+        );
+        // Too poor for the pricey drake: the purchase is refused.
+        s.players.get_mut(&uid(1)).unwrap().gold = 10;
+        s.buy_pet(uid(1), "emberdrake");
+        assert_eq!(
+            s.players[&uid(1)].pet.map(|p| p.species.key),
+            Some("war_hound"),
+            "an unaffordable purchase changes nothing"
+        );
+    }
+
+    #[test]
+    fn a_companion_piles_onto_your_target_in_combat() {
+        let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+        // Give the fighter a companion (the stable is back in town).
+        let species = super::super::pets::pet_species_by_key("dire_wolf").unwrap();
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+        let before = s.mobs[&mob_id].hp;
+        s.tick();
+        let after = s.mobs[&mob_id].hp;
+        assert!(
+            after <= before - species.base_attack,
+            "the companion's bite adds to the damage dealt"
+        );
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|l| l.text.contains("tears into")),
+            "the companion's attack is logged"
+        );
+    }
+
+    #[test]
+    fn a_companion_is_downed_when_its_owner_is_battered() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let species = super::super::pets::pet_species_by_key("moor_hawk").unwrap();
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+        // Give the owner a deep health pool so they survive the barrage; the pet
+        // shares each survivable blow and is eventually beaten down.
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.base_max_hp = 10_000;
+            p.hp = 10_000;
+        }
+        for _ in 0..10 {
+            s.strike_player(uid(1), 40, DamageType::Physical, "a test foe");
+        }
+        let pet = s.players[&uid(1)].pet.expect("still owns the pet");
+        assert!(!s.players[&uid(1)].dead, "the owner survives the barrage");
+        assert!(pet.downed, "a battered companion is downed (hp={})", pet.hp);
+        assert_eq!(pet.hp, 0);
+    }
+
+    #[test]
+    fn feeding_at_a_stable_revives_and_strengthens_a_companion() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+        let mut pet = super::super::pets::Pet::new(species, 0);
+        pet.downed = true;
+        pet.hp = 0;
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(pet);
+        s.players.get_mut(&uid(1)).unwrap().gold = 500;
+        s.feed_pet(uid(1)); // Embergate square has a stable
+        let pet = s.players[&uid(1)].pet.unwrap();
+        assert!(!pet.downed, "feeding rouses a downed companion");
+        assert_eq!(pet.hp, pet.max_hp(), "and heals it to full");
+        assert!(pet.loyalty_xp > 0, "and raises its loyalty");
+        assert_eq!(s.players[&uid(1)].gold, 500 - PET_FEED_COST);
+    }
+
+    #[test]
+    fn buying_a_deed_claims_a_home_and_only_one_per_name() {
+        use super::super::housing::{HOUSING_BASE, TIERS};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Stand at the clerk in Hearthward Close.
+        s.players.get_mut(&uid(1)).unwrap().room = HOUSING_BASE;
+        s.players.get_mut(&uid(1)).unwrap().gold = 50_000;
+        s.buy_deed(uid(1), 0); // the Wattle Hut
+        assert_eq!(s.owned_plot(uid(1)), Some(0), "the hut deed is held");
+        assert_eq!(
+            s.players[&uid(1)].gold,
+            50_000 - TIERS[0].price,
+            "the deed price is spent"
+        );
+        // One home to a name: a second deed is refused.
+        s.buy_deed(uid(1), 4);
+        assert_eq!(s.owned_plot(uid(1)), Some(0), "still only the hut");
+    }
+
+    #[test]
+    fn furniture_can_be_placed_only_in_a_home_you_own() {
+        use super::super::housing::{HOUSING_BASE, plot_base};
+        let mut s = world();
+        // Owner claims the hut (plot 0).
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = HOUSING_BASE;
+        s.players.get_mut(&uid(1)).unwrap().gold = 50_000;
+        s.buy_deed(uid(1), 0);
+        let hut = plot_base(0);
+        s.players.get_mut(&uid(1)).unwrap().room = hut;
+        s.buy_furniture(uid(1), "oak_stool");
+        assert_eq!(
+            s.house_furniture.get(&hut).map(|v| v.len()),
+            Some(1),
+            "the stool is set down in the owner's home"
+        );
+
+        // A visitor may walk in (shared world) but cannot furnish it.
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+        s.players.get_mut(&uid(2)).unwrap().room = hut;
+        s.players.get_mut(&uid(2)).unwrap().gold = 50_000;
+        s.buy_furniture(uid(2), "carved_armchair");
+        assert_eq!(
+            s.house_furniture.get(&hut).map(|v| v.len()),
+            Some(1),
+            "a visitor cannot place furniture in someone else's home"
+        );
+    }
+
+    #[test]
+    fn saved_house_furniture_is_replaced_and_deduped_on_load() {
+        use super::super::housing::{HOUSING_BASE, plot_base};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = HOUSING_BASE;
+        s.players.get_mut(&uid(1)).unwrap().gold = 50_000;
+        s.buy_deed(uid(1), 0);
+        let hut = plot_base(0);
+        s.players.get_mut(&uid(1)).unwrap().room = hut;
+        s.buy_furniture(uid(1), "oak_stool");
+
+        let mut saved = s.export_saved(uid(1)).expect("character is saveable");
+        saved.house_furniture.push((hut, "oak_stool".to_string()));
+
+        s.hydrate(uid(1), &saved);
+        s.hydrate(uid(1), &saved);
+
+        assert_eq!(
+            s.house_furniture.get(&hut).map(|v| v.len()),
+            Some(1),
+            "loading the same save must not append duplicate furniture"
+        );
+        assert_eq!(
+            s.export_saved(uid(1))
+                .expect("character is saveable")
+                .house_furniture
+                .len(),
+            1,
+            "exported save must stay deduped"
+        );
+    }
+
+    #[test]
+    fn appearance_cycles_wrap_and_compose_the_bio() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Cycling the Build field forward changes the composed bio.
+        let before = appearance::compose_bio(&s.players[&uid(1)].appearance);
+        s.cycle_appearance(uid(1), 0, 1);
+        let after = appearance::compose_bio(&s.players[&uid(1)].appearance);
+        assert_ne!(before, after, "cycling a field changes the bio");
+        // Cycling back returns to the original selection (wrapping arithmetic).
+        s.cycle_appearance(uid(1), 0, -1);
+        assert_eq!(s.players[&uid(1)].appearance[0], 0, "cycle wraps cleanly");
+        // An out-of-range field is ignored, not a panic.
+        s.cycle_appearance(uid(1), 99, 1);
+    }
+
+    #[test]
+    fn the_sundered_reaches_adds_twenty_new_bosses() {
+        let s = world();
+        let reaches_bosses = s
+            .mobs
+            .values()
+            .filter(|m| super::super::world::is_reaches_room(m.spawn.home) && m.spawn.boss)
+            .count();
+        assert_eq!(reaches_bosses, 20, "one boss per Reaches zone");
+    }
+
+    #[test]
+    fn every_capital_has_a_stable() {
+        use super::super::world::{MATLATESH_SQUARE, MELVANALA_SQUARE, TASMANIA_SQUARE};
+        for square in [1, TASMANIA_SQUARE, MELVANALA_SQUARE, MATLATESH_SQUARE] {
+            assert!(
+                features_at(square)
+                    .iter()
+                    .any(|f| f.kind == FeatureKind::Stable),
+                "capital room {square} should have a stable"
+            );
+        }
+    }
+
+    #[test]
     fn bank_toggles_between_deposit_and_withdraw_all_gold() {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Warrior);
 
-        s.interact(uid(1), 1); // feature 1 in the square is the banker's grille
+        // Find the banker's grille by kind - feature indices shift as scenery
+        // (e.g. a stable) is added to the square.
+        let bank = features_at(s.players[&uid(1)].room)
+            .iter()
+            .position(|f| f.kind == FeatureKind::Bank)
+            .expect("the town square has a bank");
+
+        s.interact(uid(1), bank);
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, 0);
         assert_eq!(p.banked_gold, STARTING_GOLD);
 
-        s.interact(uid(1), 1);
+        s.interact(uid(1), bank);
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, STARTING_GOLD);
         assert_eq!(p.banked_gold, 0);
@@ -3858,6 +6995,79 @@ mod tests {
     }
 
     #[test]
+    fn a_lethal_blow_leaves_a_lingering_corpse_not_an_instant_temple_trip() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage); // no Warrior death-save
+        let where_fell = s.players[&uid(1)].room;
+        s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+        let p = &s.players[&uid(1)];
+        assert!(p.dead, "the player is a corpse");
+        assert_eq!(p.hp, 0, "a corpse has no health");
+        assert_eq!(p.room, where_fell, "the corpse stays where it fell");
+        assert!(
+            p.respawn_at.is_some(),
+            "an auto-release deadline is armed, not an instant temple trip"
+        );
+        assert_ne!(
+            p.room, TEMPLE_ROOM,
+            "death no longer blinks you to the temple"
+        );
+    }
+
+    #[test]
+    fn releasing_sends_a_corpse_to_the_temple_restored() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage);
+        s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+        assert!(s.players[&uid(1)].dead);
+        s.release_to_temple(uid(1));
+        let p = &s.players[&uid(1)];
+        assert!(!p.dead, "release clears the corpse state");
+        assert_eq!(p.room, TEMPLE_ROOM, "you wake at the temple");
+        assert_eq!(p.hp, p.max_hp(), "restored to full");
+        assert!(p.respawn_at.is_none());
+    }
+
+    #[test]
+    fn a_healer_resurrects_a_corpse_in_place_but_others_cannot() {
+        let mut s = world();
+        // Caster who can rez (Cleric), victim (Mage), and an incapable bystander
+        // (Rogue) - all gathered in one room.
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Cleric);
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+        s.join(uid(3));
+        s.choose_class(uid(3), Class::Rogue);
+        let room = s.players[&uid(1)].room;
+        for who in [uid(2), uid(3)] {
+            s.players.get_mut(&who).unwrap().room = room;
+        }
+        s.strike_player(uid(2), 9999, DamageType::Physical, "a test foe");
+        assert!(s.players[&uid(2)].dead, "the mage is a corpse");
+
+        // The Rogue has no rite: the corpse stays fallen.
+        assert!(!Class::Rogue.can_resurrect());
+        s.resurrect_nearest(uid(3));
+        assert!(
+            s.players[&uid(2)].dead,
+            "an incapable class cannot resurrect"
+        );
+
+        // The Cleric revives the mage where it lies (not at the temple).
+        s.players.get_mut(&uid(1)).unwrap().resource = s.players[&uid(1)].max_resource;
+        s.resurrect_nearest(uid(1));
+        let v = &s.players[&uid(2)];
+        assert!(!v.dead, "the mage lives again");
+        assert!(v.hp > 0, "revived with some health");
+        assert!(v.hp < v.max_hp(), "but not to full");
+        assert_eq!(v.room, room, "raised where it fell, not the temple");
+        assert_ne!(v.room, TEMPLE_ROOM);
+    }
+
+    #[test]
     fn slaying_a_foe_grants_a_themed_title() {
         let mut s = world();
         s.join(uid(1));
@@ -3882,15 +7092,20 @@ mod tests {
     fn final_bosses_map_to_lifetime_achievements() {
         let archdemon = boss_achievement_for("the Archdemon Mal'gareth")
             .expect("authored final boss should grant an achievement");
-        assert_eq!(archdemon.reward_key, LATEANIA_ARCHDEMON_REWARD_KEY);
-        assert_eq!(archdemon.ledger_reason, LATEANIA_ARCHDEMON_LEDGER_REASON);
+        let archdemon_payout = archdemon.payout.expect("archdemon pays chips");
+        assert_eq!(archdemon_payout.reward_key, LATEANIA_ARCHDEMON_REWARD_KEY);
+        assert_eq!(
+            archdemon_payout.ledger_reason,
+            LATEANIA_ARCHDEMON_LEDGER_REASON
+        );
         assert_eq!(archdemon.award_category, LATEANIA_ARCHDEMON_AWARD_CATEGORY);
 
         let frontier_king = boss_achievement_for("the King Who Was Promised Nothing")
             .expect("last Frontier boss should grant an achievement");
-        assert_eq!(frontier_king.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
+        let king_payout = frontier_king.payout.expect("frontier king pays chips");
+        assert_eq!(king_payout.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
         assert_eq!(
-            frontier_king.ledger_reason,
+            king_payout.ledger_reason,
             LATEANIA_FRONTIER_KING_LEDGER_REASON
         );
         assert_eq!(
@@ -3898,7 +7113,83 @@ mod tests {
             LATEANIA_FRONTIER_KING_AWARD_CATEGORY
         );
 
+        let yssgar = boss_achievement_for("Yssgar, the Sundering Deep")
+            .expect("the Reaches' crowned boss should grant an achievement");
+        assert!(
+            yssgar.payout.is_none(),
+            "Yssgar's badge is the whole prize; no chip payout"
+        );
+        assert_eq!(
+            yssgar.award_category,
+            LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY
+        );
+
         assert!(boss_achievement_for("the Elder Treant").is_none());
+    }
+
+    #[test]
+    fn reach_and_escort_quest_zones_exist_in_the_world() {
+        let w = seed_world();
+        let zones: std::collections::HashSet<&str> = w.rooms.values().map(|r| r.zone).collect();
+        for q in BOARD_QUESTS {
+            match q.objective {
+                Objective::Reach { zone } => assert!(
+                    zones.contains(zone),
+                    "quest {} targets zone {zone:?} which no room carries",
+                    q.id
+                ),
+                Objective::Escort { dest_zone, .. } => assert!(
+                    zones.contains(dest_zone),
+                    "quest {} escorts to zone {dest_zone:?} which no room carries",
+                    q.id
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn sea_gate_requires_the_frontier_kings_bane() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let gate_dir = *s
+            .world
+            .room(super::super::world::MATLATESH_SQUARE)
+            .expect("Matlatesh square exists")
+            .exits
+            .iter()
+            .find(|(_, dest)| super::super::world::is_reaches_room(**dest))
+            .expect("Matlatesh carries the sea-gate")
+            .0;
+        if let Some(p) = s.players.get_mut(&uid(1)) {
+            p.room = super::super::world::MATLATESH_SQUARE;
+        }
+
+        // Without the King's bane the gate refuses, even on a second press.
+        s.move_player(uid(1), gate_dir);
+        s.move_player(uid(1), gate_dir);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            super::super::world::MATLATESH_SQUARE,
+            "sea-gate should hold without the King's bane"
+        );
+
+        // With the title, the first press warns and the second passes.
+        if let Some(p) = s.players.get_mut(&uid(1)) {
+            p.titles.push(REACHES_GATE_TITLE.to_string());
+        }
+        s.move_player(uid(1), gate_dir);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            super::super::world::MATLATESH_SQUARE,
+            "first press should only warn"
+        );
+        s.move_player(uid(1), gate_dir);
+        assert!(
+            super::super::world::is_reaches_room(s.players[&uid(1)].room),
+            "second press should pass the sea-gate"
+        );
     }
 
     #[test]
@@ -3966,7 +7257,11 @@ mod tests {
             p.resource = 0;
             p.resurrections_left = 0;
         }
-        s.interact(uid(1), 0); // feature 0 in the square is the fountain
+        let fountain = super::super::world::features_at(620)
+            .iter()
+            .position(|f| f.kind == FeatureKind::Fountain)
+            .expect("the square has a fountain");
+        s.interact(uid(1), fountain);
         let p = &s.players[&uid(1)];
         assert_eq!(p.hp, p.max_hp(), "fountain heals to full");
         assert_eq!(p.resource, p.max_resource, "fountain restores resource");

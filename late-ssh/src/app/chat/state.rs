@@ -19,12 +19,17 @@ use late_core::{
     },
 };
 use rand_core::{OsRng, RngCore};
-use ratatui::layout::Rect;
+use ratatui::{
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
+use crate::app::common::theme;
 
 use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
@@ -39,8 +44,8 @@ use super::{
     discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
-    svc::{ChatEvent, ChatService, ChatSnapshot},
-    ui_text::{NewsPayload, parse_news_payload},
+    svc::{ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, ReportKind, RoomMemberListItem},
+    ui_text::{NewsPayload, parse_news_payload, parse_report_payload},
     work,
 };
 
@@ -55,8 +60,8 @@ const INLINE_IMAGE_MAX_WIDTH: u32 = 96;
 const INLINE_IMAGE_MAX_ROWS: u32 = 12;
 const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
 const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
-const TERMINAL_IMAGE_MAX_COLS: u32 = 120;
-const TERMINAL_IMAGE_MAX_ROWS: u32 = 32;
+const TERMINAL_IMAGE_MAX_COLS: u32 = 200;
+const TERMINAL_IMAGE_MAX_ROWS: u32 = 60;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_CURSOR_FLUSH_DELAY: Duration = Duration::from_secs(2);
 
@@ -184,10 +189,29 @@ pub(crate) enum VoiceCommand {
     Mute,
 }
 
+/// An aquarium control requested from the composer (`/aquarium`,
+/// `/aquarium feed`). `App` owns the tray state and entitlements, so the
+/// composer just records the intent and `App` carries it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AquariumCommand {
+    Toggle,
+    Feed,
+}
+
+/// A pet action requested from the composer (`/pet` toggles the strip;
+/// `/feed` and `/water` are care). `App` owns the pet state and
+/// entitlements, so the composer just records the intent and `App` carries
+/// it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PetCommand {
+    Toggle,
+    Feed,
+    Water,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
-    BumpedJoin(Uuid),
     Feeds,
     News,
     Notifications,
@@ -248,7 +272,6 @@ impl RoomSection {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SelectedRoomSlotState {
     pub selected_room_id: Option<Uuid>,
-    pub selected_bumped_join_room_id: Option<Uuid>,
     pub feeds_selected: bool,
     pub news_selected: bool,
     pub notifications_selected: bool,
@@ -266,17 +289,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
-                && selected.selected_bumped_join_room_id.is_none()
                 && selected.selected_room_id == Some(room_id)
-        }
-        RoomSlot::BumpedJoin(room_id) => {
-            !selected.feeds_selected
-                && !selected.news_selected
-                && !selected.notifications_selected
-                && !selected.discover_selected
-                && !selected.showcase_selected
-                && !selected.work_selected
-                && selected.selected_bumped_join_room_id == Some(room_id)
         }
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
@@ -294,7 +307,6 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
-        || selected.selected_bumped_join_room_id.is_some()
 }
 
 fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
@@ -315,9 +327,6 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.work_selected {
         return Some(RoomSlot::Work);
-    }
-    if let Some(room_id) = state.selected_bumped_join_room_id {
-        return Some(RoomSlot::BumpedJoin(room_id));
     }
     state.selected_room_id.map(RoomSlot::Room)
 }
@@ -369,6 +378,12 @@ pub struct ChatState {
     pub(crate) active_polls: HashMap<Uuid, ActiveChatPoll>,
     pinned_messages: Vec<ChatMessage>,
     lounge_room_id: Option<Uuid>,
+    /// Recent #lounge system-feed lines (see `activity/lounge.rs`), newest
+    /// first, capped at `ACTIVITY_TICKER_CAP`. System messages are diverted
+    /// here at every ingestion point instead of being stored as chat rows;
+    /// the UI packs these left-to-right into the one-row activity ticker
+    /// above the composer. IRC and persistence are unaffected.
+    activity_ticker: Vec<ActivityTickerEntry>,
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
@@ -384,6 +399,7 @@ pub struct ChatState {
     image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
+    pub(crate) room_unread_markers: HashMap<Uuid, Option<DateTime<Utc>>>,
     pending_read_rooms: HashSet<Uuid>,
     pending_read_flush: PendingReadCursorFlush,
     visible_room_id: Option<Uuid>,
@@ -392,8 +408,6 @@ pub struct ChatState {
     refresh_room_id: Option<Uuid>,
     loading_tail_rooms: HashSet<Uuid>,
     pub(crate) selected_room_id: Option<Uuid>,
-    pub(crate) selected_bumped_join_room_id: Option<Uuid>,
-    active_bumped_join_room_ids: Vec<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
     pub(crate) composing: bool,
@@ -436,6 +450,10 @@ pub struct ChatState {
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub(crate) voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
     pub(crate) selected_message_id: Option<Uuid>,
+    /// Armed by a first `d` press on a message; a second `d` on the same
+    /// still-selected message confirms the delete. Any selection change or
+    /// clear disarms it so a stale confirm can't reap the wrong message.
+    pub(crate) pending_delete_message_id: Option<Uuid>,
     pub(crate) reaction_leader_active: bool,
     pub(crate) highlighted_message_id: Option<Uuid>,
     pub(crate) edited_message_id: Option<Uuid>,
@@ -454,6 +472,13 @@ pub struct ChatState {
     pub(crate) notifications: notifications::state::State,
     pub(crate) discover_selected: bool,
     pub(crate) discover: discover::state::State,
+    /// Message-search results for the Ctrl+/ modal's `?` mode. Owned here
+    /// (not on the modal) because ChatState owns the chat event receiver.
+    pub(crate) message_search: MessageSearch,
+    /// A search hit the user asked to jump to before its room tail was
+    /// loaded: `(room_id, message_id)`. Resolved (or dropped with a banner)
+    /// when that room's tail lands.
+    pending_search_jump: Option<(Uuid, Uuid)>,
     pub(crate) showcase_selected: bool,
     pub(crate) showcase: showcase::state::State,
     pub(crate) work_selected: bool,
@@ -467,7 +492,11 @@ pub struct ChatState {
     requested_settings_modal: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
+    requested_daily_challenge: Option<DailyChallengeRequest>,
     requested_icon_picker: bool,
+    /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
+    /// modal pre-filled with `?query`.
+    requested_message_search: Option<String>,
     requested_petname: Option<PetnameRequest>,
     requested_open_profile: Option<(Uuid, String)>,
     requested_open_sheet: Option<SheetOpenRequest>,
@@ -478,6 +507,10 @@ pub struct ChatState {
     /// Set by /voice or /mute in a voice-enabled room; consumed by `App`
     /// (which owns the paired-CLI voice controls).
     requested_voice_command: Option<VoiceCommand>,
+    /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
+    requested_aquarium_command: Option<AquariumCommand>,
+    /// Set by /pet, /feed, /water; consumed by `App` (which owns the pet).
+    requested_pet_command: Option<PetCommand>,
     requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).
     requested_brb: Option<String>,
@@ -570,6 +603,7 @@ impl ChatState {
             active_polls: HashMap::new(),
             pinned_messages: Vec::new(),
             lounge_room_id: None,
+            activity_ticker: Vec::new(),
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
@@ -583,6 +617,7 @@ impl ChatState {
             image_modal_capacity: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
+            room_unread_markers: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             pending_read_flush: PendingReadCursorFlush::default(),
             visible_room_id: None,
@@ -591,8 +626,6 @@ impl ChatState {
             refresh_room_id: None,
             loading_tail_rooms: HashSet::new(),
             selected_room_id: None,
-            selected_bumped_join_room_id: None,
-            active_bumped_join_room_ids: Vec::new(),
             room_jump_active: false,
             composer: new_chat_textarea(),
             composing: false,
@@ -612,6 +645,7 @@ impl ChatState {
             message_reactions: HashMap::new(),
             voice_channels_by_room_id: HashMap::new(),
             selected_message_id: None,
+            pending_delete_message_id: None,
             reaction_leader_active: false,
             highlighted_message_id: None,
             edited_message_id: None,
@@ -626,6 +660,8 @@ impl ChatState {
             notifications: notifications::state::State::new(notification_service, user_id),
             discover_selected: false,
             discover: discover::state::State::new(),
+            message_search: MessageSearch::default(),
+            pending_search_jump: None,
             showcase_selected: false,
             showcase: showcase::state::State::new(
                 showcase_service,
@@ -640,12 +676,16 @@ impl ChatState {
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
+            requested_daily_challenge: None,
             requested_icon_picker: false,
+            requested_message_search: None,
             requested_petname: None,
             requested_open_profile: None,
             requested_open_sheet: None,
             requested_quit: false,
             requested_voice_command: None,
+            requested_aquarium_command: None,
+            requested_pet_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
@@ -914,12 +954,20 @@ impl ChatState {
         std::mem::take(&mut self.requested_ultimate_modal)
     }
 
+    pub(crate) fn take_requested_daily_challenge(&mut self) -> Option<DailyChallengeRequest> {
+        self.requested_daily_challenge.take()
+    }
+
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
         self.requested_petname.take()
     }
 
     pub fn take_requested_icon_picker(&mut self) -> bool {
         std::mem::take(&mut self.requested_icon_picker)
+    }
+
+    pub(crate) fn take_requested_message_search(&mut self) -> Option<String> {
+        self.requested_message_search.take()
     }
 
     pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String)> {
@@ -956,6 +1004,14 @@ impl ChatState {
 
     pub(crate) fn take_requested_voice_command(&mut self) -> Option<VoiceCommand> {
         self.requested_voice_command.take()
+    }
+
+    pub(crate) fn take_requested_aquarium_command(&mut self) -> Option<AquariumCommand> {
+        self.requested_aquarium_command.take()
+    }
+
+    pub(crate) fn take_requested_pet_command(&mut self) -> Option<PetCommand> {
+        self.requested_pet_command.take()
     }
 
     pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
@@ -999,7 +1055,6 @@ impl ChatState {
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
-            || self.selected_bumped_join_room_id.is_some()
         {
             return None;
         }
@@ -1032,6 +1087,7 @@ impl ChatState {
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
         self.reaction_leader_active = false;
+        self.pending_delete_message_id = None;
         if ids.is_empty() {
             self.selected_message_id = None;
             return;
@@ -1065,11 +1121,13 @@ impl ChatState {
 
     pub fn clear_message_selection(&mut self) {
         self.reaction_leader_active = false;
+        self.pending_delete_message_id = None;
         self.selected_message_id = None;
     }
 
     pub fn focus_message_in_room(&mut self, room_id: Uuid, message_id: Uuid) {
         self.reaction_leader_active = false;
+        self.pending_delete_message_id = None;
         self.room_jump_active = false;
         self.feeds_selected = false;
         self.news_selected = false;
@@ -1077,7 +1135,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_room_id = Some(room_id);
         self.selected_message_id = Some(message_id);
         self.highlighted_message_id = Some(message_id);
@@ -1200,10 +1257,18 @@ impl ChatState {
     }
 
     /// Delete the selected message if owned by user (or if admin).
-    /// Moves selection to the adjacent message (prefer the next/older one,
-    /// fall back to the previous/newer one) so pressing `d` repeatedly
-    /// cleanly reaps a run of own messages without the cursor jumping
-    /// back to the newest every time.
+    ///
+    /// Requires a confirming double-press: the first `d` arms the delete and
+    /// asks for a second press; a second `d` on the same still-selected
+    /// message goes through. Any selection change disarms it (see
+    /// `select_from_ids` / `clear_message_selection`), so after a delete the
+    /// cursor lands on the adjacent message disarmed and the next `d` re-arms
+    /// rather than reaping it — you still walk a run of own messages, just
+    /// `dd` per message instead of a single `d`.
+    ///
+    /// Selection moves to the adjacent message (prefer the next/older one,
+    /// fall back to the previous/newer one) so the cursor doesn't jump back to
+    /// the newest every time.
     pub fn delete_selected_message_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
         let selected_id = self.selected_message_id?;
         let msg_user_id = self
@@ -1213,6 +1278,11 @@ impl ChatState {
         if !is_own && !self.permissions.can_moderate() {
             return Some(Banner::error("Can only delete your own messages"));
         }
+        if self.pending_delete_message_id != Some(selected_id) {
+            self.pending_delete_message_id = Some(selected_id);
+            return Some(Banner::info("Press d again to delete"));
+        }
+        self.pending_delete_message_id = None;
         self.service
             .delete_message_task(self.user_id, selected_id, self.permissions);
         self.selected_message_id = self
@@ -1290,9 +1360,79 @@ impl ChatState {
         }
         self.reaction_leader_active = false;
         self.highlighted_message_id = None;
+        self.pending_delete_message_id = None;
         let changed = self.selected_message_id != Some(message_id);
         self.selected_message_id = Some(message_id);
         changed
+    }
+
+    /// Whether a message is present in the locally loaded tail for a room.
+    pub(crate) fn message_is_loaded_in_room(&self, room_id: Uuid, message_id: Uuid) -> bool {
+        self.find_message_in_room(room_id, message_id).is_some()
+    }
+
+    /// Fire a message search through the service, superseding any in-flight
+    /// request (latest wins: stale results are dropped by request id).
+    pub(crate) fn start_message_search(&mut self, room_id: Option<Uuid>, query: String) {
+        let request_id = Uuid::now_v7();
+        self.message_search.begin(request_id, query.clone());
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.search_messages_task(
+            self.user_id,
+            request_id,
+            room_id,
+            query,
+            exclude_user_ids,
+        );
+    }
+
+    /// Remember a search hit to select once its room tail loads. Used when
+    /// jumping from the Ctrl+/ message search to a room whose history is not
+    /// loaded yet.
+    pub(crate) fn set_pending_search_jump(&mut self, room_id: Uuid, message_id: Uuid) {
+        self.pending_search_jump = Some((room_id, message_id));
+    }
+
+    /// Lazily fetch the context window (3 messages either side) for a search
+    /// hit if it is not cached and no other context fetch is running. Called
+    /// from the modal's tick for the currently selected hit; the single
+    /// in-flight slot makes fast scrolling converge instead of fanning out.
+    pub(crate) fn ensure_search_hit_context(&mut self, message_id: Uuid) {
+        if self.message_search.context.contains_key(&message_id)
+            || self.message_search.context_in_flight.is_some()
+        {
+            return;
+        }
+        let Some(hit) = self
+            .message_search
+            .hits
+            .iter()
+            .find(|hit| hit.message.id == message_id)
+        else {
+            return;
+        };
+        let request_id = Uuid::now_v7();
+        self.message_search.context_in_flight = Some((request_id, message_id));
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_message_context_task(
+            self.user_id,
+            request_id,
+            hit.message.room_id,
+            message_id,
+            hit.message.created,
+            exclude_user_ids,
+        );
+    }
+
+    /// Load one message as a single-hit search preview (the Mentions
+    /// fallback for messages older than the loaded history). The result
+    /// arrives through the same latest-wins search pipeline, so typing a
+    /// real `?` query afterwards simply replaces the preview.
+    pub(crate) fn start_message_preview(&mut self, message_id: Uuid) {
+        let request_id = Uuid::now_v7();
+        self.message_search.begin(request_id, String::new());
+        self.service
+            .load_message_preview_task(self.user_id, request_id, message_id);
     }
 
     /// Drop the user into compose mode in `room_id` (if not already) and
@@ -1428,7 +1568,6 @@ impl ChatState {
     fn selected_slot_state(&self) -> SelectedRoomSlotState {
         SelectedRoomSlotState {
             selected_room_id: self.selected_room_id,
-            selected_bumped_join_room_id: self.selected_bumped_join_room_id,
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
             notifications_selected: self.notifications_selected,
@@ -1486,7 +1625,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
 
         if self.selected_room_id.is_none() {
             self.selected_room_id = self
@@ -1521,28 +1659,6 @@ impl ChatState {
         &self.favorite_room_ids
     }
 
-    pub(crate) fn set_active_bumped_join_room_ids(&mut self, room_ids: Vec<Uuid>) -> bool {
-        if self.active_bumped_join_room_ids == room_ids {
-            return false;
-        }
-
-        self.active_bumped_join_room_ids = room_ids;
-        if let Some(selected_room_id) = self.selected_bumped_join_room_id
-            && !self.active_bumped_join_room_ids.contains(&selected_room_id)
-        {
-            self.selected_bumped_join_room_id = None;
-            if self.selected_room_id.is_none()
-                && let Some(slot) = self
-                    .visual_order()
-                    .into_iter()
-                    .find(|slot| !matches!(slot, RoomSlot::BumpedJoin(_)))
-            {
-                self.select_room_slot(slot);
-            }
-        }
-        true
-    }
-
     pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
         if self.feeds_selected
             || self.news_selected
@@ -1564,13 +1680,7 @@ impl ChatState {
     /// Order matches the cozy rail exactly: favorites, core/mentions/news/rss,
     /// channels, updates, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        let mut order = self
-            .active_bumped_join_room_ids
-            .iter()
-            .copied()
-            .map(RoomSlot::BumpedJoin)
-            .collect::<Vec<_>>();
-        order.extend(visual_order_for_rooms(RoomVisualOrderInput {
+        visual_order_for_rooms(RoomVisualOrderInput {
             rooms: &self.rooms,
             user_id: self.user_id,
             usernames: &self.usernames,
@@ -1579,8 +1689,8 @@ impl ChatState {
             feeds_available: self.feeds.has_feeds(),
             favorite_room_ids: &self.favorite_room_ids,
             collapsed_sections: &self.collapsed_sections,
-        }));
-        order
+            ignored_user_ids: &self.ignored_user_ids,
+        })
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -1635,25 +1745,6 @@ impl ChatState {
                 self.select_work();
                 changed
             }
-            RoomSlot::BumpedJoin(next_id) => {
-                let changed = self.feeds_selected
-                    || self.news_selected
-                    || self.notifications_selected
-                    || self.discover_selected
-                    || self.showcase_selected
-                    || self.work_selected
-                    || self.selected_bumped_join_room_id != Some(next_id)
-                    || self.selected_room_id.is_some();
-                self.feeds_selected = false;
-                self.news_selected = false;
-                self.notifications_selected = false;
-                self.discover_selected = false;
-                self.showcase_selected = false;
-                self.work_selected = false;
-                self.selected_room_id = None;
-                self.selected_bumped_join_room_id = Some(next_id);
-                changed
-            }
             RoomSlot::Room(next_id) => {
                 if !self
                     .rooms
@@ -1675,7 +1766,6 @@ impl ChatState {
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
-                self.selected_bumped_join_room_id = None;
                 self.selected_room_id = Some(next_id);
                 if !changed {
                     self.mark_room_read(next_id);
@@ -1726,8 +1816,6 @@ impl ChatState {
             RoomSlot::Work
         } else if self.news_selected {
             RoomSlot::News
-        } else if let Some(room_id) = self.selected_bumped_join_room_id {
-            RoomSlot::BumpedJoin(room_id)
         } else {
             self.selected_room_id
                 .map(RoomSlot::Room)
@@ -1804,6 +1892,13 @@ impl ChatState {
             return;
         }
         self.overlay = Some(Overlay::new(title, lines));
+    }
+
+    fn open_members_overlay(&mut self, title: &str, members: Vec<RoomMemberListItem>) {
+        self.overlay = Some(Overlay::styled(
+            title,
+            format_member_overlay_lines(&members, self.active_users.as_ref()),
+        ));
     }
 
     fn reaction_owner_lines(&self, owners: &[ChatMessageReactionOwners]) -> Vec<String> {
@@ -1943,6 +2038,31 @@ impl ChatState {
             return None;
         }
 
+        if let Some(rest) = body.trim().strip_prefix("/search")
+            && (rest.is_empty() || rest.starts_with(' '))
+        {
+            let query = rest.trim().to_string();
+            self.clear_composer_after_submit();
+            self.requested_message_search = Some(query);
+            return None;
+        }
+
+        if let Some(parsed) = parse_challenge_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                Some(request) => {
+                    self.requested_daily_challenge = Some(request);
+                    return None;
+                }
+                None => {
+                    return Some(Banner::error(&format!(
+                        "Usage: /challenge [@user] [{}]",
+                        crate::app::lobby::daily::games::DailyGame::usage_labels()
+                    )));
+                }
+            }
+        }
+
         if body.trim() == "/poll" {
             let room_id = self.visible_real_room_id_for_poll();
             self.clear_composer_after_submit();
@@ -2009,6 +2129,27 @@ impl ChatState {
         } {
             self.clear_composer_after_submit();
             self.requested_voice_command = Some(command);
+            return None;
+        }
+
+        if let Some(command) = match body.trim() {
+            "/aquarium" | "/aq" => Some(AquariumCommand::Toggle),
+            "/aquarium feed" | "/aq feed" => Some(AquariumCommand::Feed),
+            _ => None,
+        } {
+            self.clear_composer_after_submit();
+            self.requested_aquarium_command = Some(command);
+            return None;
+        }
+
+        if let Some(command) = match body.trim() {
+            "/pet" => Some(PetCommand::Toggle),
+            "/feed" => Some(PetCommand::Feed),
+            "/water" => Some(PetCommand::Water),
+            _ => None,
+        } {
+            self.clear_composer_after_submit();
+            self.requested_pet_command = Some(command);
             return None;
         }
 
@@ -2112,6 +2253,21 @@ impl ChatState {
             return None;
         }
 
+        if let Some((kind, text)) = parse_report_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(text) = text else {
+                return Some(Banner::error(&format!(
+                    "Usage: {} <describe it in a few words or more>",
+                    kind.command()
+                )));
+            };
+            let request_id = Uuid::now_v7();
+            self.pending_send_notices.push_back(request_id);
+            self.service
+                .send_report_task(self.user_id, kind, text, request_id);
+            return None;
+        }
+
         if body.trim() == "/friends" {
             self.clear_composer_after_submit();
             self.open_overlay("Friends", self.friend_list_lines());
@@ -2129,6 +2285,26 @@ impl ChatState {
             };
             self.service.list_room_members_task(self.user_id, room_id);
             return None;
+        }
+
+        if let Some(parsed) = parse_gift_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                GiftParse::Invalid => {
+                    return Some(Banner::error("Usage: /gift @user <amount>"));
+                }
+                GiftParse::Gift {
+                    username,
+                    amount,
+                    message,
+                } => {
+                    self.service
+                        .gift_chips_task(self.user_id, username.clone(), amount, message);
+                    return Some(Banner::success(&format!(
+                        "Sending {amount} chips to @{username}..."
+                    )));
+                }
+            }
         }
 
         if body.trim() == "/list" {
@@ -2309,6 +2485,31 @@ impl ChatState {
                     room_id,
                     room_slug: self.room_slug(room_id),
                     body: art,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
+        }
+
+        if let Some(parsed) = parse_me_command(&body) {
+            let Some(action_body) = parsed else {
+                self.clear_composer_after_submit();
+                return Some(Banner::error("Usage: /me <action>"));
+            };
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Send actions from inside a room"));
+            };
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: action_body,
                     reply_to_message_id: None,
                     request_id,
                     is_admin: self.is_admin,
@@ -2858,7 +3059,6 @@ impl ChatState {
         self.drain_username_directory();
         self.drain_snapshot();
         self.drain_pinned_messages();
-        let clipboard_banner = self.expire_pending_clipboard_image_upload();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_banner = self.feeds.tick();
@@ -2867,8 +3067,7 @@ impl ChatState {
         let showcase_banner = self.showcase.tick();
         let work_banner = self.work.tick();
         self.flush_pending_read_cursors_if_due();
-        clipboard_banner
-            .or(moderation_banner)
+        moderation_banner
             .or(banner)
             .or(feeds_banner)
             .or(news_banner)
@@ -2885,7 +3084,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.feeds.list();
@@ -2900,7 +3098,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.news.list_articles();
@@ -2919,7 +3116,6 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.notifications.list();
@@ -2934,7 +3130,6 @@ impl ChatState {
         self.news_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.discover.start_loading();
@@ -2949,7 +3144,6 @@ impl ChatState {
         self.notifications_selected = false;
         self.news_selected = false;
         self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.showcase.list();
@@ -2964,7 +3158,6 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
-        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
@@ -2976,16 +3169,6 @@ impl ChatState {
         self.service
             .join_public_room_task(self.user_id, item.room_id, item.slug.clone());
         Some(Banner::success(&format!("Joining #{}...", item.slug)))
-    }
-
-    pub fn join_bumped_public_room(&mut self, room_id: Uuid, slug: String) -> Banner {
-        self.service
-            .join_public_room_task(self.user_id, room_id, slug.clone());
-        Banner::success(&format!("Joining #{slug}..."))
-    }
-
-    pub fn selected_bumped_join_room_id(&self) -> Option<Uuid> {
-        self.selected_bumped_join_room_id
     }
 
     pub fn cursor_visible(&self) -> bool {
@@ -3108,6 +3291,12 @@ impl ChatState {
         &self.pinned_messages
     }
 
+    /// Recent #lounge system-feed lines for the activity ticker row,
+    /// newest first.
+    pub fn activity_ticker(&self) -> &[ActivityTickerEntry] {
+        &self.activity_ticker
+    }
+
     pub fn usernames(&self) -> &HashMap<Uuid, String> {
         &self.usernames
     }
@@ -3154,6 +3343,10 @@ impl ChatState {
 
     pub fn friend_user_ids(&self) -> &HashSet<Uuid> {
         &self.friend_user_ids
+    }
+
+    pub fn ignored_user_ids(&self) -> &HashSet<Uuid> {
+        &self.ignored_user_ids
     }
 
     pub fn active_friend_names(&self) -> Vec<String> {
@@ -3225,6 +3418,9 @@ impl ChatState {
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
         self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
+        for (_, messages) in &snapshot.chat_rooms {
+            self.note_activity_ticker_from(messages);
+        }
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.lounge_room_id = snapshot.lounge_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
@@ -3290,12 +3486,9 @@ impl ChatState {
                     }
                     // Desktop notification queueing. target_user_ids is Some for
                     // DM/private rooms, None for public rooms. Don't notify on
-                    // messages we authored ourselves.
-                    let in_dm_room = self
-                        .rooms
-                        .iter()
-                        .any(|(room, _)| room.id == message.room_id && room.kind == "dm");
-                    let ignored_author = !in_dm_room && self.message_is_ignored(&message);
+                    // messages we authored ourselves, or on ignored users
+                    // (including DMs, so ignore silences DMs too).
+                    let ignored_author = self.message_is_ignored(&message);
                     if message.user_id != self.user_id && !ignored_author {
                         let nickname = self
                             .usernames
@@ -3350,6 +3543,7 @@ impl ChatState {
                 ChatEvent::RoomTailLoaded {
                     user_id,
                     room_id,
+                    last_read_at,
                     messages,
                     message_reactions,
                     usernames,
@@ -3373,6 +3567,14 @@ impl ChatState {
                     self.bonsai_glyphs.extend(bonsai_glyphs);
                     self.chat_badges.extend(chat_badges);
                     self.profile_award_badges.extend(profile_award_badges);
+                    if messages.iter().any(|message| {
+                        last_read_at.is_none_or(|read_at| message.created > read_at)
+                            && message.user_id != self.user_id
+                    }) {
+                        self.room_unread_markers.insert(room_id, last_read_at);
+                    } else {
+                        self.room_unread_markers.remove(&room_id);
+                    }
                     self.merge_room_tail(room_id, messages);
                     for (message_id, reactions) in message_reactions {
                         self.message_reactions.insert(message_id, reactions);
@@ -3380,9 +3582,26 @@ impl ChatState {
                     if self.visible_room_id == Some(room_id) {
                         self.mark_room_read(room_id);
                     }
+                    if let Some((jump_room_id, message_id)) = self.pending_search_jump
+                        && jump_room_id == room_id
+                    {
+                        self.pending_search_jump = None;
+                        if self.message_is_loaded_in_room(room_id, message_id) {
+                            self.select_message_by_id_in_room(room_id, message_id);
+                        } else {
+                            banner =
+                                Some(Banner::error("Message is older than the loaded history"));
+                        }
+                    }
                 }
                 ChatEvent::RoomTailLoadFailed { user_id, room_id } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
+                    if self
+                        .pending_search_jump
+                        .is_some_and(|(id, _)| id == room_id)
+                    {
+                        self.pending_search_jump = None;
+                    }
                 }
                 ChatEvent::SendFailed {
                     user_id,
@@ -3399,7 +3618,6 @@ impl ChatState {
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
-                    self.selected_bumped_join_room_id = None;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3448,7 +3666,6 @@ impl ChatState {
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
-                    self.selected_bumped_join_room_id = None;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3456,6 +3673,12 @@ impl ChatState {
                 }
                 ChatEvent::GameRoomJoined { user_id, room_id } if self.user_id == user_id => {
                     self.request_list();
+                    // House tables join lazily, so the visible-room tail can be
+                    // requested before membership lands and fail the member
+                    // check, leaving room_id stuck in loading_tail_rooms. Clear
+                    // it first so this post-join request actually issues instead
+                    // of being suppressed as already-loading.
+                    self.loading_tail_rooms.remove(&room_id);
                     self.request_room_tail(room_id);
                 }
                 ChatEvent::RoomFailed { user_id, message } if self.user_id == user_id => {
@@ -3480,7 +3703,6 @@ impl ChatState {
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
-                    self.selected_bumped_join_room_id = None;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3557,6 +3779,73 @@ impl ChatState {
                     self.discover.finish_loading();
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::MessageSearchLoaded {
+                    user_id,
+                    request_id,
+                    messages,
+                    usernames,
+                } if self.user_id == user_id => {
+                    if !self.message_search.is_current(request_id) {
+                        continue;
+                    }
+                    self.usernames.extend(usernames);
+                    let query = self.message_search.query.clone();
+                    let hits = messages
+                        .into_iter()
+                        .filter(|message| !self.message_is_ignored(message))
+                        .map(|message| {
+                            let (snippet_prefix, snippet_match, snippet_suffix) =
+                                build_search_snippet(&message.body, &query);
+                            MessageSearchHit {
+                                message,
+                                snippet_prefix,
+                                snippet_match,
+                                snippet_suffix,
+                            }
+                        })
+                        .collect();
+                    self.message_search.finish(hits);
+                }
+                ChatEvent::MessageSearchFailed {
+                    user_id,
+                    request_id,
+                    message,
+                } if self.user_id == user_id => {
+                    if self.message_search.is_current(request_id) {
+                        self.message_search.fail(sentence_case(&message));
+                    }
+                }
+                ChatEvent::MessageContextLoaded {
+                    user_id,
+                    request_id,
+                    message_id,
+                    before,
+                    after,
+                    usernames,
+                } if self.user_id == user_id => {
+                    if self.message_search.context_in_flight != Some((request_id, message_id)) {
+                        continue;
+                    }
+                    self.message_search.context_in_flight = None;
+                    self.usernames.extend(usernames);
+                    self.message_search
+                        .context
+                        .insert(message_id, MessageContext { before, after });
+                }
+                ChatEvent::MessageContextFailed {
+                    user_id,
+                    request_id,
+                    message_id,
+                } if self.user_id == user_id => {
+                    if self.message_search.context_in_flight == Some((request_id, message_id)) {
+                        self.message_search.context_in_flight = None;
+                        // Cache an empty window so a persistent failure does
+                        // not refire every tick; the hit still renders alone.
+                        self.message_search
+                            .context
+                            .insert(message_id, MessageContext::default());
+                    }
+                }
                 ChatEvent::MessageReactionsUpdated {
                     room_id: _,
                     message_id,
@@ -3621,7 +3910,43 @@ impl ChatState {
                     title,
                     members,
                 } if self.user_id == user_id => {
-                    self.open_overlay(&title, members);
+                    self.open_members_overlay(&title, members);
+                }
+                ChatEvent::GiftSucceeded {
+                    user_id,
+                    recipient_username,
+                    amount,
+                    sender_balance,
+                    recipient_balance,
+                    message,
+                    ..
+                } if self.user_id == user_id => {
+                    let note = message
+                        .as_deref()
+                        .map(|m| format!(": \"{m}\""))
+                        .unwrap_or_default();
+                    banner = Some(Banner::success(&format!(
+                        "Gifted {amount} chips to @{recipient_username} ({sender_balance} left, recipient {recipient_balance}){note}"
+                    )));
+                }
+                ChatEvent::GiftSucceeded {
+                    recipient_id,
+                    sender_username,
+                    amount,
+                    recipient_balance,
+                    message,
+                    ..
+                } if self.user_id == recipient_id => {
+                    let note = message
+                        .as_deref()
+                        .map(|m| format!(": \"{m}\""))
+                        .unwrap_or_default();
+                    banner = Some(Banner::success(&format!(
+                        "@{sender_username} gifted you {amount} chips (balance {recipient_balance}){note}"
+                    )));
+                }
+                ChatEvent::GiftFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
                 }
                 ChatEvent::PublicRoomsListed {
                     user_id,
@@ -3753,17 +4078,24 @@ impl ChatState {
     fn push_message(&mut self, message: ChatMessage) {
         let room_id = message.room_id;
         let created = message.created;
-        let Some(in_dm_room) = self
-            .rooms
-            .iter()
-            .find(|(room, _)| room.id == room_id)
-            .map(|(room, _)| room.kind == "dm")
-        else {
+        if !self.rooms.iter().any(|(room, _)| room.id == room_id) {
             return;
-        };
+        }
+
+        // System-feed lines never become chat rows: they feed the activity
+        // ticker instead. Unread counts already exclude the system author at
+        // the SQL layer, so there is no cursor to keep aligned here.
+        if let Some(text) = system_line_text_in(&self.usernames, &message) {
+            self.note_activity_ticker(ActivityTickerEntry {
+                id: message.id,
+                text,
+                at: created,
+            });
+            return;
+        }
 
         let is_viewing_room = Some(room_id) == self.visible_room_id;
-        if !in_dm_room && self.message_is_ignored(&message) {
+        if self.message_is_ignored(&message) {
             if is_viewing_room {
                 self.mark_room_read(room_id);
             }
@@ -3825,8 +4157,8 @@ impl ChatState {
     }
 
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
-        let Some((room, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id)
-        else {
+        self.note_activity_ticker_from(&messages);
+        let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
             return;
         };
 
@@ -3840,15 +4172,15 @@ impl ChatState {
         merged.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
         merged.truncate(500);
 
-        *stored = if room.kind == "dm" {
-            merged
-        } else {
-            let ignored = &self.ignored_user_ids;
-            merged
-                .into_iter()
-                .filter(|message| !ignored.contains(&message.user_id))
-                .collect()
-        };
+        let ignored = &self.ignored_user_ids;
+        let usernames = &self.usernames;
+        *stored = merged
+            .into_iter()
+            .filter(|message| {
+                !message_is_ignored_in(ignored, message)
+                    && system_line_text_in(usernames, message).is_none()
+            })
+            .collect();
     }
 
     fn replace_message(&mut self, message: ChatMessage) {
@@ -3883,12 +4215,7 @@ impl ChatState {
                 } else {
                     messages
                 };
-                // DMs: don't filter. Users leave the DM room if they want it gone.
-                let messages = if room.kind == "dm" {
-                    messages
-                } else {
-                    self.filter_messages(messages)
-                };
+                let messages = self.filter_messages(messages);
                 (room, messages)
             })
             .collect()
@@ -3957,26 +4284,88 @@ impl ChatState {
     fn filter_messages(&self, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         messages
             .into_iter()
-            .filter(|message| !self.message_is_ignored(message))
+            .filter(|message| {
+                !self.message_is_ignored(message)
+                    && system_line_text_in(&self.usernames, message).is_none()
+            })
             .collect()
     }
 
-    fn message_is_ignored(&self, message: &ChatMessage) -> bool {
-        self.ignored_user_ids.contains(&message.user_id)
+    fn note_activity_ticker(&mut self, entry: ActivityTickerEntry) {
+        note_ticker_entry(&mut self.activity_ticker, entry);
     }
 
-    /// Strip already-stored messages from any newly-ignored author.
-    /// DM rooms are exempt -leaving the DM room is the way to dismiss them.
+    fn note_activity_ticker_from(&mut self, messages: &[ChatMessage]) {
+        for message in messages {
+            if let Some(text) = system_line_text_in(&self.usernames, message) {
+                self.note_activity_ticker(ActivityTickerEntry {
+                    id: message.id,
+                    text,
+                    at: message.created,
+                });
+            }
+        }
+    }
+
+    fn message_is_ignored(&self, message: &ChatMessage) -> bool {
+        message_is_ignored_in(&self.ignored_user_ids, message)
+    }
+
+    /// Strip already-stored messages from any newly-ignored author, including
+    /// DMs and bot replies directed at the newly-ignored user.
     fn refilter_local_messages(&mut self) {
         let ignored = &self.ignored_user_ids;
-        for (room, messages) in &mut self.rooms {
-            if room.kind == "dm" {
-                continue;
-            }
-            messages.retain(|m| !ignored.contains(&m.user_id));
+        for (_, messages) in &mut self.rooms {
+            messages.retain(|m| !message_is_ignored_in(ignored, m));
         }
         self.sync_selection();
     }
+}
+
+/// One diverted #lounge system line held for the activity ticker.
+pub struct ActivityTickerEntry {
+    pub id: Uuid,
+    pub text: String,
+    pub at: DateTime<Utc>,
+}
+
+/// The ticker queue length: enough that packing left to right always fills
+/// the row on any sane terminal width, without hoarding history.
+const ACTIVITY_TICKER_CAP: usize = 10;
+
+/// Insert into the newest-first ticker queue, deduped by message id (tails
+/// and snapshots replay the same lines), capped at `ACTIVITY_TICKER_CAP`.
+fn note_ticker_entry(entries: &mut Vec<ActivityTickerEntry>, entry: ActivityTickerEntry) {
+    if entries.iter().any(|existing| existing.id == entry.id) {
+        return;
+    }
+    let pos = entries
+        .iter()
+        .position(|existing| entry.at >= existing.at)
+        .unwrap_or(entries.len());
+    entries.insert(pos, entry);
+    entries.truncate(ACTIVITY_TICKER_CAP);
+}
+
+/// The #lounge system-feed check (author is the `system` bot AND the body
+/// carries the `· ` prefix — same spoof guard as `ui.rs::is_system_author`).
+/// Returns the display text when the message is a system line.
+fn system_line_text_in(usernames: &HashMap<Uuid, String>, message: &ChatMessage) -> Option<String> {
+    usernames
+        .get(&message.user_id)
+        .filter(|name| crate::app::activity::lounge::is_system_username(name))
+        .and_then(|_| super::ui_text::parse_system_line(&message.body))
+        .map(str::to_string)
+}
+
+/// A message is ignored if its author is ignored, or if it is a bot/automated
+/// reply directed at an ignored user (so an ignored user can't be heard by
+/// proxy through a bot).
+fn message_is_ignored_in(ignored: &HashSet<Uuid>, message: &ChatMessage) -> bool {
+    ignored.contains(&message.user_id)
+        || message
+            .reply_to_user_id
+            .is_some_and(|target| ignored.contains(&target))
 }
 
 fn inline_image_request_candidates(
@@ -4066,6 +4455,7 @@ pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
     pub feeds_available: bool,
     pub favorite_room_ids: &'a [Uuid],
     pub collapsed_sections: &'a HashSet<RoomSection>,
+    pub ignored_user_ids: &'a HashSet<Uuid>,
 }
 
 pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
@@ -4080,6 +4470,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         feeds_available,
         favorite_room_ids,
         collapsed_sections,
+        ignored_user_ids,
     } = input;
 
     let mut order = Vec::new();
@@ -4091,10 +4482,11 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // then only appends to `order` when the section is expanded.
     let favorites_collapsed = collapsed_sections.contains(&RoomSection::Favorites);
     for favorite_id in favorite_room_ids {
-        if rooms
-            .iter()
-            .any(|(room, _)| room.id == *favorite_id && is_chat_list_room(room))
-            && pushed_rooms.insert(*favorite_id)
+        if rooms.iter().any(|(room, _)| {
+            room.id == *favorite_id
+                && is_chat_list_room(room)
+                && !dm_peer_is_ignored(room, user_id, ignored_user_ids)
+        }) && pushed_rooms.insert(*favorite_id)
             && !favorites_collapsed
         {
             order.push(RoomSlot::Room(*favorite_id));
@@ -4122,12 +4514,27 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         }
     }
 
+    // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
+    if let Some((room, _)) = rooms
+        .iter()
+        .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some("voice"))
+        && pushed_rooms.insert(room.id)
+        && !core_collapsed
+    {
+        order.push(RoomSlot::Room(room.id));
+    }
+    if !core_collapsed {
+        // Discover ("browse rooms") lives at the bottom of Core.
+        order.push(RoomSlot::Discover);
+    }
+
     // Channels: all non-DM rooms outside Core, public + private merged.
     let channels_collapsed = collapsed_sections.contains(&RoomSection::Channels);
     for (room, _) in rooms {
         if is_chat_list_room(room)
             && room.kind != "dm"
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+            && room.slug.as_deref() != Some("voice")
             && pushed_rooms.insert(room.id)
             && !channels_collapsed
         {
@@ -4136,8 +4543,14 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
 
     // DMs: unread rooms first, then newest message, then display name.
+    // Hide DMs whose other participant is ignored so an ignored user can't
+    // resurface the DM (and its unread badge) by sending again.
     let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
-    let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
+    let mut dms: Vec<_> = rooms
+        .iter()
+        .filter(|(r, _)| r.kind == "dm")
+        .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
+        .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
             a_room,
@@ -4151,7 +4564,6 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     order.extend(dms.iter().filter_map(|(r, _)| {
         (pushed_rooms.insert(r.id) && !dms_collapsed).then_some(RoomSlot::Room(r.id))
     }));
-    order.push(RoomSlot::Discover);
 
     order
 }
@@ -4185,18 +4597,29 @@ pub(crate) fn room_activity_at(
     room_last_message_at.get(&room_id).cloned().flatten()
 }
 
+/// The other participant in a DM room, from `user_id`'s perspective.
+fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
+    if room.dm_user_a == Some(user_id) {
+        room.dm_user_b
+    } else {
+        room.dm_user_a
+    }
+}
+
+/// Whether `room` is a DM whose other participant is ignored. Such DMs are
+/// hidden from every room-list section (favorites included) so an ignored peer
+/// can't resurface the DM or its unread state by sending again.
+fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
+    room.kind == "dm" && dm_peer_id(room, user_id).is_some_and(|peer| ignored.contains(&peer))
+}
+
 /// Sort key for DMs: resolves the other participant's username.
 fn dm_sort_key(
     room: &ChatRoom,
     user_id: Uuid,
     usernames: &(impl UsernameResolver + ?Sized),
 ) -> String {
-    let other_id = if room.dm_user_a == Some(user_id) {
-        room.dm_user_b
-    } else {
-        room.dm_user_a
-    };
-    other_id
+    dm_peer_id(room, user_id)
         .and_then(|id| usernames.username(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
@@ -4271,6 +4694,166 @@ fn parse_dm_command(input: &str) -> Option<&str> {
         return None;
     }
     Some(username)
+}
+
+/// Max length of the optional note attached to a `/gift`.
+const GIFT_MESSAGE_MAX_CHARS: usize = 120;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GiftParse {
+    Invalid,
+    Gift {
+        username: String,
+        amount: i64,
+        /// Optional note: `/gift @user 100 happy birthday`.
+        message: Option<String>,
+    },
+}
+
+pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
+    let rest = input.trim().strip_prefix("/gift")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut parts = rest.split_whitespace();
+    let Some(username) = parts.next() else {
+        return Some(GiftParse::Invalid);
+    };
+    let Some(amount) = parts.next() else {
+        return Some(GiftParse::Invalid);
+    };
+    // Everything after the amount is an optional single-line note. Rejoining
+    // with single spaces drops any newlines/tabs; then strip control chars and
+    // cap the length.
+    let message: String = parts
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(GIFT_MESSAGE_MAX_CHARS)
+        .collect();
+    let message = {
+        let trimmed = message.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    };
+    let username = username.strip_prefix('@').unwrap_or(username).trim();
+    let Ok(amount) = amount.parse::<i64>() else {
+        return Some(GiftParse::Invalid);
+    };
+    if username.is_empty() || amount <= 0 || amount > GIFT_MAX_AMOUNT {
+        return Some(GiftParse::Invalid);
+    }
+    Some(GiftParse::Gift {
+        username: username.to_string(),
+        amount,
+        message,
+    })
+}
+
+/// A `/challenge` request drained by `handle_post_submit_requests` (the
+/// composer has no `DailyService` handle of its own).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DailyChallengeRequest {
+    /// Bare `/challenge`: open the Daily Games modal.
+    Modal,
+    /// `/challenge <game>`: post an open-lobby challenge.
+    Open(crate::app::lobby::daily::games::DailyGame),
+    /// `/challenge @user [game]`: post a directed challenge.
+    Directed(String, crate::app::lobby::daily::games::DailyGame),
+}
+
+/// `Some(Some(request))` on a valid `/challenge` line, `Some(None)` on a
+/// malformed one (usage banner), `None` when it isn't `/challenge` at all.
+/// Game names come from the daily roster (`chess`, `battleship`, ...);
+/// omitting one on a directed challenge defaults to the roster's first game.
+fn parse_challenge_command(input: &str) -> Option<Option<DailyChallengeRequest>> {
+    use crate::app::lobby::daily::games::DailyGame;
+
+    let trimmed = input.trim();
+    if trimmed == "/challenge" {
+        return Some(Some(DailyChallengeRequest::Modal));
+    }
+    let rest = trimmed.strip_prefix("/challenge ")?;
+    let mut tokens = rest.split_whitespace();
+    let first = tokens.next()?;
+    if let Some(game) = DailyGame::from_label(first) {
+        return Some(match tokens.next() {
+            None => Some(DailyChallengeRequest::Open(game)),
+            Some(_) => None,
+        });
+    }
+    let Some(username) = first.strip_prefix('@').filter(|name| !name.is_empty()) else {
+        return Some(None);
+    };
+    Some(match tokens.next() {
+        None => Some(DailyChallengeRequest::Directed(
+            username.to_string(),
+            DailyGame::ALL[0],
+        )),
+        Some(game_token) => match DailyGame::from_label(game_token) {
+            Some(game) if tokens.next().is_none() => {
+                Some(DailyChallengeRequest::Directed(username.to_string(), game))
+            }
+            _ => None,
+        },
+    })
+}
+
+fn parse_me_command(input: &str) -> Option<Option<String>> {
+    let trimmed = input.trim();
+    if trimmed == "/me" {
+        return Some(None);
+    }
+    let rest = trimmed.strip_prefix("/me ")?;
+    Some(super::action::encode_action_body(rest))
+}
+
+fn format_member_overlay_lines(
+    members: &[RoomMemberListItem],
+    active_users: Option<&ActiveUsers>,
+) -> Vec<Line<'static>> {
+    let online_ids = active_users
+        .map(|users| users.lock_recover().keys().copied().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let mut rows = members
+        .iter()
+        .map(|member| {
+            let online = online_ids.contains(&member.user_id);
+            let label = member
+                .username
+                .as_deref()
+                .map(|username| format!("@{username}"))
+                .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(member.user_id)));
+            (online, label.to_ascii_lowercase(), label)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    rows.into_iter()
+        .map(|(online, _, label)| {
+            let (status, status_style, name_style) = if online {
+                (
+                    "[on ]",
+                    Style::default()
+                        .fg(theme::SUCCESS())
+                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::TEXT()),
+                )
+            } else {
+                (
+                    "[off]",
+                    Style::default().fg(theme::TEXT_DIM()),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )
+            };
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(status, status_style),
+                Span::raw(" "),
+                Span::styled(label, name_style),
+            ])
+        })
+        .collect()
 }
 
 /// Parse `/leave` from the composer text.
@@ -4440,6 +5023,30 @@ fn parse_brb_command(input: &str) -> Option<String> {
     }
     let rest = trimmed.strip_prefix("/brb ")?.trim();
     Some(rest.to_string())
+}
+
+/// Minimum characters of report text, so `/bug lol` bounces with usage help
+/// instead of posting a useless card.
+const REPORT_MIN_CHARS: usize = 10;
+
+/// Parse `/bug <text>` or `/suggest <text>` from the composer. Outer `None`
+/// means not a report command; inner `None` means missing or too-short text
+/// (show usage).
+fn parse_report_command(input: &str) -> Option<(ReportKind, Option<String>)> {
+    let trimmed = input.trim();
+    for kind in [ReportKind::Bug, ReportKind::Suggestion] {
+        if trimmed == kind.command() {
+            return Some((kind, None));
+        }
+        if let Some(rest) = trimmed.strip_prefix(kind.command())
+            && let Some(rest) = rest.strip_prefix(' ')
+        {
+            let text = rest.trim();
+            let text = (text.chars().count() >= REPORT_MIN_CHARS).then(|| text.to_string());
+            return Some((kind, text));
+        }
+    }
+    None
 }
 
 /// Which cup the user asked for. Coffee gets the mug-with-handle silhouette
@@ -4636,8 +5243,7 @@ fn adjacent_composer_room(
         .iter()
         .filter_map(|slot| match slot {
             RoomSlot::Room(room_id) => Some(*room_id),
-            RoomSlot::BumpedJoin(_)
-            | RoomSlot::Feeds
+            RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
             | RoomSlot::Discover
@@ -4686,6 +5292,142 @@ fn modal_author_label(username: Option<&str>, user_id: Uuid) -> String {
         .filter(|name| !name.is_empty())
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| short_user_id(user_id))
+}
+
+/// Message-search state backing the Ctrl+/ modal's `?` mode. Owned by
+/// `ChatState` because it owns the chat event receiver; the modal reads it.
+#[derive(Default)]
+pub(crate) struct MessageSearch {
+    /// In-flight or last-completed request id. Results carrying any other id
+    /// are stale and dropped (latest wins).
+    request_id: Option<Uuid>,
+    /// Query text the current request was fired with; snippets are built
+    /// against it when results land.
+    query: String,
+    pub(crate) loading: bool,
+    pub(crate) error: Option<String>,
+    pub(crate) hits: Vec<MessageSearchHit>,
+    /// Context windows (3 messages either side) keyed by hit message id,
+    /// fetched lazily as hits are selected. Bounded in practice: filled only
+    /// while the modal is open and reset with `clear()` when it closes.
+    pub(crate) context: HashMap<Uuid, MessageContext>,
+    /// The one in-flight context fetch: `(request_id, message_id)`. A single
+    /// slot, so scrolling through hits fetches sequentially instead of
+    /// fanning out one query per keypress.
+    context_in_flight: Option<(Uuid, Uuid)>,
+}
+
+/// Messages immediately around a search hit, both sides chronological.
+#[derive(Default)]
+pub(crate) struct MessageContext {
+    pub before: Vec<ChatMessage>,
+    pub after: Vec<ChatMessage>,
+}
+
+impl MessageSearch {
+    fn begin(&mut self, request_id: Uuid, query: String) {
+        self.request_id = Some(request_id);
+        self.query = query;
+        self.loading = true;
+        self.error = None;
+    }
+
+    fn is_current(&self, request_id: Uuid) -> bool {
+        self.request_id == Some(request_id)
+    }
+
+    fn finish(&mut self, hits: Vec<MessageSearchHit>) {
+        self.loading = false;
+        self.error = None;
+        self.hits = hits;
+    }
+
+    fn fail(&mut self, message: String) {
+        self.loading = false;
+        self.error = Some(message);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+pub(crate) struct MessageSearchHit {
+    pub message: ChatMessage,
+    /// Precomputed one-row snippet, split around the first case-insensitive
+    /// query match so render can highlight it without rescanning the body.
+    pub snippet_prefix: String,
+    pub snippet_match: String,
+    pub snippet_suffix: String,
+}
+
+/// Chars of context kept before the match in a snippet.
+const SNIPPET_LEAD_CHARS: usize = 24;
+/// Total snippet char budget; render truncates further by column width.
+const SNIPPET_TOTAL_CHARS: usize = 160;
+
+/// Split a message body into `(prefix, match, suffix)` around the first
+/// case-insensitive occurrence of `query`, windowed so the match stays
+/// visible in a one-row snippet. Newlines flatten to spaces and a leading
+/// `---WORD---` card marker (news/report cards) is dropped so snippets read
+/// as text. Falls back to a head-of-body snippet with an empty match part.
+pub(crate) fn build_search_snippet(body: &str, query: &str) -> (String, String, String) {
+    let flat = strip_card_marker(body).replace(['\n', '\r'], " ");
+    let chars: Vec<char> = flat.chars().collect();
+    let lower: Vec<char> = flat.to_lowercase().chars().collect();
+    let needle: Vec<char> = query.to_lowercase().chars().collect();
+
+    // `to_lowercase` can change char counts for some scripts; if the lowered
+    // text no longer lines up with the original, skip highlighting rather
+    // than slice at wrong offsets.
+    let match_at = if needle.is_empty() || lower.len() != chars.len() {
+        None
+    } else {
+        lower
+            .windows(needle.len())
+            .position(|window| window == needle.as_slice())
+    };
+
+    let Some(start) = match_at else {
+        let mut head: String = chars.iter().take(SNIPPET_TOTAL_CHARS).collect();
+        if chars.len() > SNIPPET_TOTAL_CHARS {
+            head.push('…');
+        }
+        return (head, String::new(), String::new());
+    };
+
+    let window_start = start.saturating_sub(SNIPPET_LEAD_CHARS);
+    let match_end = start + needle.len();
+    let window_end = chars
+        .len()
+        .min(match_end + SNIPPET_TOTAL_CHARS.saturating_sub(match_end - window_start));
+
+    let mut prefix: String = chars[window_start..start].iter().collect();
+    if window_start > 0 {
+        prefix.insert(0, '…');
+    }
+    let matched: String = chars[start..match_end].iter().collect();
+    let mut suffix: String = chars[match_end..window_end].iter().collect();
+    if window_end < chars.len() {
+        suffix.push('…');
+    }
+    (prefix, matched, suffix)
+}
+
+/// Drop a leading `---WORD--- ` card marker (news/bug/suggestion cards) so
+/// search snippets show the card's text instead of its wire marker.
+fn strip_card_marker(body: &str) -> &str {
+    let trimmed = body.trim_start();
+    let Some(rest) = trimmed.strip_prefix("---") else {
+        return body;
+    };
+    let Some((word, rest)) = rest.split_once("---") else {
+        return body;
+    };
+    if word.is_empty() || !word.chars().all(|ch| ch.is_ascii_uppercase()) {
+        return body;
+    }
+    rest.trim_start()
 }
 
 fn resolve_room_jump_target(targets: &[(u8, RoomSlot)], byte: u8) -> Option<RoomSlot> {
@@ -4750,6 +5492,18 @@ fn loaded_reply_target_id(msgs: &[ChatMessage], selected_id: Uuid) -> Option<Opt
 fn reply_preview_text(body: &str) -> String {
     if let Some(title) = news_reply_preview_text(body) {
         return title;
+    }
+
+    if let Some((kind, text)) = parse_report_payload(body) {
+        let first_line = text.lines().find_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        });
+        return truncate_reply_preview(&format!(
+            "{} {}",
+            kind.icon(),
+            first_line.unwrap_or(kind.command())
+        ));
     }
 
     let body_without_reply_quote = match body.split_once('\n') {
@@ -4968,6 +5722,51 @@ mod tests {
         assert_eq!(global_char_to_line_col(text, 2), (0, 2));
         assert_eq!(global_char_to_line_col(text, 3), (1, 0));
         assert_eq!(global_char_to_line_col(text, 5), (1, 2));
+    }
+
+    #[test]
+    fn parse_gift_command_accepts_at_optional_username() {
+        assert_eq!(
+            parse_gift_command("/gift @alice 500"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+                message: None,
+            })
+        );
+        assert_eq!(
+            parse_gift_command("/gift alice 500"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+                message: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_gift_command_captures_optional_message() {
+        assert_eq!(
+            parse_gift_command("/gift @alice 500 happy birthday"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+                message: Some("happy birthday".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_gift_command_rejects_invalid_amounts_and_junk() {
+        assert_eq!(parse_gift_command("/gift"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gift @a 0"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gift @a -1"), Some(GiftParse::Invalid));
+        assert_eq!(
+            parse_gift_command("/gift @a 1000001"),
+            Some(GiftParse::Invalid)
+        );
+        assert_eq!(parse_gift_command("/gift @a wat"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gifted @a 5"), None);
     }
 
     #[test]
@@ -5568,6 +6367,7 @@ mod tests {
                 feeds_available: true,
                 favorite_room_ids: &[],
                 collapsed_sections: &HashSet::new(),
+                ignored_user_ids: &HashSet::new(),
             }),
             vec![
                 RoomSlot::Room(lounge),
@@ -5575,12 +6375,12 @@ mod tests {
                 RoomSlot::Notifications,
                 RoomSlot::News,
                 RoomSlot::Feeds,
+                RoomSlot::Discover,
                 RoomSlot::Room(public_zeta),
                 RoomSlot::Room(private_beta),
                 RoomSlot::Room(public_alpha),
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
-                RoomSlot::Discover,
             ]
         );
     }
@@ -5631,6 +6431,7 @@ mod tests {
                 feeds_available: false,
                 favorite_room_ids: &[],
                 collapsed_sections: collapsed,
+                ignored_user_ids: &HashSet::new(),
             })
         };
 
@@ -5655,6 +6456,8 @@ mod tests {
         assert!(!co.contains(&RoomSlot::Room(announcements)));
         assert!(!co.contains(&RoomSlot::Notifications));
         assert!(!co.contains(&RoomSlot::News));
+        // Discover now lives at the bottom of Core, so it collapses with it.
+        assert!(!co.contains(&RoomSlot::Discover));
         assert!(co.contains(&RoomSlot::Room(public_alpha)));
 
         // Updates is now hosted by the Directory page, not the Home rail.
@@ -5663,7 +6466,7 @@ mod tests {
         assert!(u.contains(&RoomSlot::News));
         assert!(!u.contains(&RoomSlot::Showcase));
         assert!(!u.contains(&RoomSlot::Work));
-        // Discover is not part of a collapsible section — always present.
+        // Discover lives in Core, which is expanded here, so it stays present.
         assert!(u.contains(&RoomSlot::Discover));
 
         // DMs collapsed: the DM drops out.
@@ -5713,6 +6516,7 @@ mod tests {
             feeds_available: false,
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &HashSet::new(),
         });
         let dm_order: Vec<_> = order
             .into_iter()
@@ -5723,6 +6527,83 @@ mod tests {
             .collect();
 
         assert_eq!(dm_order, vec![dm_bob.id, dm_alice.id]);
+    }
+
+    #[test]
+    fn visual_order_hides_dm_with_ignored_peer() {
+        let me = Uuid::from_u128(1);
+        let alice = Uuid::from_u128(2);
+        let bob = Uuid::from_u128(3);
+        let dm_alice = make_dm(me, alice);
+        let dm_bob = make_dm(me, bob);
+
+        let mut usernames = HashMap::new();
+        usernames.insert(alice, "alice".to_string());
+        usernames.insert(bob, "bob".to_string());
+
+        let rooms = vec![(dm_alice.clone(), Vec::new()), (dm_bob.clone(), Vec::new())];
+        let ignored = HashSet::from([bob]);
+
+        let order = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            favorite_room_ids: &[],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &ignored,
+        });
+
+        assert!(order.contains(&RoomSlot::Room(dm_alice.id)));
+        // The ignored peer's DM must not resurface in the rail.
+        assert!(!order.contains(&RoomSlot::Room(dm_bob.id)));
+
+        // Even when favorited, an ignored peer's DM stays hidden from every
+        // section so it can't be jump-addressable via the favorites path.
+        let favorited = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            favorite_room_ids: &[dm_bob.id],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &ignored,
+        });
+        assert!(!favorited.contains(&RoomSlot::Room(dm_bob.id)));
+    }
+
+    #[test]
+    fn message_is_ignored_in_covers_author_and_reply_target() {
+        let ignored_user = Uuid::from_u128(2);
+        let other = Uuid::from_u128(3);
+        let bot = Uuid::from_u128(4);
+        let ignored = HashSet::from([ignored_user]);
+
+        // Author ignored.
+        let mut by_author = make_msg(Uuid::from_u128(10));
+        by_author.user_id = ignored_user;
+        assert!(message_is_ignored_in(&ignored, &by_author));
+
+        // Bot reply directed at the ignored user.
+        let mut bot_reply = make_msg(Uuid::from_u128(11));
+        bot_reply.user_id = bot;
+        bot_reply.reply_to_user_id = Some(ignored_user);
+        assert!(message_is_ignored_in(&ignored, &bot_reply));
+
+        // Bot reply directed at someone else is kept.
+        let mut other_reply = make_msg(Uuid::from_u128(12));
+        other_reply.user_id = bot;
+        other_reply.reply_to_user_id = Some(other);
+        assert!(!message_is_ignored_in(&ignored, &other_reply));
+
+        // Ordinary message from a non-ignored author is kept.
+        let mut normal = make_msg(Uuid::from_u128(13));
+        normal.user_id = other;
+        assert!(!message_is_ignored_in(&ignored, &normal));
     }
 
     #[test]
@@ -5921,6 +6802,47 @@ mod tests {
         assert_eq!(parse_user_command("ignore alice", "/ignore"), None);
         assert_eq!(parse_user_command("/ignored alice", "/ignore"), None);
         assert_eq!(parse_user_command("/unignored alice", "/unignore"), None);
+    }
+
+    #[test]
+    fn parse_report_command_requires_enough_text() {
+        assert_eq!(
+            parse_report_command("/bug the door ate my hat"),
+            Some((ReportKind::Bug, Some("the door ate my hat".to_string())))
+        );
+        assert_eq!(
+            parse_report_command("  /suggest more cats in the lounge  "),
+            Some((
+                ReportKind::Suggestion,
+                Some("more cats in the lounge".to_string())
+            ))
+        );
+        // Bare or too-short reports show usage instead of posting.
+        assert_eq!(parse_report_command("/bug"), Some((ReportKind::Bug, None)));
+        assert_eq!(
+            parse_report_command("/bug lol"),
+            Some((ReportKind::Bug, None))
+        );
+        assert_eq!(
+            parse_report_command("/suggest   "),
+            Some((ReportKind::Suggestion, None))
+        );
+        // Not report commands at all.
+        assert_eq!(parse_report_command("/buggy thing"), None);
+        assert_eq!(parse_report_command("/suggestions here"), None);
+        assert_eq!(parse_report_command("bug report"), None);
+    }
+
+    #[test]
+    fn reply_preview_text_compacts_report_cards() {
+        assert_eq!(
+            reply_preview_text("---BUG--- the door ate my hat"),
+            "🐛 the door ate my hat"
+        );
+        assert_eq!(
+            reply_preview_text("---SUGGESTION--- more cats\nplease"),
+            "💡 more cats"
+        );
     }
 
     #[test]
@@ -6222,6 +7144,7 @@ mod tests {
             updated: chrono::Utc::now(),
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id: Uuid::from_u128(999),
             user_id: Uuid::from_u128(999),
             body: String::new(),
@@ -6233,6 +7156,110 @@ mod tests {
             reply_to_message_id: Some(reply_to_message_id),
             ..make_msg(id)
         }
+    }
+
+    #[test]
+    fn system_line_text_requires_system_author_and_prefix() {
+        let system_id = Uuid::from_u128(1);
+        let mut usernames = HashMap::new();
+        usernames.insert(system_id, "system".to_string());
+        usernames.insert(Uuid::from_u128(3), "mira".to_string());
+
+        let mut line = make_msg(Uuid::from_u128(10));
+        line.user_id = system_id;
+        line.body = "· mira sat down at poker".to_string();
+        assert_eq!(
+            system_line_text_in(&usernames, &line),
+            Some("mira sat down at poker".to_string())
+        );
+
+        // The system author without the prefix stays a normal message...
+        let mut no_prefix = make_msg(Uuid::from_u128(11));
+        no_prefix.user_id = system_id;
+        no_prefix.body = "hello".to_string();
+        assert_eq!(system_line_text_in(&usernames, &no_prefix), None);
+
+        // ...and so does a non-system author pasting the prefix.
+        let mut spoof = make_msg(Uuid::from_u128(12));
+        spoof.user_id = Uuid::from_u128(3);
+        spoof.body = "· fake activity".to_string();
+        assert_eq!(system_line_text_in(&usernames, &spoof), None);
+    }
+
+    #[test]
+    fn search_snippet_windows_around_match() {
+        let body = format!("{}the deploy failed at midnight", "padding ".repeat(10));
+        let (prefix, matched, suffix) = build_search_snippet(&body, "deploy failed");
+        assert!(prefix.starts_with('…'), "long lead-in is trimmed");
+        assert!(prefix.ends_with("the "));
+        assert_eq!(matched, "deploy failed");
+        assert_eq!(suffix, " at midnight");
+    }
+
+    #[test]
+    fn search_snippet_matches_case_insensitively_and_across_newlines() {
+        let (prefix, matched, suffix) = build_search_snippet("one\nDEPLOY two", "deploy");
+        assert_eq!(prefix, "one ");
+        assert_eq!(matched, "DEPLOY");
+        assert_eq!(suffix, " two");
+    }
+
+    #[test]
+    fn search_snippet_without_match_falls_back_to_head() {
+        let (prefix, matched, suffix) = build_search_snippet("short body", "absent");
+        assert_eq!(prefix, "short body");
+        assert!(matched.is_empty());
+        assert!(suffix.is_empty());
+
+        let (empty_query_prefix, empty_query_match, _) = build_search_snippet("preview", "");
+        assert_eq!(empty_query_prefix, "preview");
+        assert!(empty_query_match.is_empty());
+    }
+
+    #[test]
+    fn search_snippet_strips_card_markers() {
+        let (prefix, matched, _) = build_search_snippet(
+            "---NEWS--- rust 2.0 released || summary || https://example.com",
+            "rust 2.0",
+        );
+        assert!(!prefix.contains("---NEWS---"));
+        assert_eq!(matched, "rust 2.0");
+
+        // A fake marker that is not all-uppercase stays untouched.
+        let (prefix, _, _) = build_search_snippet("---not a marker--- text", "text");
+        assert!(prefix.starts_with("---not a marker---"));
+    }
+
+    #[test]
+    fn ticker_queue_dedupes_orders_newest_first_and_caps() {
+        let base = chrono::Utc::now();
+        let entry = |n: u128, offset_secs: i64| ActivityTickerEntry {
+            id: Uuid::from_u128(n),
+            text: format!("event {n}"),
+            at: base + chrono::Duration::seconds(offset_secs),
+        };
+
+        let mut entries = Vec::new();
+        // Tails replay out of order; the queue must still end newest-first.
+        note_ticker_entry(&mut entries, entry(1, 10));
+        note_ticker_entry(&mut entries, entry(2, 30));
+        note_ticker_entry(&mut entries, entry(3, 20));
+        assert_eq!(
+            entries.iter().map(|e| e.id).collect::<Vec<_>>(),
+            vec![Uuid::from_u128(2), Uuid::from_u128(3), Uuid::from_u128(1)]
+        );
+
+        // A snapshot replaying an already-seen message is a no-op.
+        note_ticker_entry(&mut entries, entry(2, 30));
+        assert_eq!(entries.len(), 3);
+
+        // Overflow drops the oldest, never the newest.
+        for n in 4..=12 {
+            note_ticker_entry(&mut entries, entry(n, 30 + n as i64));
+        }
+        assert_eq!(entries.len(), ACTIVITY_TICKER_CAP);
+        assert_eq!(entries[0].id, Uuid::from_u128(12));
+        assert!(!entries.iter().any(|e| e.id == Uuid::from_u128(1)));
     }
 
     #[test]

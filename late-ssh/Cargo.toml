@@ -46,7 +46,7 @@ dartboard-editor.workspace = true
 dartboard-local.workspace = true
 dartboard-tui.workspace = true
 ratatui.workspace = true
-ratatui-textarea = { version = "0.9.1", default-features = false }
+ratatui-textarea = { version = "0.9.2", default-features = false }
 unicode-width.workspace = true
 unicode_names2.workspace = true
 emojis.workspace = true
@@ -76,6 +76,10 @@ opentelemetry = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry-http = { workspace = true, optional = true }
 rand.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# PTY allocation for the nethack door game (openpty/setsid/TIOCSWINSZ).
+nix = { workspace = true, features = ["term", "process"] }
 
 [dev-dependencies]
 late-core = { workspace = true, features = ["testing"] }

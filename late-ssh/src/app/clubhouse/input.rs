@@ -1,0 +1,151 @@
+//! Clubhouse input: roguelike walking plus the thin bits that make the room
+//! social. Plain arrows/hjkl move your avatar; `i` (or Enter in the open)
+//! opens the #lounge composer, and what you send floats over your head as a
+//! speech bubble; `w` waves and `x` dances for everyone; `t` at the bar
+//! pours a `@bartender ` mention into the composer. Enter next to a landmark
+//! prop follows its signpost: the arcade cabinet, the heavy door, and the
+//! easel jump to their app pages (2/3/4), the poker table opens the Lobby
+//! modal, the jukebox opens the Music Booth, and the dog gets petted where
+//! everyone can see it.
+//! Returns `false` for anything it does not own so global keys (numbers,
+//! Tab, `q`, `?`, `v` music chords, ...) keep working. Composing and
+//! chat-overlay input never reaches this handler: the shared composer and
+//! overlay gates in `app/input.rs` intercept first (`screen_composes_chat`).
+
+use crate::app::common::primitives::Screen;
+use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
+use crate::app::state::App;
+
+use super::lobby::Emote;
+use super::map::Interactive;
+
+pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
+    // A left click on a patron opens their profile, the same view as
+    // `/profile <name>`. Other mouse events (scroll) fall through to the
+    // global handlers.
+    if let ParsedInput::Mouse(mouse) = event {
+        return handle_click(app, mouse);
+    }
+
+    if let Some(byte) = event_byte(event) {
+        // A tutorial popup wants Enter before anything else. There is no Esc
+        // skip: the tour only ends by reaching the bartender.
+        if matches!(byte, b'\r' | b'\n') && app.clubhouse.tutorial_capturing_keys() {
+            if app.clubhouse.tutorial_advance() {
+                app.persist_clubhouse_tutorial_done();
+                // The last box sends them off to the chat: land on the
+                // dashboard (#lounge on Home), page 1.
+                app.set_screen(Screen::Dashboard);
+            }
+            return true;
+        }
+
+        match byte {
+            b'i' | b'I' => {
+                if let Some(lounge_id) = app.chat.lounge_room_id() {
+                    app.chat.start_composing_in_room(lounge_id);
+                }
+                return true;
+            }
+            b'w' | b'W' => {
+                app.clubhouse.emote(Emote::Wave);
+                return true;
+            }
+            b'x' | b'X' => {
+                app.clubhouse.emote(Emote::Dance);
+                return true;
+            }
+            b's' | b'S' => {
+                app.clubhouse.sit();
+                return true;
+            }
+            b't' | b'T' if app.clubhouse.nearby() == Some(Interactive::Bartender) => {
+                if let Some(lounge_id) = app.chat.lounge_room_id() {
+                    app.chat.insert_mention_in_room(lounge_id, "bartender");
+                }
+                return true;
+            }
+            b'\r' | b'\n' => {
+                match app.clubhouse.nearby() {
+                    Some(Interactive::Jukebox) => {
+                        let submit_enabled = app.audio.booth_submit_enabled();
+                        app.booth_modal_state.open(submit_enabled);
+                    }
+                    Some(Interactive::Bartender) => {
+                        if let Some(lounge_id) = app.chat.lounge_room_id() {
+                            app.chat.insert_mention_in_room(lounge_id, "bartender");
+                        }
+                    }
+                    Some(Interactive::Dog) => app.clubhouse.pet_dog(),
+                    // The landmark props are signposts: Enter walks through.
+                    Some(Interactive::Arcade) => app.set_screen(Screen::Arcade),
+                    Some(Interactive::Doors) => app.set_screen(Screen::Games),
+                    Some(Interactive::Poker) => {
+                        crate::app::input::open_daily_modal_globally(app);
+                    }
+                    Some(Interactive::Easel) => app.set_screen(Screen::Artboard),
+                    _ => {
+                        if let Some(lounge_id) = app.chat.lounge_room_id() {
+                            app.chat.start_composing_in_room(lounge_id);
+                        }
+                    }
+                }
+                return true;
+            }
+            _ => {}
+        }
+    }
+
+    handle_walk(app, event)
+}
+
+/// Arrow keys and lowercase hjkl move the avatar. Consumes the key even when
+/// the step is blocked so walking into a wall doesn't trigger global actions.
+fn handle_walk(app: &mut App, event: &ParsedInput) -> bool {
+    let (dx, dy) = match event {
+        ParsedInput::Arrow(b'A') => (0, -1),
+        ParsedInput::Arrow(b'B') => (0, 1),
+        ParsedInput::Arrow(b'C') => (1, 0),
+        ParsedInput::Arrow(b'D') => (-1, 0),
+        ParsedInput::Byte(b'k') | ParsedInput::Char('k') => (0, -1),
+        ParsedInput::Byte(b'j') | ParsedInput::Char('j') => (0, 1),
+        ParsedInput::Byte(b'l') | ParsedInput::Char('l') => (1, 0),
+        ParsedInput::Byte(b'h') | ParsedInput::Char('h') => (-1, 0),
+        _ => return false,
+    };
+    // A consumed movement key also cancels a pending `v` music chord, like
+    // any locally-handled key would on the chat screens.
+    app.music_prefix_armed = false;
+    app.clubhouse.walk(dx, dy);
+    if app.clubhouse.tutorial_reached_bar() {
+        app.send_clubhouse_bartender_greeting();
+    }
+    true
+}
+
+/// A left-button press over a patron's avatar or name label opens their
+/// profile modal. Returns `false` for anything else (misses, scroll, drags,
+/// button-ups) so the global mouse handlers keep working.
+fn handle_click(app: &mut App, mouse: &MouseEvent) -> bool {
+    if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
+        return false;
+    }
+    // SGR mouse cells are 1-indexed; the hit layout is in 0-indexed frame
+    // cells (same convention as `handle_mouse_click`).
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    let Some((user_id, username)) = app.clubhouse.hit_test(x, y) else {
+        return false;
+    };
+    app.open_profile_modal(user_id, username);
+    true
+}
+
+fn event_byte(event: &ParsedInput) -> Option<u8> {
+    match event {
+        ParsedInput::Byte(byte) => Some(*byte),
+        ParsedInput::Char(ch) if ch.is_ascii() => Some(*ch as u8),
+        _ => None,
+    }
+}

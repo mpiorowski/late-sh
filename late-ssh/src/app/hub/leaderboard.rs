@@ -27,7 +27,7 @@ pub fn draw(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid
     .split(area);
 
     let (top_panels, top_gaps) = split_with_dividers(rows[0], 2);
-    let (score_panels, score_gaps) = split_with_dividers(rows[2], 3);
+    let (score_panels, score_gaps) = split_with_dividers(rows[2], 4);
 
     draw_top_row(frame, &top_panels, data, user_id);
     draw_score_row(frame, &score_panels, data, user_id);
@@ -163,6 +163,14 @@ fn draw_score_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, us
         "Snake",
         &data.monthly_snake_high_scores,
         high_scores_for(data, "Snake"),
+        user_id,
+    );
+    draw_score_panel(
+        frame,
+        panels[3],
+        "Traffic",
+        &data.monthly_traffic_high_scores,
+        high_scores_for(data, "Traffic"),
         user_id,
     );
 }

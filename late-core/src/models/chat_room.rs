@@ -166,6 +166,40 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// Private two-player chat room for a claimed daily match, plus both
+    /// memberships, in one statement. `kind = 'game'` (hidden from the Home
+    /// rail, no Mentions, no IRC) but `visibility = 'private'`: only the two
+    /// players are ever members, and the public game-room join path rejects
+    /// private rooms. `game_kind` is the daily roster kind string; the slug
+    /// is `daily-{match_id}`, unique per match. No ON CONFLICT: a duplicate
+    /// slug means a bug, not a race to absorb.
+    pub async fn create_daily_match_room(
+        client: &impl GenericClient,
+        game_kind: &str,
+        slug: &str,
+        player_a: Uuid,
+        player_b: Uuid,
+    ) -> Result<Self> {
+        let slug = normalize_game_slug(slug)?;
+        let row = client
+            .query_one(
+                "WITH room AS (
+                     INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                     VALUES ('game', 'private', false, $1, $2)
+                     RETURNING *
+                 ),
+                 members AS (
+                     INSERT INTO chat_room_members (room_id, user_id)
+                     SELECT room.id, member_id
+                     FROM room, unnest(ARRAY[$3, $4]::uuid[]) AS member_id
+                 )
+                 SELECT * FROM room",
+                &[&slug, &game_kind, &player_a, &player_b],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     pub async fn create_private_room(client: &Client, slug: &str) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 
@@ -468,21 +502,42 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    /// Create or update a permanent public room. Permanent rooms are auto-joined
-    /// by all users on connect and cannot be left.
+    /// Create a permanent public room. Permanent rooms are auto-joined by all
+    /// users on connect and cannot be left. Re-running this on a room that is
+    /// already permanent is a no-op, so the caller can retry safely; an
+    /// existing *non*-permanent room is left alone and the call fails, because
+    /// promoting it would bulk-add every user to an unleaveable room with no
+    /// undo — a mistyped slug must not do that.
     pub async fn ensure_permanent(client: &Client, slug: &str) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 
         let existing = client
             .query_opt(
-                "SELECT id
+                "SELECT *
                  FROM chat_rooms
                  WHERE slug = $1 AND kind = 'topic' AND visibility = 'public'",
                 &[&slug],
             )
             .await?;
-        if existing.is_some() {
-            bail!("room #{slug} already exists");
+        if let Some(existing) = existing {
+            let room = Self::from(existing);
+            if room.permanent {
+                return Ok(room);
+            }
+            // Promote an existing non-permanent public room (e.g. a user-created
+            // `/public` room) to a permanent auto-join room. Callers bulk-add all
+            // users afterwards, so a mistyped slug will bulk-add everyone to an
+            // unleavable room — `/create-room` is admin-only for that reason.
+            let row = client
+                .query_one(
+                    "UPDATE chat_rooms
+                     SET permanent = true, auto_join = true, updated = now()
+                     WHERE id = $1
+                     RETURNING *",
+                    &[&room.id],
+                )
+                .await?;
+            return Ok(Self::from(row));
         }
 
         let row = client

@@ -12,6 +12,7 @@ use super::theme;
 pub struct Overlay {
     pub title: String,
     pub lines: Vec<String>,
+    pub styled_lines: Option<Vec<Line<'static>>>,
     pub scroll_offset: u16,
     pub close_on_any_key: bool,
 }
@@ -21,6 +22,17 @@ impl Overlay {
         Self {
             title: title.into(),
             lines,
+            styled_lines: None,
+            scroll_offset: 0,
+            close_on_any_key: false,
+        }
+    }
+
+    pub fn styled(title: impl Into<String>, lines: Vec<Line<'static>>) -> Self {
+        Self {
+            title: title.into(),
+            lines: Vec::new(),
+            styled_lines: Some(lines),
             scroll_offset: 0,
             close_on_any_key: false,
         }
@@ -52,12 +64,16 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
 
     let width = anchor.width.saturating_sub(4).max(10);
     let inner_width = width.saturating_sub(2).max(1);
-    let content_height = overlay
-        .lines
-        .iter()
-        .map(|line| wrapped_row_count(line, inner_width))
-        .sum::<u16>()
-        .saturating_add(2);
+    let content_height = if let Some(lines) = &overlay.styled_lines {
+        lines.len() as u16
+    } else {
+        overlay
+            .lines
+            .iter()
+            .map(|line| wrapped_row_count(line, inner_width))
+            .sum::<u16>()
+    }
+    .saturating_add(2);
     let height = content_height.min(anchor.height).max(8);
     let area = Rect::new(
         anchor.x + 2,
@@ -76,16 +92,18 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
-    let lines: Vec<Line> = overlay
-        .lines
-        .iter()
-        .map(|line| {
-            Line::from(Span::styled(
-                format!(" {line}"),
-                Style::default().fg(theme::TEXT()),
-            ))
-        })
-        .collect();
+    let lines: Vec<Line> = overlay.styled_lines.clone().unwrap_or_else(|| {
+        overlay
+            .lines
+            .iter()
+            .map(|line| {
+                Line::from(Span::styled(
+                    format!(" {line}"),
+                    Style::default().fg(theme::TEXT()),
+                ))
+            })
+            .collect()
+    });
 
     frame.render_widget(Clear, area);
     frame.render_widget(

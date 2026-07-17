@@ -1,13 +1,91 @@
 use ratatui::{
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 
+use crate::app::chat::action::parse_action_body;
+use crate::app::chat::svc::ReportKind;
+use crate::app::common::username_effect::{NameStyle, char_color};
 use crate::app::common::{markdown::render_body_to_lines, theme};
 use late_core::models::{article::NEWS_MARKER, chat_message_reaction::ChatMessageReactionSummary};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const NEWS_SEPARATOR: &str = " || ";
+
+/// The flair painted over the bare username inside the author header:
+/// the tavern drunk glow as a background tint and/or a bought 24h username
+/// effect as per-character foreground color. `range` is the username's byte
+/// range within the prefix string, so badges and flags stay untouched.
+/// `word` is the drunk state printed after the header (e.g. "wasted"),
+/// present only once the drinker is soused enough to earn a label; the glow
+/// alone carries lighter states. The effect fg deliberately overrides the
+/// base author fg (own amber, friend gold, default) while keeping its bg and
+/// modifiers, so a bought effect always wins the color of the name.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AuthorTint {
+    pub range: (usize, usize),
+    pub bg: Option<Color>,
+    pub word: Option<&'static str>,
+    pub name_style: Option<NameStyle>,
+}
+
+/// The trailing ` (word)` span appended after the author header for a drinker
+/// deep enough to warrant a printed label. Faint and italic so it reads as an
+/// aside next to the name, not another badge.
+fn drunk_word_span(word: &str) -> Span<'static> {
+    Span::styled(
+        format!(" ({word})"),
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    )
+}
+
+/// The author header's prefix spans: one span when untinted (byte-identical
+/// to the historical output), split when drunk tint and/or a username effect
+/// paints the name. Falls back to the single span on any out-of-bounds range.
+///
+/// A username effect emits one span per character so gradients and shimmer
+/// interpolate across the name; the country-flag emoji inside the range
+/// ignores fg color, which is fine — the readable characters carry the look.
+fn push_author_prefix_spans(
+    spans: &mut Vec<Span<'static>>,
+    prefix: &str,
+    author_style: Style,
+    tint: Option<AuthorTint>,
+) {
+    if let Some(tint) = tint {
+        let (start, end) = tint.range;
+        if start < end
+            && end <= prefix.len()
+            && prefix.is_char_boundary(start)
+            && prefix.is_char_boundary(end)
+        {
+            if start > 0 {
+                spans.push(Span::styled(prefix[..start].to_string(), author_style));
+            }
+            let name = &prefix[start..end];
+            let name_base = match tint.bg {
+                Some(bg) => author_style.bg(bg),
+                None => author_style,
+            };
+            match tint.name_style {
+                Some(style) => {
+                    let len = name.chars().count();
+                    spans.extend(name.chars().enumerate().map(|(index, ch)| {
+                        Span::styled(ch.to_string(), name_base.fg(char_color(style, index, len)))
+                    }));
+                }
+                None => spans.push(Span::styled(name.to_string(), name_base)),
+            }
+            if end < prefix.len() {
+                spans.push(Span::styled(prefix[end..].to_string(), author_style));
+            }
+            return;
+        }
+    }
+    spans.push(Span::styled(prefix.to_string(), author_style));
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn wrap_message_to_lines(
@@ -16,6 +94,7 @@ pub(super) fn wrap_message_to_lines(
     prefix: &str,
     width: usize,
     author_style: Style,
+    author_tint: Option<AuthorTint>,
     body_style: Style,
     mentions_us: bool,
     continuation: bool,
@@ -28,14 +107,16 @@ pub(super) fn wrap_message_to_lines(
     };
 
     if !continuation {
-        lines.push(Line::from(vec![
-            pad.clone(),
-            Span::styled(prefix.to_string(), author_style),
-            Span::styled(
-                format!(" {stamp}"),
-                Style::default().fg(theme::TEXT_FAINT()),
-            ),
-        ]));
+        let mut spans = vec![pad.clone()];
+        push_author_prefix_spans(&mut spans, prefix, author_style, author_tint);
+        if let Some(word) = author_tint.and_then(|tint| tint.word) {
+            spans.push(drunk_word_span(word));
+        }
+        spans.push(Span::styled(
+            format!(" {stamp}"),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+        lines.push(Line::from(spans));
     }
 
     if body.is_empty() {
@@ -54,9 +135,11 @@ pub(super) fn wrap_chat_entry_to_lines(
     prefix: &str,
     width: usize,
     author_style: Style,
+    author_tint: Option<AuthorTint>,
     body_style: Style,
     mentions_us: bool,
     continuation: bool,
+    system_text: Option<&str>,
     inline_image_lines: Option<&[Line<'static>]>,
     reactions: &[ChatMessageReactionSummary],
 ) -> WrappedChatEntry {
@@ -65,14 +148,36 @@ pub(super) fn wrap_chat_entry_to_lines(
     } else {
         Span::raw(" ")
     };
-    let news_payload = parse_news_payload(body);
-    // Only normal (non-news), non-continuation messages emit a clickable
-    // author header for mouse hit-testing — news cards have their own
-    // card layout, and continuation messages omit the header so a run
-    // reads as one block.
-    let header_line_index = (news_payload.is_none() && !continuation).then_some(0);
-    let mut lines = if let Some(news) = news_payload {
+    let news_payload = system_text
+        .is_none()
+        .then(|| parse_news_payload(body))
+        .flatten();
+    let report_payload = (system_text.is_none() && news_payload.is_none())
+        .then(|| parse_report_payload(body))
+        .flatten();
+    let action_payload =
+        (system_text.is_none() && news_payload.is_none() && report_payload.is_none())
+            .then(|| parse_action_body(body))
+            .flatten();
+    // Only normal (non-news, non-report, non-system), non-continuation
+    // messages emit a clickable author header for mouse hit-testing — news
+    // and report cards have their own card layout, system lines are
+    // authorless, and continuation messages omit the header so a run reads
+    // as one block.
+    let header_line_index = (system_text.is_none()
+        && news_payload.is_none()
+        && report_payload.is_none()
+        && action_payload.is_none()
+        && !continuation)
+        .then_some(0);
+    let mut lines = if let Some(system) = system_text {
+        wrap_system_to_lines(system, width)
+    } else if let Some(news) = news_payload {
         wrap_news_to_lines(stamp, prefix, width, author_style, news)
+    } else if let Some((kind, text)) = report_payload {
+        wrap_report_to_lines(stamp, prefix, width, author_style, kind, text)
+    } else if let Some(action) = action_payload {
+        wrap_action_to_lines(action, prefix, width, body_style, mentions_us)
     } else {
         wrap_message_to_lines(
             body,
@@ -80,6 +185,7 @@ pub(super) fn wrap_chat_entry_to_lines(
             prefix,
             width,
             author_style,
+            author_tint,
             body_style,
             mentions_us,
             continuation,
@@ -104,6 +210,56 @@ pub(super) fn wrap_chat_entry_to_lines(
         header_line_index,
         image_line_range,
     }
+}
+
+/// A #lounge system-feed line (see `activity/lounge.rs`). The prefix alone
+/// is NOT trusted: callers must also check the author is the system user
+/// before styling, so neither a human named "system" nor a pasted "· " can
+/// spoof the authorless row.
+pub(crate) fn parse_system_line(body: &str) -> Option<&str> {
+    let text = body
+        .strip_prefix(crate::app::activity::lounge::SYSTEM_LINE_PREFIX)?
+        .trim();
+    (!text.is_empty()).then_some(text)
+}
+
+/// System lines render as exactly one authorless row — a stacked run must
+/// stay dense — so overlong text is truncated, never wrapped.
+fn wrap_system_to_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+    let budget = width.saturating_sub(4); // pad + "· " + right breathing room
+    let shown: String = if text.chars().count() > budget && budget > 1 {
+        let mut cut: String = text.chars().take(budget - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        text.to_string()
+    };
+    vec![Line::from(vec![
+        Span::raw(" "),
+        Span::styled("· ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(
+            shown,
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ])]
+}
+
+fn wrap_action_to_lines(
+    action: &str,
+    prefix: &str,
+    width: usize,
+    body_style: Style,
+    mentions_us: bool,
+) -> Vec<Line<'static>> {
+    let pad = if mentions_us {
+        Span::styled("│", Style::default().fg(theme::MENTION()))
+    } else {
+        Span::raw(" ")
+    };
+    let style = body_style.add_modifier(Modifier::ITALIC);
+    render_body_to_lines(&format!("* {prefix} {action}"), width, pad, style)
 }
 
 pub(super) struct WrappedChatEntry {
@@ -271,6 +427,80 @@ fn wrap_news_to_lines(
         pad,
         Span::styled("─".repeat(inner_width), border_style),
     ]));
+    lines
+}
+
+// ── Report cards (/bug, /suggest) ───────────────────────────
+
+/// A `/bug` or `/suggest` report card: the kind's marker at the start of the
+/// body, everything after it is the report text. Mirrors `parse_news_payload`:
+/// the marker must open the message so pasted markers mid-text don't spoof a
+/// card.
+pub(crate) fn parse_report_payload(body: &str) -> Option<(ReportKind, &str)> {
+    let trimmed = body.trim_start();
+    for kind in [ReportKind::Bug, ReportKind::Suggestion] {
+        if let Some(rest) = trimmed.strip_prefix(kind.marker()) {
+            return Some((kind, rest.trim()));
+        }
+    }
+    None
+}
+
+/// Report cards render as a compact ruled block so reports stand apart from
+/// staff replies in the report-only rooms:
+/// ```text
+///  mat filed a bug 12:34
+///  ────────────────────
+///  🐛 the thing broke when …
+///  ────────────────────
+/// ```
+fn wrap_report_to_lines(
+    stamp: &str,
+    prefix: &str,
+    width: usize,
+    author_style: Style,
+    kind: ReportKind,
+    text: &str,
+) -> Vec<Line<'static>> {
+    let border_style = Style::default().fg(theme::BORDER());
+    let body_style = Style::default().fg(theme::CHAT_BODY());
+    let meta_style = Style::default().fg(theme::TEXT_FAINT());
+    let pad = Span::raw(" ");
+
+    let mut lines = vec![Line::from(vec![
+        pad.clone(),
+        Span::styled(prefix.to_string(), author_style),
+        Span::styled(
+            format!(" {} ", kind.verb()),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(stamp.to_string(), meta_style),
+    ])];
+
+    let text = if text.is_empty() {
+        kind.command()
+    } else {
+        text
+    };
+    let body = format!("{} {}", kind.icon(), text);
+    if width < 10 {
+        lines.push(Line::from(vec![
+            pad,
+            Span::styled(normalize_inline_text(&body), body_style),
+        ]));
+        return lines;
+    }
+
+    let inner_width = width.saturating_sub(2).max(1);
+    let rule = || {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("─".repeat(inner_width), border_style),
+        ])
+    };
+    lines.push(rule());
+    lines.extend(render_body_to_lines(&body, width, pad, body_style));
+    lines.push(rule());
     lines
 }
 
@@ -490,6 +720,65 @@ mod tests {
     }
 
     #[test]
+    fn parse_report_payload_requires_marker_at_start() {
+        assert_eq!(
+            parse_report_payload("---BUG--- the door ate my hat"),
+            Some((ReportKind::Bug, "the door ate my hat"))
+        );
+        assert_eq!(
+            parse_report_payload("  ---SUGGESTION--- more cats"),
+            Some((ReportKind::Suggestion, "more cats"))
+        );
+        assert!(parse_report_payload("hello ---BUG--- fake").is_none());
+        assert!(parse_report_payload("regular message").is_none());
+    }
+
+    #[test]
+    fn wrap_chat_entry_to_lines_renders_report_card() {
+        let wrapped = wrap_chat_entry_to_lines(
+            "---BUG--- the door ate my hat",
+            "[now]",
+            "mat",
+            40,
+            Style::default(),
+            None,
+            Style::default(),
+            false,
+            false,
+            None,
+            None,
+            &[],
+        );
+        let lines = lines_to_strings(&wrapped.lines);
+        assert_eq!(lines[0], " mat filed a bug [now]");
+        assert!(lines[1].contains('─'), "{lines:?}");
+        assert!(lines[2].contains("🐛 the door ate my hat"), "{lines:?}");
+        assert!(lines.last().unwrap().contains('─'), "{lines:?}");
+        assert_eq!(wrapped.header_line_index, None);
+    }
+
+    #[test]
+    fn wrap_chat_entry_to_lines_renders_action_message() {
+        let body = crate::app::chat::action::encode_action_body("waves").expect("action");
+        let wrapped = wrap_chat_entry_to_lines(
+            &body,
+            "[now]",
+            "mat",
+            80,
+            Style::default(),
+            None,
+            Style::default(),
+            false,
+            false,
+            None,
+            None,
+            &[],
+        );
+        assert_eq!(lines_to_strings(&wrapped.lines), vec![" * mat waves"]);
+        assert_eq!(wrapped.header_line_index, None);
+    }
+
+    #[test]
     fn format_news_ascii_art_for_display_limits_to_requested_rows() {
         let art = "abc\ndef\nghi\njkl";
         let lines = format_news_ascii_art_for_display(art, 2);
@@ -598,9 +887,11 @@ mod tests {
             "alice",
             80,
             Style::default(),
+            None,
             Style::default(),
             false,
             false,
+            None,
             None,
             &[
                 ChatMessageReactionSummary {
@@ -626,6 +917,7 @@ mod tests {
             "alice",
             80,
             Style::default(),
+            None,
             Style::default(),
             false,
             false,
@@ -643,6 +935,7 @@ mod tests {
             "bob",
             80,
             Style::default(),
+            None,
             Style::default(),
             false,
             false,
@@ -662,11 +955,171 @@ mod tests {
             "alice",
             80,
             Style::default(),
+            None,
             Style::default(),
             false,
             false,
         );
         assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn wrap_message_author_tint_splits_only_the_username() {
+        let tint = AuthorTint {
+            range: (4, 9), // "alice" inside "★ alice 🌱" ("★" is 3 bytes)
+            bg: Some(Color::Rgb(10, 20, 30)),
+            word: None,
+            name_style: None,
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "[1m]",
+            "★ alice 🌱",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + prefix-before + tinted-username + prefix-after + stamp
+        let header = &lines[0];
+        assert_eq!(header.spans.len(), 5);
+        assert_eq!(header.spans[2].content.as_ref(), "alice");
+        assert_eq!(header.spans[2].style.bg, Some(Color::Rgb(10, 20, 30)));
+        assert_eq!(header.spans[1].style.bg, None);
+        assert_eq!(header.spans[3].style.bg, None);
+        // Text is identical to the untinted render.
+        let untinted = wrap_message_to_lines(
+            "hello",
+            "[1m]",
+            "★ alice 🌱",
+            80,
+            Style::default(),
+            None,
+            Style::default(),
+            false,
+            false,
+        );
+        assert_eq!(lines_to_strings(&lines), lines_to_strings(&untinted));
+    }
+
+    #[test]
+    fn wrap_message_author_tint_ignores_bad_ranges() {
+        let tint = AuthorTint {
+            range: (0, 99),
+            bg: Some(Color::Rgb(10, 20, 30)),
+            word: None,
+            name_style: None,
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "[1m]",
+            "alice",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        assert_eq!(lines[0].spans.len(), 3);
+        assert_eq!(lines[0].spans[1].style.bg, None);
+    }
+
+    #[test]
+    fn wrap_message_name_style_paints_per_char_over_drunk_bg() {
+        let tint = AuthorTint {
+            range: (0, 5),
+            bg: Some(Color::Rgb(10, 20, 30)),
+            word: None,
+            name_style: Some(NameStyle::Solid(Color::Rgb(255, 200, 80))),
+        };
+        let author_style = Style::default()
+            .fg(Color::Rgb(1, 2, 3))
+            .add_modifier(Modifier::BOLD);
+        let lines = wrap_message_to_lines(
+            "hello",
+            "12:04",
+            "alice",
+            80,
+            author_style,
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + 5 per-char spans + stamp
+        let header = &lines[0];
+        assert_eq!(header.spans.len(), 7);
+        let name: String = header.spans[1..6]
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(name, "alice");
+        for span in &header.spans[1..6] {
+            // Effect fg wins over the author fg; drunk bg and BOLD survive.
+            assert_eq!(span.style.fg, Some(Color::Rgb(255, 200, 80)));
+            assert_eq!(span.style.bg, Some(Color::Rgb(10, 20, 30)));
+            assert!(span.style.add_modifier.contains(Modifier::BOLD));
+        }
+    }
+
+    #[test]
+    fn wrap_message_prints_drunk_word_between_name_and_stamp() {
+        let tint = AuthorTint {
+            range: (0, 5),
+            bg: Some(Color::Rgb(10, 20, 30)),
+            word: Some("wasted"),
+            name_style: None,
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "12:04",
+            "alice",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + tinted-username + " (wasted)" + " 12:04"
+        let header = &lines[0];
+        assert_eq!(header.spans.len(), 4);
+        assert_eq!(header.spans[2].content.as_ref(), " (wasted)");
+        assert!(
+            header.spans[2]
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC)
+        );
+        assert_eq!(header.spans[3].content.as_ref(), " 12:04");
+    }
+
+    #[test]
+    fn wrap_message_omits_drunk_word_when_absent() {
+        // The glow can be present with no word (light buzz): header stays lean.
+        let tint = AuthorTint {
+            range: (0, 5),
+            bg: Some(Color::Rgb(10, 20, 30)),
+            word: None,
+            name_style: None,
+        };
+        let lines = wrap_message_to_lines(
+            "hello",
+            "12:04",
+            "alice",
+            80,
+            Style::default(),
+            Some(tint),
+            Style::default(),
+            false,
+            false,
+        );
+        // pad + tinted-username + " 12:04" — no aside.
+        assert_eq!(lines[0].spans.len(), 3);
+        assert_eq!(lines[0].spans[2].content.as_ref(), " 12:04");
     }
 
     #[test]

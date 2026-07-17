@@ -42,6 +42,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         (TAB_WIDTH, TAB_HEIGHT)
     };
     let popup = centered_rect(width, height, area);
+    state.set_popup_area(popup);
 
     // Two stacked boxes with a blank row between them: the profile box (the
     // dashboard, or the tabbed fallback) on top, and the always-visible
@@ -91,8 +92,9 @@ fn profile_frame(frame: &mut Frame, area: Rect, state: &ProfileModalState) -> Op
 }
 
 /// The big layout: no sub-boxes, just labelled sections. The about (bio),
-/// earned-award preview, and showcases live in the left column; bonsai sits on
-/// the right, and the aquarium gets the whole bottom band.
+/// earned-award preview, showcases, and badge-code legend live in the left
+/// column; bonsai sits on the right, and the aquarium gets the whole bottom
+/// band.
 fn draw_dashboard(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let Some(inner) = profile_frame(frame, area, state) else {
         return;
@@ -350,10 +352,6 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
         lines.push(section_heading("Badges"));
         lines.extend(badge_lines);
     }
-    lines.push(Line::from(""));
-    lines.push(section_heading("Badge Codes"));
-    lines.extend(badges::legend_lines());
-
     let showcases = state.showcases_for_viewed();
     if !showcases.is_empty() {
         lines.push(Line::from(""));
@@ -368,6 +366,10 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
             ));
         }
     }
+
+    lines.push(Line::from(""));
+    lines.push(section_heading("Badge Codes"));
+    lines.extend(badges::legend_lines());
 
     lines
 }

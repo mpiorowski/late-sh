@@ -9,12 +9,12 @@ use late_core::{
         audio_ban::{AudioBan, AudioBanListItem},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
-        game_room::GameRoom,
+        chat_slow_mode::{ChatSlowMode, ChatSlowModeListItem},
         moderation_audit_log::{ModerationAuditLog, ModerationAuditLogListItem},
         room_ban::{RoomBan, RoomBanListItem},
         server_ban::{ServerBan, ServerBanActivation, ServerBanListItem},
         user::{User, sanitize_username_input},
-        voice_channel::{TARGET_CHAT_ROOM, TARGET_GAME_ROOM, VoiceChannel},
+        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
 };
 use serde_json::json;
@@ -29,8 +29,8 @@ use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
     ArtboardAction, ArtboardCurateSource, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand,
-    RoleAction, RoomModAction, ServerUserAction, VoiceAction, mod_help_lines, normalize_mod_slug,
-    parse_mod_command, strip_user_prefix,
+    RoleAction, RoomModAction, ServerUserAction, SlowListScope, SlowScope, VoiceAction,
+    mod_help_lines, normalize_mod_slug, parse_mod_command, strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -61,6 +61,14 @@ struct RoomModRequest {
     slug: String,
     username: String,
     duration: Option<chrono::Duration>,
+    reason: String,
+}
+
+struct SlowModeRequest {
+    scope: SlowScope,
+    username: String,
+    interval_secs: i32,
+    expires_in: Option<chrono::Duration>,
     reason: String,
 }
 
@@ -130,6 +138,7 @@ impl ModerationService {
             ModCommand::User { username } => self.user_detail(permissions, &username).await,
             ModCommand::RoomInfo { slug } => self.room_detail(permissions, &slug).await,
             ModCommand::Bans { scope, page } => self.list_bans(permissions, scope, page).await,
+            ModCommand::Slows { scope, page } => self.list_slows(permissions, scope, page).await,
             ModCommand::Audit { page } => self.list_audit(permissions, page).await,
             ModCommand::ArtboardSnapshots { page } => {
                 self.list_artboard_snapshots(permissions, page).await
@@ -184,6 +193,34 @@ impl ModerationService {
                     reason,
                 )
                 .await
+            }
+            ModCommand::Slow {
+                scope,
+                username,
+                interval_secs,
+                expires_in,
+                reason,
+            } => {
+                self.slow_user(
+                    actor_user_id,
+                    permissions,
+                    SlowModeRequest {
+                        scope,
+                        username,
+                        interval_secs,
+                        expires_in,
+                        reason,
+                    },
+                )
+                .await
+            }
+            ModCommand::Unslow {
+                scope,
+                username,
+                reason,
+            } => {
+                self.unslow_user(actor_user_id, permissions, scope, &username, reason)
+                    .await
             }
             ModCommand::Artboard {
                 action,
@@ -270,7 +307,7 @@ impl ModerationService {
         let room = find_room_by_mod_slug(&client, slug).await?;
         let member_count = ChatRoomMember::count_for_room(&client, room.id).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
-        let voice_target = voice_target_for_room(&client, &room).await?;
+        let voice_target = voice_target_for_room(&room).await?;
         let voice_is_enabled = VoiceChannel::find_for_target(
             &client,
             voice_target.target_kind,
@@ -391,6 +428,58 @@ impl ModerationService {
         }
     }
 
+    async fn list_slows(
+        &self,
+        permissions: Permissions,
+        scope: SlowListScope,
+        page: i64,
+    ) -> Result<Vec<String>> {
+        ensure_mod_surface(permissions)?;
+        let client = self.db.get().await?;
+        let offset = page_offset(page);
+        match scope {
+            SlowListScope::Room { slug } => {
+                let room = find_room_by_mod_slug(&client, &slug).await?;
+                let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+                let items = ChatSlowMode::active_for_room_with_usernames_page(
+                    &client,
+                    room.id,
+                    LIST_PAGE_SIZE,
+                    offset,
+                )
+                .await?;
+                Ok(single_section(
+                    &format!("active slow modes for #{room_slug} (page {page})"),
+                    &format!("no active slow modes for #{room_slug}"),
+                    items.iter().map(format_chat_slow_mode_item).collect(),
+                ))
+            }
+            SlowListScope::Server => {
+                let items = ChatSlowMode::active_server_with_usernames_page(
+                    &client,
+                    LIST_PAGE_SIZE,
+                    offset,
+                )
+                .await?;
+                Ok(single_section(
+                    &format!("active server slow modes (page {page})"),
+                    "no active server slow modes",
+                    items.iter().map(format_chat_slow_mode_item).collect(),
+                ))
+            }
+            SlowListScope::All => {
+                let items =
+                    ChatSlowMode::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset)
+                        .await?;
+                Ok(single_section(
+                    &format!("active slow modes (page {page})"),
+                    "no active slow modes",
+                    items.iter().map(format_chat_slow_mode_item).collect(),
+                ))
+            }
+        }
+    }
+
     async fn list_audit(&self, permissions: Permissions, page: i64) -> Result<Vec<String>> {
         ensure_has(permissions, Caps::VIEW_STAFF_INFO)?;
         let client = self.db.get().await?;
@@ -459,9 +548,6 @@ impl ModerationService {
         if updated == 0 {
             anyhow::bail!("room not found: #{old_slug}");
         }
-        if room.kind == "game" {
-            GameRoom::rename_by_chat_room_id(&tx, room.id, &new_slug).await?;
-        }
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(false),
@@ -494,7 +580,7 @@ impl ModerationService {
         let mut client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, &slug).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
-        let voice_target = voice_target_for_room(&client, &room).await?;
+        let voice_target = voice_target_for_room(&room).await?;
         let current_enabled = VoiceChannel::find_for_target(
             &client,
             voice_target.target_kind,
@@ -625,7 +711,7 @@ impl ModerationService {
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
         let affected_voice_channel =
             if matches!(request.action, RoomModAction::Kick | RoomModAction::Ban) {
-                let voice_target = voice_target_for_room(&client, &room).await?;
+                let voice_target = voice_target_for_room(&room).await?;
                 VoiceChannel::find_for_target(
                     &client,
                     voice_target.target_kind,
@@ -724,6 +810,180 @@ impl ModerationService {
             request.action.past_tense(),
             target.username,
             room_slug
+        )])
+    }
+
+    async fn slow_user(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        request: SlowModeRequest,
+    ) -> Result<Vec<String>> {
+        let mut client = self.db.get().await?;
+        let room = match &request.scope {
+            SlowScope::Room { slug } => Some(find_room_by_mod_slug(&client, slug).await?),
+            SlowScope::Server => None,
+        };
+        let target = find_user_by_mod_name(&client, &request.username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        ensure_can(permissions, Caps::BAN_FROM_ROOM, tier_for_user(&target))?;
+        let expires_at = request.expires_in.map(|duration| Utc::now() + duration);
+        let expires_at_metadata = expires_at.as_ref().map(|value| value.to_rfc3339());
+        let scope_label = slow_scope_label(room.as_ref());
+        let tx = client.transaction().await?;
+        match &room {
+            Some(room) => {
+                ChatSlowMode::activate(
+                    &tx,
+                    room.id,
+                    target.id,
+                    actor_user_id,
+                    request.interval_secs,
+                    &request.reason,
+                    expires_at,
+                )
+                .await?;
+            }
+            None => {
+                ChatSlowMode::activate_server(
+                    &tx,
+                    target.id,
+                    actor_user_id,
+                    request.interval_secs,
+                    &request.reason,
+                    expires_at,
+                )
+                .await?;
+            }
+        }
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(false),
+            actor_user_id,
+            if room.is_some() {
+                "room_slow"
+            } else {
+                "server_slow"
+            },
+            "user",
+            Some(target.id),
+            json!({
+                "room_id": room.as_ref().map(|room| room.id),
+                "room_slug": room.as_ref().and_then(|room| room.slug.clone()),
+                "interval_secs": request.interval_secs,
+                "expires_at": expires_at_metadata,
+                "reason": request.reason
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        let duration_text = request
+            .expires_in
+            .map(format_duration)
+            .unwrap_or_else(|| "permanent".to_string());
+        let notified_sessions = self
+            .effects
+            .notify_toast(
+                target.id,
+                format!(
+                    "Slow mode in {scope_label}: one message every {}. {}.",
+                    format_seconds(request.interval_secs as u64),
+                    if expires_at.is_some() {
+                        format!("Expires in {duration_text}")
+                    } else {
+                        "No expiry set".to_string()
+                    }
+                ),
+            )
+            .await;
+        if let Some(room) = &room {
+            let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+            let _ = self.event_tx.send(ModerationEvent::RoomSlowModeChanged {
+                actor_user_id,
+                target_user_id: target.id,
+                room_id: room.id,
+                room_slug,
+                interval_secs: Some(request.interval_secs),
+                expires_at,
+                reason: request.reason.clone(),
+                notified_sessions,
+            });
+        }
+        Ok(vec![format!(
+            "slowed @{} in {}: one message every {} for {}",
+            target.username,
+            scope_label,
+            format_seconds(request.interval_secs as u64),
+            duration_text
+        )])
+    }
+
+    async fn unslow_user(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        scope: SlowScope,
+        username: &str,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        let mut client = self.db.get().await?;
+        let room = match &scope {
+            SlowScope::Room { slug } => Some(find_room_by_mod_slug(&client, slug).await?),
+            SlowScope::Server => None,
+        };
+        let target = find_user_by_mod_name(&client, username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        ensure_can(permissions, Caps::UNBAN_FROM_ROOM, tier_for_user(&target))?;
+        let scope_label = slow_scope_label(room.as_ref());
+        let tx = client.transaction().await?;
+        match &room {
+            Some(room) => {
+                ChatSlowMode::delete_for_room_and_user(&tx, room.id, target.id).await?;
+            }
+            None => {
+                ChatSlowMode::delete_server_for_user(&tx, target.id).await?;
+            }
+        }
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(false),
+            actor_user_id,
+            if room.is_some() {
+                "room_unslow"
+            } else {
+                "server_unslow"
+            },
+            "user",
+            Some(target.id),
+            json!({
+                "room_id": room.as_ref().map(|room| room.id),
+                "room_slug": room.as_ref().and_then(|room| room.slug.clone()),
+                "reason": reason
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+        let notified_sessions = self
+            .effects
+            .notify_toast(target.id, format!("Slow mode lifted in {scope_label}."))
+            .await;
+        if let Some(room) = &room {
+            let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+            let _ = self.event_tx.send(ModerationEvent::RoomSlowModeChanged {
+                actor_user_id,
+                target_user_id: target.id,
+                room_id: room.id,
+                room_slug,
+                interval_secs: None,
+                expires_at: None,
+                reason: reason.clone(),
+                notified_sessions,
+            });
+        }
+        Ok(vec![format!(
+            "removed slow mode for @{} in {}",
+            target.username, scope_label
         )])
     }
 
@@ -1436,6 +1696,41 @@ fn format_room_ban_item(item: &RoomBanListItem) -> String {
     )
 }
 
+fn format_chat_slow_mode_item(item: &ChatSlowModeListItem) -> String {
+    let room = item
+        .room_slug
+        .as_deref()
+        .map(|slug| format!("#{slug}"))
+        .or_else(|| item.slow_mode.room_id.map(|id| id.to_string()))
+        .unwrap_or_else(|| "server".to_string());
+    let target = item
+        .target_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.slow_mode.target_user_id.to_string());
+    let actor = item
+        .actor_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.slow_mode.actor_user_id.to_string());
+    format!(
+        "- {room} {target} every {} by {actor} expires: {} reason: {}",
+        format_seconds(item.slow_mode.interval_secs as u64),
+        format_expires_at(item.slow_mode.expires_at),
+        format_reason(&item.slow_mode.reason)
+    )
+}
+
+fn slow_scope_label(room: Option<&ChatRoom>) -> String {
+    room.map(|room| {
+        format!(
+            "#{}",
+            room.slug.clone().unwrap_or_else(|| room.kind.clone())
+        )
+    })
+    .unwrap_or_else(|| "server".to_string())
+}
+
 fn format_audit_log_item(item: &ModerationAuditLogListItem) -> String {
     let actor = item
         .actor_username
@@ -1502,6 +1797,40 @@ fn format_reason(reason: &str) -> &str {
     }
 }
 
+fn format_duration(duration: chrono::Duration) -> String {
+    format_seconds(duration.num_seconds().max(1) as u64)
+}
+
+pub(crate) fn format_seconds(secs: u64) -> String {
+    let secs = secs.max(1);
+    let days = secs / 86_400;
+    let hours = (secs % 86_400) / 3_600;
+    let minutes = (secs % 3_600) / 60;
+    let seconds = secs % 60;
+
+    if days > 0 {
+        if hours > 0 {
+            format!("{days}d {hours}h")
+        } else {
+            format!("{days}d")
+        }
+    } else if hours > 0 {
+        if minutes > 0 {
+            format!("{hours}h {minutes}m")
+        } else {
+            format!("{hours}h")
+        }
+    } else if minutes > 0 {
+        if seconds > 0 {
+            format!("{minutes}m {seconds}s")
+        } else {
+            format!("{minutes}m")
+        }
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 fn user_label(username: &str) -> String {
     format!("@{username}")
 }
@@ -1547,21 +1876,7 @@ struct RoomVoiceTarget {
     display_name: String,
 }
 
-async fn voice_target_for_room(
-    client: &tokio_postgres::Client,
-    room: &ChatRoom,
-) -> Result<RoomVoiceTarget> {
-    if room.kind == "game" {
-        let game_room = GameRoom::find_by_chat_room_id(client, room.id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("game room not found for chat room {}", room.id))?;
-        return Ok(RoomVoiceTarget {
-            target_kind: TARGET_GAME_ROOM,
-            target_id: game_room.id,
-            display_name: game_room.display_name,
-        });
-    }
-
+async fn voice_target_for_room(room: &ChatRoom) -> Result<RoomVoiceTarget> {
     Ok(RoomVoiceTarget {
         target_kind: TARGET_CHAT_ROOM,
         target_id: room.id,

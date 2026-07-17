@@ -90,9 +90,9 @@ pub fn handle_compose_input(
         }
         b => {
             // Hand remaining Ctrl+<letter> chords to ratatui-textarea so its
-            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/etc. ^W and ^H
-            // are intercepted earlier in app::input for delete-word-left
-            // and don't reach this point.
+            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/etc. ^W and ^H (both
+            // delete-word-left) are intercepted earlier in app::input and don't
+            // reach this point.
             if let Some(input) = ctrl_byte_to_input(b) {
                 app.chat.composer_input(input);
                 app.chat.update_autocomplete();
@@ -144,8 +144,6 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.show_quit_confirm = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
@@ -188,6 +186,29 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         };
         app.banner = Some(banner);
     }
+    if let Some(command) = app.chat.take_requested_aquarium_command() {
+        match command {
+            crate::app::chat::state::AquariumCommand::Toggle => {
+                crate::app::input::toggle_aquarium_tray_globally(app);
+            }
+            crate::app::chat::state::AquariumCommand::Feed => {
+                crate::app::input::feed_aquarium_globally(app);
+            }
+        }
+    }
+    if let Some(command) = app.chat.take_requested_pet_command() {
+        match command {
+            crate::app::chat::state::PetCommand::Toggle => {
+                crate::app::input::toggle_pet_strip_globally(app);
+            }
+            crate::app::chat::state::PetCommand::Feed => {
+                crate::app::input::pet_feed_globally(app);
+            }
+            crate::app::chat::state::PetCommand::Water => {
+                crate::app::input::pet_water_globally(app);
+            }
+        }
+    }
     if let Some(topic) = app.chat.take_requested_help_topic() {
         open_help_modal(app, topic);
     }
@@ -203,8 +224,26 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_ultimate_modal() {
         crate::app::ultimates::open_ultimate_modal(app);
     }
+    if let Some(request) = app.chat.take_requested_daily_challenge() {
+        use crate::app::chat::state::DailyChallengeRequest;
+        match request {
+            DailyChallengeRequest::Modal => crate::app::input::open_daily_modal_globally(app),
+            // Success is surfaced from the resulting DailyEvent::ChallengePosted
+            // (and failures from DailyEvent::Error), so a rejected challenge
+            // (self, unknown user, over the entry cap) never flashes success.
+            DailyChallengeRequest::Open(game) => {
+                app.daily.post_open_challenge(game);
+            }
+            DailyChallengeRequest::Directed(username, game) => {
+                app.daily.post_directed_challenge(&username, game);
+            }
+        }
+    }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
+    }
+    if let Some(query) = app.chat.take_requested_message_search() {
+        crate::app::input::open_message_search_modal_globally(app, &query);
     }
     if let Some(request) = app.chat.take_requested_petname() {
         app.banner = Some(apply_petname_request(app, request));
@@ -317,6 +356,45 @@ fn move_selected_favorite(app: &mut App, delta: isize) -> bool {
     true
 }
 
+/// Keys the embedded chat always wins over the game/board on a split
+/// screen (active room, daily board, house table): reaction-leader
+/// followups, `i` compose, `j`/`k` selection, Ctrl+D/Ctrl+U half-page.
+/// Route these to `handle_message_action_in_room` before the game handler.
+pub fn chat_priority_key(app: &App, byte: u8) -> bool {
+    if app.chat.is_reaction_leader_active() {
+        return true;
+    }
+    matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15)
+}
+
+/// Message-action keys that route to chat only while a message in
+/// `chat_room_id` is selected; otherwise the game keeps them (poker `f`
+/// fold / `r` raise, chess `r` resign, Enter plays, ...).
+pub fn selected_chat_key(app: &App, chat_room_id: Uuid, byte: u8) -> bool {
+    let selected_in_room = app
+        .chat
+        .selected_message_body_in_room(chat_room_id)
+        .is_some();
+    selected_in_room
+        && matches!(
+            byte,
+            b'd' | b'D'
+                | b'r'
+                | b'R'
+                | b'e'
+                | b'E'
+                | b'p'
+                | b'c'
+                | b'f'
+                | b'F'
+                | b'g'
+                | b'G'
+                | b'\r'
+                | b'\n'
+                | 0x10
+        )
+}
+
 /// Shared message-list navigation and actions. Consumed by both the chat page
 /// and the dashboard card so that d/r/e/p/j/k/etc. behave identically on both
 /// screens and new message actions only need to be wired here.
@@ -404,6 +482,12 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 app.chat.clear_message_selection();
                 return true;
             }
+        }
+        // `g` always jumps to a reply's referenced message. Enter is overloaded
+        // (image/News modals take precedence), so a reply that contains an image
+        // can't be followed with Enter alone; `g` reaches the parent regardless.
+        b'g' | b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
+            return true;
         }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {
             return true;
@@ -518,6 +602,13 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
+    // While the Discover filter is open it owns every byte (including space and
+    // h/l, which would otherwise trigger room-jump / room-switch) so the user
+    // can type an unrestricted query.
+    if app.chat.discover_selected && app.chat.discover.is_filtering() {
+        return super::discover::input::handle_byte(app, byte);
+    }
+
     if app.chat.room_jump_active {
         match byte {
             b' ' => {
@@ -563,34 +654,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::discover::input::handle_byte(app, byte);
-    }
-
-    if let Some(room_id) = app.chat.selected_bumped_join_room_id() {
-        if is_next_room_key(byte) {
-            switch_room(app, 1);
-            return true;
-        }
-        if is_prev_room_key(byte) {
-            switch_room(app, -1);
-            return true;
-        }
-        if matches!(byte, b'\r' | b'\n') {
-            let slug = app
-                .shop_state
-                .active_room_effects()
-                .get(&room_id)
-                .and_then(|effects| effects.first())
-                .and_then(|effect| effect.room_slug.clone());
-            if let Some(slug) = slug {
-                app.banner = Some(app.chat.join_bumped_public_room(room_id, slug));
-            } else {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Could not join bumped room",
-                ));
-            }
-            return true;
-        }
-        return false;
     }
 
     if app.chat.feeds_selected {

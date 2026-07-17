@@ -43,12 +43,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux desktop targets also ship the standalone late-webview
+          # helper: late itself must not link WebKitGTK, so a host without
+          # the webview libraries can still run the CLI.
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary_name: late
+            webview_helper: true
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             binary_name: late
+            webview_helper: true
           - runner: ubuntu-latest
             target: x86_64-linux-android
             binary_name: late
@@ -136,6 +141,20 @@ jobs:
       - name: install_rust_target
         run: rustup target add ${{ matrix.target }}
 
+      - name: stamp_cli_version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.release_tag }}"
+          else
+            tag="${{ github.event.release.tag_name }}"
+          fi
+          test -n "$tag"
+          echo "stamping CLI version: ${tag}"
+          # build.rs reads this and embeds it as the binary version, matching
+          # the VERSION file published by publish_cli for the same tag.
+          echo "LATE_CLI_VERSION=${tag}" >> "$GITHUB_ENV"
+
       - name: cargo_build_cli
         if: matrix.android != true
         run: cargo build --locked --release -p late-cli --bin late --target ${{ matrix.target }}
@@ -144,17 +163,24 @@ jobs:
         if: matrix.android == true
         run: cargo build --locked --release -p late-cli --bin late --target ${{ matrix.target }}
 
+      - name: cargo_build_webview_helper
+        if: matrix.webview_helper == true
+        run: cargo build --locked --release -p late-webview --bin late-webview --target ${{ matrix.target }}
+
       - name: stage_cli_artifact
         shell: bash
         run: |
           mkdir -p dist/${{ matrix.target }}
           cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/${{ matrix.target }}/${{ matrix.binary_name }}"
+          if [[ "${{ matrix.webview_helper }}" == "true" ]]; then
+            cp "target/${{ matrix.target }}/release/late-webview" "dist/${{ matrix.target }}/late-webview"
+          fi
 
       - name: upload_cli_artifact
         uses: actions/upload-artifact@v6
         with:
           name: late-${{ matrix.target }}
-          path: dist/${{ matrix.target }}/${{ matrix.binary_name }}
+          path: dist/${{ matrix.target }}/
           if-no-files-found: error
 
   publish_cli:
@@ -197,11 +223,17 @@ jobs:
 
           for artifact_dir in dist/late-*; do
             target="${artifact_dir#dist/late-}"
-            source_file="$(find "${artifact_dir}" -maxdepth 1 -type f \( -name 'late' -o -name 'late.exe' \) -print -quit)"
-            test -n "$source_file"
-            binary_name="$(basename "$source_file")"
             mkdir -p "publish/releases/${RELEASE_TAG}/${target}"
-            cp "$source_file" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}"
+            main_binary_found=0
+            for binary_name in late late.exe late-webview; do
+              source_file="${artifact_dir}/${binary_name}"
+              [[ -f "$source_file" ]] || continue
+              if [[ "$binary_name" != "late-webview" ]]; then
+                main_binary_found=1
+              fi
+              cp "$source_file" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}"
+            done
+            test "$main_binary_found" -eq 1
           done
 
           cp scripts/install.sh "publish/releases/${RELEASE_TAG}/install.sh"
@@ -212,7 +244,7 @@ jobs:
             files=()
             while IFS= read -r -d '' file; do
               files+=("${file#./}")
-            done < <(find . -mindepth 2 -maxdepth 2 -type f \( -name 'late' -o -name 'late.exe' \) -print0 | LC_ALL=C sort -z)
+            done < <(find . -mindepth 2 -maxdepth 2 -type f \( -name 'late' -o -name 'late.exe' -o -name 'late-webview' \) -print0 | LC_ALL=C sort -z)
             sha256sum "${files[@]}" > sha256sums.txt
           )
 

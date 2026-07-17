@@ -10,12 +10,14 @@ use ratatui::{
 use crate::app::{
     common::theme,
     state::{
-        GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NES_2048,
-        GAME_SELECTION_NES_BRICK_BREAKER, GAME_SELECTION_NES_CONCENTRATION_ROOM,
-        GAME_SELECTION_NES_DABG, GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING,
-        GAME_SELECTION_NES_RHDE, GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE,
-        GAME_SELECTION_NES_ZAP_RUDER, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE,
-        GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
+        GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
+        GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
+        GAME_SELECTION_NES_CONCENTRATION_ROOM, GAME_SELECTION_NES_DABG,
+        GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING, GAME_SELECTION_NES_RHDE,
+        GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE,
+        GAME_SELECTION_NES_ZAP_RUDER, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE,
+        GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
+        GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC,
     },
 };
 
@@ -102,6 +104,16 @@ pub fn tip_line(text: impl Into<String>) -> Line<'static> {
     ))
 }
 
+/// Where a game-over/solved overlay sits within the board area.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverlayAnchor {
+    /// Dead center of the board (default for most games).
+    Center,
+    /// Pinned near the top, so the finished board below stays visible (used by
+    /// puzzles where seeing the solved grid is the payoff).
+    Top,
+}
+
 pub fn draw_game_overlay(
     frame: &mut Frame,
     area: Rect,
@@ -109,7 +121,27 @@ pub fn draw_game_overlay(
     subtitle: &str,
     color: Color,
 ) {
-    let overlay_area = centered_rect(area, 28.min(area.width), 4.min(area.height));
+    draw_game_overlay_anchored(frame, area, heading, subtitle, color, OverlayAnchor::Center);
+}
+
+pub fn draw_game_overlay_anchored(
+    frame: &mut Frame,
+    area: Rect,
+    heading: &str,
+    subtitle: &str,
+    color: Color,
+    anchor: OverlayAnchor,
+) {
+    let overlay_w = 28.min(area.width);
+    let overlay_h = 4.min(area.height);
+    let overlay_area = match anchor {
+        OverlayAnchor::Center => centered_rect(area, overlay_w, overlay_h),
+        OverlayAnchor::Top => {
+            let x = area.x + area.width.saturating_sub(overlay_w) / 2;
+            let y = area.y + 1.min(area.height.saturating_sub(overlay_h));
+            Rect::new(x, y, overlay_w, overlay_h)
+        }
+    };
     let overlay = Paragraph::new(vec![
         Line::from(Span::styled(
             format!(" {heading} "),
@@ -183,11 +215,14 @@ pub fn game_title(selection: usize) -> &'static str {
     match selection {
         GAME_SELECTION_2048 => "2048",
         GAME_SELECTION_TETRIS => "Lateris",
+        GAME_SELECTION_LE_WORD => "Le Word",
         GAME_SELECTION_SUDOKU => "Sudoku",
         GAME_SELECTION_NONOGRAMS => "Nonograms",
         GAME_SELECTION_MINESWEEPER => "Minesweeper",
         GAME_SELECTION_SOLITAIRE => "Solitaire",
         GAME_SELECTION_SNAKE => "Snake",
+        GAME_SELECTION_RUBIKS_CUBE => "Rubik's Cube",
+        GAME_SELECTION_TRAFFIC => "Traffic",
         _ => "The Arcade",
     }
 }
@@ -198,6 +233,9 @@ pub struct ArcadeHubView<'a> {
     pub twenty_forty_eight_state: &'a super::twenty_forty_eight::state::State,
     pub tetris_state: &'a super::tetris::state::State,
     pub snake_state: &'a super::snake::state::State,
+    pub rubiks_cube_state: &'a super::rubiks_cube::state::State,
+    pub le_word_state: &'a super::le_word::state::State,
+    pub traffic_state: &'a super::traffic::state::State,
     pub nes_cabinet_state: &'a super::nes_cabinet::state::State,
     pub sudoku_state: &'a super::sudoku::state::State,
     pub nonogram_state: &'a super::nonogram::state::State,
@@ -222,6 +260,15 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
             return;
         } else if view.game_selection == GAME_SELECTION_SNAKE {
             super::snake::ui::draw_game(frame, area, view.snake_state, show_bottom_bar);
+            return;
+        } else if view.game_selection == GAME_SELECTION_TRAFFIC {
+            super::traffic::ui::draw_game(frame, area, view.traffic_state, show_bottom_bar);
+            return;
+        } else if view.game_selection == GAME_SELECTION_RUBIKS_CUBE {
+            super::rubiks_cube::ui::draw_game(frame, area, view.rubiks_cube_state, show_bottom_bar);
+            return;
+        } else if view.game_selection == GAME_SELECTION_LE_WORD {
+            super::le_word::ui::draw_game(frame, area, view.le_word_state, show_bottom_bar);
             return;
         } else if super::input::is_nes_selection(view.game_selection) {
             super::nes_cabinet::ui::draw_game(frame, area, view.nes_cabinet_state, show_bottom_bar);
@@ -314,6 +361,30 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Classic newspaper puzzle, rebuilt for the terminal.",
             "     ",
         ),
+        GAME_SELECTION_LE_WORD => (
+            vec![
+                r#"     ██╗     ███████╗    ██╗    ██╗ ██████╗ ██████╗ ██████╗ "#,
+                r#"     ██║     ██╔════╝    ██║    ██║██╔═══██╗██╔══██╗██╔══██╗"#,
+                r#"     ██║     █████╗      ██║ █╗ ██║██║   ██║██████╔╝██║  ██║"#,
+                r#"     ██║     ██╔══╝      ██║███╗██║██║   ██║██╔══██╗██║  ██║"#,
+                r#"     ███████╗███████╗    ╚███╔███╔╝╚██████╔╝██║  ██║██████╔╝"#,
+                r#"     ╚══════╝╚══════╝     ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═════╝ "#,
+            ],
+            "Six guesses, one daily word, classic green-yellow-gray clues.",
+            "     ",
+        ),
+        GAME_SELECTION_RUBIKS_CUBE => (
+            vec![
+                r#"     ██████╗ ██╗   ██╗██████╗ ██╗██╗  ██╗"#,
+                r#"     ██╔══██╗██║   ██║██╔══██╗██║██║ ██╔╝"#,
+                r#"     ██████╔╝██║   ██║██████╔╝██║█████╔╝ "#,
+                r#"     ██╔══██╗██║   ██║██╔══██╗██║██╔═██╗ "#,
+                r#"     ██║  ██║╚██████╔╝██████╔╝██║██║  ██╗"#,
+                r#"     ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝"#,
+            ],
+            "Turn a real cube model through three visible sides and a mini net.",
+            "     ",
+        ),
         GAME_SELECTION_NONOGRAMS => (
             vec![
                 r#"     ███╗   ██╗ ██████╗ ███╗   ██╗ ██████╗  ██████╗ ██████╗  █████╗ ███╗   ███╗███████╗"#,
@@ -360,6 +431,18 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
                 r#"     ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝"#,
             ],
             "Classic Snake game, eat, grow and survive!",
+            "     ",
+        ),
+        GAME_SELECTION_TRAFFIC => (
+            vec![
+                r#"     ████████╗██████╗  █████╗ ███████╗███████╗██╗ ██████╗"#,
+                r#"     ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝██╔════╝██║██╔════╝"#,
+                r#"        ██║   ██████╔╝███████║█████╗  █████╗  ██║██║     "#,
+                r#"        ██║   ██╔══██╗██╔══██║██╔══╝  ██╔══╝  ██║██║     "#,
+                r#"        ██║   ██║  ██║██║  ██║██║     ██║     ██║╚██████╗"#,
+                r#"        ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝     ╚═╝ ╚═════╝"#,
+            ],
+            "You're LATE and stuck in TRAFFIC. Overtake or crash.",
             "     ",
         ),
         selection if super::input::is_nes_selection(selection) => (
@@ -413,13 +496,13 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     let selection = view.game_selection;
     let mut selected_line: usize = 0;
 
-    push_game_section(&mut lines, "─── High Score Games ───");
+    push_game_section(&mut lines, "─── Score Games ───");
     lines.push(Line::from(""));
 
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Chase personal bests for monthly and all-time leaderboards.",
+            "Chase personal bests and monthly leaderboard spots.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
@@ -448,6 +531,16 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Snake",
             "Eat grow and avoid danger. Speed rises as you survive.",
             format!("Best {}", view.snake_state.best_score),
+        ),
+        (
+            GAME_SELECTION_TRAFFIC,
+            "Traffic",
+            "You're LATE and stuck in TRAFFIC. Overtake or crash.",
+            if view.traffic_state.best_score > 0 {
+                format!("Best {:>11}", view.traffic_state.best_score)
+            } else {
+                "No runs yet".to_string()
+            },
         ),
     ] {
         draw_game_entry(
@@ -481,7 +574,15 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     ]));
     lines.push(Line::from(""));
 
-    let daily_rows: [DailyRow; 4] = [
+    let daily_rows: [DailyRow; 5] = [
+        (
+            GAME_SELECTION_LE_WORD,
+            "Le Word",
+            "Guess the daily five-letter word in six tries.",
+            true,
+            DailyGame::LeWord,
+            &[("daily", 250)],
+        ),
         (
             GAME_SELECTION_SUDOKU,
             "Sudoku",
@@ -554,6 +655,30 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                 label_width: 16,
             },
         );
+
+        if idx == GAME_SELECTION_LE_WORD {
+            draw_game_entry(
+                &mut lines,
+                &mut selected_line,
+                selection,
+                GameEntry {
+                    idx: GAME_SELECTION_RUBIKS_CUBE,
+                    name: "Rubik's Cube",
+                    descriptions: &["Solve today's shared scramble through an angled cube view."],
+                    selected_style: Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                    normal_style: Style::default().fg(theme::TEXT()),
+                    description_style: Style::default().fg(theme::TEXT_DIM()),
+                    status: daily_reward_status_spans(
+                        view.daily_completion,
+                        DailyGame::RubiksCube,
+                        &[("daily", super::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS)],
+                    ),
+                    label_width: 16,
+                },
+            );
+        }
     }
 
     push_game_section(&mut lines, "─── NES Cabinet ───");

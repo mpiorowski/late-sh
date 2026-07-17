@@ -61,12 +61,23 @@ LATE_VOICE_ROOM ?= late-voice
 LATE_IRC_ENABLED ?= 1
 # Plaintext IRC listen port.
 LATE_IRC_PORT ?= 6667
+# Host port for the optional local TLS IRC listener, enabled via .env.local.
+LATE_IRC_TLS_HOST_PORT ?= 6697
 
 # --- Door games (Rebels in the Sky) ---
 LATE_REBELS_ENABLED ?= 1                                    # Enable the Rebels in the Sky door game (1=on, 0=off)
 LATE_REBELS_HOST ?= frittura.org                            # Rebels SSH server hostname to proxy to
 LATE_REBELS_PORT ?= 3788                                    # Rebels SSH server port
 LATE_REBELS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret seeding the derived rebels identity
+LATE_NETHACK_ENABLED ?= 1
+LATE_NETHACK_HOST ?= service-nethack                            # late-nethack host (compose service name; 127.0.0.1 for a bare run)
+LATE_NETHACK_PORT ?= 2323                                   # late-nethack SSH port
+LATE_NETHACK_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret authorizing late-ssh -> late-nethack
+LATE_DOPEWARS_ENABLED ?= 1                                  # Enable the dopewars door game (1=on, 0=off)
+LATE_DOPEWARS_HOST ?= service-dopewars                      # late-dopewars host (compose service name; 127.0.0.1 for a bare run)
+LATE_DOPEWARS_PORT ?= 2324                                  # late-dopewars SSH port
+LATE_DOPEWARS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret authorizing late-ssh -> late-dopewars
+LATE_DOPEWARS_SCORE_FILE ?= /tmp/late-dopewars.sco          # Shared high-score file on the dopewars host (a PVC path in prod)
 
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
@@ -138,6 +149,7 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_VOICE_ROOM=$(LATE_VOICE_ROOM)" >> .env
 	@echo "LATE_IRC_ENABLED=$(LATE_IRC_ENABLED)" >> .env
 	@echo "LATE_IRC_PORT=$(LATE_IRC_PORT)" >> .env
+	@echo "LATE_IRC_TLS_HOST_PORT=$(LATE_IRC_TLS_HOST_PORT)" >> .env
 	@echo "" >> .env
 	@echo "# Optional IRC TLS/tuning overrides:" >> .env
 	@echo "# LATE_IRC_TLS_CERT=/path/to/fullchain.pem" >> .env
@@ -150,6 +162,15 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_REBELS_HOST=$(LATE_REBELS_HOST)" >> .env
 	@echo "LATE_REBELS_PORT=$(LATE_REBELS_PORT)" >> .env
 	@echo "LATE_REBELS_SECRET=$(LATE_REBELS_SECRET)" >> .env
+	@echo "LATE_NETHACK_ENABLED=$(LATE_NETHACK_ENABLED)" >> .env
+	@echo "LATE_NETHACK_HOST=$(LATE_NETHACK_HOST)" >> .env
+	@echo "LATE_NETHACK_PORT=$(LATE_NETHACK_PORT)" >> .env
+	@echo "LATE_NETHACK_SECRET=$(LATE_NETHACK_SECRET)" >> .env
+	@echo "LATE_DOPEWARS_ENABLED=$(LATE_DOPEWARS_ENABLED)" >> .env
+	@echo "LATE_DOPEWARS_HOST=$(LATE_DOPEWARS_HOST)" >> .env
+	@echo "LATE_DOPEWARS_PORT=$(LATE_DOPEWARS_PORT)" >> .env
+	@echo "LATE_DOPEWARS_SECRET=$(LATE_DOPEWARS_SECRET)" >> .env
+	@echo "LATE_DOPEWARS_SCORE_FILE=$(LATE_DOPEWARS_SCORE_FILE)" >> .env
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
@@ -181,15 +202,20 @@ INSTANCE2_OVERRIDES = \
   LATE_ICECAST_HOST_PORT=8001 \
   LATE_LIQUIDSOAP_HOST_PORT=1235 \
   LATE_IRC_PORT=6668 \
+  LATE_IRC_TLS_HOST_PORT=6698 \
   LATE_LIVEKIT_HOST_PORT=7883 \
   LATE_LIVEKIT_RTC_TCP_PORT=7884 \
   LATE_LIVEKIT_RTC_UDP_PORT=7885
 
-CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web
+CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview
 CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-CHECK_TEST_DATABASE_URL ?= host=127.0.0.1 port=$(LATE_PG_HOST_PORT) user=postgres password=postgres dbname=postgres
-CHECK_DB_START = docker compose -f docker-compose.yml up -d --wait postgres
-CHECK_DB_STOP = docker compose -f docker-compose.yml stop postgres
+CHECK_INSTANCE ?= late-check
+CHECK_PG_HOST_PORT ?= 55433
+CHECK_COMPOSE = CHECK_PG_HOST_PORT=$(CHECK_PG_HOST_PORT) docker compose -p $(CHECK_INSTANCE) -f docker-compose.check.yml
+CHECK_TEST_DATABASE_URL ?= host=127.0.0.1 port=$(CHECK_PG_HOST_PORT) user=postgres password=postgres dbname=postgres
+CHECK_DB_STOP = $(CHECK_COMPOSE) down -v --remove-orphans
+CHECK_DB_RESET = $(CHECK_DB_STOP) >/dev/null 2>&1 || true
+CHECK_DB_START = $(CHECK_DB_RESET); $(CHECK_COMPOSE) up -d --wait postgres
 
 .PHONY: .env-instance2
 .env-instance2:
@@ -204,8 +230,12 @@ keys:
 	@if [ ! -f server_key ]; then ssh-keygen -t ed25519 -f server_key -N "" -q; fi
 
 .PHONY: check-db
-check-db: .env
+check-db:
 	$(CHECK_DB_START)
+
+.PHONY: check-db-down
+check-db-down:
+	$(CHECK_DB_STOP)
 
 .PHONY: check
 check: .env

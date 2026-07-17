@@ -1,9 +1,11 @@
-use super::state::State;
+use super::state::{ResetKind, State};
 
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
     match byte {
         b'n' | b'N' => {
-            state.new_personal_board();
+            if state.request_reset(ResetKind::NewBoard) {
+                state.new_personal_board();
+            }
             return true;
         }
         b'p' | b'P' => {
@@ -30,7 +32,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
     }
 
     if byte == b'r' || byte == b'R' {
-        state.reset_board();
+        if state.request_reset(ResetKind::Reset) {
+            state.reset_board();
+        }
         return true;
     }
 
@@ -52,15 +56,29 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             true
         }
 
-        // Digits 1-9
-        b'1'..=b'9' => {
-            state.set_digit(byte - b'0');
+        // Toggle pencil (candidate-note) mode.
+        b'm' | b'M' => {
+            state.toggle_pencil_mode();
             true
         }
 
-        // Clear cell
+        // Digits 1-9: place a value, or toggle a pencil mark in pencil mode.
+        b'1'..=b'9' => {
+            if state.pencil_mode {
+                state.toggle_note(byte - b'0');
+            } else {
+                state.set_digit(byte - b'0');
+            }
+            true
+        }
+
+        // Clear the cell's value, or its pencil marks in pencil mode.
         b'0' | 0x08 | 0x7F => {
-            state.set_digit(0);
+            if state.pencil_mode {
+                state.clear_cell_notes();
+            } else {
+                state.set_digit(0);
+            }
             true
         } // 0, Backspace, Delete
 

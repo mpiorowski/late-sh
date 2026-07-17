@@ -51,8 +51,14 @@ pub(crate) fn legend_lines() -> Vec<Line<'static>> {
         Line::from(Span::styled("CHIP1-3 Top Chips  AW1-3 Arcade Wins", dim)),
         Line::from(Span::styled("LA1-3 Lateris  24#1-3 2048  SN1-3 Snake", dim)),
         Line::from(Span::styled(
-            "LAD Lateania Archdemon  LFK Lateania Frontier King",
+            "LMG Lateania Archdemon  LKN Lateania Frontier King",
             dim,
         )),
+        Line::from(Span::styled("LYS Lateania Sundering Deep", dim)),
+        Line::from(Span::styled(
+            "NHA NetHack Amulet  NHY NetHack Ascension",
+            dim,
+        )),
+        Line::from(Span::styled("GDS Green Dragon Slayer", dim)),
     ]
 }

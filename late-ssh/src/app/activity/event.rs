@@ -21,14 +21,48 @@ pub enum ActivityKind {
         detail: Option<String>,
         score: Option<i32>,
     },
-    GamePlayed {
-        game: ActivityGame,
-        detail: Option<String>,
-    },
     GameScored {
         game: ActivityGame,
         score: i32,
         level: Option<i32>,
+    },
+    /// A notable in-game moment that is neither a win nor a score: started a
+    /// session, descended a level, died. `detail` is the full action phrase.
+    /// Shown in the dashboard feed (category `Game`).
+    GameEvent {
+        game: ActivityGame,
+        detail: String,
+    },
+    /// A player entered a game world (door games): the "come join me"
+    /// invitation shown in #lounge.
+    GameStarted {
+        game: ActivityGame,
+    },
+    /// A boss or sub-boss died to this player. `boss` is the full mob name
+    /// as the game renders it (e.g. "the Archdemon Mal'gareth").
+    BossSlain {
+        game: ActivityGame,
+        boss: String,
+    },
+    /// A player took a seat at a multiplayer table. Fired on sitting, not on
+    /// playing, so open seats become visible in #lounge.
+    SatDown {
+        game: ActivityGame,
+    },
+    /// A finished daily correspondence match. `action` carries the full
+    /// match-level phrase ("won a game of Chess" / "drew with bob at Connect
+    /// Four"); `game` and `match_id` exist only for #lounge repeat-throttling:
+    /// keying on the match lets one player finish two same-game matches back
+    /// to back (one line per match) while a re-emit of the same match dedupes.
+    /// Fired only on a finish (win/loss or draw), never on posting or claiming.
+    DailyResult {
+        game: String,
+        match_id: Uuid,
+    },
+    /// A bought 24h username effect went live ("mat is glowing (24h)").
+    /// Shown in #lounge: the whole point of the purchase is being seen.
+    UsernameEffectApplied {
+        effect: late_core::models::username_effect::UsernameEffect,
     },
     BonsaiWatered,
     BonsaiLost {
@@ -39,9 +73,14 @@ pub enum ActivityKind {
 impl ActivityKind {
     pub fn category(&self) -> ActivityCategory {
         match self {
-            Self::UserJoined => ActivityCategory::Session,
-            Self::GameWon { .. } => ActivityCategory::Game,
-            Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
+            Self::UserJoined | Self::UsernameEffectApplied { .. } => ActivityCategory::Session,
+            Self::GameWon { .. }
+            | Self::GameEvent { .. }
+            | Self::GameStarted { .. }
+            | Self::BossSlain { .. }
+            | Self::SatDown { .. }
+            | Self::DailyResult { .. } => ActivityCategory::Game,
+            Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
         }
     }
@@ -52,10 +91,14 @@ pub enum ActivityGame {
     Asterion,
     Blackjack,
     Chess,
+    GreenDragon,
+    LeWord,
     Minesweeper,
     Mud,
+    Nethack,
     Nonogram,
     Poker,
+    RubiksCube,
     Sshattrick,
     Solitaire,
     Sudoku,
@@ -64,6 +107,7 @@ pub enum ActivityGame {
     TwentyFortyEight,
     Tron,
     Snake,
+    Traffic,
 }
 
 impl ActivityGame {
@@ -72,10 +116,14 @@ impl ActivityGame {
             Self::Asterion => "asterion",
             Self::Blackjack => "blackjack",
             Self::Chess => "chess",
+            Self::GreenDragon => "greendragon",
+            Self::LeWord => "le_word",
             Self::Minesweeper => "minesweeper",
             Self::Mud => "mud",
+            Self::Nethack => "nethack",
             Self::Nonogram => "nonogram",
             Self::Poker => "poker",
+            Self::RubiksCube => "rubiks_cube",
             Self::Sshattrick => "sshattrick",
             Self::Solitaire => "solitaire",
             Self::Sudoku => "sudoku",
@@ -84,6 +132,7 @@ impl ActivityGame {
             Self::TwentyFortyEight => "2048",
             Self::Tron => "tron",
             Self::Snake => "snake",
+            Self::Traffic => "traffic",
         }
     }
 
@@ -92,10 +141,14 @@ impl ActivityGame {
             Self::Asterion => "Asterion",
             Self::Blackjack => "Blackjack",
             Self::Chess => "Chess",
+            Self::GreenDragon => "Green Dragon",
+            Self::LeWord => "Le Word",
             Self::Minesweeper => "Minesweeper",
             Self::Mud => "Lateania",
+            Self::Nethack => "NetHack",
             Self::Nonogram => "Nonogram",
             Self::Poker => "Poker",
+            Self::RubiksCube => "Rubik's Cube",
             Self::Sshattrick => "ssHattrick",
             Self::Solitaire => "Solitaire",
             Self::Sudoku => "Sudoku",
@@ -104,6 +157,7 @@ impl ActivityGame {
             Self::TwentyFortyEight => "2048",
             Self::Tron => "Tron",
             Self::Snake => "Snake",
+            Self::Traffic => "Traffic",
         }
     }
 }
@@ -158,10 +212,14 @@ impl ActivityEvent {
             ActivityGame::Asterion => "escaped the Asterion maze",
             ActivityGame::Blackjack => "won Blackjack hand",
             ActivityGame::Chess => "won Chess game",
+            ActivityGame::GreenDragon => "prevailed in the Green Dragon",
+            ActivityGame::LeWord => "solved Le Word",
             ActivityGame::Minesweeper => "cleared Minesweeper",
             ActivityGame::Mud => "triumphed in Lateania",
+            ActivityGame::Nethack => "conquered NetHack",
             ActivityGame::Nonogram => "solved Nonogram",
             ActivityGame::Poker => "won Poker hand",
+            ActivityGame::RubiksCube => "solved Rubik's Cube",
             ActivityGame::Sshattrick => "won ssHattrick match",
             ActivityGame::Solitaire => "won Solitaire",
             ActivityGame::Sudoku => "solved Sudoku",
@@ -170,6 +228,7 @@ impl ActivityEvent {
             ActivityGame::TwentyFortyEight => "won 2048",
             ActivityGame::Tron => "won Tron round",
             ActivityGame::Snake => "won Snake",
+            ActivityGame::Traffic => "finished a Traffic track",
         };
         let action = match detail.as_deref() {
             Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),
@@ -188,22 +247,147 @@ impl ActivityEvent {
         )
     }
 
-    pub fn game_played(
+    /// A notable in-game moment (start/descend/death). `action` is the full verb
+    /// phrase shown in the feed, e.g. "descended to NetHack dungeon level 5".
+    pub fn game_event(
         user_id: Uuid,
         username: impl Into<String>,
         game: ActivityGame,
-        detail: Option<String>,
+        action: String,
     ) -> Self {
-        let base_action = format!("played {} round", game.label());
-        let action = match detail.as_deref() {
-            Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),
-            _ => base_action,
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::GameEvent {
+                game,
+                detail: action.clone(),
+            },
+            action,
+        )
+    }
+
+    /// A player entered a game world. Copy lives here, not at call sites.
+    pub fn game_started(user_id: Uuid, username: impl Into<String>, game: ActivityGame) -> Self {
+        let action = match game {
+            ActivityGame::Mud => "set out into Lateania".to_string(),
+            ActivityGame::Nethack => "descended into NetHack".to_string(),
+            ActivityGame::GreenDragon => "walked into the Green Dragon".to_string(),
+            ActivityGame::Asterion
+            | ActivityGame::Blackjack
+            | ActivityGame::Chess
+            | ActivityGame::LeWord
+            | ActivityGame::Minesweeper
+            | ActivityGame::Nonogram
+            | ActivityGame::Poker
+            | ActivityGame::RubiksCube
+            | ActivityGame::Sshattrick
+            | ActivityGame::Solitaire
+            | ActivityGame::Sudoku
+            | ActivityGame::TicTacToe
+            | ActivityGame::Lateris
+            | ActivityGame::TwentyFortyEight
+            | ActivityGame::Tron
+            | ActivityGame::Snake
+            | ActivityGame::Traffic => format!("started {}", game.label()),
         };
         Self::new(
             Some(user_id),
             username,
-            ActivityKind::GamePlayed { game, detail },
+            ActivityKind::GameStarted { game },
             action,
+        )
+    }
+
+    /// A boss or sub-boss fell. `boss` is the mob name as the game renders it.
+    pub fn boss_slain(
+        user_id: Uuid,
+        username: impl Into<String>,
+        game: ActivityGame,
+        boss: impl Into<String>,
+    ) -> Self {
+        let boss = boss.into();
+        let action = format!("slew {} in {}", boss, game.label());
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::BossSlain { game, boss },
+            action,
+        )
+    }
+
+    /// A player took a seat at a multiplayer table.
+    pub fn sat_down(user_id: Uuid, username: impl Into<String>, game: ActivityGame) -> Self {
+        let action = format!("sat down at {}", game.label());
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::SatDown { game },
+            action,
+        )
+    }
+
+    /// A bought 24h username effect went live. The action names the style,
+    /// not the color: "is glowing (24h)" reads as a story, and the name
+    /// itself shows the color everywhere it renders.
+    pub fn username_effect_applied(
+        user_id: Uuid,
+        username: impl Into<String>,
+        effect: late_core::models::username_effect::UsernameEffect,
+    ) -> Self {
+        use late_core::models::username_effect::UsernameEffect;
+        let action = match effect {
+            UsernameEffect::Glow(_) => "is glowing (24h)",
+            UsernameEffect::Gradient(_) => "went gradient (24h)",
+            UsernameEffect::Shimmer => "is shimmering (24h)",
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::UsernameEffectApplied { effect },
+            action.to_string(),
+        )
+    }
+
+    /// A finished daily match with a winner. The line names only the winner and
+    /// the game — "{winner} won a game of {game}" — never the loser: a friendly
+    /// clubhouse feed, not a scoreboard that shames whoever lost. `match_id`
+    /// keys the #lounge repeat throttle.
+    pub fn daily_win(
+        winner_id: Uuid,
+        winner: impl Into<String>,
+        game_label: &str,
+        match_id: Uuid,
+    ) -> Self {
+        Self::new(
+            Some(winner_id),
+            winner,
+            ActivityKind::DailyResult {
+                game: game_label.to_string(),
+                match_id,
+            },
+            format!("won a game of {game_label}"),
+        )
+    }
+
+    /// A finished daily match that ended in a draw. Attributed to `player_a`
+    /// (arbitrary — the line names both): "{player_a} drew with {player_b} at
+    /// {game}". Unlike [`Self::daily_win`], a draw shames no one, so naming both
+    /// players is fair game.
+    pub fn daily_draw(
+        player_a_id: Uuid,
+        player_a: impl Into<String>,
+        player_b: impl AsRef<str>,
+        game_label: &str,
+        match_id: Uuid,
+    ) -> Self {
+        Self::new(
+            Some(player_a_id),
+            player_a,
+            ActivityKind::DailyResult {
+                game: game_label.to_string(),
+                match_id,
+            },
+            format!("drew with {} at {game_label}", player_b.as_ref()),
         )
     }
 

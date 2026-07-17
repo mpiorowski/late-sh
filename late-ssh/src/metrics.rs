@@ -20,10 +20,14 @@ mod inner {
             ActivityGame::Asterion => "asterion",
             ActivityGame::Blackjack => "blackjack",
             ActivityGame::Chess => "chess",
+            ActivityGame::GreenDragon => "greendragon",
+            ActivityGame::LeWord => "le_word",
             ActivityGame::Minesweeper => "minesweeper",
             ActivityGame::Mud => "mud",
+            ActivityGame::Nethack => "nethack",
             ActivityGame::Nonogram => "nonogram",
             ActivityGame::Poker => "poker",
+            ActivityGame::RubiksCube => "rubiks_cube",
             ActivityGame::Sshattrick => "sshattrick",
             ActivityGame::Solitaire => "solitaire",
             ActivityGame::Sudoku => "sudoku",
@@ -32,6 +36,7 @@ mod inner {
             ActivityGame::TwentyFortyEight => "2048",
             ActivityGame::Tron => "tron",
             ActivityGame::Snake => "snake",
+            ActivityGame::Traffic => "traffic",
         }
     }
 

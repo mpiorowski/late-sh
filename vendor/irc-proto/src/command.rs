@@ -771,7 +771,7 @@ impl Command {
         } else if cmd.eq_ignore_ascii_case("USERHOST") {
             Command::USERHOST(args.into_iter().map(|s| s.to_owned()).collect())
         } else if cmd.eq_ignore_ascii_case("ISON") {
-            Command::USERHOST(args.into_iter().map(|s| s.to_owned()).collect())
+            Command::ISON(args.into_iter().map(|s| s.to_owned()).collect())
         } else if cmd.eq_ignore_ascii_case("SAJOIN") {
             if args.len() != 2 {
                 raw(cmd, args)
@@ -1157,6 +1157,15 @@ mod test {
         let cmd = "USER a 0 * b".parse::<Message>().unwrap().command;
         assert_eq!(
             Command::USER("a".to_string(), "0".to_string(), "b".to_string()),
+            cmd
+        );
+    }
+
+    #[test]
+    fn parse_ison_message() {
+        let cmd = "ISON alice bob".parse::<Message>().unwrap().command;
+        assert_eq!(
+            Command::ISON(vec!["alice".to_string(), "bob".to_string()]),
             cmd
         );
     }

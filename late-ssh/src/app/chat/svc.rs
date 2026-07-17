@@ -23,6 +23,7 @@ use late_core::{
         chat_poll::{self, ActiveChatPoll, CreateChatPoll},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
+        chat_slow_mode::ChatSlowMode,
         moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         user::User,
@@ -34,6 +35,7 @@ use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::app::bonsai::state::stage_for;
+use crate::app::games::chips::svc::ChipService;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::ircd::registry::IrcRegistry;
 use crate::metrics;
@@ -48,6 +50,10 @@ use crate::usernames::UsernameDirectory;
 
 use super::commands::RoomScopedCommand;
 
+/// Messages before and after a search hit, plus a username lookup for their
+/// authors, as loaded by `load_message_context_task`.
+type MessageContext = (Vec<ChatMessage>, Vec<ChatMessage>, HashMap<Uuid, String>);
+
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
 const PINNED_MESSAGES_LIMIT: i64 = 100;
@@ -55,6 +61,74 @@ const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
 const POLL_FINALIZER_RECOVERY_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const POLL_FINALIZER_BATCH_LIMIT: i64 = 25;
+pub(crate) const GIFT_MAX_AMOUNT: i64 = 1_000_000;
+const GIFT_COOLDOWN: Duration = Duration::from_secs(30);
+const SEARCH_RESULTS_LIMIT: i64 = 50;
+/// Minimum query length before a message search fires; also the trigram
+/// index floor, so shorter queries would seq-scan anyway.
+pub(crate) const SEARCH_MIN_CHARS: usize = 3;
+/// Messages fetched on each side of a selected search hit for the modal's
+/// context window.
+const SEARCH_CONTEXT_EACH_SIDE: i64 = 4;
+
+/// The two report-only rooms. `#bugs` and `#suggestions` accept only
+/// `/bug` / `/suggest` report cards from regular users; free-text posting is
+/// reserved for staff so reports don't drown in conversation. A report is a
+/// normal chat message whose body starts with the kind's marker (same trick
+/// as `---NEWS---` cards), so reactions, replies, pins, and deletes all work
+/// on it unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReportKind {
+    Bug,
+    Suggestion,
+}
+
+impl ReportKind {
+    pub(crate) const fn slug(self) -> &'static str {
+        match self {
+            Self::Bug => "bugs",
+            Self::Suggestion => "suggestions",
+        }
+    }
+
+    pub(crate) const fn marker(self) -> &'static str {
+        match self {
+            Self::Bug => "---BUG---",
+            Self::Suggestion => "---SUGGESTION---",
+        }
+    }
+
+    pub(crate) const fn command(self) -> &'static str {
+        match self {
+            Self::Bug => "/bug",
+            Self::Suggestion => "/suggest",
+        }
+    }
+
+    pub(crate) const fn icon(self) -> &'static str {
+        match self {
+            Self::Bug => "🐛",
+            Self::Suggestion => "💡",
+        }
+    }
+
+    /// Verb phrase for the card header: `<author> filed a bug <stamp>`.
+    pub(crate) const fn verb(self) -> &'static str {
+        match self {
+            Self::Bug => "filed a bug",
+            Self::Suggestion => "made a suggestion",
+        }
+    }
+
+    /// The report kind a room slug enforces, if any.
+    pub(crate) fn for_room_slug(slug: &str) -> Option<Self> {
+        match slug {
+            "bugs" => Some(Self::Bug),
+            "suggestions" => Some(Self::Suggestion),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ChatService {
@@ -69,6 +143,12 @@ pub struct ChatService {
     session_registry: Option<SessionRegistry>,
     irc_registry: Option<IrcRegistry>,
     moderation_infra: ModerationInfra,
+    chip_service: Option<ChipService>,
+    gift_cooldowns: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
+    /// Last time each user posted a message containing a link. Drives the
+    /// account-age link cooldown (blunts fresh-account spam-and-leave). Keyed by
+    /// user, so it survives reconnects; holds at most one entry per link-poster.
+    link_last_sent: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
     username_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
     refresh_scheduler_started: Arc<AtomicBool>,
@@ -84,6 +164,18 @@ pub struct DiscoverRoomItem {
     pub member_count: i64,
     pub message_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,
+    /// A snapshot of the room's most recent messages, oldest-first, captured at
+    /// list-load time so the discover preview pane can render instantly while
+    /// scrolling. Empty when the room has no messages yet.
+    pub recent: Vec<PreviewMessage>,
+}
+
+/// One line of a room's recent activity, shown in the discover preview pane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewMessage {
+    pub author: String,
+    pub body: String,
+    pub created: DateTime<Utc>,
 }
 
 pub struct SendMessageTask {
@@ -104,17 +196,218 @@ pub struct SendLoungeMessageTask {
     pub failure_log: &'static str,
 }
 
-fn send_error_message(error: &anyhow::Error) -> &'static str {
+/// Fully-resolved inputs for persisting a single chat message.
+struct SendMessageParams {
+    user_id: Uuid,
+    room_id: Uuid,
+    room_slug: Option<String>,
+    body: String,
+    reply_to_message_id: Option<Uuid>,
+    reply_to_user_id: Option<Uuid>,
+    is_admin: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomMemberListItem {
+    pub user_id: Uuid,
+    pub username: Option<String>,
+}
+
+fn send_error_message(error: &anyhow::Error) -> String {
     let error = error.to_string();
     if error.contains("not a member") {
-        "You are not a member of this room."
+        "You are not a member of this room.".to_string()
     } else if error.contains("banned from this room") {
-        "You are banned from this room."
+        "You are banned from this room.".to_string()
     } else if error.contains("admin-only") {
-        "Only admins can post in #announcements."
+        "Only admins can post in #announcements.".to_string()
+    } else if let Some(slug) = error.strip_prefix("report-only:") {
+        let command = if slug == "suggestions" {
+            "/suggest"
+        } else {
+            "/bug"
+        };
+        format!(
+            "#{slug} takes reports only: post with {command} <text>, or react to an existing one."
+        )
+    } else if let Some(rest) = error.strip_prefix("slow-mode:") {
+        let mut parts = rest.splitn(2, ':');
+        let secs = parts
+            .next()
+            .and_then(|secs| secs.parse::<u64>().ok())
+            .unwrap_or(1);
+        let room = parts
+            .next()
+            .filter(|room| !room.is_empty())
+            .map(|room| {
+                if room == "server" {
+                    "server".to_string()
+                } else {
+                    format!("#{room}")
+                }
+            })
+            .unwrap_or_else(|| "this room".to_string());
+        format!(
+            "Slow mode in {room}: wait {} before sending again.",
+            format_cooldown(secs)
+        )
+    } else if let Some(secs) = error.strip_prefix("link-cooldown:") {
+        let secs = secs.parse::<u64>().unwrap_or(0);
+        format!(
+            "🔗 New accounts can only post a link occasionally — next link in {}.",
+            format_cooldown(secs)
+        )
     } else {
-        "Could not send message. Please try again."
+        "Could not send message. Please try again.".to_string()
     }
+}
+
+/// Render a remaining cooldown as a compact human string, e.g. `29m 30s`, `45s`.
+fn format_cooldown(secs: u64) -> String {
+    let secs = secs.max(1);
+    let minutes = secs / 60;
+    let seconds = secs % 60;
+    if minutes > 0 {
+        format!("{minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+async fn slow_mode_remaining_for_mode(
+    client: &tokio_postgres::Client,
+    room_id: Uuid,
+    user_id: Uuid,
+    slow_mode: ChatSlowMode,
+) -> Result<Option<Duration>> {
+    let Some(row) = client
+        .query_opt(
+            "SELECT created
+             FROM chat_messages
+             WHERE room_id = $1 AND user_id = $2
+             ORDER BY created DESC, id DESC
+             LIMIT 1",
+            &[&room_id, &user_id],
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    let last_sent: DateTime<Utc> = row.get("created");
+    let elapsed = Utc::now()
+        .signed_duration_since(last_sent)
+        .num_seconds()
+        .max(0);
+    let remaining = i64::from(slow_mode.interval_secs) - elapsed;
+    if remaining > 0 {
+        Ok(Some(Duration::from_secs(remaining as u64)))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn server_slow_mode_remaining_for_mode(
+    client: &tokio_postgres::Client,
+    user_id: Uuid,
+    slow_mode: ChatSlowMode,
+) -> Result<Option<Duration>> {
+    let Some(row) = client
+        .query_opt(
+            "SELECT cm.created
+             FROM chat_messages cm
+             JOIN chat_rooms cr ON cr.id = cm.room_id
+             WHERE cm.user_id = $1 AND cr.kind <> 'dm'
+             ORDER BY cm.created DESC, cm.id DESC
+             LIMIT 1",
+            &[&user_id],
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    let last_sent: DateTime<Utc> = row.get("created");
+    let elapsed = Utc::now()
+        .signed_duration_since(last_sent)
+        .num_seconds()
+        .max(0);
+    let remaining = i64::from(slow_mode.interval_secs) - elapsed;
+    if remaining > 0 {
+        Ok(Some(Duration::from_secs(remaining as u64)))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn slow_mode_remaining(
+    client: &tokio_postgres::Client,
+    room: &ChatRoom,
+    user_id: Uuid,
+) -> Result<Option<(Duration, &'static str)>> {
+    if let Some(slow_mode) =
+        ChatSlowMode::find_active_for_room_and_user(client, room.id, user_id).await?
+        && let Some(remaining) =
+            slow_mode_remaining_for_mode(client, room.id, user_id, slow_mode).await?
+    {
+        return Ok(Some((remaining, "room")));
+    }
+
+    if room.kind != "dm"
+        && let Some(slow_mode) = ChatSlowMode::find_active_server_for_user(client, user_id).await?
+        && let Some(remaining) =
+            server_slow_mode_remaining_for_mode(client, user_id, slow_mode).await?
+    {
+        return Ok(Some((remaining, "server")));
+    }
+
+    Ok(None)
+}
+
+/// Account-age tiers for the chat link rate limit. An account under a day old may
+/// only post a link every 30 minutes; under a week, every 5 minutes; older
+/// accounts are unlimited.
+const LINK_TIER_YOUNG_SECS: i64 = 24 * 60 * 60; // 1 day
+const LINK_TIER_ESTABLISHED_SECS: i64 = 7 * 24 * 60 * 60; // 7 days
+const LINK_COOLDOWN_FRESH: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+const LINK_COOLDOWN_YOUNG: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// The link cooldown for an account of the given age, or `None` if the account is
+/// established enough (7d+) to post links freely.
+fn link_cooldown_for_age(age_secs: i64) -> Option<std::time::Duration> {
+    if age_secs >= LINK_TIER_ESTABLISHED_SECS {
+        None
+    } else if age_secs >= LINK_TIER_YOUNG_SECS {
+        Some(LINK_COOLDOWN_YOUNG)
+    } else {
+        Some(LINK_COOLDOWN_FRESH)
+    }
+}
+
+/// Common TLDs used to spot a bare-domain link (one with no http/www scheme).
+const LINK_TLDS: &[&str] = &[
+    ".com", ".net", ".org", ".io", ".gg", ".xyz", ".co", ".me", ".tv", ".link", ".app", ".dev",
+    ".info", ".biz", ".online", ".site", ".shop", ".ru", ".cn", ".to", ".ly", ".ai",
+];
+
+/// Whether a message body contains anything that looks like a clickable link.
+/// Catches `http(s)://`, `www.`, and bare `domain.tld` forms so a link can't slip
+/// through without a scheme.
+fn contains_link(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    if lower.contains("http://") || lower.contains("https://") || lower.contains("www.") {
+        return true;
+    }
+    LINK_TLDS.iter().any(|tld| {
+        lower.match_indices(tld).any(|(i, _)| {
+            // Require an alphanumeric host char before the dot and a boundary
+            // after the TLD, so "x.com" and "buy.io/now" match but "etc." does not.
+            let before = lower[..i].chars().last();
+            let after = lower[i + tld.len()..].chars().next();
+            before.is_some_and(|c| c.is_alphanumeric())
+                && after.is_none_or(|c| !c.is_alphanumeric())
+        })
+    })
 }
 
 fn poll_error_message(error: &anyhow::Error) -> String {
@@ -304,6 +597,7 @@ pub enum ChatEvent {
     RoomTailLoaded {
         user_id: Uuid,
         room_id: Uuid,
+        last_read_at: Option<DateTime<Utc>>,
         messages: Vec<ChatMessage>,
         message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
         usernames: HashMap<Uuid, String>,
@@ -322,6 +616,30 @@ pub enum ChatEvent {
     DiscoverRoomsFailed {
         user_id: Uuid,
         message: String,
+    },
+    MessageSearchLoaded {
+        user_id: Uuid,
+        request_id: Uuid,
+        messages: Vec<ChatMessage>,
+        usernames: HashMap<Uuid, String>,
+    },
+    MessageSearchFailed {
+        user_id: Uuid,
+        request_id: Uuid,
+        message: String,
+    },
+    MessageContextLoaded {
+        user_id: Uuid,
+        request_id: Uuid,
+        message_id: Uuid,
+        before: Vec<ChatMessage>,
+        after: Vec<ChatMessage>,
+        usernames: HashMap<Uuid, String>,
+    },
+    MessageContextFailed {
+        user_id: Uuid,
+        request_id: Uuid,
+        message_id: Uuid,
     },
     MessageReactionsUpdated {
         room_id: Uuid,
@@ -457,7 +775,7 @@ pub enum ChatEvent {
     RoomMembersListed {
         user_id: Uuid,
         title: String,
-        members: Vec<String>,
+        members: Vec<RoomMemberListItem>,
     },
     PublicRoomsListed {
         user_id: Uuid,
@@ -520,6 +838,31 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    GiftSucceeded {
+        /// The sender's id.
+        user_id: Uuid,
+        sender_username: String,
+        recipient_id: Uuid,
+        recipient_username: String,
+        amount: i64,
+        sender_balance: i64,
+        recipient_balance: i64,
+        /// Optional note the sender attached to the gift.
+        message: Option<String>,
+    },
+    GiftFailed {
+        user_id: Uuid,
+        message: String,
+    },
+}
+
+/// Result of a successful chip gift, returned by `gift_chips`.
+struct GiftOutcome {
+    sender_username: String,
+    recipient_id: Uuid,
+    recipient_username: String,
+    sender_balance: i64,
+    recipient_balance: i64,
 }
 
 impl ChatService {
@@ -541,6 +884,9 @@ impl ChatService {
             session_registry: None,
             irc_registry: None,
             moderation_infra: ModerationInfra::default(),
+            chip_service: None,
+            gift_cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            link_last_sent: Arc::new(Mutex::new(HashMap::new())),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
             refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
@@ -582,6 +928,11 @@ impl ChatService {
 
     pub fn with_moderation_infra(mut self, moderation_infra: ModerationInfra) -> Self {
         self.moderation_infra = moderation_infra;
+        self
+    }
+
+    pub fn with_chip_service(mut self, chip_service: ChipService) -> Self {
+        self.chip_service = Some(chip_service);
         self
     }
 
@@ -882,6 +1233,7 @@ impl ChatService {
                 member_count: row.member_count,
                 message_count: row.message_count,
                 last_message_at: row.last_message_at,
+                recent: Vec::new(),
             })
             .collect())
     }
@@ -1170,6 +1522,15 @@ impl ChatService {
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
+        let row = client
+            .query_opt(
+                "SELECT last_read_at
+                 FROM chat_room_members
+                 WHERE room_id = $1 AND user_id = $2",
+                &[&room_id, &user_id],
+            )
+            .await?;
+        let last_read_at = row.and_then(|row| row.get("last_read_at"));
 
         let messages = ChatMessage::list_recent(&client, room_id, HISTORY_LIMIT).await?;
         let message_ids: Vec<Uuid> = messages.iter().map(|message| message.id).collect();
@@ -1181,6 +1542,7 @@ impl ChatService {
         let _ = self.evt_tx.send(ChatEvent::RoomTailLoaded {
             user_id,
             room_id,
+            last_read_at,
             messages,
             message_reactions,
             usernames: author_metadata.usernames,
@@ -1214,6 +1576,221 @@ impl ChatService {
         );
     }
 
+    #[tracing::instrument(skip(self, query, exclude_user_ids), fields(user_id = %user_id))]
+    async fn search_messages(
+        &self,
+        user_id: Uuid,
+        room_id: Option<Uuid>,
+        query: String,
+        exclude_user_ids: Vec<Uuid>,
+    ) -> Result<(Vec<ChatMessage>, HashMap<Uuid, String>)> {
+        if query.chars().count() < SEARCH_MIN_CHARS {
+            anyhow::bail!("search query too short");
+        }
+        let _permit = self.read_permits.acquire().await?;
+        let client = self.db.get().await?;
+        let messages = ChatMessage::search_for_user(
+            &client,
+            user_id,
+            &query,
+            room_id,
+            &exclude_user_ids,
+            SEARCH_RESULTS_LIMIT,
+        )
+        .await?;
+        let author_ids: Vec<Uuid> = messages.iter().map(|message| message.user_id).collect();
+        let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
+        Ok((messages, usernames))
+    }
+
+    /// Load up to `SEARCH_CONTEXT_EACH_SIDE` messages either side of a search
+    /// hit (`MessageContextLoaded`, user-targeted, keyed by request id) for
+    /// the modal's detail-pane context window. Membership-gated; system-feed
+    /// lines and the caller's ignored users are excluded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_message_context_task(
+        &self,
+        user_id: Uuid,
+        request_id: Uuid,
+        room_id: Uuid,
+        message_id: Uuid,
+        created: DateTime<Utc>,
+        exclude_user_ids: Vec<Uuid>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<MessageContext> = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    // Same read boundary as `get_for_viewer`: members
+                    // always, public non-game rooms for everyone (mention
+                    // previews can reference rooms the user never joined).
+                    if !ChatRoomMember::is_member(&client, room_id, user_id).await? {
+                        let public_readable = ChatRoom::get(&client, room_id)
+                            .await?
+                            .is_some_and(|room| room.visibility == "public" && room.kind != "game");
+                        if !public_readable {
+                            anyhow::bail!("user cannot read this room");
+                        }
+                    }
+                    let (before, after) = ChatMessage::list_around(
+                        &client,
+                        room_id,
+                        created,
+                        message_id,
+                        &exclude_user_ids,
+                        SEARCH_CONTEXT_EACH_SIDE,
+                    )
+                    .await?;
+                    let author_ids: Vec<Uuid> = before
+                        .iter()
+                        .chain(after.iter())
+                        .map(|message| message.user_id)
+                        .collect();
+                    let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
+                    Ok((before, after, usernames))
+                }
+                .await;
+                match result {
+                    Ok((before, after, usernames)) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageContextLoaded {
+                            user_id,
+                            request_id,
+                            message_id,
+                            before,
+                            after,
+                            usernames,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageContextFailed {
+                            user_id,
+                            request_id,
+                            message_id,
+                        });
+                        late_core::error_span!(
+                            "chat_message_context_failed",
+                            error = ?e,
+                            "failed to load chat message context"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.load_message_context_task",
+                user_id = %user_id,
+                message_id = %message_id
+            )),
+        );
+    }
+
+    /// Fetch one membership-gated message as a single-hit search result
+    /// (`MessageSearchLoaded`). Backs the Mentions fallback: previewing a
+    /// mention whose message is older than the loaded room history.
+    pub fn load_message_preview_task(&self, user_id: Uuid, request_id: Uuid, message_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<Option<(ChatMessage, HashMap<Uuid, String>)>> = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    let Some(message) =
+                        ChatMessage::get_for_viewer(&client, message_id, user_id).await?
+                    else {
+                        return Ok(None);
+                    };
+                    let usernames =
+                        User::list_usernames_by_ids(&client, &[message.user_id]).await?;
+                    Ok(Some((message, usernames)))
+                }
+                .await;
+                match result {
+                    Ok(Some((message, usernames))) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchLoaded {
+                            user_id,
+                            request_id,
+                            messages: vec![message],
+                            usernames,
+                        });
+                    }
+                    Ok(None) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchFailed {
+                            user_id,
+                            request_id,
+                            message: "message is no longer available".to_string(),
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchFailed {
+                            user_id,
+                            request_id,
+                            message: "preview failed, try again".to_string(),
+                        });
+                        late_core::error_span!(
+                            "chat_message_preview_failed",
+                            error = ?e,
+                            "failed to load chat message preview"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.load_message_preview_task",
+                user_id = %user_id,
+                message_id = %message_id
+            )),
+        );
+    }
+
+    /// Fire-and-forget message search. Results come back as a user-targeted
+    /// `MessageSearchLoaded` keyed by `request_id`; consumers drop results
+    /// whose request id is no longer current (latest wins).
+    pub fn search_messages_task(
+        &self,
+        user_id: Uuid,
+        request_id: Uuid,
+        room_id: Option<Uuid>,
+        query: String,
+        exclude_user_ids: Vec<Uuid>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                match service
+                    .search_messages(user_id, room_id, query, exclude_user_ids)
+                    .await
+                {
+                    Ok((messages, usernames)) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchLoaded {
+                            user_id,
+                            request_id,
+                            messages,
+                            usernames,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessageSearchFailed {
+                            user_id,
+                            request_id,
+                            message: "search failed, try again".to_string(),
+                        });
+                        late_core::error_span!(
+                            "chat_search_messages_failed",
+                            error = ?e,
+                            "failed to search chat messages"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.search_messages_task",
+                user_id = %user_id,
+                request_id = %request_id
+            )),
+        );
+    }
+
     #[tracing::instrument(skip(self), fields(user_id = %user_id))]
     async fn list_discover_rooms(&self, user_id: Uuid) -> Result<Vec<DiscoverRoomItem>> {
         let _permit = self.read_permits.acquire().await?;
@@ -1223,11 +1800,63 @@ impl ChatService {
             .into_iter()
             .map(|room| room.id)
             .collect();
-        Ok(Self::list_all_discover_rooms(&client)
+        let mut rooms: Vec<DiscoverRoomItem> = Self::list_all_discover_rooms(&client)
             .await?
             .into_iter()
             .filter(|room| !joined_ids.contains(&room.room_id))
-            .collect())
+            .collect();
+
+        Self::attach_recent_previews(&client, &mut rooms).await?;
+        Ok(rooms)
+    }
+
+    /// Fetch a snapshot of each room's most recent messages and attach them as
+    /// the `recent` preview, so the discover UI can render a preview pane
+    /// instantly while the user scrolls. Best-effort: a preview-fetch failure is
+    /// logged but leaves the rooms usable with empty previews.
+    async fn attach_recent_previews(
+        client: &tokio_postgres::Client,
+        rooms: &mut [DiscoverRoomItem],
+    ) -> Result<()> {
+        const PREVIEW_MESSAGES_PER_ROOM: i64 = 5;
+
+        let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.room_id).collect();
+        if room_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut messages_by_room =
+            ChatMessage::list_recent_for_rooms(client, &room_ids, PREVIEW_MESSAGES_PER_ROOM)
+                .await?;
+
+        let author_ids: Vec<Uuid> = messages_by_room
+            .values()
+            .flatten()
+            .map(|msg| msg.user_id)
+            .collect();
+        let usernames = User::list_usernames_by_ids(client, &author_ids).await?;
+
+        for room in rooms.iter_mut() {
+            let Some(mut messages) = messages_by_room.remove(&room.room_id) else {
+                continue;
+            };
+            // `list_recent_for_rooms` returns newest-first; flip to chronological
+            // so the preview reads top-to-bottom like a normal chat transcript.
+            messages.reverse();
+            room.recent = messages
+                .into_iter()
+                .map(|msg| PreviewMessage {
+                    author: usernames
+                        .get(&msg.user_id)
+                        .cloned()
+                        .unwrap_or_else(|| "someone".to_string()),
+                    body: msg.body,
+                    created: msg.created,
+                })
+                .collect();
+        }
+
+        Ok(())
     }
 
     pub fn list_discover_rooms_task(&self, user_id: Uuid) {
@@ -1498,6 +2127,115 @@ impl ChatService {
         });
     }
 
+    /// Post a `/bug` or `/suggest` report card into its report-only room,
+    /// regardless of which room the composer was focused on. Joins the room
+    /// first so a report never bounces on membership. Success/failure surfaces
+    /// through the usual `SendSucceeded`/`SendFailed` banners.
+    pub(crate) fn send_report_task(
+        &self,
+        user_id: Uuid,
+        kind: ReportKind,
+        text: String,
+        request_id: Uuid,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                match service.send_report(user_id, kind, text).await {
+                    Ok(()) => {
+                        let _ = service.evt_tx.send(ChatEvent::SendSucceeded {
+                            user_id,
+                            request_id,
+                        });
+                    }
+                    Err(e) => {
+                        let message = send_error_message(&e);
+                        let _ = service.evt_tx.send(ChatEvent::SendFailed {
+                            user_id,
+                            request_id,
+                            message,
+                        });
+                        late_core::error_span!(
+                            "chat_report_send_failed",
+                            error = ?e,
+                            "failed to send report"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.send_report_task",
+                user_id = %user_id,
+                slug = kind.slug(),
+                request_id = %request_id
+            )),
+        );
+    }
+
+    async fn send_report(&self, user_id: Uuid, kind: ReportKind, text: String) -> Result<()> {
+        let client = self.db.get().await?;
+        // Resolve only the public report room. Slugs are not globally unique
+        // (a private topic room or a game room may share one), so a loose
+        // slug lookup could leak the report into, and join the reporter to,
+        // whichever same-slug row happened to come back first.
+        let room = ChatRoom::find_topic_room(&client, "public", kind.slug())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("room #{} not found", kind.slug()))?;
+        ChatRoomMember::join(&client, room.id, user_id).await?;
+        drop(client);
+
+        self.send_message(SendMessageParams {
+            user_id,
+            room_id: room.id,
+            room_slug: Some(kind.slug().to_string()),
+            body: format!("{} {}", kind.marker(), text),
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            is_admin: false,
+        })
+        .await
+    }
+
+    /// Send a bot/automated reply that is a response to `reply_to_user_id`.
+    /// Recording the triggering user lets each viewer hide the reply when they
+    /// ignore that user, so ignored users cannot use a bot to be heard.
+    pub fn send_bot_reply_task(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        body: String,
+        reply_to_user_id: Option<Uuid>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service
+                    .send_message(SendMessageParams {
+                        user_id,
+                        room_id,
+                        room_slug: None,
+                        body,
+                        reply_to_message_id: None,
+                        reply_to_user_id,
+                        is_admin: false,
+                    })
+                    .await
+                {
+                    late_core::error_span!(
+                        "chat_bot_send_failed",
+                        error = ?e,
+                        "failed to send bot reply"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.send_bot_reply_task",
+                user_id = %user_id,
+                room_id = %room_id,
+            )),
+        );
+    }
+
     pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
         let SendMessageTask {
             user_id,
@@ -1512,14 +2250,15 @@ impl ChatService {
         tokio::spawn(
             async move {
                 match service
-                    .send_message(
+                    .send_message(SendMessageParams {
                         user_id,
                         room_id,
                         room_slug,
                         body,
                         reply_to_message_id,
+                        reply_to_user_id: None,
                         is_admin,
-                    )
+                    })
                     .await
                 {
                     Err(e) => {
@@ -1607,27 +2346,55 @@ impl ChatService {
         }
         drop(client);
 
-        self.send_message(
+        self.send_message(SendMessageParams {
             user_id,
-            room.id,
-            Some("lounge".to_string()),
+            room_id: room.id,
+            room_slug: Some("lounge".to_string()),
             body,
-            None,
-            false,
-        )
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            is_admin: false,
+        })
         .await
     }
 
-    #[tracing::instrument(skip(self, body), fields(user_id = %user_id, room_id = %room_id, body_len = body.len()))]
-    async fn send_message(
+    /// How much longer `user_id` must wait before posting another link, or `None`
+    /// if they may post one now. Records the send time when it returns `None`.
+    /// Established accounts (7d+) always return `None`.
+    async fn link_cooldown_remaining(
         &self,
+        client: &tokio_postgres::Client,
         user_id: Uuid,
-        room_id: Uuid,
-        room_slug: Option<String>,
-        body: String,
-        reply_to_message_id: Option<Uuid>,
-        is_admin: bool,
-    ) -> Result<()> {
+    ) -> Result<Option<std::time::Duration>> {
+        let age = User::account_age_seconds(client, user_id)
+            .await?
+            .unwrap_or(i64::MAX);
+        let Some(cooldown) = link_cooldown_for_age(age) else {
+            return Ok(None);
+        };
+        let now = std::time::Instant::now();
+        let mut last_sent = self.link_last_sent.lock_recover();
+        if let Some(prev) = last_sent.get(&user_id) {
+            let elapsed = now.duration_since(*prev);
+            if elapsed < cooldown {
+                return Ok(Some(cooldown - elapsed));
+            }
+        }
+        last_sent.insert(user_id, now);
+        Ok(None)
+    }
+
+    #[tracing::instrument(skip(self, params), fields(user_id = %params.user_id, room_id = %params.room_id, body_len = params.body.len()))]
+    async fn send_message(&self, params: SendMessageParams) -> Result<()> {
+        let SendMessageParams {
+            user_id,
+            room_id,
+            room_slug,
+            body,
+            reply_to_message_id,
+            reply_to_user_id,
+            is_admin,
+        } = params;
         let body = body.trim_start_matches('\n').trim_end();
         if body.is_empty() {
             return Ok(());
@@ -1645,6 +2412,47 @@ impl ChatService {
         if RoomBan::is_active_for_room_and_user(&client, room_id, user_id).await? {
             anyhow::bail!("user is banned from this room");
         }
+        let room = ChatRoom::get(&client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("room not found"))?;
+        // Report-only rooms: regular users may only post report cards (bodies
+        // built by /bug and /suggest); staff keep free text so they can reply
+        // under a report. Checked against the DB slug so the IRC path is
+        // covered too. The staff lookup only runs on this rare gated path.
+        if !is_admin
+            && let Some(kind) = room.slug.as_deref().and_then(ReportKind::for_room_slug)
+            && !body.trim_start().starts_with(kind.marker())
+        {
+            let is_moderator = User::staff_flags_by_ids(&client, &[user_id])
+                .await?
+                .get(&user_id)
+                .is_some_and(|(_, is_moderator)| *is_moderator);
+            if !is_moderator {
+                anyhow::bail!("report-only:{}", kind.slug());
+            }
+        }
+        if !is_admin
+            && let Some((remaining, scope)) = slow_mode_remaining(&client, &room, user_id).await?
+        {
+            let label = if scope == "server" {
+                "server".to_string()
+            } else {
+                room_slug.clone().unwrap_or_default()
+            };
+            anyhow::bail!("slow-mode:{}:{}", remaining.as_secs(), label);
+        }
+
+        // Account-age link rate limit: younger accounts can only post a link
+        // every so often, to blunt spam-and-leave without silencing them. Old
+        // (7d+) accounts and admins are unlimited. The age lookup only runs when
+        // a non-admin message actually contains a link, which is rare.
+        if !is_admin
+            && contains_link(body)
+            && let Some(remaining) = self.link_cooldown_remaining(&client, user_id).await?
+        {
+            anyhow::bail!("link-cooldown:{}", remaining.as_secs());
+        }
+
         if let Some(reply_to_message_id) = reply_to_message_id {
             let reply_target = ChatMessage::get(&client, reply_to_message_id)
                 .await?
@@ -1653,9 +2461,6 @@ impl ChatService {
                 anyhow::bail!("reply target is not in this room");
             }
         }
-        let room = ChatRoom::get(&client, room_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("room not found"))?;
         if room.kind == "dm" {
             let user_a = room
                 .dm_user_a
@@ -1672,7 +2477,13 @@ impl ChatService {
             user_id,
             body: body.to_string(),
         };
-        let chat = ChatMessage::create_with_reply_to(&client, message, reply_to_message_id).await?;
+        let chat = ChatMessage::create_with_reply_targets(
+            &client,
+            message,
+            reply_to_message_id,
+            reply_to_user_id,
+        )
+        .await?;
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;
@@ -1712,6 +2523,8 @@ impl ChatService {
                             "You can only edit your own messages."
                         } else if e.to_string().contains("empty") {
                             "Edited message cannot be empty."
+                        } else if e.to_string().starts_with("report-only:") {
+                            "Reports here must keep their marker; edit the text after it."
                         } else {
                             "Could not edit message. Please try again."
                         };
@@ -1762,6 +2575,20 @@ impl ChatService {
             target_tier_for_user_id(&client, existing.user_id).await?
         };
         ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
+
+        // Report-only rooms: a regular user's only messages there are their own
+        // report cards, and an edit must not strip the marker — otherwise
+        // editing would bypass the free-text send gate.
+        if !permissions.is_admin() && !permissions.is_moderator() {
+            let room = ChatRoom::get(&client, existing.room_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("room not found"))?;
+            if let Some(kind) = room.slug.as_deref().and_then(ReportKind::for_room_slug)
+                && !new_body.trim_start().starts_with(kind.marker())
+            {
+                anyhow::bail!("report-only:{}", kind.slug());
+            }
+        }
 
         let tx = client.transaction().await?;
         let updated = ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?;
@@ -2193,7 +3020,7 @@ impl ChatService {
         &self,
         user_id: Uuid,
         room_id: Uuid,
-    ) -> Result<(String, Vec<String>)> {
+    ) -> Result<(String, Vec<RoomMemberListItem>)> {
         let client = self.db.get().await?;
         let room = ChatRoom::get(&client, room_id)
             .await?
@@ -2208,10 +3035,11 @@ impl ChatService {
         let members = user_ids
             .into_iter()
             .map(|id| {
-                usernames
-                    .get(&id)
-                    .map(|username| format!("@{username}"))
-                    .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(id)))
+                let username = usernames.get(&id).cloned();
+                RoomMemberListItem {
+                    user_id: id,
+                    username,
+                }
             })
             .collect();
         let title = if room.kind == "dm" {
@@ -2224,6 +3052,104 @@ impl ChatService {
         };
 
         Ok((title, members))
+    }
+
+    pub fn gift_chips_task(
+        &self,
+        user_id: Uuid,
+        target_username: String,
+        amount: i64,
+        message: Option<String>,
+    ) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.gift_chips_task",
+            user_id = %user_id,
+            target_username = %target_username,
+            amount
+        );
+        tokio::spawn(
+            async move {
+                let event = match service.gift_chips(user_id, &target_username, amount).await {
+                    Ok(gift) => ChatEvent::GiftSucceeded {
+                        user_id,
+                        sender_username: gift.sender_username,
+                        recipient_id: gift.recipient_id,
+                        recipient_username: gift.recipient_username,
+                        amount,
+                        sender_balance: gift.sender_balance,
+                        recipient_balance: gift.recipient_balance,
+                        message,
+                    },
+                    Err(error) => ChatEvent::GiftFailed {
+                        user_id,
+                        message: service_sentence_case(&error.to_string()),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn gift_chips(
+        &self,
+        user_id: Uuid,
+        target_username: &str,
+        amount: i64,
+    ) -> Result<GiftOutcome> {
+        if amount <= 0 {
+            anyhow::bail!("gift amount must be positive");
+        }
+        if amount > GIFT_MAX_AMOUNT {
+            anyhow::bail!("gift amount is too large");
+        }
+        let Some(chip_service) = &self.chip_service else {
+            anyhow::bail!("chip gifts are unavailable");
+        };
+
+        let client = self.db.get().await?;
+        let sender = User::get(&client, user_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("sender not found"))?;
+        let sender_username = sender.username.clone();
+        let recipient = User::find_by_username(&client, target_username)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("recipient not found"))?;
+        if recipient.id == user_id {
+            anyhow::bail!("cannot gift yourself");
+        }
+        let recipient_id = recipient.id;
+        let recipient_username = recipient.username.clone();
+        drop(client);
+
+        let now = std::time::Instant::now();
+        {
+            let mut cooldowns = self.gift_cooldowns.lock_recover();
+            if let Some(last) = cooldowns.get(&user_id)
+                && now.duration_since(*last) < GIFT_COOLDOWN
+            {
+                anyhow::bail!("gift is on cooldown");
+            }
+            cooldowns.insert(user_id, now);
+        }
+
+        match chip_service
+            .transfer_chips(user_id, recipient.id, amount)
+            .await
+        {
+            Ok((sender_balance, recipient_balance)) => Ok(GiftOutcome {
+                sender_username,
+                recipient_id,
+                recipient_username,
+                sender_balance,
+                recipient_balance,
+            }),
+            Err(error) => {
+                self.gift_cooldowns.lock_recover().remove(&user_id);
+                Err(error)
+            }
+        }
     }
 
     pub fn list_reaction_owners_task(&self, user_id: Uuid, message_id: Uuid) {
@@ -2576,6 +3502,15 @@ impl ChatService {
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
         if room.kind != "game" {
             anyhow::bail!("Only game rooms can be joined here");
+        }
+        // Private game rooms are daily match chats: membership is fixed at
+        // claim time to the two players, so joining is only the idempotent
+        // re-join that kicks off the tail/list refresh chain. Nobody else
+        // may enter.
+        if room.visibility != "public"
+            && !ChatRoomMember::is_member(&client, room.id, user_id).await?
+        {
+            anyhow::bail!("this match chat is players only");
         }
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
@@ -2958,16 +3893,77 @@ impl ChatService {
     }
 }
 
-fn short_user_id(user_id: Uuid) -> String {
-    let id = user_id.to_string();
-    id[..id.len().min(8)].to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Duration as ChronoDuration;
     use late_core::models::chat_poll::{ChatPoll, ChatPollOptionSummary};
+
+    #[test]
+    fn contains_link_catches_schemes_www_and_bare_domains() {
+        for spam in [
+            "click https://evil.example/win",
+            "HTTP://EVIL.io free chips",
+            "go to www.evil.io now",
+            "buy at evil.io/now",
+            "join evil.gg or evil.xyz",
+            "dm me on telegram t.me/scammer",
+        ] {
+            assert!(contains_link(spam), "should flag: {spam}");
+        }
+        for clean in [
+            "hello there, how are you?",
+            "i finished 2048 and got a high score",
+            "see you at 3pm. thanks!",
+            "node.js is fine to mention",
+            "e.g. that idea is good",
+        ] {
+            assert!(!contains_link(clean), "should not flag: {clean}");
+        }
+    }
+
+    #[test]
+    fn link_cooldown_tiers_by_account_age() {
+        let hour = 3_600;
+        let day = 24 * hour;
+        // Fresh (< 1 day): 30 minutes.
+        assert_eq!(link_cooldown_for_age(0), Some(LINK_COOLDOWN_FRESH));
+        assert_eq!(link_cooldown_for_age(23 * hour), Some(LINK_COOLDOWN_FRESH));
+        // Young (1–7 days): 5 minutes.
+        assert_eq!(link_cooldown_for_age(day), Some(LINK_COOLDOWN_YOUNG));
+        assert_eq!(link_cooldown_for_age(6 * day), Some(LINK_COOLDOWN_YOUNG));
+        // Established (7d+): no cooldown.
+        assert_eq!(link_cooldown_for_age(7 * day), None);
+        assert_eq!(link_cooldown_for_age(365 * day), None);
+    }
+
+    #[test]
+    fn send_error_message_explains_report_only_rooms() {
+        let bugs = send_error_message(&anyhow::anyhow!("report-only:bugs"));
+        assert!(bugs.contains("#bugs"), "{bugs}");
+        assert!(bugs.contains("/bug"), "{bugs}");
+        let suggestions = send_error_message(&anyhow::anyhow!("report-only:suggestions"));
+        assert!(suggestions.contains("#suggestions"), "{suggestions}");
+        assert!(suggestions.contains("/suggest"), "{suggestions}");
+    }
+
+    #[test]
+    fn report_kind_maps_room_slugs() {
+        assert_eq!(ReportKind::for_room_slug("bugs"), Some(ReportKind::Bug));
+        assert_eq!(
+            ReportKind::for_room_slug("suggestions"),
+            Some(ReportKind::Suggestion)
+        );
+        assert_eq!(ReportKind::for_room_slug("lounge"), None);
+    }
+
+    #[test]
+    fn format_cooldown_is_compact() {
+        assert_eq!(format_cooldown(0), "1s");
+        assert_eq!(format_cooldown(45), "45s");
+        assert_eq!(format_cooldown(60), "1m 00s");
+        assert_eq!(format_cooldown(29 * 60 + 30), "29m 30s");
+    }
 
     fn test_poll(options: Vec<(&str, i64)>) -> ActiveChatPoll {
         let now = Utc::now();

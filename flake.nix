@@ -67,7 +67,9 @@
           packageName = "late";
           packageDescription = "Companion CLI for late.sh";
           mainProgram = "late";
-          cargoBuildFlags = ["-p" "late-cli" "--bin" "late"];
+          # late-webview is the standalone YouTube helper `late` spawns on
+          # Linux; `late` itself must not link WebKitGTK.
+          cargoBuildFlags = ["-p" "late-cli" "--bin" "late" "-p" "late-webview" "--bin" "late-webview"];
         };
         late-sh = pkgs.callPackage ./default.nix {
           rustPlatform = rustMinimalPlatform;

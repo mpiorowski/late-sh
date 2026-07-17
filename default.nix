@@ -138,25 +138,22 @@ in
       test -f "$LK_CUSTOM_WEBRTC/desktop_capture.ninja"
     '';
 
-    # The embedded CLI YouTube helper uses WebKitGTK + GStreamer. WebKit
-    # discovers codecs, sinks, and TLS modules at runtime from WebKit helper
-    # processes, so a Nix-built binary must carry those search paths and the
-    # paths WebKit should expose inside its web-process sandbox.
+    # The CLI YouTube helper (`late-webview`) uses WebKitGTK + GStreamer.
+    # WebKit discovers codecs, sinks, and TLS modules at runtime from WebKit
+    # helper processes, so the Nix-built binaries must carry those search
+    # paths and the paths WebKit should expose inside its web-process
+    # sandbox. `late` itself no longer links WebKitGTK on Linux, but it is
+    # still wrapped: the spawned late-webview child inherits these variables.
     postFixup = lib.optionalString stdenv.isLinux ''
-      if [ -x "$out/bin/late" ]; then
-        wrapProgram "$out/bin/late" \
-          --set GST_PLUGIN_SYSTEM_PATH_1_0 "${gstreamerPluginPath}" \
-          --set GST_PLUGIN_SCANNER "${gstreamerPluginScanner}" \
-          --set LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS "${webkitGstreamerSandboxPath}" \
-          --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
-      fi
-      if [ -x "$out/bin/late-cli" ]; then
-        wrapProgram "$out/bin/late-cli" \
-          --set GST_PLUGIN_SYSTEM_PATH_1_0 "${gstreamerPluginPath}" \
-          --set GST_PLUGIN_SCANNER "${gstreamerPluginScanner}" \
-          --set LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS "${webkitGstreamerSandboxPath}" \
-          --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
-      fi
+      for bin in late late-cli late-webview; do
+        if [ -x "$out/bin/$bin" ]; then
+          wrapProgram "$out/bin/$bin" \
+            --set GST_PLUGIN_SYSTEM_PATH_1_0 "${gstreamerPluginPath}" \
+            --set GST_PLUGIN_SCANNER "${gstreamerPluginScanner}" \
+            --set LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS "${webkitGstreamerSandboxPath}" \
+            --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
+        fi
+      done
     '';
 
     # Integration tests require a live postgres; skip by default.

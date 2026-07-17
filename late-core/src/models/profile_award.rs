@@ -6,6 +6,10 @@ use uuid::Uuid;
 pub const PROFILE_AWARD_RANK_LIMIT: i32 = 3;
 pub const LATEANIA_ARCHDEMON_AWARD_CATEGORY: &str = "lateania_archdemon";
 pub const LATEANIA_FRONTIER_KING_AWARD_CATEGORY: &str = "lateania_frontier_king";
+pub const LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY: &str = "lateania_sundering_deep";
+pub const NETHACK_AMULET_AWARD_CATEGORY: &str = "nethack_amulet";
+pub const NETHACK_ASCENSION_AWARD_CATEGORY: &str = "nethack_ascension";
+pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
 
 #[derive(Clone, Debug)]
 pub struct ProfileAward {
@@ -189,7 +193,11 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
     Ok(inserted)
 }
 
-pub async fn grant_lateania_boss_award(
+/// Grant a one-time, rankless milestone award (Lateania bosses, NetHack
+/// milestones) to a user. Idempotent per (user, category): the `NOT EXISTS`
+/// guard means a re-run after the award already exists is a no-op, so this is
+/// safe to call from a fire-and-forget task that may run more than once.
+pub async fn grant_unique_milestone_award(
     client: &Client,
     user_id: Uuid,
     category: &str,
@@ -218,7 +226,12 @@ pub async fn grant_lateania_boss_award(
 pub fn award_badge(category: &str, rank: i32) -> String {
     if matches!(
         category,
-        LATEANIA_ARCHDEMON_AWARD_CATEGORY | LATEANIA_FRONTIER_KING_AWARD_CATEGORY
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY
+            | LATEANIA_FRONTIER_KING_AWARD_CATEGORY
+            | LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY
+            | NETHACK_AMULET_AWARD_CATEGORY
+            | NETHACK_ASCENSION_AWARD_CATEGORY
+            | GREENDRAGON_DRAGON_AWARD_CATEGORY
     ) {
         return award_category_code(category).to_string();
     }
@@ -233,8 +246,14 @@ pub fn award_category_code(category: &str) -> &'static str {
         "tetris" => "LA",
         "twenty_forty_eight" => "24#",
         "snake" => "SN",
-        LATEANIA_ARCHDEMON_AWARD_CATEGORY => "LAD",
-        LATEANIA_FRONTIER_KING_AWARD_CATEGORY => "LFK",
+        // Boss badges are coded after the boss, not the place: Mal'Gareth,
+        // the King who was promised Nothing, YSsgar.
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY => "LMG",
+        LATEANIA_FRONTIER_KING_AWARD_CATEGORY => "LKN",
+        LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => "LYS",
+        NETHACK_AMULET_AWARD_CATEGORY => "NHA",
+        NETHACK_ASCENSION_AWARD_CATEGORY => "NHY",
+        GREENDRAGON_DRAGON_AWARD_CATEGORY => "GDS",
         _ => "LB",
     }
 }
@@ -248,6 +267,10 @@ pub fn award_category_label(category: &str) -> &'static str {
         "snake" => "Snake",
         LATEANIA_ARCHDEMON_AWARD_CATEGORY => "Lateania Archdemon",
         LATEANIA_FRONTIER_KING_AWARD_CATEGORY => "Lateania Frontier King",
+        LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => "Lateania Sundering Deep",
+        NETHACK_AMULET_AWARD_CATEGORY => "NetHack Amulet",
+        NETHACK_ASCENSION_AWARD_CATEGORY => "NetHack Ascension",
+        GREENDRAGON_DRAGON_AWARD_CATEGORY => "Green Dragon Slayer",
         _ => "Leaderboard",
     }
 }
@@ -261,6 +284,10 @@ pub fn award_category_priority(category: &str) -> i32 {
         "snake" => 4,
         LATEANIA_ARCHDEMON_AWARD_CATEGORY => 10,
         LATEANIA_FRONTIER_KING_AWARD_CATEGORY => 11,
+        LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => 12,
+        NETHACK_AMULET_AWARD_CATEGORY => 13,
+        NETHACK_ASCENSION_AWARD_CATEGORY => 14,
+        GREENDRAGON_DRAGON_AWARD_CATEGORY => 15,
         _ => 99,
     }
 }
@@ -280,7 +307,12 @@ pub fn format_score_value(category: &str, value: i64) -> String {
     match category {
         "top_chips" => format!("{value} chips"),
         "arcade_wins" => format!("{value} pts"),
-        LATEANIA_ARCHDEMON_AWARD_CATEGORY | LATEANIA_FRONTIER_KING_AWARD_CATEGORY => {
+        // Yssgar pays no chips; the badge itself is the prize.
+        LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => "Yssgar slain".to_string(),
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY
+        | LATEANIA_FRONTIER_KING_AWARD_CATEGORY
+        | NETHACK_AMULET_AWARD_CATEGORY
+        | NETHACK_ASCENSION_AWARD_CATEGORY => {
             format!("{value} chips")
         }
         _ => format!("{value} score"),
@@ -304,21 +336,49 @@ impl From<tokio_postgres::Row> for ProfileAward {
 #[cfg(test)]
 mod tests {
     use super::{
-        LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY, award_badge,
-        award_category_label, format_score_value,
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+        LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
+        NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, award_category_label, format_score_value,
     };
 
     #[test]
     fn lateania_boss_awards_have_profile_badge_codes() {
-        assert_eq!(award_badge(LATEANIA_ARCHDEMON_AWARD_CATEGORY, 1), "LAD");
-        assert_eq!(award_badge(LATEANIA_FRONTIER_KING_AWARD_CATEGORY, 1), "LFK");
+        assert_eq!(award_badge(LATEANIA_ARCHDEMON_AWARD_CATEGORY, 1), "LMG");
+        assert_eq!(award_badge(LATEANIA_FRONTIER_KING_AWARD_CATEGORY, 1), "LKN");
+        assert_eq!(
+            award_badge(LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, 1),
+            "LYS"
+        );
         assert_eq!(
             award_category_label(LATEANIA_ARCHDEMON_AWARD_CATEGORY),
             "Lateania Archdemon"
         );
         assert_eq!(
+            award_category_label(LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY),
+            "Lateania Sundering Deep"
+        );
+        assert_eq!(
             format_score_value(LATEANIA_FRONTIER_KING_AWARD_CATEGORY, 20_000),
             "20000 chips"
+        );
+        assert_eq!(
+            format_score_value(LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, 0),
+            "Yssgar slain"
+        );
+    }
+
+    #[test]
+    fn nethack_milestone_awards_have_profile_badge_codes() {
+        // Rankless like the Lateania bosses: bare code, no rank suffix.
+        assert_eq!(award_badge(NETHACK_AMULET_AWARD_CATEGORY, 1), "NHA");
+        assert_eq!(award_badge(NETHACK_ASCENSION_AWARD_CATEGORY, 1), "NHY");
+        assert_eq!(
+            award_category_label(NETHACK_ASCENSION_AWARD_CATEGORY),
+            "NetHack Ascension"
+        );
+        assert_eq!(
+            format_score_value(NETHACK_AMULET_AWARD_CATEGORY, 10_000),
+            "10000 chips"
         );
     }
 }

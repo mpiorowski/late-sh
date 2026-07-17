@@ -60,6 +60,7 @@ use your normal `~/.ssh/config`, agent, and default identity discovery.
 ### Options
 
 ```
+--config <path>           Config file override (default: ~/.config/late/config.toml)
 --ssh-target <host>        SSH target (default: late.sh)
 --ssh-port <port>          SSH port override
 --ssh-user <user>          SSH username override
@@ -71,6 +72,26 @@ use your normal `~/.ssh/config`, agent, and default identity discovery.
 --api-base-url <url>       API URL for WebSocket pairing
 -v, --verbose              Debug logging (file-backed on interactive terminals)
 ```
+
+### Config File
+
+`late` also reads a flat TOML config file from `$XDG_CONFIG_HOME/late/config.toml`
+or `~/.config/late/config.toml`. Use `--config <path>` to point at another file.
+Precedence is: CLI args, env vars, config file, built-in defaults.
+
+Example:
+
+```toml
+ssh-mode = "openssh"
+key = "/home/alice/.ssh/id_ed25519_sk"
+audio-output-device = "Built-in Audio"
+verbose = false
+```
+
+Supported file keys are `ssh-target`, `ssh-port`, `ssh-user`, `ssh-mode`, `key`,
+`audio-base-url`, `api-base-url`, `audio-output-device`, and `verbose`.
+TUI keybinds, themes, sidebar settings, and other in-app preferences are saved
+server-side, not in the CLI config file.
 
 ## Requirements
 

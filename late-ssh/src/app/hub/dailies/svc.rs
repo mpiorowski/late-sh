@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::app::activity::{
     channel::ActivitySender,
-    event::{ActivityEvent, ActivityGame, ActivityKind},
+    event::{ActivityEvent, ActivityKind},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -380,14 +380,20 @@ fn progress_update_for_event(
 ) -> Option<QuestProgressUpdate> {
     match row.template.kind.as_str() {
         "daily_puzzle_win" => match_daily_puzzle_win(&row.template.params, event),
+        "arcade_puzzle_solved" => match_arcade_puzzle_solved(&row.template.params, event),
         "arcade_score" => match_arcade_score(&row.template.params, event),
         "arcade_level" => match_arcade_level(&row.template.params, event),
-        "room_rounds_played" => match_room_round(&row.template.params, event),
-        "room_wins" => match_room_win(&row.template.params, event),
         "bonsai_watered" => match_bonsai_watered(event),
         "login_once" => match_login_once(event),
         _ => None,
     }
+}
+
+fn match_arcade_puzzle_solved(
+    params: &Value,
+    event: &ActivityEvent,
+) -> Option<QuestProgressUpdate> {
+    match_daily_puzzle_win(params, event)
 }
 
 fn match_daily_puzzle_win(params: &Value, event: &ActivityEvent) -> Option<QuestProgressUpdate> {
@@ -430,30 +436,12 @@ fn match_arcade_level(params: &Value, event: &ActivityEvent) -> Option<QuestProg
     }
 }
 
-fn match_room_round(params: &Value, event: &ActivityEvent) -> Option<QuestProgressUpdate> {
-    let ActivityKind::GamePlayed { game, .. } = &event.kind else {
-        return None;
-    };
-    matches_game(params, *game).then_some(QuestProgressUpdate::Increment(1))
-}
-
-fn match_room_win(params: &Value, event: &ActivityEvent) -> Option<QuestProgressUpdate> {
-    let ActivityKind::GameWon { game, .. } = &event.kind else {
-        return None;
-    };
-    matches_game(params, *game).then_some(QuestProgressUpdate::Increment(1))
-}
-
 fn match_bonsai_watered(event: &ActivityEvent) -> Option<QuestProgressUpdate> {
     matches!(event.kind, ActivityKind::BonsaiWatered).then_some(QuestProgressUpdate::Increment(1))
 }
 
 fn match_login_once(event: &ActivityEvent) -> Option<QuestProgressUpdate> {
     matches!(event.kind, ActivityKind::UserJoined).then_some(QuestProgressUpdate::Increment(1))
-}
-
-fn matches_game(params: &Value, game: ActivityGame) -> bool {
-    param_str(params, "game").is_some_and(|expected| game.key() == expected)
 }
 
 fn param_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {

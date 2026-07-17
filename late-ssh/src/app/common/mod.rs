@@ -1,5 +1,6 @@
 pub mod composer;
 pub mod markdown;
+pub(crate) mod marquee;
 pub(crate) mod mentions;
 pub mod overlay;
 pub mod primitives;
@@ -10,3 +11,4 @@ pub mod splash_tips;
 pub mod textarea_input;
 pub mod theme;
 pub mod time;
+pub mod username_effect;

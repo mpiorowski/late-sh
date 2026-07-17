@@ -10,6 +10,26 @@ use late_core::models::solitaire::{Game, GameParams};
 
 pub const DIFFICULTIES: [&str; 2] = ["draw-1", "draw-3"];
 
+/// Which destructive action a pending confirmation is armed for. Tracking the
+/// kind keeps the two reset keys distinct: pressing `n` then `r` re-arms for
+/// reset instead of firing the new-board press, and vice versa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetKind {
+    NewBoard,
+    Reset,
+    Reroll,
+}
+
+impl ResetKind {
+    pub fn confirm_tip(self) -> &'static str {
+        match self {
+            ResetKind::NewBoard => "Press again for a new board",
+            ResetKind::Reset => "Press again to reset",
+            ResetKind::Reroll => "Press again to reroll the deck",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Suit {
     Hearts,
@@ -124,6 +144,7 @@ pub struct State {
     pub selection: Option<Selection>,
     pub is_game_over: bool,
     pub scroll_offset: u16,
+    pub reset_pending: Option<ResetKind>,
     undo_stack: Vec<Snapshot>,
     daily_snapshots: HashMap<String, Snapshot>,
     personal_snapshots: HashMap<String, Snapshot>,
@@ -170,6 +191,7 @@ impl State {
             selection: None,
             is_game_over: false,
             scroll_offset: 0,
+            reset_pending: None,
             undo_stack: Vec::new(),
             daily_snapshots,
             personal_snapshots,
@@ -190,13 +212,56 @@ impl State {
         }
     }
 
+    /// Index of the first daily difficulty whose deal has been touched (any
+    /// move from the deterministic fresh deal counts) and is not yet won:
+    /// the live board when it is the active daily, the stored snapshot
+    /// otherwise.
+    pub fn first_unfinished_daily(&self) -> Option<usize> {
+        DIFFICULTIES.iter().enumerate().find_map(|(index, dk)| {
+            let started = if self.mode == Mode::Daily && index == self.selected_difficulty {
+                !self.is_game_over && !self.is_fresh_deal()
+            } else {
+                self.daily_snapshots.get(*dk).is_some_and(|snapshot| {
+                    !snapshot.is_game_over && !snapshot_is_fresh_deal(snapshot)
+                })
+            };
+            started.then_some(index)
+        })
+    }
+
+    /// True while the active board is a daily (not a personal board). The
+    /// backtick workspace cycle only counts daily boards as stops.
+    pub fn is_daily_active(&self) -> bool {
+        self.mode == Mode::Daily
+    }
+
+    /// The live board still matches the untouched deal for its seed.
+    fn is_fresh_deal(&self) -> bool {
+        let fresh = snapshot_from_seed(self.seed);
+        self.stock == fresh.stock
+            && self.waste == fresh.waste
+            && self.foundations == fresh.foundations
+            && self.tableau == fresh.tableau
+    }
+
+    /// Jump straight to a daily board: the backtick workspace entry path.
+    pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.clear_reset_pending();
+        self.store_active_snapshot();
+        self.mode = Mode::Daily;
+        self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
+        self.load_mode_snapshot_for_selected_difficulty();
+    }
+
     pub fn show_daily(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn show_personal(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Personal;
         if !self.personal_snapshots.contains_key(self.difficulty_key()) {
@@ -209,12 +274,14 @@ impl State {
     }
 
     pub fn next_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty = (self.selected_difficulty + 1) % DIFFICULTIES.len();
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn prev_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty =
             (self.selected_difficulty + DIFFICULTIES.len() - 1) % DIFFICULTIES.len();
@@ -222,6 +289,7 @@ impl State {
     }
 
     pub fn new_personal_board(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.personal_snapshots.insert(
             self.difficulty_key().to_string(),
@@ -236,21 +304,38 @@ impl State {
         if self.is_game_over {
             return;
         }
+        self.clear_reset_pending();
         let snapshot = snapshot_from_seed(self.seed);
         self.apply_snapshot(snapshot.clone());
         self.replace_mode_snapshot_for_selected_difficulty(snapshot);
         self.save_async();
     }
 
+    /// Deal a brand-new random deck for the current mode and difficulty.
+    /// Solvability checking is too expensive, so this is the escape hatch for
+    /// an unsolvable daily; it works for both draw-1 and draw-3. Unlike
+    /// `reset_board` it picks a fresh seed, and it is allowed even after a
+    /// game is over.
+    pub fn reroll(&mut self) {
+        self.clear_reset_pending();
+        let snapshot = snapshot_from_seed(random_seed());
+        self.apply_snapshot(snapshot.clone());
+        self.replace_mode_snapshot_for_selected_difficulty(snapshot);
+        self.save_async();
+    }
+
     pub fn scroll_up(&mut self) {
+        self.clear_reset_pending();
         self.scroll_offset = self.scroll_offset.saturating_sub(3);
     }
 
     pub fn scroll_down(&mut self) {
+        self.clear_reset_pending();
         self.scroll_offset = self.scroll_offset.saturating_add(3);
     }
 
     pub fn move_horizontal(&mut self, delta: isize) {
+        self.clear_reset_pending();
         self.cursor = match self.cursor {
             Focus::Stock => top_focus(delta.clamp(0, 5) as usize),
             Focus::Waste => top_focus((1isize + delta).clamp(0, 5) as usize),
@@ -264,6 +349,7 @@ impl State {
     }
 
     pub fn move_vertical(&mut self, delta: isize) {
+        self.clear_reset_pending();
         self.cursor = match self.cursor {
             Focus::Stock | Focus::Waste | Focus::Foundation(_) if delta > 0 => {
                 let col = top_to_tableau_col(self.cursor);
@@ -286,6 +372,7 @@ impl State {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.clear_reset_pending();
         if let Some(snapshot) = self.undo_stack.pop() {
             self.seed = snapshot.seed;
             self.stock = snapshot.stock;
@@ -303,6 +390,7 @@ impl State {
     }
 
     pub fn activate(&mut self) -> bool {
+        self.clear_reset_pending();
         if matches!(self.cursor, Focus::Stock) {
             self.selection = None;
             self.push_undo();
@@ -343,6 +431,7 @@ impl State {
     }
 
     pub fn auto_move(&mut self) -> bool {
+        self.clear_reset_pending();
         if self.is_game_over {
             return false;
         }
@@ -364,6 +453,7 @@ impl State {
     }
 
     pub fn auto_foundation_all(&mut self) -> bool {
+        self.clear_reset_pending();
         if self.is_game_over {
             return false;
         }
@@ -405,6 +495,22 @@ impl State {
             self.undo_stack.pop();
         }
         moved_any
+    }
+
+    /// Arm or confirm a destructive reset. Returns `true` only when the same
+    /// `kind` was already armed (the confirming second press); a press for a
+    /// different kind re-arms for that kind instead of firing.
+    pub fn request_reset(&mut self, kind: ResetKind) -> bool {
+        if self.reset_pending == Some(kind) {
+            self.reset_pending = None;
+            return true;
+        }
+        self.reset_pending = Some(kind);
+        false
+    }
+
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = None;
     }
 
     pub fn score(&self) -> usize {
@@ -814,6 +920,14 @@ fn puzzle_date_for_mode(mode: Mode, today: NaiveDate) -> Option<NaiveDate> {
     }
 }
 
+fn snapshot_is_fresh_deal(snapshot: &Snapshot) -> bool {
+    let fresh = snapshot_from_seed(snapshot.seed);
+    snapshot.stock == fresh.stock
+        && snapshot.waste == fresh.waste
+        && snapshot.foundations == fresh.foundations
+        && snapshot.tableau == fresh.tableau
+}
+
 fn is_current_daily_game(saved_date: Option<NaiveDate>, today: NaiveDate) -> bool {
     saved_date == Some(today)
 }
@@ -860,6 +974,24 @@ mod tests {
             SolitaireService::new(db, tokio::sync::broadcast::channel(4).0),
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn reset_confirmation_is_per_action_kind() {
+        let mut state = test_state();
+
+        // Two presses of the same key confirm and fire.
+        assert!(!state.request_reset(ResetKind::Reset));
+        assert!(state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, None);
+
+        // A press for a different kind re-arms for that kind instead of
+        // firing the originally-armed action.
+        assert!(!state.request_reset(ResetKind::NewBoard));
+        assert!(!state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, Some(ResetKind::Reset));
+        assert!(state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, None);
     }
 
     #[test]

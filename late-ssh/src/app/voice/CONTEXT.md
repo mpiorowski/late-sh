@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-06-17
+- Last updated: 2026-06-21
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -13,7 +13,7 @@
 ## 1. Scope
 
 Owned by this domain:
-- Voice channels attached to product domains such as chat rooms and game rooms.
+- Voice channels attached to chat rooms (the only target kind since the Rooms demolition dropped `target_kind='game_room'`).
 - Server-side LiveKit token minting for authenticated CLI participants.
 - TUI voice state: enabled/off, participant list, current-user joined/muted/deafened state, and room controls.
 - Pair WebSocket voice control messages: join, leave, mute, deafen, and client `voice_state` reports.
@@ -72,7 +72,7 @@ Main types:
 Public API:
 - `new(config)` — initializes an empty snapshot.
 - `snapshot()` / `subscribe()` — read or watch current TUI-visible state.
-- `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel and target chat/game-room membership before minting a CLI ticket.
+- `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel and target chat-room membership before minting a CLI ticket.
 - `join_ticket(voice_channel_id, user_id, username, muted, deafened)` — low-level LiveKit JWT minting for the native CLI after callers have authorized the join. Grants: `roomJoin=true`, `canPublish=true`, `canSubscribe=true`, `canPublishData=true`, `roomCreate=false`.
 - `apply_client_state(user_id, username, state)` — accepts CLI `voice_state` only for the user's most recently server-ticketed voice channel; removes the participant if `joined=false`, if `room` is missing/unrecognized or lacks the configured base-name plus UUID suffix, or if the parsed voice channel was not ticketed for that user.
 - `update_local_state(...)` — optimistic server-side mirror used after TUI mute/deafen/join actions so the UI responds immediately.
@@ -83,6 +83,12 @@ Public API:
 
 DMs and private rooms are created with enabled chat-room voice channels by
 default. Public chat rooms are enabled by staff through `/mod room-voice`.
+Daily match chats too: claiming a daily challenge creates an enabled
+`target_kind='chat_room'` channel (display name `{game}: {challenger} v
+{opponent}`) in the claim transaction, rendered as the usual strip above the
+board's embedded chat; the daily sweeper deletes the channel with the chat
+room 30 days after the match ends (see
+`late-ssh/src/app/lobby/daily/CONTEXT.md`).
 
 Snapshots are sorted by lowercase username, then `user_id`.
 
@@ -137,13 +143,14 @@ The pair WS still carries audio/clipboard events too; voice handlers must ignore
 
 ## 5. TUI Surface
 
-Voice is embedded into whatever surface owns the active voice channel. Chat rooms and game rooms can both render voice, and a future game does not need to expose a chat room just to expose voice.
+Voice is embedded into whatever surface owns the active voice channel. Chat rooms and game surfaces (house tables, daily match boards) both render voice through the same chat-room-targeted channels.
 
 Render:
 - `draw_voice_strip` is borderless and titleless. It renders only two rows: the participant/status roster and compact action hints. Do not add a `Voice` title, live-count header, or border row.
+- `render.rs` also draws a global right-aligned top chrome badge when the current user is actually joined to any voice channel. The badge is derived from `VoiceSnapshot::current_room`, prefers `#chat-room` or table display labels, and shows the current user's voice status. It is presence-only UI; do not route media or LiveKit control through render.
 - The strip appears whenever the active surface has an enabled voice channel, regardless of whether the current paired client can publish voice.
 - Chat-room voice is shown at the top of the message area, including the Home/dashboard-with-top-boxes chat path. The room rail does not append a speaker icon for voice-enabled rooms.
-- Game-room voice uses the same strip above embedded chat. The visual separator between the game board and voice/chat belongs to `late-ssh/src/app/rooms/ui.rs`, not the chat or voice renderer.
+- Game-surface voice uses the same strip above embedded chat. The visual separator between the game board and voice/chat belongs to the surface's renderer (`app/lobby/house/ui.rs`, `app/lobby/daily/board_ui.rs`), not the chat or voice renderer.
 - Participant status precedence is: `deafened`, else `muted`, else `speaking`, else `listening`.
 - The current user's name is amber/bold.
 
@@ -166,7 +173,7 @@ Current UX gaps worth addressing:
 
 Moderation revocation:
 - `/mod room-voice off` revokes every known/authorized participant for that voice channel and calls LiveKit `RemoveParticipant` for each identity.
-- Room kick/ban revokes the target user from that room's voice channel, including game-room voice attached through the game chat room.
+- Room kick/ban revokes the target user from that room's voice channel (all voice channels are chat-room-targeted, including game-surface ones).
 - Server kick/ban revokes the target user from whichever voice channel they are currently in or most recently ticketed for.
 - `/mod voice kick` is broader than room revocation: it is a runtime, server-wide voice block and is not persisted beyond restart.
 - LiveKit removal failures are logged after DB/audit state is committed; they should not roll back moderation state.

@@ -13,6 +13,9 @@ use super::theme;
 pub enum BannerKind {
     Success,
     Error,
+    /// Neutral news (a lost daily match, a draw): amber, not red — nothing
+    /// went wrong, the user just needs to know.
+    Info,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +42,14 @@ impl Banner {
         }
     }
 
+    pub fn info(message: &str) -> Self {
+        Self {
+            message: message.to_string(),
+            kind: BannerKind::Info,
+            created_at: Instant::now(),
+        }
+    }
+
     pub fn is_active(&self) -> bool {
         self.created_at.elapsed().as_secs() < 5
     }
@@ -48,35 +59,66 @@ impl Banner {
 pub enum Screen {
     Dashboard,
     Arcade,
-    Rooms,
+    Games,
     Lateania,
     Rebels,
+    Nethack,
+    Dopewars,
+    GreenDragon,
     Artboard,
     Pinstar,
+    WorldCup,
+    Clubhouse,
+    /// Full-screen daily-match board. Entered only from the Daily Games
+    /// modal, absent from the Tab cycle; Esc returns to the modal.
+    DailyMatch,
+    /// Full-screen house table (poker/blackjack/asterion/tron). Entered only
+    /// from the Lobby modal, absent from the Tab cycle; Esc returns to the
+    /// modal.
+    HouseTable,
 }
 
 impl Screen {
+    /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
+    /// through World Cup (`6`). The door games (Lateania, Rebels, Nethack,
+    /// Green Dragon) are reached through the Games hub, not the tab bar, so
+    /// they are absent from the cycle; if one is somehow current,
+    /// `next`/`prev` fall back to the hub that owns them.
     pub fn next(self) -> Self {
         match self {
+            Screen::Clubhouse => Screen::Dashboard,
             Screen::Dashboard => Screen::Arcade,
-            Screen::Arcade => Screen::Rooms,
-            Screen::Rooms => Screen::Artboard,
-            Screen::Artboard => Screen::Lateania,
-            Screen::Lateania => Screen::Rebels,
-            Screen::Rebels => Screen::Pinstar,
-            Screen::Pinstar => Screen::Dashboard,
+            Screen::Arcade => Screen::Games,
+            Screen::Games => Screen::Artboard,
+            Screen::Artboard => Screen::Pinstar,
+            Screen::Pinstar => Screen::WorldCup,
+            Screen::WorldCup => Screen::Clubhouse,
+            Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dopewars
+            | Screen::GreenDragon => Screen::Games,
+            Screen::DailyMatch => Screen::Dashboard,
+            Screen::HouseTable => Screen::Dashboard,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Pinstar,
+            Screen::Clubhouse => Screen::WorldCup,
+            Screen::Dashboard => Screen::Clubhouse,
             Screen::Arcade => Screen::Dashboard,
-            Screen::Rooms => Screen::Arcade,
-            Screen::Artboard => Screen::Rooms,
-            Screen::Lateania => Screen::Artboard,
-            Screen::Rebels => Screen::Lateania,
-            Screen::Pinstar => Screen::Rebels,
+            Screen::Games => Screen::Arcade,
+            Screen::Artboard => Screen::Games,
+            Screen::Pinstar => Screen::Artboard,
+            Screen::WorldCup => Screen::Pinstar,
+            Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dopewars
+            | Screen::GreenDragon => Screen::Games,
+            Screen::DailyMatch => Screen::Dashboard,
+            Screen::HouseTable => Screen::Dashboard,
         }
     }
 }
@@ -91,12 +133,19 @@ pub fn format_duration_mmss(duration: Duration) -> String {
 pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     let label = match current {
         Screen::Dashboard => "Dashboard",
+        Screen::Games => "Games",
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
+        Screen::Nethack => "NetHack",
+        Screen::Dopewars => "dopewars",
+        Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "Arcade",
-        Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
+        Screen::WorldCup => "World Cup",
+        Screen::Clubhouse => "Clubhouse",
+        Screen::DailyMatch => "Daily Match",
+        Screen::HouseTable => "House Table",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -115,6 +164,7 @@ pub fn draw_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
     let (icon, color) = match banner.kind {
         BannerKind::Success => (" ✓ ", theme::SUCCESS()),
         BannerKind::Error => (" ✗ ", theme::ERROR()),
+        BannerKind::Info => (" • ", theme::AMBER()),
     };
 
     let content = Paragraph::new(Line::from(vec![
@@ -140,6 +190,22 @@ pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
     } else if diff.num_days() < 7 {
         let days = diff.num_days();
         format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
+    } else {
+        dt.format("%m-%d").to_string()
+    }
+}
+
+/// Compact relative stamp for tight rows: `now`, `5m`, `3h`, `2d`, `06-12`.
+pub fn format_relative_time_short(dt: chrono::DateTime<chrono::Utc>) -> String {
+    let diff = chrono::Utc::now().signed_duration_since(dt);
+    if diff.num_seconds() < 60 {
+        "now".to_string()
+    } else if diff.num_minutes() < 60 {
+        format!("{}m", diff.num_minutes())
+    } else if diff.num_hours() < 24 {
+        format!("{}h", diff.num_hours())
+    } else if diff.num_days() < 7 {
+        format!("{}d", diff.num_days())
     } else {
         dt.format("%m-%d").to_string()
     }
@@ -174,25 +240,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn screen_next_cycles_all_screens() {
+    fn screen_next_cycles_top_level_screens() {
+        assert_eq!(Screen::Clubhouse.next(), Screen::Dashboard);
         assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
-        assert_eq!(Screen::Arcade.next(), Screen::Rooms);
-        assert_eq!(Screen::Rooms.next(), Screen::Artboard);
-        assert_eq!(Screen::Artboard.next(), Screen::Lateania);
-        assert_eq!(Screen::Lateania.next(), Screen::Rebels);
-        assert_eq!(Screen::Rebels.next(), Screen::Pinstar);
-        assert_eq!(Screen::Pinstar.next(), Screen::Dashboard);
+        assert_eq!(Screen::Arcade.next(), Screen::Games);
+        assert_eq!(Screen::Games.next(), Screen::Artboard);
+        assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
+        assert_eq!(Screen::Pinstar.next(), Screen::WorldCup);
+        assert_eq!(Screen::WorldCup.next(), Screen::Clubhouse);
     }
 
     #[test]
-    fn screen_prev_cycles_all_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::Pinstar);
+    fn screen_prev_cycles_top_level_screens() {
+        assert_eq!(Screen::Clubhouse.prev(), Screen::WorldCup);
+        assert_eq!(Screen::Dashboard.prev(), Screen::Clubhouse);
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
-        assert_eq!(Screen::Rooms.prev(), Screen::Arcade);
-        assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
-        assert_eq!(Screen::Lateania.prev(), Screen::Artboard);
-        assert_eq!(Screen::Rebels.prev(), Screen::Lateania);
-        assert_eq!(Screen::Pinstar.prev(), Screen::Rebels);
+        assert_eq!(Screen::Games.prev(), Screen::Arcade);
+        assert_eq!(Screen::Artboard.prev(), Screen::Games);
+        assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
+        assert_eq!(Screen::WorldCup.prev(), Screen::Pinstar);
+    }
+
+    #[test]
+    fn door_games_are_outside_the_tab_cycle_and_fall_back_to_the_hub() {
+        for door in [
+            Screen::Lateania,
+            Screen::Rebels,
+            Screen::Nethack,
+            Screen::Dopewars,
+            Screen::GreenDragon,
+        ] {
+            assert_eq!(door.next(), Screen::Games);
+            assert_eq!(door.prev(), Screen::Games);
+        }
+    }
+
+    #[test]
+    fn daily_match_board_is_outside_the_tab_cycle_and_falls_back_home() {
+        assert_eq!(Screen::DailyMatch.next(), Screen::Dashboard);
+        assert_eq!(Screen::DailyMatch.prev(), Screen::Dashboard);
     }
 
     #[test]

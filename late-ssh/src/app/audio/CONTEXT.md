@@ -3,8 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, procedural browser-pair visualizer fallback, and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-06-17
-- Previously: sidebar music stage reworked into a 3-source stage + dock accordion with first-pass radio attribution. Source arbitration simplified — no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Booth modal surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Both booth and staff `/audio` submit paths now validate through the YouTube Data API before insert, so queued rows carry server-side title/channel/`duration_ms`/`is_stream`. Browser/CLI player reports are diagnostics only; they never backfill duration or advance the shared queue.
+- Last updated: 2026-07-15 (Webview helper resiliency: the helper's pair WS reconnects on drops instead of exiting, the parent CLI respawns a dead helper from a 1s heartbeat watchdog instead of waiting for a `set_playback_source` replay, helper mute/volume are seeded from the parent at spawn via `LATE_WEBVIEW_INITIAL_MUTED`/`LATE_WEBVIEW_INITIAL_VOLUME`, and the server aligns connecting webview clients to the live CLI entry's runtime mute rather than `start_with_music_muted`. See §17.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -15,13 +14,13 @@
 Owned by this domain:
 - Always-on Icecast house radio playback (the `<audio>` and CLI symphonia path).
 - Global, DB-backed YouTube queue: submission, persistence, single-playing invariant, server-driven track switching (per-browser playback timeline), fallback debounce.
-- Community Booth History: max 100 unique previously played YouTube tracks, independent history votes, and requeue-from-history.
+- Community Booth History: max 200 unique previously played YouTube tracks, independent history votes, and requeue-from-history.
 - The singleton "YouTube fallback" stream that plays when the queue is empty.
 - Audio source arbitration between paired CLI and paired browser clients on the same SSH token (`set_playback_source` + browser Icecast gate).
 - Procedural browser-pair visualizer fallback used when browser playback is the audible surface.
 - Now-playing poller for the Icecast track title.
 - The `/audio` and `/audio fallback` SSH chat commands (staff-only).
-- Direct-client radio source for approved external stations, currently Nightride Chillsynth, Nightride, Datawave, and Spacesynth. This must not proxy/restream third-party audio through late.sh Icecast/Liquidsoap; paired CLI/browser clients connect directly to official station stream URLs.
+- Direct-client radio source for approved external stations, currently Nightride Chillsynth, Nightride, Datawave, Spacesynth, and Ambient (Nightride's `rektify.mp3`). This must not proxy/restream third-party audio through late.sh Icecast/Liquidsoap; paired CLI/browser clients connect directly to official station stream URLs.
 
 Out of scope here (lives elsewhere):
 - LiveKit voice rooms, CLI microphone/remote voice playout, TUI voice controls/status, and pair-WS voice messages — see `../voice/CONTEXT.md`.
@@ -104,7 +103,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `RECONCILE_INTERVAL = 60s` — background DB reconcile safety net. If memory drifts from the singleton `playing` row (e.g. rollout overlap), the service adopts the DB current, cancels/re-arms timers, and republishes state.
 - `STREAM_CAP = 1h` — hard cap on any single playing row's wall-clock lifetime.
 - `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(youtube_total) = max(ceil(0.3 * youtube_total), 2)`. **Denominator is active users whose persisted `users.settings.audio_source` is `youtube`**, not paired-client/browser presence. Floor of 2 means a lone active YouTube-pref user can't solo-skip; the 30% ceil kicks in above 6 active YouTube-pref users.
-- `HISTORY_LIMIT = 100` — community Booth History keeps at most 100 unique YouTube tracks.
+- `HISTORY_LIMIT = 200` — community Booth History keeps at most 200 unique YouTube tracks.
 
 ### Public API
 - `new(db, youtube_api_key)` — `main.rs:123`.
@@ -144,7 +143,7 @@ All transitions go through `svc.rs`:
 - A track is recorded when `advance_to_next_with_guard` successfully promotes a queued row to `playing`. This is the moment it "lands" in history.
 - On first history insert, live queue votes for that queue row are copied into `media_history_votes`, preserving the up/down signal that got the track into Now Playing.
 - If the same YouTube video plays again, history updates `last_played_at`, `play_count`, and metadata, but it does not overwrite existing history votes. The historical score remains a durable community rating.
-- History pruning sorts by `history vote score DESC`, then `last_played_at DESC`, then `created DESC`; rows after rank 100 are deleted. A weak new track can insert and immediately prune itself if the full history already has 100 better/newer rows.
+- History pruning sorts by `history vote score DESC`, then `last_played_at DESC`, then `created DESC`; rows after rank 200 are deleted. A weak new track can insert and immediately prune itself if the full history already has 200 better/newer rows.
 - Requeueing from history uses stored validated metadata to create a new `media_queue_items` row. It does not copy history votes into live queue votes; the fresh queue item starts with score 0 and competes normally.
 - Queue deletion and History deletion share one moderation-policy permission: `Caps::DELETE_AUDIO_TRACK`. Queue deletion passes `is_owner=true` for the submitter, so users can still delete their own queued rows; History deletion always passes `false`.
 - The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode uses `+/-/0` for history votes, Enter to requeue, and permission-gated `d` to delete a history row.
@@ -256,7 +255,8 @@ Eligibility table:
 
 | Saved `audio_source` | Can skip-vote? | Counts toward threshold? |
 |----------------------|----------------|--------------------------|
-| Icecast/default      | no             | no                       |
+| Radio (default)      | no             | no                       |
+| Icecast              | no             | no                       |
 | Youtube              | yes            | yes                      |
 
 A user always contributes at most one vote (`HashSet<Uuid>` on `user_id`) and counts once in the denominator while active. Staff `/audio skip` (`force_skip`) bypasses the threshold entirely.
@@ -304,9 +304,9 @@ Goal: the CLI tolerates everything new the audio domain added, plays direct stre
 
 - **Unknown audio events ignored** (`late-cli/src/ws.rs`). Inbound text is parsed only as `PairControlMessage`. `load_video`, `source_changed`, `queue_update` fail to deserialize, the CLI logs `warn!("ignoring unsupported pair websocket event")`, and the select loop continues. **The CLI does not disconnect on audio events.** Note: each playing track now also produces a 10s `load_video` heartbeat — the CLI log noise budget should account for that.
 - **Source gate, not forced mute.** `set_playback_source` updates `source_is_icecast`; `late-cli/src/audio/output.rs` emits silence when it is false. The user-controlled `muted` atomic remains only the local mute keybind / paired mute control. `radio` sets the native-output gate true and uses the server-sent `stream_url` / `station`; Chillsynth is only the legacy fallback when an old server omits `stream_url`.
-- **Embedded YouTube webview lifecycle.** The same `set_playback_source` message drives `late-cli/src/ws.rs::WebviewPlaybackController`: `youtube` spawns one `late webview-pair` child only when `embedded_webview_enabled=true` and writes the session token over the child's stdin pipe; `icecast`, `radio`, or `embedded_webview_enabled=false` kills the helper. Do **not** spawn the helper from global `source_changed`.
+- **Embedded YouTube webview lifecycle.** The same `set_playback_source` message drives `late-cli/src/ws.rs::WebviewPlaybackController`: `youtube` spawns one helper child (the `late-webview` binary on Linux, `late webview-pair` on Windows/macOS) only when `embedded_webview_enabled=true` and writes the session token over the child's stdin pipe; `icecast`, `radio`, or `embedded_webview_enabled=false` kills the helper. Do **not** spawn the helper from global `source_changed`.
 - **AT-SPI bridge isolation.** The parent CLI spawns the helper with `NO_AT_BRIDGE=1`. This scopes the workaround to the helper process and avoids `libatk-bridge-2.0.so` SIGSEGV crashes caused by stale `at-spi-bus-launcher`/dbus state on some Linux desktops.
-- **Embedded webview initial seek only.** On helper open, `late-cli/src/webview/pair.rs` uses the first `queue_update.current.started_at_ms` snapshot to apply a one-shot `startSeconds` to the first matching `load_video`. If a `load_video` arrives before the initial snapshot, the relay buffers it and flushes it when the snapshot decision is known. Once that first load is dispatched, server heartbeats and later queue track switches keep the normal no-offset behavior.
+- **Embedded webview initial seek only.** On helper open, `late-webview/src/pair.rs` uses the first `queue_update.current.started_at_ms` snapshot to apply a one-shot `startSeconds` to the first matching `load_video`. If a `load_video` arrives before the initial snapshot, the relay buffers it and flushes it when the snapshot decision is known. Once that first load is dispatched, server heartbeats and later queue track switches keep the normal no-offset behavior.
 - **YouTube capability.** Native CLI `client_state.capabilities` includes `"youtube"` on desktop platforms. The server still sends `set_playback_source` to every paired entry; older/plain CLIs simply gate Icecast, while YouTube-capable CLIs also launch the helper.
 - **CLI identifies itself.** First native `client_state` emitted by `late-cli/src/ws.rs` carries `"client_kind": "cli"`. The helper sends `"client_kind": "browser"` plus `"ssh_mode": "webview"` so existing browser paths still work, while the server can distinguish it from a real browser connect page.
 
@@ -316,8 +316,8 @@ Goal: the CLI tolerates everything new the audio domain added, plays direct stre
 
 File: `late-web/src/pages/connect/page.html`. The audio source is decided in the browser; the YouTube API/player is lazy-loaded only when the browser actually enters YouTube mode.
 
-- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube` | `radio`, default `icecast`). TUI `v+x` cycles `icecast → youtube → radio → icecast` via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App.paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source, web_icecast_enabled, embedded_webview_enabled }` to paired clients. On pair-WS connect, `api.rs` sends the persisted source before the audio catch-up burst. On browser pair-up and disconnect the SSH session replays the value; on CLI presence changes `api.rs` also replays it for the token so browsers know whether web direct-stream playback is allowed and CLIs know whether the embedded webview fallback is allowed. The browser is a follower: `applyUserPlaybackSource(source, web_icecast_enabled)` stores `userOverrideMode` and applies. While the user is pinned to icecast or radio, `loadYoutubeVideo` early-returns so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately). The native CLI follows the same source message: it gates direct stream output locally, retargets the decoder for `radio`, and only spawns the embedded webview helper for `youtube` when no real browser is paired.
-- **Server-authoritative stream URLs.** `set_playback_source` carries `stream_url` and `station` resolved by `stations::resolve_stream_selection` (icecast streams point at the late-web `/stream/{mount}` proxy, radio stations directly at nightride.fm). `applyUserPlaybackSource` re-points the `<audio>` element when the URL changes even if the source stayed the same — that is how v+1..4 stream/station switches reach the browser. Do not regress this to "store the URL for the next reconnect".
+- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube` | `radio`, default `radio` — new users land on Nightride FM). TUI `v+x` cycles `radio → youtube → icecast → radio` (dock order) via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App.paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source, web_icecast_enabled, embedded_webview_enabled }` to paired clients. On pair-WS connect, `api.rs` sends the persisted source before the audio catch-up burst. On browser pair-up and disconnect the SSH session replays the value; on CLI presence changes `api.rs` also replays it for the token so browsers know whether web direct-stream playback is allowed and CLIs know whether the embedded webview fallback is allowed. The browser is a follower: `applyUserPlaybackSource(source, web_icecast_enabled)` stores `userOverrideMode` and applies. While the user is pinned to icecast or radio, `loadYoutubeVideo` early-returns so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately). The native CLI follows the same source message: it gates direct stream output locally, retargets the decoder for `radio`, and only spawns the embedded webview helper for `youtube` when no real browser is paired.
+- **Server-authoritative stream URLs.** `set_playback_source` carries `stream_url` and `station` resolved by `stations::resolve_stream_selection` (icecast streams point at the late-web `/stream/{mount}` proxy, radio stations directly at nightride.fm). `applyUserPlaybackSource` re-points the `<audio>` element when the URL changes even if the source stayed the same — that is how v+1..5 stream/station switches reach the browser. Do not regress this to "store the URL for the next reconnect".
 - **Source banner + now-playing + attribution.** The page shows a `source` row (`icecast · chill`, `radio · datawave`, `youtube · community queue`), a `playing` row, and, radio only, a `via nightride.fm` attribution link (the visible credit Nightride asked for). All track data arrives over the pair WS — no HTTP polling: youtube from `queue_update.current` (fallback copy is "fallback stream", never "queue empty"), icecast from `now_playing_update.mounts` keyed by the selected stream (fallback `no signal`), radio from `radio_meta_update.stations` keyed by the selected station (fallback `live`). The HTTP endpoints (`/api/now-playing`, `/api/radio-meta`) remain for non-paired consumers (landing footer, dashboard, late-web server side).
 - **IFrame API load.** The page does not include the YouTube iframe API up front. `ensureYoutubePlayer()` calls `loadYoutubeApi()` on demand, which appends `https://www.youtube.com/iframe_api`; `window.lateYoutubeApiReady` / `onYouTubeIframeAPIReady` then create the player only if `audioMode === "youtube"`.
 - **`source_changed` / `set_playback_source` swap** (`applySourceMode`). Into `youtube`: stop `<audio>`, ensure player exists, kick playback of pending item. Into direct stream mode (`icecast` or `radio`): `ytPlayer.pauseVideo()`; restart the web `<audio>` only when `webIcecastEnabled` is true. With a CLI paired, `webIcecastEnabled=false`, so the browser goes quiet and the CLI is the only direct-stream surface. The `modeChanged` guard prevents repeated `source_changed: youtube` broadcasts during queue transitions from resetting the iframe.
@@ -364,36 +364,36 @@ File: `late-web/src/pages/connect/page.html`. The audio source is decided in the
 
 ## 12. Sidebar music-stage widget (`common/sidebar.rs`)
 
-Renders the audio domain into the right rail as a **fixed dock + detail layout**: the stage is always exactly `MUSIC_STAGE_HEIGHT = 15` rows for every active source. Rows 2-7 are a constant three-source dock (title bar + now-playing line per source, fixed order youtube → radio → icecast); row 8 is a labeled rule naming the active source; rows 9-13 are the active source's controls padded/truncated to exactly `MUSIC_DETAIL_HEIGHT = 5` rows. `v+x` cycles sources in dock order, so the highlight walks down the dock as the user cycles. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
+Renders the audio domain into the right rail as a **fixed dock + detail layout**: the stage is always exactly `MUSIC_STAGE_HEIGHT = 16` rows for every active source. Rows 2-7 are a constant three-source dock (title bar + now-playing line per source, fixed order radio → youtube → icecast; radio leads because it is the default source); row 8 is a labeled rule naming the active source; rows 9-14 are the active source's controls padded/truncated to exactly `MUSIC_DETAIL_HEIGHT = 6` rows. `v+x` cycles sources in dock order, so the highlight walks down the dock as the user cycles. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
 
 **Two product rules (user requirements):**
 1. **Every source always shows its now-playing line, even when inactive.** The dock exists so users can see what's on the other sources and judge whether switching is worth it. Never collapse a source to a title-only row. Only controls (progress, skip meter, queue, selectors) belong exclusively to the active detail area.
 2. **Chrome must not move between states.** Title bars, the rule, the detail area, and the footer sit on the same rows for all three sources and all data states. No variable-height accordion; see `feedback_stable_chrome.md` in auto-memory.
 
-### Layout (rows 0-14)
+### Layout (rows 0-15)
 
 | Row(s) | Content |
 |--------|---------|
 | 0      | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%`. Renders `muted` (italic faint) when muted, `—` when no client is paired. |
 | 1      | Volume keybind hints: `m mute  -= vol`. |
-| 2-3    | YouTube dock entry: title bar (with source-count tag) + now-playing line. |
-| 4-5    | Radio dock entry: title bar + now-playing line for the USER'S selected station. |
+| 2-3    | Radio dock entry: title bar (with source-count tag) + now-playing line for the USER'S selected station. |
+| 4-5    | YouTube dock entry: title bar + now-playing line. |
 | 6-7    | Icecast dock entry: title bar + now-playing line for the USER'S selected stream. |
 | 8      | Labeled rule: `── <active source> ───…` (dim dashes, amber-dim italic label). |
-| 9-13   | Detail area: the active source's rows, truncated/padded to exactly 5. |
-| 14     | Footer keybind hints: `v+v queue  v+x source`. |
+| 9-14   | Detail area: the active source's rows, truncated/padded to exactly 6. |
+| 15     | Footer keybind hints: `v+v queue  v+x source`. |
 
 Dock now-playing rows (`dock_track_line`): the active source's track renders `TEXT_BRIGHT` bold, inactive sources `TEXT_DIM`; a `None` track renders `no signal` in `TEXT_FAINT`. Track text per source:
 - **youtube** — `youtube_track_text(queue)`: `Channel - Title` for the current item (falls back to `by <submitter> - Title`, then bare title); `fallback stream` when nothing is submitted (the fallback is the steady state, never "queue empty").
 - **icecast** — `icecast_track_text(now)`: `Artist - Title` for the selected stream's entry in the per-mount now-playing map (§11); `no signal` until that mount has an entry.
 - **radio** — live `Artist - Title` for the selected station from the Nightride SSE watch (`radio_now_playing`); falls back to the station display name (`chillsynth` etc.) while metadata is absent.
 
-Detail areas (only the active source's builder runs; all are clamped to 5 rows by the caller):
-- **YouTube** (`youtube_detail_lines`): progress (`progress_line` when duration is known and not a stream, `elapsed_line` otherwise), skip meter or blank, `next ⌄` header, then up to `MUSIC_QUEUE_HEIGHT = 2` queue rows or `· fallback next`. With nothing submitted: `YouTube · 24/7` + `queue with v+v` hint.
+Detail areas (only the active source's builder runs; all are clamped to 6 rows by the caller):
+- **YouTube** (`youtube_detail_lines`): progress (`progress_line` when duration is known and not a stream, `elapsed_line` otherwise), skip meter or blank, `next ⌄` header, then up to `MUSIC_QUEUE_HEIGHT = 3` queue rows or `· fallback next`. With nothing submitted: `YouTube · 24/7` + `queue with v+v` hint.
 - **Icecast** (`icecast_detail_lines`): progress/elapsed for the selected stream (blank row when no signal), then two stream selector rows — `chill v1`, `classical v2`.
-- **Radio** (`radio_detail_lines`, exactly 5): four station selector rows — `chillsynth v1`, `nightride v2`, `datawave v3`, `spacesynth v4` — then the `nightride.fm · live` attribution row (`RADIO_ATTRIBUTION`, the visible credit Nightride asked for).
+- **Radio** (`radio_detail_lines`, exactly 6): five station selector rows — `chillsynth v1`, `nightride v2`, `datawave v3`, `spacesynth v4`, `ambient v5` — then the `nightride.fm · live` attribution row (`RADIO_ATTRIBUTION`, the visible credit Nightride asked for).
 
-Selector rows (`selector_row_line`) inherit the deleted vote rows' visual language: `●`/`○` state glyph, lowercase display name, right-aligned `v1`..`v4` key hint in `AMBER_DIM` bold. Selected: glyph `AMBER_GLOW`, name `TEXT`; unselected: glyph `BORDER_DIM`, name `TEXT_DIM`. Display names come from `stations::icecast_stream_display_name` / `stations::radio_station_display_name`.
+Selector rows (`selector_row_line`) inherit the deleted vote rows' visual language: `●`/`○` state glyph, lowercase display name, right-aligned `v1`..`v5` key hint in `AMBER_DIM` bold. Selected: glyph `AMBER_GLOW`, name `TEXT`; unselected: glyph `BORDER_DIM`, name `TEXT_DIM`. Display names come from `stations::icecast_stream_display_name` / `stations::radio_station_display_name`.
 
 ### Active-source rule
 
@@ -449,7 +449,7 @@ Test coverage (inline `#[cfg(test)]`): `music_stage_chrome_rows_never_move` (tit
 
 ### Nightride direct-radio source
 
-Nightride FM approved inclusion as an optional direct-client source, with the main condition that late.sh show attribution for the artists playing when possible. The `radio` source is selected by `v+x`; within it, `v+1`..`v+4` pick between Chillsynth, Nightride, Datawave, and Spacesynth (persisted as `users.settings.radio_station`). Users are never defaulted onto Nightride — icecast/chill stays the default source.
+Nightride FM approved inclusion as an optional direct-client source, with the main condition that late.sh show attribution for the artists playing when possible. The `radio` source is selected by `v+x`; within it, `v+1`..`v+5` pick between Chillsynth, Nightride, Datawave, Spacesynth, and Ambient (persisted as `users.settings.radio_station`; Ambient persists as `rektify`, matching its `/meta` station key even though its label is `ambient`). Users are never defaulted onto Nightride — icecast/chill stays the default source.
 
 Implementation constraints:
 - Do not route Nightride audio through Icecast or Liquidsoap. `radio_meta` fetches METADATA only; never proxy/restream Nightride audio.
@@ -460,7 +460,7 @@ Implementation constraints:
 
 Metadata: **implemented** as `radio_meta/svc.rs::RadioMetaService` — a background audio-domain service (never the render loop):
 - One `tokio::spawn` SSE loop per process, started in `main.rs` next to the now-playing poller, shut down via the shared `CancellationToken`.
-- Connects to `https://nightride.fm/meta` with `accept: text/event-stream`. Each event is one `data:` line containing a JSON array of station records (`station`, `artist`, `title`, plus fields we ignore: `album`, `comment`, sometimes `dj`). Stations observed include `chillsynth`, `nightride`, `datawave`, `spacesynth`, `darksynth`, `horrorsynth`, and `ebsm`.
+- Connects to `https://nightride.fm/meta` with `accept: text/event-stream`. Each event is one `data:` line containing a JSON array of station records (`station`, `artist`, `title`, plus fields we ignore: `album`, `comment`, sometimes `dj`). Stations observed include `chillsynth`, `nightride`, `datawave`, `spacesynth`, `rektify` (surfaced as the `ambient` station), `darksynth`, `horrorsynth`, and `ebsm`.
 - `parse_meta_line` skips records with an empty station/artist/title; valid records merge into the `watch<HashMap<String, ArtistTitle>>` via `send_modify` (merge, not replace, so a partial event doesn't blank other stations).
 - Reconnect with backoff: 1s doubling to 60s, reset after a received event. On disconnect the map is cleared (`send_replace(HashMap::new())`) so the UI falls back to station display names instead of showing stale tracks.
 - Consumers: `app/render.rs` formats `Artist - Title` for the user's selected station and threads it to the sidebar as `radio_now_playing` (§12); the pair WS broadcasts the map as `radio_meta_update` via `AudioService::start_meta_forward_task` (§5, consumed by the connect page §9); and `GET /api/radio-meta` (`api.rs`) exposes it over HTTP for non-paired consumers. A missing/absent entry falls back to the station display name.
@@ -491,7 +491,7 @@ Stream URL notes:
 - `media_history_items` stores community Booth History rows, unique by `(media_kind, external_id)`.
 - Columns mirror validated queue metadata (`title`, `channel`, `duration_ms`, `is_stream`) plus `first_played_at`, `last_played_at`, `play_count`, and nullable `last_submitter_id`.
 - `media_history_votes` mirrors live queue votes structurally: one `-1`/`+1` vote per `(user_id, item_id)`.
-- History is pruned to `HISTORY_LIMIT = 100` rows by rank: aggregate score descending, `last_played_at` descending, `created` descending.
+- History is pruned to `HISTORY_LIMIT = 200` rows by rank: aggregate score descending, `last_played_at` descending, `created` descending.
 
 Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - `MediaQueueItem::{insert_youtube, find_by_id, list_snapshot, queued_before_count, recent_submission_count, first_queued, current_playing, mark_playing, mark_played, mark_failed, mark_skipped, sweep_orphan_playing}`. Status/kind constants: `STATUS_QUEUED`, `STATUS_PLAYING`, `STATUS_PLAYED`, `STATUS_SKIPPED`, `STATUS_FAILED`, `KIND_YOUTUBE`.
@@ -534,7 +534,7 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 
 - **Public `POST /api/queue/submit` HTTP route.** Booth submit goes through the in-process service. Revive when there's a non-SSH submitter (web form, third-party). YouTube Data API validation path is already in code (un-trusted route in `AudioService::submit_url_task`).
 - **`GET /api/queue` HTTP route.** Snapshot exists in-process (`QueueSnapshot`); no external consumer today. See §14 first bullet.
-- **Expanded queue management outside Booth.** The sidebar music stage already shows current/fallback, skip progress, and up to two next YouTube items; richer queue actions remain Booth-only.
+- **Expanded queue management outside Booth.** The sidebar music stage already shows current/fallback, skip progress, and up to three next YouTube items; richer queue actions remain Booth-only.
 - **Heartbeat cadence tuning.** 10s `LoadVideo` re-broadcast was carried over from the old `PLAYBACK_SYNC_INTERVAL`. Could be slower (30s) once we have confidence stuck browsers don't accumulate.
 - **Multi-tab dedupe.** Two browser tabs on the same token both play. Needs a "primary tab" election or a single-tab-per-token enforcement.
 - **Region-lock partial failure UX.** Data API validation catches public/embeddable metadata but not every playback-region failure. Client errors are warn-only today because one surface can fail while another succeeds.
@@ -554,10 +554,13 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 - Native `late` remains the always-on SSH/audio control process.
 - Native `late` opens the normal pair WS as `client_kind = "cli"`.
 - Native `late` advertises `capabilities: ["clipboard_image", "youtube"]` on desktop platforms.
-- `set_playback_source: youtube` spawns a helper child (`late webview-pair`, token on stdin) only when `embedded_webview_enabled=true`.
+- `set_playback_source: youtube` spawns a helper child (token on stdin) only when `embedded_webview_enabled=true`. On Linux the helper is the standalone `late-webview` binary (resolved via `LATE_WEBVIEW_BIN`, then a sibling of the `late` executable, then `$PATH`); on Windows/macOS it is `late webview-pair`, the same binary re-executed with the webview compiled in.
+- The webview code lives in the `late-webview` crate. On Linux `late` must NOT link WebKitGTK/GTK — the whole point of the split is that a host without the webview libraries can still run the CLI. Missing helper binary or missing WebKitGTK/GStreamer libraries surface as helper start failures and land in the crash-loop guard below; the CLI session, radio, and icecast keep working.
 - A real browser connect page paired on the same token sets `embedded_webview_enabled=false`, so browser YouTube is the escape hatch when the embedded webview stack fails on a user's machine.
 - `set_playback_source: icecast` kills the helper and resumes native Icecast.
 - The helper opens its own pair WS and reports `client_kind = "browser", ssh_mode = "webview"` so existing browser paths work while policy can distinguish it from a real browser tab.
+- The helper's pair WS reconnects on drops (2s delay, give up after 10 consecutive failures, counter reset once a connection has lived 60s) instead of exiting the process. Helper exits therefore mean a real crash or a persistent server outage, not a routine redeploy/network blip, and the window position plus mute/volume survive reconnects.
+- The parent also runs a 1s heartbeat watchdog (`WebviewPlaybackController::maintain_helper`): while the source is YouTube it reaps and respawns a dead helper, honoring the crash-loop backoff below. Do not rely on `set_playback_source` replays for respawn — the server can miss the helper's disconnect entirely on a half-open TCP drop and then never replays.
 
 This lazy lifecycle is intentional. A normal CLI run does not open a webview. A webview window exists only while the user's persisted playback source is YouTube and no real browser is paired, avoiding tiling-window-manager noise for Icecast users and keeping the manual browser fallback available.
 
@@ -569,15 +572,17 @@ This lazy lifecycle is intentional. A normal CLI run does not open a webview. A 
 
 ### Webview backend
 
-`late-cli` uses `wry` + `tao`:
+The `late-webview` crate uses `wry` + `tao` (a library embedded into `late` on Windows/macOS, a standalone binary on Linux):
 
 - Linux: WebKitGTK 4.1 dev/runtime packages plus GStreamer playback plugins. On Arch/EndeavourOS, `gst-plugins-good` is required for `autoaudiosink`; without it WebKit logs `GStreamer element autoaudiosink not found` and the YouTube iframe can remain black/unstarted even though pair/load events succeeded. `gst-libav` is also recommended for codec coverage.
 - macOS: WKWebView.
 - Windows: WebView2.
 
-The helper serves `late-cli/src/webview/page.html` from a loopback-only ephemeral HTTP listener and loads it as `http://localhost:<port>/` in the webview. Do not switch this back to `WebViewBuilder::with_html`: Wry's HTML string path gives the page a null origin, and YouTube can reject the iframe with player error 153. Do not expose the page URL as `http://127.0.0.1:<port>/` either: a real incident with `r6L-GUOAhGo` showed YouTube IFrame error 150 / "Video unavailable / Watch on YouTube" from the CLI webview while the same controlled helper worked after changing the page URL to `localhost`. The server also sends `Referrer-Policy: strict-origin-when-cross-origin`, the page declares the same policy in a `<meta name="referrer">`, and the page passes `window.location.origin` into the IFrame Player `origin` parameter. The page posts `player_state` back through wry IPC, and Rust relays those events to `/api/ws/pair` while pushing `load_video` / `source_changed` into JS via `evaluate_script`. The helper window is 200x200, gives the iframe the full viewport, disables visible YouTube controls, and does not draw any app overlay on top of the player. The helper suppresses transient `unstarted`/`cued` reports and ignores `ended` until the current item has first reached `playing`, because the IFrame can emit startup/teardown states during rapid loads. Even a valid `ended` report does not advance the queue; the server timer does.
+The helper serves `late-webview/src/page.html` from a loopback-only ephemeral HTTP listener and loads it as `http://localhost:<port>/` in the webview. Do not switch this back to `WebViewBuilder::with_html`: Wry's HTML string path gives the page a null origin, and YouTube can reject the iframe with player error 153. Do not expose the page URL as `http://127.0.0.1:<port>/` either: a real incident with `r6L-GUOAhGo` showed YouTube IFrame error 150 / "Video unavailable / Watch on YouTube" from the CLI webview while the same controlled helper worked after changing the page URL to `localhost`. The server also sends `Referrer-Policy: strict-origin-when-cross-origin`, the page declares the same policy in a `<meta name="referrer">`, and the page passes `window.location.origin` into the IFrame Player `origin` parameter. The page posts `player_state` back through wry IPC, and Rust relays those events to `/api/ws/pair` while pushing `load_video` / `source_changed` into JS via `evaluate_script`. The helper window is 200x200, gives the iframe the full viewport, disables visible YouTube controls, and does not draw any app overlay on top of the player. The helper suppresses transient `unstarted`/`cued` reports and ignores `ended` until the current item has first reached `playing`, because the IFrame can emit startup/teardown states during rapid loads. Even a valid `ended` report does not advance the queue; the server timer does.
 
-The helper owns its own mute/volume state, starting at the same 30% default as native CLI Icecast. It registers as a browser with `ssh_mode = "webview"`, so pair-WS `toggle_mute`, `volume_up`, and `volume_down` controls must be applied inside `late-cli/src/webview/pair.rs` and forwarded into `page.html`; changing only the native CLI Icecast atom is not enough because YouTube audio is emitted by WebKit/GStreamer.
+The helper owns its own mute/volume state, starting at the same 30% default as native CLI Icecast. It registers as a browser with `ssh_mode = "webview"`, so pair-WS `toggle_mute`, `volume_up`, and `volume_down` controls must be applied inside `late-webview/src/pair.rs` and forwarded into `page.html`; changing only the native CLI Icecast atom is not enough because YouTube audio is emitted by WebKit/GStreamer.
+
+Helper mute is session-sticky across respawns and reconnects. At spawn the parent CLI passes its current mute/volume (its atomics track the same broadcast controls) via `LATE_WEBVIEW_INITIAL_MUTED` / `LATE_WEBVIEW_INITIAL_VOLUME`; the helper seeds its audio settings from them and pushes them into the page on the page's `ready` IPC event, before the first `load_video` plays. Server-side, `api.rs` aligns a connecting `ssh_mode = "webview"` client's mute to the live CLI entry's muted state (`PairedClientRegistry::cli_muted`), falling back to `start_with_music_muted` only when no CLI entry exists; aligning the webview to the boot preference would unmute a runtime-muted session on every helper respawn or reconnect.
 
 ### Runtime support / troubleshooting
 
@@ -596,7 +601,7 @@ This feature is a real browser media stack inside a tiny helper process. Pair-WS
   plus a bind like `bind = SUPER, Y, togglespecialworkspace, late`.
 - **Linux X11** should be less fragile than Wayland because Wry's raw-handle path supports X11, but we still use the GTK builder on Linux so one code path covers both. WebKitGTK/GStreamer packages remain the main risk.
 - **Ubuntu/Debian/Fedora** are expected to work once package names and WebKitGTK versions line up. Older distros may not ship the WebKitGTK 4.1 stack this branch expects.
-- **NixOS** should use the flake package, not a random Linux binary. Required runtime/build inputs are `webkitgtk_4_1`, `pkg-config`, `glib-networking`, and GStreamer packages (`gstreamer.out`, `gst-plugins-base/good/bad/ugly`, `gst-libav`). The package builds `gst-plugins-bad` with `-Dlv2=disabled`, wraps `late` with a fixed `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_PLUGIN_SCANNER`, `GIO_EXTRA_MODULES`, and `LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS`, and the Linux helper adds those GStreamer paths to WebKitGTK's web-process sandbox before creating the webview. If this fails, the normal browser connect page is the supported fallback and suppresses the embedded helper automatically.
+- **NixOS** should use the flake package, not a random Linux binary. Required runtime/build inputs are `webkitgtk_4_1`, `pkg-config`, `glib-networking`, and GStreamer packages (`gstreamer.out`, `gst-plugins-base/good/bad/ugly`, `gst-libav`). The package builds `gst-plugins-bad` with `-Dlv2=disabled`, wraps `late` and `late-webview` with a fixed `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_PLUGIN_SCANNER`, `GIO_EXTRA_MODULES`, and `LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS`, and the Linux helper adds those GStreamer paths to WebKitGTK's web-process sandbox before creating the webview. If this fails, the normal browser connect page is the supported fallback and suppresses the embedded helper automatically.
 - **macOS** uses WKWebView and does not need GStreamer. Main risks are autoplay policy and ordinary macOS audio routing.
 - **Windows** uses WebView2. Modern Windows usually has the runtime; the Windows volume mixer may expose the helper as its own app stream.
 - **WSL/headless/container** are not supported unless there is a real desktop/webview runtime and working audio bridge.
@@ -608,7 +613,7 @@ Failure signatures:
 - **YouTube error 150 with "Video unavailable / Watch on YouTube" in CLI webview:** first verify the helper page URL is `http://localhost:<port>/`, not `127.0.0.1`, and that the response/meta referrer policy is `strict-origin-when-cross-origin` while `playerVars.origin = window.location.origin`. This fixed `r6L-GUOAhGo` on 2026-05-20. Some 150/101 failures are still true YouTube embed-policy rejections and will only work in the normal browser/YouTube surface.
 - **YouTube error 153:** the IFrame Player rejected embed identity. The page must load from loopback HTTP as `localhost`, pass `window.location.origin`, and keep the explicit referrer policy; do not use `with_html`.
 - **Black/unstarted player:** often missing GStreamer plugins. `GStreamer element autoaudiosink not found` means `gst-plugins-good` is absent.
-- **Video moves but no sound:** verify helper mute/volume handling first (`m`, `+`, `-` should hit `late-cli/src/webview/pair.rs`, then `page.html`). If needed, click once inside the webview to satisfy an autoplay gesture. Also check the desktop mixer for a WebKit/late.sh stream.
+- **Video moves but no sound:** verify helper mute/volume handling first (`m`, `+`, `-` should hit `late-webview/src/pair.rs`, then `page.html`). If needed, click once inside the webview to satisfy an autoplay gesture. Also check the desktop mixer for a WebKit/late.sh stream.
 - **First run plays through laptop speakers:** PipeWire/WirePlumber may treat the helper as a new app stream. Moving it once to headphones in the mixer usually teaches the session manager for later launches.
 
 ### Window UX

@@ -21,6 +21,7 @@ jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: checkout
         uses: actions/checkout@v5
@@ -35,6 +36,7 @@ jobs:
     name: clippy + test
     needs: [fmt]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:18-alpine

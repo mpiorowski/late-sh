@@ -7,7 +7,7 @@ use crossterm::{
 use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame};
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     io::{self, Write},
     sync::{Arc, Mutex},
     time::Instant,
@@ -19,16 +19,15 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::profile::Profile;
 
 use crate::{
-    app::activity::{
-        channel::ACTIVITY_HISTORY_MAX_EVENTS, event::ActivityEvent, filter::ActivityFilter,
-    },
+    app::activity::event::ActivityEvent,
     app::audio::{client_state::ClientAudioState, viz::Visualizer},
     app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
-        TerminalImageProtocol, TerminalImageRenderState, da1_probe, iterm2_capabilities_probe,
-        kitty_cleanup_commands, protocol_from_device_attributes, protocol_from_env_hint,
-        protocol_from_term, protocol_from_terminal_features, protocol_from_xtversion,
-        term_disables_terminal_images, terminal_image_cleanup_commands, terminal_string_terminator,
+        TerminalImageProtocol, TerminalImageRenderState, da1_probe, identity_is_kitty,
+        iterm2_capabilities_probe, kitty_cleanup_commands, protocol_from_device_attributes,
+        protocol_from_env_hint, protocol_from_term, protocol_from_terminal_features,
+        protocol_from_xtversion, term_disables_terminal_images, terminal_image_cleanup_commands,
+        terminal_string_terminator,
     },
     app::{
         chat,
@@ -77,75 +76,39 @@ fn voice_toggle_intent(
 
 pub(crate) const GAME_SELECTION_2048: usize = 0;
 pub(crate) const GAME_SELECTION_TETRIS: usize = 1;
-pub(crate) const GAME_SELECTION_SUDOKU: usize = 2;
-pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
-pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
-pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
-pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
-pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 7;
-pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 8;
-pub(crate) const GAME_SELECTION_NES_DABG: usize = 9;
-pub(crate) const GAME_SELECTION_NES_FALLING: usize = 10;
-pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 11;
-pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 12;
-pub(crate) const GAME_SELECTION_NES_RHDE: usize = 13;
-pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 14;
-pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 15;
-pub(crate) const GAME_SELECTION_NES_2048: usize = 16;
+pub(crate) const GAME_SELECTION_LE_WORD: usize = 2;
+pub(crate) const GAME_SELECTION_SUDOKU: usize = 3;
+pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 4;
+pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 5;
+pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 6;
+pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
+pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
+pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 9;
+pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 10;
+pub(crate) const GAME_SELECTION_NES_DABG: usize = 11;
+pub(crate) const GAME_SELECTION_NES_FALLING: usize = 12;
+pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 13;
+pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 14;
+pub(crate) const GAME_SELECTION_NES_RHDE: usize = 15;
+pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 16;
+pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 17;
+pub(crate) const GAME_SELECTION_NES_2048: usize = 18;
+pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 19;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
 
+/// Bounds for the aquarium simulation. The tray renders inside the chat
+/// column, so mirror the default Home layout: frame borders (2) plus the
+/// room rail and right sidebar (24 each).
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
-    let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
-    crate::app::hub::aquarium::ui::bottom_tray_area(app_inner)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DashboardGameToggleTarget {
-    Arcade,
-    Room,
-}
-
-fn seed_activity_from_history(
-    mut activity: VecDeque<ActivityEvent>,
-    activity_feed_rx: Option<&mut broadcast::Receiver<ActivityEvent>>,
-) -> VecDeque<ActivityEvent> {
-    let Some(rx) = activity_feed_rx else {
-        return activity;
-    };
-    let newest_seed_at = activity.back().map(|event| event.at);
-    let activity_filter = ActivityFilter::dashboard();
-
-    while let Ok(event) = rx.try_recv() {
-        if newest_seed_at.is_some_and(|at| event.at <= at) {
-            continue;
-        }
-        if !activity_filter.includes(&event) {
-            continue;
-        }
-        activity.push_back(event);
-        while activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {
-            activity.pop_front();
-        }
-    }
-
-    activity
-}
-
-fn seed_room_joins_from_history(
-    mut joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
-    room_join_rx: Option<&mut crate::app::dashboard::state::DashboardRoomJoinReceiver>,
-) -> VecDeque<crate::app::dashboard::state::DashboardRoomJoin> {
-    let Some(rx) = room_join_rx else {
-        return joins;
-    };
-
-    while let Ok(join) = rx.try_recv() {
-        crate::app::dashboard::state::push_recent_room_join(&mut joins, join);
-    }
-
-    joins
+    let chat_column = Rect::new(
+        1,
+        1,
+        cols.saturating_sub(2 + 24 + 24).max(20),
+        rows.saturating_sub(2),
+    );
+    crate::app::hub::aquarium::ui::top_tray_area(chat_column)
 }
 
 const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
@@ -197,10 +160,18 @@ pub struct SessionConfig {
     pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
     pub tetris_service: crate::app::arcade::tetris::svc::LaterisService,
     pub snake_service: crate::app::arcade::snake::svc::SnakeService,
+    pub traffic_service: crate::app::arcade::traffic::svc::TrafficService,
+    pub rubiks_cube_service: crate::app::arcade::rubiks_cube::svc::RubiksCubeService,
+    pub initial_rubiks_cube_game: Option<late_core::models::rubiks_cube::Game>,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
     pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
+    pub initial_traffic_track_scores: Vec<late_core::models::traffic::TrackScore>,
+    pub initial_traffic_high_score: Option<late_core::models::traffic::HighScore>,
+    pub le_word_service: crate::app::arcade::le_word::svc::LeWordService,
+    pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
+    pub initial_le_word_game: Option<late_core::models::le_word::Game>,
     pub sudoku_service: crate::app::arcade::sudoku::svc::SudokuService,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub nonogram_service: crate::app::arcade::nonogram::svc::NonogramService,
@@ -210,8 +181,9 @@ pub struct SessionConfig {
     pub minesweeper_service: crate::app::arcade::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
-    pub rooms_service: crate::app::rooms::svc::RoomsService,
-    pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
+    pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub daily_service: crate::app::lobby::daily::svc::DailyService,
+    pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
     /// enters the dartboard game from the arcade.
@@ -234,6 +206,7 @@ pub struct SessionConfig {
     pub ultimate_service: crate::app::ultimates::UltimateService,
     pub initial_ultimate_cooldowns: Vec<late_core::models::ultimate_cooldown::UltimateCooldown>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
+    pub chip_service: crate::app::games::chips::svc::ChipService,
     pub initial_chip_balance: i64,
 
     /// Session / connection
@@ -243,6 +216,19 @@ pub struct SessionConfig {
     pub rebels_host: String,
     pub rebels_port: u16,
     pub rebels_secret: String,
+    /// NetHack door-game host (late-nethack) connection config (from the global Config).
+    pub nethack_enabled: bool,
+    pub nethack_host: String,
+    pub nethack_port: u16,
+    pub nethack_secret: String,
+    /// Chip/badge grant sink for NetHack milestones (Amulet, ascension). `None`
+    /// on headless/test paths, which disables milestone awards.
+    pub nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    /// dopewars door game: reached over SSH like nethack (host `late-dopewars`).
+    pub dopewars_enabled: bool,
+    pub dopewars_host: String,
+    pub dopewars_port: u16,
+    pub dopewars_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -254,13 +240,26 @@ pub struct SessionConfig {
             std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
         >,
     >,
+    /// Process-global World Cup service handle (clone), used to subscribe to
+    /// the snapshot and to mint a viewer guard while on the screen.
+    pub worldcup_service: Option<crate::app::worldcup::svc::WorldCupService>,
     pub active_users: Option<ActiveUsers>,
+    /// AI text generation (the clubhouse tutorial's bartender greeting).
+    /// `None` on headless/test paths; the greeting falls back to a script.
+    pub ai_service: Option<crate::app::ai::svc::AiService>,
+    /// Process-global clubhouse presence (seats, walkers, emotes). `None`
+    /// on headless/test paths, which keeps the room session-local.
+    pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
+    /// True once this user finished (or skipped) the clubhouse tutorial.
+    pub clubhouse_tutorial_done: bool,
+    /// Whether the aquarium tray was open when the user last toggled it.
+    pub show_aquarium_tray: bool,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
+    /// Live 24h username effects, shared process-wide (snapshot-swap; see
+    /// `common/username_effect.rs`).
+    pub flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    pub initial_activity: VecDeque<ActivityEvent>,
-    pub room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
-    pub initial_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
     pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
     pub permissions: Permissions,
@@ -272,6 +271,10 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
+    /// Tweak: land on Home (Dashboard, page 1) instead of the Clubhouse
+    /// (page 0) when the session starts. Ignored for brand-new users so they
+    /// still get the clubhouse first-visit tutorial.
+    pub land_on_home: bool,
 
     /// Display config
     pub initial_theme_id: String,
@@ -298,6 +301,9 @@ pub struct App {
     pub(crate) show_settings: bool,
     pub(crate) show_splash: bool,
     pub(crate) splash_ticks: usize,
+    /// Free-running frame counter (advances every world tick) used to animate
+    /// the bumped-room marquee in the room rail.
+    pub(crate) marquee_tick: usize,
     pub(crate) splash_hint: String,
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
@@ -309,6 +315,7 @@ pub struct App {
     pub(crate) show_poll_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_bonsai_v2_modal: bool,
+    pub(crate) show_lobby_modal: bool,
     pub(crate) show_ultimate_modal: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
@@ -339,22 +346,45 @@ pub struct App {
             std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
         >,
     >,
+    /// Live World Cup snapshot feed (process-global service, demand-gated).
+    pub(super) worldcup_rx: Option<
+        tokio::sync::watch::Receiver<std::sync::Arc<crate::app::worldcup::model::WorldCupSnapshot>>,
+    >,
+    /// Handle used to mint the viewer guard while on the World Cup screen.
+    pub(super) worldcup_service: Option<crate::app::worldcup::svc::WorldCupService>,
+    /// Present only while this session is on the World Cup screen; dropping it
+    /// releases the poll gate.
+    pub(crate) worldcup_viewer: Option<crate::app::worldcup::svc::WorldCupViewer>,
+    pub(crate) worldcup: crate::app::worldcup::state::State,
+    /// Admin-gated clubhouse tavern (page `0`): avatar, crowd, animations.
+    pub(crate) clubhouse: crate::app::clubhouse::state::State,
+    /// Chips backend, kept for the clubhouse's on-the-house welcome pour.
+    pub(crate) chip_service: crate::app::games::chips::svc::ChipService,
+    /// Staff bot ids from the active-users map, for speech bubbles and the
+    /// tutorial's bartender greeting.
+    pub(crate) clubhouse_bartender_id: Option<Uuid>,
+    pub(crate) clubhouse_graybeard_id: Option<Uuid>,
+    /// Per-author drunk levels (1-4) copied from the shared lobby about once
+    /// a second; chat author labels tint from this owned map, never the mutex.
+    pub(crate) drunk_levels: HashMap<Uuid, u8>,
+    /// Resolved 24h username-effect styles, rebuilt from the flair directory
+    /// about once a second (which also steps shimmer); renderers read this
+    /// owned map, never the directory mutex.
+    pub(crate) name_styles: HashMap<Uuid, crate::app::common::username_effect::NameStyle>,
+    pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
+    pub(super) ai_service: Option<crate::app::ai::svc::AiService>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
+    /// Live activity events, kept only to edge-detect friend joins for the
+    /// friend-online banner; the feed itself now ships to #lounge (see
+    /// `activity/lounge.rs`) and has no per-session buffer.
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
-    pub(super) activity: VecDeque<ActivityEvent>,
-    /// Mouse-wheel scroll offset for the Home top-strip Activity panel. `0`
-    /// keeps the newest event at the top (default); larger values scroll
-    /// back through older events. Capped at `activity.len()` each frame so
-    /// trimming the buffer can't strand the user past the end.
-    pub(crate) dashboard_activity_scroll: u16,
-    /// Last-rendered rect for the Home top-strip Activity panel. Set by
-    /// `dashboard::ui::draw_box_activity` during draw, consumed by mouse
-    /// wheel hit-testing in `app::input`. Reset to `None` at the top of
-    /// every frame so a layout change can't leave a stale target behind.
-    pub(crate) last_dashboard_activity_rect: std::cell::Cell<Option<Rect>>,
+    /// Pet-strip click targets from the last frame: the pet itself (treat),
+    /// the food bowl (feed), and the water bowl (water). Reset each frame.
+    pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_pet_strip_food_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_pet_strip_water_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -372,7 +402,11 @@ pub struct App {
     pub(crate) afk_user_ids: Arc<HashSet<Uuid>>,
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
-    pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// Daily board embedded match chat; separate cache because width and
+    /// visible messages differ from the other chat surfaces.
+    pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// House table embedded chat, same reasoning as the daily cache.
+    pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
@@ -386,7 +420,6 @@ pub struct App {
     pub(crate) selected_radio_station: late_core::models::user::RadioStation,
 
     pub(crate) music_prefix_armed: bool,
-    pub(crate) room_join_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
 
     /// AFK state set by /brb command. None = active.
@@ -414,7 +447,6 @@ pub struct App {
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
-    pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
@@ -426,10 +458,13 @@ pub struct App {
     /// Arcade Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
-    pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
     pub(crate) door_delete_confirm: bool,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
+    pub(crate) greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    /// Games hub (Screen::Games): the dedicated landing for the door games.
+    pub(crate) games_hub_state: crate::app::door::hub::state::State,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
+    pub(crate) greendragon_state: Option<crate::app::door::greendragon::state::State>,
     pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
     /// Per-session TERM string (from the PTY request), used to size the rebels
     /// PTY.
@@ -439,41 +474,48 @@ pub struct App {
     pub(crate) rebels_host: String,
     pub(crate) rebels_port: u16,
     pub(crate) rebels_secret: String,
+    pub(crate) nethack_state: Option<crate::app::door::nethack::state::State>,
+    /// Per-session TERM string (from the PTY request), used to size the nethack
+    /// PTY.
+    pub(crate) nethack_term: String,
+    /// NetHack host (late-nethack) connection config (from the global Config).
+    pub(crate) nethack_enabled: bool,
+    pub(crate) nethack_host: String,
+    pub(crate) nethack_port: u16,
+    pub(crate) nethack_secret: String,
+    /// Chip/badge grant sink threaded into the per-session NetHack door state.
+    pub(crate) nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    pub(crate) dopewars_state: Option<crate::app::door::dopewars::state::State>,
+    /// Per-session TERM string (from the PTY request), forwarded to the dopewars
+    /// host so curses gets a real terminfo entry.
+    pub(crate) dopewars_term: String,
+    /// dopewars door game: enable flag + host connection details (global Config).
+    pub(crate) dopewars_enabled: bool,
+    pub(crate) dopewars_host: String,
+    pub(crate) dopewars_port: u16,
+    pub(crate) dopewars_secret: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
     pub(crate) repaint_signal: Option<std::sync::Arc<crate::render_signal::RenderSignal>>,
-    pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
-    pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
-    pub(crate) rooms_selected_index: usize,
-    pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
-    pub(crate) rooms_last_active_room_id: Option<Uuid>,
-    pub(crate) rooms_last_touched_room_id: Option<Uuid>,
-    pub(crate) rooms_last_touched_at: Option<Instant>,
-    pub(crate) rooms_enter_request_id: u64,
-    pub(crate) rooms_pending_enter_request_id: Option<u64>,
-    pub(crate) rooms_create_flow: Option<crate::app::rooms::backend::CreateRoomFlow>,
-    pub(crate) rooms_filter: crate::app::rooms::filter::RoomsFilter,
-    pub(crate) rooms_search_active: bool,
-    pub(crate) rooms_search_query: String,
-    pub(super) rooms_snapshot_rx:
-        tokio::sync::watch::Receiver<crate::app::rooms::svc::RoomsSnapshot>,
-    pub(super) rooms_event_rx: tokio::sync::broadcast::Receiver<crate::app::rooms::svc::RoomsEvent>,
-    pub(crate) rooms_snapshot: crate::app::rooms::svc::RoomsSnapshot,
-    pub(crate) dashboard_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
+    /// Lobby modal state spanning both game domains: cursor, claim-confirm,
+    /// unseen-challenge glow.
+    pub(crate) lobby: crate::app::lobby::state::LobbyState,
+    /// Daily correspondence games: sidebar panel and board state.
+    pub(crate) daily: crate::app::lobby::daily::state::DailyState,
+    /// House tables: the fixed multiplayer tables behind the Lobby modal.
+    pub(crate) house: crate::app::lobby::house::state::HouseState,
     pub(crate) twenty_forty_eight_state: crate::app::arcade::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::arcade::tetris::state::State,
     pub(crate) snake_state: crate::app::arcade::snake::state::State,
+    pub(crate) rubiks_cube_state: crate::app::arcade::rubiks_cube::state::State,
+    pub(crate) le_word_state: crate::app::arcade::le_word::state::State,
     pub(crate) sudoku_state: crate::app::arcade::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::arcade::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
     pub(crate) nes_cabinet_state: crate::app::arcade::nes_cabinet::state::State,
-    pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
-    /// Rooms whose current pending turn already emitted a "your turn"
-    /// notification; each room is cleared once that turn passes.
-    pub(crate) rooms_turn_notified_room_ids: HashSet<Uuid>,
-    pub(crate) rooms_last_turn_scan_at: Option<Instant>,
+    pub(crate) traffic_state: crate::app::arcade::traffic::state::State,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -529,9 +571,15 @@ pub struct App {
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
-    /// Desktop-notification domain: producers push through cloned
-    /// `notifier` handles; render drains `notify_outbox` into OSC bytes.
-    pub(crate) notifier: crate::app::notify::Notifier,
+    /// True when the client is kitty specifically. kitty desyncs its cursor from
+    /// ratatui's cell-width model on regional-indicator flags, which splits the
+    /// flags in the World Cup overview's rightmost column; that one column drops
+    /// flags for kitty. Seeded from TERM, refined by the XTVERSION reply.
+    pub(crate) terminal_is_kitty: bool,
+
+    /// Desktop-notification domain: producers (chat, daily) push through
+    /// cloned `notifier` handles; render drains `notify_outbox` into OSC
+    /// bytes.
     pub(crate) notify_outbox: crate::app::notify::Outbox,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
@@ -574,7 +622,11 @@ impl App {
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
         self.show_bonsai_v2_modal = false;
-        self.show_cat_modal = false;
+        self.show_lobby_modal = false;
+        // Real sessions land in the clubhouse; the integration suite predates
+        // that and drives flows from Home, so tests start there.
+        self.screen = Screen::Dashboard;
+        self.sync_visible_chat_room();
     }
 
     pub(crate) fn login_announcements_visible(&self) -> bool {
@@ -590,8 +642,8 @@ impl App {
             && !self.show_poll_modal
             && !self.show_bonsai_modal
             && !self.show_bonsai_v2_modal
+            && !self.show_lobby_modal
             && !self.show_ultimate_modal
-            && !self.show_cat_modal
             && !self.icon_picker_open
             && !self.room_search_modal_state.is_open()
             && !self.booth_modal_state.is_open()
@@ -602,10 +654,13 @@ impl App {
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
         match self.screen {
             Screen::Dashboard => self.chat.selected_room_id,
-            Screen::Rooms => self
-                .rooms_active_room
-                .as_ref()
-                .map(|room| room.chat_room_id),
+            // The clubhouse pins the embedded chat to #lounge.
+            Screen::Clubhouse => self.chat.lounge_room_id(),
+            // The daily board's match chat; None while spectating or before
+            // the row loads.
+            Screen::DailyMatch => self.daily.board_chat_room_id(),
+            // The open house table's permanent chat room.
+            Screen::HouseTable => self.house.chat_room_id(),
             _ => None,
         }
     }
@@ -628,7 +683,7 @@ impl App {
         self.splash_hint = hint.into();
     }
 
-    pub fn new(mut config: SessionConfig) -> anyhow::Result<Self> {
+    pub fn new(config: SessionConfig) -> anyhow::Result<Self> {
         let (cols, rows) = if config.cols == 0 || config.rows == 0 {
             tracing::warn!(
                 config.cols,
@@ -640,11 +695,6 @@ impl App {
             (config.cols, config.rows)
         };
         tracing::debug!(cols, rows, "initializing app");
-
-        let activity =
-            seed_activity_from_history(config.initial_activity, config.activity_feed_rx.as_mut());
-        let mut dashboard_room_joins =
-            seed_room_joins_from_history(config.initial_room_joins, config.room_join_rx.as_mut());
 
         let shared = SharedBuffer::default();
         let backend = CrosstermBackend::new(shared.clone());
@@ -658,6 +708,7 @@ impl App {
             protocol_from_term(&config.term)
         };
         let inline_image_symbol_mode = InlineImageSymbolMode::from_identity(&config.term);
+        let terminal_is_kitty = identity_is_kitty(&config.term);
         let pending_terminal_commands = Vec::new();
         let (notifier, notify_outbox) = crate::app::notify::channel();
 
@@ -736,6 +787,17 @@ impl App {
             config.sudoku_service.clone(),
             config.initial_sudoku_games,
         );
+        let rubiks_cube_state = crate::app::arcade::rubiks_cube::state::State::new(
+            config.user_id,
+            config.rubiks_cube_service.clone(),
+            config.initial_rubiks_cube_game,
+        );
+        let le_word_state = crate::app::arcade::le_word::state::State::new(
+            config.user_id,
+            config.le_word_service.clone(),
+            config.initial_le_word_daily_word,
+            config.initial_le_word_game,
+        );
         let nonogram_state = crate::app::arcade::nonogram::state::State::new(
             config.user_id,
             config.nonogram_service.clone(),
@@ -753,13 +815,18 @@ impl App {
             config.initial_minesweeper_games,
         );
         let nes_cabinet_state = crate::app::arcade::nes_cabinet::state::State::new();
-        let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
-        let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
-        crate::app::dashboard::state::seed_persisted_room_joins_from_rooms(
-            &mut dashboard_room_joins,
-            &rooms_snapshot,
+        let mut traffic_state = crate::app::arcade::traffic::state::State::new();
+        traffic_state.hydrate(
+            config.user_id,
+            config.traffic_service.clone(),
+            config.initial_traffic_track_scores,
+            config.initial_traffic_high_score,
         );
-        let rooms_event_rx = config.rooms_service.subscribe_events();
+        let daily = crate::app::lobby::daily::state::DailyState::new(
+            config.daily_service.clone(),
+            config.user_id,
+            notifier.clone(),
+        );
         let dartboard_server = config.dartboard_server.clone();
         let dartboard_provenance = config.dartboard_provenance.clone();
         let artboard_snapshot_service = config.artboard_snapshot_service.clone();
@@ -883,25 +950,37 @@ impl App {
             config.user_id,
         );
         settings_modal_state.open_from_profile(&initial_profile);
+        // Everyone lands in the clubhouse by default: the tavern is the front
+        // door of late.sh (and the first-visit tutorial starts there). The
+        // "Land on Home page" tweak sends returning users straight to the
+        // dashboard instead; new users always start in the clubhouse so the
+        // tutorial runs.
+        let landing_screen = if config.land_on_home && !config.is_new_user {
+            Screen::Dashboard
+        } else {
+            Screen::Clubhouse
+        };
         let mut app = Self {
             running: true,
             size: (cols, rows),
-            screen: Screen::Dashboard,
+            screen: landing_screen,
             banner: None,
-            show_settings: true,
+            show_settings: false,
             show_splash: true,
             splash_ticks: 0,
+            marquee_tick: 0,
             splash_hint,
             show_quit_confirm: false,
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
-            show_aquarium_tray: false,
+            show_aquarium_tray: config.show_aquarium_tray,
             show_profile_modal: false,
             show_sheet_modal: false,
             show_poll_modal: false,
             show_bonsai_modal: false,
             show_bonsai_v2_modal: false,
+            show_lobby_modal: false,
             show_ultimate_modal: false,
             login_announcements: config.initial_announcements,
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -923,14 +1002,33 @@ impl App {
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
             radio_meta_rx: config.radio_meta_rx,
+            worldcup_rx: config
+                .worldcup_service
+                .as_ref()
+                .map(|svc| svc.subscribe_state()),
+            worldcup_service: config.worldcup_service,
+            worldcup_viewer: None,
+            worldcup: crate::app::worldcup::state::State::default(),
+            clubhouse: crate::app::clubhouse::state::State::new(
+                config.clubhouse_lobby.clone(),
+                config.user_id,
+                config.username.clone(),
+                !config.clubhouse_tutorial_done,
+            ),
+            chip_service: config.chip_service,
+            clubhouse_bartender_id: None,
+            clubhouse_graybeard_id: None,
+            drunk_levels: HashMap::new(),
+            name_styles: HashMap::new(),
+            flair_directory: config.flair_directory,
+            ai_service: config.ai_service.clone(),
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
-            room_join_rx: config.room_join_rx,
-            activity,
-            dashboard_activity_scroll: 0,
-            last_dashboard_activity_rect: std::cell::Cell::new(None),
+            last_pet_strip_pet_rect: std::cell::Cell::new(None),
+            last_pet_strip_food_rect: std::cell::Cell::new(None),
+            last_pet_strip_water_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -959,7 +1057,8 @@ impl App {
             afk_user_ids: crate::state::afk_users_snapshot(&afk_users),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
-            rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
@@ -968,7 +1067,6 @@ impl App {
             selected_icecast_stream: config.initial_icecast_stream,
             selected_radio_station: config.initial_radio_station,
             music_prefix_armed: false,
-            room_join_prefix_armed: false,
             room_section_prefix_armed: false,
             afk: None,
             afk_muted: false,
@@ -991,7 +1089,6 @@ impl App {
             bonsai_v2_state,
             bonsai_v2_activity_ticks_remaining: 0,
             pet_state,
-            show_cat_modal: false,
             quest_state,
             shop_state,
             hub_admin_state,
@@ -1001,45 +1098,50 @@ impl App {
             ),
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
-            dashboard_game_toggle_target: None,
             door_delete_confirm: false,
+            games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,
+            greendragon_service: config.greendragon_service,
             lateania_state: None,
+            greendragon_state: None,
             rebels_state: None,
             rebels_term: config.term.clone(),
             rebels_enabled: config.rebels_enabled,
             rebels_host: config.rebels_host,
             rebels_port: config.rebels_port,
             rebels_secret: config.rebels_secret,
+            nethack_state: None,
+            nethack_term: config.term.clone(),
+            nethack_enabled: config.nethack_enabled,
+            nethack_host: config.nethack_host,
+            nethack_port: config.nethack_port,
+            nethack_secret: config.nethack_secret,
+            nethack_awards: config.nethack_awards,
+            dopewars_state: None,
+            dopewars_term: config.term.clone(),
+            dopewars_enabled: config.dopewars_enabled,
+            dopewars_host: config.dopewars_host,
+            dopewars_port: config.dopewars_port,
+            dopewars_secret: config.dopewars_secret,
             repaint_signal: None,
-            rooms_service: config.rooms_service,
-            room_game_registry: config.room_game_registry,
-            rooms_selected_index: 0,
-            rooms_active_room: None,
-            rooms_last_active_room_id: None,
-            rooms_last_touched_room_id: None,
-            rooms_last_touched_at: None,
-            rooms_enter_request_id: 0,
-            rooms_pending_enter_request_id: None,
-            rooms_create_flow: None,
-            rooms_filter: crate::app::rooms::filter::RoomsFilter::default(),
-            rooms_search_active: false,
-            rooms_search_query: String::new(),
-            rooms_snapshot_rx,
-            rooms_event_rx,
-            rooms_snapshot,
-            dashboard_room_joins,
+            lobby: crate::app::lobby::state::LobbyState::new(&daily),
+            daily,
+            house: crate::app::lobby::house::state::HouseState::new(
+                config.user_id,
+                config.house_registry,
+                notifier.clone(),
+            ),
             twenty_forty_eight_state,
             tetris_state,
             snake_state,
+            rubiks_cube_state,
+            le_word_state,
             sudoku_state,
             nonogram_state,
             solitaire_state,
             minesweeper_state,
             nes_cabinet_state,
-            active_room_game: None,
-            rooms_turn_notified_room_ids: HashSet::new(),
-            rooms_last_turn_scan_at: None,
+            traffic_state,
             dartboard_state: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,
@@ -1060,7 +1162,7 @@ impl App {
             terminal_images_disabled,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
-            notifier,
+            terminal_is_kitty,
             notify_outbox,
             is_draining: config.is_draining,
             icon_picker_open: false,
@@ -1074,10 +1176,16 @@ impl App {
         if app.screen == Screen::Artboard {
             app.enter_dartboard();
         }
+        // The landing screen skips `set_screen`, so run its entry hook by
+        // hand. Clubhouse: immediate crowd refresh plus the first-visit
+        // tutorial. Dashboard: refresh the room list (sync_selection runs just
+        // below for both).
+        match landing_screen {
+            Screen::Dashboard => app.chat.request_list(),
+            _ => app.clubhouse.enter_screen(),
+        }
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
-        app.chat
-            .set_active_bumped_join_room_ids(app.shop_state.active_bumped_join_room_ids());
         app.chat.sync_selection();
         app.sync_visible_chat_room();
         Ok(app)
@@ -1130,6 +1238,21 @@ impl App {
         self.lateania_state = None;
     }
 
+    pub(crate) fn enter_greendragon(&mut self) {
+        if self.greendragon_state.is_some() {
+            return;
+        }
+        self.greendragon_state = Some(crate::app::door::greendragon::state::State::new(
+            self.greendragon_service.clone(),
+            self.user_id,
+            self.username.clone(),
+        ));
+    }
+
+    pub(crate) fn leave_greendragon(&mut self) {
+        self.greendragon_state = None;
+    }
+
     /// Store the active transport's render-loop wakeup so the rebels proxy can
     /// repaint promptly on new remote output.
     pub(crate) fn set_repaint_signal(
@@ -1157,6 +1280,47 @@ impl App {
     fn leave_rebels(&mut self) {
         // Dropping the State drops the proxy, which closes the outbound channel.
         self.rebels_state = None;
+    }
+
+    pub(crate) fn enter_nethack(&mut self) {
+        if self.nethack_state.is_some() {
+            return;
+        }
+        self.nethack_state = Some(crate::app::door::nethack::state::State::new(
+            self.user_id,
+            self.nethack_host.clone(),
+            self.nethack_port,
+            self.nethack_secret.clone(),
+            self.nethack_term.clone(),
+            self.nethack_enabled,
+            self.repaint_signal.clone(),
+            self.nethack_awards.clone(),
+        ));
+    }
+
+    fn leave_nethack(&mut self) {
+        // Dropping the State drops the process, which kills the child nethack.
+        self.nethack_state = None;
+    }
+
+    pub(crate) fn enter_dopewars(&mut self) {
+        if self.dopewars_state.is_some() {
+            return;
+        }
+        self.dopewars_state = Some(crate::app::door::dopewars::state::State::new(
+            self.user_id,
+            self.dopewars_host.clone(),
+            self.dopewars_port,
+            self.dopewars_secret.clone(),
+            self.dopewars_term.clone(),
+            self.dopewars_enabled,
+            self.repaint_signal.clone(),
+        ));
+    }
+
+    fn leave_dopewars(&mut self) {
+        // Dropping the State drops the process, which kills the child dopewars.
+        self.dopewars_state = None;
     }
 
     pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
@@ -1325,8 +1489,6 @@ impl App {
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
             self.show_bonsai_v2_modal = false;
-            self.pet_state.cancel_play();
-            self.show_cat_modal = false;
         }
         self.hub_state.ensure_visible_tab(self.is_admin);
     }
@@ -1353,6 +1515,12 @@ impl App {
         if self.screen == screen {
             if screen == Screen::Rebels {
                 self.enter_rebels();
+            }
+            if screen == Screen::Nethack {
+                self.enter_nethack();
+            }
+            if screen == Screen::Dopewars {
+                self.enter_dopewars();
             }
             if screen == Screen::Artboard {
                 self.enter_dartboard();
@@ -1391,8 +1559,28 @@ impl App {
             self.force_full_repaint();
         }
 
+        if self.screen == Screen::Nethack {
+            self.leave_nethack();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::Dopewars {
+            self.leave_dopewars();
+            self.force_full_repaint();
+        }
+
         if self.screen == Screen::Pinstar {
             self.leave_pinstar();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::DailyMatch && screen != Screen::DailyMatch {
+            self.daily.close_board();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::HouseTable && screen != Screen::HouseTable {
+            self.house.close();
             self.force_full_repaint();
         }
 
@@ -1409,8 +1597,17 @@ impl App {
         if self.screen == Screen::Rebels {
             self.enter_rebels();
         }
+        if self.screen == Screen::Nethack {
+            self.enter_nethack();
+        }
+        if self.screen == Screen::Dopewars {
+            self.enter_dopewars();
+        }
         if self.screen == Screen::Pinstar {
             self.enter_directory();
+        }
+        if self.screen == Screen::Clubhouse {
+            self.clubhouse.enter_screen();
         }
         if self.screen == Screen::Arcade
             && self.is_playing_game
@@ -1418,6 +1615,14 @@ impl App {
         {
             self.nes_cabinet_state.activate();
         }
+        // Hold a viewer guard only while on the World Cup screen; this both
+        // wakes the demand-gated poller on entry and (by dropping the prior
+        // guard) releases it on exit.
+        self.worldcup_viewer = if self.screen == Screen::WorldCup {
+            self.worldcup_service.as_ref().map(|svc| svc.viewer())
+        } else {
+            None
+        };
         self.sync_visible_chat_room();
     }
 
@@ -1443,6 +1648,11 @@ impl App {
             "terminal xtversion reply"
         );
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_identity(value));
+        // The XTVERSION payload identifies the terminal precisely (kitty vs the
+        // rest of the kitty-graphics family), refining the TERM-based seed.
+        if identity_is_kitty(value) {
+            self.terminal_is_kitty = true;
+        }
         if self.terminal_images_disabled {
             return;
         }
@@ -1502,7 +1712,19 @@ impl App {
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
         self.aquarium_state
             .handle_resize(aquarium_area.width, aquarium_area.height);
-        self.terminal.resize(Rect::new(0, 0, cols, rows))
+        // We can't use `Terminal::resize()` here: since ratatui 0.30.2 its
+        // fixed-viewport clear queries `backend.size()`, which reads the
+        // controlling tty — impossible on the write-only SSH `SharedBuffer`
+        // (same class of failure as the `Terminal::clear()` cursor read in
+        // `force_full_repaint`). Rebuild the terminal instead: `with_options`
+        // with a `Viewport::Fixed` is pure state construction and never
+        // touches the backend, and `force_full_repaint` supplies the client
+        // clear + full redraw that `Terminal::resize` used to perform.
+        let backend = CrosstermBackend::new(self.shared.clone());
+        let viewport = Viewport::Fixed(Rect::new(0, 0, cols, rows));
+        self.terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
+        self.force_full_repaint();
+        Ok(())
     }
 
     pub fn handle_input(&mut self, data: &[u8]) {
@@ -1519,6 +1741,45 @@ impl App {
             state.forward_input(data);
             return;
         }
+        // Same passthrough for the locally-hosted nethack process, except F1,
+        // which late.sh remaps to nethack's own `?` help (so the raw F1 escape
+        // never leaks into the game as stray commands).
+        if self.screen == crate::app::common::primitives::Screen::Nethack
+            && let Some(state) = self.nethack_state.as_mut()
+            && state.is_running()
+        {
+            if !state.intercept_input(data) {
+                state.forward_input(data);
+            }
+            return;
+        }
+        // A game just exited: swallow the player's trailing keystrokes (from
+        // clearing nethack's end-of-game --More--/disclosure prompts) for a
+        // short grace so a stray `q` can't fall through to the launcher's
+        // global quit and drop the whole SSH session.
+        if self.screen == crate::app::common::primitives::Screen::Nethack
+            && let Some(state) = self.nethack_state.as_ref()
+            && state.in_exit_grace()
+        {
+            return;
+        }
+        // dopewars: same raw passthrough as nethack (both are network doors to a
+        // remote curses child). Every byte goes straight to the child while it
+        // runs; Ctrl-C ends the game (it traps no SIGINT) and drops back to the
+        // launcher.
+        if self.screen == crate::app::common::primitives::Screen::Dopewars
+            && let Some(state) = self.dopewars_state.as_ref()
+            && state.is_running()
+        {
+            state.forward_input(data);
+            return;
+        }
+        if self.screen == crate::app::common::primitives::Screen::Dopewars
+            && let Some(state) = self.dopewars_state.as_ref()
+            && state.in_exit_grace()
+        {
+            return;
+        }
         crate::app::input::handle(self, data)
     }
 
@@ -1527,6 +1788,132 @@ impl App {
             return false;
         };
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
+    }
+
+    /// Advance the clubhouse animation clock every tick and, while the
+    /// screen is up, sync the shared lobby with the active-users map about
+    /// once a second and pull a fresh crowd snapshot every tick. Bots stay
+    /// out of the seat pool; the two staff bots (@bartender, @graybeard)
+    /// only toggle their fixed spots.
+    pub(crate) fn tick_clubhouse(&mut self) {
+        let on_screen = self.screen == Screen::Clubhouse;
+        self.clubhouse.tick(on_screen);
+        if !on_screen {
+            return;
+        }
+
+        if self.clubhouse.roster_refresh_due() {
+            let mut roster = Vec::new();
+            let mut graybeard = None;
+            let mut bartender = None;
+            if let Some(active_users) = &self.active_users {
+                let active_users = active_users.lock_recover();
+                for (user_id, user) in active_users.iter() {
+                    // Ghost bots register with no fingerprint; humans always
+                    // authenticate with an SSH key.
+                    if user.fingerprint.is_none() {
+                        match user.username.as_str() {
+                            "graybeard" => graybeard = Some(*user_id),
+                            "bartender" => bartender = Some(*user_id),
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    // The roster includes this session's own user: everyone
+                    // holds a seat in the shared lobby until they walk.
+                    roster.push(crate::app::clubhouse::state::Occupant {
+                        user_id: *user_id,
+                        username: user.username.clone(),
+                    });
+                }
+            }
+            self.clubhouse.graybeard_online = graybeard.is_some();
+            self.clubhouse.bartender_online = bartender.is_some();
+            self.clubhouse_graybeard_id = graybeard;
+            self.clubhouse_bartender_id = bartender;
+            self.clubhouse.refresh_roster(roster);
+        }
+
+        self.clubhouse.refresh_snapshot();
+
+        let lounge_messages = self
+            .chat
+            .lounge_room_id()
+            .map(|lounge_id| self.chat.messages_for_room(lounge_id))
+            .unwrap_or(&[]);
+        self.clubhouse.update_bartender_banner(
+            self.clubhouse_bartender_id,
+            lounge_messages,
+            chrono::Utc::now(),
+        );
+    }
+
+    /// Persist "the clubhouse tutorial ran" (fire-and-forget).
+    pub(crate) fn persist_clubhouse_tutorial_done(&self) {
+        self.profile_state
+            .service()
+            .set_clubhouse_tutorial_done(self.user_id);
+    }
+
+    /// Persist the aquarium tray's open/closed state (fire-and-forget).
+    pub(crate) fn persist_show_aquarium_tray(&self) {
+        self.profile_state
+            .service()
+            .set_show_aquarium_tray(self.user_id, self.show_aquarium_tray);
+    }
+
+    /// Open the profile modal for a user, closing the sheet modal that shares
+    /// its slot. The single entry point for every profile-open trigger (chat
+    /// author click, `/profile`, clubhouse avatar click).
+    pub(crate) fn open_profile_modal(&mut self, user_id: Uuid, fallback_name: impl Into<String>) {
+        self.show_sheet_modal = false;
+        self.sheet_modal_state.close();
+        self.profile_modal_state.open(user_id, fallback_name);
+        self.show_profile_modal = true;
+    }
+
+    /// The tutorial's @bartender welcome: a real #lounge message, so the
+    /// newcomer's first bartender line demonstrates the room being live.
+    /// AI-generated in his voice when the AI service is up, with a scripted
+    /// fallback (see `ghost::bartender_tutorial_greeting`).
+    pub(crate) fn send_clubhouse_bartender_greeting(&self) {
+        let Some(bartender_id) = self.clubhouse_bartender_id else {
+            return;
+        };
+        let Some(lounge_id) = self.chat.lounge_room_id() else {
+            return;
+        };
+        // Reaching the bar is the tutorial's finish line: the welcome round is
+        // on the house, so lock the walkthrough in as done and comp the pour.
+        self.persist_clubhouse_tutorial_done();
+        let username = self.profile_state.profile().username.clone();
+        let chat_service = self.chat.service.clone();
+        let ai_service = self.ai_service.clone();
+        let chip_service = self.chip_service.clone();
+        let lobby = self.clubhouse.lobby_handle();
+        let target = self.user_id;
+        tokio::spawn(async move {
+            // Comp the welcome drink first so the newcomer is already glowing
+            // when the bartender's line lands. A failed comp is non-fatal: the
+            // greeting still goes out, just without the buzz.
+            match chip_service
+                .grant_free_drink(target, late_core::models::drinks::WELCOME_DRINK_POINTS)
+                .await
+            {
+                Ok(drinks) => {
+                    if let Some(lobby) = lobby {
+                        lobby.record_drink(target, drinks.drunk_points, drinks.last_drink_at);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = ?err, user_id = %target, "welcome drink comp failed");
+                }
+            }
+            let body =
+                crate::app::ai::ghost::bartender_tutorial_greeting(ai_service.as_ref(), &username)
+                    .await;
+            chat_service.send_bot_reply_task(bartender_id, lounge_id, body, Some(target));
+        });
     }
 
     fn set_shared_session_afk(&self, message: Option<String>) {
@@ -1610,10 +1997,11 @@ impl App {
     /// because the CLI gates its Icecast decoder on the received source.
     pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
         use late_core::models::user::AudioSource;
+        // Dock order in the sidebar music stage: radio → youtube → icecast.
         let next = match self.paired_browser_source {
-            AudioSource::Icecast => AudioSource::Youtube,
-            AudioSource::Youtube => AudioSource::Radio,
-            AudioSource::Radio => AudioSource::Icecast,
+            AudioSource::Radio => AudioSource::Youtube,
+            AudioSource::Youtube => AudioSource::Icecast,
+            AudioSource::Icecast => AudioSource::Radio,
         };
         self.paired_browser_source = next;
         if let Some(active_users) = &self.active_users
@@ -1661,11 +2049,6 @@ impl App {
     /// The voice channel the user can currently join, based on the visible
     /// chat or active game surface.
     pub fn active_voice_channel(&self) -> Option<Uuid> {
-        if let Screen::Rooms = self.screen
-            && let Some(room) = self.rooms_active_room.as_ref()
-        {
-            return room.voice_channel_id;
-        }
         let room_id = self.current_visible_chat_room_id()?;
         self.chat.room_voice_channel_id(room_id)
     }
@@ -1863,7 +2246,20 @@ impl App {
     pub(crate) fn force_full_repaint(&mut self) {
         let mut shared = self.shared.clone();
         let _ = shared.write_all(terminal_string_terminator());
-        let _ = self.terminal.clear();
+        // Physically clear the client screen, then arm a full redraw.
+        //
+        // We can't use `Terminal::clear()` here: since ratatui 0.30.1 it
+        // snapshots the cursor via `crossterm::cursor::position()`, which reads
+        // the controlling tty. Our backend writes to a one-way SSH `SharedBuffer`
+        // with no readable tty, so that query errors and `clear()` bails *before*
+        // resetting the back buffer — leaving the next `draw()` to emit an empty
+        // diff (a blank frame). Do the two things `clear()` gave us by hand:
+        // emit the clear escape, and reset both diff buffers so the next `draw()`
+        // re-emits every cell. Two `swap_buffers()` calls reset each buffer and
+        // restore the original current index without touching the cursor.
+        let _ = crossterm::execute!(shared, terminal::Clear(ClearType::All));
+        self.terminal.swap_buffers();
+        self.terminal.swap_buffers();
         if self.terminal_image_protocol == Some(TerminalImageProtocol::Kitty) {
             self.pending_terminal_commands
                 .extend(kitty_cleanup_commands());
@@ -1985,39 +2381,6 @@ mod tests {
     fn shared_buffer_default_is_empty() {
         let buf = SharedBuffer::default();
         assert!(buf.take().is_empty());
-    }
-
-    #[test]
-    fn seed_activity_from_history_drops_events_already_in_history() {
-        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-        let event = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
-        tx.send(event.clone()).expect("send activity");
-        let mut history = VecDeque::new();
-        history.push_back(event);
-
-        let activity = seed_activity_from_history(history, Some(&mut rx));
-
-        assert_eq!(activity.len(), 1);
-        assert_eq!(activity[0].username, "alice");
-    }
-
-    #[test]
-    fn seed_activity_from_history_keeps_events_newer_than_history() {
-        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-        let old = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
-        let mut history = VecDeque::new();
-        history.push_back(old);
-        let mut fresh = ActivityEvent::joined(uuid::Uuid::from_u128(1), "bob");
-        fresh.at = history.back().map_or(fresh.at, |event| {
-            event.at + std::time::Duration::from_secs(1)
-        });
-        tx.send(fresh).expect("send activity");
-
-        let activity = seed_activity_from_history(history, Some(&mut rx));
-
-        assert_eq!(activity.len(), 2);
-        assert_eq!(activity[0].username, "alice");
-        assert_eq!(activity[1].username, "bob");
     }
 
     #[test]

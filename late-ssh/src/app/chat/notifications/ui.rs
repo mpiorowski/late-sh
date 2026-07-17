@@ -110,12 +110,22 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
 
 fn preview_rows(body: &str, width: usize, max_rows: usize) -> Vec<String> {
     let width = width.max(1);
+    // When a reply quotes the message it answers ("> ..."), show only the
+    // reply itself, not the quoted context. Keep the quote if the whole body
+    // is quoted (nothing else to show).
+    let skip_quotes = body.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('>')
+    });
     let mut rows = Vec::new();
     let mut current = String::new();
 
     for line in body.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            continue;
+        }
+        if skip_quotes && trimmed.starts_with('>') {
             continue;
         }
 
@@ -195,16 +205,17 @@ mod tests {
     }
 
     #[test]
-    fn preview_rows_uses_multiple_source_lines() {
+    fn preview_rows_drops_leading_reply_quote() {
         let rows = preview_rows("> quoted line\nactual reply line", 40, 2);
 
-        assert_eq!(
-            rows,
-            vec![
-                "\"> quoted line".to_string(),
-                "actual reply line\"".to_string()
-            ]
-        );
+        assert_eq!(rows, vec!["\"actual reply line\"".to_string()]);
+    }
+
+    #[test]
+    fn preview_rows_keeps_body_when_all_quoted() {
+        let rows = preview_rows("> only a quote", 40, 2);
+
+        assert_eq!(rows, vec!["\"> only a quote\"".to_string()]);
     }
 
     #[test]

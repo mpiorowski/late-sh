@@ -9,13 +9,16 @@ use late_core::{
 use late_ssh::app::activity::event::ActivityEvent;
 use late_ssh::app::activity::publisher::ActivityPublisher;
 use late_ssh::app::ai::svc::AiService;
+use late_ssh::app::arcade::le_word::svc::LeWordService;
 use late_ssh::app::arcade::minesweeper::svc::MinesweeperService;
 use late_ssh::app::arcade::nonogram::state::Library as NonogramLibrary;
 use late_ssh::app::arcade::nonogram::svc::NonogramService;
+use late_ssh::app::arcade::rubiks_cube::svc::RubiksCubeService;
 use late_ssh::app::arcade::snake::svc::SnakeService;
 use late_ssh::app::arcade::solitaire::svc::SolitaireService;
 use late_ssh::app::arcade::sudoku::svc::SudokuService;
 use late_ssh::app::arcade::tetris::svc::LaterisService;
+use late_ssh::app::arcade::traffic::svc::TrafficService;
 use late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
@@ -23,19 +26,10 @@ use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
 use late_ssh::app::games::chips::svc::ChipService;
+use late_ssh::app::lobby::house::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::pet::svc::PetService;
 use late_ssh::app::pinstar::svc::PinstarServerRegistry;
 use late_ssh::app::profile::svc::ProfileService;
-use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
-use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
-use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
-use late_ssh::app::rooms::chess::manager::ChessTableManager;
-use late_ssh::app::rooms::poker::manager::PokerTableManager;
-use late_ssh::app::rooms::registry::RoomGameRegistry;
-use late_ssh::app::rooms::sshattrick::manager::SshattrickRoomManager;
-use late_ssh::app::rooms::svc::RoomsService;
-use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
-use late_ssh::app::rooms::tron::manager::TronTableManager;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::voice::svc::{VoiceConfig, VoiceService};
 use late_ssh::app::{LeaderboardService, QuestService, ShopService};
@@ -44,7 +38,7 @@ use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
 use late_ssh::paired_clients::{PairControlMessage, PairedClientRegistry};
 use late_ssh::session::SessionRegistry;
 use late_ssh::state::State;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{Semaphore, broadcast, watch};
@@ -112,48 +106,13 @@ fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArt
     ArtboardProvenance::default().shared()
 }
 
-fn test_room_game_registry(db: Db) -> RoomGameRegistry {
-    let chip_service = ChipService::new(db.clone());
-    let rooms_service = RoomsService::new(db.clone());
+fn test_house_registry(db: Db) -> late_ssh::app::lobby::house::registry::HouseTableRegistry {
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
-    let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx);
-    let asterion_room_manager = AsterionRoomManager::new(
-        chip_service.clone(),
-        activity_publisher.clone(),
-        rooms_service.clone(),
-        db.clone(),
-    );
-    let blackjack_table_manager = BlackjackTableManager::new(
-        chip_service.clone(),
+    late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
+        ChipService::new(db.clone()),
         BlackjackPlayerDirectory::new(db.clone()),
-        activity_publisher.clone(),
-        rooms_service.clone(),
-    );
-    RoomGameRegistry::new(
-        asterion_room_manager,
-        blackjack_table_manager,
-        ChessTableManager::new(
-            chip_service.clone(),
-            activity_publisher.clone(),
-            rooms_service.clone(),
-        ),
-        PokerTableManager::new(
-            chip_service.clone(),
-            activity_publisher.clone(),
-            rooms_service.clone(),
-        ),
-        SshattrickRoomManager::new(
-            rooms_service.clone(),
-            chip_service.clone(),
-            activity_publisher.clone(),
-            db,
-        ),
-        TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
-        TronTableManager::new(
-            chip_service,
-            activity_publisher.clone(),
-            rooms_service.clone(),
-        ),
+        ActivityPublisher::new(db.clone(), activity_tx),
+        db,
     )
 }
 
@@ -195,6 +154,14 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         rebels_host: "frittura.org".to_string(),
         rebels_port: 3788,
         rebels_secret: String::new(),
+        nethack_enabled: false,
+        nethack_host: String::new(),
+        nethack_port: 2323,
+        nethack_secret: String::new(),
+        dopewars_enabled: false,
+        dopewars_host: String::new(),
+        dopewars_port: 2324,
+        dopewars_secret: String::new(),
     }
 }
 
@@ -238,22 +205,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = LaterisService::new(db.clone());
     let snake_service = SnakeService::new(db.clone());
+    let traffic_service = TrafficService::new(db.clone());
+    let le_word_service = LeWordService::new(db.clone(), activity_tx.clone());
+    let rubiks_cube_service = RubiksCubeService::new(db.clone(), activity_tx.clone());
     let chip_service = ChipService::new(db.clone());
-    let rooms_service = RoomsService::new(db.clone());
-    let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
-    let asterion_room_manager = AsterionRoomManager::new(
-        chip_service.clone(),
-        activity_publisher.clone(),
-        rooms_service.clone(),
-        db.clone(),
-    );
-    let blackjack_table_manager = BlackjackTableManager::new(
-        chip_service.clone(),
-        blackjack_player_directory.clone(),
-        activity_publisher.clone(),
-        rooms_service.clone(),
-    );
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
     let nonogram_service = NonogramService::new(db.clone(), activity_tx.clone());
     let solitaire_service = SolitaireService::new(db.clone(), activity_tx.clone());
@@ -266,14 +222,14 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let shop_service = ShopService::new(db.clone());
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let voice_service = VoiceService::new(config.voice.clone());
-    let (room_join_feed, _) =
-        broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
+        clubhouse_lobby: late_ssh::app::clubhouse::lobby::SharedLobby::with_seed(7),
         afk_users,
         username_directory,
+        flair_directory: late_ssh::app::common::username_effect::new_directory(),
         config,
         db: db.clone(),
         audio_service: late_ssh::app::audio::svc::AudioService::new(
@@ -294,6 +250,9 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         twenty_forty_eight_service,
         tetris_service,
         snake_service,
+        traffic_service,
+        le_word_service,
+        rubiks_cube_service,
         sudoku_service,
         nonogram_service,
         solitaire_service,
@@ -307,34 +266,17 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             chip_service.clone(),
             db.clone(),
         ),
-        rooms_service: rooms_service.clone(),
-        blackjack_table_manager: blackjack_table_manager.clone(),
-        room_game_registry: RoomGameRegistry::new(
-            asterion_room_manager,
-            blackjack_table_manager,
-            ChessTableManager::new(
-                chip_service.clone(),
-                activity_publisher.clone(),
-                rooms_service.clone(),
-            ),
-            PokerTableManager::new(
-                chip_service.clone(),
-                activity_publisher.clone(),
-                rooms_service.clone(),
-            ),
-            SshattrickRoomManager::new(
-                rooms_service.clone(),
-                chip_service.clone(),
-                activity_publisher.clone(),
-                db.clone(),
-            ),
-            TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
-            TronTableManager::new(
-                chip_service.clone(),
-                activity_publisher.clone(),
-                rooms_service.clone(),
-            ),
+        greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
+            activity_publisher.clone(),
+            chip_service.clone(),
+            db.clone(),
         ),
+        daily_service: late_ssh::app::lobby::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        ),
+        house_registry: test_house_registry(db.clone()),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
         leaderboard_service,
@@ -343,10 +285,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ultimate_service,
         now_playing_rx,
         radio_meta_rx,
+        worldcup_service: late_ssh::app::worldcup::svc::WorldCupService::new(),
         activity_feed: activity_tx,
-        activity_history: Arc::new(Mutex::new(VecDeque::new())),
-        room_join_feed,
-        room_join_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
         irc_registry,
         paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
@@ -419,10 +359,18 @@ fn make_app_with_chat_service_and_permissions(
         initial_2048_high_score: None,
         tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
+        traffic_service: TrafficService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
+        initial_traffic_track_scores: Vec::new(),
+        initial_traffic_high_score: None,
+        le_word_service: LeWordService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        rubiks_cube_service: RubiksCubeService::new(db.clone(), activity_tx.clone()),
+        initial_rubiks_cube_game: None,
+        initial_le_word_daily_word: None,
+        initial_le_word_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(
@@ -442,11 +390,20 @@ fn make_app_with_chat_service_and_permissions(
         initial_minesweeper_games: Vec::new(),
         lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
-            chip_service,
+            chip_service.clone(),
             db.clone(),
         ),
-        rooms_service: RoomsService::new(db.clone()),
-        room_game_registry: test_room_game_registry(db.clone()),
+        greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        daily_service: late_ssh::app::lobby::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        ),
+        house_registry: test_house_registry(db.clone()),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
         artboard_snapshot_service: late_ssh::app::artboard::svc::ArtboardSnapshotService::new(
@@ -466,6 +423,7 @@ fn make_app_with_chat_service_and_permissions(
         ultimate_service,
         initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
+        chip_service: chip_service.clone(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
         web_url: "http://localhost:3000".to_string(),
@@ -473,6 +431,15 @@ fn make_app_with_chat_service_and_permissions(
         rebels_host: "frittura.org".to_string(),
         rebels_port: 3788,
         rebels_secret: String::new(),
+        nethack_enabled: false,
+        nethack_host: String::new(),
+        nethack_port: 2323,
+        nethack_secret: String::new(),
+        nethack_awards: None,
+        dopewars_enabled: false,
+        dopewars_host: String::new(),
+        dopewars_port: 2324,
+        dopewars_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
@@ -480,19 +447,23 @@ fn make_app_with_chat_service_and_permissions(
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
+        worldcup_service: None,
         user_id,
         permissions,
         artboard_banned: false,
         artboard_ban_expires_at: None,
         active_users: None,
+        ai_service: None,
+        clubhouse_lobby: None,
+        clubhouse_tutorial_done: true,
+        show_aquarium_tray: false,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
+        flair_directory: None,
         activity_feed_rx: None,
-        initial_activity: VecDeque::new(),
-        room_join_rx: None,
-        initial_room_joins: VecDeque::new(),
         initial_announcements: None,
         is_new_user: false,
+        land_on_home: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
         initial_audio_source: late_core::models::user::AudioSource::default(),
@@ -555,10 +526,18 @@ pub fn make_app_with_paired_client(
         initial_2048_high_score: None,
         tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
+        traffic_service: TrafficService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
+        initial_traffic_track_scores: Vec::new(),
+        initial_traffic_high_score: None,
+        le_word_service: LeWordService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        rubiks_cube_service: RubiksCubeService::new(db.clone(), activity_tx.clone()),
+        initial_rubiks_cube_game: None,
+        initial_le_word_daily_word: None,
+        initial_le_word_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(
@@ -578,11 +557,20 @@ pub fn make_app_with_paired_client(
         initial_minesweeper_games: Vec::new(),
         lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
-            chip_service,
+            chip_service.clone(),
             db.clone(),
         ),
-        rooms_service: RoomsService::new(db.clone()),
-        room_game_registry: test_room_game_registry(db.clone()),
+        greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        daily_service: late_ssh::app::lobby::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        ),
+        house_registry: test_house_registry(db.clone()),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
         artboard_snapshot_service: late_ssh::app::artboard::svc::ArtboardSnapshotService::new(
@@ -602,6 +590,7 @@ pub fn make_app_with_paired_client(
         ultimate_service,
         initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
+        chip_service: chip_service.clone(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
         web_url: "http://localhost:3000".to_string(),
@@ -609,6 +598,15 @@ pub fn make_app_with_paired_client(
         rebels_host: "frittura.org".to_string(),
         rebels_port: 3788,
         rebels_secret: String::new(),
+        nethack_enabled: false,
+        nethack_host: String::new(),
+        nethack_port: 2323,
+        nethack_secret: String::new(),
+        nethack_awards: None,
+        dopewars_enabled: false,
+        dopewars_host: String::new(),
+        dopewars_port: 2324,
+        dopewars_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
@@ -616,19 +614,23 @@ pub fn make_app_with_paired_client(
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
+        worldcup_service: None,
         user_id,
         permissions: Permissions::default(),
         artboard_banned: false,
         artboard_ban_expires_at: None,
         active_users: None,
+        ai_service: None,
+        clubhouse_lobby: None,
+        clubhouse_tutorial_done: true,
+        show_aquarium_tray: false,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
+        flair_directory: None,
         activity_feed_rx: None,
-        initial_activity: VecDeque::new(),
-        room_join_rx: None,
-        initial_room_joins: VecDeque::new(),
         initial_announcements: None,
         is_new_user: false,
+        land_on_home: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_icecast_stream: late_core::models::user::IcecastStream::default(),
         initial_radio_station: late_core::models::user::RadioStation::default(),

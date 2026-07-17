@@ -45,13 +45,96 @@ impl ActivityPublisher {
         });
     }
 
-    pub fn game_played_task(&self, user_id: Uuid, game: ActivityGame, detail: Option<String>) {
+    pub fn game_event_task(&self, user_id: Uuid, game: ActivityGame, action: String) {
         let publisher = self.clone();
         tokio::spawn(async move {
             let username = publisher.username_for(user_id).await;
             let _ = publisher
                 .tx
-                .send(ActivityEvent::game_played(user_id, username, game, detail));
+                .send(ActivityEvent::game_event(user_id, username, game, action));
+        });
+    }
+
+    pub fn game_started_task(&self, user_id: Uuid, game: ActivityGame) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher
+                .tx
+                .send(ActivityEvent::game_started(user_id, username, game));
+        });
+    }
+
+    pub fn boss_slain_task(&self, user_id: Uuid, game: ActivityGame, boss: String) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher
+                .tx
+                .send(ActivityEvent::boss_slain(user_id, username, game, boss));
+        });
+    }
+
+    /// Announce a finished daily match to #lounge. `winner_id` is `None` for a
+    /// draw; otherwise it must be one of the two players. Emits a single
+    /// `DailyResult` event (one line per match; `match_id` keys the #lounge
+    /// repeat throttle so distinct matches never collapse). A decisive result
+    /// names only the winner (the loser is never resolved); a draw names both
+    /// players, so `opponent_id` is only looked up on the draw path.
+    pub fn daily_result_task(
+        &self,
+        match_id: Uuid,
+        game_label: &'static str,
+        challenger_id: Uuid,
+        opponent_id: Uuid,
+        winner_id: Option<Uuid>,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let event = match winner_id {
+                // Decisive: name only the winner — the loser is never resolved.
+                Some(winner) => {
+                    let winner_name = publisher.username_for(winner).await;
+                    ActivityEvent::daily_win(winner, winner_name, game_label, match_id)
+                }
+                // Draw: nobody lost, so name both players.
+                None => {
+                    let challenger_name = publisher.username_for(challenger_id).await;
+                    let opponent_name = publisher.username_for(opponent_id).await;
+                    ActivityEvent::daily_draw(
+                        challenger_id,
+                        challenger_name,
+                        opponent_name,
+                        game_label,
+                        match_id,
+                    )
+                }
+            };
+            let _ = publisher.tx.send(event);
+        });
+    }
+
+    pub fn sat_down_task(&self, user_id: Uuid, game: ActivityGame) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher
+                .tx
+                .send(ActivityEvent::sat_down(user_id, username, game));
+        });
+    }
+
+    pub fn username_effect_task(
+        &self,
+        user_id: Uuid,
+        effect: late_core::models::username_effect::UsernameEffect,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher.tx.send(ActivityEvent::username_effect_applied(
+                user_id, username, effect,
+            ));
         });
     }
 

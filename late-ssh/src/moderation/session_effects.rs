@@ -82,6 +82,25 @@ impl ModerationSessionEffects {
         notified
     }
 
+    pub(crate) async fn notify_toast(&self, user_id: Uuid, message: String) -> usize {
+        let mut notified = 0;
+        for token in self.session_tokens_for_user_id(user_id) {
+            if self
+                .send(
+                    &token,
+                    SessionMessage::Toast {
+                        message: message.clone(),
+                        error: true,
+                    },
+                )
+                .await
+            {
+                notified += 1;
+            }
+        }
+        notified
+    }
+
     pub(crate) async fn terminate_user_sessions(&self, user_id: Uuid, reason: &str) -> usize {
         let mut terminated = 0;
         if let Some(irc_registry) = &self.irc_registry {
@@ -167,17 +186,38 @@ impl ModerationSessionEffects {
     }
 
     pub(crate) fn update_active_username(&self, user_id: Uuid, username: &str) -> bool {
+        let mut old_username = None;
         if let Some(directory) = &self.username_directory {
+            old_username = usernames::snapshot(directory).get(&user_id).cloned();
             usernames::upsert(directory, user_id, username);
         }
         let Some(active_users) = self.active_users.as_ref() else {
+            if let Some(irc_registry) = &self.irc_registry
+                && let Some(old_username) = old_username
+                && old_username != username
+            {
+                irc_registry.project_username_change(user_id, &old_username, username);
+            }
             return false;
         };
         let mut guard = active_users.lock_recover();
         let Some(user) = guard.get_mut(&user_id) else {
+            if let Some(irc_registry) = &self.irc_registry
+                && let Some(old_username) = old_username
+                && old_username != username
+            {
+                irc_registry.project_username_change(user_id, &old_username, username);
+            }
             return false;
         };
+        old_username.get_or_insert_with(|| user.username.clone());
         user.username = username.to_string();
+        if let Some(irc_registry) = &self.irc_registry
+            && let Some(old_username) = old_username
+            && old_username != username
+        {
+            irc_registry.project_username_change(user_id, &old_username, username);
+        }
         true
     }
 

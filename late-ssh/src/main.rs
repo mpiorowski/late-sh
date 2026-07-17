@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -9,11 +9,11 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::Context;
 use late_core::{
-    MutexRecover, db::Db, models::chat_room::ChatRoom, rate_limit::IpRateLimiter,
-    shutdown::CancellationToken,
+    db::Db, models::chat_room::ChatRoom, rate_limit::IpRateLimiter, shutdown::CancellationToken,
 };
 use late_ssh::{
     api,
+    app::ai::{ghost::GhostService, svc::AiService},
     app::audio::now_playing::svc::NowPlayingService,
     app::audio::svc::AudioService,
     app::chat::feeds::svc::FeedService,
@@ -24,20 +24,13 @@ use late_ssh::{
     app::chat::work::svc::WorkService,
     app::profile::svc::ProfileService,
     app::voice::svc::VoiceService,
-    app::{
-        activity::channel::ACTIVITY_HISTORY_MAX_EVENTS,
-        ai::{ghost::GhostService, svc::AiService},
-    },
     config::Config,
     moderation::service::ModerationInfra,
     session::SessionRegistry,
     ssh,
     state::State,
 };
-use tokio::{
-    sync::{Semaphore, broadcast},
-    task::JoinSet,
-};
+use tokio::{sync::Semaphore, task::JoinSet};
 
 fn begin_drain(
     state: &State,
@@ -144,10 +137,7 @@ async fn main() -> anyhow::Result<()> {
     let username_directory = late_ssh::usernames::load(&db)
         .await
         .context("failed to load username directory")?;
-    let activity_history = Arc::new(Mutex::new(VecDeque::new()));
-    let (activity_tx, mut activity_history_rx) = late_ssh::app::activity::channel::new(512);
-    let room_join_history = Arc::new(Mutex::new(VecDeque::new()));
-    let (room_join_tx, mut room_join_history_rx) = tokio::sync::broadcast::channel(512);
+    let (activity_tx, _activity_rx) = late_ssh::app::activity::channel::new(512);
     let activity_publisher =
         late_ssh::app::activity::publisher::ActivityPublisher::new(db.clone(), activity_tx.clone())
             .with_username_directory(username_directory.clone());
@@ -155,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
     let now_playing_rx = now_playing_service.subscribe_state();
     let radio_meta_service = late_ssh::app::audio::radio_meta::svc::RadioMetaService::new();
     let radio_meta_rx = radio_meta_service.subscribe_state();
+    let worldcup_service = late_ssh::app::worldcup::svc::WorldCupService::new();
     let public_stream_base_url = format!("{}/stream", config.web_url.trim_end_matches('/'));
     let paired_client_registry =
         late_ssh::paired_clients::PairedClientRegistry::new(public_stream_base_url);
@@ -178,6 +169,12 @@ async fn main() -> anyhow::Result<()> {
     .with_irc_registry(irc_registry.clone())
     .with_force_admin(config.force_admin);
     let _poll_finalizer_recovery_task = chat_service.start_poll_finalizer_recovery_task();
+    let _lounge_feed_task = late_ssh::app::activity::lounge::start_lounge_feed_task(
+        db.clone(),
+        chat_service.clone(),
+        username_directory.clone(),
+        activity_tx.subscribe(),
+    );
     let ai_service = AiService::new(
         config.ai.enabled,
         config.ai.api_key.clone(),
@@ -199,67 +196,44 @@ async fn main() -> anyhow::Result<()> {
         .with_activity_feed(activity_tx.clone());
     let snake_service = late_ssh::app::arcade::snake::svc::SnakeService::new(db.clone())
         .with_activity_feed(activity_tx.clone());
+    let traffic_service = late_ssh::app::arcade::traffic::svc::TrafficService::new(db.clone())
+        .with_activity_feed(activity_tx.clone());
+    let rubiks_cube_service = late_ssh::app::arcade::rubiks_cube::svc::RubiksCubeService::new(
+        db.clone(),
+        activity_tx.clone(),
+    );
+    let le_word_service =
+        late_ssh::app::arcade::le_word::svc::LeWordService::new(db.clone(), activity_tx.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
     let _chip_activity_reward_task = chip_service.start_activity_reward_task(activity_tx.clone());
-    let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
-    rooms_service.reconcile_round_statuses_task();
-    rooms_service.refresh_task();
-    rooms_service.cleanup_inactive_tables_task();
-    let asterion_room_manager = late_ssh::app::rooms::asterion::manager::AsterionRoomManager::new(
-        chip_service.clone(),
-        activity_publisher.clone(),
-        rooms_service.clone(),
+    let daily_service = late_ssh::app::lobby::daily::svc::DailyService::new(
         db.clone(),
-    );
-    let blackjack_table_manager =
-        late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(
-            chip_service.clone(),
-            late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
-            activity_publisher.clone(),
-            rooms_service.clone(),
-        );
-    let tictactoe_table_manager =
-        late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new(
-            activity_publisher.clone(),
-            rooms_service.clone(),
-        );
-    let chess_table_manager = late_ssh::app::rooms::chess::manager::ChessTableManager::new(
         chip_service.clone(),
         activity_publisher.clone(),
-        rooms_service.clone(),
     );
-    let poker_table_manager = late_ssh::app::rooms::poker::manager::PokerTableManager::new(
-        chip_service.clone(),
-        activity_publisher.clone(),
-        rooms_service.clone(),
-    );
-    let tron_table_manager = late_ssh::app::rooms::tron::manager::TronTableManager::new(
-        chip_service.clone(),
-        activity_publisher.clone(),
-        rooms_service.clone(),
-    );
+    daily_service.refresh_task();
+    daily_service.start_sweeper_task();
     let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(
         activity_publisher.clone(),
         chip_service.clone(),
         db.clone(),
     );
-    let sshattrick_room_manager =
-        late_ssh::app::rooms::sshattrick::manager::SshattrickRoomManager::new(
-            rooms_service.clone(),
-            chip_service.clone(),
-            activity_publisher.clone(),
-            db.clone(),
-        );
-    let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
-        asterion_room_manager,
-        blackjack_table_manager.clone(),
-        chess_table_manager,
-        poker_table_manager,
-        sshattrick_room_manager,
-        tictactoe_table_manager,
-        tron_table_manager,
+    let greendragon_service = late_ssh::app::door::greendragon::svc::GreenDragonService::new(
+        activity_publisher.clone(),
+        chip_service.clone(),
+        db.clone(),
     );
-    room_game_registry.start_dashboard_room_join_feed_task(room_join_tx.clone());
+    let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
+        chip_service.clone(),
+        late_ssh::app::lobby::house::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
+        activity_publisher.clone(),
+        db.clone(),
+    );
+    house_registry
+        .ensure_chat_rooms()
+        .await
+        .context("failed to ensure house table chat rooms")?;
+    house_registry.start_seat_activity_task();
     let sudoku_service =
         late_ssh::app::arcade::sudoku::svc::SudokuService::new(db.clone(), activity_tx.clone());
     let nonogram_service =
@@ -292,12 +266,14 @@ async fn main() -> anyhow::Result<()> {
         initial_dartboard.map(|snapshot| snapshot.canvas),
         dartboard_provenance.clone(),
     );
-    let chat_service = chat_service.with_moderation_infra(
-        ModerationInfra::default()
-            .with_force_admin(config.force_admin)
-            .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone())
-            .with_voice(voice_service.clone()),
-    );
+    let chat_service = chat_service
+        .with_moderation_infra(
+            ModerationInfra::default()
+                .with_force_admin(config.force_admin)
+                .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone())
+                .with_voice(voice_service.clone()),
+        )
+        .with_chip_service(chip_service.clone());
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let _profile_award_snapshot_task = leaderboard_service
         .clone()
@@ -305,7 +281,10 @@ async fn main() -> anyhow::Result<()> {
     let quest_service = late_ssh::app::QuestService::new(db.clone(), activity_tx.clone());
     let _quest_activity_task = quest_service.start_activity_task();
     let _quest_listener_task = quest_service.start_listener_task(config.db.clone());
-    let shop_service = late_ssh::app::ShopService::new(db.clone());
+    let flair_directory = late_ssh::app::common::username_effect::new_directory();
+    let shop_service = late_ssh::app::ShopService::new(db.clone())
+        .with_flair_directory(flair_directory.clone())
+        .with_activity(activity_publisher.clone());
     let _shop_listener_task = shop_service.start_listener_task(config.db.clone());
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {
@@ -315,13 +294,16 @@ async fn main() -> anyhow::Result<()> {
             late_ssh::app::arcade::nonogram::state::Library::default()
         }
     };
+    let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
     let ghost_service = GhostService::new(
         db.clone(),
         chat_service.clone(),
         ai_service.clone(),
-        blackjack_table_manager.clone(),
         active_users.clone(),
         activity_tx.clone(),
+        username_directory.clone(),
+        chip_service.clone(),
+        clubhouse_lobby.clone(),
     );
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,
@@ -351,18 +333,21 @@ async fn main() -> anyhow::Result<()> {
         twenty_forty_eight_service,
         tetris_service,
         snake_service,
+        traffic_service,
+        rubiks_cube_service,
+        le_word_service,
         sudoku_service,
         nonogram_service,
         solitaire_service,
         minesweeper_service,
         lateania_service,
+        greendragon_service,
+        daily_service,
         bonsai_service,
         pet_service,
         nonogram_library,
         chip_service,
-        rooms_service,
-        blackjack_table_manager,
-        room_game_registry,
+        house_registry,
         dartboard_server,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),
@@ -372,14 +357,14 @@ async fn main() -> anyhow::Result<()> {
         conn_limit,
         conn_counts,
         active_users,
+        clubhouse_lobby,
         afk_users,
         username_directory: username_directory.clone(),
+        flair_directory: flair_directory.clone(),
         activity_feed: activity_tx,
-        activity_history: activity_history.clone(),
-        room_join_feed: room_join_tx,
-        room_join_history: room_join_history.clone(),
         now_playing_rx: now_playing_rx.clone(),
         radio_meta_rx: radio_meta_rx.clone(),
+        worldcup_service: worldcup_service.clone(),
         session_registry,
         paired_client_registry,
         irc_registry: irc_registry.clone(),
@@ -399,54 +384,6 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let mut tasks = JoinSet::new();
-    let activity_history_shutdown = singleton_shutdown.clone();
-    tasks.spawn(async move {
-        loop {
-            tokio::select! {
-                _ = activity_history_shutdown.cancelled() => break,
-                result = activity_history_rx.recv() => {
-                    match result {
-                        Ok(event) => {
-                            let mut history = activity_history.lock_recover();
-                            history.push_back(event);
-                            while history.len() > ACTIVITY_HISTORY_MAX_EVENTS {
-                                history.pop_front();
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(skipped, "activity history receiver lagged");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            }
-        }
-        Ok(())
-    });
-    let room_join_history_shutdown = singleton_shutdown.clone();
-    tasks.spawn(async move {
-        loop {
-            tokio::select! {
-                _ = room_join_history_shutdown.cancelled() => break,
-                result = room_join_history_rx.recv() => {
-                    match result {
-                        Ok(join) => {
-                            let mut history = room_join_history.lock_recover();
-                            late_ssh::app::dashboard::state::push_recent_room_join(
-                                &mut history,
-                                join,
-                            );
-                        }
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(skipped, "room join history receiver lagged");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            }
-        }
-        Ok(())
-    });
     let api_state = state.clone();
     let api_shutdown = session_shutdown.clone();
     tasks.spawn(async move {
@@ -491,6 +428,13 @@ async fn main() -> anyhow::Result<()> {
     let radio_meta_task = radio_meta_service.start_task(radio_meta_shutdown);
     tasks.spawn(async move {
         radio_meta_task.await.context("radio meta task panicked")?;
+        Ok(())
+    });
+
+    let worldcup_shutdown = session_shutdown.clone();
+    let worldcup_task = worldcup_service.start_task(worldcup_shutdown);
+    tasks.spawn(async move {
+        worldcup_task.await.context("world cup task panicked")?;
         Ok(())
     });
 

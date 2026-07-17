@@ -126,8 +126,10 @@ make check
 ```
 
 This runs `cargo fmt --check`, `cargo clippy`, and `cargo nextest`.
-The local check starts the compose Postgres service and points DB integration
-tests at it via `TEST_DATABASE_URL`.
+The local check starts a dedicated Compose Postgres project (`late-check`) on
+port `55433` and points DB integration tests at it via `TEST_DATABASE_URL`.
+Override `CHECK_INSTANCE` or `CHECK_PG_HOST_PORT` if you need a parallel check
+database.
 
 Run the broader PR-style gate before opening a PR:
 

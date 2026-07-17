@@ -134,19 +134,16 @@ async fn screen_number_keys_switch_between_pages_including_pinstar() {
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"3");
-    wait_for_render_contains(&mut app, " Tables ").await;
+    wait_for_render_contains(&mut app, " Games ").await;
 
     app.handle_input(b"4");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"5");
-    wait_for_render_contains(&mut app, " Lateania ").await;
+    wait_for_render_contains(&mut app, " Directory ").await;
 
     app.handle_input(b"6");
-    wait_for_render_contains(&mut app, " Rebels ").await;
-
-    app.handle_input(b"7");
-    wait_for_render_contains(&mut app, " Directory ").await;
+    wait_for_render_contains(&mut app, "FIFA World Cup").await;
 
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
@@ -166,19 +163,19 @@ async fn shift_tab_cycles_screens_backwards() {
     let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
 
     app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, "FIFA World Cup").await;
+
+    app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Directory").await;
-
-    app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Rebels ").await;
-
-    app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Tables ").await;
+    wait_for_render_contains(&mut app, " Games ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " The Arcade ").await;
@@ -204,19 +201,19 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Tables ").await;
+    wait_for_render_contains(&mut app, " Games ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Lateania ").await;
-
-    app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Rebels ").await;
-
-    app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Directory ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, "FIFA World Cup").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Home ").await;
@@ -394,11 +391,15 @@ async fn question_mark_opens_lateania_guide_on_lateania_screen() {
     let mut app = make_app(test_db.db.clone(), user.id, "lateania-guide-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
 
-    app.handle_input(b"5");
+    // Lateania has no top-level key now: open the Games hub and launch the
+    // selected (default) Lateania card.
+    app.handle_input(b"3");
+    wait_for_render_contains(&mut app, " Games ").await;
+    app.handle_input(b"\r");
     wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Lateania is the persistent BBS-style world.").await;
+    wait_for_render_contains(&mut app, "Lateania is the persistent BBS-style world").await;
 
     let frame = render_plain(&mut app);
     assert!(
@@ -814,7 +815,10 @@ async fn chat_room_list_is_mouse_clickable() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    app.handle_input(b"\x1b[<0;5;9M");
+    // Click the #rust row in the sidebar. It sits below the Core section
+    // (lounge, mentions, news, "+ browse rooms") and the Channels header, at
+    // rail row 10 (SGR mouse rows are 1-based).
+    app.handle_input(b"\x1b[<0;5;10M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }
@@ -1223,9 +1227,9 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     wait_for_render_contains(&mut app, "dnd").await;
 
     // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
-    // then dnd (channels section). Press l three times to reach dnd from
-    // lounge.
-    app.handle_input(b"lll");
+    // "+ browse rooms" (Discover, last in Core), then dnd (channels section).
+    // Press l four times to reach dnd from lounge.
+    app.handle_input(b"llll");
     wait_for_render_contains(&mut app, "Home · dnd").await;
 
     app.handle_input(b"i");

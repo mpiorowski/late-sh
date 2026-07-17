@@ -6,7 +6,7 @@ use serde_json::json;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::{
     env, fs,
     fs::OpenOptions,
@@ -50,7 +50,12 @@ enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
-    RequestClipboardImage,
+    RequestClipboardImage {
+        /// Echoed back in the clipboard payload so the server can match the
+        /// response to this exact request. None from older servers.
+        #[serde(default)]
+        request_id: Option<u64>,
+    },
     SetPlaybackSource {
         source: PairAudioSource,
         #[serde(default)]
@@ -129,16 +134,39 @@ impl WebviewPlaybackController {
         &mut self,
         source: PairAudioSource,
         embedded_webview_enabled: bool,
+        muted: bool,
+        volume_percent: u8,
     ) -> Result<()> {
         match (source, embedded_webview_enabled) {
-            (PairAudioSource::Youtube, true) => self.enter_youtube(),
+            (PairAudioSource::Youtube, true) => self.enter_youtube(muted, volume_percent),
             (PairAudioSource::Youtube, false) => self.enter_browser_youtube(),
             (PairAudioSource::Icecast, _) => self.enter_icecast(),
             (PairAudioSource::Radio, _) => self.enter_radio(),
         }
     }
 
-    fn enter_youtube(&mut self) -> Result<()> {
+    /// Heartbeat-tick watchdog: respawn the helper when the user is on
+    /// YouTube and the child died. Without this the parent only notices a
+    /// dead helper on the next SetPlaybackSource, which may never arrive
+    /// (the server can miss the helper's disconnect entirely on a half-open
+    /// TCP drop and then never replays the playback source).
+    pub(super) fn maintain_helper(&mut self, muted: bool, volume_percent: u8) {
+        if !self.wants_youtube || self.helper_is_running() {
+            return;
+        }
+        // Quiet backoff pre-check: enter_youtube's backoff probe warns on
+        // every call, which is too loud at a 1s cadence.
+        if let Some(until) = self.disabled_until
+            && Instant::now() < until
+        {
+            return;
+        }
+        if let Err(err) = self.enter_youtube(muted, volume_percent) {
+            warn!(error = %err, "failed to respawn embedded YouTube webview helper");
+        }
+    }
+
+    fn enter_youtube(&mut self, muted: bool, volume_percent: u8) -> Result<()> {
         self.wants_youtube = true;
         if self.helper_is_running() {
             return Ok(());
@@ -147,14 +175,6 @@ impl WebviewPlaybackController {
             return Ok(());
         }
 
-        let exe = match std::env::current_exe() {
-            Ok(exe) => exe,
-            Err(err) => {
-                warn!(error = %err, "failed to locate current late executable for webview helper");
-                self.record_helper_start_failure();
-                return Ok(());
-            }
-        };
         let helper_stderr = match webview_helper_stderr() {
             Ok(stderr) => stderr,
             Err(err) => {
@@ -176,10 +196,36 @@ impl WebviewPlaybackController {
                 );
             }
         }
-        let mut command = Command::new(exe);
+        // Windows/macOS run the webview in-process via the `webview-pair`
+        // subcommand. Everywhere else it is the standalone `late-webview`
+        // binary, so `late` itself never links WebKitGTK/GTK — a missing
+        // webview stack must degrade to "no embedded YouTube", never to
+        // "late does not start".
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let mut command = {
+            let exe = match std::env::current_exe() {
+                Ok(exe) => exe,
+                Err(err) => {
+                    warn!(error = %err, "failed to locate current late executable for webview helper");
+                    self.record_helper_start_failure();
+                    return Ok(());
+                }
+            };
+            let mut command = Command::new(exe);
+            command.arg("webview-pair");
+            command
+        };
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let mut command = Command::new(webview_helper_program());
         command
-            .arg("webview-pair")
             .env("LATE_API_BASE_URL", &self.api_base_url)
+            // Hand the session's current mute/volume to the helper so a
+            // respawn mid-session comes back muted if the user muted, instead
+            // of the helper's unmuted default. The parent tracks the same
+            // toggle_mute/volume controls the helper receives, so these
+            // atomics mirror the helper's last state.
+            .env("LATE_WEBVIEW_INITIAL_MUTED", if muted { "1" } else { "0" })
+            .env("LATE_WEBVIEW_INITIAL_VOLUME", volume_percent.to_string())
             // The helper is an undecorated media surface, not an accessibility
             // target. Opting out avoids host AT-SPI bridge crashes from stale
             // at-spi-bus-launcher/dbus state while leaving the terminal app's
@@ -192,9 +238,26 @@ impl WebviewPlaybackController {
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             command.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
+        #[cfg(unix)]
+        {
+            // Keep WebKitGTK media subprocesses in the helper's process group
+            // so switching away from YouTube can terminate the whole helper
+            // tree on Linux setups where playback outlives the direct child.
+            command.process_group(0);
+        }
 
         let child = match command.spawn() {
             Ok(child) => child,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                warn!(
+                    error = %err,
+                    "late-webview helper binary not found; embedded YouTube playback is \
+                     unavailable (reinstall the CLI or set LATE_WEBVIEW_BIN); radio, icecast, \
+                     and browser-paired YouTube still work"
+                );
+                self.record_helper_start_failure();
+                return Ok(());
+            }
             Err(err) => {
                 warn!(error = %err, "failed to spawn embedded YouTube webview helper");
                 self.record_helper_start_failure();
@@ -326,13 +389,49 @@ impl WebviewPlaybackController {
         let Some(mut child) = self.child.take() else {
             return;
         };
-        if let Err(err) = child.kill() {
+        if let Err(err) = kill_webview_helper(&mut child) {
             warn!(error = %err, "failed to stop embedded YouTube webview helper");
             return;
         }
         let _ = child.wait();
         info!("stopped embedded YouTube webview helper");
     }
+}
+
+/// Resolve the standalone `late-webview` helper binary on platforms where
+/// the webview is not compiled into `late`: explicit `LATE_WEBVIEW_BIN`
+/// override, then a sibling of the current executable (the installer places
+/// both binaries in the same directory), then a bare name for `$PATH`.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub(super) fn webview_helper_program() -> PathBuf {
+    if let Some(path) = nonempty_os_env("LATE_WEBVIEW_BIN") {
+        return PathBuf::from(path);
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join("late-webview");
+        if sibling.is_file() {
+            return sibling;
+        }
+    }
+    PathBuf::from("late-webview")
+}
+
+#[cfg(unix)]
+fn kill_webview_helper(child: &mut Child) -> Result<()> {
+    let pid = child.id() as i32;
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(-pid),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .with_context(|| format!("failed to kill webview helper process group {pid}"))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn kill_webview_helper(child: &mut Child) -> Result<()> {
+    child.kill().context("failed to kill webview helper")
 }
 
 struct WebviewHelperStderr {
@@ -575,6 +674,10 @@ pub(super) async fn run_viz_ws(
                     last_icecast_output_available = current_icecast_output_available;
                     send_client_state(&mut ws, client, playback).await?;
                 }
+                webview.maintain_helper(
+                    playback.muted.load(Ordering::Relaxed),
+                    playback.volume_percent.load(Ordering::Relaxed),
+                );
             }
             _ = voice_state_heartbeat.tick(), if voice.joined => {
                 send_voice_state(&mut ws, voice).await?;
@@ -707,11 +810,16 @@ async fn handle_pair_control(
                     "applied playback source change"
                 );
             }
-            webview.apply_playback_source(source, embedded_webview_enabled)?;
+            webview.apply_playback_source(
+                source,
+                embedded_webview_enabled,
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            )?;
             Ok(false)
         }
-        PairControlMessage::RequestClipboardImage => {
-            send_clipboard_image(ws).await?;
+        PairControlMessage::RequestClipboardImage { request_id } => {
+            send_clipboard_image(ws, request_id).await?;
             Ok(false)
         }
         PairControlMessage::VoiceJoin {
@@ -816,7 +924,7 @@ fn apply_audio_pair_control(
             info!(volume_percent = new_volume, "applied paired volume down");
         }
         PairControlMessage::SetPlaybackSource { .. }
-        | PairControlMessage::RequestClipboardImage
+        | PairControlMessage::RequestClipboardImage { .. }
         | PairControlMessage::VoiceJoin { .. }
         | PairControlMessage::VoiceLeave
         | PairControlMessage::VoiceSetMuted { .. }
@@ -828,6 +936,7 @@ async fn send_clipboard_image(
     ws: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
+    request_id: Option<u64>,
 ) -> Result<()> {
     let image_result = tokio::task::spawn_blocking(clipboard::image_png_bytes)
         .await
@@ -836,10 +945,12 @@ async fn send_clipboard_image(
         Ok(bytes) => json!({
             "event": "clipboard_image",
             "data_base64": STANDARD.encode(bytes),
+            "request_id": request_id,
         }),
         Err(err) => json!({
             "event": "clipboard_image_failed",
             "message": err.to_string(),
+            "request_id": request_id,
         }),
     };
     ws.send(Message::Text(payload.to_string().into())).await?;

@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::common::theme;
+use crate::app::door::landing;
 
 use super::state::{Mode, State};
 
@@ -19,6 +20,12 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
+    draw_landing(frame, area, state.is_enabled());
+}
+
+/// Two-column Rebels landing (copy left, ship art right), used by both the
+/// standalone screen fallback and the Games hub when Rebels is selected.
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(if area.width >= 122 && area.height >= 20 {
@@ -28,13 +35,13 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         })
         .split(area);
 
-    draw_launch_copy(frame, layout[0], state);
+    draw_launch_copy(frame, layout[0], enabled);
     if layout.len() > 1 && layout[1].width > 0 {
         draw_sky_art(frame, layout[1]);
     }
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
+fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -44,8 +51,8 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
         ])
         .split(area)[1];
 
-    let action_line = if state.is_enabled() {
-        action_line(">", "Enter", "launch the proxy", theme::SUCCESS())
+    let action_line = if enabled {
+        landing::action(">", "Enter", "launch the proxy", theme::SUCCESS())
     } else {
         Line::from(Span::styled(
             "Currently unavailable",
@@ -70,19 +77,20 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
             ),
         ]),
         Line::from(Span::styled(
-            "A remote SSH door game from frittura.org, embedded inside late.sh.",
+            "2101: the corporations won. Crew up, steal a ship, fly.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
+        legend_credentials(),
         Line::from(""),
     ]);
     lines.extend(game_stats());
     lines.extend([
         action_line,
         Line::from(""),
-        section("Once Inside"),
-        hint_line("Esc", "return to this launcher"),
-        hint_line("Ctrl-C", "also leaves the remote session"),
-        hint_line("mouse", "forwarded into the remote terminal"),
+        landing::heading("Once Inside"),
+        landing::hint("Esc", "return to the Games hub", 8),
+        landing::hint("Ctrl-C", "also leaves the remote session", 8),
+        landing::hint("mouse", "forwarded into the remote terminal", 8),
         Line::from(""),
         Line::from(Span::styled(
             "https://wiki.rebels.frittura.org/index.html",
@@ -111,12 +119,7 @@ fn draw_sky_art(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(spaceship_ascii()), inner[1]);
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Starter ships",
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            )),
+            landing::heading("Starter ships"),
             Line::raw(""),
             fact_line("Bresci", "fast shuttle"),
             fact_line("Orwell", "sturdy pincher"),
@@ -170,58 +173,33 @@ fn spaceship_ascii() -> Vec<Line<'static>> {
 
 fn game_stats() -> Vec<Line<'static>> {
     vec![
-        stat_line("remote ssh", "proxied live into this terminal"),
-        stat_line("identity", "derived from your late.sh account"),
-        stat_line("style", "space travel, roster building, basketball"),
+        landing::stat("remote ssh", "proxied live into this terminal", 12),
+        landing::stat("identity", "derived from your late.sh account", 12),
+        landing::stat("style", "explore, crew up, settle it on the court", 12),
         Line::from(""),
-        section("Launch"),
+        flavor_quote(),
+        Line::from(""),
+        landing::heading("Launch"),
     ]
 }
 
-fn section(title: &str) -> Line<'static> {
+/// The pitch in one line: a living, open-source indie game played by people right
+/// now over P2P, not a static bundled port.
+fn legend_credentials() -> Line<'static> {
     Line::from(Span::styled(
-        title.to_string(),
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
+        "Open source \u{b7} P2P multiplayer \u{b7} built at frittura.org",
+        Style::default().fg(theme::AMBER_DIM()),
     ))
 }
 
-fn stat_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{label:<12}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(value.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-fn action_line(marker: &str, key: &str, label: &str, color: Color) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{marker} "), Style::default().fg(color)),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT())),
-    ])
-}
-
-fn hint_line(key: &str, label: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
+/// The whole premise in one breath: the line that sells the absurd hook.
+fn flavor_quote() -> Line<'static> {
+    Line::from(Span::styled(
+        "  \"Be free: turn pirate. Stay alive: play basketball.\"",
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    ))
 }
 
 fn fact_line(label: &str, value: &str) -> Line<'static> {
@@ -297,6 +275,22 @@ pub fn blit_screen(buf: &mut Buffer, area: Rect, screen: &vt100::Screen) {
             );
         }
     }
+
+    // The physical terminal cursor is hidden app-wide (`cursor::Hide`), and this
+    // is a pure buffer blit with no access to the ratatui hardware cursor, so a
+    // parked cursor would otherwise be invisible. Draw it ourselves as a
+    // reverse-video block over its cell — authentic to a real terminal (NetHack
+    // keeps the cursor on your `@`) and the only way look/travel mode (`;`, `_`),
+    // which navigate purely by moving the cursor, are visible at all.
+    if !screen.hide_cursor() {
+        let (row, col) = screen.cursor_position();
+        if row < area.height
+            && col < area.width
+            && let Some(dst) = buf.cell_mut((area.x + col, area.y + row))
+        {
+            dst.set_style(dst.style().add_modifier(Modifier::REVERSED));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -342,5 +336,25 @@ mod tests {
     #[test]
     fn default_color_maps_to_reset() {
         assert_eq!(to_ratatui_color(vt100::Color::Default), Color::Reset);
+    }
+
+    #[test]
+    fn visible_cursor_is_drawn_as_a_reversed_block() {
+        // Park the cursor at row 0, col 2 (CUP is 1-based) with it shown.
+        let p = parser(2, 5, b"\x1b[?25h\x1b[1;3H");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 2));
+        blit_screen(&mut buf, Rect::new(0, 0, 5, 2), p.screen());
+        assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+        // A cell the cursor is not on stays un-reversed.
+        assert!(!buf[(0, 0)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn hidden_cursor_draws_no_block() {
+        // ESC[?25l hides the cursor; nothing should be reversed.
+        let p = parser(2, 5, b"\x1b[?25l\x1b[1;3H");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 2));
+        blit_screen(&mut buf, Rect::new(0, 0, 5, 2), p.screen());
+        assert!(!buf[(2, 0)].modifier.contains(Modifier::REVERSED));
     }
 }

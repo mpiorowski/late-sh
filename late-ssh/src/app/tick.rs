@@ -1,9 +1,7 @@
 use std::time::Instant;
 
-use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
-use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
+use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC};
 use crate::app::activity::event::ActivityKind;
-use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
 use crate::app::files::inline_image::InlineImageRenderSettings;
@@ -14,6 +12,8 @@ use late_core::models::user::AudioSource;
 impl App {
     pub fn tick(&mut self) {
         crate::app::input::flush_pending_escape(self);
+
+        self.marquee_tick = self.marquee_tick.saturating_add(1);
 
         if self.show_splash {
             self.splash_ticks = self.splash_ticks.saturating_add(1);
@@ -30,11 +30,25 @@ impl App {
         }
 
         self.sync_visible_chat_room();
+        self.tick_clubhouse();
+
+        // Expire a stale paired-clipboard wait here rather than inside
+        // chat.tick(): the registry slot must be cancelled along with it, so
+        // a late CLI response can't satisfy a newer request or an armed slot
+        // linger after the banner already reported the timeout.
+        if let Some(b) = self.chat.expire_pending_clipboard_image_upload() {
+            if let Some(registry) = &self.paired_client_registry {
+                registry.cancel_clipboard_request(&self.session_token);
+            }
+            self.banner = Some(b);
+        }
 
         // Services
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        // Fire a debounced message search for the Ctrl+/ modal's `?` mode.
+        crate::app::room_search_modal::state::tick_message_search(self);
         if let Some(room_id) = self.chat.take_requested_poll_room() {
             let allow_poll_modal = self.screen == Screen::Dashboard;
             crate::app::chat::input::open_requested_poll_modal(self, room_id, allow_poll_modal);
@@ -70,10 +84,7 @@ impl App {
             self.set_screen(Screen::Dashboard);
         }
         if let Some((user_id, username)) = self.chat.take_requested_open_profile() {
-            self.show_sheet_modal = false;
-            self.sheet_modal_state.close();
-            self.profile_modal_state.open(user_id, username);
-            self.show_profile_modal = true;
+            self.open_profile_modal(user_id, username);
         }
         if let Some(request) = self.chat.take_requested_open_sheet() {
             self.show_profile_modal = false;
@@ -94,11 +105,7 @@ impl App {
             .pending_chat_profile_open
             .take_if(|p| p.time.elapsed() >= crate::app::input::PROFILE_CLICK_DEBOUNCE)
         {
-            self.show_sheet_modal = false;
-            self.sheet_modal_state.close();
-            self.profile_modal_state
-                .open(pending.user_id, pending.username);
-            self.show_profile_modal = true;
+            self.open_profile_modal(pending.user_id, pending.username);
         }
         if let Some(b) = self.audio.tick() {
             self.banner = Some(b);
@@ -122,12 +129,8 @@ impl App {
             && self.settings_modal_state.draft().username.is_empty()
             && !self.profile_state.profile().username.is_empty()
         {
-            if self.profile_state.profile().show_settings_on_connect {
-                self.settings_modal_state
-                    .open_from_profile(self.profile_state.profile());
-            } else {
-                self.show_settings = false;
-            }
+            self.settings_modal_state
+                .open_from_profile(self.profile_state.profile());
         }
 
         for msg in messages {
@@ -153,6 +156,13 @@ impl App {
                 SessionMessage::ClipboardImageFailed { message } => {
                     self.chat.clear_pending_clipboard_image_upload();
                     self.banner = Some(crate::app::common::primitives::Banner::error(&message));
+                }
+                SessionMessage::Toast { message, error } => {
+                    self.banner = Some(if error {
+                        crate::app::common::primitives::Banner::error(&message)
+                    } else {
+                        crate::app::common::primitives::Banner::success(&message)
+                    });
                 }
                 SessionMessage::Terminate { reason } => {
                     tracing::info!(reason, "session terminated by control message");
@@ -250,17 +260,43 @@ impl App {
                 GAME_SELECTION_SNAKE => {
                     self.snake_state.tick();
                 }
+                GAME_SELECTION_TRAFFIC => {
+                    self.traffic_state.tick();
+                }
                 selection if crate::app::arcade::input::is_nes_selection(selection) => {
                     self.nes_cabinet_state.tick();
                 }
                 _ => (),
             }
         }
-        if let Some(active_room_game) = &mut self.active_room_game {
-            active_room_game.tick();
-        }
-        if let Some(b) = self.tick_rooms() {
+        if let Some(b) = self.daily.tick() {
             self.banner = Some(b);
+        }
+        // Modal cursor, pending claim, and glow follow the daily snapshot.
+        self.lobby.sync(&self.daily);
+        // The match chat room id only becomes known once the board's row
+        // loads, so the visible-room sync (read marker + tail) and the
+        // one-time idempotent join both key off the loaded detail here
+        // rather than off the screen switch.
+        if self.screen == crate::app::common::primitives::Screen::DailyMatch {
+            self.sync_visible_chat_room();
+            if let Some(chat_room_id) = self.daily.board_chat_room_id()
+                && let Some(board) = self.daily.board.as_mut()
+                && !board.chat_join_requested
+            {
+                board.chat_join_requested = true;
+                self.chat.join_game_room_chat(chat_room_id);
+            }
+        }
+        self.house.tick();
+        if self.screen == crate::app::common::primitives::Screen::HouseTable {
+            self.sync_visible_chat_room();
+            if let Some(chat_room_id) = self.house.chat_room_id()
+                && !self.house.chat_join_requested
+            {
+                self.house.chat_join_requested = true;
+                self.chat.join_game_room_chat(chat_room_id);
+            }
         }
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
@@ -270,6 +306,40 @@ impl App {
         }
         if let Some(state) = self.rebels_state.as_mut() {
             state.tick();
+        }
+        if let Some(state) = self.nethack_state.as_mut() {
+            state.tick();
+        }
+        if let Some(state) = self.dopewars_state.as_mut() {
+            state.tick();
+        }
+        if let Some(state) = self.greendragon_state.as_mut() {
+            state.tick();
+        }
+        // Door games are launched from the Games hub, so they return there when
+        // they exit. Rebels flips out of Running the tick its proxy closes;
+        // NetHack does the same but first holds a short input grace (so a dying
+        // player's key-mashing can't fall through), so wait that out first.
+        if self.screen == Screen::Rebels
+            && self.rebels_state.as_ref().is_none_or(|s| !s.is_running())
+        {
+            self.set_screen(Screen::Games);
+        }
+        if self.screen == Screen::Nethack
+            && self
+                .nethack_state
+                .as_ref()
+                .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+        {
+            self.set_screen(Screen::Games);
+        }
+        if self.screen == Screen::Dopewars
+            && self
+                .dopewars_state
+                .as_ref()
+                .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+        {
+            self.set_screen(Screen::Games);
         }
         // Pinstar Browser Actions
         if let Some(action) = self.pinstar_browser.pending_action.take() {
@@ -547,12 +617,26 @@ impl App {
                 let _ = state.save();
             }
         }
-        if let Some(balance) = self
-            .active_room_game
-            .as_ref()
-            .and_then(|game| game.chip_balance())
-        {
+        if let Some(balance) = self.house.client().and_then(|client| client.chip_balance()) {
             self.chip_balance = balance;
+        }
+
+        // Drunk glow for chat author labels: copy out of the shared lobby
+        // about once a second so renders read owned state, and re-reading
+        // also lets the tint fade as the buzz decays. Username effects ride
+        // the same cadence: one Arc clone of the flair directory, resolved
+        // into paintable styles (which is also what steps shimmer at 1 Hz)
+        // and expired at read.
+        if self.marquee_tick.is_multiple_of(15) {
+            self.drunk_levels = self.clubhouse.drunk_levels();
+            if let Some(directory) = &self.flair_directory {
+                let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
+                self.name_styles = crate::app::common::username_effect::resolve_all(
+                    &crate::app::common::username_effect::snapshot(directory),
+                    phase,
+                    chrono::Utc::now(),
+                );
+            }
         }
 
         // Leaderboard
@@ -562,13 +646,13 @@ impl App {
             self.leaderboard = rx.borrow_and_update().clone();
             if let Some(&balance) = self.leaderboard.user_chips.get(&self.user_id)
                 && self
-                    .active_room_game
-                    .as_ref()
-                    .is_none_or(|game| game.can_sync_external_chip_balance())
+                    .house
+                    .client()
+                    .is_none_or(|client| client.can_sync_external_chip_balance())
             {
                 self.chip_balance = balance;
-                if let Some(active_room_game) = &mut self.active_room_game {
-                    active_room_game.sync_external_chip_balance(balance);
+                if let Some(client) = self.house.client_mut() {
+                    client.sync_external_chip_balance(balance);
                 }
             }
         }
@@ -593,20 +677,10 @@ impl App {
             let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
-            let active_bumped_join_room_ids = self.shop_state.active_bumped_join_room_ids();
-            if self
-                .chat
-                .set_active_bumped_join_room_ids(active_bumped_join_room_ids)
-            {
-                self.sync_visible_chat_room();
-            }
             self.aquarium_state
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
             self.aquarium_state
                 .set_hungry(self.shop_state.aquarium_hungry());
-            if !self.shop_state.entitlements().has_aquarium() {
-                self.show_aquarium_tray = false;
-            }
             if !self.shop_state.dynamic_bonsai_enabled() {
                 self.show_bonsai_v2_modal = false;
             }
@@ -614,13 +688,14 @@ impl App {
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
             && self
-                .active_room_game
-                .as_ref()
-                .is_none_or(|game| game.can_sync_external_chip_balance())
+                .house
+                .client()
+                .is_none_or(|client| client.can_sync_external_chip_balance())
         {
             self.chip_balance = self.shop_state.balance();
-            if let Some(active_room_game) = &mut self.active_room_game {
-                active_room_game.sync_external_chip_balance(self.chip_balance);
+            let balance = self.chip_balance;
+            if let Some(client) = self.house.client_mut() {
+                client.sync_external_chip_balance(balance);
             }
         }
 
@@ -640,21 +715,16 @@ impl App {
             self.bonsai_care_state.tick();
         }
 
+        // The activity feed subscription survives the retired sidebar panel
+        // for one job: edge-detecting friend joins for the friend-online
+        // banner. The public feed itself ships to #lounge (activity/lounge).
         if let Some(rx) = &mut self.activity_feed_rx {
-            let activity_filter = ActivityFilter::dashboard();
             while let Ok(event) = rx.try_recv() {
-                if !activity_filter.includes(&event) {
-                    continue;
-                }
                 if matches!(&event.kind, ActivityKind::UserJoined)
                     && let Some(user_id) = event.user_id
                     && let Some(b) = self.chat.note_friend_join(user_id, &event.username)
                 {
                     self.banner = Some(b);
-                }
-                self.activity.push_back(event);
-                if self.activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {
-                    self.activity.pop_front();
                 }
             }
         }

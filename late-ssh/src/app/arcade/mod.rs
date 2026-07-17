@@ -1,10 +1,14 @@
 pub mod input;
+pub mod le_word;
 pub mod minesweeper;
 pub mod nes_cabinet;
 pub mod nonogram;
+pub mod rubiks_cube;
 pub mod snake;
 pub mod solitaire;
 pub mod sudoku;
 pub mod tetris;
+pub mod traffic;
 pub mod twenty_forty_eight;
 pub mod ui;
+pub mod workspace;

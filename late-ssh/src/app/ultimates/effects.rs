@@ -1,4 +1,7 @@
-use ratatui::{buffer::Buffer, style::Color};
+use ratatui::{
+    buffer::{Buffer, CellDiffOption},
+    style::Color,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UltimateEffectKind {
@@ -48,7 +51,7 @@ fn apply_thematrix_postprocess(buffer: &mut Buffer, effect: UltimateThemeEffect)
                 let Some(cell) = buffer.cell_mut((area.x + col, area.y + row)) else {
                     continue;
                 };
-                if cell.skip {
+                if cell.diff_option == CellDiffOption::Skip {
                     continue;
                 }
                 cell.set_bg(Color::Rgb(0, 4, 0));
@@ -78,7 +81,7 @@ fn apply_thematrix_postprocess(buffer: &mut Buffer, effect: UltimateThemeEffect)
                 let Some(cell) = buffer.cell_mut((area.x + col, area.y + row)) else {
                     continue;
                 };
-                if !cell.skip {
+                if cell.diff_option != CellDiffOption::Skip {
                     cell.set_bg(color);
                 }
             }
@@ -249,7 +252,7 @@ fn apply_wonderland_postprocess(buffer: &mut Buffer, effect: UltimateThemeEffect
             let Some(cell) = buffer.cell_mut((area.x + col, area.y + row)) else {
                 continue;
             };
-            if cell.skip || cell.symbol() == " " {
+            if cell.diff_option == CellDiffOption::Skip || cell.symbol() == " " {
                 continue;
             }
             let normalized = (heights[idx] - min_height) / height_range;

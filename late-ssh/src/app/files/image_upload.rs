@@ -91,6 +91,57 @@ pub(crate) async fn download_url_bytes(
     max_bytes: usize,
 ) -> Result<Vec<u8>> {
     let validated = validate_download_url(raw_url).await?;
+    let resp = send_validated_get(&validated, timeout).await?;
+    if resp.status().is_redirection() {
+        bail!("redirects are not allowed");
+    }
+    if !resp.status().is_success() {
+        bail!("download failed: http {}", resp.status());
+    }
+
+    read_response_limited(resp, max_bytes).await
+}
+
+/// Like `download_url_bytes`, but follows up to `max_redirects` redirect hops,
+/// re-validating each hop against the private-network blocklist. For fetchers
+/// of user-supplied URLs that legitimately redirect (RSS feeds moving between
+/// hosts, http→https upgrades); chat image downloads stay locked to the exact
+/// validated URL.
+pub(crate) async fn download_url_bytes_following_redirects(
+    raw_url: &str,
+    timeout: Duration,
+    max_bytes: usize,
+    max_redirects: usize,
+) -> Result<Vec<u8>> {
+    let mut url = raw_url.to_string();
+    for _ in 0..=max_redirects {
+        let validated = validate_download_url(&url).await?;
+        let resp = send_validated_get(&validated, timeout).await?;
+        if resp.status().is_redirection() {
+            let location = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .context("redirect without location header")?;
+            url = validated
+                .url
+                .join(location)
+                .context("invalid redirect location")?
+                .to_string();
+            continue;
+        }
+        if !resp.status().is_success() {
+            bail!("download failed: http {}", resp.status());
+        }
+        return read_response_limited(resp, max_bytes).await;
+    }
+    bail!("too many redirects");
+}
+
+async fn send_validated_get(
+    validated: &ValidatedDownloadUrl,
+    timeout: Duration,
+) -> Result<reqwest::Response> {
     let mut builder = reqwest::Client::builder()
         .timeout(timeout)
         .user_agent(USER_AGENT)
@@ -103,15 +154,7 @@ pub(crate) async fn download_url_bytes(
     }
 
     let client = builder.build()?;
-    let resp = client.get(validated.url).send().await?;
-    if resp.status().is_redirection() {
-        bail!("redirects are not allowed");
-    }
-    if !resp.status().is_success() {
-        bail!("download failed: http {}", resp.status());
-    }
-
-    read_response_limited(resp, max_bytes).await
+    Ok(client.get(validated.url.clone()).send().await?)
 }
 
 pub async fn upload_image_bytes(data: Vec<u8>, mime: &str) -> Result<String> {

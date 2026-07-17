@@ -1,4 +1,5 @@
 use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::user::RightSidebarMode;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -43,6 +44,10 @@ impl ProfileState {
         &self.profile
     }
 
+    pub fn service(&self) -> &ProfileService {
+        &self.profile_service
+    }
+
     pub fn theme_id(&self) -> &str {
         self.profile
             .theme_id
@@ -83,6 +88,40 @@ impl ProfileState {
         self.profile.favorite_room_ids.swap(index, target as usize);
         self.save_profile();
         true
+    }
+
+    /// Toggle the pet companion strip (the /pet command; same setting as the
+    /// "Pet companion strip" tweak in settings). Persists and returns the new
+    /// visibility.
+    pub fn toggle_show_pet_strip(&mut self) -> bool {
+        self.profile.show_pet_strip = !self.profile.show_pet_strip;
+        self.save_profile();
+        self.profile.show_pet_strip
+    }
+
+    /// Advance both sidebars through the 4-state layout cycle (the Home `\`
+    /// key): both on -> left off -> right off -> both off -> both on. `left`
+    /// is the room-list sidebar, `right` the info sidebar (its mode is kept in
+    /// step with the visibility flag). Persists and returns the new
+    /// `(left, right)` visibility.
+    pub fn cycle_sidebars(&mut self) -> (bool, bool) {
+        const CYCLE: [(bool, bool); 4] =
+            [(true, true), (false, true), (true, false), (false, false)];
+        let current = (
+            self.profile.show_room_list_sidebar,
+            self.profile.show_right_sidebar,
+        );
+        let idx = CYCLE.iter().position(|&s| s == current).unwrap_or(0);
+        let (left, right) = CYCLE[(idx + 1) % CYCLE.len()];
+        self.profile.show_room_list_sidebar = left;
+        self.profile.show_right_sidebar = right;
+        self.profile.right_sidebar_mode = if right {
+            RightSidebarMode::On
+        } else {
+            RightSidebarMode::Off
+        };
+        self.save_profile();
+        (left, right)
     }
 
     fn save_profile(&self) {
@@ -168,15 +207,16 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
                 .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         ),
         enable_background_color: profile.enable_background_color,
-        show_dashboard_header: profile.show_dashboard_header,
+        text_brightness_adjustment: profile.text_brightness_adjustment,
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
-        right_sidebar_screens: profile.right_sidebar_screens.clone(),
+        right_sidebar_components: profile.right_sidebar_components.clone(),
         show_room_list_sidebar: profile.show_room_list_sidebar,
-        show_settings_on_connect: profile.show_settings_on_connect,
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
+        land_on_home: profile.land_on_home,
         show_flag_fallback: profile.show_flag_fallback,
+        show_pet_strip: profile.show_pet_strip,
         favorite_room_ids: profile.favorite_room_ids.clone(),
         birthday: profile.birthday.clone(),
     }

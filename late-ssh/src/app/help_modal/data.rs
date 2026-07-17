@@ -13,7 +13,7 @@ pub enum HelpTopic {
     Directory,
     News,
     Arcade,
-    Tables,
+    Lobby,
     Lateania,
     TerminalCopy,
     TerminalLinks,
@@ -24,10 +24,11 @@ pub enum HelpTopic {
     Economy,
     Bonsai,
     Settings,
+    Voice,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 20] = [
+    pub const ALL: [HelpTopic; 21] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
@@ -36,7 +37,7 @@ impl HelpTopic {
         HelpTopic::Directory,
         HelpTopic::News,
         HelpTopic::Arcade,
-        HelpTopic::Tables,
+        HelpTopic::Lobby,
         HelpTopic::Lateania,
         HelpTopic::TerminalCopy,
         HelpTopic::TerminalLinks,
@@ -47,6 +48,7 @@ impl HelpTopic {
         HelpTopic::Economy,
         HelpTopic::Bonsai,
         HelpTopic::Settings,
+        HelpTopic::Voice,
         HelpTopic::Architecture,
     ];
 
@@ -61,7 +63,7 @@ impl HelpTopic {
             HelpTopic::Directory => "Directory",
             HelpTopic::News => "News",
             HelpTopic::Arcade => "Arcade",
-            HelpTopic::Tables => "Tables",
+            HelpTopic::Lobby => "Lobby",
             HelpTopic::Lateania => "Lateania",
             HelpTopic::TerminalCopy => "Copy",
             HelpTopic::TerminalLinks => "Links",
@@ -72,6 +74,7 @@ impl HelpTopic {
             HelpTopic::Economy => "Economy",
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
+            HelpTopic::Voice => "Voice",
         }
     }
 
@@ -85,7 +88,7 @@ impl HelpTopic {
             HelpTopic::Directory => 5,
             HelpTopic::News => 6,
             HelpTopic::Arcade => 7,
-            HelpTopic::Tables => 8,
+            HelpTopic::Lobby => 8,
             HelpTopic::Lateania => 9,
             HelpTopic::TerminalCopy => 10,
             HelpTopic::TerminalLinks => 11,
@@ -96,7 +99,8 @@ impl HelpTopic {
             HelpTopic::Economy => 16,
             HelpTopic::Bonsai => 17,
             HelpTopic::Settings => 18,
-            HelpTopic::Architecture => 19,
+            HelpTopic::Voice => 19,
+            HelpTopic::Architecture => 20,
         }
     }
 }
@@ -112,7 +116,7 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
         HelpTopic::Directory => directory_help_lines(),
         HelpTopic::News => news_help_lines(),
         HelpTopic::Arcade => arcade_help_lines(),
-        HelpTopic::Tables => tables_help_lines(),
+        HelpTopic::Lobby => lobby_help_lines(),
         HelpTopic::Lateania => lateania_help_lines(),
         HelpTopic::TerminalCopy => {
             terminal_faq_topic_lines(crate::app::help_modal::terminal_faq::TerminalHelpTopic::Copy)
@@ -135,6 +139,7 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
         HelpTopic::Economy => economy_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
+        HelpTopic::Voice => voice_help_lines(),
     }
 }
 
@@ -143,8 +148,15 @@ pub fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Tables, Artboard, Lateania, Rebels, and Directory.\n\
-        - Directory page 7 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
+        - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar.\n\
+        - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free.\n\
+        - \"@bartender round\" (or \"@bartender round for everyone\") buys the whole house a round: a flat 5000 chips on the buyer's tab pours an ale to every human online, payer included.\n\
+        - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. The printed word only shows from buzzed (level 2) up; tipsy just glows quietly. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
+        - The buzz sobers up on its own over time, no action needed: it decays 150 points an hour, so even a maxed-out binge is fully sober again in about a day.\n\
+        - Drunk level tints the username label's background everywhere it appears (the Clubhouse floor and chat author labels alike), light green through yellow and orange to red as the level climbs.\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Directory (5), and World Cup (6).\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, Green Dragon, dopewars, and Rebels; each is launched from there, not from its own top-level page.\n\
+        - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -162,6 +174,22 @@ pub fn bot_app_context() -> String {
         }
     }
     out
+}
+
+/// Trimmed app context for @bartender: navigation only, not the full guide.
+/// He is house furniture, not the help desk — @bot owns explaining features
+/// in depth, so anything past "which screen / which key" should route there.
+pub fn bartender_app_context() -> String {
+    "APP CONTEXT (basic navigation):\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games), 3 Games hub (Lateania, NetHack, Green Dragon, dopewars, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar), 6 World Cup (live scores).\n\
+    - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
+    - Ctrl+O opens Settings from anywhere. Ctrl+G opens Hub (Quests, Shop, Leaderboard, Events). Ctrl+Q opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron).\n\
+    - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
+    - Home's room rail also holds RSS, News, Voice, Mentions, and Discover.\n\
+    - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
+    - Pressing ? anywhere opens the full in-app guide, with a tab per topic.\n\
+    - For anything past basic directions — commands, game rules, settings, IRC, account stuff — don't guess: tell the patron to go ask @bot, that's what he's for.\n"
+        .to_string()
 }
 
 fn is_restricted_bot_context_line(line: &str) -> bool {
@@ -198,7 +226,7 @@ fn pair_help_lines(pair_url: &str) -> Vec<String> {
         "Install `late` / Pair Browser".to_string(),
         "".to_string(),
         "Recommended: install the native CLI and run `late` instead of `ssh late.sh`.".to_string(),
-        "That gives one process for SSH, local Icecast audio, YouTube webview fallback, and OS clipboard image reads.".to_string(),
+        "That gives one process for SSH, local Icecast audio, YouTube webview fallback, voice rooms, and OS clipboard image reads.".to_string(),
         "".to_string(),
         "Install".to_string(),
         format!("  linux / macos / termux   {SHELL_INSTALL_COMMAND}"),
@@ -211,6 +239,7 @@ fn pair_help_lines(pair_url: &str) -> Vec<String> {
         "  audio       Icecast playback and visualizer on your machine".to_string(),
         "  youtube     embedded webview hosts the shared queue locally".to_string(),
         "  clipboard   /paste-image reads your OS clipboard image into chat".to_string(),
+        "  voice       talk in voice rooms with your mic (linux + windows; plain SSH only shows status)".to_string(),
         "  controls    m mute, +/- volume, v+x source, v+v Music Booth".to_string(),
         "".to_string(),
         "Browser pairing".to_string(),
@@ -311,19 +340,23 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /members           list users in this room",
         "  /list              list public rooms",
         "  /poll              start a Home room poll with 2-3 options",
+        "  /challenge [@user] daily challenge (chess, battleship, connect4, reversi, checkers, backgammon): lobby or directed",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",
         "  /upload <url>      download and upload an image URL (see Images)",
         "  /ignore [@user]    ignore a user, or list ignored users",
         "  /unignore [@user]  unignore a user, or list ignored users",
+        "  /search [query]    search messages (opens the Ctrl+/ modal in ? mode)",
         "",
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open Hub",
-        "  Ctrl+Q / Alt+A     toggle your Aquarium tray after unlocking it in Shop",
-        "  Ctrl+F             feed your Aquarium tray with bought Aquarium Food",
-        "  Ctrl+/             search and jump to a room, DM, or Home entry",
+        "  /aquarium          toggle the Aquarium in the Lounge after unlocking it in Shop",
+        "  /aquarium feed     feed your Aquarium with bought Aquarium Food",
+        "  /pet               toggle the pet strip in the Lounge",
+        "  Ctrl+/             jump to a room or DM; type ?query to search messages",
+        "  Ctrl+Q             open / close the Lobby (daily games + house tables)",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
         "",
         "Messages",
@@ -338,9 +371,10 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  f then f          list reaction owners",
         "  Enter              jump to loaded original for selected reply",
         "  Enter              open selected image or News item when present",
+        "  g                  jump to a reply's original even if it has an image",
         "  r                  reply to selected message",
         "  e                  edit selected message",
-        "  d                  delete selected message",
+        "  dd                 delete selected message (press d twice)",
         "  c                  copy selected message to clipboard",
         "  Ctrl+P             pin / unpin selected message",
         "",
@@ -405,7 +439,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "",
         "Synthetic entries",
         "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
-        "  Directory page 7 contains Profiles, Projects, and Pinstar.",
+        "  Directory page 6 contains Profiles, Projects, and Pinstar.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -493,7 +527,7 @@ fn social_help_lines() -> Vec<String> {
     [
         "Social surfaces",
         "",
-        "These are Home-adjacent feeds and notification surfaces. Directory page 7 has its own guide tab for Profiles, Projects, and Pinstar.",
+        "These are Home-adjacent feeds and notification surfaces. Directory page 6 has its own guide tab for Profiles, Projects, and Pinstar.",
         "",
         "RSS",
         "  Private per-user RSS/Atom inbox.",
@@ -510,7 +544,7 @@ fn social_help_lines() -> Vec<String> {
         "  User-targeted notification feed for @user mentions.",
         "  Selecting Mentions marks it read.",
         "  j / k or ↑ / ↓   navigate notifications",
-        "  Enter             jump to referenced room/message when possible",
+        "  Enter             preview the mention with surrounding messages; Enter again jumps",
         "  Rules             actor excluded; DMs notify participants; private rooms notify members",
         "  Game-room chat does not create Mentions feed notifications.",
         "",
@@ -536,8 +570,8 @@ fn directory_help_lines() -> Vec<String> {
     [
         "Directory",
         "",
-        "Directory page 7 owns public profiles, project showcases, and Pinstar diagrams.",
-        "  7                 open Directory",
+        "Directory page 6 owns public profiles, project showcases, and Pinstar diagrams.",
+        "  8                 open Directory",
         "  h / l or [ / ]   switch Directory tabs",
         "                    h/l switch only when a Profiles/Projects form is not editing",
         "  j / k or ↑ / ↓   navigate the active list",
@@ -632,57 +666,66 @@ fn arcade_help_lines() -> Vec<String> {
         "  j / k or ↑ / ↓   browse games",
         "  Enter             play selected game",
         "  Esc / q           leave current game",
-        "  `                 return to Dashboard while a run is active",
+        "  `                 in a daily puzzle: hop games waiting on you (boards, tables, dailies)",
         "",
         "Notes",
         "  Game-specific controls appear inside the Arcade page.",
         "  Daily puzzle completions, run scores, chips, payouts, and leaderboards are covered in Economy.",
+        "",
+        "Leaderboard badges",
+        "  Awarded each month to the previous month's top players. They show",
+        "  first in your chat username badge stack, wrapped in brackets.",
+        "  The trailing digit is your rank, 1-3 (so [AW1] is that month's #1).",
+        "  [CHIP]    Top Chips",
+        "  [AW]      Arcade Wins",
+        "  [LA]      Lateris (Tetris)",
+        "  [24#]     2048",
+        "  [SN]      Snake",
+        "  The Lateania, NetHack, and Green Dragon badges are one-off feats, shown with no rank digit.",
+        "  [LMG]     Lateania Archdemon",
+        "  [LKN]     Lateania Frontier King",
+        "  [LYS]     Lateania Sundering Deep",
+        "  [NHA]     NetHack Amulet",
+        "  [NHY]     NetHack Ascension",
+        "  [GDS]     Green Dragon Slayer",
     ]
     .into_iter()
     .map(str::to_string)
     .collect()
 }
 
-fn tables_help_lines() -> Vec<String> {
+fn lobby_help_lines() -> Vec<String> {
     [
-        "Tables",
+        "Lobby",
         "",
-        "Tables are persistent multiplayer sessions for table-style games with paired embedded chat.",
-        "  3                 open Tables",
-        "  j / k or ↑ / ↓   navigate tables",
-        "  h / l or ← / →   cycle filters",
-        "  /                 search by table name",
-        "  Enter             enter selected table",
-        "  n                 create a new table",
-        "  Esc               clears create/search/query/filter before leaving table state",
-        "  Directory rows show name, game, creator, seats, pace, stakes, and status.",
+        "The Lobby (Ctrl+Q) is the front door for multiplayer play: async daily matches plus the fixed house tables, with paired embedded chat.",
+        "  Ctrl+Q            open / close the Lobby",
+        "  j / k or \u{2191} / \u{2193}   move through matches and house tables",
+        "  Enter             claim / open a match, or sit at a house table",
+        "  Esc               close the Lobby",
         "",
-        "Table creation",
-        "  n                 open game picker",
-        "  j / k or ↑ / ↓   choose game kind",
-        "  Enter             open selected create form",
-        "  first letter      shortcut to a game kind",
-        "  Esc               cancel picker/form",
-        "  Game-specific forms and limits live in the Economy tab.",
+        "Daily matches",
+        "  /challenge [@user] post a chess, battleship, connect4, reversi, checkers, or backgammon challenge",
+        "  24h per move; boards live outside the Tab cycle, Esc returns to the Lobby",
+        "  `                 hop Home chat, boards on your move, seated tables, unfinished dailies",
         "",
-        "Active table",
+        "House tables",
+        "  Poker, Blackjack, Asterion, and Tron: one fixed table each, no setup forms",
+        "  the Lobby row shows live occupancy; empty tables are always joinable",
+        "  q / Esc           leave the table screen (your seat follows the game's rules)",
+        "",
+        "At a table",
         "  Layout            game on top, embedded game chat below",
-        "  `                 cycle Dashboard and tables where you are seated",
-        "  Esc               clears selected embedded-chat message first",
-        "  q / Esc           game backend may leave the active table",
         "  i                 compose in embedded chat",
         "  j / k             embedded-chat message selection unless game claims the key",
         "  PageUp/PageDown   scroll embedded chat",
         "  r/e/d/p/c/f       reply, edit, delete, profile, copy, react selected chat message",
+        "  g                 jump to a reply's original even if it has an image",
         "  Ctrl+P            pin / unpin selected embedded-chat message",
         "  Arrows            game gets first chance; otherwise embedded chat handles them",
         "",
-        "Home shortcuts",
-        "  3                 open Tables",
-        "  b then 1-4         enter one of the recent table shortcuts in lounge",
-        "",
         "Economy",
-        "  Economy tab        Arcade game list, Arcade controls, table-game controls, chips, scoring, and leaderboards.",
+        "  Economy tab        chips, stakes, payouts, and leaderboards.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -693,20 +736,18 @@ fn lateania_help_lines() -> Vec<String> {
     [
         "Lateania",
         "",
-        "Lateania is the persistent BBS-style world.",
-        "  5                 open Lateania",
-        "  Enter             step through the gate",
+        "Lateania is the persistent BBS-style world, opened from the Games hub.",
+        "  3                 open the Games hub, then select the Lateania card",
+        "  Enter             step through the gate from the hub",
         "  d                 reset your Lateania character after confirmation",
-        "  Esc               leave the active world for the Lateania landing page",
-        "  ?                 open global guide from the lobby or active game",
+        "  Esc               leave the active world back to the Games hub",
+        "  ?                 open global guide from the hub or active game",
         "",
         "Rebels in the Sky",
         "  Pirate basketball across the galaxy, proxied live from frittura.org.",
-        "  6                 open Rebels",
-        "  Enter             connect to the rebels server",
-        "  Esc then confirm  quit the game and return to the launcher",
-        "  Ctrl-C            quit the game from inside it",
-        "  Disconnecting (or the server closing) also returns to the launcher.",
+        "  3 then Enter      open the Games hub, select Rebels, connect",
+        "  Esc / Ctrl-C      quit the game; you return to the Games hub",
+        "  Disconnecting (or the server closing) also returns to the hub.",
         "",
         "Lateania",
         "  1-5               choose class before your first adventure",
@@ -715,7 +756,8 @@ fn lateania_help_lines() -> Vec<String> {
         "  < / >             move up / down where exits exist",
         "  o                 look around",
         "  Space / Enter / x attack",
-        "  1-9               use ability slots after choosing a class",
+        "  1-9, 0            use ability slots 1-10 after choosing a class",
+        "  v then Enter      cast any ability from the panel, however deep the roster",
         "  z                 flee combat",
         "",
         "Panels",
@@ -732,7 +774,7 @@ fn lateania_help_lines() -> Vec<String> {
         "",
         "Persistence",
         "  Your Lateania character is saved when you leave and periodically while present.",
-        "  Press d on the landing page to reset and start over.",
+        "  Press d on the Lateania card in the Games hub to reset and start over.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -746,36 +788,44 @@ fn overview_lines() -> Vec<String> {
         "late.sh is a terminal clubhouse over SSH: chat, music, news, games, settings, and shared presence in one session.",
         "",
         "Primary screens",
-        "  1 Home            chat, tables, music, and live activity",
+        "  0 Clubhouse       the Late Lounge: walk around, everyone is live",
+        "  1 Home            chat, music, and live activity",
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
-        "  3 Tables          persistent table games",
+        "  3 Games           Lateania, Rebels, and NetHack in one hub",
         "  4 Artboard        shared persistent ASCII canvas",
-        "  5 Lateania        persistent terminal world",
-        "  6 Rebels          pirate basketball across the galaxy",
-        "  7 Directory       Profiles, Projects, and Pinstar",
+        "  5 Directory       Profiles, Projects, and Pinstar",
+        "  6 World Cup       live scores, groups, and the bracket",
+        "",
+        "You land in the Clubhouse: hjkl/arrows walk, i talks (your words float",
+        "over your head and land in #lounge), w waves, x dances, Enter interacts.",
+        "",
+        "The Games hub is a selector: arrow keys or h/l switch between the Lateania,",
+        "Rebels, and NetHack cards; Enter launches the selected game.",
         "",
         "Directory has its own guide tab; Artboard and active Pinstar diagrams keep page-local editing help.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  1-6               jump straight to a screen",
+        "  0-6               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open Hub",
-        "  Ctrl+Q / Alt+A    toggle Aquarium tray after unlocking it in Shop",
-        "  Ctrl+F            feed Aquarium tray with bought Aquarium Food",
-        "  Ctrl+/            search and jump to a room, DM, or synthetic Home entry",
+        "  Ctrl+Q            open / close the Lobby (daily games + house tables)",
+        "  /aquarium         toggle the Aquarium in the Lounge after unlocking it in Shop",
+        "  /aquarium feed    feed your Aquarium with bought Aquarium Food",
+        "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
         "  ?                 open this guide; Pair and terminal-specific tabs live here",
         "  w                 open Bonsai Care when not composing",
-        "  c                 open Cat Companion after unlocking it",
+        "  /pet              toggle the pet strip in the Lounge",
+        "  /feed /water      pet-strip care after unlocking the companion",
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
         "  v then x          cycle audio source: Icecast → YouTube → Radio",
         "  v then s          skip-vote the current YouTube track",
-        "  v then 1..4       select stream/station in the active source",
+        "  v then 1..5       select stream/station in the active source",
         "",
         "Home",
         "  click top bar     jump screens",
@@ -786,10 +836,10 @@ fn overview_lines() -> Vec<String> {
         "  f                 favorite / unfavorite the selected room",
         "  [ / ]             move the selected favorite up / down",
         "  favorites appear first in the room rail and room picker",
-        "  `                 cycle Dashboard / seated game rooms",
+        "  `                 hop Home chat and games waiting on you (boards, tables, dailies)",
         "",
         "Hub",
-        "  Ctrl+G            open Shop, Leaderboard, Quests, Events",
+        "  Ctrl+G            open Quests, Shop, Leaderboard, Events",
         "  Tab / Shift+Tab   switch Hub tabs",
         "  1-4               jump to Hub tab",
         "  Shop              j/k select, [/] subtab, Enter buy with Late Chips",
@@ -806,9 +856,17 @@ fn overview_lines() -> Vec<String> {
         "  Enter             jump to selected destination",
         "  Esc               close",
         "",
+        "Message search (inside the jump modal)",
+        "  ?query            search messages in every room you're in",
+        "  ?#room query      search one room; ?@user query searches a DM",
+        "  ↑/↓               browse hits; the pane below shows the message with",
+        "                    4 messages of surrounding conversation",
+        "  Enter             jump to the hit's room and select it when loaded",
+        "  Ctrl+Y            copy the selected hit's text",
+        "  /search [query]   open message search from the composer",
+        "",
         "Home room shortcuts",
-        "  3                 open Tables",
-        "  b then 1-4         enter one of the recent table shortcuts in lounge",
+        "  Ctrl+Q            open the Lobby (daily games + house tables)",
         "",
         "This modal",
         "  Tab / Shift+Tab   next / previous tab",
@@ -845,10 +903,10 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Tables, Artboard, Lateania, Rebels, Directory, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Games (Lateania/Rebels/NetHack hub), Artboard, Directory, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
-        "  Tables are persistent DB rows with paired chat_rooms(kind='game')",
-        "  Table game runtime state is process-local and can reset on SSH server restart",
+        "  The Lobby fronts daily matches (DB rows) and fixed house tables with chat_rooms(kind='game')",
+        "  House-table runtime state is process-local and can reset on SSH server restart",
         "",
         "Important characteristics",
         "  terminal-first, always-on, social, and zero-signup",
@@ -937,7 +995,7 @@ fn settings_help_lines() -> Vec<String> {
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
         "  background color, room list, and the Activity boxes toggle".to_string(),
-        "  right sidebar mode (on/off/custom) for Home, Arcade, and Tables".to_string(),
+        "  right sidebar mode (on/off/custom) for Home and Arcade".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "  IRC access token for external IRC clients".to_string(),
         "".to_string(),
@@ -992,6 +1050,18 @@ fn settings_help_lines() -> Vec<String> {
         "Notifications can fire for DMs, mentions, friend joins, and game events.".to_string(),
         "Bell and cooldown decide how loud and how often they show up.".to_string(),
         "".to_string(),
+        "Native CLI config file".to_string(),
+        "".to_string(),
+        "These in-app settings are separate from the native `late` CLI's own config.".to_string(),
+        "The CLI config is explicit and optional: nothing is ever created for you, and the CLI runs fine with no file at all.".to_string(),
+        "  Path              $XDG_CONFIG_HOME/late/config.toml, or ~/.config/late/config.toml".to_string(),
+        "  Override          run `late --config <path>` to point at a different file".to_string(),
+        "  Missing file      silently ignored; built-in defaults apply".to_string(),
+        "Precedence, lowest to highest: built-in defaults, then the config file, then LATE_* env vars, then CLI flags. A later layer wins.".to_string(),
+        "Flat TOML keys mirror the flags: ssh-target, ssh-port, ssh-user, ssh-mode, key, audio-base-url, api-base-url, audio-output-device, verbose.".to_string(),
+        "  Example           ssh-target = \"late.example\"".to_string(),
+        "  Note              sections like [foo] are rejected; it is a flat key = value file.".to_string(),
+        "".to_string(),
         "@bot".to_string(),
         "".to_string(),
         "@bot is the app's AI helper in chat.".to_string(),
@@ -1008,6 +1078,59 @@ fn settings_help_lines() -> Vec<String> {
         "Only replies when mentioned.".to_string(),
         format!("Replies on mention with a {graybeard_mention_cooldown_sec}s cooldown."),
     ]
+}
+
+fn voice_help_lines() -> Vec<String> {
+    [
+        "Voice rooms",
+        "",
+        "Voice is live talk attached to a room, backed by LiveKit. It is not a separate call screen: voice rides whatever room you are already in, so you keep chatting, playing, or browsing while connected.",
+        "",
+        "Where voice shows up",
+        "  A two-line voice strip sits at the top of any voice-enabled room: who is connected on top, controls below.",
+        "  DMs, private rooms, and game rooms have voice enabled by default.",
+        "  Public rooms stay voice-off until a staffer turns them on.",
+        "  When voice is off on the server or in this room, the strip says so and no one can join.",
+        "",
+        "Joining and controls",
+        "  Ctrl+V            join the room's voice, switch to it if you are in another, or leave when already in this one",
+        "  Ctrl+T            mute / unmute your microphone",
+        "  /voice            same as Ctrl+V from the composer",
+        "  /mute             same as Ctrl+T from the composer",
+        "  You always join muted; unmute with Ctrl+T when you want to talk.",
+        "  Deafen exists in the protocol but has no in-app shortcut yet.",
+        "  Artboard and Pinstar keep Ctrl+V / Ctrl+T for their own editing, so voice chords are ignored there.",
+        "",
+        "Reading the roster",
+        "  🟢 speaking       mic on and currently talking (name turns green)",
+        "  ⚪ listening      joined, mic on, silent",
+        "  🔇 muted          mic off",
+        "  🔕 deafened       not hearing the room",
+        "  Your own name is always amber so you can spot yourself.",
+        "",
+        "Top-right badge",
+        "  While you are connected to any voice room, a `mic <room> [status]` badge shows in the top chrome.",
+        "  It follows you across screens so you always know you are still live and where.",
+        "",
+        "Staying connected",
+        "  Entering a DM, private room, or game does not auto-join voice; joining is always an explicit Ctrl+V.",
+        "  Once joined you stay in voice across room, screen, and game navigation.",
+        "  You leave only when you press Ctrl+V to leave, switch to another voice room, disconnect the native CLI, go stale, or a moderator removes you.",
+        "",
+        "What you need to join",
+        "  Voice media runs in the native `late` CLI, so install it and run `late` (see the Pair tab).",
+        "  Supported for joining on Linux and Windows.",
+        "  Raw `ssh late.sh` sessions and macOS can see the roster and badge but cannot join or listen yet.",
+        "  If no capable CLI is paired, the strip prompts you to run the native late CLI.",
+        "",
+        "How it works under the hood",
+        "  LiveKit carries the actual audio; late.sh never relays voice media through SSH or the music stack.",
+        "  late.sh only mints a short-lived LiveKit token per join and tracks who is connected, muted, or speaking for the roster.",
+        "  The native CLI captures your mic and plays back the room over LiveKit, and reports its state back so the TUI roster stays in sync.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn bonsai_help_lines() -> Vec<String> {
@@ -1075,6 +1198,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  Watering grows the widest wave; high vigor widens it; stress narrows it.",
         "  Healthy growth reaches up and stays tidy; dry, stressed growth throws messy sideways shoots.",
         "  It also creeps a little on its own while you stay connected, as long as vigor is high enough.",
+        "  The graph caps at 96 branches total; once a tree reaches that size, growth quietly stops adding new ones, though you can still steer, pinch, cut, and split what's already there.",
         "",
         "When it dies",
         "  Dynamic Bonsai only dies when stress maxes out and vigor hits zero at the same time, so it stays recoverable-but-ugly before then.",
@@ -1136,14 +1260,14 @@ fn bonsai_help_lines() -> Vec<String> {
         "",
         "Pet Companion",
         "  Unlock            Hub Shop companion bought with Late Chips",
-        "  c                 open pet care after unlocking it",
-        "  f                 feed (every 2 days)",
-        "  w                 water (daily)",
-        "  p                 play (daily; 3-day care streak unlocks happy)",
-        "  q / Esc           close",
-        "  play mode         hjkl / WASD / arrows move toy",
-        "  Space / Enter / p dash toy",
-        "  c                 stop play",
+        "  strip             lives above the Lounge composer once unlocked",
+        "  /pet              show or hide the strip",
+        "  /feed             spend one pet food, or click the bowl or the pet",
+        "  once fed it strolls the screen for 30 minutes; one meal per day",
+        "  /water            water (daily), or click the water bowl",
+        "  pet food is a Hub Shop item; an empty bowl shows ? when you are out",
+        "  /petname [name]   show or set your pet's name",
+        "  3-day care streak keeps it happy",
     ]
     .into_iter()
     .map(str::to_string)
@@ -1159,7 +1283,7 @@ late.sh has three music sources:
   YouTube    a shared queue everyone can submit links to.
   Radio      direct Nightride guest stations.
 
-Your paired client plays the selected source. Use v then 1..4 to select a stream or station inside the active source.
+Your paired client plays the selected source. Use v then 1..5 to select a stream or station inside the active source.
 
 Plain stream, no pairing:
   vlc https://late.sh/stream
@@ -1174,7 +1298,7 @@ Global keys (work anywhere)
 
 Select stream or station
   Icecast active: v then 1 / 2 selects chill / classical
-  Radio active:   v then 1..4 selects Chillsynth / Nightride / Datawave / Spacesynth
+  Radio active:   v then 1..5 selects Chillsynth / Nightride / Datawave / Spacesynth / Ambient
 
 Swap which source you hear
   v then x          cycle your paired client through Icecast → YouTube → Radio. Your choice is saved per-user, so a refresh keeps it.
@@ -1242,7 +1366,7 @@ mod tests {
     #[test]
     fn all_purpose_guide_splits_game_topics() {
         assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Arcade"));
-        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Tables"));
+        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Lobby"));
         assert!(
             HelpTopic::ALL
                 .iter()
@@ -1250,7 +1374,7 @@ mod tests {
         );
         assert!(!HelpTopic::ALL.iter().any(|topic| topic.title() == "Games"));
         assert!(bot_app_context().contains("## Arcade\n"));
-        assert!(bot_app_context().contains("## Tables\n"));
+        assert!(bot_app_context().contains("## Lobby\n"));
         assert!(bot_app_context().contains("## Lateania\n"));
         assert!(!bot_app_context().contains("## Games\n"));
     }
@@ -1270,7 +1394,7 @@ mod tests {
         let context = bot_app_context();
         assert!(context.contains("## Economy\n"));
         assert!(context.contains("Monthly Top Chips counts net chip delta."));
-        assert!(context.contains("Lateris, 2048, and Snake record run scores."));
+        assert!(context.contains("Lateris, 2048, Snake, and Traffic record run scores."));
         assert!(context.contains("Blackjack form: name, pace, stake."));
         assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
     }
@@ -1325,6 +1449,7 @@ mod tests {
         let lines = chat_help_lines(false).join("\n");
         for expected in [
             "/brb [message]",
+            "/challenge [@user]",
             "/coffee",
             "/friend [@user]",
             "/friends",
@@ -1390,13 +1515,14 @@ mod tests {
     #[test]
     fn global_guide_points_to_hub_for_game_details() {
         let arcade = arcade_help_lines().join("\n");
-        let tables = tables_help_lines().join("\n");
+        let lobby = lobby_help_lines().join("\n");
         let lateania = lateania_help_lines().join("\n");
         assert!(arcade.contains("Economy"));
-        assert!(tables.contains("Economy tab"));
+        assert!(lobby.contains("Economy tab"));
         assert!(lateania.contains("Lateania"));
-        assert!(!arcade.contains("Lateris"));
-        assert!(!tables.contains("Sudoku"));
+        // The badge glossary names games to explain each badge code; game
+        // details still live in the hub, not here.
+        assert!(!lobby.contains("Sudoku"));
         assert!(!lateania.contains("Clock presets"));
     }
 }

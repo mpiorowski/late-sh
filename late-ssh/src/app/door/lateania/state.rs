@@ -6,6 +6,7 @@
 // list panels. All real actions delegate to the service's *_task methods; this
 // struct never blocks and never mutates world truth.
 
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
@@ -14,6 +15,9 @@ use uuid::Uuid;
 use super::classes::Class;
 use super::svc::{LateaniaService, MudSnapshot, PlayerView, empty_player_view};
 use super::world::Dir;
+
+/// Lines moved per `[` / `]` press when scrolling a text panel.
+const SCROLL_STEP: usize = 3;
 
 /// Which side panel the session is looking at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +36,15 @@ pub enum Panel {
     Quests,
     /// Adventurers in the room: select one and press Enter to auto-follow them.
     Follow,
+    /// The companion vendor at a capital Stable: select a beast and Enter to buy
+    /// it; `x` feeds (heals/raises) the companion you already have.
+    Stable,
+    /// The housing ledger: buy a deed at the clerk, or (inside a home you own)
+    /// buy and place a furnishing. `Enter` activates the selected row.
+    Housing,
+    /// The appearance/bio builder: pick a field with the cursor, `Enter` cycles
+    /// its option forward and `x` cycles back.
+    Appearance,
 }
 
 pub struct State {
@@ -43,9 +56,15 @@ pub struct State {
     panel: Panel,
     /// Selection cursor for the inventory/shop list panels.
     cursor: usize,
+    /// Line the list view is scrolled to. Interior-mutable so the render pass
+    /// (which only holds `&State`) can keep the highlighted row inside a
+    /// scroll-off margin. Reset whenever the panel changes.
+    list_scroll: Cell<usize>,
     joined: bool,
     join_pending: bool,
     join_requested_at: Instant,
+    reset_version: u64,
+    reset_elsewhere: bool,
 }
 
 impl State {
@@ -54,6 +73,11 @@ impl State {
         let join_requested_at = Instant::now();
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
+        let reset_version = snapshot
+            .reset_versions
+            .get(&user_id)
+            .copied()
+            .unwrap_or_default();
         let state = Self {
             user_id,
             session_id,
@@ -62,9 +86,12 @@ impl State {
             snapshot_rx,
             panel: Panel::Room,
             cursor: 0,
+            list_scroll: Cell::new(0),
             joined: true,
             join_pending: true,
             join_requested_at,
+            reset_version,
+            reset_elsewhere: false,
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -73,6 +100,19 @@ impl State {
     pub fn tick(&mut self) {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+        }
+        let reset_version = self
+            .snapshot
+            .reset_versions
+            .get(&self.user_id)
+            .copied()
+            .unwrap_or_default();
+        if reset_version > self.reset_version {
+            self.reset_version = reset_version;
+            self.joined = false;
+            self.join_pending = false;
+            self.reset_elsewhere = true;
+            return;
         }
         if self.snapshot.players.contains_key(&self.user_id) {
             self.join_pending = false;
@@ -109,6 +149,10 @@ impl State {
             .unwrap_or_else(empty_player_view)
     }
 
+    pub fn reset_elsewhere(&self) -> bool {
+        self.reset_elsewhere
+    }
+
     pub fn player_count(&self) -> usize {
         self.snapshot.players.values().filter(|p| p.joined).count()
     }
@@ -125,6 +169,7 @@ impl State {
         if self.panel != panel {
             self.panel = panel;
             self.cursor = 0;
+            self.list_scroll.set(0);
         }
     }
 
@@ -135,16 +180,45 @@ impl State {
             self.panel = panel;
         }
         self.cursor = 0;
+        self.list_scroll.set(0);
+    }
+
+    /// Current list scroll offset (first visible line).
+    pub fn list_scroll(&self) -> usize {
+        self.list_scroll.get()
+    }
+
+    /// Store the list scroll offset chosen by the render pass.
+    pub fn set_list_scroll(&self, off: usize) {
+        self.list_scroll.set(off);
+    }
+
+    /// Manual scroll for cursor-less text panels (`[` / `]`). List panels
+    /// auto-follow their cursor and re-clamp this on the next render, so these
+    /// only have a lasting effect on text panels. The render pass clamps the
+    /// value to the content, so growing it past the end is harmless.
+    pub fn scroll_text_up(&mut self) {
+        let cur = self.list_scroll.get();
+        self.list_scroll.set(cur.saturating_sub(SCROLL_STEP));
+    }
+
+    pub fn scroll_text_down(&mut self) {
+        let cur = self.list_scroll.get();
+        self.list_scroll.set(cur + SCROLL_STEP);
     }
 
     /// Current list length for whichever list panel is active (for cursor clamp).
     fn list_len(&self) -> usize {
         match self.panel {
             Panel::Inventory => self.view().inventory.len(),
+            Panel::Abilities => self.view().abilities.len(),
             Panel::Shop => self.view().shop.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Examine => self.view().features.len(),
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
+            Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
+            Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
+            Panel::Appearance => self.view().appearance.len(),
             _ => 0,
         }
     }
@@ -160,11 +234,40 @@ impl State {
         }
     }
 
+    // ---- Class selection cursor ----------------------------------------
+
+    /// The highlighted class on the selection screen (reuses `cursor`, which is
+    /// unused before a class is chosen). Clamped into range.
+    pub fn class_cursor(&self) -> usize {
+        self.cursor.min(Class::ALL.len() - 1)
+    }
+
+    pub fn class_cursor_up(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    pub fn class_cursor_down(&mut self) {
+        if self.cursor + 1 < Class::ALL.len() {
+            self.cursor += 1;
+        }
+    }
+
+    pub fn choose_class_at_cursor(&mut self) {
+        self.choose_class(Class::ALL[self.class_cursor()]);
+    }
+
     // ---- Actions --------------------------------------------------------
 
     pub fn choose_class(&mut self, class: Class) {
         if self.ensure_player_present() {
             self.svc.choose_class_task(self.user_id, class);
+        }
+    }
+
+    /// Commit one of the two offered archetype paths (0-based) at level 10.
+    pub fn choose_archetype(&mut self, choice: usize) {
+        if self.ensure_player_present() {
+            self.svc.choose_archetype_task(self.user_id, choice);
         }
     }
 
@@ -241,6 +344,27 @@ impl State {
         }
     }
 
+    /// Release a fallen spirit to the temple instead of waiting for a rez.
+    pub fn release(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.release_task(self.user_id);
+        }
+    }
+
+    /// Cast the Resurrection rite on the nearest corpse in the room.
+    pub fn resurrect(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.resurrect_task(self.user_id);
+        }
+    }
+
+    /// Feed and tend the player's companion at the Stable.
+    pub fn feed_pet(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.feed_pet_task(self.user_id);
+        }
+    }
+
     pub fn leave_world(&mut self) {
         self.close_session();
     }
@@ -268,6 +392,14 @@ impl State {
                     }
                 }
             }
+            Panel::Abilities => {
+                // Cast the highlighted ability; this is how slots past the 1-9
+                // hotbar (deep rosters, capstones) are reached.
+                if let Some(a) = self.view().abilities.get(self.cursor) {
+                    let slot = a.slot;
+                    self.svc.ability_task(self.user_id, slot);
+                }
+            }
             Panel::Shop => {
                 if let Some(shop) = self.view().shop
                     && let Some(entry) = shop.entries.get(self.cursor)
@@ -278,8 +410,41 @@ impl State {
             Panel::Examine => self.svc.interact_task(self.user_id, self.cursor),
             Panel::Titles => self.svc.set_active_title_task(self.user_id, self.cursor),
             Panel::Follow => self.follow_selected(),
+            Panel::Stable => {
+                if let Some(stable) = self.view().stable
+                    && let Some(entry) = stable.entries.get(self.cursor)
+                {
+                    self.svc.buy_pet_task(self.user_id, entry.key.clone());
+                }
+            }
+            Panel::Housing => {
+                if let Some(housing) = self.view().housing {
+                    if housing.furnish {
+                        if let Some(entry) = housing.entries.get(self.cursor) {
+                            self.svc.buy_furniture_task(self.user_id, entry.key.clone());
+                        }
+                    } else {
+                        // Deed rows are the tiers in order, so the cursor is the plot.
+                        self.svc.buy_deed_task(self.user_id, self.cursor);
+                    }
+                }
+            }
+            Panel::Appearance => self.cycle_appearance(1),
             _ => {}
         }
+    }
+
+    /// Cycle the highlighted appearance field forward (+1) or back (-1).
+    pub fn cycle_appearance(&mut self, delta: i8) {
+        if self.ensure_player_present() {
+            self.svc
+                .cycle_appearance_task(self.user_id, self.cursor, delta);
+        }
+    }
+
+    /// Open the appearance/bio builder.
+    pub fn open_appearance(&mut self) {
+        self.toggle_panel(Panel::Appearance);
     }
 
     /// Secondary action: sell the selected inventory row at a shop.

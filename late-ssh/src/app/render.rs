@@ -13,7 +13,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use late_core::models::leaderboard::LeaderboardData;
-use late_core::models::user::RightSidebarMode;
+use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode};
 
 use super::{
     announcements, artboard,
@@ -39,30 +39,14 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
     }
 }
 
-/// Map a top-level screen to its 1-based page number.
-pub(crate) fn screen_number(screen: Screen) -> u8 {
-    match screen {
-        Screen::Dashboard => 1,
-        Screen::Arcade => 2,
-        Screen::Rooms => 3,
-        Screen::Artboard => 4,
-        Screen::Lateania => 5,
-        Screen::Rebels => 6,
-        Screen::Pinstar => 7,
-    }
-}
-
 fn right_sidebar_allowed_on_screen(screen: Screen) -> bool {
-    matches!(screen, Screen::Dashboard | Screen::Arcade | Screen::Rooms)
+    matches!(screen, Screen::Dashboard | Screen::Arcade)
 }
 
 /// Resolve whether the right sidebar should render on `screen` given a profile
-/// (or draft) sidebar mode and per-screen visibility set.
-pub(crate) fn resolve_right_sidebar_enabled(
-    mode: RightSidebarMode,
-    screens: &[u8],
-    screen: Screen,
-) -> bool {
+/// (or draft) sidebar mode. The sidebar only shows on Home and the Arcade;
+/// which panels appear is governed by the component list.
+pub(crate) fn resolve_right_sidebar_enabled(mode: RightSidebarMode, screen: Screen) -> bool {
     if !right_sidebar_allowed_on_screen(screen) {
         return false;
     }
@@ -70,7 +54,6 @@ pub(crate) fn resolve_right_sidebar_enabled(
     match mode {
         RightSidebarMode::On => true,
         RightSidebarMode::Off => false,
-        RightSidebarMode::Custom => screens.contains(&screen_number(screen)),
     }
 }
 
@@ -80,24 +63,6 @@ fn room_list_sidebar_enabled(
     profile_enabled: bool,
 ) -> bool {
     if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
-    }
-}
-
-fn room_top_boxes_enabled(
-    show_settings: bool,
-    draft_enabled: bool,
-    profile_enabled: bool,
-    home_selected: bool,
-    room_selected: bool,
-) -> bool {
-    if home_selected {
-        true
-    } else if !room_selected {
-        false
-    } else if show_settings {
         draft_enabled
     } else {
         profile_enabled
@@ -157,19 +122,23 @@ struct DrawContext<'a> {
     game_selection: usize,
     is_playing_game: bool,
     door_delete_confirm: bool,
-    rooms_create_flow: Option<&'a crate::app::rooms::backend::CreateRoomFlow>,
-    rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
-    rooms_selected_index: usize,
-    rooms_active_room: Option<&'a crate::app::rooms::svc::RoomListItem>,
-    rooms_filter: crate::app::rooms::filter::RoomsFilter,
-    rooms_search_active: bool,
-    rooms_search_query: &'a str,
-    rooms_usernames: &'a crate::usernames::UsernameLookup<'a>,
-    room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
-    active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
-    rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    usernames: &'a crate::usernames::UsernameLookup<'a>,
+    /// Embedded match chat for the daily board; `None` while spectating,
+    /// loading, or on matches without a chat room.
+    daily_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    house: &'a crate::app::lobby::house::state::HouseState,
+    house_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    games_hub_selected: usize,
+    rebels_enabled: bool,
+    nethack_enabled: bool,
+    dopewars_enabled: bool,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
+    /// Players currently in the Lateania world (for the landing/hub card).
+    lateania_online: usize,
+    greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
+    nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
+    dopewars_state: Option<&'a mut crate::app::door::dopewars::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
     /// pixel polish on top of the existing text rendering.
@@ -177,15 +146,41 @@ struct DrawContext<'a> {
     twenty_forty_eight_state: &'a crate::app::arcade::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::arcade::tetris::state::State,
     snake_state: &'a crate::app::arcade::snake::state::State,
+    rubiks_cube_state: &'a crate::app::arcade::rubiks_cube::state::State,
+    le_word_state: &'a crate::app::arcade::le_word::state::State,
+    traffic_state: &'a crate::app::arcade::traffic::state::State,
     sudoku_state: &'a crate::app::arcade::sudoku::state::State,
     nonogram_state: &'a crate::app::arcade::nonogram::state::State,
     solitaire_state: &'a crate::app::arcade::solitaire::state::State,
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     nes_cabinet_state: &'a crate::app::arcade::nes_cabinet::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    directory_state: &'a crate::app::directory::state::DirectoryState,
     directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
+    worldcup_snapshot: Option<std::sync::Arc<crate::app::worldcup::model::WorldCupSnapshot>>,
+    worldcup_state: &'a crate::app::worldcup::state::State,
+    clubhouse_state: &'a crate::app::clubhouse::state::State,
+    clubhouse_own_username: &'a str,
+    /// Resolved 24h username-effect styles for clubhouse name labels.
+    clubhouse_name_styles:
+        &'a std::collections::HashMap<uuid::Uuid, crate::app::common::username_effect::NameStyle>,
+    /// The #lounge tail for clubhouse speech bubbles; empty off that screen.
+    clubhouse_lounge_messages: &'a [late_core::models::chat_message::ChatMessage],
+    /// Staff bot ids so their #lounge lines bubble over their sprites.
+    clubhouse_graybeard_id: Option<uuid::Uuid>,
+    /// The clubhouse composer footer; built only on that screen.
+    clubhouse_composer: Option<chat::ui::ComposerBlockView<'a>>,
+    /// The account's flag-emoji tweak, shared with chat/shop: when set, flags
+    /// are replaced by text fallbacks for terminals that can't render them.
+    show_flag_fallback: bool,
+    /// Client is kitty specifically — it splits regional-indicator flags in the
+    /// World Cup overview's rightmost column (see `App::terminal_is_kitty`).
+    terminal_is_kitty: bool,
+    /// The account's raw timezone tweak. The World Cup screen (its only
+    /// consumer) parses it lazily so no work happens on other screens' frames.
+    worldcup_timezone: Option<&'a str>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
@@ -199,6 +194,9 @@ struct DrawContext<'a> {
     is_admin: bool,
     is_moderator: bool,
     show_right_sidebar: bool,
+    /// Resolved ordered sidebar panels (draft while the settings modal is open,
+    /// else the saved profile). Order is render order, top to bottom.
+    right_sidebar_components: Vec<RightSidebarComponentSetting>,
     show_room_list_sidebar: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
@@ -221,7 +219,9 @@ struct DrawContext<'a> {
     show_bonsai_modal: bool,
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
-    show_cat_modal: bool,
+    show_lobby_modal: bool,
+    lobby: &'a crate::app::lobby::state::LobbyState,
+    daily: &'a crate::app::lobby::daily::state::DailyState,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
@@ -245,6 +245,11 @@ struct DrawContext<'a> {
     selected_radio_station: late_core::models::user::RadioStation,
     radio_now_playing: Option<&'a str>,
     afk: Option<&'a str>,
+    /// Humans currently connected (bots excluded) plus connected friends,
+    /// for the sidebar's pinned presence rows.
+    online_count: usize,
+    active_friend_names: &'a [String],
+    marquee_tick: usize,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
     pet_species: &'a str,
@@ -254,6 +259,8 @@ struct DrawContext<'a> {
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
+    chip_balance: i64,
+    voice_badge: Option<String>,
     home_selected: bool,
 }
 
@@ -261,7 +268,9 @@ impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
-        self.last_dashboard_activity_rect.set(None);
+        self.last_pet_strip_pet_rect.set(None);
+        self.last_pet_strip_food_rect.set(None);
+        self.last_pet_strip_water_rect.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -282,6 +291,12 @@ impl App {
             self.profile_state.theme_id().to_string()
         };
         theme::set_current_by_id(&active_theme_id);
+        let text_brightness_adjustment = if self.show_settings {
+            self.settings_modal_state.draft().text_brightness_adjustment
+        } else {
+            self.profile_state.profile().text_brightness_adjustment
+        };
+        theme::set_text_brightness_adjustment(text_brightness_adjustment);
         let ultimate_effects = self.ultimate_state.active_theme_effects();
         self.chat.refresh_composer_theme();
 
@@ -314,12 +329,10 @@ impl App {
             self.show_settings,
             resolve_right_sidebar_enabled(
                 self.settings_modal_state.draft().right_sidebar_mode,
-                &self.settings_modal_state.draft().right_sidebar_screens,
                 self.screen,
             ),
             resolve_right_sidebar_enabled(
                 self.profile_state.profile().right_sidebar_mode,
-                &self.profile_state.profile().right_sidebar_screens,
                 self.screen,
             ),
         );
@@ -328,6 +341,19 @@ impl App {
             self.settings_modal_state.draft().show_room_list_sidebar,
             self.profile_state.profile().show_room_list_sidebar,
         );
+        // Live-preview the component list from the draft while the settings
+        // modal is open; otherwise use the saved profile.
+        let right_sidebar_components = if self.show_settings {
+            self.settings_modal_state
+                .draft()
+                .right_sidebar_components
+                .clone()
+        } else {
+            self.profile_state
+                .profile()
+                .right_sidebar_components
+                .clone()
+        };
         let shell_active_room = self.chat.selected_room_id;
         let synthetic_selected = self.chat.feeds_selected
             || self.chat.news_selected
@@ -340,14 +366,15 @@ impl App {
             shell_active_room,
             synthetic_selected,
         );
-        let room_selected = shell_active_room.is_some() && !synthetic_selected;
-        let show_room_top_boxes = room_top_boxes_enabled(
-            self.show_settings,
-            self.settings_modal_state.draft().show_dashboard_header,
-            self.profile_state.profile().show_dashboard_header,
-            home_selected,
-            room_selected,
-        );
+        // Pet strip above the composer: pet owners only, with a settings
+        // tweak (draft-aware while the modal is open, like the sidebars).
+        let show_pet_strip_setting = if self.show_settings {
+            self.settings_modal_state.draft().show_pet_strip
+        } else {
+            self.profile_state.profile().show_pet_strip
+        };
+        let pet_strip_enabled =
+            show_pet_strip_setting && self.shop_state.entitlements().has_pet_companion();
         let screen = self.screen;
         // The icecast rows render the USER'S SELECTED stream's track, not a
         // global single mount.
@@ -385,10 +412,20 @@ impl App {
         let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
         let voice_snapshot = self.voice.snapshot();
+        // Count humans only: the always-on bots (@bartender, @graybeard,
+        // @bot) register with no fingerprint and are excluded from the
+        // clubhouse headcount, so exclude them here too or the two
+        // "people online" numbers disagree.
         let online_count = self
             .active_users
             .as_ref()
-            .map(|active_users| active_users.lock_recover().len())
+            .map(|active_users| {
+                active_users
+                    .lock_recover()
+                    .values()
+                    .filter(|user| user.fingerprint.is_some())
+                    .count()
+            })
             .unwrap_or(0);
         self.afk_user_ids = crate::state::afk_users_snapshot(&self.afk_users);
         let image_modal = self
@@ -405,16 +442,6 @@ impl App {
                 }),
                 terminal_image_protocol: self.terminal_image_protocol,
             });
-        let multiplayer_rooms = dashboard::ui::recent_dashboard_rooms(
-            &self.rooms_snapshot,
-            &self.room_game_registry,
-            &self.dashboard_room_joins,
-            4,
-        );
-        let dashboard_cycle_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -432,16 +459,39 @@ impl App {
         let dashboard_voice_channel_id = shell_active_room
             .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
             .map(|channel| channel.id);
+        let voice_badge =
+            crate::app::voice::ui::global_voice_badge(voice_snapshot, self.user_id, |channel_id| {
+                self.chat
+                    .voice_channels_by_room_id
+                    .iter()
+                    .find_map(|(room_id, channel)| {
+                        (channel.id == channel_id).then(|| {
+                            self.chat
+                                .rooms
+                                .iter()
+                                .find_map(|(room, _)| {
+                                    (room.id == *room_id).then(|| {
+                                        room.slug
+                                            .as_ref()
+                                            .map(|slug| format!("#{slug}"))
+                                            .unwrap_or_else(|| channel.display_name.clone())
+                                    })
+                                })
+                                .unwrap_or_else(|| channel.display_name.clone())
+                        })
+                    })
+            });
         let dashboard_view = dashboard::ui::DashboardRenderInput {
-            activity: &self.activity,
-            online_count,
-            active_friend_names: &active_friend_names,
-            multiplayer_rooms: &multiplayer_rooms,
-            quest_snapshot: self.quest_state.snapshot(),
-            dashboard_cycle_secs,
-            show_room_top_boxes,
             pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
+                pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetStripView {
+                    state: &self.pet_state,
+                    pet_food_quantity: self.shop_state.pet_food_quantity(),
+                    pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
+                    food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
+                    water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
+                }),
+                activity_ticker: self.chat.activity_ticker(),
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
                 image_modal,
@@ -451,6 +501,9 @@ impl App {
                 friend_user_ids: self.chat.friend_user_ids(),
                 afk_user_ids: self.afk_user_ids.as_ref(),
                 message_reactions,
+                unread_marker: shell_active_room
+                    .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
+                    .flatten(),
                 current_user_id: self.user_id,
                 voice_channel_id: dashboard_voice_channel_id,
                 voice_snapshot,
@@ -471,7 +524,8 @@ impl App {
                 bonsai_glyphs,
                 chat_badges,
                 profile_award_badges,
-                bot_username_color_active: self.shop_state.bot_username_color_active(),
+                drunk_levels: &self.drunk_levels,
+                name_styles: &self.name_styles,
                 active_room_effects: dashboard_room_effects,
                 active_poll: dashboard_active_poll,
                 inline_images: &self.chat.inline_image_cache,
@@ -480,8 +534,6 @@ impl App {
                 composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                 chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
             },
-            activity_scroll: self.dashboard_activity_scroll,
-            activity_rect_slot: Some(&self.last_dashboard_activity_rect),
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
@@ -496,9 +548,11 @@ impl App {
             marker_read_at: self.chat.feeds.marker_read_at(),
         };
         let discover_view = chat::discover::ui::DiscoverListView {
-            items: self.chat.discover.all_items(),
+            items: self.chat.discover.visible_items(),
             selected_index: self.chat.discover.selected_index(),
             loading: self.chat.discover.is_loading(),
+            filtering: self.chat.discover.is_filtering(),
+            query: self.chat.discover.query(),
         };
         let notifications_view = chat::notifications::ui::NotificationListView {
             items: self.chat.notifications.all_items(),
@@ -545,8 +599,7 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
-        let selected_room_active_poll = if self.chat.selected_bumped_join_room_id().is_none()
-            && !self.chat.feeds_selected
+        let selected_room_active_poll = if !self.chat.feeds_selected
             && !self.chat.news_selected
             && !self.chat.discover_selected
             && !self.chat.notifications_selected
@@ -560,6 +613,10 @@ impl App {
             None
         };
         let chat_view = chat::ui::ChatRenderInput {
+            // The pet lives in the Lounge only (DashboardChatView above);
+            // every other room and tab renders without the strip.
+            pet_strip: None,
+            activity_ticker: self.chat.activity_ticker(),
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
             feeds_unread_count: self.chat.feeds.unread_count(),
@@ -577,8 +634,10 @@ impl App {
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
+            ignored_user_ids: self.chat.ignored_user_ids(),
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
+            room_unread_markers: &self.chat.room_unread_markers,
             unread_counts: &self.chat.unread_counts,
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
@@ -586,7 +645,6 @@ impl App {
             active_poll: selected_room_active_poll,
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
-            selected_bumped_join_room_id: self.chat.selected_bumped_join_room_id(),
             room_jump_active: self.chat.room_jump_active,
             room_section_prefix_armed: self.room_section_prefix_armed,
             selected_message_id: self.chat.selected_message_id,
@@ -607,7 +665,8 @@ impl App {
             bonsai_glyphs,
             chat_badges,
             profile_award_badges,
-            bot_username_color_active: self.shop_state.bot_username_color_active(),
+            drunk_levels: &self.drunk_levels,
+            name_styles: &self.name_styles,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -634,30 +693,40 @@ impl App {
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
-        let rooms_chat_view =
-            self.rooms_active_room
-                .as_ref()
-                .map(|room| chat::ui::EmbeddedRoomChatView {
-                    title: "Chat",
-                    messages: self.chat.messages_for_room(room.chat_room_id),
+        let daily_chat_view =
+            self.daily
+                .board_chat_room_id()
+                .map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+                    title: "Match Chat",
+                    messages: self.chat.messages_for_room(chat_room_id),
                     overlay: self.chat.overlay(),
                     image_modal,
-                    rows_cache: &mut self.rooms_chat_rows_cache,
+                    rows_cache: &mut self.daily_chat_rows_cache,
                     usernames: chat_usernames,
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
                     afk_user_ids: self.afk_user_ids.as_ref(),
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
+                    unread_marker: self
+                        .chat
+                        .room_unread_markers
+                        .get(&chat_room_id)
+                        .copied()
+                        .flatten(),
                     current_user_id: self.user_id,
-                    voice_channel_id: room.voice_channel_id,
+                    voice_channel_id: self
+                        .chat
+                        .voice_channels_by_room_id
+                        .get(&chat_room_id)
+                        .map(|channel| channel.id),
                     voice_snapshot,
                     voice_paired_cli_supports_voice: paired_cli_supports_voice,
                     show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                     selected_message_id: self.chat.selected_message_id,
                     selected_image_message: self
                         .chat
-                        .selected_message_has_inline_image_in_room(room.chat_room_id),
+                        .selected_message_has_inline_image_in_room(chat_room_id),
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
@@ -670,11 +739,92 @@ impl App {
                     bonsai_glyphs,
                     chat_badges,
                     profile_award_badges,
+                    drunk_levels: &self.drunk_levels,
+                    name_styles: &self.name_styles,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                 });
+        let house_chat_view =
+            self.house
+                .chat_room_id()
+                .map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+                    title: "Table Chat",
+                    messages: self.chat.messages_for_room(chat_room_id),
+                    overlay: self.chat.overlay(),
+                    image_modal,
+                    rows_cache: &mut self.house_chat_rows_cache,
+                    usernames: chat_usernames,
+                    countries: chat_countries,
+                    friend_user_ids: self.chat.friend_user_ids(),
+                    afk_user_ids: self.afk_user_ids.as_ref(),
+                    message_reactions,
+                    inline_images: &self.chat.inline_image_cache,
+                    unread_marker: self
+                        .chat
+                        .room_unread_markers
+                        .get(&chat_room_id)
+                        .copied()
+                        .flatten(),
+                    current_user_id: self.user_id,
+                    voice_channel_id: self
+                        .chat
+                        .voice_channels_by_room_id
+                        .get(&chat_room_id)
+                        .map(|channel| channel.id),
+                    voice_snapshot,
+                    voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                    show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                    selected_message_id: self.chat.selected_message_id,
+                    selected_image_message: self
+                        .chat
+                        .selected_message_has_inline_image_in_room(chat_room_id),
+                    highlighted_message_id: self.chat.highlighted_message_id,
+                    reaction_picker_active: self.chat.is_reaction_leader_active(),
+                    composer: self.chat.composer(),
+                    composing: self.chat.composing,
+                    mention_matches: &self.chat.mention_ac.matches,
+                    mention_selected: self.chat.mention_ac.selected,
+                    mention_active: self.chat.mention_ac.active,
+                    reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                    is_editing: self.chat.edited_message_id.is_some(),
+                    bonsai_glyphs,
+                    chat_badges,
+                    profile_award_badges,
+                    drunk_levels: &self.drunk_levels,
+                    name_styles: &self.name_styles,
+                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                    composer_rect_slot: Some(&self.chat.last_composer_rect),
+                    composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+                    chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+                });
+        // The clubhouse has no chat panel: #lounge messages float over their
+        // authors' heads and the shared composer block pins to the bottom.
+        // Both are only assembled while that screen is up.
+        let clubhouse_lounge_id = if screen == Screen::Clubhouse {
+            self.chat.lounge_room_id()
+        } else {
+            None
+        };
+        let clubhouse_lounge_messages: &[late_core::models::chat_message::ChatMessage] =
+            clubhouse_lounge_id
+                .map(|lounge_id| self.chat.messages_for_room(lounge_id))
+                .unwrap_or(&[]);
+        let clubhouse_composer = clubhouse_lounge_id.map(|_| chat::ui::ComposerBlockView {
+            composer: self.chat.composer(),
+            composing: self.chat.composing,
+            selected_message: false,
+            selected_image_message: false,
+            selected_news_message: false,
+            reaction_picker_active: false,
+            reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+            is_editing: self.chat.edited_message_id.is_some(),
+            mention_active: self.chat.mention_ac.active,
+            mention_matches: &self.chat.mention_ac.matches,
+            mention_selected: self.chat.mention_ac.selected,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+        });
         let mut terminal_image_frame = TerminalImageFrame::default();
 
         // Sixel cleanup, pre-frame phase. Sixel — unlike Kitty — has no
@@ -692,13 +842,12 @@ impl App {
             || self.show_quit_confirm
             || self.show_mod_modal
             || self.show_hub_modal
-            || self.show_aquarium_tray
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
-            || self.show_cat_modal
+            || self.show_lobby_modal
             || login_announcements_visible
             || self.show_help
             || self.show_ultimate_modal
@@ -710,13 +859,12 @@ impl App {
         let suppress_new_sixel = self.show_settings
             || self.show_mod_modal
             || self.show_hub_modal
-            || self.show_aquarium_tray
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
-            || self.show_cat_modal
+            || self.show_lobby_modal
             || login_announcements_visible
             || self.show_help
             || self.show_ultimate_modal
@@ -725,9 +873,11 @@ impl App {
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
-        let pre_wipe = self
-            .terminal_image_render_state
-            .pre_frame_sixel_wipe_bytes(image_modal_msg_id, overlay_blocks_sixel);
+        let pre_wipe = self.terminal_image_render_state.pre_frame_sixel_wipe_bytes(
+            image_modal_msg_id,
+            overlay_blocks_sixel,
+            screen as u16,
+        );
         if !pre_wipe.is_empty() {
             use std::io::Write;
             let _ = self.shared.write_all(&pre_wipe);
@@ -738,6 +888,8 @@ impl App {
         // Taken out (like pinstar_state) so the draw dispatch can hold &mut and
         // call set_viewport with the exact content_area before blitting.
         let mut rebels_state_taken = self.rebels_state.take();
+        let mut nethack_state_taken = self.nethack_state.take();
+        let mut dopewars_state_taken = self.dopewars_state.take();
 
         let pinstar_browser = if screen == Screen::Pinstar {
             Some(&self.pinstar_browser)
@@ -756,32 +908,48 @@ impl App {
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
                         door_delete_confirm: self.door_delete_confirm,
-                        rooms_create_flow: self.rooms_create_flow.as_ref(),
-                        rooms_snapshot: &self.rooms_snapshot,
-                        rooms_selected_index: self.rooms_selected_index,
-                        rooms_active_room: self.rooms_active_room.as_ref(),
-                        rooms_filter: self.rooms_filter,
-                        rooms_search_active: self.rooms_search_active,
-                        rooms_search_query: self.rooms_search_query.as_str(),
-                        rooms_usernames: chat_usernames,
-                        room_game_registry: &self.room_game_registry,
-                        active_room_game: self.active_room_game.as_deref(),
-                        rooms_chat_view,
+                        usernames: chat_usernames,
+                        daily_chat_view,
+                        house: &self.house,
+                        house_chat_view,
+                        games_hub_selected: self.games_hub_state.selected(),
+                        rebels_enabled: self.rebels_enabled,
+                        nethack_enabled: self.nethack_enabled,
+                        dopewars_enabled: self.dopewars_enabled,
                         lateania_state: self.lateania_state.as_ref(),
+                        lateania_online: self.lateania_service.player_count(),
+                        greendragon_state: self.greendragon_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
+                        nethack_state: nethack_state_taken.as_mut(),
+                        dopewars_state: dopewars_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         snake_state: &self.snake_state,
+                        rubiks_cube_state: &self.rubiks_cube_state,
+                        le_word_state: &self.le_word_state,
+                        traffic_state: &self.traffic_state,
                         sudoku_state: &self.sudoku_state,
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
                         nes_cabinet_state: &self.nes_cabinet_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        directory_state: &self.directory_state,
                         directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
+                        worldcup_snapshot: self.worldcup_rx.as_ref().map(|rx| rx.borrow().clone()),
+                        worldcup_state: &self.worldcup,
+                        clubhouse_state: &self.clubhouse,
+                        clubhouse_own_username: self.profile_state.profile().username.as_str(),
+                        clubhouse_name_styles: &self.name_styles,
+                        clubhouse_lounge_messages,
+                        clubhouse_graybeard_id: self.clubhouse_graybeard_id,
+                        clubhouse_composer,
+                        show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                        terminal_is_kitty: self.terminal_is_kitty,
+                        worldcup_timezone: self.profile_state.profile().timezone.as_deref(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
@@ -795,6 +963,7 @@ impl App {
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
                         show_right_sidebar,
+                        right_sidebar_components,
                         show_room_list_sidebar,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
@@ -817,7 +986,9 @@ impl App {
                         show_bonsai_modal: self.show_bonsai_modal,
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
-                        show_cat_modal: self.show_cat_modal,
+                        show_lobby_modal: self.show_lobby_modal,
+                        lobby: &self.lobby,
+                        daily: &self.daily,
                         login_announcements: if login_announcements_visible {
                             self.login_announcements.as_ref()
                         } else {
@@ -845,6 +1016,9 @@ impl App {
                         selected_radio_station,
                         radio_now_playing: radio_now_playing.as_deref(),
                         afk: self.afk.as_deref(),
+                        online_count,
+                        active_friend_names: &active_friend_names,
+                        marquee_tick: self.marquee_tick,
                         chat_state: &self.chat,
                         user_id: self.user_id,
                         pet_species: &self.pet_state.species,
@@ -854,6 +1028,8 @@ impl App {
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
+                        chip_balance: self.chip_balance,
+                        voice_badge,
                         home_selected,
                     },
                     &mut terminal_image_frame,
@@ -866,6 +1042,8 @@ impl App {
 
         self.pinstar_state = pinstar_state_taken;
         self.rebels_state = rebels_state_taken;
+        self.nethack_state = nethack_state_taken;
+        self.dopewars_state = dopewars_state_taken;
         draw_result?;
 
         // Feed the modal's image capacity (recorded during draw) back into
@@ -906,7 +1084,7 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         screen: Screen,
-        ctx: DrawContext<'_>,
+        mut ctx: DrawContext<'_>,
         terminal_images: &mut TerminalImageFrame,
     ) {
         if ctx.show_splash {
@@ -985,7 +1163,11 @@ impl App {
             .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-        if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
+        if let Some(hud) = status_hud_title(
+            Some(ctx.chip_balance),
+            ctx.mentions_unread_count,
+            ctx.voice_badge.as_deref(),
+        ) {
             block = block.title_top(hud);
         }
         let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
@@ -998,44 +1180,41 @@ impl App {
         frame.render_widget(block, area);
         frame.render_widget(Clear, inner);
 
-        let (app_inner, aquarium_tray_area) =
-            if ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium() {
-                let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
-                (
-                    Rect::new(
-                        inner.x,
-                        inner.y,
-                        inner.width,
-                        inner.height.saturating_sub(tray.height),
-                    ),
-                    Some(tray),
-                )
-            } else {
-                (inner, None)
-            };
+        // The aquarium tray lives inside the Lounge chat view only: it is
+        // carved from the top of the lounge's center column and competes
+        // with the chat for space. Every other screen keeps its full area.
+        let aquarium_tray_enabled =
+            ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium();
+        let mut aquarium_tray_area = None;
 
         let (content_area, sidebar_area) = if ctx.show_right_sidebar {
             let main_layout =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(app_inner);
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
             (main_layout[0], Some(main_layout[1]))
         } else {
-            (app_inner, None)
+            (inner, None)
         };
         let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
-                let (rail_area, center_area) =
-                    if ctx.show_room_list_sidebar && content_area.width > HOME_RAIL_WIDTH + 20 {
-                        let split = Layout::horizontal([
-                            Constraint::Length(HOME_RAIL_WIDTH),
-                            Constraint::Fill(1),
-                        ])
-                        .split(content_area);
-                        (Some(split[0]), split[1])
-                    } else {
-                        (None, content_area)
-                    };
+                let (rail_area, center_area) = if ctx.show_room_list_sidebar {
+                    let split = Layout::horizontal([
+                        Constraint::Length(HOME_RAIL_WIDTH),
+                        Constraint::Fill(1),
+                    ])
+                    .split(content_area);
+                    (Some(split[0]), split[1])
+                } else {
+                    (None, content_area)
+                };
+                let center_area = if aquarium_tray_enabled && ctx.home_selected {
+                    let (tray, rest) = crate::app::hub::aquarium::ui::carve_top_tray(center_area);
+                    aquarium_tray_area = tray;
+                    rest
+                } else {
+                    center_area
+                };
 
                 if let Some(rail_area) = rail_area {
                     chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
@@ -1043,13 +1222,6 @@ impl App {
 
                 if ctx.home_selected {
                     dashboard::ui::draw_dashboard(
-                        frame,
-                        center_area,
-                        ctx.dashboard_view,
-                        terminal_images,
-                    );
-                } else if ctx.dashboard_view.show_room_top_boxes {
-                    dashboard::ui::draw_chat_with_top_strip(
                         frame,
                         center_area,
                         ctx.dashboard_view,
@@ -1064,6 +1236,22 @@ impl App {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
                 }
             }
+            Screen::Games => {
+                crate::app::door::hub::ui::draw_games_hub(
+                    frame,
+                    content_area,
+                    &crate::app::door::hub::ui::HubView {
+                        selected: ctx.games_hub_selected,
+                        delete_confirm: ctx.door_delete_confirm,
+                        rebels_enabled: ctx.rebels_enabled,
+                        nethack_enabled: ctx.nethack_enabled,
+                        dopewars_enabled: ctx.dopewars_enabled,
+                        terminal_image_protocol: ctx.terminal_image_protocol,
+                        lateania_online: ctx.lateania_online,
+                    },
+                    terminal_images,
+                );
+            }
             Screen::Lateania => {
                 crate::app::door::lateania::screen::GAME.draw(
                     frame,
@@ -1071,8 +1259,20 @@ impl App {
                     &crate::app::door::lateania::screen::LateaniaScreenView {
                         delete_confirm: ctx.door_delete_confirm,
                         state: ctx.lateania_state,
-                        usernames: ctx.rooms_usernames,
+                        usernames: ctx.usernames,
                         terminal_image_protocol: ctx.terminal_image_protocol,
+                        online: ctx.lateania_online,
+                    },
+                    terminal_images,
+                );
+            }
+            Screen::GreenDragon => {
+                crate::app::door::greendragon::screen::GAME.draw(
+                    frame,
+                    content_area,
+                    &crate::app::door::greendragon::screen::GreenDragonScreenView {
+                        delete_confirm: ctx.door_delete_confirm,
+                        state: ctx.greendragon_state,
                     },
                     terminal_images,
                 );
@@ -1085,11 +1285,26 @@ impl App {
                     crate::app::door::rebels::render::draw_page(frame, content_area, state);
                 }
             }
+            Screen::Nethack => {
+                if let Some(state) = ctx.nethack_state {
+                    // Size the child PTY to the exact widget area before blitting.
+                    state.set_viewport(content_area);
+                    crate::app::door::nethack::render::draw_page(frame, content_area, state);
+                }
+            }
+            Screen::Dopewars => {
+                if let Some(state) = ctx.dopewars_state {
+                    // Size the child PTY to the exact widget area before blitting.
+                    state.set_viewport(content_area);
+                    crate::app::door::dopewars::render::draw_page(frame, content_area, state);
+                }
+            }
             Screen::Pinstar => {
                 crate::app::directory::ui::draw_directory_page(
                     frame,
                     content_area,
                     crate::app::directory::ui::DirectoryPageView {
+                        directory: ctx.directory_state,
                         tab: ctx.directory_tab,
                         profiles: ctx.chat_view.work_view,
                         work_state: ctx
@@ -1115,6 +1330,9 @@ impl App {
                     twenty_forty_eight_state: ctx.twenty_forty_eight_state,
                     tetris_state: ctx.tetris_state,
                     snake_state: ctx.snake_state,
+                    rubiks_cube_state: ctx.rubiks_cube_state,
+                    le_word_state: ctx.le_word_state,
+                    traffic_state: ctx.traffic_state,
                     sudoku_state: ctx.sudoku_state,
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
@@ -1123,26 +1341,49 @@ impl App {
                     daily_completion: ctx.leaderboard.user_daily_statuses.get(&ctx.user_id),
                 },
             ),
-            Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
+            Screen::WorldCup => {
+                let empty = crate::app::worldcup::model::WorldCupSnapshot::default();
+                let snapshot = ctx.worldcup_snapshot.as_deref().unwrap_or(&empty);
+                crate::app::worldcup::ui::draw(
+                    frame,
+                    content_area,
+                    crate::app::worldcup::ui::WorldCupView {
+                        snapshot,
+                        state: ctx.worldcup_state,
+                        show_flags: !ctx.show_flag_fallback,
+                        terminal_is_kitty: ctx.terminal_is_kitty,
+                        timezone: crate::app::profile::svc::parse_account_tz(ctx.worldcup_timezone),
+                    },
+                );
+            }
+            Screen::Clubhouse => crate::app::clubhouse::ui::draw(
                 frame,
                 content_area,
-                crate::app::rooms::ui::RoomsPageView {
-                    create_flow: ctx.rooms_create_flow,
-                    snapshot: ctx.rooms_snapshot,
-                    selected_index: ctx.rooms_selected_index,
-                    active_room: ctx.rooms_active_room,
-                    active_room_game: ctx.active_room_game,
-                    room_game_registry: ctx.room_game_registry,
-                    is_admin: ctx.is_admin,
-                    is_moderator: ctx.is_moderator,
-                    filter: ctx.rooms_filter,
-                    search_active: ctx.rooms_search_active,
-                    search_query: ctx.rooms_search_query,
-                    usernames: ctx.rooms_usernames,
-                    active_room_chat: ctx.rooms_chat_view,
+                crate::app::clubhouse::ui::ClubhouseView {
+                    state: ctx.clubhouse_state,
+                    own_username: ctx.clubhouse_own_username,
+                    name_styles: ctx.clubhouse_name_styles,
+                    now_playing: ctx.now_playing,
+                    lounge_messages: ctx.clubhouse_lounge_messages,
+                    graybeard_user_id: ctx.clubhouse_graybeard_id,
+                    composer: ctx.clubhouse_composer.take(),
                 },
-                terminal_images,
+            ),
+            Screen::DailyMatch => crate::app::lobby::daily::board_ui::draw(
+                frame,
+                content_area,
+                ctx.daily,
                 ctx.terminal_image_protocol,
+                terminal_images,
+                ctx.daily_chat_view.take(),
+            ),
+            Screen::HouseTable => crate::app::lobby::house::ui::draw(
+                frame,
+                content_area,
+                ctx.house.client(),
+                ctx.usernames,
+                ctx.house_chat_view.take(),
+                terminal_images,
             ),
         }
 
@@ -1151,14 +1392,13 @@ impl App {
                 frame,
                 sidebar_area,
                 &SidebarProps {
+                    components: &ctx.right_sidebar_components,
                     visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
                     bonsai: ctx.bonsai,
                     bonsai_v2: ctx.bonsai_v2,
                     use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),
-                    cat: ctx.cat,
-                    pet_available: ctx.shop_state.entitlements().has_pet_companion(),
                     audio_beat: ctx.visualizer.beat(),
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
@@ -1170,16 +1410,17 @@ impl App {
                     selected_radio_station: ctx.selected_radio_station,
                     radio_now_playing: ctx.radio_now_playing,
                     afk: ctx.afk,
+                    daily: ctx.daily,
+                    lobby_glow: ctx.lobby.glow(),
+                    online_count: ctx.online_count,
+                    active_friend_names: ctx.active_friend_names,
+                    marquee_tick: ctx.marquee_tick,
                 },
             );
         }
 
         if let Some(aquarium_area) = aquarium_tray_area {
-            crate::app::hub::aquarium::ui::draw_bottom_tray(
-                frame,
-                aquarium_area,
-                ctx.aquarium_state,
-            );
+            crate::app::hub::aquarium::ui::draw_top_tray(frame, aquarium_area, ctx.aquarium_state);
         }
 
         if foreground_overlay_open {
@@ -1203,12 +1444,13 @@ impl App {
             let color = match banner.kind {
                 BannerKind::Success => theme::SUCCESS(),
                 BannerKind::Error => theme::ERROR(),
+                BannerKind::Info => theme::AMBER(),
             };
             // leading space (1) + icon (2) + message + border padding (4)
             let msg_w = (banner.message.len() as u16) + 7;
-            let toast_w = msg_w.max(20).min(app_inner.width);
-            let toast_x = app_inner.x + app_inner.width.saturating_sub(toast_w);
-            let toast_area = Rect::new(toast_x, app_inner.y, toast_w, 3);
+            let toast_w = msg_w.max(20).min(inner.width);
+            let toast_x = inner.x + inner.width.saturating_sub(toast_w);
+            let toast_area = Rect::new(toast_x, inner.y, toast_w, 3);
             frame.render_widget(Clear, toast_area);
             let notif_block = Block::default()
                 .borders(Borders::ALL)
@@ -1218,9 +1460,7 @@ impl App {
             draw_banner(frame, notif_inner, &banner);
         }
 
-        if !ctx.show_cat_modal {
-            crate::app::pet::ui::draw_roaming_pet(frame, app_inner, ctx.cat);
-        }
+        crate::app::pet::ui::draw_roaming_pet(frame, inner, ctx.cat);
 
         if ctx.show_settings {
             settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
@@ -1278,8 +1518,8 @@ impl App {
             );
         }
 
-        if ctx.show_cat_modal {
-            crate::app::pet::modal_ui::draw(frame, ctx.cat);
+        if ctx.show_lobby_modal {
+            crate::app::lobby::modal_ui::draw(frame, inner, ctx.lobby, ctx.daily, ctx.house);
         }
 
         if let Some(modal) = ctx.login_announcements {
@@ -1341,12 +1581,10 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_quit_confirm
         || ctx.show_mod_modal
         || ctx.show_hub_modal
-        || ctx.show_aquarium_tray
         || ctx.show_profile_modal
         || ctx.show_poll_modal
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
-        || ctx.show_cat_modal
         || ctx.login_announcements.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal
@@ -1366,19 +1604,34 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
     let tabs = [
+        (Screen::Clubhouse, "0"),
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
-        (Screen::Rooms, "3"),
+        (Screen::Games, "3"),
         (Screen::Artboard, "4"),
-        (Screen::Lateania, "5"),
-        (Screen::Rebels, "6"),
-        (Screen::Pinstar, "7"),
+        (Screen::Pinstar, "5"),
+        (Screen::WorldCup, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
             spans.push(Span::raw(" "));
         }
-        let style = if *tab_screen == screen {
+        // While a door game is open the user is "inside" the Games hub, so keep
+        // the Games tab lit rather than leaving no tab highlighted. The daily
+        // board is a Home-surface feature, so Home stays lit there.
+        let active = *tab_screen == screen
+            || (*tab_screen == Screen::Games
+                && matches!(
+                    screen,
+                    Screen::Lateania
+                        | Screen::Rebels
+                        | Screen::Nethack
+                        | Screen::Dopewars
+                        | Screen::GreenDragon
+                ))
+            || (*tab_screen == Screen::Dashboard
+                && matches!(screen, Screen::DailyMatch | Screen::HouseTable));
+        let style = if active {
             Style::default()
                 .fg(theme::BG_SELECTION())
                 .bg(theme::AMBER())
@@ -1391,12 +1644,19 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     let page_title = match screen {
         Screen::Dashboard => "Home",
+        Screen::Games => "Games",
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
+        Screen::Nethack => "NetHack",
+        Screen::Dopewars => "dopewars",
+        Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Rooms => "Tables",
         Screen::Pinstar => "Directory",
+        Screen::WorldCup => "World Cup",
+        Screen::Clubhouse => "Clubhouse",
+        Screen::DailyMatch => "Daily Match",
+        Screen::HouseTable => "House Table",
     };
     spans.push(Span::styled(
         " | ",
@@ -1421,12 +1681,84 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         ));
     }
 
-    if screen == Screen::Rooms {
-        append_rooms_title_extras(&mut spans, ctx);
+    if screen == Screen::Nethack {
+        spans.push(Span::styled(
+            "by nethack.org ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        // While a game is live, surface the leave/help keys in the chrome (it
+        // sits outside the game grid, so it never covers glyphs). Players who
+        // skipped the launcher otherwise mash Esc trying to get out.
+        let in_game = ctx
+            .nethack_state
+            .as_deref()
+            .is_some_and(|state| state.is_running());
+        if in_game {
+            spans.push(Span::styled(
+                "· ? help · S save · Ctrl-C quit ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
+    if screen == Screen::Dopewars {
+        spans.push(Span::styled(
+            "by dopewars.sourceforge.io ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        // While a game is live, surface the leave key in the chrome (it sits
+        // outside the game grid, so it never covers glyphs). Players who skipped
+        // the launcher otherwise mash Esc trying to get out.
+        let in_game = ctx
+            .dopewars_state
+            .as_deref()
+            .is_some_and(|state| state.is_running());
+        if in_game {
+            spans.push(Span::styled(
+                "· Ctrl-C quit ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
     }
 
     if screen == Screen::Dashboard {
         append_home_title_extras(&mut spans, ctx);
+    }
+
+    // The clubhouse tavern draws no widget chrome of its own, so the
+    // headcount and keybinds live up here.
+    if screen == Screen::Clubhouse {
+        spans.push(Span::styled(
+            format!(
+                "· {} inside · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
+                ctx.clubhouse_state.headcount()
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+
+    if screen == Screen::WorldCup {
+        spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
+        spans.push(Span::styled(
+            "Space",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            " bracket · ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::styled(
+            "j/k",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            " scroll ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
     }
 
     if screen == Screen::Arcade && ctx.is_playing_game {
@@ -1539,50 +1871,6 @@ fn append_home_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_
     }
 }
 
-fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let amber = Style::default().fg(theme::AMBER());
-    let bright = Style::default().fg(theme::TEXT_BRIGHT());
-
-    if let Some(room) = ctx.rooms_active_room {
-        spans.push(Span::styled("· ", dim));
-        spans.push(Span::styled(room.display_name.clone(), bright));
-        if room.game_kind == crate::app::rooms::svc::GameKind::Asterion {
-            spans.push(Span::styled(" by github.com/ricott1/asterion", dim));
-        } else if room.game_kind == crate::app::rooms::svc::GameKind::Sshattrick {
-            spans.push(Span::styled(" by github.com/ricott1/sshattrick", dim));
-        }
-        if let Some(details) = ctx.active_room_game.and_then(|game| game.title_details()) {
-            if let Some(seated) = details.seated {
-                spans.push(Span::styled(" · ", dim));
-                spans.push(Span::styled(seated, dim));
-            }
-            if let Some(role) = details.role {
-                spans.push(Span::styled(" · ", dim));
-                spans.push(Span::styled(role, dim));
-            }
-            if let Some(balance) = details.balance {
-                spans.push(Span::styled(" · ", dim));
-                spans.push(Span::styled("Bal ", dim));
-                spans.push(Span::styled(format!("{} ", balance), amber));
-            }
-        }
-        spans.push(Span::raw(" "));
-    } else {
-        let real_count = ctx.rooms_snapshot.rooms.len();
-        let open = ctx
-            .rooms_snapshot
-            .rooms
-            .iter()
-            .filter(|r| r.status == "open")
-            .count();
-        spans.push(Span::styled("· ", dim));
-        spans.push(Span::styled(format!("{real_count} live"), dim));
-        spans.push(Span::styled(" · ", dim));
-        spans.push(Span::styled(format!("{open} open "), dim));
-    }
-}
-
 fn line_width(line: &Line<'_>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
@@ -1638,7 +1926,7 @@ fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
     let hints = [
         ("Settings", ctrl_hint("O", use_caret)),
         ("Hub", ctrl_hint("G", use_caret)),
-        ("Aqua", ctrl_hint("Q", use_caret)),
+        ("Lobby", ctrl_hint("Q", use_caret)),
         ("Guide", "?"),
     ];
 
@@ -1686,35 +1974,63 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     Line::from(spans).right_aligned()
 }
 
-fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
-    if unread <= 0 {
+fn status_hud_title(
+    balance: Option<i64>,
+    unread: i64,
+    voice_badge: Option<&str>,
+) -> Option<Line<'static>> {
+    if balance.is_none() && unread <= 0 && voice_badge.is_none() {
         return None;
     }
-    let noun = if unread == 1 { "mention" } else { "mentions" };
-    Some(
-        Line::from(vec![
-            Span::styled(
-                format!(" {unread}"),
-                Style::default()
-                    .fg(theme::MENTION())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" unread {noun} "),
-                Style::default().fg(theme::TEXT_MUTED()),
-            ),
-        ])
-        .right_aligned(),
-    )
+    let mut spans = Vec::new();
+    if unread > 0 {
+        let noun = if unread == 1 { "mention" } else { "mentions" };
+        spans.push(Span::styled(
+            format!(" {unread}"),
+            Style::default()
+                .fg(theme::MENTION())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" unread {noun} "),
+            Style::default().fg(theme::TEXT_MUTED()),
+        ));
+    }
+    if let Some(voice_badge) = voice_badge {
+        if !spans.is_empty() {
+            spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
+        }
+        spans.push(Span::styled(
+            voice_badge.to_string(),
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(balance) = balance {
+        if !spans.is_empty() {
+            spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
+        }
+        spans.push(Span::styled(
+            format!(" {balance}"),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            " chips ",
+            Style::default().fg(theme::TEXT_MUTED()),
+        ));
+    }
+    Some(Line::from(spans).right_aligned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         HelpHintStyle, app_frame_bottom_titles, app_frame_help_hint_title, app_frame_sponsor_title,
-        dashboard_home_selected, line_width, mentions_hud_title, resolve_right_sidebar_enabled,
-        room_list_sidebar_enabled, room_top_boxes_enabled, screen_number, sidebar_enabled,
-        sponsor_line,
+        dashboard_home_selected, line_width, resolve_right_sidebar_enabled,
+        room_list_sidebar_enabled, sidebar_enabled, sponsor_line, status_hud_title,
     };
     use crate::app::common::primitives::Screen;
     use late_core::models::user::RightSidebarMode;
@@ -1740,60 +2056,35 @@ mod tests {
     fn right_sidebar_is_only_available_on_first_three_pages() {
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Dashboard,
         ));
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Arcade,
-        ));
-        assert!(resolve_right_sidebar_enabled(
-            RightSidebarMode::On,
-            &[],
-            Screen::Rooms,
         ));
         assert!(!resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Lateania,
         ));
         assert!(!resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Artboard,
         ));
         assert!(!resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Pinstar,
         ));
     }
 
     #[test]
-    fn right_sidebar_custom_slots_follow_available_page_order() {
-        assert_eq!(screen_number(Screen::Dashboard), 1);
-        assert_eq!(screen_number(Screen::Arcade), 2);
-        assert_eq!(screen_number(Screen::Rooms), 3);
-        assert_eq!(screen_number(Screen::Artboard), 4);
-        assert_eq!(screen_number(Screen::Lateania), 5);
-        assert_eq!(screen_number(Screen::Rebels), 6);
-        assert_eq!(screen_number(Screen::Pinstar), 7);
-
-        assert!(resolve_right_sidebar_enabled(
-            RightSidebarMode::Custom,
-            &[1, 3],
+    fn right_sidebar_off_hides_on_allowed_pages() {
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::Off,
             Screen::Dashboard,
         ));
         assert!(!resolve_right_sidebar_enabled(
-            RightSidebarMode::Custom,
-            &[1, 3],
+            RightSidebarMode::Off,
             Screen::Arcade,
-        ));
-        assert!(resolve_right_sidebar_enabled(
-            RightSidebarMode::Custom,
-            &[1, 3],
-            Screen::Rooms,
         ));
     }
 
@@ -1807,31 +2098,6 @@ mod tests {
     fn room_list_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
         assert!(room_list_sidebar_enabled(false, false, true));
         assert!(!room_list_sidebar_enabled(false, true, false));
-    }
-
-    #[test]
-    fn room_top_boxes_enabled_is_always_on_for_home() {
-        assert!(room_top_boxes_enabled(true, false, false, true, true));
-        assert!(room_top_boxes_enabled(false, false, false, true, true));
-        assert!(room_top_boxes_enabled(true, false, false, true, false));
-    }
-
-    #[test]
-    fn room_top_boxes_enabled_prefers_settings_draft_for_non_home_while_modal_is_open() {
-        assert!(!room_top_boxes_enabled(true, false, true, false, true));
-        assert!(room_top_boxes_enabled(true, true, false, false, true));
-    }
-
-    #[test]
-    fn room_top_boxes_enabled_uses_saved_profile_for_non_home_when_modal_is_closed() {
-        assert!(room_top_boxes_enabled(false, false, true, false, true));
-        assert!(!room_top_boxes_enabled(false, true, false, false, true));
-    }
-
-    #[test]
-    fn room_top_boxes_enabled_is_off_for_synthetic_home_entries() {
-        assert!(!room_top_boxes_enabled(true, true, true, false, false));
-        assert!(!room_top_boxes_enabled(false, true, true, false, false));
     }
 
     #[test]
@@ -1850,23 +2116,49 @@ mod tests {
     }
 
     #[test]
-    fn mentions_hud_title_hidden_when_unread_is_zero_or_negative() {
-        assert!(mentions_hud_title(0).is_none());
-        assert!(mentions_hud_title(-3).is_none());
+    fn status_hud_title_hidden_when_empty() {
+        assert!(status_hud_title(None, 0, None).is_none());
+        assert!(status_hud_title(None, -3, None).is_none());
     }
 
     #[test]
-    fn mentions_hud_title_renders_right_aligned_pluralized_text() {
+    fn status_hud_title_renders_right_aligned_pluralized_text() {
         use ratatui::layout::Alignment;
 
-        let one = mentions_hud_title(1).expect("one mention should render");
+        let one = status_hud_title(None, 1, None).expect("one mention should render");
         assert_eq!(one.alignment, Some(Alignment::Right));
         let text: String = one.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, " 1 unread mention ");
 
-        let many = mentions_hud_title(14).expect("many mentions should render");
+        let many = status_hud_title(None, 14, None).expect("many mentions should render");
         let text: String = many.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, " 14 unread mentions ");
+    }
+
+    #[test]
+    fn status_hud_title_combines_voice_and_mentions() {
+        let line =
+            status_hud_title(None, 2, Some(" mic #lounge [muted] ")).expect("status should render");
+        let text: String = line.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, " 2 unread mentions | mic #lounge [muted] ");
+    }
+
+    #[test]
+    fn status_hud_title_renders_balance_right_of_mentions() {
+        use ratatui::layout::Alignment;
+
+        let only = status_hud_title(Some(1_500), 0, None).expect("balance should render alone");
+        assert_eq!(only.alignment, Some(Alignment::Right));
+        let text: String = only.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, " 1500 chips ");
+
+        let combined = status_hud_title(Some(1_500), 2, Some(" mic #lounge [muted] "))
+            .expect("balance + voice + mentions should render");
+        let text: String = combined.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(
+            text,
+            " 2 unread mentions | mic #lounge [muted] | 1500 chips "
+        );
     }
 
     #[test]
@@ -1898,7 +2190,7 @@ mod tests {
         let help = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
         assert_eq!(
             line_text(&help),
-            " Settings Ctrl+O · Hub Ctrl+G · Aqua Ctrl+Q · Guide ? "
+            " Settings Ctrl+O · Hub Ctrl+G · Lobby Ctrl+Q · Guide ? "
         );
     }
 
@@ -1909,9 +2201,12 @@ mod tests {
         let caret = app_frame_help_hint_title(HelpHintStyle::SpacedCaret);
         assert_eq!(
             line_text(&spaced),
-            " Settings Ctrl+O  Hub Ctrl+G  Aqua Ctrl+Q  Guide ? "
+            " Settings Ctrl+O  Hub Ctrl+G  Lobby Ctrl+Q  Guide ? "
         );
-        assert_eq!(line_text(&caret), " Settings ^O  Hub ^G  Aqua ^Q  Guide ? ");
+        assert_eq!(
+            line_text(&caret),
+            " Settings ^O  Hub ^G  Lobby ^Q  Guide ? "
+        );
 
         let (help, sponsor) = app_frame_bottom_titles((line_width(&dotted) + 2) as u16);
         assert_eq!(line_text(&help), line_text(&dotted));

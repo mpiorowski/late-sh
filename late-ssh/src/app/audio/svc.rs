@@ -36,7 +36,7 @@ const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
 const MIN_VIDEO_DURATION_MS: i32 = 30_000;
 const SKIP_VOTE_PERCENT: usize = 30;
 const SKIP_VOTE_MIN: u32 = 2;
-const HISTORY_LIMIT: i64 = 100;
+const HISTORY_LIMIT: i64 = 200;
 
 #[derive(Clone)]
 pub struct AudioService {
@@ -722,13 +722,13 @@ impl AudioService {
         active_audio_source_counts(&self.active_users).0
     }
 
-    /// Count of active users whose persisted audio source is Icecast/default.
+    /// Count of active users whose persisted audio source is Icecast.
     pub fn icecast_source_count(&self) -> usize {
         active_audio_source_counts(&self.active_users).1
     }
 
     /// Count of active users whose persisted audio source is the direct
-    /// radio preset.
+    /// radio preset (the default for users who never picked one).
     pub fn radio_source_count(&self) -> usize {
         active_audio_source_counts(&self.active_users).2
     }

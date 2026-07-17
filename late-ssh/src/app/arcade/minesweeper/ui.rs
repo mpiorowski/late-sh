@@ -7,9 +7,10 @@ use ratatui::{
 };
 
 use crate::app::arcade::ui::{
-    GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
-    tip_line,
+    GameBottomBar, OverlayAnchor, centered_rect, draw_game_frame, draw_game_overlay,
+    draw_game_overlay_anchored, keys_line, status_line, tip_line,
 };
+
 use crate::app::common::theme;
 
 use super::state::{self, Mode, State, adjacent_mine_count};
@@ -45,7 +46,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 "mines",
                 state
                     .mine_count()
-                    .saturating_sub(state.flag_count())
+                    .saturating_sub(state.flag_count() + state.hit_mine_count())
                     .to_string(),
                 theme::AMBER(),
             ),
@@ -57,18 +58,22 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("1-8", "chord"),
             ("d/p/n", "daily/pers/new"),
             ("[ ]", "diff"),
+            ("o", "cell style"),
+            ("{ }", "scroll"),
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),
-        tip: Some(tip_line(
-            "On a revealed cell, press its number to open all adjacent unflagged cells.",
-        )),
+        tip: Some(tip_line(if state.reset_pending {
+            "Press again to reset"
+        } else {
+            "On a revealed cell, press its number to open all adjacent unflagged cells."
+        })),
     };
 
     let board_area = draw_game_frame(frame, area, "Minesweeper", bottom, show_bottom_bar);
 
     let board_w = (diff.cols as u16) * 4 + 4; // row labels + borders
-    let board_h = diff.rows as u16 + 3; // col headers + top/bottom borders
+    let board_h = diff.rows as u16 * 2 + 2; // col headers + top/bottom borders + row separators
     let board_rect = centered_rect(
         board_area,
         board_w.min(board_area.width),
@@ -76,7 +81,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     );
 
     frame.render_widget(
-        Paragraph::new(board_lines(state)).alignment(Alignment::Center),
+        Paragraph::new(
+            board_lines(state)
+                .into_iter()
+                .skip(state.scroll_offset as usize)
+                .collect::<Vec<_>>(),
+        )
+        .alignment(Alignment::Center),
         board_rect,
     );
 
@@ -87,12 +98,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 Mode::Daily => "Change diff via [ ]",
                 Mode::Personal => "n for new",
             };
-            draw_game_overlay(
+            draw_game_overlay_anchored(
                 frame,
                 board_area,
                 "FIELD CLEARED!",
                 subtext,
                 theme::SUCCESS(),
+                OverlayAnchor::Top,
             );
         } else {
             let subtext = match state.mode {
@@ -125,9 +137,12 @@ fn board_lines(state: &State) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(Span::styled(top, dim)));
 
-    // Cell rows
+    // Cell rows with separators
     for row in 0..diff.rows {
         lines.push(board_row(state, row));
+        if row < diff.rows - 1 {
+            lines.push(row_separator(diff.cols));
+        }
     }
 
     // Bottom border
@@ -177,6 +192,20 @@ fn board_row(state: &State, row: usize) -> Line<'static> {
     Line::from(spans)
 }
 
+fn row_separator(cols: usize) -> Line<'static> {
+    let dim = Style::default().fg(theme::BORDER_DIM());
+    let mut s = "   \u{251c}".to_string();
+    for ci in 0..cols {
+        s.push_str("\u{2500}\u{2500}\u{2500}");
+        s.push(if ci < cols - 1 {
+            '\u{253c}'
+        } else {
+            '\u{2524}'
+        });
+    }
+    Line::from(Span::styled(s, dim))
+}
+
 fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     let cell = state
         .player_grid()
@@ -210,10 +239,14 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
                 .bg(Color::Rgb(180, 56, 48))
                 .add_modifier(Modifier::BOLD),
         ),
-        _ => (
-            " \u{00b7} ".to_string(),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ),
+        _ => {
+            let glyph = if state.use_dot_style {
+                " \u{00b7} ".to_string()
+            } else {
+                "\u{2588}\u{2588}\u{2588}".to_string()
+            };
+            (glyph, Style::default().fg(theme::TEXT_FAINT()))
+        }
     };
 
     if is_chord_target {
@@ -366,6 +399,65 @@ fn row_label(row: usize) -> char {
     (b'A' + row as u8) as char
 }
 
+pub fn hit_area(area: Rect, diff: &state::DifficultyConfig) -> Rect {
+    let board_area = crate::app::arcade::ui::game_content_area(area, true, true);
+    let content_width = 4 + diff.cols * 4;
+    let board_w = (content_width as u16).min(board_area.width);
+    let board_h = ((diff.rows as u16) * 2 + 2).min(board_area.height);
+    centered_rect(board_area, board_w, board_h)
+}
+
+pub fn hit_test(
+    area: Rect,
+    diff: &state::DifficultyConfig,
+    scroll_offset: u16,
+    x: u16,
+    y: u16,
+) -> Option<(usize, usize)> {
+    let board_rect = hit_area(area, diff);
+
+    if x < board_rect.x || x >= board_rect.x + board_rect.width {
+        return None;
+    }
+    if y < board_rect.y || y >= board_rect.y.saturating_add(board_rect.height) {
+        return None;
+    }
+
+    let content_width = 4 + diff.cols * 4;
+    if board_rect.width < content_width as u16 {
+        return None;
+    }
+    let text_start_x = board_rect.x + (board_rect.width - (content_width as u16)) / 2;
+
+    if x < text_start_x {
+        return None;
+    }
+
+    let local_x = x - text_start_x;
+    if local_x < 4 {
+        return None;
+    }
+    let cell_offset = local_x - 4;
+    let col = cell_offset / 4;
+    let in_cell = cell_offset % 4 < 3;
+
+    if !in_cell || col as usize >= diff.cols {
+        return None;
+    }
+
+    let line = y.saturating_sub(board_rect.y).saturating_add(scroll_offset);
+    if line < 2 || line >= 2 + (diff.rows as u16) * 2 {
+        return None;
+    }
+
+    let board_row = (line - 2) as usize;
+    if !board_row.is_multiple_of(2) || board_row / 2 >= diff.rows {
+        return None;
+    }
+
+    Some((board_row / 2, col as usize))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,5 +474,68 @@ mod tests {
         assert_eq!(glyph, CHORD_PREVIEW_GLYPH);
         assert_eq!(style.fg, Some(theme::BORDER_DIM()));
         assert_eq!(style.bg, None);
+    }
+
+    fn board_origin(area: Rect, diff: &state::DifficultyConfig) -> (u16, u16) {
+        let br = hit_area(area, diff);
+        let content_width = 4 + diff.cols * 4;
+        let text_start_x = br.x + (br.width - (content_width as u16)) / 2;
+        (text_start_x + 4, br.y + 2)
+    }
+
+    #[test]
+    fn hit_test_hits_cells() {
+        for diff in &state::DIFFICULTIES {
+            let area = Rect::new(0, 0, 120, 60);
+            let (ox, oy) = board_origin(area, diff);
+            assert_eq!(hit_test(area, diff, 0, ox, oy), Some((0, 0)));
+            assert_eq!(
+                hit_test(area, diff, 0, ox + (diff.cols as u16 - 1) * 4, oy),
+                Some((0, diff.cols - 1))
+            );
+            assert_eq!(
+                hit_test(area, diff, 0, ox, oy + (diff.rows as u16 - 1) * 2),
+                Some((diff.rows - 1, 0))
+            );
+            if diff.cols > 1 {
+                assert_eq!(hit_test(area, diff, 0, ox + 4, oy), Some((0, 1)));
+            }
+        }
+    }
+
+    #[test]
+    fn hit_test_rejects_non_cell_area() {
+        let diff = state::DIFFICULTIES[0];
+        let area = Rect::new(0, 0, 80, 40);
+        let (ox, oy) = board_origin(area, &diff);
+        let br = hit_area(area, &diff);
+
+        assert_eq!(
+            hit_test(area, &diff, 0, ox + 3, oy),
+            None,
+            "vertical separator"
+        );
+        assert_eq!(
+            hit_test(area, &diff, 0, ox, oy + 1),
+            None,
+            "horizontal separator"
+        );
+        assert_eq!(
+            hit_test(area, &diff, 0, br.x + 1, br.y + 2),
+            None,
+            "row label"
+        );
+        assert_eq!(hit_test(area, &diff, 0, ox, oy - 1), None, "column header");
+        assert_eq!(
+            hit_test(area, &diff, 0, ox, oy + (diff.rows as u16 - 1) * 2 + 1),
+            None,
+            "bottom border"
+        );
+        assert_eq!(hit_test(area, &diff, 0, 0, 0), None, "top-left corner");
+        assert_eq!(
+            hit_test(area, &diff, 0, 79, 39),
+            None,
+            "bottom-right corner"
+        );
     }
 }

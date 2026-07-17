@@ -43,7 +43,7 @@ use crate::{
         command::{RoleAction, RoomModAction},
         event::ModerationEvent,
     },
-    state::State,
+    state::{ActiveSession, ActiveUser, State},
     usernames,
 };
 
@@ -106,6 +106,12 @@ where
         .await?;
         return Ok(());
     }
+    track_active_irc_user(&state, &registration, peer_ip, conn_id);
+    if let Err(err) = welcome(&state, &mut framed, &registration).await {
+        state.irc_registry.unregister(registration.user_id, conn_id);
+        untrack_active_irc_user(&state, registration.user_id, conn_id);
+        return Err(err);
+    }
 
     let mut session = Session {
         state: state.clone(),
@@ -127,12 +133,16 @@ where
 
     let result = session.run(&mut framed, control_rx).await;
     state.irc_registry.unregister(session.user_id, conn_id);
+    untrack_active_irc_user(&state, session.user_id, conn_id);
     result
 }
 
 struct Registered {
     user_id: Uuid,
+    username: String,
     nick: String,
+    fingerprint: String,
+    audio_source: late_core::models::user::AudioSource,
     is_admin: bool,
     is_moderator: bool,
     caps: IrcCapabilities,
@@ -308,16 +318,19 @@ async fn register(
     };
     match outcome {
         AuthOutcome::Ok { user, token_id: _ } => {
-            let nick = user.username.clone();
+            let username = user.username.clone();
+            let nick = proj::nick_for_username(&username);
             let is_admin = user.is_admin || state.config.force_admin;
             let registered = Registered {
                 user_id: user.id,
+                username,
                 nick,
+                fingerprint: user.fingerprint.clone(),
+                audio_source: late_core::models::user::extract_audio_source(&user.settings),
                 is_admin,
                 is_moderator: user.is_moderator,
                 caps: pending.caps,
             };
-            welcome(state, framed, &registered).await?;
             Ok(Some(registered))
         }
         AuthOutcome::BadToken | AuthOutcome::Banned => {
@@ -355,7 +368,7 @@ async fn register(
 
 async fn welcome(state: &State, framed: &mut IrcStream, registered: &Registered) -> Result<()> {
     let nick = registered.nick.as_str();
-    let online = state.active_users.lock_recover().len() + state.irc_registry.connection_count();
+    let online = state.active_users.lock_recover().len();
     let mut burst = vec![
         replies::numeric(
             nick,
@@ -412,6 +425,57 @@ async fn welcome(state: &State, framed: &mut IrcStream, registered: &Registered)
     Ok(())
 }
 
+fn irc_session_token(conn_id: u64) -> String {
+    format!("irc:{conn_id}")
+}
+
+fn track_active_irc_user(state: &State, registered: &Registered, peer_ip: IpAddr, conn_id: u64) {
+    let mut active_users = state.active_users.lock_recover();
+    let session = ActiveSession {
+        token: irc_session_token(conn_id),
+        fingerprint: Some(registered.fingerprint.clone()),
+        peer_ip: Some(peer_ip),
+        afk: None,
+    };
+
+    if let Some(active) = active_users.get_mut(&registered.user_id) {
+        active.connection_count += 1;
+        active.username = registered.username.clone();
+        active.fingerprint = Some(registered.fingerprint.clone());
+        active.peer_ip = Some(peer_ip);
+        active.audio_source = registered.audio_source;
+        active.last_login_at = std::time::Instant::now();
+        active.sessions.push(session);
+    } else {
+        active_users.insert(
+            registered.user_id,
+            ActiveUser {
+                username: registered.username.clone(),
+                fingerprint: Some(registered.fingerprint.clone()),
+                peer_ip: Some(peer_ip),
+                audio_source: registered.audio_source,
+                sessions: vec![session],
+                connection_count: 1,
+                last_login_at: std::time::Instant::now(),
+            },
+        );
+    }
+}
+
+fn untrack_active_irc_user(state: &State, user_id: Uuid, conn_id: u64) {
+    let mut active_users = state.active_users.lock_recover();
+    let Some(active) = active_users.get_mut(&user_id) else {
+        return;
+    };
+    let token = irc_session_token(conn_id);
+    active.sessions.retain(|session| session.token != token);
+    if active.connection_count <= 1 {
+        active_users.remove(&user_id);
+    } else {
+        active.connection_count -= 1;
+    }
+}
+
 fn motd_burst(nick: &str, web_url: &str) -> Vec<Message> {
     let mut out = vec![replies::numeric(
         nick,
@@ -440,6 +504,7 @@ struct JoinedChannel {
 }
 
 struct DmPeer {
+    peer_user_id: Uuid,
     peer_nick: String,
 }
 
@@ -531,6 +596,19 @@ impl Session {
                             send_all(framed, vec![replies::error(reason)]).await?;
                             return Ok(());
                         }
+                        Some(IrcControl::UserRenamed {
+                            user_id,
+                            old_username,
+                            new_username,
+                        }) => {
+                            self.project_username_change(
+                                framed,
+                                user_id,
+                                &old_username,
+                                &new_username,
+                            )
+                            .await?;
+                        }
                         None => return Ok(()),
                     }
                 }
@@ -604,11 +682,11 @@ impl Session {
                 let mut out = vec![replies::numeric(
                     &self.nick,
                     Response::ERR_RESTRICTED,
-                    vec!["Your nick is locked to your late.sh username".to_string()],
+                    vec!["Your nick is locked to your late.sh identity".to_string()],
                 )];
                 out.push(replies::server_notice(
                     &self.nick,
-                    "Nicks are locked to late.sh usernames; change it via the late.sh TUI",
+                    "Nicks are derived from late.sh usernames; change your username via the late.sh TUI",
                 ));
                 send_all(framed, out).await?;
             }
@@ -718,8 +796,7 @@ impl Session {
                     .await?;
             }
             Command::LUSERS(_, _) => {
-                let online = self.state.active_users.lock_recover().len()
-                    + self.state.irc_registry.connection_count();
+                let online = self.state.active_users.lock_recover().len();
                 framed
                     .send(replies::numeric(
                         &self.nick,
@@ -733,8 +810,10 @@ impl Session {
                 let replies_text: Vec<String> = nicks
                     .iter()
                     .filter_map(|nick| {
-                        lookup_user_by_nick(&directory, nick)
-                            .map(|(_, name)| format!("{name}=+{name}@{}", replies::USER_HOSTNAME))
+                        lookup_user_by_nick(&directory, nick).map(|(_, name)| {
+                            let nick = proj::nick_for_username(&name);
+                            format!("{nick}=+{nick}@{}", replies::USER_HOSTNAME)
+                        })
                     })
                     .collect();
                 framed
@@ -751,7 +830,7 @@ impl Session {
                     .iter()
                     .filter_map(|nick| lookup_user_by_nick(&directory, nick))
                     .filter(|(id, _)| self.is_user_online(*id))
-                    .map(|(_, name)| name)
+                    .map(|(_, name)| proj::nick_for_username(&name))
                     .collect();
                 framed
                     .send(replies::numeric(
@@ -884,12 +963,15 @@ impl Session {
             }
         }
         let body = match proj::parse_ctcp_action(&text) {
-            Some(action) => proj::action_to_body(action),
+            Some(action) => {
+                let action = self.rewrite_leading_irc_mention_for_late(action);
+                proj::action_to_body(&action)
+            }
             None if text.starts_with('\u{1}') => {
                 // Non-ACTION CTCP: answer VERSION/PING minimally, drop the rest.
                 return self.handle_ctcp(framed, target, &text).await;
             }
-            None => text,
+            None => self.rewrite_leading_irc_mention_for_late(&text),
         };
         let reply_to_message_id = match proj::reply_tag(tags) {
             Ok(reply_to_message_id) => reply_to_message_id,
@@ -939,7 +1021,7 @@ impl Session {
             );
         } else {
             let directory = usernames::snapshot(&self.state.username_directory);
-            let Some((target_id, _)) = lookup_user_by_nick(&directory, target) else {
+            let Some((target_id, target_username)) = lookup_user_by_nick(&directory, target) else {
                 if reply_errors {
                     framed
                         .send(replies::numeric(
@@ -963,7 +1045,8 @@ impl Session {
             self.dm_peers.insert(
                 room.id,
                 DmPeer {
-                    peer_nick: target.to_string(),
+                    peer_user_id: target_id,
+                    peer_nick: proj::nick_for_username(&target_username),
                 },
             );
             self.state.chat_service.send_message_with_reply_task(
@@ -1090,7 +1173,7 @@ impl Session {
         }
 
         let directory = usernames::snapshot(&self.state.username_directory);
-        let Some((target_id, _)) = lookup_user_by_nick(&directory, target) else {
+        let Some((target_id, target_username)) = lookup_user_by_nick(&directory, target) else {
             if reply_errors {
                 framed
                     .send(replies::numeric(
@@ -1107,7 +1190,8 @@ impl Session {
         self.dm_peers.insert(
             room.id,
             DmPeer {
-                peer_nick: target.to_string(),
+                peer_user_id: target_id,
+                peer_nick: proj::nick_for_username(&target_username),
             },
         );
         Ok(Some(room.id))
@@ -1201,6 +1285,13 @@ impl Session {
                 .await?;
         }
         Ok(valid)
+    }
+
+    fn rewrite_leading_irc_mention_for_late(&self, body: &str) -> String {
+        let directory = usernames::snapshot(&self.state.username_directory);
+        proj::rewrite_leading_mention_for_late(body, |nick| {
+            lookup_user_by_nick(&directory, nick).map(|(_, username)| username)
+        })
     }
 
     async fn handle_ctcp(&self, framed: &mut IrcStream, _target: &str, text: &str) -> Result<()> {
@@ -1453,12 +1544,9 @@ impl Session {
             .iter()
             .filter_map(|id| {
                 let username = directory.get(id)?;
+                let nick = proj::nick_for_username(username);
                 let is_staff = staff.contains_key(id);
-                Some(if is_staff {
-                    format!("@{username}")
-                } else {
-                    username.clone()
-                })
+                Some(if is_staff { format!("@{nick}") } else { nick })
             })
             .collect();
         names.sort();
@@ -1497,18 +1585,19 @@ impl Session {
                     let Some(username) = directory.get(&id) else {
                         continue;
                     };
+                    let nick = proj::nick_for_username(username);
                     let flags = if staff.contains_key(&id) { "H@" } else { "H" };
                     out.push(replies::numeric(
                         &self.nick,
                         Response::RPL_WHOREPLY,
                         vec![
                             mask.to_string(),
-                            username.clone(),
+                            nick.clone(),
                             replies::USER_HOSTNAME.to_string(),
                             SERVER_NAME.to_string(),
-                            username.clone(),
+                            nick.clone(),
                             flags.to_string(),
-                            format!("0 {username}"),
+                            format!("0 {nick}"),
                         ],
                     ));
                 }
@@ -1518,17 +1607,18 @@ impl Session {
             if let Some((id, username)) = lookup_user_by_nick(&directory, mask)
                 && (self.is_user_online(id) || id == self.user_id)
             {
+                let nick = proj::nick_for_username(&username);
                 out.push(replies::numeric(
                     &self.nick,
                     Response::RPL_WHOREPLY,
                     vec![
                         "*".to_string(),
-                        username.clone(),
+                        nick.clone(),
                         replies::USER_HOSTNAME.to_string(),
                         SERVER_NAME.to_string(),
-                        username.clone(),
+                        nick.clone(),
                         "H".to_string(),
-                        format!("0 {username}"),
+                        format!("0 {nick}"),
                     ],
                 ));
             }
@@ -1567,23 +1657,24 @@ impl Session {
         let client = self.state.db.get().await?;
         let staff = User::staff_flags_by_ids(&client, &[id]).await?;
         drop(client);
+        let nick = proj::nick_for_username(&username);
         let mut out = vec![
             replies::numeric(
                 &self.nick,
                 Response::RPL_WHOISUSER,
                 vec![
-                    username.clone(),
-                    username.clone(),
+                    nick.clone(),
+                    nick.clone(),
                     replies::USER_HOSTNAME.to_string(),
                     "*".to_string(),
-                    username.clone(),
+                    nick.clone(),
                 ],
             ),
             replies::numeric(
                 &self.nick,
                 Response::RPL_WHOISSERVER,
                 vec![
-                    username.clone(),
+                    nick.clone(),
                     SERVER_NAME.to_string(),
                     NETWORK_NAME.to_string(),
                 ],
@@ -1593,13 +1684,13 @@ impl Session {
             out.push(replies::numeric(
                 &self.nick,
                 Response::RPL_WHOISOPERATOR,
-                vec![username.clone(), "is an IRC operator".to_string()],
+                vec![nick.clone(), "is an IRC operator".to_string()],
             ));
         }
         out.push(replies::numeric(
             &self.nick,
             Response::RPL_ENDOFWHOIS,
-            vec![username, "End of /WHOIS list".to_string()],
+            vec![nick, "End of /WHOIS list".to_string()],
         ));
         send_all(framed, out).await?;
         Ok(())
@@ -1702,7 +1793,8 @@ impl Session {
         }
         let reason = reason.unwrap_or("IRC KICK");
         for nick in users.split(',').filter(|nick| !nick.trim().is_empty()) {
-            let command = format!("kick {channel} @{} {reason}", nick.trim());
+            let username = proj::username_for_nick(nick.trim());
+            let command = format!("kick {channel} @{username} {reason}");
             self.run_moderation_command(framed, channel, &command)
                 .await?;
         }
@@ -1725,7 +1817,8 @@ impl Session {
                 .await?;
             return Ok(());
         }
-        let command = format!("kick server @{nick} {reason}");
+        let username = proj::username_for_nick(nick);
+        let command = format!("kick server @{username} {reason}");
         self.run_moderation_command(framed, nick, &command).await
     }
 
@@ -1758,10 +1851,11 @@ impl Session {
                 .await?;
             return Ok(());
         };
+        let username = proj::username_for_nick(nick);
         let command = if add {
-            format!("ban {channel} @{nick} IRC MODE +b")
+            format!("ban {channel} @{username} IRC MODE +b")
         } else {
-            format!("unban {channel} @{nick} IRC MODE -b")
+            format!("unban {channel} @{username} IRC MODE -b")
         };
         self.run_moderation_command(framed, channel, &command).await
     }
@@ -1779,9 +1873,11 @@ impl Session {
         for item in bans {
             let target = item
                 .target_username
+                .map(|username| proj::nick_for_username(&username))
                 .unwrap_or_else(|| item.ban.target_user_id.to_string());
             let actor = item
                 .actor_username
+                .map(|username| proj::nick_for_username(&username))
                 .unwrap_or_else(|| SERVER_NAME.to_string());
             out.push(replies::numeric(
                 &self.nick,
@@ -1855,11 +1951,11 @@ impl Session {
                 let directory = usernames::snapshot(&self.state.username_directory);
                 let actor = directory
                     .get(&actor_user_id)
-                    .cloned()
+                    .map(|username| proj::nick_for_username(username))
                     .unwrap_or_else(|| SERVER_NAME.to_string());
                 let target = directory
                     .get(&target_user_id)
-                    .cloned()
+                    .map(|username| proj::nick_for_username(username))
                     .unwrap_or_else(|| target_user_id.to_string());
                 match action {
                     RoomModAction::Kick => {
@@ -1914,7 +2010,10 @@ impl Session {
                 ..
             } => {
                 let directory = usernames::snapshot(&self.state.username_directory);
-                let Some(target) = directory.get(&target_user_id).cloned() else {
+                let Some(target) = directory
+                    .get(&target_user_id)
+                    .map(|username| proj::nick_for_username(username))
+                else {
                     return Ok(());
                 };
                 if target_user_id == self.user_id {
@@ -2093,18 +2192,24 @@ impl Session {
                     return Ok(());
                 }
             }
+            let directory = usernames::snapshot(&self.state.username_directory);
             let author = match author_username {
                 Some(author) => author,
-                None => {
-                    let directory = usernames::snapshot(&self.state.username_directory);
-                    match directory.get(&message.user_id) {
-                        Some(name) => name.clone(),
-                        None => return Ok(()),
-                    }
-                }
+                None => match directory.get(&message.user_id) {
+                    Some(name) => name.clone(),
+                    None => return Ok(()),
+                },
             };
+            let author = proj::nick_for_username(&author);
             let channel_name = channel.name.clone();
-            self.deliver_privmsg(framed, &author, &channel_name, &message, is_edit)
+            let body = proj::body_for_irc(&message.body, &author);
+            let body = proj::rewrite_leading_mention_for_irc(&body, |username| {
+                directory
+                    .values()
+                    .find(|candidate| candidate.eq_ignore_ascii_case(username))
+                    .cloned()
+            });
+            self.deliver_privmsg(framed, &author, &channel_name, &message, &body, is_edit)
                 .await?;
             return Ok(());
         }
@@ -2128,17 +2233,27 @@ impl Session {
             }
             drop(client);
             let directory = usernames::snapshot(&self.state.username_directory);
-            let Some(peer_nick) = directory.get(&message.user_id).cloned() else {
+            let Some(peer_nick) = directory
+                .get(&message.user_id)
+                .map(|username| proj::nick_for_username(username))
+            else {
                 return Ok(());
             };
-            self.dm_peers.insert(message.room_id, DmPeer { peer_nick });
+            self.dm_peers.insert(
+                message.room_id,
+                DmPeer {
+                    peer_user_id: message.user_id,
+                    peer_nick,
+                },
+            );
         }
         let Some(peer) = self.dm_peers.get(&message.room_id) else {
             return Ok(());
         };
         let author = peer.peer_nick.clone();
         let target = self.nick.clone();
-        self.deliver_privmsg(framed, &author, &target, &message, is_edit)
+        let body = proj::body_for_irc(&message.body, &author);
+        self.deliver_privmsg(framed, &author, &target, &message, &body, is_edit)
             .await?;
         Ok(())
     }
@@ -2149,9 +2264,10 @@ impl Session {
         author: &str,
         target: &str,
         message: &late_core::models::chat_message::ChatMessage,
+        body: &str,
         is_edit: bool,
     ) -> Result<()> {
-        let mut lines = proj::split_body(&message.body, proj::PRIVMSG_CHUNK_BYTES);
+        let mut lines = proj::split_body(body, proj::PRIVMSG_CHUNK_BYTES);
         if is_edit {
             lines = lines
                 .into_iter()
@@ -2243,11 +2359,15 @@ impl Session {
         drop(client);
 
         let directory = usernames::snapshot(&self.state.username_directory);
-        let Some(author) = directory.get(&actor_user_id).cloned() else {
+        let Some(author) = directory
+            .get(&actor_user_id)
+            .map(|username| proj::nick_for_username(username))
+        else {
             return Ok(None);
         };
         if actor_user_id != self.user_id {
             self.dm_peers.entry(room_id).or_insert_with(|| DmPeer {
+                peer_user_id: actor_user_id,
                 peer_nick: author.clone(),
             });
             return Ok(Some((author, self.nick.clone())));
@@ -2261,10 +2381,14 @@ impl Session {
         let Some(peer_id) = peer_id else {
             return Ok(None);
         };
-        let Some(peer_nick) = directory.get(&peer_id).cloned() else {
+        let Some(peer_nick) = directory
+            .get(&peer_id)
+            .map(|username| proj::nick_for_username(username))
+        else {
             return Ok(None);
         };
         self.dm_peers.entry(room_id).or_insert_with(|| DmPeer {
+            peer_user_id: peer_id,
             peer_nick: peer_nick.clone(),
         });
         Ok(Some((author, peer_nick)))
@@ -2352,7 +2476,64 @@ impl Session {
             return Some(self.nick.clone());
         }
         let directory = usernames::snapshot(&self.state.username_directory);
-        directory.get(&user_id).cloned()
+        directory
+            .get(&user_id)
+            .map(|username| proj::nick_for_username(username))
+    }
+
+    async fn project_username_change(
+        &mut self,
+        framed: &mut IrcStream,
+        renamed_user_id: Uuid,
+        old_username: &str,
+        new_username: &str,
+    ) -> Result<()> {
+        let old_nick = proj::nick_for_username(old_username);
+        let new_nick = proj::nick_for_username(new_username);
+        if old_nick == new_nick {
+            return Ok(());
+        }
+
+        for peer in self.dm_peers.values_mut() {
+            if peer.peer_user_id == renamed_user_id {
+                peer.peer_nick = new_nick.clone();
+            }
+        }
+
+        if renamed_user_id == self.user_id {
+            self.nick = new_nick.clone();
+            framed
+                .send(replies::from_user(&old_nick, Command::NICK(new_nick)))
+                .await?;
+            return Ok(());
+        }
+
+        if self
+            .dm_peers
+            .values()
+            .any(|peer| peer.peer_user_id == renamed_user_id)
+            || self.shares_joined_channel_with(renamed_user_id).await?
+        {
+            framed
+                .send(replies::from_user(&old_nick, Command::NICK(new_nick)))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn shares_joined_channel_with(&self, user_id: Uuid) -> Result<bool> {
+        if self.joined.is_empty() {
+            return Ok(false);
+        }
+        let client = self.state.db.get().await?;
+        let joined_room_ids: Vec<Uuid> = self.joined.keys().copied().collect();
+        let memberships = ChatRoomMember::list_memberships_for_users_in_rooms(
+            &client,
+            &[user_id],
+            &joined_room_ids,
+        )
+        .await?;
+        Ok(!memberships.is_empty())
     }
 
     fn is_user_online(&self, user_id: Uuid) -> bool {
@@ -2387,9 +2568,12 @@ impl Session {
             if *departed == self.user_id {
                 continue;
             }
-            if let Some(nick) = directory.get(departed) {
+            if let Some(nick) = directory
+                .get(departed)
+                .map(|username| proj::nick_for_username(username))
+            {
                 out.push(replies::from_user(
-                    nick,
+                    &nick,
                     Command::QUIT(Some("left late.sh".to_string())),
                 ));
             }
@@ -2410,7 +2594,10 @@ impl Session {
             )
             .await?;
             for (arrived, room_id) in memberships {
-                let Some(nick) = directory.get(&arrived).cloned() else {
+                let Some(nick) = directory
+                    .get(&arrived)
+                    .map(|username| proj::nick_for_username(username))
+                else {
                     continue;
                 };
                 if let Some(channel) = self.joined.get(&room_id) {
@@ -2465,7 +2652,7 @@ fn nick_from_ban_mask(mask: &str) -> Option<&str> {
 fn lookup_user_by_nick(directory: &HashMap<Uuid, String>, nick: &str) -> Option<(Uuid, String)> {
     directory
         .iter()
-        .find(|(_, name)| name.eq_ignore_ascii_case(nick))
+        .find(|(_, name)| proj::nick_for_username(name).eq_ignore_ascii_case(nick))
         .map(|(id, name)| (*id, name.clone()))
 }
 

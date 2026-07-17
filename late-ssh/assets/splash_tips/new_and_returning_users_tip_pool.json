@@ -9,7 +9,7 @@
   "You can /ignore and /unignore @users",
   "Try out blackjack, poker, and chess!!",
   "Press Control+] to open the emoji and symbol picker",
-  "Press 2 for minigames, 3 for games, 4 for artboard",
+  "Press 2 for minigames, 3 for games, 4 for artboard, 5 for directory",
   "Type /binds in chat for a list of available chat commands",
   "You can change your username in ctrl+o settings",
   "Connect from an IRC client with a token from ctrl+o settings",
@@ -27,5 +27,10 @@
   "Try a different color theme in ctrl+o settings",
   "Your bonsai grows slow and steady — water it daily for the best results",
   "The music keeps playing even when you're not chatting!",
-  "Resize your terminal and the layout reflows automatically"
+  "Resize your terminal and the layout reflows automatically",
+  "You land in the Clubhouse: walk with hjkl, press i to talk, w to wave, x to dance",
+  "In the Clubhouse your words float over your head; the full chat lives on Home (1)",
+  "Walk up to the Clubhouse dog and press Enter. Everyone sees the pet",
+  "Press ` on Home to hop through games waiting on you: your-move boards, seated tables, unfinished daily puzzles",
+  "Type /search in chat to find old messages across all your rooms"
 ]

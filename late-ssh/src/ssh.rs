@@ -3,6 +3,7 @@ use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::{
     artboard_ban::ArtboardBan,
+    article_feed_read::ArticleFeedRead,
     server_ban::ServerBan,
     user::{User, UserParams, extract_theme_id},
 };
@@ -25,7 +26,6 @@ use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
 use crate::app::activity::event::ActivityEvent;
-use crate::app::dashboard::state::DashboardRoomJoinReceiver;
 use crate::app::{
     common::theme,
     state::{App, SessionConfig},
@@ -35,6 +35,7 @@ use crate::metrics;
 use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
+use crate::terminal_size::clamp_terminal_size;
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 const PROXY_V1_MAX_LEN: usize = 108;
@@ -42,6 +43,13 @@ const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
+const AUTH_SETUP_BANNER: &str = "\r\nlate.sh requires SSH public-key auth.\r\n\
+New here? Install the companion CLI:\r\n\
+  curl -fsSL https://cli.late.sh/install.sh | bash\r\n\
+  late\r\n\
+Or create a key manually with:\r\n\
+  ssh-keygen -t ed25519 -C late.sh\r\n\
+  ssh late.sh\r\n";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
 const INPUT_QUEUE_CAP: usize = 256;
 
@@ -75,7 +83,6 @@ struct ClientHandler {
 
     /// Activity feed
     activity_feed_rx: Option<tokio::sync::broadcast::Receiver<ActivityEvent>>,
-    room_join_rx: Option<DashboardRoomJoinReceiver>,
 
     /// Session bindings
     channel: Option<Channel<Msg>>,
@@ -282,7 +289,6 @@ impl Server {
             user: None,
             is_new_user: false,
             activity_feed_rx: None,
-            room_join_rx: None,
             transport_peer_addr,
             peer_addr: effective_peer_addr,
             peer_ip,
@@ -491,6 +497,10 @@ impl ClientHandler {
 impl russh::server::Handler for ClientHandler {
     type Error = anyhow::Error;
 
+    async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
+        Ok(Some(AUTH_SETUP_BANNER.to_string()))
+    }
+
     #[tracing::instrument(skip(self, key), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
     async fn auth_publickey(
         &mut self,
@@ -609,7 +619,6 @@ impl russh::server::Handler for ClientHandler {
 
         self.user = Some(user);
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
-        self.room_join_rx = Some(self.state.room_join_feed.subscribe());
         let _ = self
             .state
             .activity_feed
@@ -665,6 +674,17 @@ impl russh::server::Handler for ClientHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(term, col_width, row_height, "pty requested");
+        let terminal_size = clamp_terminal_size(col_width, row_height);
+        if terminal_size.clamped {
+            tracing::warn!(
+                term,
+                reported_cols = col_width,
+                reported_rows = row_height,
+                cols = terminal_size.cols,
+                rows = terminal_size.rows,
+                "clamped oversized pty dimensions"
+            );
+        }
         let session_token = self.ensure_cli_session().await?;
         self.track_active_session_token(&session_token);
         let session_rx = self
@@ -676,6 +696,7 @@ impl russh::server::Handler for ClientHandler {
         let chat_service = self.state.chat_service.clone();
         let profile_service = self.state.profile_service.clone();
         let twenty_forty_eight_service = self.state.twenty_forty_eight_service.clone();
+        let le_word_service = self.state.le_word_service.clone();
         let sudoku_service = self.state.sudoku_service.clone();
         let nonogram_service = self.state.nonogram_service.clone();
         let solitaire_service = self.state.solitaire_service.clone();
@@ -702,6 +723,11 @@ impl russh::server::Handler for ClientHandler {
             initial_tetris_high_score,
             initial_snake_game,
             initial_snake_high_score,
+            initial_traffic_track_scores,
+            initial_traffic_high_score,
+            initial_le_word_daily_word,
+            initial_le_word_game,
+            initial_rubiks_cube_game,
             initial_sudoku_games,
             initial_nonogram_games,
             initial_solitaire_games,
@@ -805,8 +831,8 @@ impl russh::server::Handler for ClientHandler {
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
         let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
-            cols: col_width as u16,
-            rows: row_height as u16,
+            cols: terminal_size.cols,
+            rows: terminal_size.rows,
             term: term.to_string(),
 
             // Services / data sources
@@ -824,10 +850,18 @@ impl russh::server::Handler for ClientHandler {
             initial_2048_high_score,
             tetris_service: self.state.tetris_service.clone(),
             snake_service: self.state.snake_service.clone(),
+            traffic_service: self.state.traffic_service.clone(),
+            rubiks_cube_service: self.state.rubiks_cube_service.clone(),
+            initial_rubiks_cube_game,
             initial_tetris_game,
             initial_snake_game,
             initial_tetris_high_score,
             initial_snake_high_score,
+            initial_traffic_track_scores,
+            initial_traffic_high_score,
+            le_word_service,
+            initial_le_word_daily_word,
+            initial_le_word_game,
             sudoku_service,
             initial_sudoku_games,
             nonogram_service,
@@ -837,8 +871,9 @@ impl russh::server::Handler for ClientHandler {
             minesweeper_service: self.state.minesweeper_service.clone(),
             initial_minesweeper_games,
             lateania_service: self.state.lateania_service.clone(),
-            rooms_service: self.state.rooms_service.clone(),
-            room_game_registry: self.state.room_game_registry.clone(),
+            greendragon_service: self.state.greendragon_service.clone(),
+            daily_service: self.state.daily_service.clone(),
+            house_registry: self.state.house_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
             dartboard_provenance: self.state.dartboard_provenance.clone(),
             artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
@@ -859,6 +894,7 @@ impl russh::server::Handler for ClientHandler {
             ultimate_service: self.state.ultimate_service.clone(),
             initial_ultimate_cooldowns,
             nonogram_library,
+            chip_service: self.state.chip_service.clone(),
             initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),
 
@@ -868,19 +904,41 @@ impl russh::server::Handler for ClientHandler {
             rebels_host: self.state.config.rebels_host.clone(),
             rebels_port: self.state.config.rebels_port,
             rebels_secret: self.state.config.rebels_secret.clone(),
+            nethack_enabled: self.state.config.nethack_enabled,
+            nethack_host: self.state.config.nethack_host.clone(),
+            nethack_port: self.state.config.nethack_port,
+            nethack_secret: self.state.config.nethack_secret.clone(),
+            nethack_awards: Some(crate::app::door::nethack::award::NethackAwards::new(
+                self.state.chip_service.clone(),
+                self.state.db.clone(),
+                crate::app::activity::publisher::ActivityPublisher::new(
+                    self.state.db.clone(),
+                    self.state.activity_feed.clone(),
+                )
+                .with_username_directory(self.state.username_directory.clone()),
+            )),
+            dopewars_enabled: self.state.config.dopewars_enabled,
+            dopewars_host: self.state.config.dopewars_host.clone(),
+            dopewars_port: self.state.config.dopewars_port,
+            dopewars_secret: self.state.config.dopewars_secret.clone(),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
+            worldcup_service: Some(self.state.worldcup_service.clone()),
             active_users: Some(self.state.active_users.clone()),
+            ai_service: Some(self.state.ai_service.clone()),
+            clubhouse_lobby: Some(self.state.clubhouse_lobby.clone()),
+            clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
+                &user.settings,
+            ),
+            show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
+            flair_directory: Some(self.state.flair_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
-            initial_activity: self.state.activity_history.lock_recover().clone(),
-            room_join_rx: self.room_join_rx.take(),
-            initial_room_joins: self.state.room_join_history.lock_recover().clone(),
             initial_announcements,
             user_id,
             permissions,
@@ -888,6 +946,7 @@ impl russh::server::Handler for ClientHandler {
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
             is_new_user: self.is_new_user,
+            land_on_home: late_core::models::user::extract_land_on_home(&user.settings),
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
@@ -1179,12 +1238,22 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(col_width, row_height, "window resize");
+        let terminal_size = clamp_terminal_size(col_width, row_height);
+        if terminal_size.clamped {
+            tracing::warn!(
+                reported_cols = col_width,
+                reported_rows = row_height,
+                cols = terminal_size.cols,
+                rows = terminal_size.rows,
+                "clamped oversized window resize"
+            );
+        }
         let Some(app) = self.app.as_ref() else {
             return Ok(());
         };
         {
             let mut app = app.lock().await;
-            if let Err(e) = app.resize(col_width as u16, row_height as u16) {
+            if let Err(e) = app.resize(terminal_size.cols, terminal_size.rows) {
                 tracing::error!(error = ?e, "error resizing app");
             }
             if let Some(signal) = self.render_signal.as_ref() {
@@ -1391,6 +1460,13 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
                         "failed to seed auto-join chat rooms for newly created user"
                     );
                 }
+            }
+            if let Err(e) = ArticleFeedRead::seed_read_for_new_user(&client, user.id).await {
+                tracing::warn!(
+                    user_id = %user.id,
+                    error = ?e,
+                    "failed to seed news read cursor for newly created user"
+                );
             }
             (user, true)
         }
