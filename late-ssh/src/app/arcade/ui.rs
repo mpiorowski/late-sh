@@ -129,7 +129,7 @@ fn overlay_size(heading: &str, subtitle: &str, area: Rect) -> (u16, u16) {
     const MIN_WIDTH: u16 = 28;
     const MAX_WIDTH: u16 = 44;
 
-    let heading_cols = (heading.len() as u16).saturating_add(2);
+    let heading_cols = (heading.chars().count() as u16).saturating_add(2);
     let subtitle_cols = subtitle.chars().count() as u16;
     let overlay_w = heading_cols
         .max(subtitle_cols)
@@ -175,7 +175,7 @@ pub fn draw_game_overlay_anchored(
         )),
     ])
     .alignment(Alignment::Center)
-    .wrap(Wrap { trim: true })
+    .wrap(Wrap { trim: false })
     .block(
         Block::default()
             .borders(Borders::ALL)
