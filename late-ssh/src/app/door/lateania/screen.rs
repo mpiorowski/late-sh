@@ -45,7 +45,7 @@ impl DoorGame for LateaniaDoorGame {
     }
 
     fn description(&self) -> &'static str {
-        "A persistent terminal world with shared rooms, twelve classes, quests, player housing, companions, titles, and loot."
+        "A persistent terminal world of six great lands: shared rooms, seventeen classes, crafting and taming trades, quests, player housing, companions, titles, and loot."
     }
 
     fn activity_game(&self) -> Option<ActivityGame> {
@@ -249,7 +249,7 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online:
         ),
     ]));
     lines.push(Line::from(Span::styled(
-        "Shared rooms, twelve classes, frontier quests, player housing, companions, titles, loot, and real persistence.",
+        "Shared rooms, seventeen classes, crafting and taming trades, boss quests, player housing, companions, titles, loot, and real persistence.",
         Style::default().fg(theme::TEXT_DIM()),
     )));
     lines.push(Line::raw(""));
@@ -347,15 +347,15 @@ fn draw_frontier_art(
 
     let mut lines = vec![
         Line::from(Span::styled(
-            "The Frontier is open",
+            "The whole world is open",
             Style::default()
                 .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::raw(""),
-        fact_line("20", "frontier zones"),
-        fact_line("1,500+", "rooms in the world"),
-        fact_line("12", "classes, each with two archetype paths"),
+        fact_line("6", "great lands to explore"),
+        fact_line("8,600+", "rooms in the world"),
+        fact_line("17", "classes, each with two archetype paths"),
         fact_line("5", "home tiers to buy and furnish"),
         fact_line("30k", "one-time chips across final boss achievements"),
         Line::raw(""),
@@ -445,18 +445,23 @@ fn world_stats(online: usize) -> Vec<Line<'static>> {
     vec![
         landing::stat(&online_label, "in the world right now", 22),
         landing::stat(
-            "20 frontier zones",
-            "boss quests, titles, and bounty rewards",
+            "six great lands",
+            "frontier, reaches, ash, lakes, greenwood & isles",
             22,
         ),
         landing::stat(
-            "1,500+ rooms",
-            "towns, capitals, wilds, mazes, a cave, and homes",
+            "8,600+ rooms",
+            "towns, capitals, wilds, mazes, caves, and homes",
             22,
         ),
         landing::stat(
-            "12 classes",
-            "the five originals plus seven new callings",
+            "17 classes",
+            "the five originals plus twelve new callings",
+            22,
+        ),
+        landing::stat(
+            "trades & taming",
+            "gather, craft, fish, and tame fifty wild beasts",
             22,
         ),
         landing::stat(
@@ -522,8 +527,8 @@ fn render_frontier_banner_preview() -> Vec<Line<'static>> {
 
 fn fallback_banner_preview() -> Vec<Line<'static>> {
     [
-        "  The Frontier banner could not be rendered.",
-        "  Enter Lateania and find the wilds yourself.",
+        "  The Lateania banner could not be rendered.",
+        "  Enter the world and find the wilds yourself.",
     ]
     .into_iter()
     .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::AMBER_DIM()))))
