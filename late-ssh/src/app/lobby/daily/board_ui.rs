@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use uuid::Uuid;
 
@@ -708,7 +708,7 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, chess: &ChessDetail) {
 
     let budget = (inner.height as usize).saturating_sub(lines.len());
     append_moves(&mut lines, chess, budget);
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn append_moves(lines: &mut Vec<Line<'static>>, chess: &ChessDetail, budget: usize) {

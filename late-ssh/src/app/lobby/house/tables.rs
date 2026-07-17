@@ -75,12 +75,15 @@ impl HouseTable {
     }
 
     /// Win payout for the Lobby modal row. Poker's pot and Blackjack's stake
-    /// already ride in `tagline`; Asterion's daily-escape reward comes from a
-    /// DB-backed `RewardTemplate` with no fixed amount to show here. `None`
-    /// means the row leaves this column blank.
+    /// already ride in `tagline`. Asterion's is a DB-backed `RewardTemplate`
+    /// (migration `056_create_quests.sql`, key `asterion_daily_escape`) with
+    /// no Rust constant to read live, so its 4000-chip `reward_chips` value
+    /// is mirrored here by hand. `None` means the row leaves this column
+    /// blank.
     pub fn price_label(self) -> Option<String> {
         match self {
-            Self::Poker | Self::Blackjack | Self::Asterion => None,
+            Self::Poker | Self::Blackjack => None,
+            Self::Asterion => Some("4000 chips/day".to_string()),
             Self::Tron => Some(format!("{TRON_WIN_CHIPS} chips")),
             Self::Ssnake => Some(format!("{SSNAKE_WIN_CHIPS} chips")),
         }

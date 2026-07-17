@@ -25,8 +25,11 @@ use crate::usernames::UsernameLookup;
 
 // ── Layout ─────────────────────────────────────────────────────
 // Arenas are up to 63x36 matrix cells. Each terminal row renders two
-// matrix rows with the upper-half block, so the arena pane is at most
-// 65 wide (63 + border) and 21 tall (18 + border + status row).
+// matrix rows with the upper-half block, so at 1x the arena pane is at
+// most 65 wide (63 + border) and 21 tall (18 + border + status row).
+// On panes with room to spare every cell doubles to a 2x2 block (2 cols
+// x 1 terminal row) so the arena fills the screen instead of floating
+// as a small box; the map itself never changes.
 
 const SIDEBAR_WIDTH: u16 = 28;
 
@@ -53,11 +56,31 @@ pub fn preferred_height(state: &State, area: Rect) -> u16 {
         .snapshot()
         .level
         .as_ref()
-        .map(|level| level.height.div_ceil(2))
-        .unwrap_or(MAX_HEIGHT.div_ceil(2)) as u16;
+        .map(|level| {
+            if zoom_eligible(level, area) {
+                level.height as u16
+            } else {
+                level.height.div_ceil(2) as u16
+            }
+        })
+        .unwrap_or(MAX_HEIGHT.div_ceil(2) as u16);
     // +2 border, +2 breathing room so the board never sits cramped against
     // the pane edges (centering turns the slack into margins).
     (arena_rows + 4).min(area.height.max(1))
+}
+
+/// Rows the embedded chat keeps when the zoomed arena claims the rest of
+/// the screen (plus the one-row spacer above it).
+const ZOOM_CHAT_FLOOR: u16 = 8;
+
+/// Whether the pane should be sized for the 2x zoom: the doubled arena must
+/// fit beside the sidebar, and chat below must keep at least its floor.
+/// `area` is the full pre-split content area; the draw side re-derives the
+/// scale from the rect it actually receives, so a request the layout can't
+/// honor degrades back to 1x.
+fn zoom_eligible(level: &SsnakeLevel, area: Rect) -> bool {
+    area.width >= level.width as u16 * 2 + 2 + SIDEBAR_WIDTH
+        && level.height as u16 + 4 + ZOOM_CHAT_FLOOR <= area.height
 }
 
 // ── Entry point ────────────────────────────────────────────────
@@ -130,15 +153,26 @@ fn draw_arena(frame: &mut Frame, area: Rect, state: &State) {
         return;
     };
 
-    let outer_w = level.width as u16 + 2;
-    let outer_h = level.height.div_ceil(2) as u16 + 2;
-    if area.width < outer_w || area.height < outer_h {
+    if area.width < level.width as u16 + 2 || area.height < level.height.div_ceil(2) as u16 + 2 {
         frame.render_widget(
             Paragraph::new("Arena needs more room.").alignment(Alignment::Center),
             area,
         );
         return;
     }
+
+    // Largest cell scale the pane fits; preferred_height only requests the
+    // taller pane when the zoom is worth it, so this usually lands on the
+    // scale the layout was sized for.
+    let scale = if area.width >= level.width as u16 * 2 + 2
+        && area.height >= level.height as u16 + 2
+    {
+        2
+    } else {
+        1
+    };
+    let outer_w = (level.width * scale) as u16 + 2;
+    let outer_h = (level.height * scale).div_ceil(2) as u16 + 2;
 
     let arena = Rect {
         x: area.x + (area.width - outer_w) / 2,
@@ -160,7 +194,7 @@ fn draw_arena(frame: &mut Frame, area: Rect, state: &State) {
         .style(Style::default().bg(ARENA_BG));
     let inner = block.inner(arena);
     frame.render_widget(block, arena);
-    frame.render_widget(Paragraph::new(board_lines(snapshot, level)), inner);
+    frame.render_widget(Paragraph::new(board_lines(snapshot, level, scale)), inner);
 
     if snapshot.phase == SsnakePhase::Finished {
         let (heading, subtitle, color) = outcome_overlay(snapshot);
@@ -201,47 +235,48 @@ fn waiting_lines(state: &State) -> Vec<Line<'static>> {
     ]
 }
 
-/// Render two matrix rows per terminal line with the upper-half block:
+/// Render two virtual rows per terminal line with the upper-half block:
 /// foreground paints the top cell, background the bottom cell. Every cell,
 /// food included, is a plain colored half block; text glyphs are full
-/// terminal-cell height and misalign with this grid.
-fn board_lines(snapshot: &SsnakeSnapshot, level: &SsnakeLevel) -> Vec<Line<'static>> {
+/// terminal-cell height and misalign with this grid. `scale` stretches each
+/// arena cell to a scale x scale block of virtual cells (2 = the zoom).
+fn board_lines(snapshot: &SsnakeSnapshot, level: &SsnakeLevel, scale: usize) -> Vec<Line<'static>> {
     let colors = cell_colors(snapshot, level);
-    let rows = level.height.div_ceil(2);
+    let virtual_w = level.width * scale;
+    let virtual_h = level.height * scale;
+    let color_at = |x: usize, y: usize| {
+        if y < virtual_h {
+            colors[y / scale * level.width + x / scale]
+        } else {
+            ARENA_BG
+        }
+    };
+    let rows = virtual_h.div_ceil(2);
     let mut lines = Vec::with_capacity(rows);
     for row in 0..rows {
         let top_y = row * 2;
         let bottom_y = top_y + 1;
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(level.width);
         let mut run_start = 0usize;
-        for x in 0..=level.width {
-            let same_run = x < level.width
+        for x in 0..=virtual_w {
+            let same_run = x < virtual_w
                 && x > run_start
-                && colors[top_y * level.width + x] == colors[top_y * level.width + run_start]
-                && bottom_color(&colors, level, bottom_y, x)
-                    == bottom_color(&colors, level, bottom_y, run_start);
+                && color_at(x, top_y) == color_at(run_start, top_y)
+                && color_at(x, bottom_y) == color_at(run_start, bottom_y);
             if x == run_start || same_run {
                 continue;
             }
-            let top = colors[top_y * level.width + run_start];
-            let bottom = bottom_color(&colors, level, bottom_y, run_start);
             spans.push(Span::styled(
                 "▀".repeat(x - run_start),
-                Style::default().fg(top).bg(bottom),
+                Style::default()
+                    .fg(color_at(run_start, top_y))
+                    .bg(color_at(run_start, bottom_y)),
             ));
             run_start = x;
         }
         lines.push(Line::from(spans));
     }
     lines
-}
-
-fn bottom_color(colors: &[Color], level: &SsnakeLevel, bottom_y: usize, x: usize) -> Color {
-    if bottom_y < level.height {
-        colors[bottom_y * level.width + x]
-    } else {
-        ARENA_BG
-    }
 }
 
 fn cell_colors(snapshot: &SsnakeSnapshot, level: &SsnakeLevel) -> Vec<Color> {
@@ -642,7 +677,7 @@ mod tests {
     fn board_lines_cover_full_arena_width() {
         let level = open_test_arena(30, 21);
         let snapshot = snapshot_with_level(level.clone());
-        let lines = board_lines(&snapshot, &level);
+        let lines = board_lines(&snapshot, &level, 1);
         assert_eq!(lines.len(), 11, "21 rows pack into 11 half-block lines");
         for line in &lines {
             let width: usize = line
@@ -652,6 +687,49 @@ mod tests {
                 .sum();
             assert_eq!(width, level.width);
         }
+    }
+
+    #[test]
+    fn zoomed_board_doubles_every_cell() {
+        let level = open_test_arena(30, 21);
+        let snapshot = snapshot_with_level(level.clone());
+        let lines = board_lines(&snapshot, &level, 2);
+        assert_eq!(lines.len(), 21, "42 virtual rows pack into 21 lines");
+        for line in &lines {
+            let width: usize = line
+                .spans
+                .iter()
+                .map(|span| span.content.chars().count())
+                .sum();
+            assert_eq!(width, level.width * 2);
+        }
+        // Each terminal line covers exactly one arena row at 2x, so the
+        // half-block fg and bg agree everywhere; the green head at (2, 2)
+        // spans virtual columns 4-5 on line 2.
+        let line = &lines[2];
+        let mut x = 0usize;
+        let mut found = false;
+        for span in &line.spans {
+            let len = span.content.chars().count();
+            if x <= 4 && 4 < x + len {
+                assert_eq!(span.style.fg, Some(GREEN_HEAD));
+                assert_eq!(span.style.bg, Some(GREEN_HEAD));
+                found = true;
+            }
+            x += len;
+        }
+        assert!(found, "head span missing on the zoomed line");
+    }
+
+    #[test]
+    fn zoom_asks_for_taller_pane_only_when_it_fits() {
+        let level = open_test_arena(30, 21);
+        let wide = Rect::new(0, 0, 120, 50);
+        let narrow = Rect::new(0, 0, 80, 50);
+        let short = Rect::new(0, 0, 120, 30);
+        assert!(zoom_eligible(&level, wide));
+        assert!(!zoom_eligible(&level, narrow), "2x + sidebar needs 90 cols");
+        assert!(!zoom_eligible(&level, short), "chat must keep its floor");
     }
 
     #[test]

@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use uuid::Uuid;
 
@@ -472,5 +472,5 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyReversiState) {
             Span::styled(format!("{white}"), Style::default().fg(theme::TEXT())),
         ]),
     ];
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }

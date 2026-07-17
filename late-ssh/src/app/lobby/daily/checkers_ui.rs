@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color as TermColor, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use uuid::Uuid;
 
@@ -503,5 +503,5 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyCheckersState) {
             Style::default().fg(theme::TEXT_FAINT()),
         )),
     ];
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
