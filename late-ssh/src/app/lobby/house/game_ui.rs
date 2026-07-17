@@ -57,10 +57,9 @@ fn draw_info_sidebar(frame: &mut Frame, area: Rect, content: RoomSidebarContent<
     }
 
     match content {
-        RoomSidebarContent::Info(lines) => frame.render_widget(
-            Paragraph::new(lines).wrap(Wrap { trim: false }),
-            inner,
-        ),
+        RoomSidebarContent::Info(lines) => {
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner)
+        }
     }
 }
 

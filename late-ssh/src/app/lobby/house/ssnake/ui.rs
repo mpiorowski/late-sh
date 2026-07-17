@@ -164,13 +164,12 @@ fn draw_arena(frame: &mut Frame, area: Rect, state: &State) {
     // Largest cell scale the pane fits; preferred_height only requests the
     // taller pane when the zoom is worth it, so this usually lands on the
     // scale the layout was sized for.
-    let scale = if area.width >= level.width as u16 * 2 + 2
-        && area.height >= level.height as u16 + 2
-    {
-        2
-    } else {
-        1
-    };
+    let scale =
+        if area.width >= level.width as u16 * 2 + 2 && area.height >= level.height as u16 + 2 {
+            2
+        } else {
+            1
+        };
     let outer_w = (level.width * scale) as u16 + 2;
     let outer_h = (level.height * scale).div_ceil(2) as u16 + 2;
 
@@ -645,7 +644,9 @@ mod tests {
             players: [
                 SsnakePlayerSnapshot {
                     body: vec![Pos { x: 2, y: 2 }, Pos { x: 3, y: 2 }],
-                    motion: Motion::Moving(crate::app::lobby::house::ssnake::state::Direction::Left),
+                    motion: Motion::Moving(
+                        crate::app::lobby::house::ssnake::state::Direction::Left,
+                    ),
                     lives: 3,
                     score: 0,
                     eliminated: false,
