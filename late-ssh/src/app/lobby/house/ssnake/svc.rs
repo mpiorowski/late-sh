@@ -28,8 +28,8 @@ const LIFE_POINT_ODDS: u32 = 35;
 const MAX_SNAKE_LEN: i32 = 500;
 const SSNAKE_PLAYED_MIN_TICKS: u32 = 40;
 const SSNAKE_WIN_LEDGER_REASON: &str = "ssnake_win";
-pub const SSNAKE_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
-pub const SSNAKE_WIN_CHIPS: i64 = 150;
+pub const SSNAKE_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(10 * 60);
+pub const SSNAKE_WIN_CHIPS: i64 = 300;
 
 #[derive(Clone)]
 pub struct SsnakeService {

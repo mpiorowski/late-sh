@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-17 (Super Snake joined the house tables: a 4-seat real-time DOS-snake port with 20 embedded text arenas in `late-ssh/assets/ssnake_levels/`, warp-tunnel edges, and a 150-chip cooldown win payout via `ssnake_win`, migration 118; see `late-ssh/src/app/lobby/house/CONTEXT.md`)
+- Last updated: 2026-07-17 (Super Snake joined the house tables: a 4-seat real-time DOS-snake port with 20 embedded text arenas in `late-ssh/assets/ssnake_levels/`, warp-tunnel edges, and a 300-chip cooldown win payout via `ssnake_win`, migration 118; see `late-ssh/src/app/lobby/house/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 

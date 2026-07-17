@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/lobby/house` — the fixed multiplayer "house tables" behind the Lobby modal (`Ctrl+Q`), plus the five game runtimes (Poker, Blackjack, Asterion, Tron, Super Snake).
-- Last updated: 2026-07-17 (Super Snake joined the roster: a 4-seat real-time DOS-snake port with 20 embedded text-asset arenas in `late-ssh/assets/ssnake_levels/`, warp-tunnel edges, and a 150-chip cooldown win payout via `ssnake_win`, migration 118)
+- Last updated: 2026-07-17 (Super Snake joined the roster: a 4-seat real-time DOS-snake port with 20 embedded text-asset arenas in `late-ssh/assets/ssnake_levels/`, warp-tunnel edges, and a 300-chip cooldown win payout via `ssnake_win`, migration 118)
 - Parent context: `../CONTEXT.md` (the Lobby domain), then the root `CONTEXT.md`; read `../daily/CONTEXT.md` for the daily correspondence domain.
 - Status: Active.
 

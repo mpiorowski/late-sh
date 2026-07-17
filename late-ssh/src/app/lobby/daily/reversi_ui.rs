@@ -445,7 +445,7 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyReversiState) {
     let (black, white) = state.disc_counts();
     let lines = vec![
         Line::from(Span::styled(
-            "Correspondence reversi".to_string(),
+            "Reversi".to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),

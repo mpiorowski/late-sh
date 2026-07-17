@@ -678,7 +678,7 @@ fn draw_info_rail(
 ) {
     let mut lines = vec![
         Line::from(Span::styled(
-            "Correspondence battleship".to_string(),
+            "Battleship".to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),

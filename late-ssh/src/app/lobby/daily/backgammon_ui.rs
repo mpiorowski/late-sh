@@ -626,7 +626,7 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyBackgammonState) {
     };
     let mut lines = vec![
         Line::from(Span::styled(
-            "Correspondence backgammon".to_string(),
+            "Backgammon".to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),

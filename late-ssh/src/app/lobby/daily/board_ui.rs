@@ -686,7 +686,7 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, chess: &ChessDetail) {
     // nowhere else to live: the full move list.
     let mut lines = vec![
         Line::from(Span::styled(
-            "Correspondence chess".to_string(),
+            "Chess".to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),

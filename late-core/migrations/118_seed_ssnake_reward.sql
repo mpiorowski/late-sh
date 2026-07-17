@@ -12,11 +12,11 @@ VALUES
         'game_win',
         '{"game":"ssnake","payout_kind":"win"}'::jsonb,
         1,
-        150,
+        300,
         100,
         false,
         'cooldown',
-        300
+        600
     )
 ON CONFLICT (key) DO UPDATE SET
     title = EXCLUDED.title,

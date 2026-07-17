@@ -15,7 +15,9 @@ use crate::app::lobby::house::{
     blackjack::settings::BlackjackTableSettings,
     poker::settings::{PokerPace, PokerTableSettings},
     ssnake::settings::{SsnakeSpeed, SsnakeTableSettings},
+    ssnake::svc::SSNAKE_WIN_CHIPS,
     tron::settings::{TronMode, TronSpeed, TronTableSettings},
+    tron::svc::TRON_WIN_CHIPS,
 };
 use late_core::models::game_room::GameKind;
 
@@ -68,7 +70,19 @@ impl HouseTable {
             Self::Blackjack => "house shoe · 10-chip stake",
             Self::Asterion => "escape the maze, dodge the minotaur",
             Self::Tron => "light cycles · quick · glitch",
-            Self::Ssnake => "snake arena · warp tunnels · dos classic",
+            Self::Ssnake => "snake arena · warp tunnels",
+        }
+    }
+
+    /// Win payout for the Lobby modal row. Poker's pot and Blackjack's stake
+    /// already ride in `tagline`; Asterion's daily-escape reward comes from a
+    /// DB-backed `RewardTemplate` with no fixed amount to show here. `None`
+    /// means the row leaves this column blank.
+    pub fn price_label(self) -> Option<String> {
+        match self {
+            Self::Poker | Self::Blackjack | Self::Asterion => None,
+            Self::Tron => Some(format!("{TRON_WIN_CHIPS} chips")),
+            Self::Ssnake => Some(format!("{SSNAKE_WIN_CHIPS} chips")),
         }
     }
 
