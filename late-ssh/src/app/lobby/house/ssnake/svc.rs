@@ -656,7 +656,7 @@ impl SharedState {
             self.players[seat_index].body.pop_back();
             return;
         }
-        if self.players[seat_index].lives < 0 {
+        if self.players[seat_index].lives <= 0 {
             self.players[seat_index].eliminated = true;
             self.players[seat_index].body.clear();
             return;
@@ -834,11 +834,16 @@ impl SharedState {
         } else {
             Vec::new()
         };
+        // No payout for a round shorter than the eligibility window, or an
+        // instant forfeit (sit, start, leave) would farm the win reward on
+        // every cooldown expiry.
         let win = match outcome {
-            SsnakeOutcome::Winner { seat_index } => {
+            SsnakeOutcome::Winner { seat_index }
+                if self.round_tick_count >= SSNAKE_PLAYED_MIN_TICKS =>
+            {
                 self.seats[seat_index].map(|user_id| WinEvent { user_id })
             }
-            SsnakeOutcome::Draw => None,
+            SsnakeOutcome::Winner { .. } | SsnakeOutcome::Draw => None,
         };
         GameEndEvents { played, win }
     }
@@ -846,11 +851,12 @@ impl SharedState {
     fn finished_status(&self) -> String {
         match self.outcome {
             Some(SsnakeOutcome::Winner { seat_index }) => {
-                format!(
-                    "{} wins {} chips. Press n for another arena.",
-                    SsnakeColor::for_seat(seat_index).label(),
-                    SSNAKE_WIN_CHIPS
-                )
+                let color = SsnakeColor::for_seat(seat_index).label();
+                if self.round_tick_count >= SSNAKE_PLAYED_MIN_TICKS {
+                    format!("{color} wins {SSNAKE_WIN_CHIPS} chips. Press n for another arena.")
+                } else {
+                    format!("{color} wins. Press n for another arena.")
+                }
             }
             Some(SsnakeOutcome::Draw) => "Dead even. Draw. Press n for another arena.".to_string(),
             None => self.status_message.clone(),
@@ -960,7 +966,13 @@ mod tests {
         let (state, _, _, _) = started_state();
         let level = state.level.as_ref().expect("level chosen");
         assert_eq!(state.points_left, level.points_needed);
-        for player in &state.players {
+        let seeded: Vec<_> = state
+            .players
+            .iter()
+            .filter(|player| player.in_round)
+            .collect();
+        assert_eq!(seeded.len(), 2, "both seated snakes join the round");
+        for player in seeded {
             assert_eq!(player.lives, level.lives);
             assert_eq!(player.body.len(), 1);
             assert_eq!(player.motion, Motion::Idle);
@@ -1007,6 +1019,7 @@ mod tests {
     fn last_point_awards_bonus_and_ends_match_on_score() {
         let (mut state, a, _, generation) = arena_state();
         let level = state.level.clone().unwrap();
+        state.round_tick_count = SSNAKE_PLAYED_MIN_TICKS;
         state.points_left = 1;
         state.life_point = false;
         state.point = Some(Pos { x: 6, y: 5 });
@@ -1025,6 +1038,7 @@ mod tests {
     #[test]
     fn elimination_hands_the_win_to_the_survivor() {
         let (mut state, _, b, _) = started_state();
+        state.round_tick_count = SSNAKE_PLAYED_MIN_TICKS;
         state.players[0].eliminated = true;
         state.players[0].body.clear();
         let game_end = state.finish_if_eliminated().expect("match should end");
@@ -1037,7 +1051,7 @@ mod tests {
         let (mut state, _, _, _) = started_state();
         state.players[0].motion = Motion::Dying;
         state.players[0].respawn_length = 9;
-        state.players[0].lives = 0;
+        state.players[0].lives = 1;
         state.players[0].body = VecDeque::from([Pos { x: 3, y: 3 }]);
         state.step_death_shrink(0);
         assert_eq!(state.players[0].motion, Motion::Idle);
@@ -1050,7 +1064,7 @@ mod tests {
     fn death_shrink_eliminates_when_out_of_lives() {
         let (mut state, _, _, _) = started_state();
         state.players[0].motion = Motion::Dying;
-        state.players[0].lives = -1;
+        state.players[0].lives = 0;
         state.players[0].body = VecDeque::from([Pos { x: 3, y: 3 }]);
         state.step_death_shrink(0);
         assert!(state.players[0].eliminated);
@@ -1059,9 +1073,25 @@ mod tests {
     #[test]
     fn leaving_mid_match_forfeits_to_the_opponent() {
         let (mut state, a, b, _) = started_state();
+        state.round_tick_count = SSNAKE_PLAYED_MIN_TICKS;
         let game_end = state.leave(a).expect("match should end");
         assert_eq!(state.outcome, Some(SsnakeOutcome::Winner { seat_index: 1 }));
         assert_eq!(game_end.win.map(|win| win.user_id), Some(b));
+    }
+
+    #[test]
+    fn short_round_win_pays_no_chips() {
+        let (mut state, a, _, _) = started_state();
+        let game_end = state.leave(a).expect("match should end");
+        assert_eq!(state.outcome, Some(SsnakeOutcome::Winner { seat_index: 1 }));
+        assert!(
+            game_end.win.is_none(),
+            "instant forfeit must not farm the win reward"
+        );
+        assert!(
+            !state.status_message.contains("chips"),
+            "status must not promise chips for an ineligible round"
+        );
     }
 
     #[test]
@@ -1108,6 +1138,7 @@ mod tests {
         assert!(state.sit(Uuid::now_v7()).is_none(), "table caps at 3");
 
         state.start_round(a).expect("round should start");
+        state.round_tick_count = SSNAKE_PLAYED_MIN_TICKS;
         assert!(state.players[0].in_round);
         assert!(state.players[2].in_round);
         assert!(!state.players[3].in_round);
@@ -1139,6 +1170,7 @@ mod tests {
         state.sit(b);
         state.sit(c);
         state.start_round(a).expect("round should start");
+        state.round_tick_count = SSNAKE_PLAYED_MIN_TICKS;
         state.players[0].score = 10;
         state.players[1].score = 30;
         state.players[2].score = 20;
