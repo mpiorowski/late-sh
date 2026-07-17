@@ -26,7 +26,7 @@ Entry points:
 | `modal_ui.rs` | Modal renderer: near-fullscreen list with section rules, claim-confirm status line, footer keys, the challenge-draft overlay. |
 | `workspace.rs` | The backtick cycle (`GameWorkspace`, `cycle_game_workspace`, pure `next_workspace` + its unit tests). Consumes `arcade/workspace.rs` for the Arcade-daily leg; hopping out of an Arcade stop clears `is_playing_game` (boards save move-by-move, nothing else to close). |
 | `daily/` | Correspondence domain: roster, service, board screens, panel. See `daily/CONTEXT.md`. |
-| `house/` | Fixed house tables: roster, singleton registry, four runtimes, table screen. See `house/CONTEXT.md`. |
+| `house/` | Fixed house tables: roster, singleton registry, five runtimes, table screen. See `house/CONTEXT.md`. |
 
 ## 3. Invariants
 

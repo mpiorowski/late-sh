@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use std::time::Duration;
 
@@ -57,7 +57,9 @@ fn draw_info_sidebar(frame: &mut Frame, area: Rect, content: RoomSidebarContent<
     }
 
     match content {
-        RoomSidebarContent::Info(lines) => frame.render_widget(Paragraph::new(lines), inner),
+        RoomSidebarContent::Info(lines) => {
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner)
+        }
     }
 }
 

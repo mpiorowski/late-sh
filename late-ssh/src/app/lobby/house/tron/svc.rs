@@ -32,9 +32,7 @@ const MAX_GAP_MOVES: u8 = 6;
 const PICKUP_GAP_MOVES: u8 = 3;
 const TRON_WIN_LEDGER_REASON: &str = "tron_win";
 pub const TRON_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
-pub const TRON_TWO_PLAYER_WIN_CHIPS: i64 = 100;
-pub const TRON_THREE_PLAYER_WIN_CHIPS: i64 = 150;
-pub const TRON_FOUR_PLAYER_WIN_CHIPS: i64 = 200;
+pub const TRON_WIN_CHIPS: i64 = 100;
 const TRON_PLAYED_MIN_TICKS: u32 = 30;
 
 #[derive(Clone)]
@@ -846,9 +844,7 @@ impl SharedState {
 pub fn tron_win_payout(rider_count: usize) -> i64 {
     match rider_count {
         0 | 1 => 0,
-        2 => TRON_TWO_PLAYER_WIN_CHIPS,
-        3 => TRON_THREE_PLAYER_WIN_CHIPS,
-        _ => TRON_FOUR_PLAYER_WIN_CHIPS,
+        _ => TRON_WIN_CHIPS,
     }
 }
 
@@ -1110,11 +1106,11 @@ mod tests {
     }
 
     #[test]
-    fn payout_scales_by_round_start_rider_count() {
+    fn payout_is_flat_across_multiplayer_rounds() {
         assert_eq!(tron_win_payout(1), 0);
-        assert_eq!(tron_win_payout(2), TRON_TWO_PLAYER_WIN_CHIPS);
-        assert_eq!(tron_win_payout(3), TRON_THREE_PLAYER_WIN_CHIPS);
-        assert_eq!(tron_win_payout(4), TRON_FOUR_PLAYER_WIN_CHIPS);
+        assert_eq!(tron_win_payout(2), TRON_WIN_CHIPS);
+        assert_eq!(tron_win_payout(3), TRON_WIN_CHIPS);
+        assert_eq!(tron_win_payout(4), TRON_WIN_CHIPS);
     }
 
     #[test]

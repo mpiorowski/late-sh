@@ -304,18 +304,18 @@ impl DailyCheckersState {
 /// down.
 fn starting_grid() -> Grid {
     let mut grid = [[None; SIZE]; SIZE];
-    for (row, cells) in grid.iter_mut().enumerate() {
-        for (col, cell) in cells.iter_mut().enumerate() {
+    for (row, rank) in grid.iter_mut().enumerate() {
+        for (col, square) in rank.iter_mut().enumerate() {
             if (row + col) % 2 != 1 {
                 continue;
             }
             if row <= 2 {
-                *cell = Some(Piece {
+                *square = Some(Piece {
                     color: Color::Red,
                     king: false,
                 });
             } else if row >= 5 {
-                *cell = Some(Piece {
+                *square = Some(Piece {
                     color: Color::White,
                     king: false,
                 });

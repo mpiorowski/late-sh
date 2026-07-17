@@ -9,17 +9,25 @@ pub enum GameKind {
     Asterion,
     Blackjack,
     Poker,
+    Ssnake,
     Tron,
 }
 
 impl GameKind {
-    pub const ALL: [Self; 4] = [Self::Asterion, Self::Blackjack, Self::Poker, Self::Tron];
+    pub const ALL: [Self; 5] = [
+        Self::Asterion,
+        Self::Blackjack,
+        Self::Poker,
+        Self::Ssnake,
+        Self::Tron,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Asterion => "asterion",
             Self::Blackjack => "blackjack",
             Self::Poker => "poker",
+            Self::Ssnake => "ssnake",
             Self::Tron => "tron",
         }
     }
@@ -39,6 +47,7 @@ impl TryFrom<&str> for GameKind {
             "asterion" => Ok(Self::Asterion),
             "blackjack" => Ok(Self::Blackjack),
             "poker" => Ok(Self::Poker),
+            "ssnake" => Ok(Self::Ssnake),
             "tron" => Ok(Self::Tron),
             _ => Err(anyhow::anyhow!("unknown game kind: {}", value)),
         }
