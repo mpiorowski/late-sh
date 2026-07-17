@@ -74,15 +74,19 @@ impl HouseTable {
         }
     }
 
-    /// Win payout for the Lobby modal row. Poker's pot and Blackjack's stake
-    /// already ride in `tagline`. Asterion's is a DB-backed `RewardTemplate`
-    /// (migration `056_create_quests.sql`, key `asterion_daily_escape`) with
-    /// no Rust constant to read live, so its 4000-chip `reward_chips` value
-    /// is mirrored here by hand. `None` means the row leaves this column
-    /// blank.
+    /// Win payout for the Lobby modal row. Poker's pot is genuinely variable
+    /// (depends on how many players bet and how much), so it gets a
+    /// placeholder rather than a number; its buy-in/blinds already ride in
+    /// `tagline`. Blackjack pays 2x the bet, 2.5x (3:2) on a natural (see
+    /// `blackjack::state::payout_credit`); its stake is in `tagline`.
+    /// Asterion's is a DB-backed `RewardTemplate` (migration
+    /// `056_create_quests.sql`, key `asterion_daily_escape`) with no Rust
+    /// constant to read live, so its 4000-chip `reward_chips` value is
+    /// mirrored here by hand. `None` means the row leaves this column blank.
     pub fn price_label(self) -> Option<String> {
         match self {
-            Self::Poker | Self::Blackjack => None,
+            Self::Poker => Some("pot varies".to_string()),
+            Self::Blackjack => Some("2x · bj 3:2".to_string()),
             Self::Asterion => Some("4000 chips/day".to_string()),
             Self::Tron => Some(format!("{TRON_WIN_CHIPS} chips")),
             Self::Ssnake => Some(format!("{SSNAKE_WIN_CHIPS} chips")),
