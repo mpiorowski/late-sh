@@ -244,6 +244,19 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// Existing DM room between two users, if one has been created.
+    pub async fn get_dm(client: &Client, user_a: Uuid, user_b: Uuid) -> Result<Option<Self>> {
+        let (dm_user_a, dm_user_b) = canonical_dm_pair(user_a, user_b);
+        let row = client
+            .query_opt(
+                "SELECT * FROM chat_rooms
+                 WHERE kind = 'dm' AND dm_user_a = $1 AND dm_user_b = $2",
+                &[&dm_user_a, &dm_user_b],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     pub async fn list_for_user(client: &Client, user_id: Uuid) -> Result<Vec<Self>> {
         let rows = client
             .query(

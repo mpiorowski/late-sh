@@ -1186,7 +1186,23 @@ impl Session {
             return Ok(None);
         };
         let client = self.state.db.get().await?;
-        let room = ChatRoom::get_or_create_dm(&client, self.user_id, target_id).await?;
+        // Reactions only ever target an existing message, so an existing DM
+        // room is implied; never create one as a side effect of a bad tag.
+        let Some(room) = ChatRoom::get_dm(&client, self.user_id, target_id).await? else {
+            if reply_errors {
+                framed
+                    .send(replies::numeric(
+                        &self.nick,
+                        Response::ERR_CANNOTSENDTOCHAN,
+                        vec![
+                            target.to_string(),
+                            "IRC reply target is not in this conversation".to_string(),
+                        ],
+                    ))
+                    .await?;
+            }
+            return Ok(None);
+        };
         self.dm_peers.insert(
             room.id,
             DmPeer {
@@ -2436,13 +2452,24 @@ impl Session {
             proj::ReactionTagAction::React => "+draft/react",
             proj::ReactionTagAction::Unreact => "+draft/unreact",
         };
+        let mut tags = Vec::new();
+        if self.caps.server_time {
+            tags.push(Tag(
+                "time".to_string(),
+                Some(proj::server_time(chrono::Utc::now())),
+            ));
+        }
+        // Reaction deltas have no persisted message of their own, so mint a
+        // fresh msgid per delivery (ergo mints one per TAGMSG dispatch too).
+        tags.push(Tag("msgid".to_string(), Some(proj::msgid(Uuid::new_v4()))));
+        let reply = proj::msgid(message_id);
+        tags.push(Tag("+draft/reply".to_string(), Some(reply.clone())));
+        tags.push(Tag("+reply".to_string(), Some(reply)));
+        tags.push(Tag(reaction_tag.to_string(), Some(icon.to_string())));
         replies::from_user_with_tags(
             author,
             Command::Raw("TAGMSG".to_string(), vec![target.to_string()]),
-            vec![
-                Tag("+reply".to_string(), Some(proj::msgid(message_id))),
-                Tag(reaction_tag.to_string(), Some(icon.to_string())),
-            ],
+            tags,
         )
     }
 
@@ -2462,10 +2489,11 @@ impl Session {
         if self.caps.message_tags && first_line && !is_edit {
             tags.push(Tag("msgid".to_string(), Some(proj::msgid(message.id))));
             if let Some(reply_to_message_id) = message.reply_to_message_id {
-                tags.push(Tag(
-                    "+reply".to_string(),
-                    Some(proj::msgid(reply_to_message_id)),
-                ));
+                // Emit both the draft and ratified-style names: shipped clients
+                // (goguma, halloy) read either but themselves send both.
+                let reply = proj::msgid(reply_to_message_id);
+                tags.push(Tag("+draft/reply".to_string(), Some(reply.clone())));
+                tags.push(Tag("+reply".to_string(), Some(reply)));
             }
         }
         tags

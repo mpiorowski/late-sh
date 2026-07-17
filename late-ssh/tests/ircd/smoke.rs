@@ -662,9 +662,10 @@ async fn tui_reply_projects_reply_tag_to_tag_aware_client() {
     let line = client.read_until("PRIVMSG #lounge :reply from tui").await;
     assert!(
         line.starts_with("@msgid=")
+            && line.contains(&format!(";+draft/reply={}", parent.id))
             && line.contains(&format!(";+reply={}", parent.id))
             && line.contains(&format!(":{}!{}@late.sh ", user.username, user.username)),
-        "tag-aware client should receive msgid and +reply tags for TUI replies: {line}"
+        "tag-aware client should receive msgid and both reply tags for TUI replies: {line}"
     );
 }
 
@@ -835,6 +836,43 @@ async fn tagged_reaction_toggles_late_reaction_without_storing_fallback_body() {
 }
 
 #[tokio::test]
+async fn tagged_reaction_without_dm_room_is_rejected_and_creates_none() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-dm-react-user").await;
+    let peer = server.seed_user("irc-dm-react-peer").await;
+    let mut client = server.connect_with_caps(&user.token, "message-tags").await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    client
+        .write_line(&format!(
+            "@+reply={};+draft/react=👀 TAGMSG {}",
+            uuid::Uuid::new_v4(),
+            peer.username
+        ))
+        .await
+        .expect("send tagged reaction without a DM room");
+
+    let error = client
+        .read_until("IRC reply target is not in this conversation")
+        .await;
+    assert!(
+        error.contains(" 404 "),
+        "reaction without a DM room should be rejected: {error}"
+    );
+
+    let db = server.state.db.get().await.expect("db client");
+    assert!(
+        ChatRoom::get_dm(&db, user.id, peer.id)
+            .await
+            .expect("dm room lookup")
+            .is_none(),
+        "rejected reaction must not create a DM room"
+    );
+}
+
+#[tokio::test]
 async fn outbound_reaction_delta_projects_tagmsg() {
     let server = IrcTestServer::start().await;
     let user = server.seed_user("irc-reaction-echo-user").await;
@@ -852,7 +890,7 @@ async fn outbound_reaction_delta_projects_tagmsg() {
     .expect("create parent message");
     drop(db);
     let mut client = server
-        .connect_with_caps(&user.token, "message-tags echo-message")
+        .connect_with_caps(&user.token, "message-tags server-time echo-message")
         .await;
     client.read_until(" 376 ").await;
     client.read_until(" JOIN #lounge").await;
@@ -867,10 +905,13 @@ async fn outbound_reaction_delta_projects_tagmsg() {
 
     let tagmsg = client.read_until("TAGMSG #lounge").await;
     assert!(
-        tagmsg.contains(&format!("+reply={}", parent.id))
+        tagmsg.starts_with("@time=")
+            && tagmsg.contains(";msgid=")
+            && tagmsg.contains(&format!(";+draft/reply={}", parent.id))
+            && tagmsg.contains(&format!(";+reply={}", parent.id))
             && tagmsg.contains("+draft/react=👀")
             && tagmsg.contains(&format!(":{}!{}@late.sh ", user.username, user.username)),
-        "reaction delta should project as TAGMSG: {tagmsg}"
+        "reaction delta should project as a time/msgid-tagged TAGMSG: {tagmsg}"
     );
 }
 
