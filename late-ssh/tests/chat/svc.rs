@@ -286,11 +286,9 @@ async fn emits_message_reactions_updated_when_member_reacts() {
             assert_eq!(delta.icon, "👀");
             assert_eq!(delta.action, ChatReactionAction::React);
             assert_eq!(delta.previous_icon, None);
-            assert!(
-                delta.target_user_ids.as_ref().is_some_and(
-                    |targets| targets.contains(&author.id) && targets.contains(&reactor.id)
-                ),
-                "delta should carry room target users: {delta:?}"
+            assert_eq!(
+                delta.target_user_ids, None,
+                "public room deltas broadcast; sessions filter by membership"
             );
         }
         _ => panic!("expected message reaction delta event"),
