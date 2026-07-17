@@ -122,9 +122,10 @@ impl HouseTable {
 
     /// Fixed house settings. Poker: 1k stack, 10/20 blinds, standard pace.
     /// Blackjack: the 10-chip stake, standard pace. Tron: quick speed,
-    /// glitch mode (owner-preserved). Super Snake: classic speed, all four
-    /// seats, random arena (seated players cycle it between matches).
-    /// Asterion has no settings.
+    /// glitch mode (owner-preserved). Super Snake: relaxed speed (SSH
+    /// round-trips eat into reaction time, so the DOS classic pace is too
+    /// hot), all four seats, random arena (seated players cycle it between
+    /// matches). Asterion has no settings.
     pub fn poker_settings() -> PokerTableSettings {
         PokerTableSettings {
             pace: PokerPace::Standard,
@@ -146,7 +147,7 @@ impl HouseTable {
 
     pub fn ssnake_settings() -> SsnakeTableSettings {
         SsnakeTableSettings {
-            speed: SsnakeSpeed::Classic,
+            speed: SsnakeSpeed::Relaxed,
             level: None,
             seats: 4,
         }
@@ -197,7 +198,7 @@ mod tests {
         assert_eq!(tron.mode, TronMode::Glitch);
 
         let ssnake = HouseTable::ssnake_settings();
-        assert_eq!(ssnake.speed, SsnakeSpeed::Classic);
+        assert_eq!(ssnake.speed, SsnakeSpeed::Relaxed);
         assert_eq!(ssnake.level, None);
         assert_eq!(ssnake.seats, 4);
     }

@@ -11,7 +11,7 @@
 House tables replaced the demolished Rooms directory: one fixed table per game, no creation flow, no settings forms, no DB rows (the `game_rooms` table is dropped, migration 111). The Lobby modal (`Ctrl+Q`) lists them in a fixed bottom section with live occupancy; Enter opens `Screen::HouseTable` (outside the Tab cycle, `q`/Esc back to the modal). A second stake tier later is a new `HouseTable` enum variant, not config.
 
 Locked shape (owner decisions):
-- Roster: Poker (1k stack, 10/20 blinds), Blackjack (10-chip stake), Asterion (the maze), Tron (quick speed + glitch mode), Super Snake (classic speed, 4 seats, random arena — seated players cycle the arena pick between matches).
+- Roster: Poker (1k stack, 10/20 blinds), Blackjack (10-chip stake), Asterion (the maze), Tron (quick speed + glitch mode), Super Snake (relaxed speed, 4 seats, random arena — seated players cycle the arena pick between matches).
 - Everything is a closed enum + exhaustive match; no trait objects, no `_ =>` arms on the roster.
 - House tables never touch the `daily_matches` correspondence model and have no DB rows of their own.
 
