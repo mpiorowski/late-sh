@@ -297,7 +297,7 @@ impl DailyBackgammonState {
     /// Whose turn it is. Forced passes are recorded as turns, so this is
     /// plain parity: white on even turn counts, red on odd.
     pub fn turn(&self) -> Color {
-        if self.turns.len() % 2 == 0 {
+        if self.turns.len().is_multiple_of(2) {
             Color::White
         } else {
             Color::Red

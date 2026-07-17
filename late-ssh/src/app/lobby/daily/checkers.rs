@@ -176,7 +176,7 @@ impl DailyCheckersState {
     /// Whose turn it is. No passes in checkers, so this is plain parity: red on
     /// even move counts, white on odd.
     pub fn turn(&self) -> Color {
-        if self.moves.len() % 2 == 0 {
+        if self.moves.len().is_multiple_of(2) {
             Color::Red
         } else {
             Color::White
@@ -304,18 +304,18 @@ impl DailyCheckersState {
 /// down.
 fn starting_grid() -> Grid {
     let mut grid = [[None; SIZE]; SIZE];
-    for row in 0..SIZE {
-        for col in 0..SIZE {
+    for (row, rank) in grid.iter_mut().enumerate() {
+        for (col, square) in rank.iter_mut().enumerate() {
             if (row + col) % 2 != 1 {
                 continue;
             }
             if row <= 2 {
-                grid[row][col] = Some(Piece {
+                *square = Some(Piece {
                     color: Color::Red,
                     king: false,
                 });
             } else if row >= 5 {
-                grid[row][col] = Some(Piece {
+                *square = Some(Piece {
                     color: Color::White,
                     king: false,
                 });

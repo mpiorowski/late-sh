@@ -46,6 +46,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             | ActivityGame::Poker
             | ActivityGame::RubiksCube
             | ActivityGame::Sshattrick
+            | ActivityGame::Ssnake
             | ActivityGame::Solitaire
             | ActivityGame::Sudoku
             | ActivityGame::TicTacToe
@@ -60,6 +61,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             ActivityGame::Asterion
             | ActivityGame::Chess
             | ActivityGame::Sshattrick
+            | ActivityGame::Ssnake
             | ActivityGame::TicTacToe
             | ActivityGame::Tron => true,
             // Door-game wins are milestone-gated at the source (dragon

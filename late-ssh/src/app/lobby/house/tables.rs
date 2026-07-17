@@ -14,7 +14,10 @@ use uuid::Uuid;
 use crate::app::lobby::house::{
     blackjack::settings::BlackjackTableSettings,
     poker::settings::{PokerPace, PokerTableSettings},
+    ssnake::settings::{SsnakeSpeed, SsnakeTableSettings},
+    ssnake::svc::SSNAKE_WIN_CHIPS,
     tron::settings::{TronMode, TronSpeed, TronTableSettings},
+    tron::svc::TRON_WIN_CHIPS,
 };
 use late_core::models::game_room::GameKind;
 
@@ -24,11 +27,18 @@ pub enum HouseTable {
     Blackjack,
     Asterion,
     Tron,
+    Ssnake,
 }
 
 impl HouseTable {
     /// Roster order: the Lobby modal section and startup seeding follow it.
-    pub const ALL: [Self; 4] = [Self::Poker, Self::Blackjack, Self::Asterion, Self::Tron];
+    pub const ALL: [Self; 5] = [
+        Self::Poker,
+        Self::Blackjack,
+        Self::Asterion,
+        Self::Tron,
+        Self::Ssnake,
+    ];
 
     /// Stable per-variant runtime id. House tables have no `game_rooms` row;
     /// the singleton services still need a table id for snapshots and client
@@ -39,6 +49,7 @@ impl HouseTable {
             Self::Blackjack => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0002),
             Self::Asterion => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0003),
             Self::Tron => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0004),
+            Self::Ssnake => Uuid::from_u128(0x0000_1a7e_5000_7000_8000_0000_0000_0005),
         }
     }
 
@@ -48,6 +59,7 @@ impl HouseTable {
             Self::Blackjack => "Blackjack",
             Self::Asterion => "Asterion",
             Self::Tron => "Tron",
+            Self::Ssnake => "Super Snake",
         }
     }
 
@@ -58,6 +70,26 @@ impl HouseTable {
             Self::Blackjack => "house shoe · 10-chip stake",
             Self::Asterion => "escape the maze, dodge the minotaur",
             Self::Tron => "light cycles · quick · glitch",
+            Self::Ssnake => "snake arena · warp tunnels",
+        }
+    }
+
+    /// Win payout for the Lobby modal row. Poker's pot is genuinely variable
+    /// (depends on how many players bet and how much), so it gets a
+    /// placeholder rather than a number; its buy-in/blinds already ride in
+    /// `tagline`. Blackjack pays 2x the bet, 2.5x (3:2) on a natural (see
+    /// `blackjack::state::payout_credit`); its stake is in `tagline`.
+    /// Asterion's is a DB-backed `RewardTemplate` (migration
+    /// `056_create_quests.sql`, key `asterion_daily_escape`) with no Rust
+    /// constant to read live, so its 4000-chip `reward_chips` value is
+    /// mirrored here by hand. `None` means the row leaves this column blank.
+    pub fn price_label(self) -> Option<String> {
+        match self {
+            Self::Poker => Some("pot varies".to_string()),
+            Self::Blackjack => Some("2x · bj 3:2".to_string()),
+            Self::Asterion => Some("4000 chips/day".to_string()),
+            Self::Tron => Some(format!("{TRON_WIN_CHIPS} chips")),
+            Self::Ssnake => Some(format!("{SSNAKE_WIN_CHIPS} chips")),
         }
     }
 
@@ -68,6 +100,7 @@ impl HouseTable {
             Self::Blackjack => "blackjack",
             Self::Asterion => "maze",
             Self::Tron => "tron",
+            Self::Ssnake => "ssnake",
         }
     }
 
@@ -80,6 +113,7 @@ impl HouseTable {
             Self::Blackjack => GameKind::Blackjack,
             Self::Asterion => GameKind::Asterion,
             Self::Tron => GameKind::Tron,
+            Self::Ssnake => GameKind::Ssnake,
         }
     }
 
@@ -89,12 +123,16 @@ impl HouseTable {
             Self::Blackjack => 4,
             Self::Asterion => 12,
             Self::Tron => 4,
+            Self::Ssnake => 4,
         }
     }
 
     /// Fixed house settings. Poker: 1k stack, 10/20 blinds, standard pace.
     /// Blackjack: the 10-chip stake, standard pace. Tron: quick speed,
-    /// glitch mode (owner-preserved). Asterion has no settings.
+    /// glitch mode (owner-preserved). Super Snake: relaxed speed (SSH
+    /// round-trips eat into reaction time, so the DOS classic pace is too
+    /// hot), all four seats, random arena (seated players cycle it between
+    /// matches). Asterion has no settings.
     pub fn poker_settings() -> PokerTableSettings {
         PokerTableSettings {
             pace: PokerPace::Standard,
@@ -111,6 +149,14 @@ impl HouseTable {
         TronTableSettings {
             speed: TronSpeed::Quick,
             mode: TronMode::Glitch,
+        }
+    }
+
+    pub fn ssnake_settings() -> SsnakeTableSettings {
+        SsnakeTableSettings {
+            speed: SsnakeSpeed::Relaxed,
+            level: None,
+            seats: 4,
         }
     }
 
@@ -157,5 +203,10 @@ mod tests {
         let tron = HouseTable::tron_settings();
         assert_eq!(tron.speed, TronSpeed::Quick);
         assert_eq!(tron.mode, TronMode::Glitch);
+
+        let ssnake = HouseTable::ssnake_settings();
+        assert_eq!(ssnake.speed, SsnakeSpeed::Relaxed);
+        assert_eq!(ssnake.level, None);
+        assert_eq!(ssnake.seats, 4);
     }
 }

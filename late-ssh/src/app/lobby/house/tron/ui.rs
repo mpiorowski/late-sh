@@ -19,10 +19,7 @@ use crate::app::{
                 BOARD_HEIGHT, BOARD_WIDTH, Direction, Position, SEAT_COUNT, State, TronColor,
                 TronOutcome, TronPhase, TronPickup,
             },
-            svc::{
-                TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TRON_WIN_PAYOUT_COOLDOWN,
-                TronSnapshot,
-            },
+            svc::{TRON_WIN_CHIPS, TRON_WIN_PAYOUT_COOLDOWN, TronSnapshot},
         },
     },
 };
@@ -305,11 +302,7 @@ fn info_lines(state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static
             alive_count(snapshot).to_string(),
             theme::TEXT_BRIGHT(),
         ),
-        info_label_value(
-            "Prize",
-            format!("{TRON_TWO_PLAYER_WIN_CHIPS}-{TRON_FOUR_PLAYER_WIN_CHIPS}"),
-            theme::SUCCESS(),
-        ),
+        info_label_value("Prize", TRON_WIN_CHIPS.to_string(), theme::SUCCESS()),
         info_label_value(
             "Cooldown",
             payout_cooldown_label(TRON_WIN_PAYOUT_COOLDOWN),

@@ -1115,7 +1115,7 @@ impl DailyState {
         }
         checkers.pending = candidate;
         // Complete move? Play it optimistically and send the whole path.
-        if legal.iter().any(|path| *path == checkers.pending) {
+        if legal.contains(&checkers.pending) {
             let cells: Vec<(usize, usize)> =
                 checkers.pending.iter().map(|&i| (i / 8, i % 8)).collect();
             if checkers.state.apply_move(&cells).is_ok() {
