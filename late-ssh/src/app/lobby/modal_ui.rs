@@ -229,7 +229,7 @@ fn selected_line_index(
 const NAME_COL: usize = 16;
 const GAME_COL: usize = 12;
 const DETAIL_COL: usize = 25;
-const PRICE_COL: usize = 14;
+const PRICE_COL: usize = 16;
 
 fn col(text: &str, width: usize) -> String {
     let chars: Vec<char> = text.chars().collect();
