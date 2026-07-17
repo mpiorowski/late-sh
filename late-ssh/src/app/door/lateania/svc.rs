@@ -167,6 +167,10 @@ const PET_WOUND_PCT: i32 = 30;
 const RESURRECT_COST: i32 = 30;
 /// Monk "Iron Body": percent reduction to incoming physical blows.
 const IRON_BODY_PCT: i32 = 15;
+/// Beastlord "Pack Bond": percent bonus to a companion's attack (and, via the
+/// same fraction, its effective toughness against wounds) plus a share knocked
+/// off its auto-skill cooldowns.
+const BEASTLORD_PET_PCT: i32 = 30;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
 /// Normal death removes this share of carried gold; banked gold is protected.
@@ -4250,8 +4254,8 @@ impl WorldState {
 
     fn spell_damage(&self, class: Class, base: i32, user_id: Uuid) -> i32 {
         let mut dmg = base;
-        if class == Class::Mage {
-            dmg += dmg / 5; // Arcane Mastery
+        if class == Class::Mage || class == Class::Runemaster {
+            dmg += dmg / 5; // Arcane Mastery / Runic Overflow
         }
         if class == Class::Ranger {
             // Hunter's Instinct: more vs wounded foe.
@@ -4371,9 +4375,13 @@ impl WorldState {
             p.target = None;
             p.xp += xp as i64;
             p.gold += gold as i64;
-            // Necromancer "Soul Harvest" takes both health and Souls from a kill;
-            // Warlock "Pact of Souls" feeds only the pact (Mana).
-            if p.class == Some(Class::Necromancer) {
+            // Necromancer "Soul Harvest" and Spiritmaster "Spirit Siphon" take both
+            // health and Souls from a kill; Warlock "Pact of Souls" feeds only the
+            // pact (Mana).
+            if matches!(
+                p.class,
+                Some(Class::Necromancer) | Some(Class::Spiritmaster)
+            ) {
                 let life = (p.max_hp() / 12).max(6);
                 let souls = (p.max_resource / 8).max(5);
                 p.hp = (p.hp + life).min(p.max_hp());
@@ -5034,9 +5042,9 @@ impl WorldState {
             if let Some(p) = self.players.get_mut(uid) {
                 if p.class.is_some() && p.respawn_at.is_none() {
                     p.resource = (p.resource + p.resource_regen).min(p.max_resource);
-                    // Bard trait "Battle Hymn": Tempo keeps perfect time and
-                    // returns faster than other resources.
-                    if p.class == Some(Class::Bard) {
+                    // Bard "Battle Hymn" and Skald "War-Chant": Tempo keeps perfect
+                    // time and returns faster than other resources.
+                    if matches!(p.class, Some(Class::Bard) | Some(Class::Skald)) {
                         let beat = 2 + p.level / 10;
                         p.resource = (p.resource + beat).min(p.max_resource);
                     }
@@ -5161,6 +5169,18 @@ impl WorldState {
                 LogKind::Combat,
                 format!("You strike {mob_name} for {dealt} physical{tag}."),
             );
+            // Valewalker "Reaping Harvest": each landed melee strike draws a little
+            // of the wild's vigour back into the reaper.
+            if class == Some(Class::Valewalker) {
+                let mend = self
+                    .players
+                    .get(&user_id)
+                    .map(|p| (3 + p.level / 4).max(1))
+                    .unwrap_or(0);
+                if mend > 0 {
+                    self.heal_player(user_id, mend);
+                }
+            }
             if dead {
                 self.kill_mob(user_id, mob_id);
                 continue;
@@ -5189,7 +5209,13 @@ impl WorldState {
                 }
             }
             // A living, fighting companion piles onto the same target. If its
-            // bite finishes the foe, the kill is credited to its owner.
+            // bite finishes the foe, the kill is credited to its owner. A
+            // Beastlord's "Pack Bond" empowers that companion (see pet_power_pct).
+            let pet_bonus = if class == Some(Class::Beastlord) {
+                BEASTLORD_PET_PCT
+            } else {
+                0
+            };
             if let Some((pet_glyph, pet_name, pet_atk, pet_level)) = self
                 .players
                 .get(&user_id)
@@ -5199,7 +5225,7 @@ impl WorldState {
                     (
                         pet.species.glyph,
                         pet.species.name,
-                        pet.attack(),
+                        pet.attack() + pet.attack() * pet_bonus / 100,
                         pet.level(),
                     )
                 })
@@ -5225,7 +5251,10 @@ impl WorldState {
                 }
                 // The companion's level-gated auto-skills fire here, each on its
                 // own cooldown (savage bite / rend / roar / guard / pounce).
-                if self.fire_pet_skills(user_id, mob_id, pet_level, pet_atk, pet_name, &mob_name) {
+                let beastlord = class == Some(Class::Beastlord);
+                if self.fire_pet_skills(
+                    user_id, mob_id, pet_level, pet_atk, pet_name, &mob_name, beastlord,
+                ) {
                     // A killing pounce may have finished the foe.
                     continue;
                 }
@@ -6025,15 +6054,22 @@ impl WorldState {
     /// that drops to zero is downed and stops fighting until fed.
     fn wound_pet(&mut self, user_id: Uuid, raw: i32) {
         let mut downed_name: Option<String> = None;
-        if let Some(p) = self.players.get_mut(&user_id)
-            && let Some(pet) = p.pet.as_mut()
-            && !pet.downed
-        {
-            pet.hp -= (raw * PET_WOUND_PCT / 100).max(1);
-            if pet.hp <= 0 {
-                pet.hp = 0;
-                pet.downed = true;
-                downed_name = Some(pet.species.name.to_string());
+        if let Some(p) = self.players.get_mut(&user_id) {
+            // Beastlord "Pack Bond" toughens the companion, softening the splash.
+            let beastlord = p.class == Some(Class::Beastlord);
+            let mut splash = (raw * PET_WOUND_PCT / 100).max(1);
+            if beastlord {
+                splash = (splash - splash * BEASTLORD_PET_PCT / 100).max(1);
+            }
+            if let Some(pet) = p.pet.as_mut()
+                && !pet.downed
+            {
+                pet.hp -= splash;
+                if pet.hp <= 0 {
+                    pet.hp = 0;
+                    pet.downed = true;
+                    downed_name = Some(pet.species.name.to_string());
+                }
             }
         }
         if let Some(name) = downed_name {
@@ -6053,6 +6089,7 @@ impl WorldState {
     /// foe was slain (by a killing pounce), so the combat step knows to move on.
     /// Damage/DoT scale with the pet's own attack; Roar empowers the owner and
     /// Guard shields them. Lock-free/snapshot-only: only `WorldState` is touched.
+    #[allow(clippy::too_many_arguments)]
     fn fire_pet_skills(
         &mut self,
         user_id: Uuid,
@@ -6061,6 +6098,7 @@ impl WorldState {
         pet_atk: i32,
         pet_name: &str,
         mob_name: &str,
+        beastlord: bool,
     ) -> bool {
         let now_tick = self.world_ticks;
         for (si, skill) in pet_skills_at(pet_level).enumerate() {
@@ -6072,8 +6110,15 @@ impl WorldState {
             if !ready {
                 continue;
             }
-            self.pet_skill_cd
-                .insert((user_id, si), now_tick + skill.cooldown as u64);
+            // Beastlord "Pack Bond" shortens the companion's skill cooldowns so it
+            // looses them more often (at least one tick off, never below one).
+            let base_cd = skill.cooldown as u64;
+            let cd = if beastlord {
+                (base_cd - base_cd * BEASTLORD_PET_PCT as u64 / 100).max(1)
+            } else {
+                base_cd
+            };
+            self.pet_skill_cd.insert((user_id, si), now_tick + cd);
             match skill.effect {
                 PetSkillEffect::SavageBite | PetSkillEffect::Pounce => {
                     // Bonus burst damage, scaled by the pet's bite.
@@ -7712,7 +7757,50 @@ mod tests {
     }
 
     #[test]
-    fn all_twelve_classes_can_be_chosen_with_sane_stats() {
+    fn spiritmaster_siphons_health_and_souls_on_a_kill() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Spiritmaster);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.hp = 5;
+            p.resource = 0;
+        }
+        let mob_id = *s.mobs.keys().next().expect("world has mobs");
+        s.kill_mob(uid(1), mob_id);
+        let p = &s.players[&uid(1)];
+        assert!(p.hp > 5, "Spirit Siphon restores health on a kill");
+        assert!(p.resource > 0, "Spirit Siphon restores Souls on a kill");
+    }
+
+    #[test]
+    fn beastlord_pack_bond_toughens_the_companion() {
+        // The same incoming blow splashes less onto a Beastlord's companion than
+        // onto an ordinary owner's - Pack Bond makes the beast hardier.
+        let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+        let mut plain = world();
+        plain.join(uid(1));
+        plain.choose_class(uid(1), Class::Ranger);
+        plain.players.get_mut(&uid(1)).unwrap().pet =
+            Some(super::super::pets::Pet::new(species, 0));
+        plain.wound_pet(uid(1), 100);
+        let plain_hp = plain.players[&uid(1)].pet.unwrap().hp;
+
+        let mut bond = world();
+        bond.join(uid(2));
+        bond.choose_class(uid(2), Class::Beastlord);
+        bond.players.get_mut(&uid(2)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+        bond.wound_pet(uid(2), 100);
+        let bond_hp = bond.players[&uid(2)].pet.unwrap().hp;
+
+        assert!(
+            bond_hp > plain_hp,
+            "Pack Bond should soften the wound splash ({bond_hp} vs {plain_hp})"
+        );
+    }
+
+    #[test]
+    fn all_classes_can_be_chosen_with_sane_stats() {
         for (i, class) in Class::ALL.iter().enumerate() {
             let mut s = world();
             let u = uid(i as u128 + 1);

@@ -1197,6 +1197,11 @@ fn class_accent(class_name: &str) -> Color {
         "Cleric" => theme::BADGE_GOLD(),
         "Rogue" => theme::ERROR(),
         "Ranger" => theme::SUCCESS(),
+        "Beastlord" => theme::SUCCESS(),
+        "Skald" => theme::AMBER_GLOW(),
+        "Runemaster" => theme::MENTION(),
+        "Valewalker" => theme::SUCCESS(),
+        "Spiritmaster" => theme::MENTION(),
         _ => theme::TEXT_BRIGHT(),
     }
 }
