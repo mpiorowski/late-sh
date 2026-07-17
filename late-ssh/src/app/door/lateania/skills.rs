@@ -174,6 +174,28 @@ impl fmt::Display for CraftSkill {
     }
 }
 
+/// The **Animal Taming** trade: the beastmaster's skill. Unlike the gathering
+/// and crafting trades it has no station or node - it is trained by taming wild
+/// beasts of Broceliande into companions (see `taming.rs`). It levels 1..=50 on
+/// the very same shared curve, and its xp lives as a single value on
+/// `PlayerState` (there is only one taming trade, so no enum of variants is
+/// needed). This zero-sized marker just carries the stable key/label so the
+/// Trades block and persistence read consistently with the other trades.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TamingSkill;
+
+impl TamingSkill {
+    /// Stable persistence key (never change once shipped).
+    pub const fn key() -> &'static str {
+        "animal_taming"
+    }
+
+    /// Display name for the Trades block and log lines.
+    pub const fn label() -> &'static str {
+        "Animal Taming"
+    }
+}
+
 /// Skill level cap - the same 50 the class levels use, so "level 1 to 50" reads
 /// consistently across the game.
 pub const SKILL_MAX_LEVEL: i32 = 50;

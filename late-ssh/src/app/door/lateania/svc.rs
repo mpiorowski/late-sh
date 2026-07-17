@@ -54,8 +54,9 @@ use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
 use super::pets::{Pet, pet_species_by_key};
-use super::skills::{CraftSkill, GatherSkill, skill_level_for_xp, skill_progress};
+use super::skills::{CraftSkill, GatherSkill, TamingSkill, skill_level_for_xp, skill_progress};
 use super::stats::AbilityScores;
+use super::taming::{PetSkillEffect, TAMEABLE, beasts_at, pet_skills_at, tame_chance, tame_xp};
 use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RegionProgress,
     ResourceNode, RoomId, World, craft_stations_at, critter_index, critters_at, features_at,
@@ -449,6 +450,34 @@ pub struct PetView {
     pub downed: bool,
     /// Loyalty toward the next level, 0-100.
     pub loyalty_pct: i32,
+    /// Auto-skills the pet has unlocked at its level: (name, unlock level). Fire
+    /// automatically in combat.
+    pub skills: Vec<(String, i32)>,
+}
+
+/// One tameable wild beast present in the room, for the Taming panel.
+#[derive(Clone, Debug)]
+pub struct TameEntryView {
+    /// Index into the room's tameable list (passed back to `tame`).
+    pub idx: usize,
+    pub name: String,
+    pub glyph: String,
+    /// Animal Taming level this beast requires.
+    pub req_level: i32,
+    /// The player's success odds right now, 0-100 (0 = under-level or spooked).
+    pub odds: u32,
+    /// A short status: "" when tamable, else "needs Taming N" / "spooked".
+    pub reason: String,
+    pub desc: String,
+}
+
+/// The Animal Taming panel: the tameable beasts roaming this room, with the
+/// player's taming level and odds. Present when a tameable beast is here.
+#[derive(Clone, Debug)]
+pub struct TamingView {
+    /// The player's current Animal Taming level.
+    pub taming_level: i32,
+    pub entries: Vec<TameEntryView>,
 }
 
 /// One companion offered at a Stable.
@@ -567,6 +596,8 @@ pub struct PlayerView {
     pub pet: Option<PetView>,
     /// The companion vendor, present when standing at a capital Stable.
     pub stable: Option<StableView>,
+    /// The Animal Taming panel, present when a tameable wild beast roams here.
+    pub taming: Option<TamingView>,
     /// The housing ledger, present at the clerk or inside a home you own.
     pub housing: Option<HousingView>,
     /// The crafting panel, present when standing at any craft station.
@@ -656,6 +687,7 @@ impl PlayerView {
             shop: None,
             pet: None,
             stable: None,
+            taming: None,
             housing: None,
             crafting: None,
             portal: None,
@@ -1215,6 +1247,12 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.feed_pet(user_id));
     }
 
+    /// Attempt to tame the wild beast at index `idx` in the current room's
+    /// tameable list into the player's active companion.
+    pub fn tame_task(&self, user_id: Uuid, idx: usize) {
+        self.mutate(user_id, move |s| s.tame(user_id, idx));
+    }
+
     /// Buy the deed to a housing plot (tier index) at the clerk.
     pub fn buy_deed_task(&self, user_id: Uuid, plot: usize) {
         self.mutate(user_id, move |s| s.buy_deed(user_id, plot));
@@ -1585,6 +1623,9 @@ struct PlayerState {
     skills: HashMap<GatherSkill, i64>,
     /// Crafting-skill xp, keyed by trade (same shape and curve as `skills`).
     craft_skills: HashMap<CraftSkill, i64>,
+    /// Total Animal Taming xp (the beastmaster trade). Its level is a pure
+    /// function of this, on the same 1..=50 curve. Persisted (schema v14).
+    taming_xp: i64,
     /// A weapon coated with poison: (damage per tick, strikes remaining). Each
     /// landed melee hit leaves a poison DoT and spends one charge. Transient.
     weapon_poison: Option<(i32, u8)>,
@@ -1686,6 +1727,11 @@ impl PlayerState {
     /// Total xp trained in a crafting skill (0 if untrained).
     fn craft_xp(&self, skill: CraftSkill) -> i64 {
         self.craft_skills.get(&skill).copied().unwrap_or(0)
+    }
+
+    /// Current Animal Taming level (1 if untrained).
+    fn taming_level(&self) -> i32 {
+        skill_level_for_xp(self.taming_xp)
     }
 
     /// How many of an item id sit in the pack.
@@ -2114,6 +2160,12 @@ struct WorldState {
     hunted: HashMap<usize, Instant>,
     /// Harvest cooldowns for resource nodes, keyed by global NODES index.
     gathered: HashMap<usize, Instant>,
+    /// Per-player, per-beast cooldown after a *failed* tame: (user, beast index)
+    /// -> when it bolted. A spooked beast won't be approached again for a spell.
+    tame_cooldowns: HashMap<(Uuid, usize), Instant>,
+    /// Pet auto-skill cooldowns: (user, pet-skill index) -> the `world_ticks`
+    /// value at which that skill may next fire. Transient (combat-round timing).
+    pet_skill_cd: HashMap<(Uuid, usize), u64>,
     /// Next id for a runtime-only summoned add (Summoner behavior). Kept well
     /// clear of authored spawn ids so the two never collide.
     next_summon_id: u32,
@@ -2136,6 +2188,8 @@ const TEMPLE_ROOM: RoomId = 4;
 const GAME_RESPAWN: Duration = Duration::from_secs(40);
 /// How long a harvested resource node stays depleted before it regrows.
 const NODE_RESPAWN: Duration = Duration::from_secs(45);
+/// How long a beast stays spooked (and un-approachable) after a failed tame.
+const TAME_COOLDOWN: Duration = Duration::from_secs(30);
 /// Poison damage per tick applied by a coated weapon, by poison tier (0..5).
 const POISON_PER_TICK: [i32; 5] = [4, 8, 14, 22, 34];
 /// Strikes a single weapon-coating lasts before the poison is spent.
@@ -2183,6 +2237,8 @@ impl WorldState {
             world_revision: 0,
             hunted: HashMap::new(),
             gathered: HashMap::new(),
+            tame_cooldowns: HashMap::new(),
+            pet_skill_cd: HashMap::new(),
             next_summon_id: SUMMON_ID_START,
             world_ticks: 0,
             world_boss: None,
@@ -2263,6 +2319,7 @@ impl WorldState {
             appearance: [0; appearance::N_FIELDS],
             skills: HashMap::new(),
             craft_skills: HashMap::new(),
+            taming_xp: 0,
             weapon_poison: None,
             escort: None,
             frontier_descent_pending: false,
@@ -2478,6 +2535,8 @@ impl WorldState {
                 .iter()
                 .filter_map(|(key, xp)| CraftSkill::from_key(key).map(|s| (s, *xp)))
                 .collect();
+            // Restore Animal Taming xp (0 for pre-taming saves).
+            p.taming_xp = saved.taming_xp.max(0);
             // Restore the chosen archetype (ignored if the key is unknown or no
             // longer matches the class, e.g. a respec/rename).
             p.archetype = saved
@@ -2580,6 +2639,7 @@ impl WorldState {
                 .iter()
                 .map(|(s, xp)| (s.key().to_string(), *xp))
                 .collect(),
+            taming_xp: p.taming_xp,
         }))
     }
 
@@ -5130,12 +5190,19 @@ impl WorldState {
             }
             // A living, fighting companion piles onto the same target. If its
             // bite finishes the foe, the kill is credited to its owner.
-            if let Some((pet_glyph, pet_name, pet_atk)) = self
+            if let Some((pet_glyph, pet_name, pet_atk, pet_level)) = self
                 .players
                 .get(&user_id)
                 .and_then(|p| p.pet.as_ref())
                 .filter(|pet| !pet.downed)
-                .map(|pet| (pet.species.glyph, pet.species.name, pet.attack()))
+                .map(|pet| {
+                    (
+                        pet.species.glyph,
+                        pet.species.name,
+                        pet.attack(),
+                        pet.level(),
+                    )
+                })
             {
                 let (pet_dealt, pet_dead) = {
                     let Some(mob) = self.mobs.get_mut(&mob_id) else {
@@ -5154,6 +5221,12 @@ impl WorldState {
                 );
                 if pet_dead {
                     self.kill_mob(user_id, mob_id);
+                    continue;
+                }
+                // The companion's level-gated auto-skills fire here, each on its
+                // own cooldown (savage bite / rend / roar / guard / pounce).
+                if self.fire_pet_skills(user_id, mob_id, pet_level, pet_atk, pet_name, &mob_name) {
+                    // A killing pounce may have finished the foe.
                     continue;
                 }
             }
@@ -5973,6 +6046,224 @@ impl WorldState {
         }
     }
 
+    // ---- Pet auto-skills ------------------------------------------------
+
+    /// Fire the companion's level-gated auto-skills against the owner's target,
+    /// each on its own cooldown (tracked in `world_ticks`). Returns true if the
+    /// foe was slain (by a killing pounce), so the combat step knows to move on.
+    /// Damage/DoT scale with the pet's own attack; Roar empowers the owner and
+    /// Guard shields them. Lock-free/snapshot-only: only `WorldState` is touched.
+    fn fire_pet_skills(
+        &mut self,
+        user_id: Uuid,
+        mob_id: u32,
+        pet_level: i32,
+        pet_atk: i32,
+        pet_name: &str,
+        mob_name: &str,
+    ) -> bool {
+        let now_tick = self.world_ticks;
+        for (si, skill) in pet_skills_at(pet_level).enumerate() {
+            // Respect the per-skill cooldown.
+            let ready = self
+                .pet_skill_cd
+                .get(&(user_id, si))
+                .is_none_or(|&next| now_tick >= next);
+            if !ready {
+                continue;
+            }
+            self.pet_skill_cd
+                .insert((user_id, si), now_tick + skill.cooldown as u64);
+            match skill.effect {
+                PetSkillEffect::SavageBite | PetSkillEffect::Pounce => {
+                    // Bonus burst damage, scaled by the pet's bite.
+                    let bonus = skill.power + pet_atk * skill.power / 20;
+                    let dead = {
+                        let Some(mob) = self.mobs.get_mut(&mob_id) else {
+                            return false;
+                        };
+                        let (dealt, _) = mob.spawn.profile.apply(bonus, DamageType::Physical);
+                        mob.hp -= dealt;
+                        mob.hp <= 0
+                    };
+                    self.dirty = true;
+                    self.mark_world_dirty();
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name}'s {} rips into {mob_name}!", skill.name),
+                    );
+                    if dead {
+                        self.kill_mob(user_id, mob_id);
+                        return true;
+                    }
+                }
+                PetSkillEffect::Rend => {
+                    let per_tick = skill.power + pet_atk / 8;
+                    self.seed_mob_dot(
+                        user_id,
+                        per_tick,
+                        DamageType::Physical,
+                        3,
+                        &format!("Your {pet_name}'s Rend"),
+                    );
+                }
+                PetSkillEffect::Roar => {
+                    let mag = skill.power + pet_atk / 10;
+                    if let Some(p) = self.players.get_mut(&user_id) {
+                        p.empower = p.empower.max(mag);
+                        p.empower_ticks = p.empower_ticks.max(4);
+                    }
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!(
+                            "Your {pet_name} looses an intimidating roar - you feel emboldened!"
+                        ),
+                    );
+                    self.dirty = true;
+                }
+                PetSkillEffect::Guard => {
+                    let mag = skill.power + pet_atk / 4;
+                    if let Some(p) = self.players.get_mut(&user_id) {
+                        p.shield = p.shield.max(mag);
+                        p.shield_ticks = p.shield_ticks.max(4);
+                    }
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name} guards you closely, warding the next blows."),
+                    );
+                    self.dirty = true;
+                }
+            }
+        }
+        false
+    }
+
+    // ---- Animal Taming --------------------------------------------------
+
+    /// Attempt to tame the wild beast identified by its index in the room's
+    /// tameable list. Driven by the player's Animal Taming level versus the
+    /// beast's required level: a clear success chance, a spooked cooldown on
+    /// failure, and on success the beast becomes the player's active companion
+    /// (replacing any current one, like `buy_pet`) and trains the trade.
+    fn tame(&mut self, user_id: Uuid, idx: usize) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.dead || player.respawn_at.is_some() {
+            return;
+        }
+        let room = player.room;
+        let here = beasts_at(room);
+        let Some(wb) = here.get(idx).copied() else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "There is no such beast here to tame.".to_string(),
+            );
+            return;
+        };
+        let species = &TAMEABLE[wb.species];
+        let bi = wb.species;
+        let now = Instant::now();
+        // A spooked beast will not be approached again until it settles.
+        if let Some(t) = self.tame_cooldowns.get(&(user_id, bi))
+            && now.duration_since(*t) < TAME_COOLDOWN
+        {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                format!("The {} is still wary of you. Give it time.", species.name),
+            );
+            return;
+        }
+        let taming_xp = player.taming_xp;
+        let level = skill_level_for_xp(taming_xp);
+        // Under-level: refused outright, with a clear reason.
+        if level < species.tame_level {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "The {} is beyond your skill - taming it needs {} level {} (yours is {level}).",
+                    species.name,
+                    TamingSkill::label(),
+                    species.tame_level,
+                ),
+            );
+            return;
+        }
+        let chance = tame_chance(taming_xp, species);
+        // The approach: a beat of warily-earned trust before the roll.
+        self.log_to(
+            user_id,
+            LogKind::Normal,
+            format!(
+                "The {} eyes you warily as you step close, hand open and low...",
+                species.name
+            ),
+        );
+        let roll = rand::thread_rng().gen_range(0..100);
+        if roll < chance {
+            // Success: it becomes the active companion, and the trade trains.
+            let released = self
+                .players
+                .get(&user_id)
+                .and_then(|p| p.pet.map(|o| o.species.name));
+            let gained = tame_xp(species);
+            let (before, after) = if let Some(p) = self.players.get_mut(&user_id) {
+                p.pet = Some(Pet::new(species, 0));
+                let b = skill_level_for_xp(p.taming_xp);
+                p.taming_xp += gained as i64;
+                (b, skill_level_for_xp(p.taming_xp))
+            } else {
+                return;
+            };
+            if let Some(old) = released {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!("Your {old} is set loose to make room, and pads off into the green."),
+                );
+            }
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!(
+                    "{} You've earned its trust! The {} is yours now. (+{gained} {} xp)",
+                    species.glyph,
+                    species.name,
+                    TamingSkill::label()
+                ),
+            );
+            if after > before {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!("Your {} rises to level {after}!", TamingSkill::label()),
+                );
+            }
+            self.tame_cooldowns.remove(&(user_id, bi));
+        } else {
+            // Failure: it bolts, and stays spooked for a spell.
+            self.tame_cooldowns.insert((user_id, bi), now);
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                format!(
+                    "The {} shies, then bolts into the briars. Not this time.",
+                    species.name
+                ),
+            );
+        }
+        self.dirty = true;
+    }
+
     // ---- Player housing -------------------------------------------------
 
     /// Whether a housing clerk stands in this room.
@@ -6250,6 +6541,16 @@ impl WorldState {
                     xp_next,
                 }
             }));
+            // The beastmaster's trade, Animal Taming, closes out the Trades block.
+            {
+                let (xp_into, xp_next) = skill_progress(player.taming_xp);
+                skills.push(SkillView {
+                    name: TamingSkill::label().to_string(),
+                    level: player.taming_level(),
+                    xp_into,
+                    xp_next,
+                });
+            }
             // The crafting panel: every recipe worked at the stations in this room.
             let crafting = {
                 let stations = craft_stations_at(player.room);
@@ -6409,11 +6710,15 @@ impl WorldState {
                 attack: pet.attack(),
                 downed: pet.downed,
                 loyalty_pct: pet.loyalty_pct(),
+                skills: pet_skills_at(pet.level())
+                    .map(|s| (s.name.to_string(), s.level))
+                    .collect(),
             });
             let stable = self.room_has_stable(player.room).then(|| StableView {
                 feed_cost: PET_FEED_COST,
                 entries: super::pets::PET_SPECIES
                     .iter()
+                    .filter(|s| !s.is_tameable())
                     .map(|s| StableEntryView {
                         key: s.key.to_string(),
                         name: s.name.to_string(),
@@ -6426,6 +6731,53 @@ impl WorldState {
                     })
                     .collect(),
             });
+
+            // The Animal Taming panel: every tameable beast roaming this room,
+            // with the player's odds against each (0 = under-level or spooked).
+            let taming = {
+                let beasts = beasts_at(player.room);
+                if beasts.is_empty() {
+                    None
+                } else {
+                    let taming_level = player.taming_level();
+                    let entries = beasts
+                        .iter()
+                        .enumerate()
+                        .map(|(i, wb)| {
+                            let sp = &TAMEABLE[wb.species];
+                            let spooked = self
+                                .tame_cooldowns
+                                .get(&(*user_id, wb.species))
+                                .is_some_and(|t| now.duration_since(*t) < TAME_COOLDOWN);
+                            let odds = if spooked {
+                                0
+                            } else {
+                                tame_chance(player.taming_xp, sp)
+                            };
+                            let reason = if taming_level < sp.tame_level {
+                                format!("needs Taming {}", sp.tame_level)
+                            } else if spooked {
+                                "spooked".to_string()
+                            } else {
+                                String::new()
+                            };
+                            TameEntryView {
+                                idx: i,
+                                name: sp.name.to_string(),
+                                glyph: sp.glyph.to_string(),
+                                req_level: sp.tame_level,
+                                odds,
+                                reason,
+                                desc: sp.desc.to_string(),
+                            }
+                        })
+                        .collect();
+                    Some(TamingView {
+                        taming_level,
+                        entries,
+                    })
+                }
+            };
 
             // The housing ledger: deeds at the clerk, furnishings inside your home.
             let housing = if self.room_has_housing_clerk(player.room) {
@@ -6576,6 +6928,7 @@ impl WorldState {
                     shop,
                     pet,
                     stable,
+                    taming,
                     housing,
                     crafting,
                     portal,
@@ -7944,6 +8297,91 @@ mod tests {
         assert_eq!(pet.hp, pet.max_hp(), "and heals it to full");
         assert!(pet.loyalty_xp > 0, "and raises its loyalty");
         assert_eq!(s.players[&uid(1)].gold, 500 - PET_FEED_COST);
+    }
+
+    // The forest gate (entrance) room of Broceliande zone 0, where the easiest
+    // tameable beasts roam.
+    fn broceliande_beast_room() -> RoomId {
+        super::super::world::BROCELIANDE_BASE
+    }
+
+    #[test]
+    fn taming_a_beast_makes_it_your_companion_and_trains_the_trade() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // Stand where the easiest beasts (level 1) gather, and be well-trained so
+        // the roll is a near-sure thing; force success by maxing the odds.
+        s.players.get_mut(&uid(1)).unwrap().room = broceliande_beast_room();
+        s.players.get_mut(&uid(1)).unwrap().taming_xp =
+            super::super::skills::xp_for_skill_level(50);
+        // The easiest beast in the room is the first tameable species.
+        let beasts = super::super::taming::beasts_at(broceliande_beast_room());
+        assert!(!beasts.is_empty(), "beasts roam the first forest gate");
+        let before_xp = s.players[&uid(1)].taming_xp;
+        // Try a few times; a master's odds cap at 95%, so one of a handful lands.
+        for _ in 0..40 {
+            if s.players[&uid(1)].pet.is_some() {
+                break;
+            }
+            s.tame(uid(1), 0);
+        }
+        let p = &s.players[&uid(1)];
+        assert!(p.pet.is_some(), "a successful tame yields a companion");
+        assert!(
+            p.pet.unwrap().species.is_tameable(),
+            "the companion is a tamed wild beast"
+        );
+        assert!(p.taming_xp > before_xp, "taming trains Animal Taming xp");
+    }
+
+    #[test]
+    fn an_underskilled_tamer_cannot_take_a_great_beast() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // Deep in Broceliande the great beasts need a near-master tamer; a fresh
+        // Ranger has no taming training, so the attempt is refused outright.
+        let deep = super::super::world::BROCELIANDE_BASE
+            + 19 * super::super::world::BROCELIANDE_ZONE_STRIDE;
+        s.players.get_mut(&uid(1)).unwrap().room = deep;
+        let beasts = super::super::taming::beasts_at(deep);
+        assert!(!beasts.is_empty(), "great beasts roam the deep gate");
+        s.tame(uid(1), 0);
+        let p = &s.players[&uid(1)];
+        assert!(p.pet.is_none(), "an under-level tamer takes nothing");
+        assert_eq!(p.taming_xp, 0, "and earns no taming xp");
+        assert!(
+            p.log.iter().any(|l| l.text.contains("beyond your skill")),
+            "the refusal explains the level gate"
+        );
+    }
+
+    #[test]
+    fn a_leveled_companions_auto_skills_fire_in_combat() {
+        let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+        // A well-fed, high-loyalty companion has unlocked its auto-skills.
+        let species = super::super::pets::pet_species_by_key("dire_wolf").unwrap();
+        let pet = super::super::pets::Pet::new(species, super::super::pets::LOYALTY_PER_LEVEL * 5);
+        assert!(pet.level() >= 3, "the fed companion has unlocked skills");
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(pet);
+        // Give the foe a big pool so it survives to show the extra hits.
+        s.mobs.get_mut(&mob_id).unwrap().hp = 5000;
+        s.mobs.get_mut(&mob_id).unwrap().spawn.max_hp = 5000;
+        // Run a few rounds so a skill comes off cooldown and fires.
+        let mut fired = false;
+        for _ in 0..5 {
+            s.tick();
+            if s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|l| l.text.contains("Savage Bite") || l.text.contains("rips into"))
+            {
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "a leveled companion's auto-skill fires in combat");
     }
 
     #[test]

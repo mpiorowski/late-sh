@@ -19,5 +19,6 @@ pub mod skills;
 pub mod state;
 pub mod stats;
 pub mod svc;
+pub mod taming;
 pub mod ui;
 pub mod world;

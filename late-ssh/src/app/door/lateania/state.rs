@@ -39,6 +39,10 @@ pub enum Panel {
     /// The companion vendor at a capital Stable: select a beast and Enter to buy
     /// it; `x` feeds (heals/raises) the companion you already have.
     Stable,
+    /// The Animal Taming panel: the tameable wild beasts roaming this room, each
+    /// with its required Taming level and your odds. Select one and Enter to
+    /// attempt the tame. Opened with `q` where a tameable beast is present.
+    Taming,
     /// The housing ledger: buy a deed at the clerk, or (inside a home you own)
     /// buy and place a furnishing. `Enter` activates the selected row.
     Housing,
@@ -230,6 +234,7 @@ impl State {
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
             Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
+            Panel::Taming => self.view().taming.map(|t| t.entries.len()).unwrap_or(0),
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
             Panel::Appearance => self.view().appearance.len(),
@@ -441,6 +446,11 @@ impl State {
         }
     }
 
+    /// Open the Animal Taming panel (only meaningful where a tameable beast roams).
+    pub fn open_taming(&mut self) {
+        self.toggle_panel(Panel::Taming);
+    }
+
     pub fn leave_world(&mut self) {
         self.close_session();
     }
@@ -491,6 +501,13 @@ impl State {
                     && let Some(entry) = stable.entries.get(self.cursor)
                 {
                     self.svc.buy_pet_task(self.user_id, entry.key.clone());
+                }
+            }
+            Panel::Taming => {
+                if let Some(taming) = self.view().taming
+                    && let Some(entry) = taming.entries.get(self.cursor)
+                {
+                    self.svc.tame_task(self.user_id, entry.idx);
                 }
             }
             Panel::Housing => {

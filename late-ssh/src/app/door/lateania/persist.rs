@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 13;
+const SCHEMA_VERSION: u32 = 14;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -47,6 +47,7 @@ pub struct SavedCharacterInit {
     pub appearance: Vec<u8>,
     pub skills: Vec<(String, i64)>,
     pub craft_skills: Vec<(String, i64)>,
+    pub taming_xp: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -132,6 +133,11 @@ pub struct SavedCharacter {
     /// saves.
     #[serde(default)]
     pub craft_skills: Vec<(String, i64)>,
+    /// Total Animal Taming xp (the beastmaster trade; see `taming.rs`); its level
+    /// is a pure function of this. 0 for pre-taming (schema < 14) saves, which
+    /// simply start the trade untrained at level 1.
+    #[serde(default)]
+    pub taming_xp: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -211,6 +217,7 @@ impl SavedCharacter {
             appearance: init.appearance,
             skills: init.skills,
             craft_skills: init.craft_skills,
+            taming_xp: init.taming_xp,
         }
     }
 
@@ -296,6 +303,7 @@ mod tests {
             appearance: vec![1, 2, 3, 4, 5],
             skills: vec![("woodcutting".to_string(), 900), ("mining".to_string(), 40)],
             craft_skills: vec![("smithing".to_string(), 300)],
+            taming_xp: 1500,
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -326,6 +334,7 @@ mod tests {
             vec![("woodcutting".to_string(), 900), ("mining".to_string(), 40)]
         );
         assert_eq!(back.craft_skills, vec![("smithing".to_string(), 300)]);
+        assert_eq!(back.taming_xp, 1500);
     }
 
     #[test]

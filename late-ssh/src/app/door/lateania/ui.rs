@@ -360,6 +360,7 @@ fn draw_side(
         Panel::Quests => (quests_panel(view), None),
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
         Panel::Stable => stable_panel(view, state.cursor()),
+        Panel::Taming => taming_panel(view, state.cursor()),
         Panel::Housing => housing_panel(view, state.cursor()),
         Panel::Portal => portal_panel(view, state.cursor()),
         Panel::Appearance => (appearance_panel(view, state.cursor()), None),
@@ -635,6 +636,20 @@ fn room_panel(
                 }),
             ),
         ]));
+        // The companion's unlocked auto-skills (fire automatically in combat).
+        if !pet.skills.is_empty() {
+            let names = pet
+                .skills
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.extend(side_text_wrap(
+                &format!("    skills: {names}"),
+                theme::AMBER_DIM(),
+                width,
+            ));
+        }
     }
     let exits = if view.exits.is_empty() {
         "none".to_string()
@@ -761,6 +776,25 @@ fn room_panel(
             };
             lines.extend(side_text_wrap(
                 &format!("{marker}{}{detail}", n.name),
+                color,
+                width,
+            ));
+        }
+    }
+    // Tameable wild beasts of Broceliande: what roams here and whether you can
+    // take it (the Animal Taming trade). Opened with `q`.
+    if let Some(taming) = &view.taming
+        && !taming.entries.is_empty()
+    {
+        lines.push(section("Wild beasts"));
+        for e in &taming.entries {
+            let (color, tail) = if e.reason.is_empty() {
+                (theme::SUCCESS(), format!(", {}% to tame (press q)", e.odds))
+            } else {
+                (theme::TEXT_DIM(), format!(", {}", e.reason))
+            };
+            lines.extend(side_text_wrap(
+                &format!("\u{1F43E} {}{tail}", e.name),
                 color,
                 width,
             ));
@@ -1717,6 +1751,71 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
     lines.push(hint("w/s", "select  Enter buy"));
     lines.push(hint("x", &format!("feed/tend ({}g)", stable.feed_cost)));
     lines.push(hint("p", "leave stable"));
+    (lines, sel_line)
+}
+
+/// The Animal Taming panel: the tameable wild beasts roaming this room, each
+/// with its required Taming level and the player's odds. Enter attempts the
+/// selected tame; success makes the beast your active companion.
+fn taming_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+    let Some(taming) = &view.taming else {
+        return (
+            vec![Line::from(Span::styled(
+                "No tameable beast roams here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
+    };
+    let mut sel_line = None;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Animal Taming",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("your taming level: {}", taming.taming_level),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+    ];
+    for (i, e) in taming.entries.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let marker = if selected { ">" } else { " " };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        // The odds/reason: green when tamable, red when out of reach or spooked.
+        let (status, status_color) = if e.reason.is_empty() {
+            (format!("{}% chance", e.odds), theme::SUCCESS())
+        } else {
+            (e.reason.clone(), theme::ERROR())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {} {}", e.glyph, e.name), name_style),
+            Span::styled(
+                format!("  (need Lv{})", e.req_level),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("    {status}"),
+            Style::default().fg(status_color),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter tame"));
+    lines.push(hint("q", "leave"));
     (lines, sel_line)
 }
 

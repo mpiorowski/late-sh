@@ -4934,8 +4934,7 @@ fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
         // ride the endgame band with deliberately tiny base stats; Broceliande is
         // its own moderate green continent, so it is excluded here and keeps the
         // gentle overworld multipliers instead of the endgame ones.
-        let kaelmyr =
-            (KAELMYR_SPAWN_ID_START..BROCELIANDE_SPAWN_ID_START).contains(&spawn.id);
+        let kaelmyr = (KAELMYR_SPAWN_ID_START..BROCELIANDE_SPAWN_ID_START).contains(&spawn.id);
         let endgame = frontier || reaches || kaelmyr;
         let living_dark = is_living_dark_spawn(spawn.id);
         let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) =
@@ -6872,8 +6871,10 @@ const BROCELIANDE_ZONES: usize = BROCELIANDE_ZONES_DATA.len();
 pub const BROCELIANDE_SPAWN_ID_START: u32 = 990_000;
 const BROCELIANDE_SEED: u64 = 0xB70C_E11A_9DE0_u64;
 /// Each zone reserves this many room ids (a `BROCELIANDE_W`×`BROCELIANDE_H`
-/// cell field).
-const BROCELIANDE_ZONE_STRIDE: u32 = (BROCELIANDE_W * BROCELIANDE_H) as u32;
+/// cell field). Public so the taming system can place beasts within a zone.
+pub const BROCELIANDE_ZONE_STRIDE: u32 = (BROCELIANDE_W * BROCELIANDE_H) as u32;
+/// Number of Broceliande zones, public for beast placement.
+pub const BROCELIANDE_ZONE_COUNT: usize = BROCELIANDE_ZONES;
 
 /// Which Broceliande zones are carved as organic caverns/glades (fern grottoes,
 /// grove-clearings, jungle sinks) rather than braided briar-mazes. The rest are
@@ -7331,9 +7332,7 @@ fn extend_broceliande(
             } else if is_boss {
                 Box::leak(format!("{zname} - the Green Heart").into_boxed_str())
             } else {
-                Box::leak(
-                    format!("{zname} - {}", BROCELIANDE_PLACES[cell % 10]).into_boxed_str(),
-                )
+                Box::leak(format!("{zname} - {}", BROCELIANDE_PLACES[cell % 10]).into_boxed_str())
             };
             let desc: &'static str = Box::leak(
                 broceliande_desc(adj, green, feature, creature, cell as u32).into_boxed_str(),
@@ -10561,10 +10560,7 @@ mod tests {
             .expect("Broceliande forest gate exists");
         assert!(entrance.safe, "the Woodward's Holt landing is a safe haven");
         assert!(
-            entrance
-                .exits
-                .values()
-                .any(|to| (680u32..692).contains(to)),
+            entrance.exits.values().any(|to| (680u32..692).contains(to)),
             "Broceliande hangs off the Verdant Highlands by a walk"
         );
         // Foes are behaviour-driven with several distinct behaviours; filter by
@@ -10578,10 +10574,18 @@ mod tests {
         let mut kinds = HashSet::new();
         for s in &spawns {
             let b = world.behavior_of(s.id);
-            assert_ne!(b, MobBehavior::Sentinel, "{} should have a behavior", s.name);
+            assert_ne!(
+                b,
+                MobBehavior::Sentinel,
+                "{} should have a behavior",
+                s.name
+            );
             kinds.insert(std::mem::discriminant(&b));
         }
-        assert!(kinds.len() >= 4, "Broceliande should field varied behaviours");
+        assert!(
+            kinds.len() >= 4,
+            "Broceliande should field varied behaviours"
+        );
         // Every zone has exactly one notable, and its loot all resolves.
         let bosses = spawns.iter().filter(|s| s.boss).count();
         assert_eq!(bosses, BROCELIANDE_ZONES, "one boss per Broceliande zone");

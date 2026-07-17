@@ -12,8 +12,10 @@
 //     u opens the crafting panel where a craft station stands.
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
-//     buys the selected beast and x feeds/tends the one you have. n opens the
-//     housing ledger (buy a deed at the clerk, furnish a home you own from inside).
+//     buys the selected beast and x feeds/tends the one you have. q opens the
+//     Animal Taming panel where a tameable wild beast roams (Enter attempts the
+//     tame). n opens the housing ledger (buy a deed at the clerk, furnish a home
+//     you own from inside).
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory). List panels auto-scroll to
 //     follow the cursor; [ / ] scroll the cursor-less text panels.
@@ -117,6 +119,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Titles
             | Panel::Follow
             | Panel::Stable
+            | Panel::Taming
             | Panel::Housing
             | Panel::Portal
             | Panel::Appearance
@@ -200,6 +203,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             // The housing ledger opens at the clerk or inside a home you own.
             if view.housing.is_some() {
                 state.toggle_panel(Panel::Housing);
+            }
+            InputAction::Handled
+        }
+        b'q' | b'Q' => {
+            // The Animal Taming panel opens where a tameable wild beast roams.
+            if view.taming.is_some() {
+                state.open_taming();
             }
             InputAction::Handled
         }
@@ -379,6 +389,7 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Titles
             | Panel::Follow
             | Panel::Stable
+            | Panel::Taming
             | Panel::Housing
             | Panel::Appearance
             | Panel::Crafting
