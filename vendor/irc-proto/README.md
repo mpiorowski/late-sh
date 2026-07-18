@@ -12,8 +12,7 @@ protocol layer in-tree (server-side numerics, mode quirks, codec tweaks) when
 that is the cleanest implementation path. Keep local changes minimal and note
 them below.
 
-Like `vendor/potatis`, this crate is excluded from `make check`'s first-party
-fmt scope.
+This crate is excluded from `make check`'s first-party fmt scope.
 
 ## Local modifications
 

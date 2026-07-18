@@ -212,5 +212,5 @@ cargo test -p late-dopewars && cargo test -p late-ssh dopewars
 
 ### Possible future work
 - Milestones/chips/awards by scraping the final-score screen (deferred; mirror `nethack/milestone.rs` + `award.rs` + the `scan_screen` scrape in `nethack/state.rs`).
-- Optional shared/competitive market: one `dopewars -S` server with `-o`/`-p` clients per session (single-player ships first).
+- ~~Optional shared/competitive market: one `dopewars -S` server with `-o`/`-p` clients per session.~~ **Evaluated and rejected 2026-07-18**: concurrency is far too low (~1 player/week) for two people to ever share the market, and one shared server makes every deploy wipe all in-progress runs. Cheap to build (supervised `-S` on localhost, spawn `-t -b -o 127.0.0.1 -p 7902 -P <handle>`, thread the handle through the SSH username), so revisit only if concurrent players become a thing.
 - A cross-crate known-answer fingerprint test pinning `derive_client_key` (mirror nethack's KAT), once test-running is re-enabled.
