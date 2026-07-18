@@ -1596,8 +1596,8 @@ mod tests {
         });
         let components = extract_right_sidebar_components(&settings);
         // Stored order kept for known entries, unknown dropped (including
-        // the retired "pet" and "activity" keys), missing (visualizer,
-        // daily) backfilled ENABLED at the end in ALL order: an existing
+        // the retired "pet" and "activity" keys), missing (daily,
+        // visualizer) backfilled ENABLED at the end in ALL order: an existing
         // user's stored list predates newer panels, so they should appear
         // rather than silently stay hidden.
         assert_eq!(
@@ -1612,11 +1612,11 @@ mod tests {
                     enabled: true,
                 },
                 RightSidebarComponentSetting {
-                    component: RightSidebarComponent::Visualizer,
+                    component: RightSidebarComponent::Daily,
                     enabled: true,
                 },
                 RightSidebarComponentSetting {
-                    component: RightSidebarComponent::Daily,
+                    component: RightSidebarComponent::Visualizer,
                     enabled: true,
                 },
             ]

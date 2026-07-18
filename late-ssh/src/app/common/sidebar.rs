@@ -1137,10 +1137,11 @@ mod tests {
     #[test]
     fn friend_names_text_scrolls_past_the_names_that_do_not_fit() {
         let names = vec!["ada".to_string(), "bob".to_string(), "cyd".to_string()];
-        // Marker plus its space leave 10 columns of the 12-wide rail.
-        assert_eq!(friend_names_text(&names, 12, 0), "@ada @bob ");
+        // The full 12-wide rail shows names; the marker was retired so no
+        // column is reserved.
+        assert_eq!(friend_names_text(&names, 12, 0), "@ada @bob @c");
         // Held at the start, then scrolled to the end: the tail is readable.
-        assert_eq!(friend_names_text(&names, 12, 40), " @bob @cyd");
+        assert_eq!(friend_names_text(&names, 12, 40), "da @bob @cyd");
     }
 
     fn line_text(line: &Line<'_>) -> String {
