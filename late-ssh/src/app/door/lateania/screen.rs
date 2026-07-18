@@ -271,6 +271,11 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online:
         "LYS badge, once per account; no chips, only glory",
         22,
     ));
+    lines.push(landing::stat(
+        "Kaethyr Ascendant",
+        "LKA badge, once per account; no chips, only glory",
+        22,
+    ));
     lines.push(Line::from(Span::styled(
         "  Repeat clears keep titles and loot, but these chip payouts are lifetime claims.",
         Style::default().fg(theme::TEXT_FAINT()),

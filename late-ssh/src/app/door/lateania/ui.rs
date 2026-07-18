@@ -1924,6 +1924,12 @@ fn atlas_panel(view: &PlayerView) -> Vec<Line<'static>> {
                 Style::default().fg(theme::BADGE_GOLD()),
             ));
         }
+        if r.here {
+            head.push(Span::styled(
+                "  \u{25C8} you are here",
+                Style::default().fg(theme::MENTION()),
+            ));
+        }
         lines.push(Line::from(head));
 
         if discovered {
@@ -1979,23 +1985,39 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         )),
         Line::raw(""),
     ];
-    // Villages come first in the destination list, then the islands.
+    // Continent gates come first in the destination list, then the villages,
+    // then the islands.
+    let continent_count = super::world::CONTINENT_WAYSTONES.len();
     let village_count = super::archipelago::VILLAGES.len();
-    for (i, (label, _room, here)) in portal.entries.iter().enumerate() {
+    for (i, (label, _room, here, sealed)) in portal.entries.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
-        if i == village_count {
+        if i == continent_count {
+            lines.push(Line::from(Span::styled(
+                "  — the portal villages —",
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
+        }
+        if i == continent_count + village_count {
             lines.push(Line::from(Span::styled(
                 "  — the Shattered Archipelago —",
                 Style::default().fg(theme::TEXT_DIM()),
             )));
         }
         let marker = if selected { ">" } else { " " };
-        let suffix = if *here { "  (here)" } else { "" };
+        let suffix = if *here {
+            "  (here)"
+        } else if *sealed {
+            "  (sealed)"
+        } else {
+            ""
+        };
         let style = if *here {
             Style::default().fg(theme::TEXT_DIM())
+        } else if *sealed {
+            Style::default().fg(theme::TEXT_FAINT())
         } else if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
@@ -2004,6 +2026,11 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
         };
+        let style = if selected && (*here || *sealed) {
+            style.bg(theme::BG_SELECTION())
+        } else {
+            style
+        };
         lines.push(Line::from(Span::styled(
             format!("{marker} {label}{suffix}"),
             style,
@@ -2011,7 +2038,7 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter travel"));
-    lines.push(hint("y", "close"));
+    lines.push(hint("i", "close"));
     (lines, sel_line)
 }
 
@@ -2224,6 +2251,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(hint("c v t", "sheet abilities bag"));
     lines.push(hint("j k", "quests titles"));
     lines.push(hint("r f", "recall follow"));
+    lines.push(hint(";", "nearest haven"));
     lines.push(hint("'", "say (local chat)"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));

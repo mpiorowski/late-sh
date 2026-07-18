@@ -371,6 +371,13 @@ impl State {
         }
     }
 
+    /// Retreat to the nearest safe haven (out of combat only).
+    pub fn retreat(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.retreat_task(self.user_id);
+        }
+    }
+
     /// Open the Follow panel to pick which adventurer to follow.
     pub fn follow(&mut self) {
         self.toggle_panel(Panel::Follow);
@@ -524,8 +531,10 @@ impl State {
             }
             Panel::Portal => {
                 if let Some(portal) = self.view().portal
-                    && let Some((_, room, _)) = portal.entries.get(self.cursor)
+                    && let Some((_, room, _, _)) = portal.entries.get(self.cursor)
                 {
+                    // Sealed gates are still sent; the service answers with
+                    // why the way refuses.
                     self.svc.travel_task(self.user_id, *room);
                     self.panel = Panel::Room;
                 }

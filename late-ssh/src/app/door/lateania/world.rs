@@ -193,6 +193,8 @@ pub struct RegionProgress {
     pub total: usize,
     /// Of those, how many the player has set foot in.
     pub explored: usize,
+    /// Whether the player currently stands in this region.
+    pub here: bool,
     /// Named bosses lairing in the region (where the great loot is).
     pub bosses: usize,
 }
@@ -242,6 +244,13 @@ const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
         "the Matlatesh sea-gate",
     ),
     (
+        "Kaelmyr, the Ashen Reach",
+        KAELMYR_BASE,
+        KAELMYR_BASE + KAELMYR_ZONES as RoomId * KAELMYR_ZONE_STRIDE,
+        "endgame",
+        "the Yssgar ash-gate",
+    ),
+    (
         "The Sunderlakes",
         16_000,
         18_000,
@@ -288,7 +297,11 @@ impl World {
     /// each region it reports how many of its rooms you've set foot in versus how
     /// many exist, how many named bosses lair there (where the great loot is),
     /// and a danger tier. A region you've never entered reads as undiscovered.
-    pub fn region_progress(&self, visited: &HashSet<RoomId>) -> Vec<RegionProgress> {
+    pub fn region_progress(
+        &self,
+        visited: &HashSet<RoomId>,
+        current: RoomId,
+    ) -> Vec<RegionProgress> {
         REGIONS
             .iter()
             .map(|&(name, lo, hi, tier, note)| {
@@ -305,6 +318,7 @@ impl World {
                     note,
                     total,
                     explored: explored.min(total),
+                    here: (lo..hi).contains(&current),
                     bosses,
                 }
             })
@@ -786,8 +800,42 @@ pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
 
 const PORTAL_DESC: &str = "A ring of standing waystones hums with a soft blue light, the air \
     inside it rippling like a heat-haze over water. Step through and it will carry you in a \
-    breath to any other waystone you know of - the far villages, or the drowned isles of the \
-    Shattered Archipelago. Examine it to open the ways.";
+    breath to any other waystone you know of - the far villages, the drowned isles of the \
+    Shattered Archipelago, or the gate of a far country. Press i to open the ways.";
+
+/// The mainland waystones: Embergate's square plus each far country's safe
+/// gate room, so a recall to town never means re-walking a whole gate chain.
+/// The third field names the title the walking gate into that land demands;
+/// the Ways enforce the same lock (`svc::travel` re-checks it and the menu
+/// shows sealed gates dimmed), so fast travel can never skip a progression
+/// gate. A drift test in `svc.rs` keeps these titles equal to the gate consts.
+pub const CONTINENT_WAYSTONES: &[(&str, RoomId, Option<&str>)] = &[
+    ("Embergate, the Town Square", 1, None),
+    ("the Sunderlakes landing", LAKES_BASE, None),
+    ("Broceliande, the forest gate", BROCELIANDE_BASE, None),
+    (
+        "the Sundered Reaches sea-gate",
+        REACHES_BASE,
+        Some("Bane of the King Who Was Promised Nothing"),
+    ),
+    (
+        "Cinderfall Shore, Kaelmyr",
+        KAELMYR_BASE,
+        Some("Bane of Yssgar, the Sundering Deep"),
+    ),
+];
+
+/// Every destination the Ways can offer: the mainland continent gates first,
+/// then the archipelago villages and island landings (which need no title).
+pub fn waystone_destinations() -> Vec<(&'static str, RoomId, Option<&'static str>)> {
+    let mut out: Vec<(&'static str, RoomId, Option<&'static str>)> = CONTINENT_WAYSTONES.to_vec();
+    out.extend(
+        super::archipelago::portal_destinations()
+            .into_iter()
+            .map(|(label, room)| (label, room, None)),
+    );
+    out
+}
 
 /// Portal (and, for the villages, fountain) features for the runtime-generated
 /// fast-travel network - the Embergate waystone, the villages, and every island
@@ -797,13 +845,16 @@ fn waystone_features() -> &'static [Feature] {
     static F: OnceLock<Vec<Feature>> = OnceLock::new();
     F.get_or_init(|| {
         let mut v = Vec::new();
-        // The mainland gateway into the network sits in Embergate's square.
-        v.push(feat(
-            1,
-            "the town waystone",
-            FeatureKind::Portal,
-            PORTAL_DESC,
-        ));
+        // The mainland gateways into the network: Embergate's square plus each
+        // far country's safe gate room.
+        for (_, room, _) in CONTINENT_WAYSTONES {
+            let name = if *room == 1 {
+                "the town waystone"
+            } else {
+                "the gate waystone"
+            };
+            v.push(feat(*room, name, FeatureKind::Portal, PORTAL_DESC));
+        }
         for i in 0..super::archipelago::VILLAGES.len() {
             let room = super::archipelago::village_room(i);
             v.push(feat(
@@ -10948,7 +10999,7 @@ mod tests {
         let world = seed_world();
         // A blank explorer: nothing mapped, but every region reports real totals.
         let none = HashSet::new();
-        let fresh = world.region_progress(&none);
+        let fresh = world.region_progress(&none, 1);
         assert!(!fresh.is_empty(), "the atlas has regions");
         assert!(
             fresh.iter().all(|r| r.explored == 0),
@@ -10964,7 +11015,7 @@ mod tests {
         );
         // Visiting a couple of rooms lights up exactly their region's progress.
         let visited: HashSet<RoomId> = HashSet::from([1u32, 2u32]);
-        let seen = world.region_progress(&visited);
+        let seen = world.region_progress(&visited, 1);
         let home = seen
             .iter()
             .find(|r| r.name.starts_with("Embergate"))
@@ -10973,6 +11024,51 @@ mod tests {
             home.explored, 2,
             "the two visited rooms are counted at home"
         );
+    }
+
+    #[test]
+    fn the_atlas_covers_every_continent_including_kaelmyr() {
+        let world = seed_world();
+        let none = HashSet::new();
+        for probe in [
+            KAELMYR_BASE,
+            LAKES_BASE,
+            BROCELIANDE_BASE,
+            REACHES_BASE,
+            2_000,
+        ] {
+            let regions = world.region_progress(&none, probe);
+            assert!(
+                regions.iter().any(|r| r.here),
+                "room {probe} should fall inside an atlas region"
+            );
+        }
+        // Exactly one region claims the player at a time.
+        let regions = world.region_progress(&none, KAELMYR_BASE);
+        assert_eq!(regions.iter().filter(|r| r.here).count(), 1);
+    }
+
+    #[test]
+    fn continent_waystones_stand_in_real_safe_rooms() {
+        let world = seed_world();
+        for (label, room, _) in CONTINENT_WAYSTONES {
+            let r = world
+                .room(*room)
+                .unwrap_or_else(|| panic!("waystone room for {label} exists"));
+            assert!(r.safe, "the {label} waystone stands in a safe room");
+            assert!(
+                features_at(*room)
+                    .iter()
+                    .any(|f| f.kind == FeatureKind::Portal),
+                "the {label} room carries a Portal feature"
+            );
+        }
+        // Destinations are unique across the whole network.
+        let dests = waystone_destinations();
+        let mut rooms: Vec<RoomId> = dests.iter().map(|(_, r, _)| *r).collect();
+        rooms.sort_unstable();
+        rooms.dedup();
+        assert_eq!(rooms.len(), dests.len(), "destination rooms are unique");
     }
 
     #[test]

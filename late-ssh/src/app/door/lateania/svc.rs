@@ -12,7 +12,7 @@
 // (abilities.rs), and an inventory / equipment / gold / shop economy (items.rs).
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex as StdMutex},
     time::{Duration, Instant},
 };
@@ -26,7 +26,8 @@ use late_core::{
         mud_world_state::MudWorldState,
         profile_award::{
             LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
-            LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
+            LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
+            award_badge, grant_unique_milestone_award,
         },
         reward::{LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY},
         user::User,
@@ -239,6 +240,14 @@ const SUNDERING_DEEP_ACHIEVEMENT: BossAchievement = BossAchievement {
     mob_name: "Yssgar, the Sundering Deep",
     award_category: LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
     // The deepest crown pays no chips: the LYS badge alone marks it.
+    payout: None,
+};
+
+const KAETHYR_ASCENDANT_ACHIEVEMENT: BossAchievement = BossAchievement {
+    mob_name: "Kaethyr Ascendant, Who Sang the God Awake",
+    award_category: LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
+    // Kaelmyr's last fight follows Yssgar's pattern: badge only, no chips,
+    // keeping the chip economy flat past the two paying crowns.
     payout: None,
 };
 
@@ -538,8 +547,9 @@ pub struct HousingView {
 /// The waystone fast-travel menu, present when standing on a portal.
 #[derive(Clone, Debug)]
 pub struct PortalView {
-    /// Each destination: `(label, room id, is_here)`.
-    pub entries: Vec<(String, RoomId, bool)>,
+    /// Each destination: `(label, room id, is_here, is_sealed)`. Sealed gates
+    /// (a continent whose title the player lacks) render dimmed and refuse.
+    pub entries: Vec<(String, RoomId, bool, bool)>,
 }
 
 #[derive(Clone, Debug)]
@@ -1288,6 +1298,10 @@ impl LateaniaService {
 
     pub fn recall_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.recall(user_id));
+    }
+
+    pub fn retreat_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.retreat_to_haven(user_id));
     }
 
     pub fn follow_task(&self, user_id: Uuid) {
@@ -3164,6 +3178,97 @@ impl WorldState {
         self.dirty = true;
     }
 
+    /// Whether a walking progression gate would refuse this single step. The
+    /// silent twin of `can_cross_progression_gate`, used by the haven retreat
+    /// so its pathing can never slip through a sealed gate.
+    fn gate_blocks(&self, user_id: Uuid, from: RoomId, dest: RoomId) -> bool {
+        (from == FIRST_DUNGEON_GATE_FROM
+            && dest == FIRST_DUNGEON_GATE_TO
+            && !self.player_has_title(user_id, FIRST_DUNGEON_GATE_TITLE))
+            || (self.is_living_dark_gateway(from, dest)
+                && !self.player_has_title(user_id, FRONTIER_GATE_TITLE))
+            || (self.is_frontier_gateway(from, dest)
+                && !self.player_has_required_titles(user_id, &FRONTIER_REQUIRED_TITLES))
+            || (self.is_reaches_gateway(from, dest)
+                && !self.player_has_title(user_id, REACHES_GATE_TITLE))
+            || (self.is_kaelmyr_gateway(from, dest)
+                && !self.player_has_title(user_id, KAELMYR_GATE_TITLE))
+    }
+
+    /// Retreat to the nearest haven: a breadth-first walk over the exits the
+    /// player could take on foot, ending at the closest safe room. The
+    /// maze-country answer to being lost - deep in a briar maze it reads as
+    /// "back to this zone's gate" without any per-zone bookkeeping. Out of
+    /// combat only, and it never crosses a gate walking would refuse.
+    fn retreat_to_haven(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
+            return;
+        }
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't slip away in the thick of combat - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        let start = player.room;
+        if self.world.room(start).is_some_and(|r| r.safe) {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                "You already stand in a haven.".to_string(),
+            );
+            return;
+        }
+        let mut queue = VecDeque::from([start]);
+        let mut seen = HashSet::from([start]);
+        let mut haven = None;
+        while let Some(room) = queue.pop_front() {
+            let Some(r) = self.world.room(room) else {
+                continue;
+            };
+            if r.safe {
+                haven = Some(room);
+                break;
+            }
+            for next in r.exits.values() {
+                if !self.gate_blocks(user_id, room, *next) && seen.insert(*next) {
+                    queue.push_back(*next);
+                }
+            }
+        }
+        let Some(haven) = haven else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "No haven answers from here.".to_string(),
+            );
+            return;
+        };
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.previous_room = Some(p.room);
+            p.room = haven;
+            p.visited.insert(haven);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            "You retrace your turnings in a rush, and the quiet of the nearest haven closes around you."
+                .to_string(),
+        );
+        self.describe_room(user_id);
+        self.apply_critter_perks(user_id);
+        self.dirty = true;
+    }
+
     /// Toggle auto-following: with no companion set, begin following another
     /// adventurer in this room; otherwise stop following.
     fn follow_toggle(&mut self, user_id: Uuid) {
@@ -3748,8 +3853,7 @@ impl WorldState {
             self.log_to(
                 user_id,
                 LogKind::System,
-                "Press y to open the ways: step through to any village or island you know of."
-                    .to_string(),
+                "Press i to open the ways: step through to any waystone you know of.".to_string(),
             );
         }
         self.dirty = true;
@@ -3780,10 +3884,27 @@ impl WorldState {
             );
             return;
         }
-        let valid = super::archipelago::portal_destinations()
-            .iter()
-            .any(|(_, r)| *r == dest);
-        if !valid || dest == p.room {
+        let Some((_, _, required)) = super::world::waystone_destinations()
+            .into_iter()
+            .find(|(_, r, _)| *r == dest)
+        else {
+            return;
+        };
+        if dest == p.room {
+            return;
+        }
+        // The Ways honor the same locks as the walking gates: a sealed
+        // continent's waystone refuses until its title is earned.
+        if let Some(title) = required
+            && !self.player_has_title(user_id, title)
+        {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "The waystone hums against your palm, then stills. That far gate is sealed to any but a crowned {title}."
+                ),
+            );
             return;
         }
         if let Some(p) = self.players.get_mut(&user_id) {
@@ -6892,9 +7013,13 @@ impl WorldState {
                 .iter()
                 .any(|f| f.kind == FeatureKind::Portal)
                 .then(|| PortalView {
-                    entries: super::archipelago::portal_destinations()
+                    entries: super::world::waystone_destinations()
                         .into_iter()
-                        .map(|(label, room)| (label.to_string(), room, room == player.room))
+                        .map(|(label, room, required)| {
+                            let sealed = required
+                                .is_some_and(|t| !player.titles.iter().any(|owned| owned == t));
+                            (label.to_string(), room, room == player.room, sealed)
+                        })
                         .collect(),
                 });
 
@@ -6916,7 +7041,7 @@ impl WorldState {
             let minimap =
                 self.world
                     .minimap(player.room, player.previous_room, &player.visited, 3, 2);
-            let atlas = self.world.region_progress(&player.visited);
+            let atlas = self.world.region_progress(&player.visited, player.room);
             let mut quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
                 .filter_map(|z| {
                     super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
@@ -7126,6 +7251,7 @@ fn boss_achievement_for(mob_name: &str) -> Option<BossAchievement> {
         "the Archdemon Mal'gareth" => Some(ARCHDEMON_ACHIEVEMENT),
         "the King Who Was Promised Nothing" => Some(FRONTIER_KING_ACHIEVEMENT),
         "Yssgar, the Sundering Deep" => Some(SUNDERING_DEEP_ACHIEVEMENT),
+        "Kaethyr Ascendant, Who Sang the God Awake" => Some(KAETHYR_ASCENDANT_ACHIEVEMENT),
         _ => None,
     }
 }
@@ -8278,6 +8404,73 @@ mod tests {
     }
 
     #[test]
+    fn continent_waystones_honor_their_walking_gate_titles() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Standing on Embergate's town waystone (room 1): Kaelmyr's far gate
+        // stays sealed until the Yssgar crown is earned.
+        assert_eq!(s.players[&uid(1)].room, 1);
+        s.travel(uid(1), super::super::world::KAELMYR_BASE);
+        assert_eq!(s.players[&uid(1)].room, 1, "a sealed gate refuses the ways");
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(KAELMYR_GATE_TITLE.to_string());
+        s.travel(uid(1), super::super::world::KAELMYR_BASE);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            super::super::world::KAELMYR_BASE,
+            "the crowned traveler passes"
+        );
+        // Open lands need no title, and the town waystone routes home again.
+        s.travel(uid(1), super::super::world::LAKES_BASE);
+        assert_eq!(s.players[&uid(1)].room, super::super::world::LAKES_BASE);
+        s.travel(uid(1), 1);
+        assert_eq!(s.players[&uid(1)].room, 1);
+    }
+
+    #[test]
+    fn continent_waystone_titles_match_the_walking_gates() {
+        for (label, room, required) in super::super::world::CONTINENT_WAYSTONES {
+            if super::super::world::is_kaelmyr_room(*room) {
+                assert_eq!(*required, Some(KAELMYR_GATE_TITLE), "{label}");
+            } else if super::super::world::is_reaches_room(*room) {
+                assert_eq!(*required, Some(REACHES_GATE_TITLE), "{label}");
+            } else {
+                assert_eq!(*required, None, "{label} is an open land");
+            }
+        }
+    }
+
+    #[test]
+    fn retreat_slips_to_the_nearest_haven_only_out_of_combat() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Drop the adventurer a few cells deep into the first Frontier zone.
+        s.players.get_mut(&uid(1)).unwrap().room = 2_003;
+        assert!(
+            !s.world.room(2_003).unwrap().safe,
+            "test premise: an unsafe maze cell"
+        );
+        // Mid-fight, retreat refuses.
+        s.players.get_mut(&uid(1)).unwrap().target = Some(999);
+        s.retreat_to_haven(uid(1));
+        assert_eq!(s.players[&uid(1)].room, 2_003, "no retreating mid-fight");
+        // Out of combat it ends at the closest safe room: the zone's own gate.
+        s.players.get_mut(&uid(1)).unwrap().target = None;
+        s.retreat_to_haven(uid(1));
+        let room = s.players[&uid(1)].room;
+        assert!(s.world.room(room).unwrap().safe, "retreat ends in a haven");
+        assert_eq!(room, 2_000, "the nearest haven is the zone's entrance");
+        // Already safe: retreating again goes nowhere.
+        s.retreat_to_haven(uid(1));
+        assert_eq!(s.players[&uid(1)].room, 2_000);
+    }
+
+    #[test]
     fn class_cannot_be_changed_once_chosen() {
         let mut s = world();
         s.join(uid(1));
@@ -8890,7 +9083,22 @@ mod tests {
             LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY
         );
 
+        let kaethyr = boss_achievement_for("Kaethyr Ascendant, Who Sang the God Awake")
+            .expect("Kaelmyr's last boss should grant an achievement");
+        assert!(
+            kaethyr.payout.is_none(),
+            "Kaethyr's badge is the whole prize; no chip payout"
+        );
+        assert_eq!(
+            kaethyr.award_category,
+            LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY
+        );
+
         assert!(boss_achievement_for("the Elder Treant").is_none());
+        assert!(
+            boss_achievement_for("Kaethyr the Unquenched, Ashen King of Kaelmyr").is_none(),
+            "only the Ascendant form at the Sundering Wound carries the crown"
+        );
     }
 
     #[test]

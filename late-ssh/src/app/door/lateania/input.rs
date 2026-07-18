@@ -243,6 +243,12 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.toggle_panel(Panel::Quests);
             InputAction::Handled
         }
+        b';' => {
+            // Retreat to the nearest safe haven (out of combat only) - the
+            // way back to a maze zone's gate without walking it.
+            state.retreat();
+            InputAction::Handled
+        }
         b'r' | b'R' => {
             // Word of recall: warp back to the Town Square (out of combat only).
             state.recall();
@@ -391,8 +397,10 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Stable
             | Panel::Taming
             | Panel::Housing
+            | Panel::Portal
             | Panel::Appearance
             | Panel::Crafting
+            | Panel::Abilities
     );
     match key {
         b'A' => {
