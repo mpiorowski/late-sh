@@ -872,6 +872,7 @@ impl russh::server::Handler for ClientHandler {
             initial_minesweeper_games,
             lateania_service: self.state.lateania_service.clone(),
             greendragon_service: self.state.greendragon_service.clone(),
+            arcade_handle_service: self.state.arcade_handle_service.clone(),
             daily_service: self.state.daily_service.clone(),
             house_registry: self.state.house_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),

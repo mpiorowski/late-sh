@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use super::state::{Mode, State};
+use super::state::{HandleStatus, Mode, State};
 use crate::app::common::theme;
 use crate::app::door::landing;
 use crate::app::door::rebels::render::blit_screen;
@@ -18,22 +18,72 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
     }
 }
 
+/// The door-screen launcher: the landing with a handle-aware Launch block (the
+/// one-time arcade-name claim prompt, then the play action). Constant three
+/// lines in every handle state, so the chrome never moves as lookups and
+/// claims resolve.
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
-    draw_landing(frame, area, state.is_enabled());
+    if !state.is_enabled() {
+        draw_landing(frame, area, false);
+        return;
+    }
+    let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(theme::TEXT_DIM())));
+    let launch = match state.handle_status() {
+        HandleStatus::Loading => vec![
+            dim("Checking your arcade name...".to_string()),
+            Line::from(""),
+            Line::from(""),
+        ],
+        HandleStatus::Missing { error } => {
+            let notice = match error {
+                Some(msg) => Line::from(Span::styled(msg, Style::default().fg(theme::ERROR()))),
+                None => Line::from(Span::styled(
+                    "Shown publicly with your games. Cannot be changed later.",
+                    Style::default().fg(theme::TEXT_FAINT()),
+                )),
+            };
+            vec![
+                Line::from(vec![
+                    Span::styled("> ", Style::default().fg(theme::SUCCESS())),
+                    Span::styled("claim your arcade name: ", Style::default().fg(theme::TEXT())),
+                    Span::styled(
+                        state.entry_input().to_string(),
+                        Style::default()
+                            .fg(theme::TEXT_BRIGHT())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("_", Style::default().fg(theme::AMBER())),
+                ]),
+                dim("3-20 characters: letters, digits, underscore. Enter claims and plays."
+                    .to_string()),
+                notice,
+            ]
+        }
+        HandleStatus::Claiming => vec![
+            dim(format!("Claiming {}...", state.entry_input())),
+            Line::from(""),
+            Line::from(""),
+        ],
+        HandleStatus::Claimed(name) => vec![
+            landing::action(">", "Enter", "descend for the Orb of Zot", theme::SUCCESS()),
+            dim(format!("Playing as {name}.")),
+            Line::from(""),
+        ],
+        HandleStatus::Failed => vec![
+            Line::from(Span::styled(
+                "Couldn't check your arcade name.",
+                Style::default().fg(theme::ERROR()),
+            )),
+            landing::action(">", "Enter", "retry", theme::SUCCESS()),
+            Line::from(""),
+        ],
+    };
+    render_landing(frame, area, launch);
 }
 
-/// DCSS landing copy, used by both the standalone screen fallback and the Games
-/// hub when DCSS is selected.
+/// DCSS landing copy with the classic one-line Launch block, used by the Games
+/// hub when DCSS is selected (the hub has no per-session door state).
 pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
-    let inner = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(area)[1];
-
     let action_line = if enabled {
         landing::action(">", "Enter", "descend for the Orb of Zot", theme::SUCCESS())
     } else {
@@ -42,6 +92,19 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
             Style::default().fg(theme::ERROR()),
         ))
     };
+    render_landing(frame, area, vec![action_line]);
+}
+
+/// The landing body around a caller-supplied Launch block.
+fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
+    let inner = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(area)[1];
 
     let mut lines = vec![Line::raw("")];
     lines.extend(crawl_logo());
@@ -73,7 +136,9 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         flavor_quote(),
         Line::from(""),
         landing::heading("Launch"),
-        action_line,
+    ]);
+    lines.extend(launch);
+    lines.extend([
         Line::from(""),
         landing::heading("Once Inside"),
         landing::hint("? or F1", "crawl's own in-game help menu", 8),

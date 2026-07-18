@@ -275,6 +275,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             chip_service.clone(),
             db.clone(),
         ),
+        arcade_handle_service: late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone()),
         daily_service: late_ssh::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),
@@ -440,6 +441,7 @@ fn make_app_with_chat_service_and_permissions(
         nethack_port: 2323,
         nethack_secret: String::new(),
         nethack_awards: None,
+        arcade_handle_service: late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone()),
         dcss_enabled: false,
         dcss_host: String::new(),
         dcss_port: 2325,
@@ -611,6 +613,7 @@ pub fn make_app_with_paired_client(
         nethack_port: 2323,
         nethack_secret: String::new(),
         nethack_awards: None,
+        arcade_handle_service: late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone()),
         dcss_enabled: false,
         dcss_host: String::new(),
         dcss_port: 2325,

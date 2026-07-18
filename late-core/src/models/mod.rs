@@ -1,4 +1,5 @@
 pub mod account_link;
+pub mod arcade_handle;
 pub mod artboard;
 pub mod artboard_ban;
 pub mod article;

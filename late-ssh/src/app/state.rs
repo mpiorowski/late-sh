@@ -219,6 +219,9 @@ pub struct SessionConfig {
     pub dcss_host: String,
     pub dcss_port: u16,
     pub dcss_secret: String,
+    /// Accessor for the account's arcade handle (the public door-game name;
+    /// crawl's `-name`), claimed once from the DCSS launcher.
+    pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     /// dopewars door game: reached over SSH like nethack (host `late-dopewars`).
     pub dopewars_enabled: bool,
     pub dopewars_host: String,
@@ -489,6 +492,7 @@ pub struct App {
     pub(crate) dcss_host: String,
     pub(crate) dcss_port: u16,
     pub(crate) dcss_secret: String,
+    pub(crate) arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     pub(crate) dopewars_state: Option<crate::app::door::dopewars::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the dopewars
     /// host so curses gets a real terminfo entry.
@@ -1125,6 +1129,7 @@ impl App {
             dcss_host: config.dcss_host,
             dcss_port: config.dcss_port,
             dcss_secret: config.dcss_secret,
+            arcade_handle_service: config.arcade_handle_service,
             dopewars_state: None,
             dopewars_term: config.term.clone(),
             dopewars_enabled: config.dopewars_enabled,
@@ -1322,6 +1327,7 @@ impl App {
             self.dcss_term.clone(),
             self.dcss_enabled,
             self.repaint_signal.clone(),
+            Some(self.arcade_handle_service.clone()),
         ));
     }
 

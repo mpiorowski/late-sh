@@ -385,6 +385,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_minesweeper_games,
         lateania_service: state.lateania_service.clone(),
         greendragon_service: state.greendragon_service.clone(),
+        arcade_handle_service: state.arcade_handle_service.clone(),
         daily_service: state.daily_service.clone(),
         house_registry: state.house_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),

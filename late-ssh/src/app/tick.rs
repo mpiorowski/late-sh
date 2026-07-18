@@ -337,7 +337,9 @@ impl App {
             && self
                 .dcss_state
                 .as_ref()
-                .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+                // `awaiting_handle` holds the screen through the arcade-name
+                // lookup and claim prompt, which run before any game does.
+                .is_none_or(|s| !s.is_running() && !s.in_exit_grace() && !s.awaiting_handle())
         {
             self.set_screen(Screen::Games);
         }
