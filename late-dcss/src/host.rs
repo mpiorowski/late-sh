@@ -149,6 +149,19 @@ async fn run_bridge(
     cmd.env_clear()
         .arg("-name")
         .arg(&cfg.playname)
+        // Server-side display defaults, applied after any rc file (players have
+        // no rc of their own here). The viewport maxima let the map grow with
+        // the terminal instead of crawl's cramped 33x21 default (81x71 are the
+        // hard caps); use_terminal_default_colours makes crawl inherit the
+        // terminal's default background (pair 0 via ncurses use_default_colors)
+        // so the late.sh theme shows through instead of every cell being
+        // painted ANSI black.
+        .arg("-extra-opt-last")
+        .arg("view_max_width=81")
+        .arg("-extra-opt-last")
+        .arg("view_max_height=71")
+        .arg("-extra-opt-last")
+        .arg("use_terminal_default_colours=true")
         .env("TERM", &cfg.term)
         .env("HOME", &cfg.data_dir)
         .env("LANG", "C.UTF-8")
