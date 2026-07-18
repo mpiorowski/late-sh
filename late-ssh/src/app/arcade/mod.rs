@@ -1,7 +1,6 @@
 pub mod input;
 pub mod le_word;
 pub mod minesweeper;
-pub mod nes_cabinet;
 pub mod nonogram;
 pub mod rubiks_cube;
 pub mod snake;

@@ -7,7 +7,11 @@
 // the growth maths live here; the world wiring (buying, feeding, combat) is in
 // `svc.rs`.
 
-/// A buyable companion species: the fixed template a live `Pet` grows from.
+/// A companion species: the fixed template a live `Pet` grows from. A species is
+/// either **bought** at a Stable (`tame_level == 0`, a positive `price`) or
+/// **tamed** in the wild (`tame_level > 0`, the required Animal Taming level; the
+/// `price` is unused). Both kinds share the same runtime `Pet`, so a tamed beast
+/// fights, is fed, and persists exactly like a bought one.
 #[derive(Clone, Copy, Debug)]
 pub struct PetSpecies {
     /// Stable persistence key (never reorder/rename).
@@ -15,12 +19,16 @@ pub struct PetSpecies {
     pub name: &'static str,
     /// A short glyph shown beside the pet in panels.
     pub glyph: &'static str,
-    /// Purchase price in gold.
+    /// Purchase price in gold (for buyable Stable species; 0 for tameables).
     pub price: i64,
     /// Level-1 health and per-round attack, before loyalty growth.
     pub base_hp: i32,
     pub base_attack: i32,
     pub desc: &'static str,
+    /// Animal Taming level required to tame this beast in the wild. `0` marks a
+    /// buyable Stable companion (not tameable). Rises across the fifty wild
+    /// beasts so taming gets harder and harder.
+    pub tame_level: i32,
 }
 
 /// The companions sold across the capital Stables. Ordered cheapest first.
@@ -33,6 +41,7 @@ pub const PET_SPECIES: &[PetSpecies] = &[
         base_hp: 40,
         base_attack: 6,
         desc: "A loyal hound bred for the shield-wall - eager, brave, and quick to the throat of your foe.",
+        tame_level: 0,
     },
     PetSpecies {
         key: "dire_wolf",
@@ -42,6 +51,7 @@ pub const PET_SPECIES: &[PetSpecies] = &[
         base_hp: 64,
         base_attack: 10,
         desc: "A grey hunter of the deep wood, all sinew and patience, that brings down quarry far above its weight.",
+        tame_level: 0,
     },
     PetSpecies {
         key: "moor_hawk",
@@ -51,6 +61,7 @@ pub const PET_SPECIES: &[PetSpecies] = &[
         base_hp: 30,
         base_attack: 14,
         desc: "A swift raptor that stoops from above in a blur of talons - fragile, but its strikes bite deep.",
+        tame_level: 0,
     },
     PetSpecies {
         key: "cave_bear",
@@ -60,6 +71,7 @@ pub const PET_SPECIES: &[PetSpecies] = &[
         base_hp: 120,
         base_attack: 12,
         desc: "A mountain of fur and muscle from the frostline caverns; slow to rouse, ruinous once it does.",
+        tame_level: 0,
     },
     PetSpecies {
         key: "emberdrake",
@@ -69,12 +81,25 @@ pub const PET_SPECIES: &[PetSpecies] = &[
         base_hp: 90,
         base_attack: 20,
         desc: "A hatchling wyrm with coals for eyes - rare, prized, and worth every coin to those who can afford it.",
+        tame_level: 0,
     },
 ];
 
-/// Look up a species by its stable persistence key.
+impl PetSpecies {
+    /// True for a wild beast tamed via the Animal Taming trade (not a Stable buy).
+    pub fn is_tameable(&self) -> bool {
+        self.tame_level > 0
+    }
+}
+
+/// Look up a species by its stable persistence key, across both the buyable
+/// Stable companions and the fifty tameable wild beasts of Broceliande. Used by
+/// persistence, so a saved pet of either kind reloads correctly.
 pub fn pet_species_by_key(key: &str) -> Option<&'static PetSpecies> {
-    PET_SPECIES.iter().find(|s| s.key == key)
+    PET_SPECIES
+        .iter()
+        .chain(super::taming::TAMEABLE.iter())
+        .find(|s| s.key == key)
 }
 
 /// Loyalty earned per feeding, and the loyalty needed for each level beyond the

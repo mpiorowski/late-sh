@@ -166,7 +166,7 @@ impl RightSidebarComponent {
     /// flexible panel and absorbs leftover rows. Stale stored keys (e.g. the
     /// retired "activity" panel) are dropped on read by `from_key`.
     pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
-        [Self::Visualizer, Self::Music, Self::Daily, Self::Bonsai];
+        [Self::Daily, Self::Visualizer, Self::Music, Self::Bonsai];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -518,8 +518,10 @@ impl User {
                           WHEN 'lateania_archdemon' THEN 'LMG'
                           WHEN 'lateania_frontier_king' THEN 'LKN'
                           WHEN 'lateania_sundering_deep' THEN 'LYS'
+                          WHEN 'lateania_kaethyr_ascendant' THEN 'LKA'
                           WHEN 'nethack_amulet' THEN 'NHA'
                           WHEN 'nethack_ascension' THEN 'NHY'
+                          WHEN 'greendragon_dragon' THEN 'GDS'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -541,8 +543,11 @@ impl User {
                                    WHEN 'snake' THEN 4
                                    WHEN 'lateania_archdemon' THEN 10
                                    WHEN 'lateania_frontier_king' THEN 11
-                                   WHEN 'nethack_amulet' THEN 12
-                                   WHEN 'nethack_ascension' THEN 13
+                                   WHEN 'lateania_sundering_deep' THEN 12
+                                   WHEN 'lateania_kaethyr_ascendant' THEN 13
+                                   WHEN 'nethack_amulet' THEN 14
+                                   WHEN 'nethack_ascension' THEN 15
+                                   WHEN 'greendragon_dragon' THEN 16
                                    ELSE 99
                                  END
                     ) AS badges
@@ -551,7 +556,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'nethack_amulet', 'nethack_ascension')
+                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'greendragon_dragon')
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
@@ -979,14 +984,16 @@ pub struct ChatAuthorMetadata {
 fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
     // Collapse the lesser milestone when its superseding one is present:
-    // Yssgar implies the Frontier King implies the Archdemon, and an Ascension
-    // implies the Amulet. Profile views still show all; chat author labels
-    // show only the highest.
+    // Kaethyr Ascendant implies Yssgar implies the Frontier King implies the
+    // Archdemon, and an Ascension implies the Amulet. Profile views still show
+    // all; chat author labels show only the highest.
+    let has_kaethyr = raw.split_whitespace().any(|badge| badge == "LKA");
     let has_sundering_deep = raw.split_whitespace().any(|badge| badge == "LYS");
     let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LKN");
     let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
     let badges = raw
         .split_whitespace()
+        .filter(|badge| !(has_kaethyr && matches!(*badge, "LYS" | "LKN" | "LMG")))
         .filter(|badge| !(has_sundering_deep && (*badge == "LKN" || *badge == "LMG")))
         .filter(|badge| !(has_frontier_king && *badge == "LMG"))
         .filter(|badge| !(has_ascension && *badge == "NHA"))
@@ -1459,6 +1466,18 @@ mod tests {
     }
 
     #[test]
+    fn chat_profile_award_badges_prefer_kaethyr_over_every_lesser_crown() {
+        assert_eq!(
+            chat_profile_award_badges(Some("LMG LKN LYS LKA".to_string())).as_deref(),
+            Some("LKA")
+        );
+        assert_eq!(
+            chat_profile_award_badges(Some("AW1 LMG LKA CHIP2".to_string())).as_deref(),
+            Some("AW1 LKA CHIP2")
+        );
+    }
+
+    #[test]
     fn chat_profile_award_badges_keep_archdemon_when_it_is_the_best_lateania_badge() {
         assert_eq!(
             chat_profile_award_badges(Some("AW1 LMG CHIP2".to_string())).as_deref(),
@@ -1577,8 +1596,8 @@ mod tests {
         });
         let components = extract_right_sidebar_components(&settings);
         // Stored order kept for known entries, unknown dropped (including
-        // the retired "pet" and "activity" keys), missing (visualizer,
-        // daily) backfilled ENABLED at the end in ALL order: an existing
+        // the retired "pet" and "activity" keys), missing (daily,
+        // visualizer) backfilled ENABLED at the end in ALL order: an existing
         // user's stored list predates newer panels, so they should appear
         // rather than silently stay hidden.
         assert_eq!(
@@ -1593,11 +1612,11 @@ mod tests {
                     enabled: true,
                 },
                 RightSidebarComponentSetting {
-                    component: RightSidebarComponent::Visualizer,
+                    component: RightSidebarComponent::Daily,
                     enabled: true,
                 },
                 RightSidebarComponentSetting {
-                    component: RightSidebarComponent::Daily,
+                    component: RightSidebarComponent::Visualizer,
                     enabled: true,
                 },
             ]

@@ -133,7 +133,6 @@ fn arcade_sections() -> Vec<GuideSection> {
                 "High-score games: 2048, Lateris, Snake, Traffic.".to_string(),
                 "Daily games: Rubik's Cube, Sudoku, Nonograms, Minesweeper, Solitaire, Le Word."
                     .to_string(),
-                "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
             ],
         },
         GuideSection {
@@ -192,19 +191,6 @@ fn arcade_sections() -> Vec<GuideSection> {
                 "Uppercase turns the same face inverse.".to_string(),
                 "s or 0 resets today's scramble.".to_string(),
                 "v or any arrow rotates the view.".to_string(),
-            ],
-        },
-        GuideSection {
-            title: "NES Cabinet",
-            body: vec![
-                "ROMs: Squirrel Domino, Thwaite, DABG, Falling, Brick Breaker, Escape from Pong, RHDE, Concentration Room, Zap Ruder, 2048."
-                    .to_string(),
-                "WASD uses the d-pad; arrows also use the d-pad in fit view.".to_string(),
-                "k is B; l is A.".to_string(),
-                "Space is Select; Enter is Start.".to_string(),
-                "z toggles full-frame fit and readable zoom.".to_string(),
-                "Arrows or Shift+h/j/k/l pan while zoomed.".to_string(),
-                "r resets the current ROM.".to_string(),
             ],
         },
         GuideSection {

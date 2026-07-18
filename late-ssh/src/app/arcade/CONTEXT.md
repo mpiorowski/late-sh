@@ -28,7 +28,6 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `twenty_forty_eight/`, `tetris/`, and `snake/` are high-score games.
 - `traffic/` is a multi-track high-score game. Each track finish is graded to a normalized `0..=1000` score (`Track::grade_time`, from the track's theoretical fastest/slowest completion time, so every track yields a comparable range regardless of its distance/speed definition); crashing before the finish scores nothing. The user's Traffic high score is the **sum** of their per-track bests. Persistence keeps one best per `(user, track_key)` in `traffic_track_scores` plus a mirrored aggregate row in `traffic_high_scores` (`= SUM(track scores)`) so leaderboard queries stay uniform with the other high-score games. `track_key` is the `Track::name`.
 - `rubiks_cube/` is a daily deterministic puzzle game with a real cube state, face turns, a three-face angled render, and a compact net. It records one daily win per user/date, publishes Activity for the once-per-day base chip payout and Hub quest progress, and counts toward Arcade Wins. The in-progress cube persists per user in `rubiks_cube_games` (54-char sticker string + move count, saved fire-and-forget on every move/reset; rows from an older date are ignored on load since the daily scramble is deterministic).
-- `nes_cabinet/` is a Potatis-backed local emulator cabinet for bundled legal/homebrew ROMs: Squirrel Domino, Thwaite, DABG, Falling, Brick Breaker, Escape from Pong, RHDE, Concentration Room, Zap Ruder, and 2048.
 - `sudoku/`, `nonogram/`, `minesweeper/`, `solitaire/`, `le_word/`, and `rubiks_cube/` are daily puzzle games. Le Word has a single global daily word rather than personal runs. Rubik's Cube has one shared daily scramble and no personal mode.
 - `workspace.rs` owns the Arcade leg of the backtick workspace cycle: the `ArcadeStop` closed enum (the six daily puzzle games in lobby order), `unfinished_daily_stops` (today's daily boards with at least one player move and no win — each game state exposes `first_unfinished_daily()` / `has_unfinished_daily()`), and `open_stop` (points the Arcade at the right daily board and sets `is_playing_game`). Real-time games and personal boards never join; `lobby/workspace.rs` consumes this module.
 
@@ -40,7 +39,7 @@ Per-game directories generally follow:
 
 ## Lifecycle
 
-- `late-ssh/src/main.rs` creates the Arcade services: 2048, Lateris, Snake, Sudoku, Nonogram, Solitaire, Minesweeper, Le Word, and Rubik's Cube. NES Cabinet is local per-session state and has no service. It also creates the shared `games::chips::svc::ChipService`. Hub creates the shared leaderboard refresh service.
+- `late-ssh/src/main.rs` creates the Arcade services: 2048, Lateris, Snake, Sudoku, Nonogram, Solitaire, Minesweeper, Le Word, and Rubik's Cube. It also creates the shared `games::chips::svc::ChipService`. Hub creates the shared leaderboard refresh service.
 - `late-ssh/src/session_bootstrap.rs` and `late-ssh/src/ssh.rs` load saved per-user game rows/high scores before `App::new`.
 - `App::new` in `late-ssh/src/app/state.rs` builds one per-session state object per Arcade game.
 - `App::tick` advances active real-time games only while `screen == Screen::Arcade && is_playing_game`.
@@ -65,7 +64,6 @@ Per-game directories generally follow:
 | High-score | 2048, Lateris, Snake | One current run plus best score plus final score events | Monthly and all-time high scores in Hub |
 | High-score (multi-track) | Traffic | One best per track (`traffic_track_scores`) plus aggregate sum (`traffic_high_scores`) plus final score events | Monthly and all-time Traffic high scores in Hub |
 | Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire, Le Word, Rubik's Cube | One daily and one personal slot per user/difficulty or pack, except Le Word's global daily answer and Rubik's shared daily scramble | Daily completion status / Arcade Wins in Hub, plus Hub Quests via Activity |
-| Emulator cabinet | NES Cabinet | Runtime only, bundled ROMs only | None |
 | Economy support | Chips | `user_chips` plus `chip_ledger` | Monthly chip earners in Hub |
 
 Asterion, Blackjack, Chess, Poker, ssHattrick, Tic-Tac-Toe, and Tron are Rooms games, not Arcade games. Cards are shared by Solitaire/Blackjack/Poker; chips are shared by Arcade rewards and room-game payouts/settlements. Keep room runtimes, traits, registry wiring, and UI under `rooms/`.
@@ -138,8 +136,6 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 ## Rendering
 
 - `arcade/ui.rs` renders the lobby header/list and delegates active games to their `ui.rs`.
-- NES Cabinet vendors Potatis under `vendor/potatis/{common,mos6502,nes}` and embeds ROMs from `late-ssh/assets/nes/`. Potatis `Nes` is not `Send` because it uses `Rc<RefCell<...>>`, so `nes_cabinet::state::State` keeps only a sendable frame/control handle in `App` and runs the emulator on a dedicated local thread. The thread is lazy and starts only after a NES lobby entry is launched; leaving the active cabinet pauses emulation so ordinary SSH sessions do not burn a NES loop in the background.
-- The vendored Potatis mapper set includes Sunsoft FME-7 / mapper 69 support, but the current bundled ROM set uses the simpler mapper support already covered by Potatis.
 - The lobby hides the ASCII header when the terminal is short and auto-scrolls the selected entry near the top third of the viewport.
 - `draw_game_frame`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games.
 - Daily puzzle QoL feedback is local to each game UI: Sudoku user-entered values render red only when they duplicate the same number in their row, column, or 3x3 box; Nonogram clue labels render green when the current filled runs satisfy that row/column clue and red when current fills/X marks make that row/column impossible, with the active row/column emphasized through clue text only; Minesweeper flags render green/red after game over based on whether they mark real mines and hidden cells that would open from a currently valid chord are highlighted.
@@ -159,7 +155,6 @@ Current per-game basics:
 - Solitaire: card/tableau/foundation controls live in the game info panel; mouse support maps left-click to select/place/draw stock, right-click to auto-move the clicked card, and wheel events over the board to tableau scroll.
 - Le Word: type `a-z`, `Enter` submits, Backspace deletes, and `!` opens rules.
 - Rubik's Cube: everyone gets the same UTC daily scramble; `u/d/l/r/f/b` turns faces clockwise, uppercase turns inverse, `s`/`0` resets today's scramble, `v` rotates the view right, and arrows rotate the view in their own directions.
-- NES Cabinet: `w/a/s/d` is the d-pad, arrows are also d-pad in fit view, `k`/`b` is B, `l`/`n` is A, Space is Select, Enter is Start, `z` toggles fit/zoom rendering, arrows or `Shift+h/j/k/l` pan the zoom viewport while zoomed, and `r` resets. ROM selection happens from the Arcade lobby entries, not inside the emulator.
 
 Destructive daily/personal puzzle reset keys use a local confirmation flag. Sudoku (`n`/`r`), Minesweeper (`n`), Solitaire (`n`/`r`), and Rubik's Cube (`s`/`0`) set `reset_pending` on the first press and reset only on a repeated reset key. Any ordinary movement, mode/difficulty switch, board edit, card action, face turn, or view change clears the pending flag. Renderers surface a short "press again" tip while pending.
 
@@ -169,7 +164,6 @@ Destructive daily/personal puzzle reset keys use a local confirmation flag. Sudo
 - DB/service tests live under `late-ssh/tests/arcade/` and must use shared testcontainers helpers.
 - Root test policy still applies: agents do not run `cargo test`, `cargo nextest`, or `cargo clippy`.
 - App flow tests outside `tests/arcade/` may assert global Arcade navigation and render copy.
-- Vendored Potatis tests that require upstream `test-roms/` fixtures are ignored in `vendor/potatis/**/tests` because this repo vendors emulator source and bundled homebrew ROM assets, not the upstream emulator test ROM fixture tree.
 
 ## Known Gaps
 

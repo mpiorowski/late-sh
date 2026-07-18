@@ -12,7 +12,7 @@
 // (abilities.rs), and an inventory / equipment / gold / shop economy (items.rs).
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex as StdMutex},
     time::{Duration, Instant},
 };
@@ -26,7 +26,8 @@ use late_core::{
         mud_world_state::MudWorldState,
         profile_award::{
             LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
-            LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
+            LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
+            award_badge, grant_unique_milestone_award,
         },
         reward::{LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY},
         user::User,
@@ -44,19 +45,23 @@ use crate::app::{
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::appearance;
 use super::classes::{ARCHETYPE_LEVEL, ArchetypeDef, Class, level_for_xp, xp_for_level};
+use super::crafting::{recipe, recipe_indices_for};
 use super::damage::{DamageProfile, DamageType, Defense};
 use super::housing::{self, furniture_by_key, plot_of_room};
 use super::items::{
-    CATACOMBS_RELIC_ID, CAVERNS_RELIC_ID, ItemKind, Slot, THORNWOOD_RELIC_ID, item, shop_at,
+    CATACOMBS_RELIC_ID, CAVERNS_RELIC_ID, Item, ItemKind, Slot, THORNWOOD_RELIC_ID, item, shop_at,
 };
 use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
 use super::pets::{Pet, pet_species_by_key};
+use super::skills::{CraftSkill, GatherSkill, TamingSkill, skill_level_for_xp, skill_progress};
 use super::stats::AbilityScores;
+use super::taming::{PetSkillEffect, TAMEABLE, beasts_at, pet_skills_at, tame_chance, tame_xp};
 use super::world::{
-    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RoomId, World,
-    critter_index, critters_at, features_at, frontier_entrance_room, is_frontier_room, seed_world,
+    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RegionProgress,
+    ResourceNode, RoomId, World, craft_stations_at, critter_index, critters_at, features_at,
+    frontier_entrance_room, is_frontier_room, node_index, nodes_at, seed_world,
 };
 
 /// World heartbeat. One combat round resolves per tick.
@@ -163,6 +168,10 @@ const PET_WOUND_PCT: i32 = 30;
 const RESURRECT_COST: i32 = 30;
 /// Monk "Iron Body": percent reduction to incoming physical blows.
 const IRON_BODY_PCT: i32 = 15;
+/// Beastlord "Pack Bond": percent bonus to a companion's attack (and, via the
+/// same fraction, its effective toughness against wounds) plus a share knocked
+/// off its auto-skill cooldowns.
+const BEASTLORD_PET_PCT: i32 = 30;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
 /// Normal death removes this share of carried gold; banked gold is protected.
@@ -182,6 +191,9 @@ const FRONTIER_REQUIRED_TITLES: [&str; 4] = [
 ];
 /// The Sundered Reaches open only to whoever has unmade the Frontier's crown.
 const REACHES_GATE_TITLE: &str = "Bane of the King Who Was Promised Nothing";
+/// Kaelmyr, the Ashen Reach, opens only to whoever has drowned the deepest crown
+/// of the Reaches - the Bane of Yssgar. It is the deepest end-game gate.
+const KAELMYR_GATE_TITLE: &str = "Bane of Yssgar, the Sundering Deep";
 
 /// How often the world autosaves every present character's progress.
 const AUTOSAVE_SECS: u64 = 60;
@@ -228,6 +240,14 @@ const SUNDERING_DEEP_ACHIEVEMENT: BossAchievement = BossAchievement {
     mob_name: "Yssgar, the Sundering Deep",
     award_category: LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
     // The deepest crown pays no chips: the LYS badge alone marks it.
+    payout: None,
+};
+
+const KAETHYR_ASCENDANT_ACHIEVEMENT: BossAchievement = BossAchievement {
+    mob_name: "Kaethyr Ascendant, Who Sang the God Awake",
+    award_category: LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
+    // Kaelmyr's last fight follows Yssgar's pattern: badge only, no chips,
+    // keeping the chip economy flat past the two paying crowns.
     payout: None,
 };
 
@@ -304,6 +324,55 @@ pub struct WildlifeView {
     pub perk: String,
 }
 
+/// One harvestable resource node in the room, for the Resources list.
+#[derive(Clone, Debug)]
+pub struct NodeView {
+    pub name: String,
+    pub note: String,
+    /// The gathering skill it belongs to, e.g. "Woodcutting".
+    pub skill: String,
+    /// True when the player can work it right now (off cooldown and skilled enough).
+    pub gatherable: bool,
+    /// Why it can't be worked, when `gatherable` is false: "needs Mining 16" or
+    /// "regrowing"; empty when it can.
+    pub reason: String,
+}
+
+/// One gathering skill's progress, for the character sheet Skills block.
+#[derive(Clone, Debug)]
+pub struct SkillView {
+    pub name: String,
+    pub level: i32,
+    pub xp_into: i64,
+    pub xp_next: i64,
+}
+
+/// One recipe row in the crafting panel.
+#[derive(Clone, Debug)]
+pub struct CraftEntryView {
+    /// Global recipe index, passed back to `craft`.
+    pub recipe: usize,
+    pub name: String,
+    /// The craft skill it trains, e.g. "Smithing".
+    pub skill: String,
+    /// Compact ingredient list, e.g. "3x Copper Ingot, 1x Oak Plank".
+    pub inputs: String,
+    /// True when it can be made right now (station here, skilled enough, have
+    /// the materials).
+    pub craftable: bool,
+    /// Why it can't be made, when `craftable` is false; empty when it can.
+    pub reason: String,
+}
+
+/// The crafting panel, present when the player stands at any craft station. Lists
+/// every recipe worked at the stations in this room.
+#[derive(Clone, Debug)]
+pub struct CraftView {
+    /// The stations standing here, e.g. "forge, alchemy lab".
+    pub stations: String,
+    pub entries: Vec<CraftEntryView>,
+}
+
 #[derive(Clone, Debug)]
 pub struct OccupantView {
     pub user_id: Uuid,
@@ -314,6 +383,10 @@ pub struct OccupantView {
     pub alive: bool,
     /// The adventurer's composed bio, shown when you profile them.
     pub bio: String,
+    /// This adventurer's stable class key (empty if unclassed), for their portrait.
+    pub class_key: String,
+    /// This adventurer's raw appearance selections, for composing their portrait.
+    pub appearance_idx: Vec<u8>,
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -345,6 +418,25 @@ pub struct InvView {
     pub sell_price: i64,
     /// Compact stat summary for the panel, e.g. "+8 atk" or "heal 30".
     pub stats: String,
+    /// How this gear compares to what's worn in its slot, e.g. "vs worn: +3 atk
+    /// -2 hp", "new slot", or "" for non-gear / the worn item itself.
+    pub compare: String,
+    /// The same comparison as a percent power change (positive = an upgrade,
+    /// shown green; negative = worse, red). None for non-gear or the item
+    /// already equipped. Drives the batch-sell "non-upgrades" filter.
+    pub compare_pct: Option<i32>,
+}
+
+/// A batch-sell request at a merchant. Consumables and equipped gear are never
+/// touched; only loose inventory is sold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SellBatch {
+    /// Every loose piece of gear and every valuable.
+    All,
+    /// Only common-rarity gear (plus valuables).
+    Common,
+    /// Gear that wouldn't improve the character (not an upgrade), plus valuables.
+    NonUpgrades,
 }
 
 /// One shop listing.
@@ -357,6 +449,10 @@ pub struct ShopEntryView {
     pub affordable: bool,
     /// Compact stat summary for the panel, e.g. "+8 atk".
     pub stats: String,
+    /// How this gear compares to what's worn in its slot (see `InvView::compare`).
+    pub compare: String,
+    /// The same comparison as a percent power change (see `InvView::compare_pct`).
+    pub compare_pct: Option<i32>,
 }
 
 /// The player's live companion, for the room/character panels.
@@ -371,6 +467,34 @@ pub struct PetView {
     pub downed: bool,
     /// Loyalty toward the next level, 0-100.
     pub loyalty_pct: i32,
+    /// Auto-skills the pet has unlocked at its level: (name, unlock level). Fire
+    /// automatically in combat.
+    pub skills: Vec<(String, i32)>,
+}
+
+/// One tameable wild beast present in the room, for the Taming panel.
+#[derive(Clone, Debug)]
+pub struct TameEntryView {
+    /// Index into the room's tameable list (passed back to `tame`).
+    pub idx: usize,
+    pub name: String,
+    pub glyph: String,
+    /// Animal Taming level this beast requires.
+    pub req_level: i32,
+    /// The player's success odds right now, 0-100 (0 = under-level or spooked).
+    pub odds: u32,
+    /// A short status: "" when tamable, else "needs Taming N" / "spooked".
+    pub reason: String,
+    pub desc: String,
+}
+
+/// The Animal Taming panel: the tameable beasts roaming this room, with the
+/// player's taming level and odds. Present when a tameable beast is here.
+#[derive(Clone, Debug)]
+pub struct TamingView {
+    /// The player's current Animal Taming level.
+    pub taming_level: i32,
+    pub entries: Vec<TameEntryView>,
 }
 
 /// One companion offered at a Stable.
@@ -420,6 +544,14 @@ pub struct HousingView {
     pub entries: Vec<HousingEntryView>,
 }
 
+/// The waystone fast-travel menu, present when standing on a portal.
+#[derive(Clone, Debug)]
+pub struct PortalView {
+    /// Each destination: `(label, room id, is_here, is_sealed)`. Sealed gates
+    /// (a continent whose title the player lacks) render dimmed and refuse.
+    pub entries: Vec<(String, RoomId, bool, bool)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ShopView {
     pub npc_name: String,
@@ -443,6 +575,8 @@ pub struct PlayerView {
     pub joined: bool,
     pub classed: bool,
     pub class_name: String,
+    /// Stable class key (e.g. "warrior"), for the composed portrait.
+    pub class_key: String,
     pub trait_name: String,
     pub trait_desc: String,
     pub resource_name: String,
@@ -470,6 +604,10 @@ pub struct PlayerView {
     pub following: Option<Uuid>,
     /// Wild creatures sharing the room.
     pub wildlife: Vec<WildlifeView>,
+    /// Harvestable resource nodes in the room (trees, veins, fishing spots...).
+    pub nodes: Vec<NodeView>,
+    /// The player's gathering skills and their progress, for the Skills block.
+    pub skills: Vec<SkillView>,
     pub in_combat_with: Option<String>,
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
@@ -478,12 +616,20 @@ pub struct PlayerView {
     pub pet: Option<PetView>,
     /// The companion vendor, present when standing at a capital Stable.
     pub stable: Option<StableView>,
+    /// The Animal Taming panel, present when a tameable wild beast roams here.
+    pub taming: Option<TamingView>,
     /// The housing ledger, present at the clerk or inside a home you own.
     pub housing: Option<HousingView>,
+    /// The crafting panel, present when standing at any craft station.
+    pub crafting: Option<CraftView>,
+    /// The waystone fast-travel menu, present when standing on a portal.
+    pub portal: Option<PortalView>,
     /// The composed character bio (from the appearance choices).
     pub bio: String,
     /// The appearance/bio builder rows: (field label, chosen option).
     pub appearance: Vec<(String, String)>,
+    /// The raw appearance selection indices, for composing the portrait.
+    pub appearance_idx: Vec<u8>,
     pub log: Vec<LogLine>,
     pub respawning: bool,
     /// True while this player is a corpse (fallen, awaiting rez or release).
@@ -509,6 +655,8 @@ pub struct PlayerView {
     pub features: Vec<FeatureView>,
     /// Overhead map of the explored neighbourhood around the player.
     pub minimap: MiniMap,
+    /// The whole-world atlas: exploration progress per major region (Map panel).
+    pub atlas: Vec<RegionProgress>,
     /// The world clock phase, e.g. "dawn"/"day"/"dusk"/"night".
     pub time_of_day: &'static str,
     /// The current weather, e.g. "clear"/"rain"/"fog"/"storm".
@@ -528,6 +676,7 @@ impl PlayerView {
             joined: false,
             classed: false,
             class_name: String::new(),
+            class_key: String::new(),
             trait_name: String::new(),
             trait_desc: String::new(),
             resource_name: String::new(),
@@ -553,15 +702,21 @@ impl PlayerView {
             occupants: Vec::new(),
             following: None,
             wildlife: Vec::new(),
+            nodes: Vec::new(),
+            skills: Vec::new(),
             in_combat_with: None,
             abilities: Vec::new(),
             inventory: Vec::new(),
             shop: None,
             pet: None,
             stable: None,
+            taming: None,
             housing: None,
+            crafting: None,
+            portal: None,
             bio: String::new(),
             appearance: Vec::new(),
+            appearance_idx: Vec::new(),
             log: Vec::new(),
             respawning: false,
             dead: false,
@@ -576,6 +731,7 @@ impl PlayerView {
             resurrection_cap: 0,
             features: Vec::new(),
             minimap: MiniMap::default(),
+            atlas: Vec::new(),
             time_of_day: "day",
             weather: "clear",
             escort: None,
@@ -587,6 +743,37 @@ impl PlayerView {
 
 pub fn empty_player_view() -> PlayerView {
     PlayerView::empty()
+}
+
+/// A compact comparison of a piece of gear against whatever the player currently
+/// wears in that slot, for the inventory and shop panels. Returns "" for
+/// non-gear and for the worn item itself; "new slot" when nothing is worn there;
+/// otherwise the stat deltas, e.g. "vs worn: +3 atk -2 hp".
+fn compare_to_worn(equipped: &HashMap<Slot, u32>, it: &Item) -> String {
+    let Some(slot) = it.slot() else {
+        return String::new();
+    };
+    match equipped.get(&slot).and_then(|id| item(*id)) {
+        None => "new slot".to_string(),
+        Some(worn) if worn.id == it.id => String::new(),
+        Some(worn) => {
+            let deltas = [
+                (it.mods.attack - worn.mods.attack, "atk"),
+                (it.mods.max_hp - worn.mods.max_hp, "hp"),
+                (it.mods.armor - worn.mods.armor, "arm"),
+            ];
+            let parts: Vec<String> = deltas
+                .iter()
+                .filter(|(d, _)| *d != 0)
+                .map(|(d, label)| format!("{d:+} {label}"))
+                .collect();
+            if parts.is_empty() {
+                "same as worn".to_string()
+            } else {
+                format!("vs worn: {}", parts.join(" "))
+            }
+        }
+    }
 }
 
 impl LateaniaService {
@@ -1084,6 +1271,12 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.feed_pet(user_id));
     }
 
+    /// Attempt to tame the wild beast at index `idx` in the current room's
+    /// tameable list into the player's active companion.
+    pub fn tame_task(&self, user_id: Uuid, idx: usize) {
+        self.mutate(user_id, move |s| s.tame(user_id, idx));
+    }
+
     /// Buy the deed to a housing plot (tier index) at the clerk.
     pub fn buy_deed_task(&self, user_id: Uuid, plot: usize) {
         self.mutate(user_id, move |s| s.buy_deed(user_id, plot));
@@ -1107,6 +1300,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.recall(user_id));
     }
 
+    pub fn retreat_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.retreat_to_haven(user_id));
+    }
+
     pub fn follow_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.follow_toggle(user_id));
     }
@@ -1121,6 +1318,16 @@ impl LateaniaService {
 
     pub fn look_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.look(user_id));
+    }
+
+    /// Work a resource node in the current room (chop/mine/fish/forage/skin).
+    pub fn gather_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.gather(user_id));
+    }
+
+    /// Craft the recipe at a global index, if the station/skill/materials allow.
+    pub fn craft_task(&self, user_id: Uuid, recipe_index: usize) {
+        self.mutate(user_id, move |s| s.craft(user_id, recipe_index));
     }
 
     /// Re-roll ability scores on the selection screen (before a class is chosen).
@@ -1168,6 +1375,16 @@ impl LateaniaService {
 
     pub fn sell_task(&self, user_id: Uuid, item_id: u32) {
         self.mutate(user_id, move |s| s.sell(user_id, item_id));
+    }
+
+    /// Batch-sell loose inventory at a merchant (see `SellBatch`).
+    pub fn sell_batch_task(&self, user_id: Uuid, kind: SellBatch) {
+        self.mutate(user_id, move |s| s.sell_batch(user_id, kind));
+    }
+
+    /// Step through a waystone portal to another landing.
+    pub fn travel_task(&self, user_id: Uuid, dest: RoomId) {
+        self.mutate(user_id, move |s| s.travel(user_id, dest));
     }
 
     pub fn delete_character_task(&self, user_id: Uuid) {
@@ -1429,6 +1646,17 @@ struct PlayerState {
     pet: Option<Pet>,
     /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
     appearance: [u8; appearance::N_FIELDS],
+    /// Gathering-skill xp, keyed by trade; the level is a pure function of xp.
+    /// A missing entry means the trade is untrained (level 1, 0 xp).
+    skills: HashMap<GatherSkill, i64>,
+    /// Crafting-skill xp, keyed by trade (same shape and curve as `skills`).
+    craft_skills: HashMap<CraftSkill, i64>,
+    /// Total Animal Taming xp (the beastmaster trade). Its level is a pure
+    /// function of this, on the same 1..=50 curve. Persisted (schema v14).
+    taming_xp: i64,
+    /// A weapon coated with poison: (damage per tick, strikes remaining). Each
+    /// landed melee hit leaves a poison DoT and spends one charge. Transient.
+    weapon_poison: Option<(i32, u8)>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -1458,6 +1686,33 @@ impl PlayerState {
             }
         }
         (attack, hp, armor)
+    }
+
+    /// Compare a piece of gear against what is worn in its slot, as a percent
+    /// power change (positive = upgrade). `None` for non-gear, an unslotted item,
+    /// or the very item already equipped in that slot.
+    fn compare_gear(&self, it: &super::items::Item) -> Option<i32> {
+        let slot = it.slot()?;
+        if self.equipped.get(&slot) == Some(&it.id) {
+            return None; // this is the equipped item itself
+        }
+        let worn_power = self
+            .equipped
+            .get(&slot)
+            .and_then(|id| item(*id))
+            .map(|w| w.power())
+            .unwrap_or(0);
+        let new_power = it.power();
+        if worn_power == 0 {
+            // Nothing worn: any positive-power gear is a straight gain.
+            return (new_power > 0).then_some(100);
+        }
+        Some((new_power - worn_power) * 100 / worn_power.max(1))
+    }
+
+    /// Whether a piece of gear would improve the character over what is worn.
+    fn is_upgrade(&self, it: &super::items::Item) -> bool {
+        self.compare_gear(it).is_some_and(|pct| pct > 0)
     }
 
     /// The chosen archetype's tuning percentages, or all-zero if none is picked.
@@ -1490,6 +1745,38 @@ impl PlayerState {
     fn armor(&self) -> i32 {
         let (_, _, armor) = self.equipment_mods();
         armor
+    }
+
+    /// Total xp trained in a gathering skill (0 if untrained).
+    fn skill_xp(&self, skill: GatherSkill) -> i64 {
+        self.skills.get(&skill).copied().unwrap_or(0)
+    }
+
+    /// Total xp trained in a crafting skill (0 if untrained).
+    fn craft_xp(&self, skill: CraftSkill) -> i64 {
+        self.craft_skills.get(&skill).copied().unwrap_or(0)
+    }
+
+    /// Current Animal Taming level (1 if untrained).
+    fn taming_level(&self) -> i32 {
+        skill_level_for_xp(self.taming_xp)
+    }
+
+    /// How many of an item id sit in the pack.
+    fn item_count(&self, id: u32) -> u32 {
+        self.inventory.iter().filter(|&&i| i == id).count() as u32
+    }
+
+    /// Remove up to `n` copies of an item id from the pack.
+    fn consume(&mut self, id: u32, mut n: u32) {
+        self.inventory.retain(|&x| {
+            if n > 0 && x == id {
+                n -= 1;
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 
@@ -1778,6 +2065,83 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         repeat: Repeat::Once,
         blurb: "Few return from the floor of all seas. Reach the Sundering Deep and prove it can be done.",
     },
+    // ---- Kaelmyr, the Ashen Reach (the ash-cairn board, off Yssgar) -------
+    BoardQuest {
+        id: 17,
+        board: super::world::KAELMYR_BASE,
+        title: "Cross the Ash-Gate",
+        objective: Objective::Reach {
+            zone: "The Cinderfall Shore",
+        },
+        reward_gold: 300,
+        reward_title: Some("Ash-Walker"),
+        repeat: Repeat::Once,
+        blurb: "A burnt continent lies below the drowned wound. Descend the ash-gate and set foot on Kaelmyr.",
+    },
+    BoardQuest {
+        id: 18,
+        board: super::world::KAELMYR_BASE,
+        title: "Salt the Cinder-Dead",
+        objective: Objective::Bounty {
+            name_contains: "revenant",
+            count: 6,
+        },
+        reward_gold: 700,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "The Reaches' dead wash up and rise again on the burnt strand. Put six of the cinder-dead down.",
+    },
+    BoardQuest {
+        id: 19,
+        board: super::world::KAELMYR_BASE,
+        title: "Break the Emberkin Rite",
+        objective: Objective::Bounty {
+            name_contains: "Emberkin",
+            count: 4,
+        },
+        reward_gold: 760,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "The ash-shamans keep their pyres lit with the living. Scatter four of the Emberkin from the terraces.",
+    },
+    BoardQuest {
+        id: 20,
+        board: super::world::KAELMYR_BASE,
+        title: "Ashen Salvage",
+        objective: Objective::Collect {
+            item: super::items::KAELMYR_SHORE_RELIC_ID,
+            count: 3,
+        },
+        reward_gold: 720,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "Relics of the world's first age wash up on the cinder shore. Bring back three from Kaelmyr.",
+    },
+    BoardQuest {
+        id: 21,
+        board: super::world::KAELMYR_BASE,
+        title: "Reach the Ashen King",
+        objective: Objective::Reach {
+            zone: "The Unquenched Throne",
+        },
+        reward_gold: 1200,
+        reward_title: Some("Throne-Seeker of Kaelmyr"),
+        repeat: Repeat::Once,
+        blurb: "Kaethyr the Unquenched has ruled the ash since the Sundering. Walk to his burning throne and look upon it.",
+    },
+    BoardQuest {
+        id: 22,
+        board: super::world::KAELMYR_BASE,
+        title: "Silence the Hollow Choir",
+        objective: Objective::Bounty {
+            name_contains: "Choir",
+            count: 4,
+        },
+        reward_gold: 820,
+        reward_title: None,
+        repeat: Repeat::Daily,
+        blurb: "The Hollow Choir sings to wake the drowned god beneath the wound. Silence four of the choristers.",
+    },
 ];
 
 fn board_quest(id: u32) -> Option<&'static BoardQuest> {
@@ -1822,6 +2186,14 @@ struct WorldState {
     world_revision: u64,
     /// Hunt cooldowns for `Game` critters, keyed by global WILDLIFE index.
     hunted: HashMap<usize, Instant>,
+    /// Harvest cooldowns for resource nodes, keyed by global NODES index.
+    gathered: HashMap<usize, Instant>,
+    /// Per-player, per-beast cooldown after a *failed* tame: (user, beast index)
+    /// -> when it bolted. A spooked beast won't be approached again for a spell.
+    tame_cooldowns: HashMap<(Uuid, usize), Instant>,
+    /// Pet auto-skill cooldowns: (user, pet-skill index) -> the `world_ticks`
+    /// value at which that skill may next fire. Transient (combat-round timing).
+    pet_skill_cd: HashMap<(Uuid, usize), u64>,
     /// Next id for a runtime-only summoned add (Summoner behavior). Kept well
     /// clear of authored spawn ids so the two never collide.
     next_summon_id: u32,
@@ -1842,6 +2214,18 @@ const SAVED_HOUSE_FURNITURE_LIMIT: usize = 512;
 const TEMPLE_ROOM: RoomId = 4;
 /// How long a hunted game critter stays gone before it wanders back.
 const GAME_RESPAWN: Duration = Duration::from_secs(40);
+/// How long a harvested resource node stays depleted before it regrows.
+const NODE_RESPAWN: Duration = Duration::from_secs(45);
+/// How long a beast stays spooked (and un-approachable) after a failed tame.
+const TAME_COOLDOWN: Duration = Duration::from_secs(30);
+/// Poison damage per tick applied by a coated weapon, by poison tier (0..5).
+const POISON_PER_TICK: [i32; 5] = [4, 8, 14, 22, 34];
+/// Strikes a single weapon-coating lasts before the poison is spent.
+const POISON_CHARGES: u8 = 5;
+/// Ticks each poisoned strike festers in the foe.
+const POISON_DOT_TICKS: u8 = 3;
+/// Ticks a cooked meal's well-fed regen lasts.
+const WELL_FED_TICKS: u8 = 8;
 
 impl WorldState {
     fn new(room_id: Uuid, world: World) -> Self {
@@ -1880,6 +2264,9 @@ impl WorldState {
             world_dirty: false,
             world_revision: 0,
             hunted: HashMap::new(),
+            gathered: HashMap::new(),
+            tame_cooldowns: HashMap::new(),
+            pet_skill_cd: HashMap::new(),
             next_summon_id: SUMMON_ID_START,
             world_ticks: 0,
             world_boss: None,
@@ -1958,6 +2345,10 @@ impl WorldState {
             archetype: None,
             pet: None,
             appearance: [0; appearance::N_FIELDS],
+            skills: HashMap::new(),
+            craft_skills: HashMap::new(),
+            taming_xp: 0,
+            weapon_poison: None,
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
@@ -2160,6 +2551,20 @@ impl WorldState {
             p.board_progress = saved.board_progress.clone();
             p.board_done = saved.board_done.clone();
             p.quest_cooldowns = saved.quest_cooldowns.clone();
+            // Restore gathering-skill xp (unknown keys are dropped, so retiring a
+            // trade never breaks a save).
+            p.skills = saved
+                .skills
+                .iter()
+                .filter_map(|(key, xp)| GatherSkill::from_key(key).map(|s| (s, *xp)))
+                .collect();
+            p.craft_skills = saved
+                .craft_skills
+                .iter()
+                .filter_map(|(key, xp)| CraftSkill::from_key(key).map(|s| (s, *xp)))
+                .collect();
+            // Restore Animal Taming xp (0 for pre-taming saves).
+            p.taming_xp = saved.taming_xp.max(0);
             // Restore the chosen archetype (ignored if the key is unknown or no
             // longer matches the class, e.g. a respec/rename).
             p.archetype = saved
@@ -2252,6 +2657,17 @@ impl WorldState {
                 .map(|plot| self.saved_house_furniture_for_plot(user_id, plot))
                 .unwrap_or_default(),
             appearance: p.appearance.to_vec(),
+            skills: p
+                .skills
+                .iter()
+                .map(|(s, xp)| (s.key().to_string(), *xp))
+                .collect(),
+            craft_skills: p
+                .craft_skills
+                .iter()
+                .map(|(s, xp)| (s.key().to_string(), *xp))
+                .collect(),
+            taming_xp: p.taming_xp,
         }))
     }
 
@@ -2489,6 +2905,11 @@ impl WorldState {
                 "Beyond the sea-gate lie the Sundered Reaches: a drowned realm crueller than any Frontier mile. Press {} again if you truly mean to pass.",
                 dir_input_hint(dir)
             ))
+        } else if self.is_kaelmyr_gateway(from, dest) {
+            Some(format!(
+                "Below Yssgar's chamber gapes the wound the seas fled into, and beyond it lies Kaelmyr, the Ashen Reach: a burnt continent older than the world's drowning. Nothing you have faced compares. Press {} again if you truly mean to descend.",
+                dir_input_hint(dir)
+            ))
         } else {
             None
         };
@@ -2525,6 +2946,11 @@ impl WorldState {
     /// The sea-gate: stepping from Matlatesh's square into the Sundered Reaches.
     fn is_reaches_gateway(&self, from: RoomId, dest: RoomId) -> bool {
         from == super::world::MATLATESH_SQUARE && super::world::is_reaches_room(dest)
+    }
+
+    /// The ash-gate: stepping from Yssgar's Reaches chamber down into Kaelmyr.
+    fn is_kaelmyr_gateway(&self, from: RoomId, dest: RoomId) -> bool {
+        super::world::is_reaches_room(from) && super::world::is_kaelmyr_room(dest)
     }
 
     fn can_cross_progression_gate(&mut self, user_id: Uuid, from: RoomId, dest: RoomId) -> bool {
@@ -2574,6 +3000,18 @@ impl WorldState {
                 user_id,
                 LogKind::System,
                 "The sea-gate stands sealed. Only one crowned Bane of the King Who Was Promised Nothing may pass into the Sundered Reaches.".to_string(),
+            );
+            return false;
+        }
+
+        if self.is_kaelmyr_gateway(from, dest)
+            && !self.player_has_title(user_id, KAELMYR_GATE_TITLE)
+        {
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "The wound stays shut against you. Only one who has drowned Yssgar - a crowned Bane of Yssgar, the Sundering Deep - may descend into Kaelmyr.".to_string(),
             );
             return false;
         }
@@ -2642,6 +3080,8 @@ impl WorldState {
             format!("{} (dangerous Frontier)", dir.label())
         } else if self.is_reaches_gateway(from, dest) {
             format!("{} (the Sundered Reaches)", dir.label())
+        } else if self.is_kaelmyr_gateway(from, dest) {
+            format!("{} (Kaelmyr, the Ashen Reach)", dir.label())
         } else {
             dir.label().to_string()
         }
@@ -2731,6 +3171,97 @@ impl WorldState {
             user_id,
             LogKind::Loot,
             "You speak the word of recall. The world folds soft as cloth, and the lanternlight of Embergate's Town Square rises around you."
+                .to_string(),
+        );
+        self.describe_room(user_id);
+        self.apply_critter_perks(user_id);
+        self.dirty = true;
+    }
+
+    /// Whether a walking progression gate would refuse this single step. The
+    /// silent twin of `can_cross_progression_gate`, used by the haven retreat
+    /// so its pathing can never slip through a sealed gate.
+    fn gate_blocks(&self, user_id: Uuid, from: RoomId, dest: RoomId) -> bool {
+        (from == FIRST_DUNGEON_GATE_FROM
+            && dest == FIRST_DUNGEON_GATE_TO
+            && !self.player_has_title(user_id, FIRST_DUNGEON_GATE_TITLE))
+            || (self.is_living_dark_gateway(from, dest)
+                && !self.player_has_title(user_id, FRONTIER_GATE_TITLE))
+            || (self.is_frontier_gateway(from, dest)
+                && !self.player_has_required_titles(user_id, &FRONTIER_REQUIRED_TITLES))
+            || (self.is_reaches_gateway(from, dest)
+                && !self.player_has_title(user_id, REACHES_GATE_TITLE))
+            || (self.is_kaelmyr_gateway(from, dest)
+                && !self.player_has_title(user_id, KAELMYR_GATE_TITLE))
+    }
+
+    /// Retreat to the nearest haven: a breadth-first walk over the exits the
+    /// player could take on foot, ending at the closest safe room. The
+    /// maze-country answer to being lost - deep in a briar maze it reads as
+    /// "back to this zone's gate" without any per-zone bookkeeping. Out of
+    /// combat only, and it never crosses a gate walking would refuse.
+    fn retreat_to_haven(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
+            return;
+        }
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't slip away in the thick of combat - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        let start = player.room;
+        if self.world.room(start).is_some_and(|r| r.safe) {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                "You already stand in a haven.".to_string(),
+            );
+            return;
+        }
+        let mut queue = VecDeque::from([start]);
+        let mut seen = HashSet::from([start]);
+        let mut haven = None;
+        while let Some(room) = queue.pop_front() {
+            let Some(r) = self.world.room(room) else {
+                continue;
+            };
+            if r.safe {
+                haven = Some(room);
+                break;
+            }
+            for next in r.exits.values() {
+                if !self.gate_blocks(user_id, room, *next) && seen.insert(*next) {
+                    queue.push_back(*next);
+                }
+            }
+        }
+        let Some(haven) = haven else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "No haven answers from here.".to_string(),
+            );
+            return;
+        };
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.previous_room = Some(p.room);
+            p.room = haven;
+            p.visited.insert(haven);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            "You retrace your turnings in a rush, and the quiet of the nearest haven closes around you."
                 .to_string(),
         );
         self.describe_room(user_id);
@@ -2904,6 +3435,229 @@ impl WorldState {
         );
         self.dirty = true;
         true
+    }
+
+    /// Work a resource node in the current room: harvest the highest-tier node
+    /// the player qualifies for, granting its raw material and skill xp. Nodes
+    /// don't need a safe/unsafe room and never involve combat.
+    fn gather(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            return;
+        }
+        let room_id = player.room;
+        if nodes_at(room_id).is_empty() {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                "There's nothing to gather here.".to_string(),
+            );
+            return;
+        }
+        // `try_gather` logs its own reason when a node is present but unworkable.
+        self.try_gather(user_id, room_id);
+    }
+
+    /// Harvest the best node in the room the player can work right now. Returns
+    /// true if a material was taken. When a node is present but out of reach
+    /// (under-skilled) or still regrowing, it logs why and returns false.
+    fn try_gather(&mut self, user_id: Uuid, room_id: RoomId) -> bool {
+        let now = Instant::now();
+        let Some(player) = self.players.get(&user_id) else {
+            return false;
+        };
+        let nodes = nodes_at(room_id);
+
+        // Pick the highest-tier node the player qualifies for and that is off
+        // cooldown. Also remember the toughest node they're too unskilled for,
+        // and whether anything here is merely regrowing, for a helpful message.
+        let mut choice: Option<(usize, &'static ResourceNode)> = None;
+        let mut under_skilled: Option<(&'static ResourceNode, i32)> = None;
+        let mut regrowing = false;
+        for &n in &nodes {
+            let Some(ni) = node_index(n) else {
+                continue;
+            };
+            let level = skill_level_for_xp(player.skill_xp(n.skill));
+            if level < n.level_req {
+                if under_skilled.is_none_or(|(u, _)| n.tier > u.tier) {
+                    under_skilled = Some((n, level));
+                }
+                continue;
+            }
+            let ready = match self.gathered.get(&ni) {
+                Some(t) => now.duration_since(*t) >= NODE_RESPAWN,
+                None => true,
+            };
+            if !ready {
+                regrowing = true;
+                continue;
+            }
+            if choice.is_none_or(|(_, c)| n.tier > c.tier) {
+                choice = Some((ni, n));
+            }
+        }
+
+        let Some((ni, node)) = choice else {
+            if let Some((n, level)) = under_skilled {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!(
+                        "You can't work {} yet - it needs {} level {} (yours is {level}).",
+                        n.name,
+                        n.skill.label(),
+                        n.level_req,
+                    ),
+                );
+            } else if regrowing {
+                self.log_to(
+                    user_id,
+                    LogKind::Normal,
+                    "The resources here need time to recover.".to_string(),
+                );
+            }
+            return false;
+        };
+
+        self.gathered.insert(ni, now);
+        let skill = node.skill;
+        let yield_item = node.yield_item;
+        let gained = node.xp;
+        let node_name = node.name;
+        let item_name = item(yield_item)
+            .map(|i| i.name.to_string())
+            .unwrap_or_else(|| "something".to_string());
+        let (before, after) = if let Some(p) = self.players.get_mut(&user_id) {
+            p.inventory.push(yield_item);
+            let cur = p.skill_xp(skill);
+            let before = skill_level_for_xp(cur);
+            let new_xp = cur + gained as i64;
+            p.skills.insert(skill, new_xp);
+            (before, skill_level_for_xp(new_xp))
+        } else {
+            return false;
+        };
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "You {} {node_name} and take {item_name}. (+{gained} {} xp)",
+                skill.verb(),
+                skill.label(),
+            ),
+        );
+        if after > before {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {} rises to level {after}!", skill.label()),
+            );
+        }
+        self.dirty = true;
+        true
+    }
+
+    /// Craft the recipe at `recipe_index`: requires the matching station in the
+    /// room, enough craft-skill level, and all input materials. Consumes the
+    /// inputs, adds the output, and trains the craft skill.
+    fn craft(&mut self, user_id: Uuid, recipe_index: usize) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(rc) = recipe(recipe_index) else {
+            return;
+        };
+        // Gather everything decidable under a read borrow, then drop it.
+        let room_id;
+        let level;
+        let missing: Option<(u32, u32)>;
+        {
+            let Some(player) = self.players.get(&user_id) else {
+                return;
+            };
+            if player.respawn_at.is_some() {
+                return;
+            }
+            room_id = player.room;
+            level = skill_level_for_xp(player.craft_xp(rc.skill));
+            missing = rc
+                .inputs
+                .iter()
+                .find(|ing| player.item_count(ing.item) < ing.qty)
+                .map(|ing| (ing.item, ing.qty));
+        }
+        if !craft_stations_at(room_id).contains(&rc.skill) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You need a {} to make that.", rc.skill.station()),
+            );
+            return;
+        }
+        if level < rc.level_req {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "Your {} ({level}) isn't skilled enough - that needs level {}.",
+                    rc.skill.label(),
+                    rc.level_req,
+                ),
+            );
+            return;
+        }
+        if let Some((item_id, qty)) = missing {
+            let name = item(item_id).map(|i| i.name).unwrap_or("materials");
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You don't have the materials ({qty}x {name})."),
+            );
+            return;
+        }
+
+        let out_name = item(rc.output)
+            .map(|i| i.name.to_string())
+            .unwrap_or_else(|| "something".to_string());
+        let (before, after) = {
+            let p = self.players.get_mut(&user_id).expect("player present");
+            for ing in &rc.inputs {
+                p.consume(ing.item, ing.qty);
+            }
+            for _ in 0..rc.output_qty {
+                p.inventory.push(rc.output);
+            }
+            let cur = p.craft_xp(rc.skill);
+            p.craft_skills.insert(rc.skill, cur + rc.xp as i64);
+            (
+                skill_level_for_xp(cur),
+                skill_level_for_xp(cur + rc.xp as i64),
+            )
+        };
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "You {} {out_name}. (+{} {} xp)",
+                rc.skill.verb(),
+                rc.xp,
+                rc.skill.label(),
+            ),
+        );
+        if after > before {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {} rises to level {after}!", rc.skill.label()),
+            );
+        }
+        self.dirty = true;
     }
 
     fn look(&mut self, user_id: Uuid) {
@@ -3095,8 +3849,75 @@ impl WorldState {
                 LogKind::System,
                 "Press n to open the housing ledger: buy a deed here, or furnish a home you own from inside it.".to_string(),
             );
+        } else if feat.kind == FeatureKind::Portal {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Press i to open the ways: step through to any waystone you know of.".to_string(),
+            );
         }
         self.dirty = true;
+    }
+
+    /// Step through a waystone to another. Only works when the player stands on a
+    /// portal, is out of combat, and the destination is a real portal landing.
+    fn travel(&mut self, user_id: Uuid, dest: RoomId) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if p.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't step through while fighting.".to_string(),
+            );
+            return;
+        }
+        let on_portal = features_at(p.room)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Portal);
+        if !on_portal {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "There is no waystone here to step through.".to_string(),
+            );
+            return;
+        }
+        let Some((_, _, required)) = super::world::waystone_destinations()
+            .into_iter()
+            .find(|(_, r, _)| *r == dest)
+        else {
+            return;
+        };
+        if dest == p.room {
+            return;
+        }
+        // The Ways honor the same locks as the walking gates: a sealed
+        // continent's waystone refuses until its title is earned.
+        if let Some(title) = required
+            && !self.player_has_title(user_id, title)
+        {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "The waystone hums against your palm, then stills. That far gate is sealed to any but a crowned {title}."
+                ),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.previous_room = Some(p.room);
+            p.room = dest;
+            p.visited.insert(dest);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Travel,
+            "The waystone takes you in a breath of blue light...".to_string(),
+        );
+        self.describe_room(user_id);
     }
 
     fn board_quest_available(&self, p: &PlayerState, q: &BoardQuest) -> bool {
@@ -3564,8 +4385,8 @@ impl WorldState {
 
     fn spell_damage(&self, class: Class, base: i32, user_id: Uuid) -> i32 {
         let mut dmg = base;
-        if class == Class::Mage {
-            dmg += dmg / 5; // Arcane Mastery
+        if class == Class::Mage || class == Class::Runemaster {
+            dmg += dmg / 5; // Arcane Mastery / Runic Overflow
         }
         if class == Class::Ranger {
             // Hunter's Instinct: more vs wounded foe.
@@ -3685,9 +4506,13 @@ impl WorldState {
             p.target = None;
             p.xp += xp as i64;
             p.gold += gold as i64;
-            // Necromancer "Soul Harvest" takes both health and Souls from a kill;
-            // Warlock "Pact of Souls" feeds only the pact (Mana).
-            if p.class == Some(Class::Necromancer) {
+            // Necromancer "Soul Harvest" and Spiritmaster "Spirit Siphon" take both
+            // health and Souls from a kill; Warlock "Pact of Souls" feeds only the
+            // pact (Mana).
+            if matches!(
+                p.class,
+                Some(Class::Necromancer) | Some(Class::Spiritmaster)
+            ) {
                 let life = (p.max_hp() / 12).max(6);
                 let souls = (p.max_resource / 8).max(5);
                 p.hp = (p.hp + life).min(p.max_hp());
@@ -3867,6 +4692,13 @@ impl WorldState {
             p.hp = p.max_hp();
             p.resource = p.max_resource;
         }
+        // Level-up is a moment: lead with a bold banner, then the per-level
+        // detail. Full heal + resource already applied above.
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("★═══ LEVEL UP! You are now level {new_level}. ═══★"),
+        );
         // Every level is a real reward: announce the concrete stat gains, any
         // ability learned, and the named milestone at every fifth level.
         let res_label = class.resource().label();
@@ -3897,7 +4729,24 @@ impl WorldState {
                 self.log_to(
                     user_id,
                     LogKind::Loot,
-                    format!("  Milestone - {name}! Hard-won growth toughens you (permanent +HP)."),
+                    format!(
+                        "  ✦ Milestone - {name}! Hard-won growth toughens you (permanent +HP)."
+                    ),
+                );
+                // Milestones are a big deal: the whole world hears of it.
+                self.log_all(format!(
+                    "A hero rises: an adventurer has reached the rank of {name}."
+                ));
+            }
+            if lvl == Class::MAX_LEVEL {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    "  ⚔ You have reached the pinnacle - level 50, the height of your calling. Few ever stand here.".to_string(),
+                );
+                self.log_all(
+                    "The bells of Embergate ring: an adventurer has reached level 50, the pinnacle of their calling!"
+                        .to_string(),
                 );
             }
         }
@@ -4012,6 +4861,11 @@ impl WorldState {
 
     fn use_item(&mut self, user_id: Uuid, item_id: u32) {
         let Some(it) = item(item_id) else { return };
+        // Poisons aren't drunk - they coat your weapon.
+        if let Some(tier) = super::items::poison_tier(item_id) {
+            self.coat_weapon(user_id, item_id, tier);
+            return;
+        }
         let ItemKind::Consumable { heal, restore } = it.kind else {
             self.log_to(
                 user_id,
@@ -4028,6 +4882,11 @@ impl WorldState {
         if !has {
             return;
         }
+        // Cooked food grants a well-fed regen on top of its immediate heal, and
+        // so do the rarest Sunderlakes fish (their "special" - see fish_well_fed).
+        let well_fed = super::items::food_tier(item_id)
+            .map(|t| 2 + t as i32)
+            .or_else(|| super::items::fish_well_fed(item_id));
         if let Some(p) = self.players.get_mut(&user_id) {
             if let Some(pos) = p.inventory.iter().position(|i| *i == item_id) {
                 p.inventory.remove(pos);
@@ -4035,8 +4894,43 @@ impl WorldState {
             let max = p.max_hp();
             p.hp = (p.hp + heal).min(max);
             p.resource = (p.resource + restore).min(p.max_resource);
+            if let Some(regen) = well_fed {
+                p.self_effects.push(ActiveEffect {
+                    kind: AbilityEffect::HealOverTime,
+                    magnitude: regen,
+                    remaining: WELL_FED_TICKS,
+                });
+            }
         }
-        self.log_to(user_id, LogKind::Loot, format!("You use {}.", it.name));
+        let verb = if well_fed.is_some() { "eat" } else { "use" };
+        self.log_to(user_id, LogKind::Loot, format!("You {verb} {}.", it.name));
+        self.dirty = true;
+    }
+
+    /// Coat the player's weapon with a poison: each landed melee hit will leave a
+    /// poison DoT until the charges run out. Consumes the vial.
+    fn coat_weapon(&mut self, user_id: Uuid, item_id: u32, tier: u32) {
+        let has = self
+            .players
+            .get(&user_id)
+            .map(|p| p.inventory.contains(&item_id))
+            .unwrap_or(false);
+        if !has {
+            return;
+        }
+        let per_tick = POISON_PER_TICK[(tier as usize).min(POISON_PER_TICK.len() - 1)];
+        let name = item(item_id).map(|i| i.name).unwrap_or("poison");
+        if let Some(p) = self.players.get_mut(&user_id) {
+            if let Some(pos) = p.inventory.iter().position(|i| *i == item_id) {
+                p.inventory.remove(pos);
+            }
+            p.weapon_poison = Some((per_tick, POISON_CHARGES));
+        }
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            format!("You coat your weapon with {name} ({POISON_CHARGES} strikes)."),
+        );
         self.dirty = true;
     }
 
@@ -4100,6 +4994,72 @@ impl WorldState {
             user_id,
             LogKind::Loot,
             format!("You sell {} for {}g.", it.name, price),
+        );
+    }
+
+    /// Which kind of batch-sell was requested.
+    fn sell_batch(&mut self, user_id: Uuid, kind: SellBatch) {
+        if shop_at(self.players.get(&user_id).map(|p| p.room).unwrap_or(0)).is_none() {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You need a merchant to sell.".to_string(),
+            );
+            return;
+        }
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        // Decide which pack items to sell. Equipped gear and consumables are
+        // always kept; the batch only touches loose inventory.
+        let doomed: Vec<u32> = p
+            .inventory
+            .iter()
+            .copied()
+            .filter(|id| {
+                let Some(it) = item(*id) else { return false };
+                match it.kind {
+                    ItemKind::Consumable { .. } => false, // never dump potions
+                    ItemKind::Valuable => true,           // pure sell-fodder, always goes
+                    ItemKind::Equipment(_) => match kind {
+                        SellBatch::All => true,
+                        SellBatch::Common => it.rarity == super::items::Rarity::Common,
+                        // "won't improve the character": not an upgrade over worn gear.
+                        SellBatch::NonUpgrades => !p.is_upgrade(it),
+                    },
+                }
+            })
+            .collect();
+        if doomed.is_empty() {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Nothing to sell that way.".to_string(),
+            );
+            return;
+        }
+        let mut count = 0;
+        let mut total = 0;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            for id in &doomed {
+                if let Some(pos) = p.inventory.iter().position(|i| i == id) {
+                    p.inventory.remove(pos);
+                    let price = item(*id).map(|it| it.sell_price()).unwrap_or(1);
+                    p.gold += price;
+                    total += price;
+                    count += 1;
+                }
+            }
+        }
+        let what = match kind {
+            SellBatch::All => "loose gear and valuables",
+            SellBatch::Common => "common items",
+            SellBatch::NonUpgrades => "items that wouldn't improve you",
+        };
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You sell {count} {what} for {total}g."),
         );
     }
 
@@ -4213,9 +5173,9 @@ impl WorldState {
             if let Some(p) = self.players.get_mut(uid) {
                 if p.class.is_some() && p.respawn_at.is_none() {
                     p.resource = (p.resource + p.resource_regen).min(p.max_resource);
-                    // Bard trait "Battle Hymn": Tempo keeps perfect time and
-                    // returns faster than other resources.
-                    if p.class == Some(Class::Bard) {
+                    // Bard "Battle Hymn" and Skald "War-Chant": Tempo keeps perfect
+                    // time and returns faster than other resources.
+                    if matches!(p.class, Some(Class::Bard) | Some(Class::Skald)) {
                         let beat = 2 + p.level / 10;
                         p.resource = (p.resource + beat).min(p.max_resource);
                     }
@@ -4340,18 +5300,66 @@ impl WorldState {
                 LogKind::Combat,
                 format!("You strike {mob_name} for {dealt} physical{tag}."),
             );
+            // Valewalker "Reaping Harvest": each landed melee strike draws a little
+            // of the wild's vigour back into the reaper.
+            if class == Some(Class::Valewalker) {
+                let mend = self
+                    .players
+                    .get(&user_id)
+                    .map(|p| (3 + p.level / 4).max(1))
+                    .unwrap_or(0);
+                if mend > 0 {
+                    self.heal_player(user_id, mend);
+                }
+            }
             if dead {
                 self.kill_mob(user_id, mob_id);
                 continue;
             }
+            // A poison-coated weapon leaves a festering DoT in the struck foe and
+            // spends one charge (the target is the player's current mob).
+            let poison = self.players.get(&user_id).and_then(|p| p.weapon_poison);
+            if let Some((per_tick, charges)) = poison {
+                self.seed_mob_dot(
+                    user_id,
+                    per_tick,
+                    DamageType::Poison,
+                    POISON_DOT_TICKS,
+                    "Your poison",
+                );
+                if let Some(p) = self.players.get_mut(&user_id) {
+                    let left = charges.saturating_sub(1);
+                    p.weapon_poison = (left > 0).then_some((per_tick, left));
+                }
+                if charges <= 1 {
+                    self.log_to(
+                        user_id,
+                        LogKind::System,
+                        "The last of the poison is spent.".to_string(),
+                    );
+                }
+            }
             // A living, fighting companion piles onto the same target. If its
-            // bite finishes the foe, the kill is credited to its owner.
-            if let Some((pet_glyph, pet_name, pet_atk)) = self
+            // bite finishes the foe, the kill is credited to its owner. A
+            // Beastlord's "Pack Bond" empowers that companion (see pet_power_pct).
+            let pet_bonus = if class == Some(Class::Beastlord) {
+                BEASTLORD_PET_PCT
+            } else {
+                0
+            };
+            if let Some((pet_glyph, pet_name, pet_atk, pet_level)) = self
                 .players
                 .get(&user_id)
                 .and_then(|p| p.pet.as_ref())
                 .filter(|pet| !pet.downed)
-                .map(|pet| (pet.species.glyph, pet.species.name, pet.attack()))
+                .map(|pet| {
+                    (
+                        pet.species.glyph,
+                        pet.species.name,
+                        pet.attack() + pet.attack() * pet_bonus / 100,
+                        pet.level(),
+                    )
+                })
             {
                 let (pet_dealt, pet_dead) = {
                     let Some(mob) = self.mobs.get_mut(&mob_id) else {
@@ -4370,6 +5378,15 @@ impl WorldState {
                 );
                 if pet_dead {
                     self.kill_mob(user_id, mob_id);
+                    continue;
+                }
+                // The companion's level-gated auto-skills fire here, each on its
+                // own cooldown (savage bite / rend / roar / guard / pounce).
+                let beastlord = class == Some(Class::Beastlord);
+                if self.fire_pet_skills(
+                    user_id, mob_id, pet_level, pet_atk, pet_name, &mob_name, beastlord,
+                ) {
+                    // A killing pounce may have finished the foe.
                     continue;
                 }
             }
@@ -5168,15 +6185,22 @@ impl WorldState {
     /// that drops to zero is downed and stops fighting until fed.
     fn wound_pet(&mut self, user_id: Uuid, raw: i32) {
         let mut downed_name: Option<String> = None;
-        if let Some(p) = self.players.get_mut(&user_id)
-            && let Some(pet) = p.pet.as_mut()
-            && !pet.downed
-        {
-            pet.hp -= (raw * PET_WOUND_PCT / 100).max(1);
-            if pet.hp <= 0 {
-                pet.hp = 0;
-                pet.downed = true;
-                downed_name = Some(pet.species.name.to_string());
+        if let Some(p) = self.players.get_mut(&user_id) {
+            // Beastlord "Pack Bond" toughens the companion, softening the splash.
+            let beastlord = p.class == Some(Class::Beastlord);
+            let mut splash = (raw * PET_WOUND_PCT / 100).max(1);
+            if beastlord {
+                splash = (splash - splash * BEASTLORD_PET_PCT / 100).max(1);
+            }
+            if let Some(pet) = p.pet.as_mut()
+                && !pet.downed
+            {
+                pet.hp -= splash;
+                if pet.hp <= 0 {
+                    pet.hp = 0;
+                    pet.downed = true;
+                    downed_name = Some(pet.species.name.to_string());
+                }
             }
         }
         if let Some(name) = downed_name {
@@ -5187,6 +6211,233 @@ impl WorldState {
             );
             self.dirty = true;
         }
+    }
+
+    // ---- Pet auto-skills ------------------------------------------------
+
+    /// Fire the companion's level-gated auto-skills against the owner's target,
+    /// each on its own cooldown (tracked in `world_ticks`). Returns true if the
+    /// foe was slain (by a killing pounce), so the combat step knows to move on.
+    /// Damage/DoT scale with the pet's own attack; Roar empowers the owner and
+    /// Guard shields them. Lock-free/snapshot-only: only `WorldState` is touched.
+    #[allow(clippy::too_many_arguments)]
+    fn fire_pet_skills(
+        &mut self,
+        user_id: Uuid,
+        mob_id: u32,
+        pet_level: i32,
+        pet_atk: i32,
+        pet_name: &str,
+        mob_name: &str,
+        beastlord: bool,
+    ) -> bool {
+        let now_tick = self.world_ticks;
+        for (si, skill) in pet_skills_at(pet_level).enumerate() {
+            // Respect the per-skill cooldown.
+            let ready = self
+                .pet_skill_cd
+                .get(&(user_id, si))
+                .is_none_or(|&next| now_tick >= next);
+            if !ready {
+                continue;
+            }
+            // Beastlord "Pack Bond" shortens the companion's skill cooldowns so it
+            // looses them more often (at least one tick off, never below one).
+            let base_cd = skill.cooldown as u64;
+            let cd = if beastlord {
+                (base_cd - base_cd * BEASTLORD_PET_PCT as u64 / 100).max(1)
+            } else {
+                base_cd
+            };
+            self.pet_skill_cd.insert((user_id, si), now_tick + cd);
+            match skill.effect {
+                PetSkillEffect::SavageBite | PetSkillEffect::Pounce => {
+                    // Bonus burst damage, scaled by the pet's bite.
+                    let bonus = skill.power + pet_atk * skill.power / 20;
+                    let dead = {
+                        let Some(mob) = self.mobs.get_mut(&mob_id) else {
+                            return false;
+                        };
+                        let (dealt, _) = mob.spawn.profile.apply(bonus, DamageType::Physical);
+                        mob.hp -= dealt;
+                        mob.hp <= 0
+                    };
+                    self.dirty = true;
+                    self.mark_world_dirty();
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name}'s {} rips into {mob_name}!", skill.name),
+                    );
+                    if dead {
+                        self.kill_mob(user_id, mob_id);
+                        return true;
+                    }
+                }
+                PetSkillEffect::Rend => {
+                    let per_tick = skill.power + pet_atk / 8;
+                    self.seed_mob_dot(
+                        user_id,
+                        per_tick,
+                        DamageType::Physical,
+                        3,
+                        &format!("Your {pet_name}'s Rend"),
+                    );
+                }
+                PetSkillEffect::Roar => {
+                    let mag = skill.power + pet_atk / 10;
+                    if let Some(p) = self.players.get_mut(&user_id) {
+                        p.empower = p.empower.max(mag);
+                        p.empower_ticks = p.empower_ticks.max(4);
+                    }
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!(
+                            "Your {pet_name} looses an intimidating roar - you feel emboldened!"
+                        ),
+                    );
+                    self.dirty = true;
+                }
+                PetSkillEffect::Guard => {
+                    let mag = skill.power + pet_atk / 4;
+                    if let Some(p) = self.players.get_mut(&user_id) {
+                        p.shield = p.shield.max(mag);
+                        p.shield_ticks = p.shield_ticks.max(4);
+                    }
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name} guards you closely, warding the next blows."),
+                    );
+                    self.dirty = true;
+                }
+            }
+        }
+        false
+    }
+
+    // ---- Animal Taming --------------------------------------------------
+
+    /// Attempt to tame the wild beast identified by its index in the room's
+    /// tameable list. Driven by the player's Animal Taming level versus the
+    /// beast's required level: a clear success chance, a spooked cooldown on
+    /// failure, and on success the beast becomes the player's active companion
+    /// (replacing any current one, like `buy_pet`) and trains the trade.
+    fn tame(&mut self, user_id: Uuid, idx: usize) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.dead || player.respawn_at.is_some() {
+            return;
+        }
+        let room = player.room;
+        let here = beasts_at(room);
+        let Some(wb) = here.get(idx).copied() else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "There is no such beast here to tame.".to_string(),
+            );
+            return;
+        };
+        let species = &TAMEABLE[wb.species];
+        let bi = wb.species;
+        let now = Instant::now();
+        // A spooked beast will not be approached again until it settles.
+        if let Some(t) = self.tame_cooldowns.get(&(user_id, bi))
+            && now.duration_since(*t) < TAME_COOLDOWN
+        {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                format!("The {} is still wary of you. Give it time.", species.name),
+            );
+            return;
+        }
+        let taming_xp = player.taming_xp;
+        let level = skill_level_for_xp(taming_xp);
+        // Under-level: refused outright, with a clear reason.
+        if level < species.tame_level {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "The {} is beyond your skill - taming it needs {} level {} (yours is {level}).",
+                    species.name,
+                    TamingSkill::label(),
+                    species.tame_level,
+                ),
+            );
+            return;
+        }
+        let chance = tame_chance(taming_xp, species);
+        // The approach: a beat of warily-earned trust before the roll.
+        self.log_to(
+            user_id,
+            LogKind::Normal,
+            format!(
+                "The {} eyes you warily as you step close, hand open and low...",
+                species.name
+            ),
+        );
+        let roll = rand::thread_rng().gen_range(0..100);
+        if roll < chance {
+            // Success: it becomes the active companion, and the trade trains.
+            let released = self
+                .players
+                .get(&user_id)
+                .and_then(|p| p.pet.map(|o| o.species.name));
+            let gained = tame_xp(species);
+            let (before, after) = if let Some(p) = self.players.get_mut(&user_id) {
+                p.pet = Some(Pet::new(species, 0));
+                let b = skill_level_for_xp(p.taming_xp);
+                p.taming_xp += gained as i64;
+                (b, skill_level_for_xp(p.taming_xp))
+            } else {
+                return;
+            };
+            if let Some(old) = released {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!("Your {old} is set loose to make room, and pads off into the green."),
+                );
+            }
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!(
+                    "{} You've earned its trust! The {} is yours now. (+{gained} {} xp)",
+                    species.glyph,
+                    species.name,
+                    TamingSkill::label()
+                ),
+            );
+            if after > before {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!("Your {} rises to level {after}!", TamingSkill::label()),
+                );
+            }
+            self.tame_cooldowns.remove(&(user_id, bi));
+        } else {
+            // Failure: it bolts, and stays spooked for a spell.
+            self.tame_cooldowns.insert((user_id, bi), now);
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                format!(
+                    "The {} shies, then bolts into the briars. Not this time.",
+                    species.name
+                ),
+            );
+        }
+        self.dirty = true;
     }
 
     // ---- Player housing -------------------------------------------------
@@ -5386,6 +6637,11 @@ impl WorldState {
                     in_combat: other.target.is_some(),
                     alive: !other.dead,
                     bio: appearance::compose_bio(&other.appearance),
+                    class_key: other
+                        .class
+                        .map(|c| c.as_key().to_string())
+                        .unwrap_or_default(),
+                    appearance_idx: other.appearance.to_vec(),
                 })
                 .collect();
             let corpse_here = occupants.iter().any(|o| !o.alive);
@@ -5415,6 +6671,122 @@ impl WorldState {
                     },
                 })
                 .collect();
+            // Harvestable nodes in the room, each flagged with whether the player
+            // can work it now and, if not, why (under-skilled or regrowing).
+            let nodes: Vec<NodeView> = nodes_at(player.room)
+                .into_iter()
+                .map(|n| {
+                    let level = skill_level_for_xp(player.skill_xp(n.skill));
+                    let ready = match node_index(n).and_then(|ni| self.gathered.get(&ni)) {
+                        Some(t) => now.duration_since(*t) >= NODE_RESPAWN,
+                        None => true,
+                    };
+                    let (gatherable, reason) = if level < n.level_req {
+                        (false, format!("needs {} {}", n.skill.label(), n.level_req))
+                    } else if !ready {
+                        (false, "regrowing".to_string())
+                    } else {
+                        (true, String::new())
+                    };
+                    NodeView {
+                        name: n.name.to_string(),
+                        note: n.note.to_string(),
+                        skill: n.skill.label().to_string(),
+                        gatherable,
+                        reason,
+                    }
+                })
+                .collect();
+            // Every gathering trade, in a stable order, with its live progress.
+            let mut skills: Vec<SkillView> = GatherSkill::ALL
+                .iter()
+                .map(|&s| {
+                    let xp = player.skill_xp(s);
+                    let (xp_into, xp_next) = skill_progress(xp);
+                    SkillView {
+                        name: s.label().to_string(),
+                        level: skill_level_for_xp(xp),
+                        xp_into,
+                        xp_next,
+                    }
+                })
+                .collect();
+            // The maker's trades follow the gatherer's in the same Trades block.
+            skills.extend(CraftSkill::ALL.iter().map(|&s| {
+                let xp = player.craft_xp(s);
+                let (xp_into, xp_next) = skill_progress(xp);
+                SkillView {
+                    name: s.label().to_string(),
+                    level: skill_level_for_xp(xp),
+                    xp_into,
+                    xp_next,
+                }
+            }));
+            // The beastmaster's trade, Animal Taming, closes out the Trades block.
+            {
+                let (xp_into, xp_next) = skill_progress(player.taming_xp);
+                skills.push(SkillView {
+                    name: TamingSkill::label().to_string(),
+                    level: player.taming_level(),
+                    xp_into,
+                    xp_next,
+                });
+            }
+            // The crafting panel: every recipe worked at the stations in this room.
+            let crafting = {
+                let stations = craft_stations_at(player.room);
+                if stations.is_empty() {
+                    None
+                } else {
+                    let mut entries = Vec::new();
+                    for &st in &stations {
+                        let clevel = skill_level_for_xp(player.craft_xp(st));
+                        for ri in recipe_indices_for(st) {
+                            let Some(rc) = recipe(ri) else {
+                                continue;
+                            };
+                            let inputs = rc
+                                .inputs
+                                .iter()
+                                .map(|ing| {
+                                    let n = item(ing.item).map(|i| i.name).unwrap_or("?");
+                                    format!("{}x {n}", ing.qty)
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let have_mats = rc
+                                .inputs
+                                .iter()
+                                .all(|ing| player.item_count(ing.item) >= ing.qty);
+                            let (craftable, reason) = if clevel < rc.level_req {
+                                (false, format!("needs {} {}", st.label(), rc.level_req))
+                            } else if !have_mats {
+                                (false, "need materials".to_string())
+                            } else {
+                                (true, String::new())
+                            };
+                            entries.push(CraftEntryView {
+                                recipe: ri,
+                                name: item(rc.output)
+                                    .map(|i| i.name.to_string())
+                                    .unwrap_or_default(),
+                                skill: st.label().to_string(),
+                                inputs,
+                                craftable,
+                                reason,
+                            });
+                        }
+                    }
+                    Some(CraftView {
+                        stations: stations
+                            .iter()
+                            .map(|s| s.station())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        entries,
+                    })
+                }
+            };
             let in_combat_with = player.target.and_then(|mob_id| {
                 self.mobs
                     .get(&mob_id)
@@ -5422,22 +6794,25 @@ impl WorldState {
                     .map(|m| m.spawn.name.to_string())
             });
 
-            let (classed, class_name, trait_name, trait_desc, resource_name) = match player.class {
-                Some(c) => (
-                    true,
-                    c.name().to_string(),
-                    c.trait_name().to_string(),
-                    c.trait_desc().to_string(),
-                    c.resource().label().to_string(),
-                ),
-                None => (
-                    false,
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                ),
-            };
+            let (classed, class_name, class_key, trait_name, trait_desc, resource_name) =
+                match player.class {
+                    Some(c) => (
+                        true,
+                        c.name().to_string(),
+                        c.as_key().to_string(),
+                        c.trait_name().to_string(),
+                        c.trait_desc().to_string(),
+                        c.resource().label().to_string(),
+                    ),
+                    None => (
+                        false,
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    ),
+                };
 
             let abilities: Vec<AbilityView> = match player.class {
                 Some(c) => unlocked_for(c, player.level)
@@ -5467,6 +6842,8 @@ impl WorldState {
                     equipped: false,
                     sell_price: it.sell_price(),
                     stats: it.stat_summary(),
+                    compare: compare_to_worn(&player.equipped, it),
+                    compare_pct: player.compare_gear(it),
                 })
                 .chain(
                     player
@@ -5481,6 +6858,8 @@ impl WorldState {
                             equipped: true,
                             sell_price: it.sell_price(),
                             stats: it.stat_summary(),
+                            compare: String::new(),
+                            compare_pct: None,
                         }),
                 )
                 .collect();
@@ -5500,6 +6879,8 @@ impl WorldState {
                         price: it.price,
                         affordable: player.gold >= it.price,
                         stats: it.stat_summary(),
+                        compare: compare_to_worn(&player.equipped, it),
+                        compare_pct: player.compare_gear(it),
                     })
                     .collect(),
             });
@@ -5513,11 +6894,15 @@ impl WorldState {
                 attack: pet.attack(),
                 downed: pet.downed,
                 loyalty_pct: pet.loyalty_pct(),
+                skills: pet_skills_at(pet.level())
+                    .map(|s| (s.name.to_string(), s.level))
+                    .collect(),
             });
             let stable = self.room_has_stable(player.room).then(|| StableView {
                 feed_cost: PET_FEED_COST,
                 entries: super::pets::PET_SPECIES
                     .iter()
+                    .filter(|s| !s.is_tameable())
                     .map(|s| StableEntryView {
                         key: s.key.to_string(),
                         name: s.name.to_string(),
@@ -5530,6 +6915,53 @@ impl WorldState {
                     })
                     .collect(),
             });
+
+            // The Animal Taming panel: every tameable beast roaming this room,
+            // with the player's odds against each (0 = under-level or spooked).
+            let taming = {
+                let beasts = beasts_at(player.room);
+                if beasts.is_empty() {
+                    None
+                } else {
+                    let taming_level = player.taming_level();
+                    let entries = beasts
+                        .iter()
+                        .enumerate()
+                        .map(|(i, wb)| {
+                            let sp = &TAMEABLE[wb.species];
+                            let spooked = self
+                                .tame_cooldowns
+                                .get(&(*user_id, wb.species))
+                                .is_some_and(|t| now.duration_since(*t) < TAME_COOLDOWN);
+                            let odds = if spooked {
+                                0
+                            } else {
+                                tame_chance(player.taming_xp, sp)
+                            };
+                            let reason = if taming_level < sp.tame_level {
+                                format!("needs Taming {}", sp.tame_level)
+                            } else if spooked {
+                                "spooked".to_string()
+                            } else {
+                                String::new()
+                            };
+                            TameEntryView {
+                                idx: i,
+                                name: sp.name.to_string(),
+                                glyph: sp.glyph.to_string(),
+                                req_level: sp.tame_level,
+                                odds,
+                                reason,
+                                desc: sp.desc.to_string(),
+                            }
+                        })
+                        .collect();
+                    Some(TamingView {
+                        taming_level,
+                        entries,
+                    })
+                }
+            };
 
             // The housing ledger: deeds at the clerk, furnishings inside your home.
             let housing = if self.room_has_housing_clerk(player.room) {
@@ -5576,6 +7008,21 @@ impl WorldState {
                 None
             };
 
+            // The waystone menu is present whenever the room holds a portal.
+            let portal = features_at(player.room)
+                .iter()
+                .any(|f| f.kind == FeatureKind::Portal)
+                .then(|| PortalView {
+                    entries: super::world::waystone_destinations()
+                        .into_iter()
+                        .map(|(label, room, required)| {
+                            let sealed = required
+                                .is_some_and(|t| !player.titles.iter().any(|owned| owned == t));
+                            (label.to_string(), room, room == player.room, sealed)
+                        })
+                        .collect(),
+                });
+
             let xp_into = player.xp - xp_for_level(player.level);
             let xp_next = if player.level >= Class::MAX_LEVEL {
                 0
@@ -5594,6 +7041,7 @@ impl WorldState {
             let minimap =
                 self.world
                     .minimap(player.room, player.previous_room, &player.visited, 3, 2);
+            let atlas = self.world.region_progress(&player.visited, player.room);
             let mut quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
                 .filter_map(|z| {
                     super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
@@ -5635,6 +7083,7 @@ impl WorldState {
                     joined: true,
                     classed,
                     class_name,
+                    class_key,
                     trait_name,
                     trait_desc,
                     resource_name,
@@ -5660,13 +7109,18 @@ impl WorldState {
                     occupants,
                     following: player.following,
                     wildlife,
+                    nodes,
+                    skills,
                     in_combat_with,
                     abilities,
                     inventory,
                     shop,
                     pet,
                     stable,
+                    taming,
                     housing,
+                    crafting,
+                    portal,
                     bio: appearance::compose_bio(&player.appearance),
                     appearance: (0..appearance::N_FIELDS)
                         .map(|i| {
@@ -5676,6 +7130,7 @@ impl WorldState {
                             )
                         })
                         .collect(),
+                    appearance_idx: player.appearance.to_vec(),
                     log: player.log.clone(),
                     respawning: player.respawn_at.is_some(),
                     dead: player.dead,
@@ -5690,6 +7145,7 @@ impl WorldState {
                     resurrection_cap: player.resurrection_cap,
                     features,
                     minimap,
+                    atlas,
                     time_of_day,
                     weather,
                     escort: player
@@ -5795,6 +7251,7 @@ fn boss_achievement_for(mob_name: &str) -> Option<BossAchievement> {
         "the Archdemon Mal'gareth" => Some(ARCHDEMON_ACHIEVEMENT),
         "the King Who Was Promised Nothing" => Some(FRONTIER_KING_ACHIEVEMENT),
         "Yssgar, the Sundering Deep" => Some(SUNDERING_DEEP_ACHIEVEMENT),
+        "Kaethyr Ascendant, Who Sang the God Awake" => Some(KAETHYR_ASCENDANT_ACHIEVEMENT),
         _ => None,
     }
 }
@@ -5844,6 +7301,241 @@ mod tests {
 
     fn world() -> WorldState {
         WorldState::new(uid(999), seed_world())
+    }
+
+    #[test]
+    fn gathering_a_node_yields_its_material_and_trains_the_skill() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // Stand at the roadside birch (Woodcutting tier 0, room 600).
+        s.players.get_mut(&uid(1)).unwrap().room = 600;
+        let before = s.players[&uid(1)].inventory.len();
+        s.gather(uid(1));
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.inventory.len(), before + 1, "a material is taken");
+        assert!(
+            p.inventory
+                .contains(&super::super::items::material_id(0, 0)),
+            "the birch log lands in the pack"
+        );
+        assert_eq!(
+            p.skill_xp(GatherSkill::Woodcutting),
+            12,
+            "woodcutting xp is granted"
+        );
+    }
+
+    #[test]
+    fn a_worked_node_is_depleted_until_it_regrows() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        s.players.get_mut(&uid(1)).unwrap().room = 600;
+        s.gather(uid(1));
+        let after_one = s.players[&uid(1)].inventory.len();
+        s.gather(uid(1)); // still on cooldown
+        assert_eq!(
+            s.players[&uid(1)].inventory.len(),
+            after_one,
+            "the same node can't be stripped twice before it regrows"
+        );
+    }
+
+    #[test]
+    fn an_underskilled_node_refuses_to_be_worked() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // The ironbark (tier 4, room 803) needs Woodcutting 38; a fresh
+        // character has no woodcutting training at all.
+        s.players.get_mut(&uid(1)).unwrap().room = 803;
+        let before = s.players[&uid(1)].inventory.len();
+        s.gather(uid(1));
+        let p = &s.players[&uid(1)];
+        assert_eq!(
+            p.inventory.len(),
+            before,
+            "nothing is taken while under-skilled"
+        );
+        assert_eq!(
+            p.skill_xp(GatherSkill::Woodcutting),
+            0,
+            "no xp for a node you can't work"
+        );
+    }
+
+    #[test]
+    fn skill_xp_survives_a_save_load_round_trip() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .skills
+            .insert(GatherSkill::Mining, 500);
+        let saved = s.export_saved(uid(1)).expect("classed characters export");
+        let mut s2 = world();
+        s2.join(uid(1));
+        s2.hydrate(uid(1), &saved);
+        assert_eq!(
+            s2.players[&uid(1)].skill_xp(GatherSkill::Mining),
+            500,
+            "mining xp reloads through the save"
+        );
+    }
+
+    fn copper_ingot_recipe() -> usize {
+        recipe_indices_for(CraftSkill::Smithing)
+            .into_iter()
+            .find(|&i| recipe(i).unwrap().output == super::super::items::ingot_id(0))
+            .expect("a copper ingot recipe exists")
+    }
+
+    #[test]
+    fn crafting_at_a_station_consumes_inputs_and_makes_the_output() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Stand at Embergate's crafters' row (room 3) with 2 copper ore.
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.room = 3;
+            p.inventory.push(super::super::items::material_id(1, 0));
+            p.inventory.push(super::super::items::material_id(1, 0));
+        }
+        s.craft(uid(1), copper_ingot_recipe());
+        let p = &s.players[&uid(1)];
+        assert_eq!(
+            p.item_count(super::super::items::material_id(1, 0)),
+            0,
+            "the ore is consumed"
+        );
+        assert_eq!(
+            p.item_count(super::super::items::ingot_id(0)),
+            1,
+            "an ingot is produced"
+        );
+        assert!(
+            p.craft_xp(CraftSkill::Smithing) > 0,
+            "smithing is trained by crafting"
+        );
+    }
+
+    #[test]
+    fn crafting_needs_both_the_station_and_the_materials() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let ri = copper_ingot_recipe();
+        // Away from a forge (town square) with no ore: nothing is made.
+        s.players.get_mut(&uid(1)).unwrap().room = 1;
+        s.craft(uid(1), ri);
+        assert_eq!(
+            s.players[&uid(1)].item_count(super::super::items::ingot_id(0)),
+            0,
+            "no station means no craft"
+        );
+        // At the forge but still without ore: still nothing, and no xp.
+        s.players.get_mut(&uid(1)).unwrap().room = 3;
+        s.craft(uid(1), ri);
+        assert_eq!(
+            s.players[&uid(1)].item_count(super::super::items::ingot_id(0)),
+            0,
+            "no materials means no craft"
+        );
+        assert_eq!(
+            s.players[&uid(1)].craft_xp(CraftSkill::Smithing),
+            0,
+            "a failed craft trains nothing"
+        );
+    }
+
+    #[test]
+    fn craft_skill_xp_survives_a_save_load_round_trip() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .craft_skills
+            .insert(CraftSkill::Alchemy, 250);
+        let saved = s.export_saved(uid(1)).expect("classed characters export");
+        let mut s2 = world();
+        s2.join(uid(1));
+        s2.hydrate(uid(1), &saved);
+        assert_eq!(
+            s2.players[&uid(1)].craft_xp(CraftSkill::Alchemy),
+            250,
+            "alchemy xp reloads through the save"
+        );
+    }
+
+    #[test]
+    fn a_poison_coats_the_weapon_instead_of_being_drunk() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let poison = super::super::items::poison_id(2);
+        s.players.get_mut(&uid(1)).unwrap().inventory.push(poison);
+        s.use_item(uid(1), poison);
+        let p = &s.players[&uid(1)];
+        assert!(p.weapon_poison.is_some(), "the weapon is coated");
+        assert!(!p.inventory.contains(&poison), "the vial is used up");
+    }
+
+    #[test]
+    fn a_coated_weapon_poisons_the_foe_and_spends_a_charge() {
+        let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+        s.players.get_mut(&uid(1)).unwrap().weapon_poison = Some((10, POISON_CHARGES));
+        s.tick();
+        assert_eq!(
+            s.players[&uid(1)].weapon_poison.map(|(_, c)| c),
+            Some(POISON_CHARGES - 1),
+            "a landed strike spends one poison charge"
+        );
+        assert!(
+            s.mob_dots.get(&mob_id).is_some_and(|d| !d.is_empty()),
+            "the struck foe is left with a poison DoT"
+        );
+    }
+
+    #[test]
+    fn gear_comparison_reads_against_what_is_worn() {
+        let mut equipped = HashMap::new();
+        equipped.insert(Slot::Weapon, 1000u32); // Rusty Shortsword, +4 atk
+        let stronger = item(super::super::items::smith_weapon_id(2)).unwrap(); // Iron Sword, +16
+        let cmp = compare_to_worn(&equipped, stronger);
+        assert!(cmp.starts_with("vs worn:"), "shows a comparison: {cmp}");
+        assert!(cmp.contains("+12 atk"), "16 vs 4 should read +12: {cmp}");
+        // A bare slot reads as a new slot; a consumable never compares.
+        let empty = HashMap::new();
+        assert_eq!(compare_to_worn(&empty, stronger), "new slot");
+        let potion = item(super::super::items::potion_id(0)).unwrap();
+        assert_eq!(compare_to_worn(&empty, potion), "");
+    }
+
+    #[test]
+    fn eating_cooked_food_grants_a_well_fed_regen() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let meal = super::super::items::food_id(1);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.inventory.push(meal);
+            p.hp = 1;
+        }
+        s.use_item(uid(1), meal);
+        let p = &s.players[&uid(1)];
+        assert!(
+            p.self_effects
+                .iter()
+                .any(|e| e.kind == AbilityEffect::HealOverTime && e.remaining > 0),
+            "a hot meal leaves a well-fed regen"
+        );
     }
 
     fn grant_frontier_unlock_titles(s: &mut WorldState, user_id: Uuid) {
@@ -6211,7 +7903,50 @@ mod tests {
     }
 
     #[test]
-    fn all_twelve_classes_can_be_chosen_with_sane_stats() {
+    fn spiritmaster_siphons_health_and_souls_on_a_kill() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Spiritmaster);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.hp = 5;
+            p.resource = 0;
+        }
+        let mob_id = *s.mobs.keys().next().expect("world has mobs");
+        s.kill_mob(uid(1), mob_id);
+        let p = &s.players[&uid(1)];
+        assert!(p.hp > 5, "Spirit Siphon restores health on a kill");
+        assert!(p.resource > 0, "Spirit Siphon restores Souls on a kill");
+    }
+
+    #[test]
+    fn beastlord_pack_bond_toughens_the_companion() {
+        // The same incoming blow splashes less onto a Beastlord's companion than
+        // onto an ordinary owner's - Pack Bond makes the beast hardier.
+        let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+        let mut plain = world();
+        plain.join(uid(1));
+        plain.choose_class(uid(1), Class::Ranger);
+        plain.players.get_mut(&uid(1)).unwrap().pet =
+            Some(super::super::pets::Pet::new(species, 0));
+        plain.wound_pet(uid(1), 100);
+        let plain_hp = plain.players[&uid(1)].pet.unwrap().hp;
+
+        let mut bond = world();
+        bond.join(uid(2));
+        bond.choose_class(uid(2), Class::Beastlord);
+        bond.players.get_mut(&uid(2)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+        bond.wound_pet(uid(2), 100);
+        let bond_hp = bond.players[&uid(2)].pet.unwrap().hp;
+
+        assert!(
+            bond_hp > plain_hp,
+            "Pack Bond should soften the wound splash ({bond_hp} vs {plain_hp})"
+        );
+    }
+
+    #[test]
+    fn all_classes_can_be_chosen_with_sane_stats() {
         for (i, class) in Class::ALL.iter().enumerate() {
             let mut s = world();
             let u = uid(i as u128 + 1);
@@ -6638,6 +8373,145 @@ mod tests {
     }
 
     #[test]
+    fn waystone_travel_teleports_between_portals() {
+        use super::super::archipelago::{island_entrance, village_room};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Room 1 (Embergate square) has the town waystone.
+        assert_eq!(s.players[&uid(1)].room, 1);
+        s.travel(uid(1), village_room(0));
+        assert_eq!(
+            s.players[&uid(1)].room,
+            village_room(0),
+            "steps through to Lantern Cove"
+        );
+        // From a village waystone, hop to an island landing.
+        s.travel(uid(1), island_entrance(3));
+        assert_eq!(s.players[&uid(1)].room, island_entrance(3));
+    }
+
+    #[test]
+    fn travel_needs_a_waystone_and_a_real_destination() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Walk to a plain room with no portal, then try to travel: refused.
+        s.move_player(uid(1), Dir::North); // the Gilded Flagon (room 2), no portal
+        let here = s.players[&uid(1)].room;
+        s.travel(uid(1), super::super::archipelago::village_room(0));
+        assert_eq!(s.players[&uid(1)].room, here, "no waystone, no travel");
+    }
+
+    #[test]
+    fn continent_waystones_honor_their_walking_gate_titles() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Standing on Embergate's town waystone (room 1): Kaelmyr's far gate
+        // stays sealed until the Yssgar crown is earned.
+        assert_eq!(s.players[&uid(1)].room, 1);
+        s.travel(uid(1), super::super::world::KAELMYR_BASE);
+        assert_eq!(s.players[&uid(1)].room, 1, "a sealed gate refuses the ways");
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(KAELMYR_GATE_TITLE.to_string());
+        s.travel(uid(1), super::super::world::KAELMYR_BASE);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            super::super::world::KAELMYR_BASE,
+            "the crowned traveler passes"
+        );
+        // Open lands need no title, and the town waystone routes home again.
+        s.travel(uid(1), super::super::world::LAKES_BASE);
+        assert_eq!(s.players[&uid(1)].room, super::super::world::LAKES_BASE);
+        s.travel(uid(1), 1);
+        assert_eq!(s.players[&uid(1)].room, 1);
+    }
+
+    #[test]
+    fn continent_waystone_titles_match_the_walking_gates() {
+        for (label, room, required) in super::super::world::CONTINENT_WAYSTONES {
+            if super::super::world::is_kaelmyr_room(*room) {
+                assert_eq!(*required, Some(KAELMYR_GATE_TITLE), "{label}");
+            } else if super::super::world::is_reaches_room(*room) {
+                assert_eq!(*required, Some(REACHES_GATE_TITLE), "{label}");
+            } else {
+                assert_eq!(*required, None, "{label} is an open land");
+            }
+        }
+    }
+
+    #[test]
+    fn retreat_slips_to_the_nearest_haven_only_out_of_combat() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Drop the adventurer a few cells deep into the first Frontier zone.
+        s.players.get_mut(&uid(1)).unwrap().room = 2_003;
+        assert!(
+            !s.world.room(2_003).unwrap().safe,
+            "test premise: an unsafe maze cell"
+        );
+        // Mid-fight, retreat refuses.
+        s.players.get_mut(&uid(1)).unwrap().target = Some(999);
+        s.retreat_to_haven(uid(1));
+        assert_eq!(s.players[&uid(1)].room, 2_003, "no retreating mid-fight");
+        // Out of combat it ends at the closest safe room: the zone's own gate.
+        s.players.get_mut(&uid(1)).unwrap().target = None;
+        s.retreat_to_haven(uid(1));
+        let room = s.players[&uid(1)].room;
+        assert!(s.world.room(room).unwrap().safe, "retreat ends in a haven");
+        assert_eq!(room, 2_000, "the nearest haven is the zone's entrance");
+        // Already safe: retreating again goes nowhere.
+        s.retreat_to_haven(uid(1));
+        assert_eq!(s.players[&uid(1)].room, 2_000);
+    }
+
+    #[test]
+    fn class_cannot_be_changed_once_chosen() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // A second choice must be ignored - no re-classing mid-adventure.
+        s.choose_class(uid(1), Class::Mage);
+        assert_eq!(
+            s.players[&uid(1)].class,
+            Some(Class::Warrior),
+            "class is locked in once chosen"
+        );
+    }
+
+    #[test]
+    fn sell_batch_dumps_junk_but_keeps_upgrades_and_potions() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.move_player(uid(1), Dir::East); // to the smithy (room 3), a merchant
+        assert_eq!(s.players[&uid(1)].room, 3);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.equipped.clear();
+            // A weak weapon worn, a stronger one loose (an upgrade to keep), a
+            // weaker one loose (junk), and a potion (must survive).
+            p.equipped.insert(Slot::Weapon, 1001); // Iron Longsword
+            p.inventory = vec![1004, 1000, 1300]; // strong wpn, weak wpn, potion
+            p.gold = 0;
+        }
+        s.sell_batch(uid(1), SellBatch::NonUpgrades);
+        let p = &s.players[&uid(1)];
+        assert!(p.inventory.contains(&1300), "keeps the potion");
+        assert!(!p.inventory.contains(&1000), "sells the weaker weapon");
+        assert!(
+            p.inventory.contains(&1004) || p.equipped.values().any(|v| *v == 1004),
+            "keeps the upgrade weapon"
+        );
+        assert!(p.gold > 0, "selling junk earns gold");
+    }
+
+    #[test]
     fn buying_a_companion_costs_gold_and_sets_a_pet() {
         let mut s = world();
         s.join(uid(1));
@@ -6724,6 +8598,91 @@ mod tests {
         assert_eq!(pet.hp, pet.max_hp(), "and heals it to full");
         assert!(pet.loyalty_xp > 0, "and raises its loyalty");
         assert_eq!(s.players[&uid(1)].gold, 500 - PET_FEED_COST);
+    }
+
+    // The forest gate (entrance) room of Broceliande zone 0, where the easiest
+    // tameable beasts roam.
+    fn broceliande_beast_room() -> RoomId {
+        super::super::world::BROCELIANDE_BASE
+    }
+
+    #[test]
+    fn taming_a_beast_makes_it_your_companion_and_trains_the_trade() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // Stand where the easiest beasts (level 1) gather, and be well-trained so
+        // the roll is a near-sure thing; force success by maxing the odds.
+        s.players.get_mut(&uid(1)).unwrap().room = broceliande_beast_room();
+        s.players.get_mut(&uid(1)).unwrap().taming_xp =
+            super::super::skills::xp_for_skill_level(50);
+        // The easiest beast in the room is the first tameable species.
+        let beasts = super::super::taming::beasts_at(broceliande_beast_room());
+        assert!(!beasts.is_empty(), "beasts roam the first forest gate");
+        let before_xp = s.players[&uid(1)].taming_xp;
+        // Try a few times; a master's odds cap at 95%, so one of a handful lands.
+        for _ in 0..40 {
+            if s.players[&uid(1)].pet.is_some() {
+                break;
+            }
+            s.tame(uid(1), 0);
+        }
+        let p = &s.players[&uid(1)];
+        assert!(p.pet.is_some(), "a successful tame yields a companion");
+        assert!(
+            p.pet.unwrap().species.is_tameable(),
+            "the companion is a tamed wild beast"
+        );
+        assert!(p.taming_xp > before_xp, "taming trains Animal Taming xp");
+    }
+
+    #[test]
+    fn an_underskilled_tamer_cannot_take_a_great_beast() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // Deep in Broceliande the great beasts need a near-master tamer; a fresh
+        // Ranger has no taming training, so the attempt is refused outright.
+        let deep = super::super::world::BROCELIANDE_BASE
+            + 19 * super::super::world::BROCELIANDE_ZONE_STRIDE;
+        s.players.get_mut(&uid(1)).unwrap().room = deep;
+        let beasts = super::super::taming::beasts_at(deep);
+        assert!(!beasts.is_empty(), "great beasts roam the deep gate");
+        s.tame(uid(1), 0);
+        let p = &s.players[&uid(1)];
+        assert!(p.pet.is_none(), "an under-level tamer takes nothing");
+        assert_eq!(p.taming_xp, 0, "and earns no taming xp");
+        assert!(
+            p.log.iter().any(|l| l.text.contains("beyond your skill")),
+            "the refusal explains the level gate"
+        );
+    }
+
+    #[test]
+    fn a_leveled_companions_auto_skills_fire_in_combat() {
+        let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+        // A well-fed, high-loyalty companion has unlocked its auto-skills.
+        let species = super::super::pets::pet_species_by_key("dire_wolf").unwrap();
+        let pet = super::super::pets::Pet::new(species, super::super::pets::LOYALTY_PER_LEVEL * 5);
+        assert!(pet.level() >= 3, "the fed companion has unlocked skills");
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(pet);
+        // Give the foe a big pool so it survives to show the extra hits.
+        s.mobs.get_mut(&mob_id).unwrap().hp = 5000;
+        s.mobs.get_mut(&mob_id).unwrap().spawn.max_hp = 5000;
+        // Run a few rounds so a skill comes off cooldown and fires.
+        let mut fired = false;
+        for _ in 0..5 {
+            s.tick();
+            if s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|l| l.text.contains("Savage Bite") || l.text.contains("rips into"))
+            {
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "a leveled companion's auto-skill fires in combat");
     }
 
     #[test]
@@ -7124,7 +9083,22 @@ mod tests {
             LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY
         );
 
+        let kaethyr = boss_achievement_for("Kaethyr Ascendant, Who Sang the God Awake")
+            .expect("Kaelmyr's last boss should grant an achievement");
+        assert!(
+            kaethyr.payout.is_none(),
+            "Kaethyr's badge is the whole prize; no chip payout"
+        );
+        assert_eq!(
+            kaethyr.award_category,
+            LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY
+        );
+
         assert!(boss_achievement_for("the Elder Treant").is_none());
+        assert!(
+            boss_achievement_for("Kaethyr the Unquenched, Ashen King of Kaelmyr").is_none(),
+            "only the Ascendant form at the Sundering Wound carries the crown"
+        );
     }
 
     #[test]

@@ -11,9 +11,10 @@ NetHack
 -------
 
 late.sh hosts NetHack as a door game (the "NetHack" screen). The game binary is
-compiled from official upstream source inside the service container (see the
-"nethack-build" stage in the Dockerfile) and is run as a local child process;
-players reach it remotely over the late.sh SSH server.
+compiled from official upstream source in the Dockerfile ("nethack-build"
+stage) and ships in the "runtime-nethack" image, where the late-nethack host
+runs it as a child process; players reach it remotely over the late.sh SSH
+server.
 
   Program:    NetHack 5.0.0
   License:    NetHack General Public License (NGPL)
@@ -60,3 +61,47 @@ NGPL compliance notes:
 
 NetHack is a trademark in some jurisdictions; the name is used here only to
 identify the game, not to imply endorsement by the NetHack DevTeam.
+
+
+dopewars
+--------
+
+late.sh hosts dopewars as a door game (the "dopewars" screen). The game binary
+is compiled from official upstream source in the Dockerfile ("dopewars-build"
+stage) and ships in the "runtime-dopewars" image, where the late-dopewars host
+runs it as a child process; players reach it remotely over the late.sh SSH
+server.
+
+  Program:    dopewars 1.6.2
+  License:    GNU General Public License, version 2 or later (GPL-2.0-or-later)
+              https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+  Copyright:  Copyright (C) 1998-2022 Ben Webb
+  Upstream:   https://dopewars.sourceforge.io/
+              https://github.com/benmwebb/dopewars
+  Installed:  Built from the official upstream 1.6.2 source release in the
+              Dockerfile ("dopewars-build" stage). The source tarball's SHA-256
+              is verified (sha256sum -c, fail-closed) before building.
+  Source:     The complete, corresponding machine-readable source is the pinned
+              upstream release tarball recorded in the Dockerfile
+              (DOPEWARS_URL / DOPEWARS_VERSION / DOPEWARS_SHA256), also
+              available from the upstream sites above. Our build recipe is the
+              Dockerfile.
+  Modified:   No. No source is patched; the build is configuration only
+              (terminal-only: --disable-gui-client --disable-gui-server
+              --enable-curses-client, plus a `make LIBS="-lncursesw"` link
+              workaround for the release Makefile's missing curses libs).
+
+GPLv2 compliance notes:
+
+  - dopewars' own copyright and license notices are part of the upstream source
+    tree we build and are left intact.
+  - late.sh does not distribute copies of the dopewars program to players; it
+    only lets them play it over the network. GPLv2 has no network-service
+    copyleft clause, so remote play does not trigger a source-distribution
+    obligation.
+  - If you redistribute a build of late.sh that includes the dopewars binary
+    (for example, by publishing the runtime-dopewars Docker image), GPLv2
+    requires you to also make the corresponding source available. Keep the
+    pinned "Source" pointer above (the exact upstream tarball we compile) and
+    the Dockerfile build recipe with the distribution so recipients can obtain
+    and rebuild that source.

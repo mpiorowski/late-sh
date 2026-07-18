@@ -11,13 +11,9 @@ use crate::app::{
     common::theme,
     state::{
         GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
-        GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
-        GAME_SELECTION_NES_CONCENTRATION_ROOM, GAME_SELECTION_NES_DABG,
-        GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING, GAME_SELECTION_NES_RHDE,
-        GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE,
-        GAME_SELECTION_NES_ZAP_RUDER, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE,
-        GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
-        GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC,
+        GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SNAKE,
+        GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
+        GAME_SELECTION_TRAFFIC,
     },
 };
 
@@ -124,6 +120,26 @@ pub fn draw_game_overlay(
     draw_game_overlay_anchored(frame, area, heading, subtitle, color, OverlayAnchor::Center);
 }
 
+fn overlay_size(heading: &str, subtitle: &str, area: Rect) -> (u16, u16) {
+    const BORDER_LINES: u16 = 2;
+    const MIN_WIDTH: u16 = 28;
+    const MAX_WIDTH: u16 = 44;
+
+    let heading_cols = (heading.chars().count() as u16).saturating_add(2);
+    let subtitle_cols = subtitle.chars().count() as u16;
+    let overlay_w = heading_cols
+        .max(subtitle_cols)
+        .saturating_add(BORDER_LINES)
+        .clamp(MIN_WIDTH, MAX_WIDTH)
+        .min(area.width);
+
+    let text_cols = overlay_w.saturating_sub(BORDER_LINES).max(1);
+    let subtitle_lines = subtitle_cols.div_ceil(text_cols).max(1);
+    let overlay_h = (BORDER_LINES + 1 + subtitle_lines).min(area.height);
+
+    (overlay_w, overlay_h)
+}
+
 pub fn draw_game_overlay_anchored(
     frame: &mut Frame,
     area: Rect,
@@ -132,8 +148,7 @@ pub fn draw_game_overlay_anchored(
     color: Color,
     anchor: OverlayAnchor,
 ) {
-    let overlay_w = 28.min(area.width);
-    let overlay_h = 4.min(area.height);
+    let (overlay_w, overlay_h) = overlay_size(heading, subtitle, area);
     let overlay_area = match anchor {
         OverlayAnchor::Center => centered_rect(area, overlay_w, overlay_h),
         OverlayAnchor::Top => {
@@ -156,6 +171,7 @@ pub fn draw_game_overlay_anchored(
         )),
     ])
     .alignment(Alignment::Center)
+    .wrap(Wrap { trim: false })
     .block(
         Block::default()
             .borders(Borders::ALL)
@@ -208,10 +224,6 @@ pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
 }
 
 pub fn game_title(selection: usize) -> &'static str {
-    if let Some(rom) = super::input::nes_rom_for_selection(selection) {
-        return super::nes_cabinet::state::ROMS[rom].title;
-    }
-
     match selection {
         GAME_SELECTION_2048 => "2048",
         GAME_SELECTION_TETRIS => "Lateris",
@@ -236,7 +248,6 @@ pub struct ArcadeHubView<'a> {
     pub rubiks_cube_state: &'a super::rubiks_cube::state::State,
     pub le_word_state: &'a super::le_word::state::State,
     pub traffic_state: &'a super::traffic::state::State,
-    pub nes_cabinet_state: &'a super::nes_cabinet::state::State,
     pub sudoku_state: &'a super::sudoku::state::State,
     pub nonogram_state: &'a super::nonogram::state::State,
     pub solitaire_state: &'a super::solitaire::state::State,
@@ -269,9 +280,6 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
             return;
         } else if view.game_selection == GAME_SELECTION_LE_WORD {
             super::le_word::ui::draw_game(frame, area, view.le_word_state, show_bottom_bar);
-            return;
-        } else if super::input::is_nes_selection(view.game_selection) {
-            super::nes_cabinet::ui::draw_game(frame, area, view.nes_cabinet_state, show_bottom_bar);
             return;
         } else if view.game_selection == GAME_SELECTION_SUDOKU {
             super::sudoku::ui::draw_game(frame, area, view.sudoku_state, show_bottom_bar);
@@ -445,19 +453,6 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "You're LATE and stuck in TRAFFIC. Overtake or crash.",
             "     ",
         ),
-        selection if super::input::is_nes_selection(selection) => (
-            vec![
-                r#"     ███╗   ██╗███████╗███████╗"#,
-                r#"     ████╗  ██║██╔════╝██╔════╝"#,
-                r#"     ██╔██╗ ██║█████╗  ███████╗"#,
-                r#"     ██║╚██╗██║██╔══╝  ╚════██║"#,
-                r#"     ██║ ╚████║███████╗███████║"#,
-                r#"     ╚═╝  ╚═══╝╚══════╝╚══════╝"#,
-            ],
-            "Select a homebrew ROM. Potatis renders the NES frame into the terminal.",
-            "     ",
-        ),
-
         _ => (
             vec![
                 r#"     ██████╗ ██████╗  ██████╗ █████╗ ██████╗ ███████╗"#,
@@ -679,97 +674,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                 },
             );
         }
-    }
-
-    push_game_section(&mut lines, "─── NES Cabinet ───");
-    lines.push(Line::from(""));
-
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "Homebrew ROMs running through Potatis by github.com/henrikpersson/potatis.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]));
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "For the best experience, press Z and zoom out your terminal font.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]));
-    lines.push(Line::from(""));
-
-    for (idx, rom, desc) in [
-        (
-            GAME_SELECTION_NES_SQUIRREL_DOMINO,
-            super::nes_cabinet::state::ROM_SQUIRREL_DOMINO,
-            "Domino-clearing puzzle duel.",
-        ),
-        (
-            GAME_SELECTION_NES_THWAITE,
-            super::nes_cabinet::state::ROM_THWAITE,
-            "Missile-defense arcade shooter.",
-        ),
-        (
-            GAME_SELECTION_NES_DABG,
-            super::nes_cabinet::state::ROM_DABG,
-            "Platform shooter with co-op.",
-        ),
-        (
-            GAME_SELECTION_NES_FALLING,
-            super::nes_cabinet::state::ROM_FALLING,
-            "Dodge-and-collect score chase.",
-        ),
-        (
-            GAME_SELECTION_NES_BRICK_BREAKER,
-            super::nes_cabinet::state::ROM_BRICK_BREAKER,
-            "Breakout-style brick smashing.",
-        ),
-        (
-            GAME_SELECTION_NES_ESCAPE_FROM_PONG,
-            super::nes_cabinet::state::ROM_ESCAPE_FROM_PONG,
-            "Pong-from-the-ball puzzle.",
-        ),
-        (
-            GAME_SELECTION_NES_RHDE,
-            super::nes_cabinet::state::ROM_RHDE,
-            "Furniture-fight strategy oddity.",
-        ),
-        (
-            GAME_SELECTION_NES_CONCENTRATION_ROOM,
-            super::nes_cabinet::state::ROM_CONCENTRATION_ROOM,
-            "Memory card game for one or two.",
-        ),
-        (
-            GAME_SELECTION_NES_ZAP_RUDER,
-            super::nes_cabinet::state::ROM_ZAP_RUDER,
-            "Air-hockey toy with controller fallback.",
-        ),
-        (
-            GAME_SELECTION_NES_2048,
-            super::nes_cabinet::state::ROM_2048,
-            "Tile-merging puzzle ROM.",
-        ),
-    ] {
-        draw_game_entry(
-            &mut lines,
-            &mut selected_line,
-            selection,
-            GameEntry {
-                idx,
-                name: super::nes_cabinet::state::ROMS[rom].title,
-                descriptions: &[desc],
-                selected_style: Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-                normal_style: Style::default().fg(theme::TEXT()),
-                description_style: Style::default().fg(theme::TEXT_DIM()),
-                status: vec![Span::styled("ROM", Style::default().fg(theme::SUCCESS()))],
-                label_width: 24,
-            },
-        );
     }
 
     // Scroll so the selected game stays at the vertical center of the viewport.

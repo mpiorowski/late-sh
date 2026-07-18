@@ -1,7 +1,8 @@
 # Door Games & MUDs - Candidate Research
 
 Investigation notes for slowly adding more door games / MUDs to late.sh.
-Status: **research only, nothing committed.** Last updated 2026-06-28.
+Status: **research notes.** Last updated 2026-07-18 (twclone license/maturity
+corrected per DOOR_DOPEWARS_PREP.md; dopewars has since shipped as a door).
 
 ## TL;DR
 
@@ -14,7 +15,7 @@ Status: **research only, nothing committed.** Last updated 2026-06-28.
   (GPL, LORD-like, already ported to 64-bit Linux). Both run as a normal process
   on a PTY - exactly how NetHack already works here.
 - **TradeWars 2002 is a no-go on license** (proprietary, EIS/Pritchett own the
-  trademark). The open path is **twclone** (MIT clone), which would be a port,
+  trademark). The open path is **twclone** (GPL-2 clone), which would be a port,
   not the real thing.
 - **MUDs are parked** (see bottom). Almost all the demand is for *doors*, not
   MUDs, and MUDs fight late.sh's quick-session format. Licensing is fine if we
@@ -54,7 +55,8 @@ worth owning. Licensing is the gate before any of this matters.
 | **Usurper** | GPL | Classic LORD-style RPG door. Rick Parrish ported it to **32/64-bit** (orig by Jakob Dangarden). Runs on Linux → **pattern 2.** Good "second LORD-like" alongside LotGD. |
 | **Legend of the Green Dragon (LotGD)** | GPL (≤0.9.7), Creative Commons (after) | **The open LORD.** Faithful remake. BUT it's **PHP + MySQL web**, not a terminal door → needs either a TUI front-end or a native port (**pattern 1**). Highest player-recognition payoff, highest effort. Active forks exist (incl. a Symfony rewrite). |
 | **Wolfpack Empire** | GPLv3 | Classic large multiplayer strategy "Empire" door. Server + client, runs on Linux. Heavier/niche but clean. |
-| **twclone** | MIT (v1.0.0, Dec 2025) | Independent TradeWars clone, **fully rewritten and now headless**: a TCP server with a **pure JSON protocol** and a **PostgreSQL** backend. No BBS, no DOSBox, no telnet/ANSI. The clean way to get TradeWars-like gameplay. See deep dive below. |
+| **Dungeon Crawl Stone Soup (DCSS)** | GPL-2.0-or-later (project relicensed with every past contributor's consent) | Not a door - the *other* flagship roguelike - but the cleanest **pattern 2** candidate on this list. Native Linux curses binary (`crawl`), actively maintained, yearly releases. Built to be hosted: official public servers run dgamelaunch, and the game writes machine-readable `logfile`/`milestones` files (rune pickups, Zot entry, wins) - so achievements come off disk, no vt100 scraping like NetHack. Reuses the `late-nethack` host machinery almost verbatim. Wants 80x24 minimum. |
+| **twclone** | GPL-2.0 (v1.0.0-rc1, Dec 2025). The README claims MIT, but the actual LICENSE/COPYING files are GPLv2 (GitHub detects GPL-2.0) | Independent TradeWars clone, **fully rewritten and now headless**: a TCP server with a **pure JSON protocol** and a **PostgreSQL** backend. No BBS, no DOSBox, no telnet/ANSI. The clean way to get TradeWars-like gameplay - but still a release candidate with ~175 open issues and federation/economy/NPC systems deferred. See deep dive below. |
 
 ### 🟡 Yellow - usable but read the terms
 
@@ -102,12 +104,14 @@ fixups - which tells you this is a well-known pain point, not just us.
 **Verdict on the real thing:** red. Proprietary server, DOS emulation, ANSI
 mess. Not worth it.
 
-### The actual answer: twclone (MIT, headless, JSON + Postgres)
+### The actual answer: twclone (GPL-2, headless, JSON + Postgres)
 
-`twclone` was **fully rewritten and released as v1.0.0 in Dec 2025**, and it's
-now shaped almost perfectly for late.sh:
+`twclone` was **fully rewritten**, with **v1.0.0-rc1 released Dec 15 2025** (a
+release candidate, not a finished 1.0.0 - ~175 open issues, federation/economy/
+NPC systems still deferred), and it's shaped almost perfectly for late.sh:
 
-- **MIT licensed** - no permission needed, donations/chip economy is fine.
+- **GPL-2 licensed** (the README says MIT, but the actual LICENSE/COPYING files
+  are GPLv2) - same license family as dopewars, donations/chip economy is fine.
 - **Headless TCP server, no BBS** - just run the server binary.
 - **Pure JSON protocol** - "all client<->server interactions use JSON." No
   telnet, no ANSI, no CP437. Any language that speaks JSON can be a client.
@@ -160,9 +164,9 @@ really a new Lateania-style game, not "The Pit."
 
 ## Recommended order of attack
 
-1. **dopewars** - fastest real win. GPL, terminal-native, multiplayer. Wrap it
-   like NetHack (`late-nethack`-style host or a local PTY child). Low risk, high
-   "oh nice, Drug Wars" recognition.
+1. **dopewars** - **done, shipped.** GPL, terminal-native. Runs as its own
+   `late-dopewars` SSH host (NetHack-style), single-player with a shared
+   high-score table. See `late-ssh/src/app/door/dopewars/CONTEXT.md`.
 2. **Usurper** - second easy PTY door, scratches the LORD-RPG itch with a clean
    license while we decide on LotGD.
 3. **Legend of the Green Dragon** - the marquee "this is basically LORD" feature,
@@ -170,10 +174,11 @@ really a new Lateania-style game, not "The Pit."
    (Lateania-style) or a TUI shim over the PHP backend. Decide pattern before
    starting.
 4. **TradeWars via twclone** - the most-requested game, finally tractable.
-   Run the MIT twclone server next to our Postgres and write a native Rust JSON
-   client. More work than dopewars but no licensing/DOS/BBS nightmare, and the
-   payoff is the game people keep asking for. Do the protocol spike first (see
-   deep dive) before committing.
+   Run the GPL-2 twclone server next to our Postgres and write a native Rust
+   JSON client. More work than dopewars but no licensing/DOS/BBS nightmare, and
+   the payoff is the game people keep asking for. It's still a v1.0.0-rc1 with
+   big systems deferred, so do the protocol spike first (see deep dive) before
+   committing.
 MUDs are intentionally **not** in this list anymore - see Parked below.
 
 ## Open questions before building anything

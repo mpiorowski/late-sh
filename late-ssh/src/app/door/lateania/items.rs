@@ -115,6 +115,16 @@ impl Item {
         (self.price / 2).max(1)
     }
 
+    /// A single "how good is this gear" score, for comparing two items in the
+    /// same slot. Attack and armor weigh full; HP is cheaper per point. Non-gear
+    /// scores 0. Used for upgrade highlighting and the "sell non-upgrades" batch.
+    pub fn power(&self) -> i32 {
+        match self.kind {
+            ItemKind::Equipment(_) => self.mods.attack * 3 + self.mods.armor * 3 + self.mods.max_hp,
+            _ => 0,
+        }
+    }
+
     /// A compact one-line summary of what the item does, for the inventory and
     /// shop panels: e.g. "+8 atk", "+10 hp +2 arm", "heal 30 / +20 res", or a
     /// sell-value hint for valuables.
@@ -191,6 +201,29 @@ const fn consumable(
         name,
         desc,
         kind: ItemKind::Consumable { heal, restore },
+        rarity,
+        mods: StatMods {
+            attack: 0,
+            max_hp: 0,
+            armor: 0,
+        },
+        price,
+        class_hint: None,
+    }
+}
+
+const fn valuable(
+    id: u32,
+    name: &'static str,
+    desc: &'static str,
+    rarity: Rarity,
+    price: i64,
+) -> Item {
+    Item {
+        id,
+        name,
+        desc,
+        kind: ItemKind::Valuable,
         rarity,
         mods: StatMods {
             attack: 0,
@@ -960,12 +993,585 @@ pub const ITEMS: &[Item] = &[
     },
 ];
 
+// ---- Raw gathering materials --------------------------------------------
+//
+// Trees, ore veins, fishing spots and herb/skinning patches (see world::NODES)
+// drop these raw materials when harvested (see svc gather). They are Valuables
+// for now - immediately sellable to any merchant, which is what "tradeable"
+// means today - and become crafting inputs in the crafting update. IDs live in
+// 4000..4100 (skill index * 20 + tier), clear of the authored (<1500) and
+// generated Frontier/Reaches (3000..3400) ranges.
+
+/// Base id for the raw-material catalog.
+pub const MATERIAL_BASE: u32 = 4000;
+/// Tiers per gathering skill (levels of material, low to high).
+pub const MATERIAL_TIERS: u32 = 5;
+
+/// The item id of the raw material a skill drops at a given tier (0-based). The
+/// `skill_index` is `skills::GatherSkill::index`.
+pub const fn material_id(skill_index: u32, tier: u32) -> u32 {
+    MATERIAL_BASE + skill_index * 20 + tier
+}
+
+/// Names per skill (rows follow `GatherSkill::index`) and tier (columns low->high).
+const MATERIAL_NAMES: [[&str; 5]; 5] = [
+    // Woodcutting
+    ["Birch Log", "Oak Log", "Ash Log", "Yew Log", "Ironbark Log"],
+    // Mining
+    [
+        "Copper Ore",
+        "Tin Ore",
+        "Iron Ore",
+        "Silver Ore",
+        "Mithril Ore",
+    ],
+    // Fishing
+    [
+        "River Bream",
+        "Silver Trout",
+        "Grey Pike",
+        "Deep Sturgeon",
+        "Moonscale Fish",
+    ],
+    // Foraging
+    [
+        "Marsh Sage",
+        "Redleaf",
+        "Bloodthistle",
+        "Frostbloom",
+        "Sunmoss",
+    ],
+    // Skinning
+    [
+        "Rough Hide",
+        "Thick Hide",
+        "Boar Hide",
+        "Bear Pelt",
+        "Direhide",
+    ],
+];
+
+/// One flavour line per skill (rows follow `GatherSkill::index`).
+const MATERIAL_FLAVOR: [&str; 5] = [
+    "A length of cut timber, ready for the sawbench.",
+    "Raw ore, still cold from the rock; a smith can smelt it down.",
+    "A fresh-landed fish, good eating or good bait.",
+    "A bundle of cut herbs, pungent and green.",
+    "A cleaned hide, ready for the tanner's rack.",
+];
+
+fn build_materials() -> Vec<Item> {
+    let mut out = Vec::with_capacity(25);
+    for (s, names) in MATERIAL_NAMES.iter().enumerate() {
+        for (t, name) in names.iter().enumerate() {
+            let tier = t as i64;
+            // 6, 24, 54, 96, 150 gold: a modest trickle, so gathering feeds
+            // crafting rather than replacing combat as a gold source.
+            let price = 6 * (tier + 1) * (tier + 1);
+            let rarity = match t {
+                0 | 1 => Rarity::Common,
+                2 | 3 => Rarity::Uncommon,
+                _ => Rarity::Rare,
+            };
+            out.push(Item {
+                id: material_id(s as u32, t as u32),
+                name,
+                desc: MATERIAL_FLAVOR[s],
+                kind: ItemKind::Valuable,
+                rarity,
+                mods: StatMods {
+                    attack: 0,
+                    max_hp: 0,
+                    armor: 0,
+                },
+                price,
+                class_hint: None,
+            });
+        }
+    }
+    out
+}
+
+/// The raw-material catalog, built once and reused for the `item` lookup.
+pub fn materials() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_materials)
+}
+
+// ---- Crafted goods -------------------------------------------------------
+//
+// Crafting turns raw materials into refined intermediates (ingots, planks,
+// leather) and finished goods (weapons, armor, potions, poisons, food). IDs live
+// in 4200..4500, clear of the raw materials (4000..4100). Recipes in
+// `crafting.rs` reference these ids by the const helpers below; `item` resolves
+// them like any other. Five tiers each, mirroring the material tiers.
+
+pub const CRAFTED_BASE: u32 = 4200;
+
+pub const fn ingot_id(tier: u32) -> u32 {
+    CRAFTED_BASE + tier
+}
+pub const fn plank_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 20 + tier
+}
+pub const fn leather_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 40 + tier
+}
+pub const fn smith_weapon_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 100 + tier
+}
+pub const fn smith_armor_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 120 + tier
+}
+pub const fn wood_weapon_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 140 + tier
+}
+pub const fn leather_armor_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 160 + tier
+}
+pub const fn potion_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 200 + tier
+}
+pub const fn poison_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 220 + tier
+}
+pub const fn food_id(tier: u32) -> u32 {
+    CRAFTED_BASE + 240 + tier
+}
+/// Masterwork gear (the endgame recipe sinks); `n` is 0 (blade) or 1 (plate).
+pub const fn masterwork_id(n: u32) -> u32 {
+    CRAFTED_BASE + 180 + n
+}
+
+/// The tier of a poison item id, if `id` is one (used to route it to the
+/// weapon-coating action instead of the normal consumable path).
+pub fn poison_tier(id: u32) -> Option<u32> {
+    (0..5).find(|&t| poison_id(t) == id)
+}
+
+/// The tier of a cooked-food item id, if `id` is one (food grants a well-fed
+/// regen buff on top of its heal).
+pub fn food_tier(id: u32) -> Option<u32> {
+    (0..5).find(|&t| food_id(t) == id)
+}
+
+const INGOT_NAMES: [&str; 5] = [
+    "Copper Ingot",
+    "Tin Ingot",
+    "Iron Ingot",
+    "Silver Ingot",
+    "Mithril Ingot",
+];
+const PLANK_NAMES: [&str; 5] = [
+    "Birch Plank",
+    "Oak Plank",
+    "Ash Plank",
+    "Yew Plank",
+    "Ironbark Plank",
+];
+const LEATHER_NAMES: [&str; 5] = [
+    "Rough Leather",
+    "Thick Leather",
+    "Boar Leather",
+    "Bear Leather",
+    "Dire Leather",
+];
+const SMITH_WEAPON_NAMES: [&str; 5] = [
+    "Copper Sword",
+    "Tin Sabre",
+    "Iron Sword",
+    "Silver Sword",
+    "Mithril Sword",
+];
+const SMITH_ARMOR_NAMES: [&str; 5] = [
+    "Copper Cuirass",
+    "Tin Cuirass",
+    "Iron Cuirass",
+    "Silver Cuirass",
+    "Mithril Cuirass",
+];
+const WOOD_WEAPON_NAMES: [&str; 5] = [
+    "Birch Shortbow",
+    "Oak Longbow",
+    "Ash Recurve",
+    "Yew Warbow",
+    "Ironbark Greatbow",
+];
+const LEATHER_ARMOR_NAMES: [&str; 5] = [
+    "Rough Jerkin",
+    "Thick Jerkin",
+    "Boarhide Vest",
+    "Bearhide Coat",
+    "Direhide Cuirass",
+];
+const POTION_NAMES: [&str; 5] = [
+    "Minor Healing Draught",
+    "Lesser Healing Draught",
+    "Greater Healing Draught",
+    "Superior Healing Draught",
+    "Master Healing Draught",
+];
+const POISON_NAMES: [&str; 5] = [
+    "Weak Toxin",
+    "Numbing Poison",
+    "Virulent Bile",
+    "Deadly Venom",
+    "Wyrm Venom",
+];
+const FOOD_NAMES: [&str; 5] = [
+    "Grilled Bream",
+    "Pan-Seared Trout",
+    "Smoked Pike",
+    "Sturgeon Steak",
+    "Moonscale Feast",
+];
+
+const INTER_RARITY: [Rarity; 5] = [
+    Rarity::Common,
+    Rarity::Common,
+    Rarity::Uncommon,
+    Rarity::Uncommon,
+    Rarity::Rare,
+];
+const FINAL_RARITY: [Rarity; 5] = [
+    Rarity::Common,
+    Rarity::Uncommon,
+    Rarity::Uncommon,
+    Rarity::Rare,
+    Rarity::Epic,
+];
+
+fn build_crafted() -> Vec<Item> {
+    let mut out = Vec::new();
+    // Per-tier stat/price tables (index 0..5, low to high).
+    const INGOT_PRICE: [i64; 5] = [24, 54, 96, 150, 220];
+    const PLANK_PRICE: [i64; 5] = [20, 46, 84, 130, 190];
+    const LEATHER_PRICE: [i64; 5] = [22, 50, 90, 140, 205];
+    const WEAPON_ATK: [i32; 5] = [6, 11, 16, 21, 26];
+    const WEAPON_PRICE: [i64; 5] = [60, 140, 260, 440, 700];
+    const BOW_ATK: [i32; 5] = [5, 10, 15, 20, 25];
+    const BOW_PRICE: [i64; 5] = [55, 130, 250, 430, 690];
+    const PLATE_HP: [i32; 5] = [8, 16, 26, 40, 60];
+    const PLATE_ARM: [i32; 5] = [1, 2, 3, 4, 6];
+    const PLATE_PRICE: [i64; 5] = [70, 150, 280, 460, 720];
+    const JERKIN_HP: [i32; 5] = [6, 12, 20, 30, 44];
+    const JERKIN_ARM: [i32; 5] = [1, 1, 2, 3, 4];
+    const JERKIN_PRICE: [i64; 5] = [50, 120, 230, 400, 640];
+    const POTION_HEAL: [i32; 5] = [25, 45, 75, 120, 180];
+    const POTION_PRICE: [i64; 5] = [20, 45, 90, 160, 260];
+    const POISON_PRICE: [i64; 5] = [15, 40, 80, 140, 220];
+    const FOOD_HEAL: [i32; 5] = [20, 35, 55, 85, 130];
+    const FOOD_REST: [i32; 5] = [10, 20, 35, 55, 85];
+    const FOOD_PRICE: [i64; 5] = [15, 35, 70, 120, 190];
+
+    for t in 0..5usize {
+        let tu = t as u32;
+        // Intermediates (sellable valuables and recipe inputs).
+        out.push(valuable(
+            ingot_id(tu),
+            INGOT_NAMES[t],
+            "A refined metal bar, ready for the forge.",
+            INTER_RARITY[t],
+            INGOT_PRICE[t],
+        ));
+        out.push(valuable(
+            plank_id(tu),
+            PLANK_NAMES[t],
+            "A planed board, true and square for the workbench.",
+            INTER_RARITY[t],
+            PLANK_PRICE[t],
+        ));
+        out.push(valuable(
+            leather_id(tu),
+            LEATHER_NAMES[t],
+            "Supple tanned leather, ready to be worked.",
+            INTER_RARITY[t],
+            LEATHER_PRICE[t],
+        ));
+        // Finished goods.
+        out.push(eq(
+            smith_weapon_id(tu),
+            SMITH_WEAPON_NAMES[t],
+            "Forged steel with a keen, hammered edge.",
+            Slot::Weapon,
+            FINAL_RARITY[t],
+            WEAPON_ATK[t],
+            0,
+            0,
+            WEAPON_PRICE[t],
+            None,
+        ));
+        out.push(eq(
+            smith_armor_id(tu),
+            SMITH_ARMOR_NAMES[t],
+            "A forged breastplate, proof against a hard blow.",
+            Slot::Chest,
+            FINAL_RARITY[t],
+            0,
+            PLATE_HP[t],
+            PLATE_ARM[t],
+            PLATE_PRICE[t],
+            None,
+        ));
+        out.push(eq(
+            wood_weapon_id(tu),
+            WOOD_WEAPON_NAMES[t],
+            "A supple bow of seasoned wood, strung and true.",
+            Slot::Weapon,
+            FINAL_RARITY[t],
+            BOW_ATK[t],
+            0,
+            0,
+            BOW_PRICE[t],
+            Some(Class::Ranger),
+        ));
+        out.push(eq(
+            leather_armor_id(tu),
+            LEATHER_ARMOR_NAMES[t],
+            "Light leather armor that never slows a step.",
+            Slot::Chest,
+            FINAL_RARITY[t],
+            0,
+            JERKIN_HP[t],
+            JERKIN_ARM[t],
+            JERKIN_PRICE[t],
+            None,
+        ));
+        out.push(consumable(
+            potion_id(tu),
+            POTION_NAMES[t],
+            "A brewed cordial that knits wounds closed.",
+            FINAL_RARITY[t],
+            POTION_HEAL[t],
+            0,
+            POTION_PRICE[t],
+        ));
+        // Poisons are sellable for now; the depth update makes them applyable.
+        out.push(valuable(
+            poison_id(tu),
+            POISON_NAMES[t],
+            "A stoppered vial of poison, meant to coat a blade.",
+            FINAL_RARITY[t],
+            POISON_PRICE[t],
+        ));
+        out.push(consumable(
+            food_id(tu),
+            FOOD_NAMES[t],
+            "A hot cooked meal that restores body and focus.",
+            FINAL_RARITY[t],
+            FOOD_HEAL[t],
+            FOOD_REST[t],
+            FOOD_PRICE[t],
+        ));
+    }
+    // Masterwork gear: the endgame smithing sinks, made from many top-tier
+    // materials at high skill. A clear step above the tier-4 craftables.
+    out.push(eq(
+        masterwork_id(0),
+        "Masterwork Greatblade",
+        "A flawless blade of folded mithril, the work of a master's whole art.",
+        Slot::Weapon,
+        Rarity::Legendary,
+        34,
+        0,
+        0,
+        1600,
+        None,
+    ));
+    out.push(eq(
+        masterwork_id(1),
+        "Masterwork Plate",
+        "A suit of mirror-bright mithril plate, proof against nearly anything.",
+        Slot::Chest,
+        Rarity::Legendary,
+        0,
+        80,
+        8,
+        1700,
+        None,
+    ));
+    out
+}
+
+/// The crafted-goods catalog, built once and reused for the `item` lookup.
+pub fn crafted() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_crafted)
+}
+
+// ---- The Sunderlakes fish catalog (ids 4600..4700) -----------------------
+//
+// Forty distinct fish species netted, angled, and speared across the lake
+// country of the Sunderlakes (see world::extend_lakes). They sit in a fresh
+// 4600..4700 band, clear of the raw materials (4000..4100), crafted goods
+// (4200..4500), and the generated Frontier/Reaches/Kaelmyr loot (3000..3600).
+//
+// Each fish is a resource-node yield with a *varying* sell price - a wide
+// spread from a few-gold minnow to a prized several-hundred-gold catch, so a
+// deep-water haul is a real reward. Roughly a third are edible: those are
+// `Consumable`s that heal and/or restore resource, scaling with the fish's
+// prestige, and a handful of the rarest carry a "special" - a well-fed
+// `HealOverTime` (see `fish_well_fed` / `use_item`) that makes a legendary
+// fish genuinely worth eating rather than only selling. The rest are pure
+// `Valuable` sell loot. Everything resolves through `item(id)`.
+
+/// Base id for the Sunderlakes fish catalog.
+pub const FISH_BASE: u32 = 4600;
+/// Number of distinct fish species.
+pub const FISH_COUNT: u32 = 40;
+
+/// A fish species definition, compiled into the catalog. `heal`/`restore` of 0
+/// means a pure `Valuable` (sell-only); non-zero makes it an edible
+/// `Consumable`. `well_fed` (if set) is the per-tick well-fed regen a special
+/// fish grants when eaten (see `fish_well_fed`).
+struct FishDef {
+    /// Offset from `FISH_BASE`; also the species' place in the catalog.
+    slot: u32,
+    name: &'static str,
+    desc: &'static str,
+    rarity: Rarity,
+    price: i64,
+    heal: i32,
+    restore: i32,
+    well_fed: i32,
+}
+
+#[allow(clippy::too_many_arguments)]
+const fn fishdef(
+    slot: u32,
+    name: &'static str,
+    desc: &'static str,
+    rarity: Rarity,
+    price: i64,
+    heal: i32,
+    restore: i32,
+    well_fed: i32,
+) -> FishDef {
+    FishDef {
+        slot,
+        name,
+        desc,
+        rarity,
+        price,
+        heal,
+        restore,
+        well_fed,
+    }
+}
+
+/// The forty fish of the Sunderlakes, ordered roughly by the Fishing level and
+/// zone depth at which they are caught: small shallow-water fish first, prized
+/// deep-water and drowned-valley catches last. Slots are contiguous 0..40.
+#[rustfmt::skip]
+const FISH_DEFS: [FishDef; 40] = [
+    // --- Shallow reed-water: cheap, plentiful, a few humble edibles ---------
+    fishdef(0,  "Silver Minnow",       "A palmful of quicksilver, barely worth the hook - but they shoal in their thousands.", Rarity::Common, 8,   0,  0,  0),
+    fishdef(1,  "Reed Perch",          "A striped little perch that hangs in the reed-shadows. Bony, but honest eating.",        Rarity::Common, 14,  10, 0,  0),
+    fishdef(2,  "Mudsnout Carp",       "A whiskered bottom-feeder the colour of the mire it grubs in.",                          Rarity::Common, 18,  0,  0,  0),
+    fishdef(3,  "Copperscale Roach",   "A common roach that flashes copper when it turns in the shallows.",                      Rarity::Common, 22,  0,  0,  0),
+    fishdef(4,  "Marsh Bream",         "A broad, slab-sided bream that fights well above its weight in the weed.",               Rarity::Common, 30,  16, 0,  0),
+    fishdef(5,  "Bristle Loach",       "A spiny loach that clings to the stones; the meres are thick with them.",                Rarity::Common, 26,  0,  0,  0),
+    fishdef(6,  "Fenwater Tench",      "A stubborn olive tench, slick with the healing slime the fen-folk prize.",               Rarity::Uncommon, 44, 24, 8,  0),
+    fishdef(7,  "Islet Rudd",          "A red-finned rudd that patrols the island shallows in bright, wary schools.",            Rarity::Common, 34,  0,  0,  0),
+    // --- Open meres & flooded caverns: mid-value, sturdier fish -------------
+    fishdef(8,  "Blue Mere Trout",     "A cold-water trout gone deep blue in the still meres. A fine table fish.",               Rarity::Uncommon, 60, 34, 0,  0),
+    fishdef(9,  "Ghost Grayling",      "A pale, half-translucent grayling that seems to swim through the water like smoke.",     Rarity::Uncommon, 72, 0,  0,  0),
+    fishdef(10, "Cavern Blindfish",    "An eyeless white fish of the flooded caves, feeling its way through the dark.",          Rarity::Uncommon, 88, 0,  0,  0),
+    fishdef(11, "Reedmace Pike",       "A lean ambush-pike that lies like a green log among the reeds.",                         Rarity::Uncommon, 96, 40, 0,  0),
+    fishdef(12, "Sunken Char",         "A deep-dwelling char, its belly banded rose and gold from the cold dark.",               Rarity::Uncommon, 110, 46, 12, 0),
+    fishdef(13, "Drowned Valley Eel",  "A long muscular eel that threads the flooded orchards of the drowned valleys.",          Rarity::Uncommon, 84, 0,  0,  0),
+    fishdef(14, "Lanternjaw",          "A cave-fish that dangles a wisp of cold blue light before its own gaping mouth.",        Rarity::Rare, 140, 0,  0,  0),
+    fishdef(15, "Silt-Gilded Barbel",  "A big golden barbel that roots the deep silt, its scales edged like beaten coin.",       Rarity::Rare, 165, 0,  0,  0),
+    // --- Deep water & mere-hearts: rarer, richer, restorative catches -------
+    fishdef(16, "Moonpale Salmon",     "A salmon that runs the deep channels only by moonlight, its flesh rich and pink.",       Rarity::Rare, 185, 60, 18, 0),
+    fishdef(17, "Glasswater Sturgeon", "An armoured sturgeon of the clearest deeps, old as the meres themselves.",               Rarity::Rare, 210, 0,  0,  0),
+    fishdef(18, "Meregleam Tench",     "A tench whose scales hold a faint inner glow, drawn up from lightless water.",           Rarity::Rare, 175, 55, 20, 0),
+    fishdef(19, "Stormfin Bass",       "A powerful bass that feeds hardest under a breaking storm, thick and fighting-fit.",     Rarity::Rare, 155, 0,  0,  0),
+    fishdef(20, "Hollow-Cavern Ray",   "A pale freshwater ray that glides the drowned cavern-halls like a slow ghost.",          Rarity::Rare, 230, 0,  0,  0),
+    fishdef(21, "Bittern's Bane",      "A vicious spined predator the marsh-birds have learned to leave well alone.",            Rarity::Rare, 195, 0,  0,  0),
+    fishdef(22, "Amberweed Golden",    "A goldfish grown huge and lordly in the amber weed-beds, worth a merchant's smile.",     Rarity::Rare, 260, 0,  0,  0),
+    fishdef(23, "Frostmere Whitefish", "A silver whitefish of the highest, coldest meres, its meat firm and clean.",             Rarity::Rare, 205, 70, 24, 0),
+    // --- The prized deeps: the trophy fish anglers boast of ------------------
+    fishdef(24, "Kingfisher's Prize",  "The great striped perch every angler swears is a myth until the line goes taut.",        Rarity::Epic, 320, 0,  0,  0),
+    fishdef(25, "Deep Meregold",       "A slab of living gold from the mere-hearts; a single scale would buy supper.",           Rarity::Epic, 380, 0,  0,  0),
+    fishdef(26, "Silverback Salmon",   "A monster salmon, silver-backed and heavy as a hound, that runs the sunken falls.",      Rarity::Epic, 340, 95, 30, 0),
+    fishdef(27, "Drowned-God Carp",    "A vast, slow, ancient carp the fen-shrines were raised to honour. Uncanny to hold.",     Rarity::Epic, 420, 0,  0,  0),
+    fishdef(28, "Voidmere Sturgeon",   "A black sturgeon from the deepest drowned trench, scaled like old iron.",                Rarity::Epic, 460, 0,  0,  0),
+    fishdef(29, "Ghostlight Pike",     "A pike lit from within by a drowned corpse-glow; the old anglers make a warding sign.",  Rarity::Epic, 390, 0,  0,  0),
+    fishdef(30, "Tempest Marlin",      "A freshwater marlin that leaps the storm-swells, its bill sharp as a boarding-pike.",    Rarity::Epic, 440, 110, 34, 0),
+    fishdef(31, "Abyss Anglerfish",    "A horror of the lightless deep, all teeth and a single cold luring lamp.",               Rarity::Epic, 405, 0,  0,  0),
+    // --- Legends of the Sunderlakes: the specials worth eating --------------
+    fishdef(32, "Sunderlake Leviathan","A young leviathan of the drowned deeps; men have retired on a single one.",              Rarity::Legendary, 540, 0,   0,  0),
+    fishdef(33, "The Mere-Mother",     "A carp so old and so vast the fen-folk name her a minor goddess. To land her is a saga.", Rarity::Legendary, 620, 150, 50, 5),
+    fishdef(34, "Moonscale Royal",     "The true moonscale, silver-white and shining; a bite of it mends flesh and spirit both.", Rarity::Legendary, 580, 140, 45, 4),
+    fishdef(35, "Drowned Crown Bass",  "A bass that wears a crown-crest of gold spines, king of some sunken lake-court.",         Rarity::Legendary, 560, 0,   0,  0),
+    fishdef(36, "Heartglow Trout",     "A trout that burns a warm gold from within; eaten fresh it fills you with lasting vigour.",Rarity::Legendary, 600, 135, 55, 5),
+    fishdef(37, "The Fathom-King",     "A titan eel of the deepest trench, black and endless; a trophy beyond price.",           Rarity::Legendary, 660, 0,   0,  0),
+    fishdef(38, "Weeping Silverfin",   "A shimmering fish the drowned-valley shrines wept over; its flesh is said to be blessed.", Rarity::Legendary, 590, 160, 60, 6),
+    fishdef(39, "The First Fish",      "Grey and eyeless and older than the meres, from water that has never seen the sky. Sacred.",Rarity::Legendary, 700, 0,   0,  0),
+];
+
+fn build_fish() -> Vec<Item> {
+    FISH_DEFS
+        .iter()
+        .map(|f| {
+            let id = FISH_BASE + f.slot;
+            let kind = if f.heal != 0 || f.restore != 0 {
+                ItemKind::Consumable {
+                    heal: f.heal,
+                    restore: f.restore,
+                }
+            } else {
+                ItemKind::Valuable
+            };
+            Item {
+                id,
+                name: f.name,
+                desc: f.desc,
+                kind,
+                rarity: f.rarity,
+                mods: StatMods {
+                    attack: 0,
+                    max_hp: 0,
+                    armor: 0,
+                },
+                price: f.price,
+                class_hint: None,
+            }
+        })
+        .collect()
+}
+
+/// The Sunderlakes fish catalog, built once and reused for `item` lookups.
+pub fn fish() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_fish)
+}
+
+/// The per-tick well-fed regen a special (legendary) fish grants when eaten, if
+/// it carries one - reuses the same `HealOverTime` self-effect as cooked food
+/// (see `use_item`). `None` for ordinary fish.
+pub fn fish_well_fed(id: u32) -> Option<i32> {
+    if !(FISH_BASE..FISH_BASE + FISH_COUNT).contains(&id) {
+        return None;
+    }
+    FISH_DEFS
+        .iter()
+        .find(|f| FISH_BASE + f.slot == id)
+        .filter(|f| f.well_fed > 0)
+        .map(|f| f.well_fed)
+}
+
 pub fn item(id: u32) -> Option<&'static Item> {
     ITEMS
         .iter()
         .find(|i| i.id == id)
         .or_else(|| frontier_items().iter().find(|i| i.id == id))
         .or_else(|| reaches_items().iter().find(|i| i.id == id))
+        .or_else(|| kaelmyr_items().iter().find(|i| i.id == id))
+        .or_else(|| materials().iter().find(|i| i.id == id))
+        .or_else(|| crafted().iter().find(|i| i.id == id))
+        .or_else(|| fish().iter().find(|i| i.id == id))
 }
 
 // ---- Generated catalogs (Frontier and Sundered Reaches) ------------------
@@ -985,8 +1591,18 @@ pub const FRONTIER_TIERS: usize = 20;
 /// Number of Sundered Reaches loot tiers - one per zone (see world::REACHES_ZONES_DATA).
 pub const REACHES_TIERS: usize = 20;
 
+/// Number of Kaelmyr loot tiers - one per zone (see world::KAELMYR_ZONES_DATA).
+pub const KAELMYR_TIERS: usize = 20;
+
 const FRONTIER_ITEM_BASE: u32 = 3000;
 const REACHES_ITEM_BASE: u32 = 3200;
+/// Kaelmyr, the Ashen Reach: a third generated continent, its gear one clear
+/// step past the drowned Reaches. IDs live in the free 3400..3600 band (authored
+/// items top out well below 3000; materials start at 4000).
+pub const KAELMYR_ITEM_BASE: u32 = 3400;
+/// The Cinderfall Shore relic (Kaelmyr tier-0 relic), dropped on the ashen shore
+/// and collected for the ash-cairn board's opening bounty.
+pub const KAELMYR_SHORE_RELIC_ID: u32 = KAELMYR_ITEM_BASE + 9;
 
 /// The full generated frontier item catalog (200 items).
 pub fn frontier_items() -> &'static [Item] {
@@ -998,6 +1614,12 @@ pub fn frontier_items() -> &'static [Item] {
 pub fn reaches_items() -> &'static [Item] {
     static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
     CATALOG.get_or_init(build_reaches_items)
+}
+
+/// The full generated Kaelmyr item catalog (200 items).
+pub fn kaelmyr_items() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_kaelmyr_items)
 }
 
 /// The drop table for a frontier zone (tier 0..FRONTIER_TIERS): representative
@@ -1015,6 +1637,14 @@ pub fn reaches_loot(tier: usize) -> &'static [u32] {
     static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
     let tables = TABLES.get_or_init(|| generated_loot_tables(REACHES_ITEM_BASE, REACHES_TIERS));
     tables[tier.min(REACHES_TIERS - 1)].as_slice()
+}
+
+/// The drop table for a Kaelmyr zone (tier 0..KAELMYR_TIERS), same shape as
+/// `reaches_loot` but drawn from the Kaelmyr catalog.
+pub fn kaelmyr_loot(tier: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| generated_loot_tables(KAELMYR_ITEM_BASE, KAELMYR_TIERS));
+    tables[tier.min(KAELMYR_TIERS - 1)].as_slice()
 }
 
 fn generated_loot_tables(base_id: u32, tiers: usize) -> Vec<Vec<u32>> {
@@ -1137,6 +1767,49 @@ fn build_reaches_items() -> Vec<Item> {
         },
         draught_desc: "A briny restorative pressed from abyssal kelp and pearl-dust.",
         relic_desc: "A relic of the drowned realm with no combat use; merchants pay dearly for these.",
+    })
+}
+
+fn build_kaelmyr_items() -> Vec<Item> {
+    // One ashland material per zone, low to high - matched to KAELMYR_ZONES_DATA.
+    const MATERIALS: [&str; KAELMYR_TIERS] = [
+        "Ashglass",
+        "Cinderbound",
+        "Emberforged",
+        "Slagsteel",
+        "Pyrewrought",
+        "Charbone",
+        "Glowstone",
+        "Sootglass",
+        "Magmawrought",
+        "Basaltbound",
+        "Stormglass",
+        "Skyforged",
+        "Voidcinder",
+        "Wrathsteel",
+        "Hollowbone",
+        "Choirglass",
+        "Sunderash",
+        "Godsforged",
+        "Cataclysm",
+        "Worldwound",
+    ];
+    // Kaelmyr is the deepest continent yet, so every tier reads as endgame gear.
+    const TIER_RARITY: [Rarity; KAELMYR_TIERS] = [Rarity::Legendary; KAELMYR_TIERS];
+    build_generated_items(GeneratedRealm {
+        base_id: KAELMYR_ITEM_BASE,
+        // Continue the power curve one full continent past the Reaches: Kaelmyr
+        // tier 0 lands just above Reaches tier 19.
+        power_offset: (FRONTIER_TIERS + REACHES_TIERS) as i32,
+        materials: &MATERIALS,
+        rarities: &TIER_RARITY,
+        gear_desc: |type_name| {
+            format!(
+                "Ash-forged {type_name}, hammered on the burning anvils of Kaelmyr and never once cooled."
+            )
+        },
+        draught_desc: "A scalding tonic brewed from ash-lichen and cinder-salt.",
+        relic_desc: "A relic of the Ashen Reach with no combat use; collectors pay a fortune for these.",
     })
 }
 
@@ -1292,12 +1965,164 @@ mod tests {
             .iter()
             .chain(frontier_items().iter())
             .chain(reaches_items().iter())
+            .chain(kaelmyr_items().iter())
+            .chain(materials().iter())
+            .chain(crafted().iter())
+            .chain(fish().iter())
             .map(|i| i.id)
             .collect();
         ids.sort_unstable();
         let n = ids.len();
         ids.dedup();
         assert_eq!(n, ids.len(), "duplicate item id");
+    }
+
+    #[test]
+    fn materials_form_a_clean_sellable_catalog() {
+        assert_eq!(materials().len(), 25, "five skills x five tiers");
+        for m in materials() {
+            assert!(
+                m.id >= MATERIAL_BASE && m.id < MATERIAL_BASE + 100,
+                "material {} sits in the 4000 band",
+                m.id
+            );
+            assert!(
+                matches!(m.kind, ItemKind::Valuable),
+                "raw materials are sellable valuables for now"
+            );
+            assert!(m.sell_price() >= 1, "materials are worth something");
+            // Look-ups resolve through the shared catalog.
+            assert!(item(m.id).is_some(), "material {} is not findable", m.id);
+        }
+    }
+
+    #[test]
+    fn every_equippable_item_carries_real_stats() {
+        // No dead gear: every wearable item in every catalog must actually
+        // grant at least one stat, so nothing is a pure downgrade to bare hands.
+        for it in ITEMS
+            .iter()
+            .chain(frontier_items().iter())
+            .chain(reaches_items().iter())
+        {
+            if matches!(it.kind, ItemKind::Equipment(_)) {
+                assert!(
+                    it.power() > 0,
+                    "equippable item {} ({}) has no stats",
+                    it.id,
+                    it.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn crafted_goods_form_a_clean_catalog() {
+        assert_eq!(
+            crafted().len(),
+            52,
+            "ten crafted kinds x five tiers, plus two masterwork sinks"
+        );
+        for c in crafted() {
+            assert!(
+                c.id >= CRAFTED_BASE && c.id < CRAFTED_BASE + 300,
+                "crafted item {} sits in the 4200 band",
+                c.id
+            );
+            assert!(c.sell_price() >= 1, "crafted goods are worth something");
+            assert!(
+                item(c.id).is_some(),
+                "crafted item {} is not findable",
+                c.id
+            );
+            assert!(
+                materials().iter().all(|m| m.id != c.id),
+                "crafted item {} collides with a raw material",
+                c.id
+            );
+        }
+    }
+
+    #[test]
+    fn fish_catalog_is_a_clean_band_of_sell_and_edible_species() {
+        let all = fish();
+        assert_eq!(all.len() as u32, FISH_COUNT, "forty fish species");
+        let mut edible = 0;
+        let mut sell_only = 0;
+        let mut specials = 0;
+        let mut min_price = i64::MAX;
+        let mut max_price = 0;
+        for f in all {
+            assert!(
+                f.id >= FISH_BASE && f.id < FISH_BASE + 100,
+                "fish {} sits in the 4600 band",
+                f.id
+            );
+            // Clear of every other catalog band.
+            assert!(f.id >= 4600, "fish must not collide with materials/crafted");
+            assert!(item(f.id).is_some(), "fish {} is not findable", f.id);
+            assert!(f.sell_price() >= 1, "every fish is worth something");
+            min_price = min_price.min(f.price);
+            max_price = max_price.max(f.price);
+            match f.kind {
+                ItemKind::Consumable { heal, restore } => {
+                    edible += 1;
+                    assert!(heal > 0 || restore > 0, "an edible fish must do something");
+                    if fish_well_fed(f.id).is_some() {
+                        specials += 1;
+                    }
+                }
+                ItemKind::Valuable => sell_only += 1,
+                ItemKind::Equipment(_) => panic!("no fish is equipment"),
+            }
+        }
+        // Roughly a third edible, the rest pure sell loot.
+        assert!(
+            (10..=16).contains(&edible),
+            "about a third of fish should be edible, got {edible}"
+        );
+        assert_eq!(
+            edible + sell_only,
+            FISH_COUNT as i32,
+            "no third kind of fish"
+        );
+        assert!(specials >= 3, "a few rare fish carry a well-fed special");
+        // A wide price spread: cheap minnows to prized several-hundred-gold catches.
+        assert!(
+            min_price <= 15,
+            "there are a few-gold minnows, got {min_price}"
+        );
+        assert!(
+            max_price >= 500,
+            "there are prized catches, got {max_price}"
+        );
+        // Only fish carry a well-fed special outside the food catalog.
+        for f in all {
+            if let Some(regen) = fish_well_fed(f.id) {
+                assert!(regen > 0 && regen <= 10, "special regen is modest");
+                assert!(
+                    matches!(f.kind, ItemKind::Consumable { .. }),
+                    "a special fish must be edible"
+                );
+            }
+        }
+        assert_eq!(fish_well_fed(FISH_BASE + FISH_COUNT + 1), None);
+    }
+
+    #[test]
+    fn power_ranks_gear_and_is_zero_for_non_gear() {
+        let sword = ITEMS
+            .iter()
+            .find(|it| matches!(it.kind, ItemKind::Equipment(Slot::Weapon)))
+            .expect("a weapon exists");
+        assert!(sword.power() > 0);
+        assert!(
+            ITEMS
+                .iter()
+                .filter(|it| matches!(it.kind, ItemKind::Consumable { .. }))
+                .all(|it| it.power() == 0),
+            "consumables have no gear-power"
+        );
     }
 
     #[test]
@@ -1425,6 +2250,43 @@ mod tests {
     }
 
     #[test]
+    fn kaelmyr_loot_outclasses_the_deepest_reaches_tier() {
+        // Kaelmyr continues the curve one continent past the Reaches: entry-tier
+        // Kaelmyr gear must beat the Reaches' top tier, and the whole catalog must
+        // resolve through item(id) in the 3400..3600 band.
+        let reaches_top = item(REACHES_ITEM_BASE + 19 * 10).expect("deepest reaches blade exists");
+        let kaelmyr_entry = item(KAELMYR_ITEM_BASE).expect("first kaelmyr blade exists");
+        assert!(
+            kaelmyr_entry.mods.attack > reaches_top.mods.attack,
+            "kaelmyr entry gear should out-damage the deepest reaches gear"
+        );
+        for tier in 0..KAELMYR_TIERS as u32 {
+            for i in 0..10 {
+                let id = KAELMYR_ITEM_BASE + tier * 10 + i;
+                assert!(item(id).is_some(), "kaelmyr item {id} should resolve");
+                assert!(
+                    (KAELMYR_ITEM_BASE..KAELMYR_ITEM_BASE + 200).contains(&id),
+                    "kaelmyr ids must stay in 3400..3600"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kaelmyr_relics_state_they_are_not_combat_items() {
+        for tier in 0..KAELMYR_TIERS {
+            let id = KAELMYR_ITEM_BASE + (tier as u32) * 10 + 9;
+            let relic = item(id).expect("kaelmyr relic should exist");
+            assert_eq!(relic.kind, ItemKind::Valuable);
+            assert!(
+                relic.desc.contains("no combat use"),
+                "{} should explain its lack of combat use",
+                relic.name
+            );
+        }
+    }
+
+    #[test]
     fn reaches_relics_state_they_are_not_combat_items() {
         for tier in 0..REACHES_TIERS {
             let id = REACHES_ITEM_BASE + (tier as u32) * 10 + 9;
@@ -1444,6 +2306,7 @@ mod tests {
             .iter()
             .chain(frontier_items().iter())
             .chain(reaches_items().iter())
+            .chain(kaelmyr_items().iter())
         {
             if it.kind == ItemKind::Valuable {
                 let summary = it.stat_summary();

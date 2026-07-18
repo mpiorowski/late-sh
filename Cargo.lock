@@ -977,10 +977,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "common"
-version = "0.1.0"
-
-[[package]]
 name = "compact_str"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2475,16 +2471,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "getch"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13990e2d5b29e1770ddf7fc000afead4acb9bd8f8a9602de63bf189e261b1ba8"
-dependencies = [
- "libc",
- "termios",
-]
-
-[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3611,7 +3597,6 @@ dependencies = [
  "irc-proto",
  "kdl",
  "late-core",
- "nes",
  "nix 0.29.0",
  "opentelemetry",
  "opentelemetry-http",
@@ -4155,15 +4140,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mos6502"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.13.0",
- "common",
- "getch",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4207,16 +4183,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
-]
-
-[[package]]
-name = "nes"
-version = "0.1.0"
-dependencies = [
- "bitflags 1.3.2",
- "common",
- "mos6502",
- "phf 0.11.3",
 ]
 
 [[package]]

@@ -97,7 +97,7 @@ Cross-module touchpoints (outside this folder):
 - `app/lobby/workspace.rs`: the backtick cycle (`GameWorkspace` enum + pure `next_workspace`; `dashboard/input.rs` keeps only the key binding): Home chat → each match waiting on your move (nearest deadline first, `DailyState::my_turn_matches`) → each house table where you hold a seat (roster order, `HouseState::my_seated_tables`) → each unfinished Arcade daily puzzle (lobby order, `arcade/workspace.rs::unfinished_daily_stops`) → Home. Rooms no longer participate; hopping preserves the first stop's `return_screen` (Arcade stops don't record one — a chain passing through resumes with `Screen::Arcade`), and the wrap back to Home skips the modal (`board_input::leave_board` / `house::input::leave_table`).
 - `app/common/primitives.rs`: `Screen::DailyMatch` (outside the Tab cycle, like door games).
 - `app/common/sidebar.rs`: `DAILY_HEIGHT`, render arm, `SidebarProps.daily`.
-- `late-core/src/models/user.rs`: `RightSidebarComponent::Daily` (key `daily`, label `Lobby`), default order `[Visualizer, Music, Daily, Bonsai]`, `normalize_right_sidebar_components` backfills missing panels for existing users.
+- `late-core/src/models/user.rs`: `RightSidebarComponent::Daily` (key `daily`, label `Lobby`), default order `[Daily, Visualizer, Music, Bonsai]`, `normalize_right_sidebar_components` backfills missing panels for existing users.
 - `app/chat/state.rs` + `app/chat/input.rs`: composer `/challenge [@user] <game label>` parses to a `DailyChallengeRequest` (carrying the `DailyGame`) which chat input hands to `DailyState` post methods.
 - `app/notify/mod.rs`: `Notification::daily_your_turn(game_label, opponent)` (`Kind::GameEvents`).
 - `app/help_modal/data.rs`: `Ctrl+Q` + `/challenge` help entries.

@@ -7,6 +7,7 @@ pub const PROFILE_AWARD_RANK_LIMIT: i32 = 3;
 pub const LATEANIA_ARCHDEMON_AWARD_CATEGORY: &str = "lateania_archdemon";
 pub const LATEANIA_FRONTIER_KING_AWARD_CATEGORY: &str = "lateania_frontier_king";
 pub const LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY: &str = "lateania_sundering_deep";
+pub const LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY: &str = "lateania_kaethyr_ascendant";
 pub const NETHACK_AMULET_AWARD_CATEGORY: &str = "nethack_amulet";
 pub const NETHACK_ASCENSION_AWARD_CATEGORY: &str = "nethack_ascension";
 pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
@@ -229,6 +230,7 @@ pub fn award_badge(category: &str, rank: i32) -> String {
         LATEANIA_ARCHDEMON_AWARD_CATEGORY
             | LATEANIA_FRONTIER_KING_AWARD_CATEGORY
             | LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY
+            | LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY
             | NETHACK_AMULET_AWARD_CATEGORY
             | NETHACK_ASCENSION_AWARD_CATEGORY
             | GREENDRAGON_DRAGON_AWARD_CATEGORY
@@ -247,10 +249,11 @@ pub fn award_category_code(category: &str) -> &'static str {
         "twenty_forty_eight" => "24#",
         "snake" => "SN",
         // Boss badges are coded after the boss, not the place: Mal'Gareth,
-        // the King who was promised Nothing, YSsgar.
+        // the King who was promised Nothing, YSsgar, KAethyr Ascendant.
         LATEANIA_ARCHDEMON_AWARD_CATEGORY => "LMG",
         LATEANIA_FRONTIER_KING_AWARD_CATEGORY => "LKN",
         LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => "LYS",
+        LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY => "LKA",
         NETHACK_AMULET_AWARD_CATEGORY => "NHA",
         NETHACK_ASCENSION_AWARD_CATEGORY => "NHY",
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "GDS",
@@ -268,6 +271,7 @@ pub fn award_category_label(category: &str) -> &'static str {
         LATEANIA_ARCHDEMON_AWARD_CATEGORY => "Lateania Archdemon",
         LATEANIA_FRONTIER_KING_AWARD_CATEGORY => "Lateania Frontier King",
         LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => "Lateania Sundering Deep",
+        LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY => "Lateania Kaethyr Ascendant",
         NETHACK_AMULET_AWARD_CATEGORY => "NetHack Amulet",
         NETHACK_ASCENSION_AWARD_CATEGORY => "NetHack Ascension",
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "Green Dragon Slayer",
@@ -285,9 +289,10 @@ pub fn award_category_priority(category: &str) -> i32 {
         LATEANIA_ARCHDEMON_AWARD_CATEGORY => 10,
         LATEANIA_FRONTIER_KING_AWARD_CATEGORY => 11,
         LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => 12,
-        NETHACK_AMULET_AWARD_CATEGORY => 13,
-        NETHACK_ASCENSION_AWARD_CATEGORY => 14,
-        GREENDRAGON_DRAGON_AWARD_CATEGORY => 15,
+        LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY => 13,
+        NETHACK_AMULET_AWARD_CATEGORY => 14,
+        NETHACK_ASCENSION_AWARD_CATEGORY => 15,
+        GREENDRAGON_DRAGON_AWARD_CATEGORY => 16,
         _ => 99,
     }
 }
@@ -307,8 +312,9 @@ pub fn format_score_value(category: &str, value: i64) -> String {
     match category {
         "top_chips" => format!("{value} chips"),
         "arcade_wins" => format!("{value} pts"),
-        // Yssgar pays no chips; the badge itself is the prize.
+        // Yssgar and Kaethyr pay no chips; the badge itself is the prize.
         LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => "Yssgar slain".to_string(),
+        LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY => "Kaethyr Ascendant slain".to_string(),
         LATEANIA_ARCHDEMON_AWARD_CATEGORY
         | LATEANIA_FRONTIER_KING_AWARD_CATEGORY
         | NETHACK_AMULET_AWARD_CATEGORY
@@ -337,8 +343,9 @@ impl From<tokio_postgres::Row> for ProfileAward {
 mod tests {
     use super::{
         LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
-        LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
-        NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, award_category_label, format_score_value,
+        LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
+        NETHACK_AMULET_AWARD_CATEGORY, NETHACK_ASCENSION_AWARD_CATEGORY, award_badge,
+        award_category_label, format_score_value,
     };
 
     #[test]
@@ -364,6 +371,18 @@ mod tests {
         assert_eq!(
             format_score_value(LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, 0),
             "Yssgar slain"
+        );
+        assert_eq!(
+            award_badge(LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, 1),
+            "LKA"
+        );
+        assert_eq!(
+            award_category_label(LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY),
+            "Lateania Kaethyr Ascendant"
+        );
+        assert_eq!(
+            format_score_value(LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, 0),
+            "Kaethyr Ascendant slain"
         );
     }
 
