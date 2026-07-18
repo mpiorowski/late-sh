@@ -1,0 +1,44 @@
+[package]
+name = "late-dcss"
+version = "0.1.0"
+edition = "2024"
+
+# Standalone host for the Dungeon Crawl Stone Soup door game. Runs the real
+# upstream crawl console binary on a PTY and exposes it over SSH, so late-ssh
+# reaches it as a network-proxied door (the same shape as the nethack host).
+# See late-ssh/src/app/door/dcss/CONTEXT.md.
+
+[[bin]]
+name = "late-dcss"
+path = "src/main.rs"
+
+[features]
+# No-op: CI builds/tests the workspace with `--features otel`, which requires
+# every member to define the feature. This host has no telemetry deps of its own
+# (it logs via tracing-subscriber fmt), so `otel` is a no-op here. Wire real OTLP
+# exporters in if host-side traces/metrics are ever wanted.
+otel = []
+
+[dependencies]
+# Core Utils
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Async / Runtime
+tokio = { workspace = true }
+
+# SSH transport
+russh = { workspace = true }
+
+# Identity: shared-secret -> derived ed25519 client key (mirrors the nethack host)
+blake3 = { workspace = true }
+
+# Server host-key generation (matches late-ssh's RNG usage)
+getrandom = { workspace = true }
+
+# PTY allocation for the crawl child (openpty/setsid/TIOCSWINSZ) plus `signal`
+# for the SIGHUP graceful-save on teardown (crawl hangup-saves like nethack; the
+# dgamelaunch servers rely on the same behavior). Linux-only host, so nix is an
+# unconditional dep.
+nix = { workspace = true, features = ["term", "process", "signal"] }

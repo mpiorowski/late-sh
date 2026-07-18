@@ -1,0 +1,130 @@
+name: dcss
+
+# Dedicated CI/CD for the DCSS door, responsible only for the from-source
+# binary and its standalone SSH host (late-dcss, twin of late-nethack):
+#   - build_validate: compile the dcss-build stage and prove the crawl binary
+#     runs (--version resolves the baked DATADIR and version info). Runs on
+#     changes to the build and weekly, to catch upstream / checksum breakage
+#     early (the build fetches a pinned tarball from GitHub over the network).
+#   - build_runtime_dcss: build the runtime-dcss target (the late-dcss host
+#     image) to catch breakage in that stage on Dockerfile PRs. Nothing else
+#     builds runtime-dcss on PR.
+#   - verify_deployed: manual, per-environment. Confirms the live late-dcss
+#     deployment is rolled out and the door is enabled on service-ssh.
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .github/workflows/dcss.yml
+  schedule:
+    - cron: "0 6 * * 3" # Wednesdays 06:00 UTC (staggered a day after dopewars')
+  workflow_dispatch:
+    inputs:
+      run_verify_deployed:
+        description: "Also verify the door is enabled on the live pod after building"
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: "Target environment for verify_deployed"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+permissions:
+  contents: read
+
+jobs:
+  build_validate:
+    name: build_validate_dcss_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build only the dcss-build stage and load it locally so we can run the
+      # binary. The stage itself already asserts the binary and data tree land
+      # under /opt/dcss; we re-prove the binary actually runs here.
+      - name: build_dcss_stage
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: dcss-build
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: dcss-build:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: smoke_test_binary
+        run: |
+          docker run --rm dcss-build:ci /opt/dcss/bin/crawl -version
+
+  build_runtime_dcss:
+    name: build_runtime_dcss_image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build the runtime-dcss target (the late-dcss host image) to catch
+      # breakage in that stage on Dockerfile PRs. We only prove it builds; it is
+      # not pushed here (deploy_dcss.yml builds and pushes the released image).
+      - name: build_runtime_dcss_target
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime-dcss
+          platforms: linux/amd64
+          push: false
+          tags: late-dcss:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  verify_deployed:
+    name: verify_deployed
+    needs: build_validate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_verify_deployed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment/late-dcss -n default --timeout=180s
+
+      - name: verify_door_enabled
+        run: |
+          # LATE_DCSS_ENABLED is a CLIENT flag: it lives on service-ssh (which
+          # reaches the host over SSH), NOT on the late-dcss host pod. Read it
+          # there, mirroring nethack.yml.
+          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
+          echo "service-ssh pod: ${POD}"
+          enabled=$(kubectl exec "${POD}" -- printenv LATE_DCSS_ENABLED || true)
+          echo "LATE_DCSS_ENABLED=${enabled}"
+          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) echo "door enabled" ;;
+            *) echo "::warning::DCSS door is not enabled (LATE_DCSS_ENABLED=${enabled})" ;;
+          esac

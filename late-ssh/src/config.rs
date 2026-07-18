@@ -83,6 +83,12 @@ pub struct Config {
     pub nethack_host: String,
     pub nethack_port: u16,
     pub nethack_secret: String,
+    /// DCSS door game: reached over SSH like nethack. `enabled` gates only
+    /// the client; the host (`late-dcss`) is deployed unconditionally.
+    pub dcss_enabled: bool,
+    pub dcss_host: String,
+    pub dcss_port: u16,
+    pub dcss_secret: String,
     /// dopewars door game: reached over SSH like nethack. `enabled` gates only
     /// the client; the host (`late-dopewars`) is deployed unconditionally.
     pub dopewars_enabled: bool,
@@ -229,6 +235,13 @@ impl Config {
             "nethack: NetHack door-game host (late-nethack) target and status"
         );
         tracing::info!(
+            enabled = self.dcss_enabled,
+            host = %self.dcss_host,
+            port = self.dcss_port,
+            has_secret = !self.dcss_secret.is_empty(),
+            "dcss: DCSS door-game host (late-dcss) target and status"
+        );
+        tracing::info!(
             enabled = self.dopewars_enabled,
             host = %self.dopewars_host,
             port = self.dopewars_port,
@@ -285,6 +298,14 @@ impl Config {
                 .context("LATE_NETHACK_SECRET must be set when LATE_NETHACK_ENABLED is true")?
         } else {
             optional("LATE_NETHACK_SECRET").unwrap_or_default()
+        };
+
+        let dcss_enabled = optional_bool("LATE_DCSS_ENABLED", false)?;
+        let dcss_secret = if dcss_enabled {
+            optional("LATE_DCSS_SECRET")
+                .context("LATE_DCSS_SECRET must be set when LATE_DCSS_ENABLED is true")?
+        } else {
+            optional("LATE_DCSS_SECRET").unwrap_or_default()
         };
 
         let dopewars_enabled = optional_bool("LATE_DOPEWARS_ENABLED", false)?;
@@ -397,6 +418,10 @@ impl Config {
             nethack_host: optional("LATE_NETHACK_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
             nethack_port: optional_parse("LATE_NETHACK_PORT", 2323)?,
             nethack_secret,
+            dcss_enabled,
+            dcss_host: optional("LATE_DCSS_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
+            dcss_port: optional_parse("LATE_DCSS_PORT", 2325)?,
+            dcss_secret,
             dopewars_enabled,
             dopewars_host: optional("LATE_DOPEWARS_HOST")
                 .unwrap_or_else(|| "127.0.0.1".to_string()),

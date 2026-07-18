@@ -167,13 +167,18 @@ really a new Lateania-style game, not "The Pit."
 1. **dopewars** - **done, shipped.** GPL, terminal-native. Runs as its own
    `late-dopewars` SSH host (NetHack-style), single-player with a shared
    high-score table. See `late-ssh/src/app/door/dopewars/CONTEXT.md`.
-2. **Usurper** - second easy PTY door, scratches the LORD-RPG itch with a clean
+2. **DCSS** - **done, built (prod deploy pending).** Same standalone-SSH-host
+   pattern as NetHack (`late-dcss` host crate + `door/dcss` client), from-source
+   0.34.1 console build with wizard mode compiled out. File-based milestones
+   (no scraping) deferred to a v2. See `late-ssh/src/app/door/dcss/CONTEXT.md`.
+   First rollout must be `deploy_dcss.yml` (it builds the image).
+3. **Usurper** - second easy PTY door, scratches the LORD-RPG itch with a clean
    license while we decide on LotGD.
-3. **Legend of the Green Dragon** - the marquee "this is basically LORD" feature,
+4. **Legend of the Green Dragon** - the marquee "this is basically LORD" feature,
    but budget real effort: it's a web app, so either a native Rust port
    (Lateania-style) or a TUI shim over the PHP backend. Decide pattern before
    starting.
-4. **TradeWars via twclone** - the most-requested game, finally tractable.
+5. **TradeWars via twclone** - the most-requested game, finally tractable.
    Run the GPL-2 twclone server next to our Postgres and write a native Rust
    JSON client. More work than dopewars but no licensing/DOS/BBS nightmare, and
    the payoff is the game people keep asking for. It's still a v1.0.0-rc1 with

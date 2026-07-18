@@ -424,6 +424,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             )
             .with_username_directory(state.username_directory.clone()),
         )),
+        dcss_enabled: state.config.dcss_enabled,
+        dcss_host: state.config.dcss_host.clone(),
+        dcss_port: state.config.dcss_port,
+        dcss_secret: state.config.dcss_secret.clone(),
         dopewars_enabled: state.config.dopewars_enabled,
         dopewars_host: state.config.dopewars_host.clone(),
         dopewars_port: state.config.dopewars_port,

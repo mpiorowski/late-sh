@@ -917,6 +917,10 @@ impl russh::server::Handler for ClientHandler {
                 )
                 .with_username_directory(self.state.username_directory.clone()),
             )),
+            dcss_enabled: self.state.config.dcss_enabled,
+            dcss_host: self.state.config.dcss_host.clone(),
+            dcss_port: self.state.config.dcss_port,
+            dcss_secret: self.state.config.dcss_secret.clone(),
             dopewars_enabled: self.state.config.dopewars_enabled,
             dopewars_host: self.state.config.dopewars_host.clone(),
             dopewars_port: self.state.config.dopewars_port,

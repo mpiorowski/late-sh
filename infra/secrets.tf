@@ -173,6 +173,30 @@ resource "kubernetes_secret_v1" "dopewars_identity_secret" {
 }
 
 # =============================================================================
+# DCSS Door Identity Seed
+# =============================================================================
+# Shared secret authorizing late-ssh -> late-dcss. The same value is injected
+# into BOTH the service-ssh client (LATE_DCSS_SECRET) and the late-dcss host
+# pod, which each derive the same ed25519 key from it (see late-dcss).
+
+resource "random_password" "dcss_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "dcss_identity_secret" {
+  metadata {
+    name = "dcss-identity-secret"
+  }
+
+  data = {
+    secret = random_password.dcss_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Icecast Passwords
 # =============================================================================
 

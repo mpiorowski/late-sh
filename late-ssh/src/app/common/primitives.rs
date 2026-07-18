@@ -63,6 +63,7 @@ pub enum Screen {
     Lateania,
     Rebels,
     Nethack,
+    Dcss,
     Dopewars,
     GreenDragon,
     Artboard,
@@ -96,6 +97,7 @@ impl Screen {
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
+            | Screen::Dcss
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
@@ -115,6 +117,7 @@ impl Screen {
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
+            | Screen::Dcss
             | Screen::Dopewars
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
@@ -137,6 +140,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
+        Screen::Dcss => "DCSS",
         Screen::Dopewars => "dopewars",
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "Arcade",
@@ -267,6 +271,7 @@ mod tests {
             Screen::Lateania,
             Screen::Rebels,
             Screen::Nethack,
+            Screen::Dcss,
             Screen::Dopewars,
             Screen::GreenDragon,
         ] {

@@ -105,3 +105,51 @@ GPLv2 compliance notes:
     pinned "Source" pointer above (the exact upstream tarball we compile) and
     the Dockerfile build recipe with the distribution so recipients can obtain
     and rebuild that source.
+
+
+Dungeon Crawl Stone Soup
+------------------------
+
+late.sh hosts Dungeon Crawl Stone Soup as a door game (the "DCSS" screen). The
+console game binary is compiled from official upstream source in the Dockerfile
+("dcss-build" stage) and ships in the "runtime-dcss" image, where the late-dcss
+host runs it as a child process; players reach it remotely over the late.sh SSH
+server.
+
+  Program:    Dungeon Crawl Stone Soup 0.34.1 (console build)
+  License:    GNU General Public License, version 2 or later (GPL-2.0-or-later)
+              https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+              (see the release's LICENSE file; some bundled components carry
+              other GPL-compatible licenses, listed there)
+  Copyright:  Copyright (C) the Dungeon Crawl Stone Soup team; portions
+              Copyright (C) 1997-2005 Linley Henzell and contributors
+  Upstream:   https://crawl.develz.org/
+              https://github.com/crawl/crawl
+  Installed:  Built from the official upstream 0.34.1 source release in the
+              Dockerfile ("dcss-build" stage). The source tarball's SHA-256 is
+              verified (sha256sum -c, fail-closed) before building.
+  Source:     The complete, corresponding machine-readable source is the pinned
+              upstream release tarball recorded in the Dockerfile
+              (DCSS_URL / DCSS_VERSION / DCSS_SHA256), also available from the
+              upstream sites above. Our build recipe is the Dockerfile.
+  Modified:   No. No source is patched; the build is configuration only (the
+              default console target, installed with
+              `make install prefix=/opt/dcss NOWIZARD=y` -- the Makefile's own
+              knob that compiles out wizard/debug mode for hosts with untrusted
+              players).
+
+GPLv2 compliance notes:
+
+  - crawl's own copyright and license notices are part of the upstream source
+    tree we build and are left intact (the data tree in the image includes the
+    release's LICENSE and CREDITS files).
+  - late.sh does not distribute copies of the crawl program to players; it
+    only lets them play it over the network. GPLv2 has no network-service
+    copyleft clause, so remote play does not trigger a source-distribution
+    obligation.
+  - If you redistribute a build of late.sh that includes the crawl binary
+    (for example, by publishing the runtime-dcss Docker image), GPLv2
+    requires you to also make the corresponding source available. Keep the
+    pinned "Source" pointer above (the exact upstream tarball we compile) and
+    the Dockerfile build recipe with the distribution so recipients can obtain
+    and rebuild that source.
