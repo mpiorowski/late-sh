@@ -54,7 +54,10 @@ pub(crate) fn legend_lines() -> Vec<Line<'static>> {
             "LMG Lateania Archdemon  LKN Lateania Frontier King",
             dim,
         )),
-        Line::from(Span::styled("LYS Lateania Sundering Deep", dim)),
+        Line::from(Span::styled(
+            "LYS Lateania Sundering Deep  LKA Kaethyr Ascendant",
+            dim,
+        )),
         Line::from(Span::styled(
             "NHA NetHack Amulet  NHY NetHack Ascension",
             dim,

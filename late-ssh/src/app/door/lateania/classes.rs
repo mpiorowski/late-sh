@@ -20,6 +20,11 @@ pub enum Class {
     Paladin,
     Warlock,
     Berserker,
+    Beastlord,
+    Skald,
+    Runemaster,
+    Valewalker,
+    Spiritmaster,
 }
 
 /// The resource a class spends on abilities.
@@ -61,7 +66,7 @@ pub struct ClassStats {
 }
 
 impl Class {
-    pub const ALL: [Class; 12] = [
+    pub const ALL: [Class; 17] = [
         Class::Warrior,
         Class::Mage,
         Class::Cleric,
@@ -74,6 +79,11 @@ impl Class {
         Class::Paladin,
         Class::Warlock,
         Class::Berserker,
+        Class::Beastlord,
+        Class::Skald,
+        Class::Runemaster,
+        Class::Valewalker,
+        Class::Spiritmaster,
     ];
 
     /// The hard level ceiling. Reaching it is the long game.
@@ -93,6 +103,11 @@ impl Class {
             Self::Paladin => "Paladin",
             Self::Warlock => "Warlock",
             Self::Berserker => "Berserker",
+            Self::Beastlord => "Beastlord",
+            Self::Skald => "Skald",
+            Self::Runemaster => "Runemaster",
+            Self::Valewalker => "Valewalker",
+            Self::Spiritmaster => "Spiritmaster",
         }
     }
 
@@ -112,6 +127,11 @@ impl Class {
             Self::Paladin => Score::Strength,
             Self::Warlock => Score::Charisma,
             Self::Berserker => Score::Strength,
+            Self::Beastlord => Score::Wisdom,
+            Self::Skald => Score::Charisma,
+            Self::Runemaster => Score::Intelligence,
+            Self::Valewalker => Score::Strength,
+            Self::Spiritmaster => Score::Charisma,
         }
     }
 
@@ -129,6 +149,11 @@ impl Class {
             Self::Paladin => Resource::Mana,
             Self::Warlock => Resource::Mana,
             Self::Berserker => Resource::Rage,
+            Self::Beastlord => Resource::Spirit,
+            Self::Skald => Resource::Tempo,
+            Self::Runemaster => Resource::Mana,
+            Self::Valewalker => Resource::Focus,
+            Self::Spiritmaster => Resource::Souls,
         }
     }
 
@@ -147,6 +172,11 @@ impl Class {
             Self::Paladin => "Holy bulwark - shields the line and mends it in one breath.",
             Self::Warlock => "Pact-bound caster - feeds foes to the dark for power.",
             Self::Berserker => "Reckless juggernaut - hits hardest as death draws near.",
+            Self::Beastlord => "Beast-tamer warlord - fights beside an empowered companion.",
+            Self::Skald => "Norse battle-singer - war-chants that quicken and embolden.",
+            Self::Runemaster => "Rune-carver - burst nukes and a slow-burning graven rune.",
+            Self::Valewalker => "Scythe-warrior of the wild - sustained melee, mends on the cut.",
+            Self::Spiritmaster => "Spirit-binder - shadow curses that fester and feed you.",
         }
     }
 
@@ -250,6 +280,46 @@ impl Class {
                 had any right to be. They do not parry, they do not retreat, they do not stop. \
                 Win quickly, the wise say, or do not fight a Berserker at all."
             }
+            Self::Beastlord => {
+                "The Beastlord never walks alone. Where others learned the sword, they \
+                learned the wild - to read the set of an ear, the meaning of a growl, and \
+                to earn a loyalty no coin could buy. In the fight they are the lesser \
+                danger: it is the thing at their side, made greater by the bond between \
+                them, that opens the enemy's throat. Their Spirit is the tether of that \
+                bond, and a Beastlord with a strong companion is worth two of anyone else."
+            }
+            Self::Skald => {
+                "The Skald fights with axe in one hand and a saga in the other. Every blow \
+                is a line of verse and every verse a spur, quickening the blood of those \
+                who stand with them until a tired shield-wall finds it can swing all night. \
+                Tempo is the meter they keep, spent on war-chants that hasten and embolden. \
+                When the fight is over the Skald is already composing how it will be sung - \
+                and they mean to be in the chorus, not the elegy."
+            }
+            Self::Runemaster => {
+                "The Runemaster does not cast so much as carve. Each spell is a rune scored \
+                into the air with a blade of will, holding raw force until it is loosed - a \
+                blaze of power now, or a graven mark left to smoulder and then detonate. \
+                Mana is the ink of that carving, deep and precise. Patient where the Mage is \
+                frantic, a Runemaster sets their runes early and lets the battlefield come \
+                apart on their own schedule."
+            }
+            Self::Valewalker => {
+                "The Valewalker keeps the green marches with a scythe meant for more than \
+                grain. Half warrior and half warden, they wade into the fight and take root, \
+                each reaping stroke drawing a little of the wild's own vigour back into their \
+                frame. Focus is their patience, spent on cuts that never tire. They do not \
+                dazzle and they do not fall - they simply keep swinging, mending as they go, \
+                until the harvest is in."
+            }
+            Self::Spiritmaster => {
+                "The Spiritmaster walks with a retinue no one else can see. They bind the \
+                lingering dead and the hungry spirits of dark places, setting them upon the \
+                living to gnaw and wither and drink. Souls are the coin of that binding, paid \
+                by the dying. A Spiritmaster rarely strikes a blow themselves; they need not, \
+                when the air around their enemy is already full of teeth - and every scream \
+                feeds them a little more."
+            }
         }
     }
 
@@ -268,6 +338,11 @@ impl Class {
             Self::Paladin => "Aura of Devotion",
             Self::Warlock => "Pact of Souls",
             Self::Berserker => "Frenzy",
+            Self::Beastlord => "Pack Bond",
+            Self::Skald => "War-Chant",
+            Self::Runemaster => "Runic Overflow",
+            Self::Valewalker => "Reaping Harvest",
+            Self::Spiritmaster => "Spirit Siphon",
         }
     }
 
@@ -293,6 +368,18 @@ impl Class {
             }
             Self::Warlock => "Each foe you slay feeds your pact, restoring a surge of Mana.",
             Self::Berserker => "The closer you are to death, the harder your blows land.",
+            Self::Beastlord => {
+                "Your bond empowers your companion: it hits harder, is hardier, and looses \
+                its skills more often."
+            }
+            Self::Skald => {
+                "Your song keeps perfect time: Tempo returns faster than any other resource."
+            }
+            Self::Runemaster => "Every offensive spell strikes for extra arcane damage.",
+            Self::Valewalker => "Each melee strike you land mends a little of your own hurt.",
+            Self::Spiritmaster => {
+                "Each foe you slay yields its spirit, restoring health and Souls."
+            }
         }
     }
 
@@ -383,6 +470,42 @@ impl Class {
                 attack: 7 + l * 2,
                 resource_regen: 7,
             },
+            // Beastlord: a sturdy companion-fighter - hardy like the Ranger, its own
+            // strikes middling because the empowered beast does the heavy work.
+            Self::Beastlord => ClassStats {
+                max_hp: 40 + l * 9,
+                max_resource: 70 + l * 3,
+                attack: 5 + (l * 3) / 2,
+                resource_regen: 7,
+            },
+            // Skald: a support-bruiser like the Bard, with deep, fast-flowing Tempo.
+            Self::Skald => ClassStats {
+                max_hp: 38 + l * 8,
+                max_resource: 80 + l * 3,
+                attack: 6 + (l * 3) / 2,
+                resource_regen: 10,
+            },
+            // Runemaster: a glass burst-caster like the Mage.
+            Self::Runemaster => ClassStats {
+                max_hp: 30 + l * 7,
+                max_resource: 60 + l * 4,
+                attack: 5 + l * 2,
+                resource_regen: 7,
+            },
+            // Valewalker: a self-sustaining melee warrior, tough and steady.
+            Self::Valewalker => ClassStats {
+                max_hp: 42 + l * 10,
+                max_resource: 90,
+                attack: 6 + l * 2,
+                resource_regen: 9,
+            },
+            // Spiritmaster: a DoT caster a touch hardier than the Mage, fed by the dying.
+            Self::Spiritmaster => ClassStats {
+                max_hp: 32 + l * 8,
+                max_resource: 60 + l * 4,
+                attack: 5 + l * 2,
+                resource_regen: 6,
+            },
         }
     }
 
@@ -412,6 +535,11 @@ impl Class {
             Self::Paladin => "paladin",
             Self::Warlock => "warlock",
             Self::Berserker => "berserker",
+            Self::Beastlord => "beastlord",
+            Self::Skald => "skald",
+            Self::Runemaster => "runemaster",
+            Self::Valewalker => "valewalker",
+            Self::Spiritmaster => "spiritmaster",
         }
     }
 
@@ -429,6 +557,11 @@ impl Class {
             "paladin" => Some(Self::Paladin),
             "warlock" => Some(Self::Warlock),
             "berserker" => Some(Self::Berserker),
+            "beastlord" => Some(Self::Beastlord),
+            "skald" => Some(Self::Skald),
+            "runemaster" => Some(Self::Runemaster),
+            "valewalker" => Some(Self::Valewalker),
+            "spiritmaster" => Some(Self::Spiritmaster),
             _ => None,
         }
     }
@@ -745,6 +878,66 @@ pub const ARCHETYPES: &[ArchetypeDef] = &[
         "Warbringer",
         "Rage made armor; weather the storm and keep on swinging.",
     ),
+    dps(
+        "packmaster",
+        Class::Beastlord,
+        "Packmaster",
+        "Drive the hunt on the attack - you and your beast strike far harder.",
+    ),
+    tank(
+        "warden_of_beasts",
+        Class::Beastlord,
+        "Wildwarden",
+        "Stand as the shield your companion fights behind, hard to bring down.",
+    ),
+    dps(
+        "berserker_skald",
+        Class::Skald,
+        "Warsinger",
+        "A war-song turned to slaughter - your every blow bites deeper.",
+    ),
+    healer(
+        "loresinger",
+        Class::Skald,
+        "Loresinger",
+        "A saga of mending whose every verse knits your wounds the harder.",
+    ),
+    dps(
+        "warcarver",
+        Class::Runemaster,
+        "Warcarver",
+        "Carve runes of pure ruin - your graven force blazes fiercer.",
+    ),
+    tank(
+        "wardcarver",
+        Class::Runemaster,
+        "Wardcarver",
+        "Score runes of shelter into your skin to blunt the blows that land.",
+    ),
+    dps(
+        "reaper_of_the_vale",
+        Class::Valewalker,
+        "Vale-Reaper",
+        "Give the scythe its head; your reaping strokes fall heavier.",
+    ),
+    tank(
+        "greenwarden",
+        Class::Valewalker,
+        "Greenwarden",
+        "Root deep as an old oak and let the fight break against you.",
+    ),
+    dps(
+        "spiritreaver",
+        Class::Spiritmaster,
+        "Spiritreaver",
+        "Loose the bound dead without mercy - your spirits bite far deeper.",
+    ),
+    healer(
+        "soulwarden",
+        Class::Spiritmaster,
+        "Soulwarden",
+        "Turn stolen spirit inward - your siphoning mends you far more.",
+    ),
 ];
 
 /// The two archetype choices for a class, in quick-pick order.
@@ -805,7 +998,7 @@ mod tests {
 
     #[test]
     fn all_classes_round_trip_their_persistence_key_and_are_distinct() {
-        assert_eq!(Class::ALL.len(), 12, "twelve classes now");
+        assert_eq!(Class::ALL.len(), 17, "seventeen classes now");
         let mut keys = std::collections::HashSet::new();
         let mut names = std::collections::HashSet::new();
         for class in Class::ALL {
@@ -823,6 +1016,44 @@ mod tests {
         assert_eq!(Class::Necromancer.resource(), Resource::Souls);
         assert_eq!(Class::from_key("druid"), Some(Class::Druid));
         assert_eq!(Class::from_key("necromancer"), Some(Class::Necromancer));
+    }
+
+    #[test]
+    fn the_five_newcomers_are_fully_wired() {
+        let newcomers = [
+            (Class::Beastlord, "beastlord", Resource::Spirit),
+            (Class::Skald, "skald", Resource::Tempo),
+            (Class::Runemaster, "runemaster", Resource::Mana),
+            (Class::Valewalker, "valewalker", Resource::Focus),
+            (Class::Spiritmaster, "spiritmaster", Resource::Souls),
+        ];
+        for (class, key, resource) in newcomers {
+            assert_eq!(class.as_key(), key);
+            assert_eq!(Class::from_key(key), Some(class));
+            assert_eq!(class.resource(), resource);
+            assert!(!class.tagline().is_empty());
+            assert!(!class.description().is_empty());
+            assert!(!class.trait_name().is_empty());
+            assert!(!class.trait_desc().is_empty());
+            // Each newcomer offers exactly two archetype paths at ARCHETYPE_LEVEL.
+            let paths = archetypes_for(class);
+            assert_eq!(paths.len(), 2, "{class:?} needs two archetypes");
+            for path in paths {
+                assert_eq!(archetype_by_key(path.key).map(|a| a.key), Some(path.key));
+            }
+        }
+    }
+
+    #[test]
+    fn archetype_keys_are_globally_unique() {
+        let mut keys = std::collections::HashSet::new();
+        for a in ARCHETYPES {
+            assert!(keys.insert(a.key), "duplicate archetype key {}", a.key);
+        }
+        // Every class has exactly two paths.
+        for class in Class::ALL {
+            assert_eq!(archetypes_for(class).len(), 2, "{class:?}");
+        }
     }
 
     #[test]

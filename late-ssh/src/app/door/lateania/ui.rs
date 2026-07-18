@@ -16,6 +16,7 @@ use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
 
 use super::{
+    appearance,
     classes::Class,
     state::{Panel, State},
     svc::{LogKind, PlayerView},
@@ -120,7 +121,32 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         )])]),
         rows[0],
     );
-    draw_game(frame, rows[1], state, usernames);
+    // While composing a chat line, reserve the bottom row for the say prompt.
+    if let Some(text) = state.chat_text() {
+        let body = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(rows[1]);
+        draw_game(frame, body[0], state, usernames);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    "Say: ",
+                    Style::default()
+                        .fg(theme::AMBER_GLOW())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{text}\u{2588}"),
+                    Style::default().fg(theme::TEXT_BRIGHT()),
+                ),
+                Span::styled(
+                    "   (Enter send · Esc cancel)",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ])),
+            body[1],
+        );
+    } else {
+        draw_game(frame, rows[1], state, usernames);
+    }
 }
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
@@ -335,8 +361,12 @@ fn draw_side(
         Panel::Quests => (quests_panel(view), None),
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
         Panel::Stable => stable_panel(view, state.cursor()),
+        Panel::Taming => taming_panel(view, state.cursor()),
         Panel::Housing => housing_panel(view, state.cursor()),
+        Panel::Portal => portal_panel(view, state.cursor()),
         Panel::Appearance => (appearance_panel(view, state.cursor()), None),
+        Panel::Crafting => crafting_panel(view, state.cursor()),
+        Panel::Map => (atlas_panel(view), None),
     };
     let off = scroll_offset(
         state.list_scroll(),
@@ -607,6 +637,20 @@ fn room_panel(
                 }),
             ),
         ]));
+        // The companion's unlocked auto-skills (fire automatically in combat).
+        if !pet.skills.is_empty() {
+            let names = pet
+                .skills
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.extend(side_text_wrap(
+                &format!("    skills: {names}"),
+                theme::AMBER_DIM(),
+                width,
+            ));
+        }
     }
     let exits = if view.exits.is_empty() {
         "none".to_string()
@@ -716,6 +760,47 @@ fn room_panel(
             ));
         }
     }
+    if !view.nodes.is_empty() {
+        lines.push(section("Resources"));
+        for n in &view.nodes {
+            let (marker, color) = if n.gatherable {
+                ("◆ ", theme::AMBER())
+            } else {
+                ("· ", theme::TEXT_DIM())
+            };
+            let detail = if n.gatherable {
+                format!(", {} (press y)", n.skill.to_lowercase())
+            } else if !n.reason.is_empty() {
+                format!(", {}", n.reason)
+            } else {
+                String::new()
+            };
+            lines.extend(side_text_wrap(
+                &format!("{marker}{}{detail}", n.name),
+                color,
+                width,
+            ));
+        }
+    }
+    // Tameable wild beasts of Broceliande: what roams here and whether you can
+    // take it (the Animal Taming trade). Opened with `q`.
+    if let Some(taming) = &view.taming
+        && !taming.entries.is_empty()
+    {
+        lines.push(section("Wild beasts"));
+        for e in &taming.entries {
+            let (color, tail) = if e.reason.is_empty() {
+                (theme::SUCCESS(), format!(", {}% to tame (press q)", e.odds))
+            } else {
+                (theme::TEXT_DIM(), format!(", {}", e.reason))
+            };
+            lines.extend(side_text_wrap(
+                &format!("\u{1F43E} {}{tail}", e.name),
+                color,
+                width,
+            ));
+        }
+    }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
     lines
@@ -812,7 +897,12 @@ fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView) {
 
 /// Left column: portrait, identity headline, and vitals as filled meters.
 fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
-    let mut lines = class_portrait(&view.class_name, accent);
+    let mut lines = composed_portrait(
+        &view.class_key,
+        &view.class_name,
+        &view.appearance_idx,
+        accent,
+    );
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         format!("Lv {} {}", view.level, view.class_name),
@@ -906,6 +996,8 @@ fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
             .add_modifier(Modifier::BOLD),
     )));
     lines.extend(wrap(&view.trait_desc, 24));
+    lines.push(Line::raw(""));
+    lines.extend(skills_block(view));
     lines
 }
 
@@ -956,6 +1048,42 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
     }
     lines.push(Line::raw(""));
     lines.push(hint("c", "close  v abilities  t bag"));
+    lines
+}
+
+/// The gathering-trades block: each skill's level and a compact progress
+/// readout. Shown on both the full character sheet and the narrow panel; the `y`
+/// hint teaches how to work a node.
+fn skills_block(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Trades")];
+    if view.skills.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  untrained",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+        return lines;
+    }
+    for s in &view.skills {
+        let progress = if s.xp_next > 0 {
+            format!("{}/{}", s.xp_into, s.xp_next)
+        } else {
+            "max".to_string()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", s.name), Style::default().fg(theme::TEXT())),
+            Span::styled(
+                format!("L{}", s.level),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {progress}"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    lines.push(hint("y", "gather a resource node"));
     lines
 }
 
@@ -1067,6 +1195,13 @@ fn primary_label(class_name: &str) -> &'static str {
     }
 }
 
+/// The display name for a stable class key (empty string if unknown).
+fn class_name_of(class_key: &str) -> String {
+    Class::from_key(class_key)
+        .map(|c| c.name().to_string())
+        .unwrap_or_default()
+}
+
 /// The accent colour that tints a class's portrait and headline.
 fn class_accent(class_name: &str) -> Color {
     match class_name {
@@ -1075,6 +1210,11 @@ fn class_accent(class_name: &str) -> Color {
         "Cleric" => theme::BADGE_GOLD(),
         "Rogue" => theme::ERROR(),
         "Ranger" => theme::SUCCESS(),
+        "Beastlord" => theme::SUCCESS(),
+        "Skald" => theme::AMBER_GLOW(),
+        "Runemaster" => theme::MENTION(),
+        "Valewalker" => theme::SUCCESS(),
+        "Spiritmaster" => theme::MENTION(),
         _ => theme::TEXT_BRIGHT(),
     }
 }
@@ -1087,27 +1227,71 @@ fn class_emblem(class_name: &str) -> &'static str {
         "Cleric" => "✚ Cleric",
         "Rogue" => "† Rogue",
         "Ranger" => "➹ Ranger",
+        "Beastlord" => "❦ Beastlord",
+        "Skald" => "♪ Skald",
+        "Runemaster" => "ᛟ Runemaster",
+        "Valewalker" => "⚑ Valewalker",
+        "Spiritmaster" => "✵ Spiritmaster",
         _ => "Adventurer",
     }
 }
 
-/// A small ASCII portrait bust, accent-tinted, with the class emblem below it.
-/// The bust art is shared; the emblem and colour give each class its identity.
-fn class_portrait(class_name: &str, accent: Color) -> Vec<Line<'static>> {
-    const BUST: [&str; 6] = [
-        "  ▄█████▄ ",
-        " ██▀───▀██",
-        " █  ◉ ◉  █",
-        " █   ▾   █",
-        " ██  ◡  ██",
-        "  ▀█████▀ ",
-    ];
-    let mut lines: Vec<Line<'static>> = BUST
+/// A hair-colour tint for the portrait fringe, from the Hair option index.
+fn hair_tint(idx: u8) -> Color {
+    match idx {
+        3 | 9 => theme::TEXT_DIM(),   // silver-streaked / salt-and-pepper
+        5 => theme::TEXT_BRIGHT(),    // raven-dark (near-black reads as bright ink)
+        6 => theme::ERROR(),          // fire-red
+        7 | 8 => theme::BADGE_GOLD(), // sun-bleached / ash-blond
+        _ => theme::AMBER_DIM(),
+    }
+}
+
+/// An eye-colour tint for the portrait, from the Eyes option index.
+fn eye_tint(idx: u8) -> Color {
+    match idx {
+        1 | 3 | 9 => theme::AMBER(), // warm brown / amber / hazel
+        2 | 10 => theme::MENTION(),  // pale blue / ice-pale
+        7 => theme::SUCCESS(),       // glass-green
+        6 => theme::TEXT_DIM(),      // storm-dark
+        11 => theme::BADGE_GOLD(),   // gold-flecked
+        _ => theme::TEXT_BRIGHT(),
+    }
+}
+
+/// A composed ASCII portrait bust built from the player's own appearance choices
+/// (build/hair/eyes/bearing) plus a class-flavoured headpiece, tinted with the
+/// class accent and per-feature colours. Falls back cleanly when indices are
+/// missing (old/absent selections). The class emblem is shown below the bust.
+fn composed_portrait(
+    class_key: &str,
+    class_name: &str,
+    sel: &[u8],
+    accent: Color,
+) -> Vec<Line<'static>> {
+    // Pad/clamp the selection to a full field set.
+    let mut idx = [0u8; appearance::N_FIELDS];
+    for (i, slot) in idx.iter_mut().enumerate() {
+        *slot = sel.get(i).copied().unwrap_or(0);
+    }
+    let rows = appearance::portrait(class_key, &idx);
+    // Row roles: 0 adornment (accent), 1 hair (hair tint), 3 eyes (eye tint),
+    // the rest the neutral face frame.
+    let hair = hair_tint(idx[1]);
+    let eyes = eye_tint(idx[2]);
+    let mut lines: Vec<Line<'static>> = rows
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(i, row)| {
+            let (color, weight) = match i {
+                0 => (accent, Modifier::BOLD),
+                1 => (hair, Modifier::empty()),
+                3 => (eyes, Modifier::BOLD),
+                _ => (theme::TEXT_BRIGHT(), Modifier::empty()),
+            };
             Line::from(Span::styled(
-                (*row).to_string(),
-                Style::default().fg(accent),
+                row.clone(),
+                Style::default().fg(color).add_modifier(weight),
             ))
         })
         .collect();
@@ -1173,6 +1357,8 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
             Style::default().fg(theme::BADGE_GOLD()),
         )));
     }
+    lines.push(Line::raw(""));
+    lines.extend(skills_block(view));
     lines.push(Line::raw(""));
     lines.push(hint("c", "close  v abilities  t bag"));
     lines.push(hint("[ ]", "scroll"));
@@ -1331,20 +1517,64 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
             Style::default().fg(rarity_color(&it.rarity))
         };
         let spans = vec![Span::styled(format!("{marker} {}{}", it.name, tag), style)];
+        lines.push(Line::from(spans));
         if !it.stats.is_empty() {
-            lines.push(Line::from(spans));
-            lines.push(Line::from(Span::styled(
+            let mut stat_spans = vec![Span::styled(
                 format!("    {}", it.stats),
                 Style::default().fg(theme::TEXT_DIM()),
-            )));
-            continue;
+            )];
+            if let Some(cmp) = compare_span(it.compare_pct) {
+                stat_spans.push(cmp);
+            }
+            lines.push(Line::from(stat_spans));
         }
-        lines.push(Line::from(spans));
+        if let Some(cmp) = compare_line(&it.compare) {
+            lines.push(cmp);
+        }
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter equip/use"));
-    lines.push(hint("x", "sell (at a shop)  t close"));
+    lines.push(hint("x", "sell one (at a shop)"));
+    lines.push(hint("A/C/J", "sell all / commons / non-upgrades"));
+    lines.push(hint("t", "close"));
     (lines, sel_line)
+}
+
+/// A coloured "vs worn" comparison line for a gear row: green for an upgrade,
+/// red for a downgrade, amber for a mixed trade-off. None when there's nothing
+/// to compare.
+fn compare_line(compare: &str) -> Option<Line<'static>> {
+    if compare.is_empty() {
+        return None;
+    }
+    let up = compare == "new slot" || compare.contains('+');
+    let down = compare.contains('-');
+    let color = match (up, down) {
+        (true, false) => theme::SUCCESS(),
+        (false, true) => theme::ERROR(),
+        _ => theme::AMBER(),
+    };
+    Some(Line::from(Span::styled(
+        format!("    {compare}"),
+        Style::default().fg(color),
+    )))
+}
+
+/// A small coloured " ▲+18%" / " ▼-12%" tag comparing gear to what's worn: green
+/// for an upgrade, red for worse, faint for a sidegrade. None renders nothing.
+fn compare_span(compare_pct: Option<i32>) -> Option<Span<'static>> {
+    let pct = compare_pct?;
+    let (arrow, color) = if pct > 0 {
+        ('\u{25B2}', theme::SUCCESS())
+    } else if pct < 0 {
+        ('\u{25BC}', theme::ERROR())
+    } else {
+        ('=', theme::TEXT_DIM())
+    };
+    Some(Span::styled(
+        format!("  {arrow}{pct:+}%"),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))
 }
 
 fn inventory_item_tag(equipped: bool, slot: Option<&str>) -> String {
@@ -1410,13 +1640,20 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<u
         let mut spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
         if !e.stats.is_empty() {
             lines.push(Line::from(spans));
-            lines.push(Line::from(vec![
+            let mut stat_spans = vec![
                 Span::styled(
                     format!("    {}", e.stats),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
                 Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
-            ]));
+            ];
+            if let Some(cmp) = compare_span(e.compare_pct) {
+                stat_spans.push(cmp);
+            }
+            lines.push(Line::from(stat_spans));
+            if let Some(cmp) = compare_line(&e.compare) {
+                lines.push(cmp);
+            }
             continue;
         }
         spans.push(Span::styled(
@@ -1428,6 +1665,69 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<u
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter buy"));
     lines.push(hint("b", "leave shop"));
+    (lines, sel_line)
+}
+
+fn crafting_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+    let Some(craft) = &view.crafting else {
+        return (
+            vec![Line::from(Span::styled(
+                "No crafting station here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
+    };
+    let mut sel_line = None;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("Crafting - {}", craft.stations),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+    ];
+    if craft.entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  no recipes here",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, e) in craft.entries.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let marker = if selected { ">" } else { " " };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else if e.craftable {
+            Style::default().fg(theme::TEXT())
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        // Name row, with a gated reason when it can't be made.
+        let mut name_spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+        if !e.craftable && !e.reason.is_empty() {
+            name_spans.push(Span::styled(
+                format!("  ({})", e.reason),
+                Style::default().fg(theme::ERROR()),
+            ));
+        }
+        lines.push(Line::from(name_spans));
+        // Ingredient row.
+        lines.push(Line::from(Span::styled(
+            format!("    {} · {}", e.skill.to_lowercase(), e.inputs),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter craft"));
+    lines.push(hint("u", "close"));
     (lines, sel_line)
 }
 
@@ -1513,6 +1813,232 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
     lines.push(hint("w/s", "select  Enter buy"));
     lines.push(hint("x", &format!("feed/tend ({}g)", stable.feed_cost)));
     lines.push(hint("p", "leave stable"));
+    (lines, sel_line)
+}
+
+/// The Animal Taming panel: the tameable wild beasts roaming this room, each
+/// with its required Taming level and the player's odds. Enter attempts the
+/// selected tame; success makes the beast your active companion.
+fn taming_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+    let Some(taming) = &view.taming else {
+        return (
+            vec![Line::from(Span::styled(
+                "No tameable beast roams here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
+    };
+    let mut sel_line = None;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Animal Taming",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("your taming level: {}", taming.taming_level),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+    ];
+    for (i, e) in taming.entries.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let marker = if selected { ">" } else { " " };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        // The odds/reason: green when tamable, red when out of reach or spooked.
+        let (status, status_color) = if e.reason.is_empty() {
+            (format!("{}% chance", e.odds), theme::SUCCESS())
+        } else {
+            (e.reason.clone(), theme::ERROR())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {} {}", e.glyph, e.name), name_style),
+            Span::styled(
+                format!("  (need Lv{})", e.req_level),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("    {status}"),
+            Style::default().fg(status_color),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter tame"));
+    lines.push(hint("q", "leave"));
+    (lines, sel_line)
+}
+
+/// The whole-world atlas: one row per major region with an exploration meter
+/// (where you've been vs. what's unexplored), a boss/loot count, and a danger
+/// tier. A region you've never entered reads as undiscovered.
+fn atlas_panel(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(
+        "World Atlas",
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    ))];
+
+    let total: usize = view.atlas.iter().map(|r| r.total).sum();
+    let explored: usize = view.atlas.iter().map(|r| r.explored).sum();
+    let pct = explored
+        .checked_mul(100)
+        .and_then(|n| n.checked_div(total))
+        .unwrap_or(0);
+    lines.push(Line::from(Span::styled(
+        format!("  {explored}/{total} rooms mapped ({pct}%)"),
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::raw(""));
+
+    for r in &view.atlas {
+        let discovered = r.explored > 0;
+        let name_color = if !discovered {
+            theme::TEXT_FAINT()
+        } else if r.explored >= r.total {
+            theme::SUCCESS()
+        } else {
+            theme::TEXT_BRIGHT()
+        };
+        // Region name + a boss/loot marker (◆ where the great loot lairs).
+        let mut head = vec![Span::styled(
+            format!("  {}", r.name),
+            Style::default().fg(name_color).add_modifier(Modifier::BOLD),
+        )];
+        if r.bosses > 0 {
+            head.push(Span::styled(
+                format!("  \u{25C6}{}", r.bosses),
+                Style::default().fg(theme::BADGE_GOLD()),
+            ));
+        }
+        if r.here {
+            head.push(Span::styled(
+                "  \u{25C8} you are here",
+                Style::default().fg(theme::MENTION()),
+            ));
+        }
+        lines.push(Line::from(head));
+
+        if discovered {
+            let bar = meter(r.explored as i32, r.total.max(1) as i32, 12);
+            let bar_color = if r.explored >= r.total {
+                theme::SUCCESS()
+            } else {
+                theme::AMBER()
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("    {bar} "), Style::default().fg(bar_color)),
+                Span::styled(
+                    format!("{}/{} · {}", r.explored, r.total, r.tier),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("    unexplored · reach via {}", r.note),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "  \u{25C6}=bosses (loot)  [ ] scroll  m close",
+        Style::default().fg(theme::TEXT_FAINT()),
+    )));
+    lines
+}
+
+fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+    let Some(portal) = &view.portal else {
+        return (
+            vec![Line::from(Span::styled(
+                "No waystone here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
+    };
+    let mut sel_line = None;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "The Ways",
+            Style::default()
+                .fg(theme::MENTION())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "Step through to any waystone you know of.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+    ];
+    // Continent gates come first in the destination list, then the villages,
+    // then the islands.
+    let continent_count = super::world::CONTINENT_WAYSTONES.len();
+    let village_count = super::archipelago::VILLAGES.len();
+    for (i, (label, _room, here, sealed)) in portal.entries.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        if i == continent_count {
+            lines.push(Line::from(Span::styled(
+                "  — the portal villages —",
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
+        }
+        if i == continent_count + village_count {
+            lines.push(Line::from(Span::styled(
+                "  — the Shattered Archipelago —",
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
+        }
+        let marker = if selected { ">" } else { " " };
+        let suffix = if *here {
+            "  (here)"
+        } else if *sealed {
+            "  (sealed)"
+        } else {
+            ""
+        };
+        let style = if *here {
+            Style::default().fg(theme::TEXT_DIM())
+        } else if *sealed {
+            Style::default().fg(theme::TEXT_FAINT())
+        } else if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        let style = if selected && (*here || *sealed) {
+            style.bg(theme::BG_SELECTION())
+        } else {
+            style
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker} {label}{suffix}"),
+            style,
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter travel"));
+    lines.push(hint("i", "close"));
     (lines, sel_line)
 }
 
@@ -1606,6 +2132,18 @@ fn appearance_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         )),
         Line::raw(""),
     ];
+    // A live portrait of the current choices, so players can preview how each
+    // change reshapes their character before committing.
+    if view.classed {
+        let accent = class_accent(&view.class_name);
+        lines.extend(composed_portrait(
+            &view.class_key,
+            &view.class_name,
+            &view.appearance_idx,
+            accent,
+        ));
+        lines.push(Line::raw(""));
+    }
     for (i, (label, value)) in view.appearance.iter().enumerate() {
         let selected = i == cursor;
         let marker = if selected { ">" } else { " " };
@@ -1713,6 +2251,8 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(hint("c v t", "sheet abilities bag"));
     lines.push(hint("j k", "quests titles"));
     lines.push(hint("r f", "recall follow"));
+    lines.push(hint(";", "nearest haven"));
+    lines.push(hint("'", "say (local chat)"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
     }
@@ -1722,6 +2262,13 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     if view.housing.is_some() {
         lines.push(hint("n", "housing ledger"));
     }
+    if view.crafting.is_some() {
+        lines.push(hint("u", "craft (station here)"));
+    }
+    if view.portal.is_some() {
+        lines.push(hint("i", "the ways (portal)"));
+    }
+    lines.push(hint("m", "world atlas"));
     lines.push(hint("Esc", "leave"));
     lines
 }
@@ -2148,18 +2695,38 @@ fn follow_panel(
             tag,
         ));
     }
-    // Profile the highlighted adventurer: show their chosen bio.
-    if let Some(occ) = view.occupants.get(cursor)
-        && !occ.bio.is_empty()
-    {
-        lines.push(Line::raw(""));
-        for l in wrap_plain(&occ.bio, 30) {
+    // Profile the highlighted adventurer: show their composed portrait, then bio.
+    if let Some(occ) = view.occupants.get(cursor) {
+        if !occ.class_key.is_empty() {
+            lines.push(Line::raw(""));
+            let name = usernames
+                .get(&occ.user_id)
+                .cloned()
+                .unwrap_or_else(|| "adventurer".to_string());
+            let accent = class_accent(&class_name_of(&occ.class_key));
+            lines.extend(composed_portrait(
+                &occ.class_key,
+                &class_name_of(&occ.class_key),
+                &occ.appearance_idx,
+                accent,
+            ));
             lines.push(Line::from(Span::styled(
-                l,
+                format!(" {name}"),
                 Style::default()
-                    .fg(theme::TEXT())
-                    .add_modifier(Modifier::ITALIC),
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
             )));
+        }
+        if !occ.bio.is_empty() {
+            lines.push(Line::raw(""));
+            for l in wrap_plain(&occ.bio, 30) {
+                lines.push(Line::from(Span::styled(
+                    l,
+                    Style::default()
+                        .fg(theme::TEXT())
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            }
         }
     }
     lines.push(Line::raw(""));
@@ -2189,20 +2756,55 @@ fn interactable_color(kind: &str) -> ratatui::style::Color {
     match kind {
         "fountain" => theme::SUCCESS(),
         "bank" | "board" | "stable" | "clerk" => theme::AMBER_GLOW(),
+        _ if is_craft_station(kind) => theme::AMBER_GLOW(),
         _ => theme::MENTION(),
     }
+}
+
+/// The craft-station feature tags (see `CraftSkill::station`), which read as
+/// actionable like the other vendors.
+fn is_craft_station(kind: &str) -> bool {
+    matches!(
+        kind,
+        "forge" | "workbench" | "tannery" | "alchemy lab" | "cooking fire"
+    )
 }
 
 /// Whether a feature kind is something you actively use/trade at (vs. just look
 /// at). Drives a brighter, bolder treatment so actionable things pop.
 fn is_actionable_feature(kind: &str) -> bool {
-    matches!(kind, "fountain" | "bank" | "board" | "stable" | "clerk")
+    matches!(kind, "fountain" | "bank" | "board" | "stable" | "clerk") || is_craft_station(kind)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{fit, inventory_item_tag, meter, score_dots};
+    use super::{compare_span, fit, inventory_item_tag, meter, score_dots, scroll_offset};
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn scroll_offset_keeps_the_selection_visible_in_a_long_list() {
+        // A 40-row list in a 10-tall window: the highlighted row must always land
+        // inside the visible window [off, off+height) so nothing you're on scrolls
+        // off-screen (the bug: titles/inventory ran off the bottom).
+        let (total, height) = (40usize, 10usize);
+        let mut off = 0;
+        for sel in 0..total {
+            off = scroll_offset(off, total, Some(sel), height);
+            assert!(
+                sel >= off && sel < off + height,
+                "row {sel} fell outside window [{off}, {})",
+                off + height
+            );
+            assert!(off <= total - height, "offset never overscrolls");
+        }
+    }
+
+    #[test]
+    fn compare_span_colours_upgrades_and_downgrades() {
+        assert!(compare_span(None).is_none());
+        assert!(compare_span(Some(18)).is_some(), "an upgrade shows a tag");
+        assert!(compare_span(Some(-12)).is_some(), "a downgrade shows a tag");
+    }
 
     #[test]
     fn score_dots_scale_from_empty_to_full() {

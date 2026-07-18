@@ -39,12 +39,24 @@ pub enum Panel {
     /// The companion vendor at a capital Stable: select a beast and Enter to buy
     /// it; `x` feeds (heals/raises) the companion you already have.
     Stable,
+    /// The Animal Taming panel: the tameable wild beasts roaming this room, each
+    /// with its required Taming level and your odds. Select one and Enter to
+    /// attempt the tame. Opened with `q` where a tameable beast is present.
+    Taming,
     /// The housing ledger: buy a deed at the clerk, or (inside a home you own)
     /// buy and place a furnishing. `Enter` activates the selected row.
     Housing,
     /// The appearance/bio builder: pick a field with the cursor, `Enter` cycles
     /// its option forward and `x` cycles back.
     Appearance,
+    /// The crafting panel at a station: select a recipe and `Enter` to make it.
+    Crafting,
+    /// The waystone fast-travel menu: pick a destination and `Enter` to step
+    /// through to it.
+    Portal,
+    /// The whole-world atlas: exploration progress per region (read-only,
+    /// scrollable with `[` / `]`). Toggled with `m`.
+    Map,
 }
 
 pub struct State {
@@ -65,6 +77,10 @@ pub struct State {
     join_requested_at: Instant,
     reset_version: u64,
     reset_elsewhere: bool,
+    /// The chat line being composed, if the player is typing (Some = compose
+    /// mode captures keys). Chat is world-local via the service's `say`, so it
+    /// never leaks into late.sh's global feed.
+    chat_buffer: Option<String>,
 }
 
 impl State {
@@ -92,6 +108,7 @@ impl State {
             join_requested_at,
             reset_version,
             reset_elsewhere: false,
+            chat_buffer: None,
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -217,8 +234,11 @@ impl State {
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
             Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
+            Panel::Taming => self.view().taming.map(|t| t.entries.len()).unwrap_or(0),
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
+            Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
             Panel::Appearance => self.view().appearance.len(),
+            Panel::Crafting => self.view().crafting.map(|c| c.entries.len()).unwrap_or(0),
             _ => 0,
         }
     }
@@ -283,10 +303,78 @@ impl State {
         }
     }
 
+    /// Work a resource node in the current room (chop/mine/fish/forage/skin).
+    pub fn gather(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.gather_task(self.user_id);
+        }
+    }
+
+    // ---- Local chat (say) ----------------------------------------------
+    //
+    // Composing a line captures keystrokes until Enter (send) or Esc (cancel).
+    // Sending routes through the service's world-local `say`, so Lateania chat
+    // stays inside Lateania and never reaches late.sh's global feed.
+
+    /// True while the player is typing a chat line (input capture is active).
+    pub fn chat_active(&self) -> bool {
+        self.chat_buffer.is_some()
+    }
+
+    /// The line being composed, for the input prompt (None when not composing).
+    pub fn chat_text(&self) -> Option<&str> {
+        self.chat_buffer.as_deref()
+    }
+
+    /// Begin composing a chat line.
+    pub fn open_chat(&mut self) {
+        if self.chat_buffer.is_none() {
+            self.chat_buffer = Some(String::new());
+        }
+    }
+
+    /// Discard the line being composed.
+    pub fn chat_cancel(&mut self) {
+        self.chat_buffer = None;
+    }
+
+    /// Append a typed character to the chat line (capped so it can't run away).
+    pub fn chat_push(&mut self, c: char) {
+        if let Some(buf) = self.chat_buffer.as_mut()
+            && buf.chars().count() < 200
+        {
+            buf.push(c);
+        }
+    }
+
+    /// Delete the last character of the chat line.
+    pub fn chat_backspace(&mut self) {
+        if let Some(buf) = self.chat_buffer.as_mut() {
+            buf.pop();
+        }
+    }
+
+    /// Send the composed line as local speech, then close compose mode.
+    pub fn chat_send(&mut self) {
+        if let Some(buf) = self.chat_buffer.take() {
+            let msg = buf.trim().to_string();
+            if !msg.is_empty() && self.ensure_player_present() {
+                self.svc.say_task(self.user_id, msg);
+            }
+        }
+    }
+
     /// Speak the word of recall: warp back to Embergate's Town Square.
     pub fn recall(&mut self) {
         if self.ensure_player_present() {
             self.svc.recall_task(self.user_id);
+        }
+    }
+
+    /// Retreat to the nearest safe haven (out of combat only).
+    pub fn retreat(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.retreat_task(self.user_id);
         }
     }
 
@@ -365,6 +453,11 @@ impl State {
         }
     }
 
+    /// Open the Animal Taming panel (only meaningful where a tameable beast roams).
+    pub fn open_taming(&mut self) {
+        self.toggle_panel(Panel::Taming);
+    }
+
     pub fn leave_world(&mut self) {
         self.close_session();
     }
@@ -417,6 +510,13 @@ impl State {
                     self.svc.buy_pet_task(self.user_id, entry.key.clone());
                 }
             }
+            Panel::Taming => {
+                if let Some(taming) = self.view().taming
+                    && let Some(entry) = taming.entries.get(self.cursor)
+                {
+                    self.svc.tame_task(self.user_id, entry.idx);
+                }
+            }
             Panel::Housing => {
                 if let Some(housing) = self.view().housing {
                     if housing.furnish {
@@ -429,9 +529,31 @@ impl State {
                     }
                 }
             }
+            Panel::Portal => {
+                if let Some(portal) = self.view().portal
+                    && let Some((_, room, _, _)) = portal.entries.get(self.cursor)
+                {
+                    // Sealed gates are still sent; the service answers with
+                    // why the way refuses.
+                    self.svc.travel_task(self.user_id, *room);
+                    self.panel = Panel::Room;
+                }
+            }
             Panel::Appearance => self.cycle_appearance(1),
+            Panel::Crafting => {
+                if let Some(cr) = self.view().crafting
+                    && let Some(entry) = cr.entries.get(self.cursor)
+                {
+                    self.svc.craft_task(self.user_id, entry.recipe);
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Open the waystone fast-travel menu (only meaningful on a portal).
+    pub fn open_portal(&mut self) {
+        self.toggle_panel(Panel::Portal);
     }
 
     /// Cycle the highlighted appearance field forward (+1) or back (-1).
@@ -457,6 +579,13 @@ impl State {
             if let Some(row) = view.inventory.get(self.cursor) {
                 self.svc.sell_task(self.user_id, row.item_id);
             }
+        }
+    }
+
+    /// Batch-sell from the inventory panel (all / common / non-upgrades).
+    pub fn sell_batch(&mut self, kind: super::svc::SellBatch) {
+        if self.ensure_player_present() {
+            self.svc.sell_batch_task(self.user_id, kind);
         }
     }
 }

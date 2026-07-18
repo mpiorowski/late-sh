@@ -8,10 +8,14 @@
 //     slot 10; deeper rosters cast from the Abilities panel); z flee.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
+//   - World: y works a resource node here (chop/mine/fish/forage/skin);
+//     u opens the crafting panel where a craft station stands.
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
-//     buys the selected beast and x feeds/tends the one you have. n opens the
-//     housing ledger (buy a deed at the clerk, furnish a home you own from inside).
+//     buys the selected beast and x feeds/tends the one you have. q opens the
+//     Animal Taming panel where a tameable wild beast roams (Enter attempts the
+//     tame). n opens the housing ledger (buy a deed at the clerk, furnish a home
+//     you own from inside).
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory). List panels auto-scroll to
 //     follow the cursor; [ / ] scroll the cursor-less text panels.
@@ -33,6 +37,19 @@ pub enum InputAction {
 }
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
+    // While composing a chat line, keys feed the line until Enter (send) or Esc
+    // (cancel). This runs before the Esc-leaves check so Esc cancels compose
+    // rather than leaving the world. Chat is world-local (never hits late.sh).
+    if state.chat_active() {
+        match byte {
+            0x1B => state.chat_cancel(),
+            b'\r' | b'\n' => state.chat_send(),
+            0x7f | 0x08 => state.chat_backspace(),
+            0x20..=0x7e => state.chat_push(byte as char),
+            _ => {}
+        }
+        return InputAction::Handled;
+    }
     // Lateania reserves Esc for returning to its landing page.
     if byte == 0x1B {
         return InputAction::Leave;
@@ -102,8 +119,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Titles
             | Panel::Follow
             | Panel::Stable
+            | Panel::Taming
             | Panel::Housing
+            | Panel::Portal
             | Panel::Appearance
+            | Panel::Crafting
             | Panel::Abilities
     );
 
@@ -126,6 +146,29 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     if byte == b'0' && !in_list {
         state.use_ability(10);
         return InputAction::Handled;
+    }
+
+    // Batch-sell shortcuts, only inside the Inventory panel (so they don't shadow
+    // the global meanings of A/C/J elsewhere): A = sell all loose gear, C = sell
+    // commons, J = sell junk (anything that wouldn't improve you). All keep your
+    // potions and equipped gear, and need a merchant present.
+    if panel == Panel::Inventory {
+        use super::svc::SellBatch;
+        match byte {
+            b'A' => {
+                state.sell_batch(SellBatch::All);
+                return InputAction::Handled;
+            }
+            b'C' => {
+                state.sell_batch(SellBatch::Common);
+                return InputAction::Handled;
+            }
+            b'J' | b'j' => {
+                state.sell_batch(SellBatch::NonUpgrades);
+                return InputAction::Handled;
+            }
+            _ => {}
+        }
     }
 
     match byte {
@@ -163,6 +206,26 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
+        b'q' | b'Q' => {
+            // The Animal Taming panel opens where a tameable wild beast roams.
+            if view.taming.is_some() {
+                state.open_taming();
+            }
+            InputAction::Handled
+        }
+        b'i' | b'I' => {
+            // The waystone menu opens when standing on a portal. (Moved off `y`,
+            // which the gather action uses.)
+            if view.portal.is_some() {
+                state.open_portal();
+            }
+            InputAction::Handled
+        }
+        b'm' | b'M' => {
+            // Toggle the whole-world atlas.
+            state.toggle_panel(Panel::Map);
+            InputAction::Handled
+        }
         b'o' | b'O' => {
             // Open the Examine list (the "look at things" panel) and refresh the
             // room description in the log.
@@ -178,6 +241,12 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'j' | b'J' => {
             // Quest journal (read-only).
             state.toggle_panel(Panel::Quests);
+            InputAction::Handled
+        }
+        b';' => {
+            // Retreat to the nearest safe haven (out of combat only) - the
+            // way back to a maze zone's gate without walking it.
+            state.retreat();
             InputAction::Handled
         }
         b'r' | b'R' => {
@@ -198,6 +267,24 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'e' | b'E' => {
             // Open the appearance / bio builder.
             state.open_appearance();
+            InputAction::Handled
+        }
+        b'y' | b'Y' => {
+            // Work a resource node here (chop/mine/fish/forage/skin).
+            state.gather();
+            InputAction::Handled
+        }
+        b'u' | b'U' => {
+            // The crafting panel opens where a craft station stands.
+            if view.crafting.is_some() {
+                state.toggle_panel(Panel::Crafting);
+            }
+            InputAction::Handled
+        }
+        b'\'' => {
+            // Open the local chat line (say to the room). World-local; does not
+            // leak into late.sh.
+            state.open_chat();
             InputAction::Handled
         }
         b'\r' | b'\n' => {
@@ -296,6 +383,10 @@ fn select_row(state: &mut State, target: usize) {
 }
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
+    // Arrow keys do nothing while composing a chat line (they'd otherwise move).
+    if state.chat_active() {
+        return true;
+    }
     let in_list = matches!(
         state.panel(),
         Panel::Inventory
@@ -304,8 +395,12 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Titles
             | Panel::Follow
             | Panel::Stable
+            | Panel::Taming
             | Panel::Housing
+            | Panel::Portal
             | Panel::Appearance
+            | Panel::Crafting
+            | Panel::Abilities
     );
     match key {
         b'A' => {
