@@ -139,10 +139,13 @@ async fn run_bridge(
 
     let mut cmd = TokioCommand::new(&cfg.bin);
     // Spawn with a cleared environment and an explicit allowlist. crawl needs a
-    // TERM, a writable HOME (everything lives under `$HOME/.crawl`), a UTF-8
-    // locale for its Unicode map glyphs and ncursesw line drawing, and the
-    // window size. The `-name` argument keys the per-player save inside the
-    // shared playground; crawl skips its name prompt when one is given.
+    // TERM, a writable HOME (everything lives under `$HOME/.crawl`), and a
+    // UTF-8 locale for its Unicode map glyphs and ncursesw line drawing. The
+    // window size comes ONLY from the pty (openpty winsize + TIOCSWINSZ):
+    // LINES/COLUMNS must NOT be exported, because ncurses treats them as an
+    // override of the OS size and then ignores SIGWINCH, freezing crawl at its
+    // spawn-time geometry. The `-name` argument keys the per-player save inside
+    // the shared playground; crawl skips its name prompt when one is given.
     cmd.env_clear()
         .arg("-name")
         .arg(&cfg.playname)
@@ -150,8 +153,6 @@ async fn run_bridge(
         .env("HOME", &cfg.data_dir)
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
-        .env("LINES", cfg.rows.max(1).to_string())
-        .env("COLUMNS", cfg.cols.max(1).to_string())
         .stdin(Stdio::from(
             slave.try_clone().context("clone dcss pty slave for stdin")?,
         ))
