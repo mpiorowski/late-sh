@@ -1,34 +1,18 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use late_core::models::arcade_handle::{self, ClaimOutcome};
 use ratatui::layout::Rect;
 
 use super::proxy::{DcssProcess, ProcessConfig, ProxyStatus};
-use crate::app::door::arcade::ArcadeHandleService;
+use crate::app::door::arcade::{ArcadeHandleService, HandleFlow, HandleKeyResult};
 use crate::render_signal::RenderSignal;
+
+// The launcher UI renders straight off the shared flow's status.
+pub use crate::app::door::arcade::HandleStatus;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     Launcher,
     Running,
-}
-
-/// Where the account stands with its arcade handle (the crawl `-name`).
-/// Written by the background lookup/claim tasks, read by the launcher UI, so
-/// it lives behind an `Arc<Mutex<..>>` like the proxy status.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HandleStatus {
-    /// The initial lookup is in flight.
-    Loading,
-    /// No handle claimed yet: the launcher shows the claim prompt. `error`
-    /// carries the last refusal (bad shape, reserved, taken, db failure).
-    Missing { error: Option<String> },
-    /// A claim is in flight.
-    Claiming,
-    /// The account's immutable handle; launching is possible.
-    Claimed(String),
-    /// The initial lookup failed (db unreachable); Enter retries.
-    Failed,
 }
 
 /// Ticks to swallow launcher input after a game exits. At the 66ms world tick
@@ -38,7 +22,6 @@ pub enum HandleStatus {
 const EXIT_GRACE_TICKS: u8 = 10;
 
 pub struct State {
-    user_id: uuid::Uuid,
     host: String,
     port: u16,
     secret: String,
@@ -58,20 +41,13 @@ pub struct State {
     /// while in the Launcher; while non-zero the launcher swallows input so a
     /// game's trailing keystrokes can't fall through to the global quit.
     exit_grace: u8,
-    /// Accessor for the account's arcade handle. `None` on headless/test paths
-    /// (the prompt then reports the name service as unavailable).
-    handle_svc: Option<ArcadeHandleService>,
-    /// The handle lifecycle, shared with the background lookup/claim tasks.
-    handle: Arc<Mutex<HandleStatus>>,
-    /// Compose buffer for the claim prompt. Only the foreground touches it.
-    entry: String,
-    /// The player asked to launch before the handle was known (hub Enter races
-    /// the lookup; a claim is a launch intent too). `tick()` connects as soon
-    /// as the status lands on `Claimed`.
-    launch_pending: bool,
+    /// The shared arcade-handle launcher flow (lookup, claim prompt, launch
+    /// intent); the claimed handle becomes crawl's `-name`.
+    handle: HandleFlow,
 }
 
 impl State {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         user_id: uuid::Uuid,
         host: String,
@@ -82,8 +58,7 @@ impl State {
         repaint: Option<Arc<RenderSignal>>,
         handle_svc: Option<ArcadeHandleService>,
     ) -> Self {
-        let state = Self {
-            user_id,
+        Self {
             host,
             port,
             secret,
@@ -92,17 +67,15 @@ impl State {
             proxy: None,
             viewport: Rect::new(0, 0, 80, 24),
             term,
+            // A disabled door never looks the handle up.
+            handle: HandleFlow::new(
+                user_id,
+                if enabled { handle_svc } else { None },
+                repaint.clone(),
+            ),
             repaint,
             exit_grace: 0,
-            handle_svc,
-            handle: Arc::new(Mutex::new(HandleStatus::Missing { error: None })),
-            entry: String::new(),
-            launch_pending: false,
-        };
-        if state.enabled && state.handle_svc.is_some() {
-            state.spawn_load();
         }
-        state
     }
 
     pub fn mode(&self) -> Mode {
@@ -131,29 +104,25 @@ impl State {
         if !self.enabled || self.proxy.is_some() {
             return;
         }
-        let status = self.handle.lock().expect("handle mutex").clone();
-        match status {
-            HandleStatus::Claimed(playname) => {
-                self.proxy = Some(DcssProcess::spawn(ProcessConfig {
-                    host: self.host.clone(),
-                    port: self.port,
-                    secret: self.secret.clone(),
-                    playname,
-                    cols: self.viewport.width.max(1),
-                    rows: self.viewport.height.max(1),
-                    term: self.term.clone(),
-                    repaint: self.repaint.clone(),
-                }));
-                self.mode = Mode::Running;
-                self.exit_grace = 0;
-                self.launch_pending = false;
-            }
-            // Handle not known yet: remember the intent; tick() launches when
-            // the in-flight lookup or claim lands on Claimed.
-            HandleStatus::Loading | HandleStatus::Claiming => self.launch_pending = true,
-            // The claim prompt (or the retry hint) is on screen; nothing to do.
-            HandleStatus::Missing { .. } | HandleStatus::Failed => {}
-        }
+        let Some(playname) = self.handle.claimed() else {
+            // Handle not known yet: remember the intent (no-op if the prompt
+            // or retry hint is on screen); tick() launches when the in-flight
+            // lookup or claim lands on Claimed.
+            self.handle.request_launch();
+            return;
+        };
+        self.proxy = Some(DcssProcess::spawn(ProcessConfig {
+            host: self.host.clone(),
+            port: self.port,
+            secret: self.secret.clone(),
+            playname,
+            cols: self.viewport.width.max(1),
+            rows: self.viewport.height.max(1),
+            term: self.term.clone(),
+            repaint: self.repaint.clone(),
+        }));
+        self.mode = Mode::Running;
+        self.exit_grace = 0;
     }
 
     /// Called every app tick: if the process closed (clean save, death, quit, or
@@ -178,23 +147,14 @@ impl State {
         if self.exit_grace > 0 {
             self.exit_grace -= 1;
         }
-        if self.launch_pending {
-            let status = self.handle.lock().expect("handle mutex").clone();
-            match status {
-                HandleStatus::Claimed(_) => self.connect(), // clears the flag
-                // The lookup/claim came back without a handle: the prompt (or
-                // retry hint) is on screen, the intent is void.
-                HandleStatus::Missing { .. } | HandleStatus::Failed => {
-                    self.launch_pending = false;
-                }
-                HandleStatus::Loading | HandleStatus::Claiming => {}
-            }
+        if self.handle.take_ready_launch() {
+            self.connect();
         }
     }
 
     /// Snapshot of the arcade-handle lifecycle for the launcher UI.
     pub fn handle_status(&self) -> HandleStatus {
-        self.handle.lock().expect("handle mutex").clone()
+        self.handle.status()
     }
 
     /// Whether the launcher still owes the player handle work (lookup, claim
@@ -202,139 +162,28 @@ impl State {
     /// once the handle is claimed an idle launcher bounces back to the Games
     /// hub as before.
     pub fn awaiting_handle(&self) -> bool {
-        self.enabled && !matches!(self.handle_status(), HandleStatus::Claimed(_))
+        self.enabled && self.handle.awaiting()
     }
 
     /// The claim prompt's compose buffer, for rendering.
     pub fn entry_input(&self) -> &str {
-        &self.entry
+        self.handle.entry_input()
     }
 
     /// Handle a Launcher-mode key byte. Returns true when consumed; unconsumed
-    /// keys fall through to the global keymap (tab switching, quit). While the
-    /// claim prompt is open every printable byte is consumed, so a typed `q`
-    /// cannot fall through to the global quit mid-word.
+    /// keys fall through to the global keymap (tab switching, quit).
     pub fn launcher_key(&mut self, byte: u8) -> bool {
         if !self.enabled || self.mode == Mode::Running {
             return false;
         }
-        let is_enter = matches!(byte, b'\r' | b'\n');
-        let status = self.handle.lock().expect("handle mutex").clone();
-        match status {
-            HandleStatus::Claimed(_) => {
-                if is_enter {
-                    self.connect();
-                }
-                is_enter
+        match self.handle.key(byte) {
+            HandleKeyResult::Launch => {
+                self.connect();
+                true
             }
-            // Work in flight; swallow Enter so it can't double-submit.
-            HandleStatus::Loading | HandleStatus::Claiming => is_enter,
-            HandleStatus::Failed => {
-                if is_enter {
-                    self.spawn_load();
-                }
-                is_enter
-            }
-            HandleStatus::Missing { .. } => match byte {
-                b'\r' | b'\n' => {
-                    self.submit_entry();
-                    true
-                }
-                0x08 | 0x7f => {
-                    self.entry.pop();
-                    true
-                }
-                0x20..=0x7e => {
-                    if (byte.is_ascii_alphanumeric() || byte == b'_')
-                        && self.entry.len() < arcade_handle::HANDLE_MAX_LEN
-                    {
-                        self.entry.push(byte as char);
-                    }
-                    true
-                }
-                _ => false,
-            },
+            HandleKeyResult::Consumed => true,
+            HandleKeyResult::Ignored => false,
         }
-    }
-
-    /// Validate the compose buffer and, if it holds up, claim it in the
-    /// background. A successful claim doubles as launch intent: the player
-    /// typed the name because they want to play.
-    fn submit_entry(&mut self) {
-        let name = self.entry.clone();
-        if !arcade_handle::handle_shape_valid(&name) {
-            self.set_entry_error(
-                "3-20 characters: letters, digits, underscore; starting with a letter.",
-            );
-            return;
-        }
-        if arcade_handle::handle_reserved(&name) {
-            self.set_entry_error("That name is reserved.");
-            return;
-        }
-        let Some(svc) = self.handle_svc.clone() else {
-            self.set_entry_error("The name service is unavailable.");
-            return;
-        };
-        *self.handle.lock().expect("handle mutex") = HandleStatus::Claiming;
-        self.launch_pending = true;
-        let slot = self.handle.clone();
-        let repaint = self.repaint.clone();
-        let user_id = self.user_id;
-        tokio::spawn(async move {
-            let next = match svc.claim(user_id, &name).await {
-                Ok(ClaimOutcome::Claimed) => HandleStatus::Claimed(name),
-                // A racing double-submit already claimed for this account;
-                // whatever landed first is the handle.
-                Ok(ClaimOutcome::AlreadyClaimed(existing)) => HandleStatus::Claimed(existing),
-                Ok(ClaimOutcome::Taken) => HandleStatus::Missing {
-                    error: Some("That name is already taken.".to_string()),
-                },
-                Err(e) => {
-                    tracing::warn!(error = ?e, "arcade handle claim failed");
-                    HandleStatus::Missing {
-                        error: Some("Couldn't save the name. Try again.".to_string()),
-                    }
-                }
-            };
-            *slot.lock().expect("handle mutex") = next;
-            if let Some(sig) = &repaint {
-                sig.wake();
-            }
-        });
-    }
-
-    fn set_entry_error(&self, message: &str) {
-        *self.handle.lock().expect("handle mutex") = HandleStatus::Missing {
-            error: Some(message.to_string()),
-        };
-    }
-
-    /// Look up the account's handle in the background; the launcher shows
-    /// Loading until the result lands.
-    fn spawn_load(&self) {
-        let Some(svc) = self.handle_svc.clone() else {
-            *self.handle.lock().expect("handle mutex") = HandleStatus::Missing { error: None };
-            return;
-        };
-        *self.handle.lock().expect("handle mutex") = HandleStatus::Loading;
-        let slot = self.handle.clone();
-        let repaint = self.repaint.clone();
-        let user_id = self.user_id;
-        tokio::spawn(async move {
-            let next = match svc.get(user_id).await {
-                Ok(Some(name)) => HandleStatus::Claimed(name),
-                Ok(None) => HandleStatus::Missing { error: None },
-                Err(e) => {
-                    tracing::warn!(error = ?e, "arcade handle lookup failed");
-                    HandleStatus::Failed
-                }
-            };
-            *slot.lock().expect("handle mutex") = next;
-            if let Some(sig) = &repaint {
-                sig.wake();
-            }
-        });
     }
 
     /// Whether the launcher should currently swallow input because a game just

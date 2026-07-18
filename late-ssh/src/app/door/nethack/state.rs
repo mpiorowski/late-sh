@@ -6,7 +6,11 @@ use super::award::NethackAwards;
 use super::milestone::{self, Milestone};
 use super::proxy::{NethackProcess, ProcessConfig, ProxyStatus};
 use super::status;
+use crate::app::door::arcade::{ArcadeHandleService, HandleFlow, HandleKeyResult};
 use crate::render_signal::RenderSignal;
+
+// The launcher UI renders straight off the shared flow's status.
+pub use crate::app::door::arcade::HandleStatus;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -70,6 +74,9 @@ pub struct State {
     last_dlvl: Option<i32>,
     /// Once-per-session debounce for the death activity event.
     death_noted: bool,
+    /// The shared arcade-handle launcher flow (lookup, claim prompt, launch
+    /// intent); the claimed handle becomes NetHack's `-u` playname.
+    handle: HandleFlow,
 }
 
 impl State {
@@ -83,6 +90,7 @@ impl State {
         enabled: bool,
         repaint: Option<Arc<RenderSignal>>,
         awards: Option<NethackAwards>,
+        handle_svc: Option<ArcadeHandleService>,
     ) -> Self {
         Self {
             user_id,
@@ -94,6 +102,12 @@ impl State {
             proxy: None,
             viewport: Rect::new(0, 0, 80, 24),
             term,
+            // A disabled door never looks the handle up.
+            handle: HandleFlow::new(
+                user_id,
+                if enabled { handle_svc } else { None },
+                repaint.clone(),
+            ),
             repaint,
             exit_grace: 0,
             awards,
@@ -132,11 +146,18 @@ impl State {
         if !self.enabled || self.proxy.is_some() {
             return;
         }
+        let Some(playname) = self.handle.claimed() else {
+            // Handle not known yet: remember the intent (no-op if the prompt
+            // or retry hint is on screen); tick() launches when the in-flight
+            // lookup or claim lands on Claimed.
+            self.handle.request_launch();
+            return;
+        };
         self.proxy = Some(NethackProcess::spawn(ProcessConfig {
             host: self.host.clone(),
             port: self.port,
             secret: self.secret.clone(),
-            user_id: self.user_id,
+            playname,
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
@@ -178,8 +199,47 @@ impl State {
                 // (Amulet pickup, ascension) plus feed events (descent, death).
                 self.scan_screen();
             }
-        } else if self.exit_grace > 0 {
+            return;
+        }
+        if self.exit_grace > 0 {
             self.exit_grace -= 1;
+        }
+        if self.handle.take_ready_launch() {
+            self.connect();
+        }
+    }
+
+    /// Snapshot of the arcade-handle lifecycle for the launcher UI.
+    pub fn handle_status(&self) -> HandleStatus {
+        self.handle.status()
+    }
+
+    /// Whether the launcher still owes the player handle work (lookup, claim
+    /// prompt, retry). Keeps the NetHack screen up while no game is running;
+    /// once the handle is claimed an idle launcher bounces back to the Games
+    /// hub as before.
+    pub fn awaiting_handle(&self) -> bool {
+        self.enabled && self.handle.awaiting()
+    }
+
+    /// The claim prompt's compose buffer, for rendering.
+    pub fn entry_input(&self) -> &str {
+        self.handle.entry_input()
+    }
+
+    /// Handle a Launcher-mode key byte. Returns true when consumed; unconsumed
+    /// keys fall through to the global keymap (tab switching, quit).
+    pub fn launcher_key(&mut self, byte: u8) -> bool {
+        if !self.enabled || self.mode == Mode::Running {
+            return false;
+        }
+        match self.handle.key(byte) {
+            HandleKeyResult::Launch => {
+                self.connect();
+                true
+            }
+            HandleKeyResult::Consumed => true,
+            HandleKeyResult::Ignored => false,
         }
     }
 
@@ -351,6 +411,7 @@ mod tests {
             String::new(),
             "xterm".to_string(),
             false,
+            None,
             None,
             None,
         )

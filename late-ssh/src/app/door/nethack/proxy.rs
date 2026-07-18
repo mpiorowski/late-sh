@@ -45,7 +45,7 @@ enum OutboundCommand {
 ///
 /// This is the network-proxied twin of the rebels door (`RebelsProxy`): same
 /// vt100 model and transport, but the target is late.sh's own NetHack host and
-/// the SSH username carries the account-derived `-u` playname.
+/// the SSH username carries the account's arcade handle as the `-u` playname.
 pub struct NethackProcess {
     cmd_tx: mpsc::Sender<OutboundCommand>,
     task: JoinHandle<()>,
@@ -57,7 +57,13 @@ pub struct ProcessConfig {
     pub host: String,
     pub port: u16,
     pub secret: String,
-    pub user_id: uuid::Uuid,
+    /// The account's arcade handle, sent as the SSH username; the host
+    /// re-sanitizes it and passes it as NetHack's `-u`, which keys the
+    /// save/bones. Claimed once and immutable
+    /// (`late_core::models::arcade_handle`), so a late.sh rename can never
+    /// orphan a character. (Bonus over the old hash scheme: bones/ghost names
+    /// are now readable.)
+    pub playname: String,
     pub cols: u16,
     pub rows: u16,
     pub term: String,
@@ -134,23 +140,6 @@ impl Drop for NethackProcess {
     }
 }
 
-/// Build the NetHack `-u` player name for an account. Derived **only** from the
-/// immutable user id, never the mutable username: the name keys the player's
-/// save/bones, so deriving it from the username would orphan a character whenever
-/// the user renames. It must be unique per account, stable forever, and PTY-safe.
-///
-/// We take the TRAILING hex of the id, not the leading hex: our ids are UUIDv7,
-/// whose leading 48 bits are a millisecond timestamp (low entropy for
-/// same-moment signups), while the tail is random. `late_` + 24 hex chars (29
-/// total) stays under NetHack's name cap (`PL_NSIZ` 32, i.e. 31 usable) and is
-/// collision-free in practice. (Cost: bones/ghost names are opaque, not the
-/// username.) This is sent as the SSH username; the host re-sanitizes it (it
-/// keeps `_`) before passing it to `-u`.
-pub fn nethack_playname(user_id: uuid::Uuid) -> String {
-    let simple = user_id.simple().to_string(); // 32 lowercase hex
-    format!("late_{}", &simple[simple.len() - 24..])
-}
-
 async fn run_bridge(
     cfg: ProcessConfig,
     mut cmd_rx: mpsc::Receiver<OutboundCommand>,
@@ -171,13 +160,12 @@ async fn run_bridge(
     .with_context(|| format!("connecting to {}:{}", cfg.host, cfg.port))?;
 
     // Authenticate with the shared-secret-derived key; the username carries the
-    // account-derived playname (the host uses it as `-u`).
-    let username = nethack_playname(cfg.user_id);
+    // account's arcade handle (the host uses it as `-u`).
     let key =
         russh::keys::PrivateKeyWithHashAlg::new(Arc::new(derive_client_key(&cfg.secret)), None);
     let auth = timeout(
         SETUP_TIMEOUT,
-        session.authenticate_publickey(username.as_str(), key),
+        session.authenticate_publickey(cfg.playname.as_str(), key),
     )
     .await
     .context("nethack outbound authenticate_publickey timed out")?
@@ -242,35 +230,4 @@ async fn run_bridge(
         .disconnect(Disconnect::ByApplication, "", "en")
         .await;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn playname_is_account_derived_and_pty_safe() {
-        let id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788);
-        let name = nethack_playname(id);
-        assert!(name.starts_with("late_"));
-        // trailing 24 hex of the id
-        assert!(name.ends_with(&id.simple().to_string()[8..]));
-        assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
-        // within NetHack's PL_NSIZ (32 -> 31 usable)
-        assert!(name.len() <= 31, "playname {name} too long: {}", name.len());
-    }
-
-    #[test]
-    fn playname_is_stable_per_account() {
-        let id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788);
-        // No username input -> a rename cannot change the save identity.
-        assert_eq!(nethack_playname(id), nethack_playname(id));
-    }
-
-    #[test]
-    fn playname_distinguishes_accounts() {
-        let a = uuid::Uuid::from_u128(1);
-        let b = uuid::Uuid::from_u128(2);
-        assert_ne!(nethack_playname(a), nethack_playname(b));
-    }
 }

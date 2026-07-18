@@ -44,10 +44,10 @@ pub fn handle_shape_valid(handle: &str) -> bool {
 }
 
 /// Whether the name is reserved from claiming: the bare fallback name the door
-/// hosts substitute for an unusable playname, and the `late_` prefix used by
-/// the derived hash playnames (NetHack still keys live saves by `late_<hex>`;
-/// letting users claim those shapes would let them open another account's save
-/// when that door adopts handles).
+/// hosts substitute for an unusable playname, and the `late_` prefix the
+/// pre-handle derived playnames used (orphaned `late_<hex>` saves survive on
+/// the hosts' volumes; letting users claim those shapes would let them open
+/// another account's old save).
 pub fn handle_reserved(handle: &str) -> bool {
     let lower = handle.to_ascii_lowercase();
     lower == "late" || lower.starts_with("late_")

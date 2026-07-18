@@ -1518,15 +1518,19 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
 
     if ctx.screen == Screen::Nethack {
         // Running-mode bytes never reach here (intercepted in handle_input), so
-        // this only handles the Launcher. Enter launches the game; every other
-        // key (Tab/1-8 nav, `q` to quit, `?` for help, ...) falls through to the
-        // normal global handling, so the launcher behaves like a plain page.
-        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+        // this only handles the Launcher. Key bytes go to the launcher first:
+        // Enter plays, claims, or retries depending on the arcade-name state,
+        // and while the claim prompt is open typed bytes feed the compose
+        // buffer (a typed `q` must not fall through to the global quit).
+        // Unconsumed keys keep the normal global handling, so the launcher
+        // still behaves like a plain page.
+        if let ParsedInput::Byte(b) = event {
             app.enter_nethack();
-            if let Some(state) = app.nethack_state.as_mut() {
-                state.connect();
+            if let Some(state) = app.nethack_state.as_mut()
+                && state.launcher_key(*b)
+            {
+                return true;
             }
-            return true;
         }
         return false;
     }

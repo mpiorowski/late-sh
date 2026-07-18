@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use super::state::{HandleStatus, Mode, State};
+use super::state::{Mode, State};
 use crate::app::common::theme;
 use crate::app::door::landing;
 use crate::app::door::rebels::render::blit_screen;
@@ -19,65 +19,18 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 /// The door-screen launcher: the landing with a handle-aware Launch block (the
-/// one-time arcade-name claim prompt, then the play action). Constant three
-/// lines in every handle state, so the chrome never moves as lookups and
-/// claims resolve.
+/// one-time arcade-name claim prompt, then the play action; see
+/// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
         draw_landing(frame, area, false);
         return;
     }
-    let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(theme::TEXT_DIM())));
-    let launch = match state.handle_status() {
-        HandleStatus::Loading => vec![
-            dim("Checking your arcade name...".to_string()),
-            Line::from(""),
-            Line::from(""),
-        ],
-        HandleStatus::Missing { error } => {
-            let notice = match error {
-                Some(msg) => Line::from(Span::styled(msg, Style::default().fg(theme::ERROR()))),
-                None => Line::from(Span::styled(
-                    "Shown publicly with your games. Cannot be changed later.",
-                    Style::default().fg(theme::TEXT_FAINT()),
-                )),
-            };
-            vec![
-                Line::from(vec![
-                    Span::styled("> ", Style::default().fg(theme::SUCCESS())),
-                    Span::styled("claim your arcade name: ", Style::default().fg(theme::TEXT())),
-                    Span::styled(
-                        state.entry_input().to_string(),
-                        Style::default()
-                            .fg(theme::TEXT_BRIGHT())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled("_", Style::default().fg(theme::AMBER())),
-                ]),
-                dim("3-20 characters: letters, digits, underscore. Enter claims and plays."
-                    .to_string()),
-                notice,
-            ]
-        }
-        HandleStatus::Claiming => vec![
-            dim(format!("Claiming {}...", state.entry_input())),
-            Line::from(""),
-            Line::from(""),
-        ],
-        HandleStatus::Claimed(name) => vec![
-            landing::action(">", "Enter", "descend for the Orb of Zot", theme::SUCCESS()),
-            dim(format!("Playing as {name}.")),
-            Line::from(""),
-        ],
-        HandleStatus::Failed => vec![
-            Line::from(Span::styled(
-                "Couldn't check your arcade name.",
-                Style::default().fg(theme::ERROR()),
-            )),
-            landing::action(">", "Enter", "retry", theme::SUCCESS()),
-            Line::from(""),
-        ],
-    };
+    let launch = landing::handle_launch_block(
+        state.handle_status(),
+        state.entry_input(),
+        landing::action(">", "Enter", "descend for the Orb of Zot", theme::SUCCESS()),
+    );
     render_landing(frame, area, launch);
 }
 

@@ -1307,6 +1307,7 @@ impl App {
             self.nethack_enabled,
             self.repaint_signal.clone(),
             self.nethack_awards.clone(),
+            Some(self.arcade_handle_service.clone()),
         ));
     }
 
