@@ -370,8 +370,9 @@ fn draw_side(
     };
     let off = scroll_offset(
         state.list_scroll(),
-        lines.len(),
+        &lines,
         selected,
+        area.width as usize,
         area.height as usize,
     );
     state.set_list_scroll(off);
@@ -389,31 +390,108 @@ fn draw_side(
 /// to show).
 const LIST_SCROLL_MARGIN: usize = 2;
 
-/// New first-visible line for a side panel, given the previous scroll `prev`.
+/// New first-visible *line* for a side panel, given the previous scroll `prev`.
 ///
-/// List panels pass the highlighted row as `selected` and auto-follow it,
-/// nudging only when it would come within `LIST_SCROLL_MARGIN` of an edge so
-/// the list scrolls under the cursor. Cursor-less text panels pass
-/// `selected = None` and are scrolled manually (`[` / `]`); here we just clamp
-/// the requested offset to the content.
-fn scroll_offset(prev: usize, total: usize, selected: Option<usize>, height: usize) -> usize {
-    if height == 0 || total <= height {
+/// `side_paragraph` word-wraps (`Wrap { trim: false }`), so one logical line can
+/// occupy several terminal rows — the crafting panel's ingredient/gated-reason
+/// rows routinely wrap in the 28-34-wide side panel. The scroll therefore counts
+/// **wrapped rows**, not logical lines; counting lines used to leave the last
+/// several recipes stranded below the screen.
+///
+/// List panels pass the highlighted line as `selected` and auto-follow it,
+/// nudging only when it would come within `LIST_SCROLL_MARGIN` rows of an edge.
+/// Cursor-less text panels pass `selected = None` and are scrolled manually
+/// (`[` / `]`); the offset is just clamped so it can't overscroll into blank.
+fn scroll_offset(
+    prev: usize,
+    lines: &[Line<'_>],
+    selected: Option<usize>,
+    width: usize,
+    height: usize,
+) -> usize {
+    let n = lines.len();
+    if height == 0 || n == 0 {
         return 0;
     }
-    let max = total - height;
+    let rows: Vec<usize> = lines.iter().map(|l| line_rows(l, width)).collect();
+    let total_rows: usize = rows.iter().sum();
+    if total_rows <= height {
+        return 0;
+    }
+    // prefix[i] = wrapped rows above logical line i.
+    let mut prefix = vec![0usize; n + 1];
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + rows[i];
+    }
+    // Largest line offset that still fills the screen (never scroll into blank).
+    let max_top = total_rows - height;
+    let max_off = (0..n).rev().find(|&i| prefix[i] <= max_top).unwrap_or(0);
+
     let Some(sel) = selected else {
         // Text panel: honor the manual offset, clamped to the content.
-        return prev.min(max);
+        return prev.min(max_off);
     };
     // Margin can't exceed what fits above and below within the window.
     let margin = LIST_SCROLL_MARGIN.min(height.saturating_sub(1) / 2);
-    let mut off = prev.min(max);
-    if sel < off + margin {
-        off = sel.saturating_sub(margin);
-    } else if sel + margin >= off + height {
-        off = sel + margin + 1 - height;
+    let mut off = prev.min(max_off);
+    // Scroll up until the selection's top row clears the margin (or we hit 0).
+    while off > 0 && prefix[sel] < prefix[off] + margin {
+        off -= 1;
     }
-    off.min(max)
+    // Scroll down until the selection's bottom row clears the margin.
+    while off < max_off && prefix[sel] + rows[sel] + margin > prefix[off] + height {
+        off += 1;
+    }
+    off.min(max_off)
+}
+
+/// Terminal rows a rendered `line` occupies in a `width`-wide side panel,
+/// matching `side_paragraph`'s word-wrap so the scroll can count rows.
+fn line_rows(line: &Line<'_>, width: usize) -> usize {
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    wrapped_rows(&text, width)
+}
+
+/// Word-wrap row count for `text` at `width`, approximating ratatui's
+/// `WordWrapper` (`Wrap { trim: false }`): break on spaces, split a word longer
+/// than the width across rows. Always at least 1.
+fn wrapped_rows(text: &str, width: usize) -> usize {
+    if width == 0 {
+        return 1;
+    }
+    let mut rows = 1usize;
+    let mut col = 0usize;
+    for (i, token) in text.split(' ').enumerate() {
+        if i > 0 {
+            // the single space that `split` consumed between tokens
+            if col + 1 > width {
+                rows += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        let tw = UnicodeWidthStr::width(token);
+        if tw == 0 {
+            continue;
+        }
+        if col + tw <= width {
+            col += tw;
+        } else {
+            if col > 0 {
+                rows += 1;
+            }
+            if tw > width {
+                // a single word longer than the panel breaks across rows
+                let extra = (tw - 1) / width;
+                rows += extra;
+                col = tw - extra * width;
+            } else {
+                col = tw;
+            }
+        }
+    }
+    rows
 }
 
 fn draw_room_side(
@@ -2778,25 +2856,73 @@ fn is_actionable_feature(kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_span, fit, inventory_item_tag, meter, score_dots, scroll_offset};
+    use super::{
+        compare_span, fit, inventory_item_tag, line_rows, meter, score_dots, scroll_offset,
+        wrapped_rows,
+    };
+    use ratatui::text::Line;
     use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn scroll_offset_keeps_the_selection_visible_in_a_long_list() {
         // A 40-row list in a 10-tall window: the highlighted row must always land
         // inside the visible window [off, off+height) so nothing you're on scrolls
-        // off-screen (the bug: titles/inventory ran off the bottom).
-        let (total, height) = (40usize, 10usize);
+        // off-screen (the bug: titles/inventory ran off the bottom). Short lines,
+        // so one logical line is one row.
+        let lines: Vec<Line> = (0..40).map(|i| Line::from(format!("row {i}"))).collect();
+        let (width, height) = (40usize, 10usize);
         let mut off = 0;
-        for sel in 0..total {
-            off = scroll_offset(off, total, Some(sel), height);
+        for sel in 0..lines.len() {
+            off = scroll_offset(off, &lines, Some(sel), width, height);
             assert!(
                 sel >= off && sel < off + height,
                 "row {sel} fell outside window [{off}, {})",
                 off + height
             );
-            assert!(off <= total - height, "offset never overscrolls");
+            assert!(off <= lines.len() - height, "offset never overscrolls");
         }
+    }
+
+    #[test]
+    fn wrapped_rows_matches_word_wrap() {
+        assert_eq!(wrapped_rows("", 10), 1);
+        assert_eq!(wrapped_rows("short", 10), 1);
+        assert_eq!(wrapped_rows("exactly-10", 10), 1);
+        // Two words that don't both fit wrap to a second row.
+        assert_eq!(wrapped_rows("hello world", 8), 2);
+        // A single word longer than the width breaks across rows (ceil 12/5).
+        assert_eq!(wrapped_rows("abcdefghijkl", 5), 3);
+        // A real crafting ingredient row wraps in the narrow side panel.
+        let ing = "    cooking · 3 river trout, 2 wild sage, 1 salt block";
+        assert!(wrapped_rows(ing, 28) >= 2, "long ingredient row must wrap");
+    }
+
+    #[test]
+    fn scroll_offset_reaches_the_end_when_rows_wrap() {
+        // Each recipe is a short name line + a long ingredient line that wraps to
+        // two rows in a narrow panel. The crafting bug: counting logical lines
+        // (not wrapped rows) left the last recipes stranded below the screen.
+        let (width, height) = (28usize, 12usize);
+        let mut lines: Vec<Line> = Vec::new();
+        let mut name_line = Vec::new();
+        for i in 0..20 {
+            name_line.push(lines.len());
+            lines.push(Line::from(format!("> Recipe {i}")));
+            lines.push(Line::from(format!(
+                "    cooking · 3 river trout, 2 wild sage, 1 salt block ({i})"
+            )));
+        }
+        let sel = *name_line.last().unwrap();
+        let off = scroll_offset(0, &lines, Some(sel), width, height);
+        // The selected line must sit inside the visible *rows*, not just lines.
+        let rows: Vec<usize> = lines.iter().map(|l| line_rows(l, width)).collect();
+        let win_top: usize = rows[..off].iter().sum();
+        let sel_top: usize = rows[..sel].iter().sum();
+        assert!(
+            sel_top >= win_top && sel_top < win_top + height,
+            "last recipe row {sel_top} outside visible rows [{win_top}, {})",
+            win_top + height
+        );
     }
 
     #[test]
