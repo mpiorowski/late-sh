@@ -110,7 +110,7 @@ The system is a Rust workspace with four main crates (`late-cli`, `late-core`, `
 
 **LLM enforcement:**
 - On every code change, check: does this need a test? If yes, classify it strictly as unit or integration per the rules above.
-- LLM agents must NOT run `cargo test`, `cargo nextest`, or `cargo clippy` in this repo. The human owner runs verification manually because those commands are too blocking in normal agent workflows.
+- LLM agents run the tests targeted at their change via `make test-llm ARGS="-p <crate> -E 'test(<filter>)'"` — it starts the check DB and runs `cargo nextest` inside a memory-capped systemd scope so a heavy build cannot freeze the machine. Never run raw `cargo test`/`cargo nextest`/`cargo clippy` or full-suite runs; `make check` stays the human-owned gate.
 - Do NOT put integration-flavored tests (DB calls, service interactions, spawning tasks) inside `#[cfg(test)]` module blocks in `src/` files.
 - Do NOT invent extra source-side test directory structure when inline `#[cfg(test)] mod tests` is sufficient; reserve directory splits for crate-level integration tests under `tests/`.
 - If a test is intentionally deferred (WIP/incomplete dependency), document the gap and cleanup plan in PR/context notes.
@@ -142,8 +142,8 @@ For `late-web`:
 
 ### Command policy
 
-- LLM agents must not run tests or lint gates locally. Do not run `cargo test`, `cargo nextest`, or `cargo clippy`; leave all verification to the human owner.
-- If code changes would normally merit verification, note the expected command(s) in handoff instead of running them.
+- LLM agents run the tests targeted at their change through `make test-llm ARGS="..."` (memory-capped `cargo nextest` with the check DB; `TEST_LLM_MEM_HIGH`/`TEST_LLM_MEM_MAX` tune the cap).
+- Full-suite verification and lint gates stay with the human owner; if broader verification is merited, note the expected command(s) in handoff instead of running them.
 - The human owner may still use the full CI-equivalent gate locally:
 
 ```bash

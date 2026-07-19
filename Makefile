@@ -217,6 +217,9 @@ INSTANCE2_OVERRIDES = \
 
 CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview
 CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+# Cap parallel compile/link jobs locally; 16-way builds spike past RAM on a
+# swapless machine and freeze the desktop. CI overrides via CHECK_BUILD_JOBS.
+CHECK_BUILD_JOBS ?= 8
 CHECK_INSTANCE ?= late-check
 CHECK_PG_HOST_PORT ?= 55433
 CHECK_COMPOSE = CHECK_PG_HOST_PORT=$(CHECK_PG_HOST_PORT) docker compose -p $(CHECK_INSTANCE) -f docker-compose.check.yml
@@ -245,14 +248,27 @@ check-db:
 check-db-down:
 	$(CHECK_DB_STOP)
 
+# Targeted, memory-capped test run for LLM agents.
+# Usage: make test-llm ARGS="-p late-ssh -E 'test(chat)'"
+# MemoryHigh throttles the build before the desktop starves; MemoryMax kills
+# the scope outright instead of freezing a swapless machine.
+TEST_LLM_MEM_HIGH ?= 10G
+TEST_LLM_MEM_MAX ?= 12G
+.PHONY: test-llm
+test-llm: .env
+	@set -e; \
+	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
+	$(CHECK_DB_START); \
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q -p MemoryHigh=$(TEST_LLM_MEM_HIGH) -p MemoryMax=$(TEST_LLM_MEM_MAX) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS)
+
 .PHONY: check
 check: .env
 	@set -e; \
 	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
 	$(CHECK_DB_START); \
 	cargo fmt $(CHECK_PACKAGES) -- --check; \
-	$(CHECK_CARGO_ENV) cargo clippy $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run $(CHECK_PACKAGES) --all-targets --no-fail-fast --failure-output final
+	$(CHECK_CARGO_ENV) cargo clippy -j $(CHECK_BUILD_JOBS) $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings; \
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) $(CHECK_PACKAGES) --all-targets --no-fail-fast --failure-output final
 
 .PHONY: checkci
 checkci: .env

@@ -137,6 +137,17 @@ async fn run_bridge(
         }
     }
 
+    // Per-player macro directory. Without `-macro`, crawl persists in-game
+    // keymaps and macros to a single shared `$HOME/.crawl/macro.txt` (the
+    // per-name filename needs the DGL_NAMED_MACRO_FILE compile flag our plain
+    // build doesn't set), so one player's saved bindings would load for every
+    // later session — including keymaps that rebind ordinary keys to
+    // destructive command sequences — and concurrent saves would clobber each
+    // other. Saves/scores/logfile/morgues deliberately stay shared under HOME.
+    let macros = macro_dir(&cfg.data_dir, &cfg.playname);
+    fs::create_dir_all(&macros)
+        .with_context(|| format!("failed to create dcss macro dir {macros}"))?;
+
     let mut cmd = TokioCommand::new(&cfg.bin);
     // Spawn with a cleared environment and an explicit allowlist. crawl needs a
     // TERM, a writable HOME (everything lives under `$HOME/.crawl`), and a
@@ -149,6 +160,8 @@ async fn run_bridge(
     cmd.env_clear()
         .arg("-name")
         .arg(&cfg.playname)
+        .arg("-macro")
+        .arg(&macros)
         // Server-side display defaults, applied after any rc file (players have
         // no rc of their own here). The viewport maxima let the map grow with
         // the terminal instead of crawl's cramped 33x21 default (81x71 are the
@@ -344,6 +357,13 @@ fn send_sighup(pid: u32, playname: &str) {
     }
 }
 
+/// The per-player macro directory passed as crawl's `-macro`. Keyed by the
+/// (already sanitized, `[A-Za-z0-9_]`) playname so no two handles can share
+/// macro state; crawl writes `macro.txt` inside it.
+fn macro_dir(data_dir: &str, playname: &str) -> String {
+    format!("{}/.crawl/macros/{}", data_dir.trim_end_matches('/'), playname)
+}
+
 /// Push a new window size to the PTY; the kernel signals SIGWINCH to the child's
 /// foreground group so curses redraws at the new size.
 fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
@@ -359,5 +379,20 @@ fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
     };
     unsafe {
         libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macro_dirs_are_distinct_per_playname() {
+        let a = macro_dir("/data", "alice");
+        let b = macro_dir("/data", "bob");
+        assert_ne!(a, b);
+        assert_eq!(a, "/data/.crawl/macros/alice");
+        // A trailing slash on the configured data dir must not double up.
+        assert_eq!(macro_dir("/data/", "bob"), "/data/.crawl/macros/bob");
     }
 }

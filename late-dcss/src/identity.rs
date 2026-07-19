@@ -25,12 +25,14 @@ pub fn derive_client_key(secret: &str) -> PrivateKey {
 // CROSS-CRATE CONTRACT: `KEY_DOMAIN` and every derivation step above MUST stay
 // byte-identical to late-ssh's `door::dcss::identity::derive_client_key`. If
 // they drift, the client derives a different key and the host rejects every
-// connection. (The nethack crates pin this with a known-answer fingerprint test;
-// record one here from the first real test run.)
+// connection — so the contract is pinned by the known-answer test below, which
+// must match the identical KAT in late-ssh.
 #[cfg(test)]
 mod tests {
     use super::*;
     use russh::keys::HashAlg;
+
+    const KAT_FINGERPRINT: &str = "SHA256:m2sABvz5I6UssavNQoi1KjVoa2DP0uJ6Kk0DjOxxQQk";
 
     fn fingerprint(secret: &str) -> String {
         derive_client_key(secret)
@@ -47,5 +49,13 @@ mod tests {
     #[test]
     fn different_secrets_yield_different_keys() {
         assert_ne!(fingerprint("a"), fingerprint("b"));
+    }
+
+    // Known-answer test: this MUST match the identical KAT in the late-ssh
+    // dcss client. Determinism alone would pass even if KEY_DOMAIN or a
+    // derivation step drifted on one side only.
+    #[test]
+    fn known_answer_fingerprint_is_stable() {
+        assert_eq!(fingerprint("late-dcss-kat-v1"), KAT_FINGERPRINT);
     }
 }
