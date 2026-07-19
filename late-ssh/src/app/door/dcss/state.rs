@@ -170,6 +170,16 @@ impl State {
         self.handle.entry_input()
     }
 
+    /// Whether the one-time arcade-name claim modal is on screen.
+    pub fn name_modal_visible(&self) -> bool {
+        self.enabled && self.mode == Mode::Launcher && self.handle.modal_visible()
+    }
+
+    /// Close the claim modal (Esc); Enter or another launch attempt reopens it.
+    pub fn dismiss_name_modal(&mut self) {
+        self.handle.dismiss_modal();
+    }
+
     /// Handle a Launcher-mode key byte. Returns true when consumed; unconsumed
     /// keys fall through to the global keymap (tab switching, quit).
     pub fn launcher_key(&mut self, byte: u8) -> bool {
@@ -384,8 +394,28 @@ mod tests {
         // Backspace edits.
         assert!(state.launcher_key(0x7f));
         assert_eq!(state.entry_input(), "Gnoll_Fan");
-        // Escape sequences and control bytes fall through to global handling.
-        assert!(!state.launcher_key(0x1b));
+        // Esc closes the claim modal (usually via the global escape dispatch;
+        // the raw byte works too).
+        assert!(state.launcher_key(0x1b));
+        assert!(!state.name_modal_visible());
+    }
+
+    #[test]
+    fn modal_dismisses_on_esc_and_reopens_on_enter() {
+        let mut state = promptable_state();
+        assert!(state.name_modal_visible());
+        state.dismiss_name_modal();
+        assert!(!state.name_modal_visible());
+        // While dismissed, printables are not ours (global keymap keeps them).
+        assert!(!state.launcher_key(b'a'));
+        assert_eq!(state.entry_input(), "");
+        // Enter reopens the modal instead of submitting the hidden buffer.
+        assert!(state.launcher_key(b'\r'));
+        assert!(state.name_modal_visible());
+        // A hub launch attempt reopens it too.
+        state.dismiss_name_modal();
+        state.connect();
+        assert!(state.name_modal_visible());
     }
 
     #[test]

@@ -85,6 +85,9 @@ pub struct HandleFlow {
     /// the lookup; a claim is a launch intent too). The door's `tick()` drains
     /// it via [`HandleFlow::take_ready_launch`].
     launch_pending: bool,
+    /// The player closed the claim modal with Esc. The landing then shows a
+    /// hint instead, and Enter (or another launch attempt) reopens the modal.
+    dismissed: bool,
 }
 
 impl HandleFlow {
@@ -102,6 +105,7 @@ impl HandleFlow {
             status: Arc::new(Mutex::new(HandleStatus::Missing { error: None })),
             entry: String::new(),
             launch_pending: false,
+            dismissed: false,
         };
         if flow.svc.is_some() {
             flow.spawn_load();
@@ -137,15 +141,34 @@ impl HandleFlow {
         &self.entry
     }
 
-    /// Record launch intent that cannot be satisfied yet because the lookup or
-    /// a claim is still in flight. A no-op in settled states: the prompt (or
-    /// retry hint) is on screen and Enter drives those directly.
-    pub fn request_launch(&mut self) {
-        if matches!(
+    /// Whether the one-time claim modal should be on screen: the account has
+    /// no handle yet (or the lookup failed) and the player hasn't waved it
+    /// away with Esc. Loading stays modal-free so a fast lookup never flashes.
+    pub fn modal_visible(&self) -> bool {
+        if self.dismissed {
+            return false;
+        }
+        matches!(
             self.status(),
-            HandleStatus::Loading | HandleStatus::Claiming
-        ) {
-            self.launch_pending = true;
+            HandleStatus::Missing { .. } | HandleStatus::Claiming | HandleStatus::Failed
+        )
+    }
+
+    /// Close the claim modal without claiming; the landing shows a reopen hint
+    /// until the next launch attempt.
+    pub fn dismiss_modal(&mut self) {
+        self.dismissed = true;
+    }
+
+    /// Record launch intent. While the lookup or a claim is in flight the
+    /// intent is remembered and `take_ready_launch` fires it once the handle
+    /// lands; in the settled no-handle states it reopens the claim modal
+    /// instead (the player wants to play, and the name is what's in the way).
+    pub fn request_launch(&mut self) {
+        match self.status() {
+            HandleStatus::Loading | HandleStatus::Claiming => self.launch_pending = true,
+            HandleStatus::Missing { .. } | HandleStatus::Failed => self.dismissed = false,
+            HandleStatus::Claimed(_) => {}
         }
     }
 
@@ -192,13 +215,31 @@ impl HandleFlow {
             }
             HandleStatus::Failed => {
                 if is_enter {
+                    self.dismissed = false;
                     self.spawn_load();
                     HandleKeyResult::Consumed
                 } else {
                     HandleKeyResult::Ignored
                 }
             }
+            // Modal waved away: only Enter is ours, and it reopens the modal
+            // rather than submitting the (hidden) buffer.
+            HandleStatus::Missing { .. } if self.dismissed => {
+                if is_enter {
+                    self.dismissed = false;
+                    HandleKeyResult::Consumed
+                } else {
+                    HandleKeyResult::Ignored
+                }
+            }
             HandleStatus::Missing { .. } => match byte {
+                // Esc closes the modal when it arrives as a raw byte (it
+                // usually comes via the global escape dispatch instead, which
+                // calls `dismiss_modal` directly).
+                0x1b => {
+                    self.dismissed = true;
+                    HandleKeyResult::Consumed
+                }
                 b'\r' | b'\n' => {
                     self.submit_entry();
                     HandleKeyResult::Consumed

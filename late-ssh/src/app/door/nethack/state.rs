@@ -227,6 +227,16 @@ impl State {
         self.handle.entry_input()
     }
 
+    /// Whether the one-time arcade-name claim modal is on screen.
+    pub fn name_modal_visible(&self) -> bool {
+        self.enabled && self.mode == Mode::Launcher && self.handle.modal_visible()
+    }
+
+    /// Close the claim modal (Esc); Enter or another launch attempt reopens it.
+    pub fn dismiss_name_modal(&mut self) {
+        self.handle.dismiss_modal();
+    }
+
     /// Handle a Launcher-mode key byte. Returns true when consumed; unconsumed
     /// keys fall through to the global keymap (tab switching, quit).
     pub fn launcher_key(&mut self, byte: u8) -> bool {

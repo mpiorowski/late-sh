@@ -5,8 +5,11 @@
 //! label is full-bright. Per-game flavor (logos, art, glyphs, quotes) stays in
 //! each game's own render module.
 
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::app::common::theme;
 
@@ -82,31 +85,13 @@ pub fn handle_launch_block(
             Line::from(""),
             Line::from(""),
         ],
-        HandleStatus::Missing { error } => {
-            let notice = match error {
-                Some(msg) => Line::from(Span::styled(msg, Style::default().fg(theme::ERROR()))),
-                None => Line::from(Span::styled(
-                    "Shown publicly with your games. Cannot be changed later.",
-                    Style::default().fg(theme::TEXT_FAINT()),
-                )),
-            };
-            vec![
-                Line::from(vec![
-                    Span::styled("> ", Style::default().fg(theme::SUCCESS())),
-                    Span::styled("claim your arcade name: ", Style::default().fg(theme::TEXT())),
-                    Span::styled(
-                        entry.to_string(),
-                        Style::default()
-                            .fg(theme::TEXT_BRIGHT())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled("_", Style::default().fg(theme::AMBER())),
-                ]),
-                dim("3-20 characters: letters, digits, underscore. Enter claims and plays."
-                    .to_string()),
-                notice,
-            ]
-        }
+        // The claim itself happens in the dedicated modal (`draw_name_modal`);
+        // this is what shows behind it, and after Esc closes it.
+        HandleStatus::Missing { .. } => vec![
+            action(">", "Enter", "claim your arcade name", theme::SUCCESS()),
+            dim("One name for every arcade game; you need it before playing.".to_string()),
+            Line::from(""),
+        ],
         HandleStatus::Claiming => vec![
             dim(format!("Claiming {entry}...")),
             Line::from(""),
@@ -126,4 +111,128 @@ pub fn handle_launch_block(
             Line::from(""),
         ],
     }
+}
+
+const NAME_MODAL_WIDTH: u16 = 62;
+const NAME_MODAL_HEIGHT: u16 = 12;
+
+/// The one-time arcade-name claim modal, shared by every door that keys saves
+/// by the handle (DCSS, NetHack). Pops centered over the door landing the
+/// first time an account without a handle tries to play; disappears for good
+/// once a name is claimed. Every state keeps the same fixed layout so nothing
+/// jumps while a claim resolves.
+pub fn draw_name_modal(
+    frame: &mut Frame,
+    area: Rect,
+    status: crate::app::door::arcade::HandleStatus,
+    entry: &str,
+) {
+    use crate::app::door::arcade::HandleStatus;
+
+    let popup = centered_rect(NAME_MODAL_WIDTH, NAME_MODAL_HEIGHT, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Your arcade name ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // breathing room
+        Constraint::Length(2), // what this is
+        Constraint::Length(1), // gap
+        Constraint::Length(1), // name input
+        Constraint::Length(1), // gap
+        Constraint::Length(1), // rules / error / progress
+        Constraint::Min(0),    // spacer
+        Constraint::Length(1), // footer
+    ])
+    .split(inner);
+
+    let intro = vec![
+        Line::from(Span::styled(
+            "One name for every arcade game. It labels your saves",
+            Style::default().fg(theme::TEXT()),
+        )),
+        Line::from(Span::styled(
+            "and public scores, and cannot be changed later.",
+            Style::default().fg(theme::TEXT()),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(intro).centered(), rows[1]);
+
+    let input = Line::from(vec![
+        Span::styled("> ", Style::default().fg(theme::SUCCESS())),
+        Span::styled("name: ", Style::default().fg(theme::TEXT())),
+        Span::styled(
+            entry.to_string(),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("_", Style::default().fg(theme::AMBER())),
+    ]);
+    frame.render_widget(Paragraph::new(input).centered(), rows[3]);
+
+    let status_line = match &status {
+        HandleStatus::Missing { error: Some(msg) } => Line::from(Span::styled(
+            msg.clone(),
+            Style::default().fg(theme::ERROR()),
+        )),
+        HandleStatus::Missing { error: None } => Line::from(Span::styled(
+            "3-20 characters: letters, digits, underscore.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        HandleStatus::Claiming => Line::from(Span::styled(
+            "Claiming the name...",
+            Style::default().fg(theme::AMBER()),
+        )),
+        HandleStatus::Failed => Line::from(Span::styled(
+            "Couldn't reach the name service.",
+            Style::default().fg(theme::ERROR()),
+        )),
+        // Loading and Claimed never show the modal.
+        HandleStatus::Loading | HandleStatus::Claimed(_) => Line::from(""),
+    };
+    frame.render_widget(Paragraph::new(status_line).centered(), rows[5]);
+
+    let footer_cols = Layout::horizontal([
+        Constraint::Length(2),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Length(2),
+    ])
+    .split(rows[7]);
+    let enter_label = if matches!(status, HandleStatus::Failed) {
+        " retry"
+    } else {
+        " claim and play"
+    };
+    let left = Line::from(vec![
+        Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(enter_label, Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(left), footer_cols[1]);
+    let right = Line::from(vec![
+        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" not now", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(right).right_aligned(), footer_cols[2]);
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
+        .flex(Flex::Center)
+        .split(area);
+    let horizontal = Layout::horizontal([Constraint::Length(width.min(area.width))])
+        .flex(Flex::Center)
+        .split(vertical[0]);
+    horizontal[0]
 }

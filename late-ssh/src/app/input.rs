@@ -1528,13 +1528,20 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Nethack {
+        // While the arcade-name claim modal is up, the modal router
+        // (`handle_modal_input`) owns key bytes; fall through so they reach it.
+        if app
+            .nethack_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
         // Running-mode bytes never reach here (intercepted in handle_input), so
         // this only handles the Launcher. Keys go to the launcher first: Enter
-        // plays, claims, or retries depending on the arcade-name state, and
-        // while the claim prompt is open typed characters feed the compose
-        // buffer (a typed `q` must not fall through to the global quit). The
-        // vt parser emits printables as `Char` and control bytes as `Byte`, so
-        // both must funnel in. Unconsumed keys keep the normal global
+        // plays or reopens the claim modal depending on the arcade-name state.
+        // The vt parser emits printables as `Char` and control bytes as
+        // `Byte`, so both funnel in. Unconsumed keys keep the normal global
         // handling, so the launcher still behaves like a plain page.
         if let Some(b) = launcher_key_byte(event) {
             app.enter_nethack();
@@ -1548,8 +1555,16 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Dcss {
-        // Same as NetHack above: launcher-first key routing, with `Char` and
-        // `Byte` both funneled into the arcade-name state machine.
+        // Same as NetHack above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .dcss_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
         if let Some(b) = launcher_key_byte(event) {
             app.enter_dcss();
             if let Some(state) = app.dcss_state.as_mut()
@@ -3235,6 +3250,33 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 }
 
 fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
+    // The arcade-name claim modal swallows every key byte while it is up:
+    // printables and backspace edit the name, Enter claims, Esc closes, and
+    // everything else (Tab, digits-as-nav, `q`) is inert so the app can't
+    // navigate away underneath the modal.
+    if ctx.screen == Screen::Nethack
+        && let Some(state) = app.nethack_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Dcss
+        && let Some(state) = app.dcss_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+
     if is_chat_composer_context(ctx) {
         chat::input::handle_compose_input(
             app,

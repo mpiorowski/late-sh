@@ -1291,14 +1291,14 @@ impl App {
                 }
             }
             Screen::Nethack => {
-                if let Some(state) = ctx.nethack_state {
+                if let Some(state) = ctx.nethack_state.as_deref_mut() {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(content_area);
                     crate::app::door::nethack::render::draw_page(frame, content_area, state);
                 }
             }
             Screen::Dcss => {
-                if let Some(state) = ctx.dcss_state {
+                if let Some(state) = ctx.dcss_state.as_deref_mut() {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(content_area);
                     crate::app::door::dcss::render::draw_page(frame, content_area, state);
@@ -1531,6 +1531,31 @@ impl App {
 
         if ctx.show_lobby_modal {
             crate::app::lobby::modal_ui::draw(frame, inner, ctx.lobby, ctx.daily, ctx.house);
+        }
+
+        // One-time arcade-name claim modal, over the door landings that need a
+        // handle before playing (visibility is decided by the door state).
+        if screen == Screen::Nethack
+            && let Some(state) = ctx.nethack_state.as_deref()
+            && state.name_modal_visible()
+        {
+            crate::app::door::landing::draw_name_modal(
+                frame,
+                inner,
+                state.handle_status(),
+                state.entry_input(),
+            );
+        }
+        if screen == Screen::Dcss
+            && let Some(state) = ctx.dcss_state.as_deref()
+            && state.name_modal_visible()
+        {
+            crate::app::door::landing::draw_name_modal(
+                frame,
+                inner,
+                state.handle_status(),
+                state.entry_input(),
+            );
         }
 
         if let Some(modal) = ctx.login_announcements {
