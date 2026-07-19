@@ -164,6 +164,84 @@ impl ChatMessage {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
+    /// When the user last sent a message in a room, if ever. Drives the
+    /// per-room slow-mode cooldown.
+    pub async fn last_sent_at_in_room(
+        client: &Client,
+        room_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let row = client
+            .query_opt(
+                "SELECT created
+                 FROM chat_messages
+                 WHERE room_id = $1 AND user_id = $2
+                 ORDER BY created DESC, id DESC
+                 LIMIT 1",
+                &[&room_id, &user_id],
+            )
+            .await?;
+        Ok(row.map(|row| row.get("created")))
+    }
+
+    /// When the user last sent a message in any non-DM room, if ever. Drives
+    /// the server-wide slow-mode cooldown.
+    pub async fn last_sent_at_in_public_rooms(
+        client: &Client,
+        user_id: Uuid,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let row = client
+            .query_opt(
+                "SELECT cm.created
+                 FROM chat_messages cm
+                 JOIN chat_rooms cr ON cr.id = cm.room_id
+                 WHERE cm.user_id = $1 AND cr.kind <> 'dm'
+                 ORDER BY cm.created DESC, cm.id DESC
+                 LIMIT 1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.map(|row| row.get("created")))
+    }
+
+    /// Unread messages authored by other users in a room the user is a member
+    /// of, newest first, capped at `limit`. Unread is relative to the member's
+    /// `last_read_at`. Used by the login announcements splash.
+    pub async fn list_unread_for_member(
+        client: &Client,
+        room_id: Uuid,
+        user_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<UnreadRoomMessage>> {
+        let rows = client
+            .query(
+                "SELECT msg.id,
+                        msg.created,
+                        msg.body,
+                        u.username AS author
+                 FROM chat_room_members member
+                 JOIN chat_messages msg ON msg.room_id = member.room_id
+                 JOIN users u ON u.id = msg.user_id
+                 WHERE member.room_id = $1
+                   AND member.user_id = $2
+                   AND msg.user_id <> $2
+                   AND msg.created > COALESCE(member.last_read_at, '-infinity'::timestamptz)
+                 ORDER BY msg.created DESC, msg.id DESC
+                 LIMIT $3",
+                &[&room_id, &user_id, &limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| UnreadRoomMessage {
+                id: row.get("id"),
+                created: row.get("created"),
+                author: row.get("author"),
+                body: row.get("body"),
+            })
+            .collect())
+    }
+
     /// Up to `limit_each` messages immediately before and after a message in
     /// its room, both in chronological order. System-feed authors and
     /// `exclude_user_ids` (the caller's ignored users, as authors or as
@@ -429,6 +507,16 @@ impl ChatMessage {
             .map(|row| (row.get("room_id"), row.get("id")))
             .collect())
     }
+}
+
+/// A message shown on the login announcements splash: the fields the splash
+/// renders, with the author's username resolved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnreadRoomMessage {
+    pub id: Uuid,
+    pub created: DateTime<Utc>,
+    pub author: String,
+    pub body: String,
 }
 
 /// Escape `%`, `_`, and `\` in a user-supplied query so it matches literally

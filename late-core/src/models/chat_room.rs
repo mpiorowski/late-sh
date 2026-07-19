@@ -61,6 +61,29 @@ impl ChatRoom {
         Ok(row.map(Self::from))
     }
 
+    /// The public, non-DM room for a slug, preferring a permanent room and
+    /// then the oldest match. Used by the login announcements splash, which
+    /// must resolve `#announcements` to the same room `auto_join_public_rooms`
+    /// joins users to.
+    pub async fn find_public_non_dm_by_slug(
+        client: &Client,
+        slug: &str,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT *
+                 FROM chat_rooms
+                 WHERE slug = $1
+                   AND kind <> 'dm'
+                   AND visibility = 'public'
+                 ORDER BY permanent DESC, created ASC, id ASC
+                 LIMIT 1",
+                &[&slug],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     pub async fn find_irc_channel_by_slug_for_user(
         client: &Client,
         slug: &str,
@@ -288,6 +311,16 @@ impl ChatRoom {
         }
     }
 
+    pub async fn list_by_ids(client: &Client, room_ids: &[Uuid]) -> Result<Vec<Self>> {
+        if room_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = client
+            .query("SELECT * FROM chat_rooms WHERE id = ANY($1)", &[&room_ids])
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
     pub async fn is_kind(client: &Client, room_id: Uuid, kind: &str) -> Result<bool> {
         let row = client
             .query_opt("SELECT kind FROM chat_rooms WHERE id = $1", &[&room_id])
@@ -464,7 +497,7 @@ impl ChatRoom {
             .collect())
     }
 
-    pub async fn touch_updated(client: &Client, room_id: Uuid) -> Result<u64> {
+    pub async fn touch_updated(client: &impl GenericClient, room_id: Uuid) -> Result<u64> {
         let rows = client
             .execute(
                 "UPDATE chat_rooms SET updated = current_timestamp WHERE id = $1",

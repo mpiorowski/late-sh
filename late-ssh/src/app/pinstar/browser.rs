@@ -162,61 +162,19 @@ pub async fn load_diagram_list_with_client(
     client: &Client,
     user_id: Uuid,
 ) -> Result<Vec<DiagramEntry>> {
-    let rows = client
-        .query(
-            "SELECT d.id,
-                    d.title,
-                    d.owner_id,
-                    d.created,
-                    d.updated,
-                    COALESCE(NULLIF(owner.username, ''), substring(d.owner_id::text, 1, 8)) AS owner_name,
-                    CASE
-                        WHEN d.owner_id = $1 THEN 'owner'
-                        WHEN self_member.role IN ('editor', 'viewer') THEN self_member.role
-                        ELSE 'viewer'
-                    END AS effective_role,
-                    (d.owner_id = $1 OR self_member.user_id IS NOT NULL) AS is_member,
-                    COALESCE(
-                        string_agg(
-                            COALESCE(NULLIF(member_user.username, ''), substring(member_user.id::text, 1, 8))
-                                || ':' || m.role,
-                            ', '
-                            ORDER BY member_user.username, member_user.id
-                        ) FILTER (WHERE m.user_id IS NOT NULL),
-                        ''
-                    ) AS member_names
-               FROM pinstar_diagrams d
-               JOIN users owner ON owner.id = d.owner_id
-               LEFT JOIN pinstar_diagram_members self_member
-                      ON self_member.diagram_id = d.id
-                     AND self_member.user_id = $1
-               LEFT JOIN pinstar_diagram_members m ON m.diagram_id = d.id
-               LEFT JOIN users member_user ON member_user.id = m.user_id
-              GROUP BY d.id,
-                       d.title,
-                       d.owner_id,
-                       d.created,
-                       d.updated,
-                       owner.username,
-                       self_member.user_id,
-                       self_member.role
-              ORDER BY d.updated DESC",
-            &[&user_id],
-        )
-        .await?;
-
-    Ok(rows
+    Ok(PinstarDiagram::list_for_viewer(client, user_id)
+        .await?
         .into_iter()
-        .map(|row| DiagramEntry {
-            id: row.get("id"),
-            title: row.get("title"),
-            is_owner: row.get::<_, Uuid>("owner_id") == user_id,
-            is_member: row.get("is_member"),
-            role: row.get("effective_role"),
-            owner: row.get("owner_name"),
-            members: row.get("member_names"),
-            created: row.get("created"),
-            updated: row.get("updated"),
+        .map(|entry| DiagramEntry {
+            is_owner: entry.owner_id == user_id,
+            id: entry.id,
+            title: entry.title,
+            is_member: entry.is_member,
+            role: entry.effective_role,
+            owner: entry.owner_name,
+            members: entry.member_names,
+            created: entry.created,
+            updated: entry.updated,
         })
         .collect())
 }
@@ -320,9 +278,7 @@ pub async fn delete_diagram_for_user(db: &Db, user_id: Uuid, diagram_id: Uuid) -
     }
 
     let tx = client.transaction().await?;
-    let deleted = tx
-        .execute("DELETE FROM pinstar_diagrams WHERE id = $1", &[&diagram_id])
-        .await?;
+    let deleted = PinstarDiagram::delete_by_id(&tx, diagram_id).await?;
     if deleted == 0 {
         anyhow::bail!("diagram already deleted");
     }

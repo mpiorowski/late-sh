@@ -10,6 +10,7 @@ use late_core::{
     MutexRecover,
     db::{Db, DbConfig},
     models::{
+        chat_room::ChatRoom,
         chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_VARIANT_SLOT,
@@ -604,26 +605,11 @@ impl ShopService {
             .filter_map(|effect| effect.room_id)
             .collect::<Vec<_>>();
         let mut active_effect_room_meta = HashMap::new();
-        if !active_effect_room_ids.is_empty() {
-            let rows = client
-                .query(
-                    "SELECT id, kind, visibility, permanent, slug
-                     FROM chat_rooms
-                     WHERE id = ANY($1)",
-                    &[&active_effect_room_ids],
-                )
-                .await?;
-            for row in rows {
-                active_effect_room_meta.insert(
-                    row.get::<_, Uuid>("id"),
-                    (
-                        row.get::<_, String>("kind"),
-                        row.get::<_, String>("visibility"),
-                        row.get::<_, bool>("permanent"),
-                        row.get::<_, Option<String>>("slug"),
-                    ),
-                );
-            }
+        for room in ChatRoom::list_by_ids(&client, &active_effect_room_ids).await? {
+            active_effect_room_meta.insert(
+                room.id,
+                (room.kind, room.visibility, room.permanent, room.slug),
+            );
         }
         for effect in active_effect_rows {
             let Some(room_id) = effect.room_id else {

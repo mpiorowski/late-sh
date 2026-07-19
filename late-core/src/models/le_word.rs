@@ -56,6 +56,20 @@ impl DailyWord {
         Ok(row.map(Self::from))
     }
 
+    /// Take the transaction-scoped advisory lock guarding daily-word creation,
+    /// so concurrent `ensure_daily_word` callers serialize on the check-then-
+    /// insert instead of racing. Released automatically when the transaction
+    /// ends, so the caller must hold an open transaction.
+    pub async fn lock_daily_creation(client: &impl GenericClient) -> Result<()> {
+        client
+            .query_one(
+                "SELECT pg_advisory_xact_lock(hashtextextended('le_word_daily_word', 0))",
+                &[],
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn used_answer_words(client: &impl GenericClient) -> Result<Vec<String>> {
         let rows = client
             .query("SELECT answer_word FROM le_word_daily_words", &[])
