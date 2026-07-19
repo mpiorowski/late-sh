@@ -72,9 +72,10 @@ pub struct State {
     /// (which only holds `&State`) can keep the highlighted row inside a
     /// scroll-off margin. Reset whenever the panel changes.
     list_scroll: Cell<usize>,
-    /// Skill headers the player has collapsed in the crafting panel (by skill
-    /// name). Session-only; folds a long recipe list down to its categories.
-    collapsed_craft: std::collections::HashSet<String>,
+    /// Category headers the player has folded in the collapsible list panels
+    /// (crafting / inventory / shop), by prefixed key (e.g. `"inv:Weapons"`).
+    /// Session-only; folds a long list down to its category headers.
+    collapsed: std::collections::HashSet<String>,
     joined: bool,
     join_pending: bool,
     join_requested_at: Instant,
@@ -106,7 +107,7 @@ impl State {
             panel: Panel::Room,
             cursor: 0,
             list_scroll: Cell::new(0),
-            collapsed_craft: std::collections::HashSet::new(),
+            collapsed: std::collections::HashSet::new(),
             joined: true,
             join_pending: true,
             join_requested_at,
@@ -228,21 +229,73 @@ impl State {
         self.list_scroll.set(cur + SCROLL_STEP);
     }
 
-    /// The crafting panel's navigable rows (collapsible skill headers + the
-    /// recipes of expanded skills), for both the cursor and the renderer.
-    pub fn craft_rows(&self) -> Vec<super::svc::CraftRow> {
+    /// Crafting rows: collapsible skill headers + the recipes of expanded skills.
+    pub fn craft_rows(&self) -> Vec<super::svc::SectionRow> {
         self.view()
             .crafting
-            .map(|c| c.rows(&self.collapsed_craft))
+            .map(|c| c.rows(&self.collapsed))
             .unwrap_or_default()
+    }
+
+    /// Inventory rows: items grouped under collapsible category headers
+    /// (Weapons / Armor / Consumables / Valuables).
+    pub fn inv_rows(&self) -> Vec<super::svc::SectionRow> {
+        let inv = self.view().inventory;
+        super::svc::section_rows(
+            inv.len(),
+            |i| {
+                let cat = inv[i].category;
+                (format!("inv:{cat}"), cat.to_string())
+            },
+            &self.collapsed,
+        )
+    }
+
+    /// Shop rows: stock grouped under the same collapsible category headers.
+    pub fn shop_rows(&self) -> Vec<super::svc::SectionRow> {
+        let Some(shop) = self.view().shop else {
+            return Vec::new();
+        };
+        super::svc::section_rows(
+            shop.entries.len(),
+            |i| {
+                let cat = shop.entries[i].category;
+                (format!("shop:{cat}"), cat.to_string())
+            },
+            &self.collapsed,
+        )
+    }
+
+    /// The section rows for whichever collapsible panel is active (else empty).
+    fn active_rows(&self) -> Vec<super::svc::SectionRow> {
+        match self.panel {
+            Panel::Crafting => self.craft_rows(),
+            Panel::Inventory => self.inv_rows(),
+            Panel::Shop => self.shop_rows(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Fold or unfold a category header, keeping the cursor on that header so the
+    /// view doesn't jump.
+    fn toggle_section(&mut self, key: String) {
+        use super::svc::SectionRow;
+        if !self.collapsed.remove(&key) {
+            self.collapsed.insert(key.clone());
+        }
+        if let Some(i) = self
+            .active_rows()
+            .iter()
+            .position(|r| matches!(r, SectionRow::Header { key: k, .. } if *k == key))
+        {
+            self.cursor = i;
+        }
     }
 
     /// Current list length for whichever list panel is active (for cursor clamp).
     fn list_len(&self) -> usize {
         match self.panel {
-            Panel::Inventory => self.view().inventory.len(),
             Panel::Abilities => self.view().abilities.len(),
-            Panel::Shop => self.view().shop.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Examine => self.view().features.len(),
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
@@ -251,8 +304,8 @@ impl State {
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
             Panel::Appearance => self.view().appearance.len(),
-            // The crafting cursor walks headers + visible recipes, not entries.
-            Panel::Crafting => self.craft_rows().len(),
+            // These panels' cursors walk headers + visible items, not the raw list.
+            Panel::Inventory | Panel::Shop | Panel::Crafting => self.active_rows().len(),
             _ => 0,
         }
     }
@@ -490,13 +543,19 @@ impl State {
         }
         match self.panel {
             Panel::Inventory => {
-                let view = self.view();
-                if let Some(row) = view.inventory.get(self.cursor) {
-                    if row.slot.is_some() {
-                        self.svc.equip_task(self.user_id, row.item_id);
-                    } else {
-                        self.svc.use_item_task(self.user_id, row.item_id);
+                use super::svc::SectionRow;
+                match self.inv_rows().get(self.cursor).cloned() {
+                    Some(SectionRow::Header { key, .. }) => self.toggle_section(key),
+                    Some(SectionRow::Item { index }) => {
+                        if let Some(row) = self.view().inventory.get(index) {
+                            if row.slot.is_some() {
+                                self.svc.equip_task(self.user_id, row.item_id);
+                            } else {
+                                self.svc.use_item_task(self.user_id, row.item_id);
+                            }
+                        }
                     }
+                    None => {}
                 }
             }
             Panel::Abilities => {
@@ -508,10 +567,17 @@ impl State {
                 }
             }
             Panel::Shop => {
-                if let Some(shop) = self.view().shop
-                    && let Some(entry) = shop.entries.get(self.cursor)
-                {
-                    self.svc.buy_task(self.user_id, entry.item_id);
+                use super::svc::SectionRow;
+                match self.shop_rows().get(self.cursor).cloned() {
+                    Some(SectionRow::Header { key, .. }) => self.toggle_section(key),
+                    Some(SectionRow::Item { index }) => {
+                        if let Some(shop) = self.view().shop
+                            && let Some(entry) = shop.entries.get(index)
+                        {
+                            self.svc.buy_task(self.user_id, entry.item_id);
+                        }
+                    }
+                    None => {}
                 }
             }
             Panel::Examine => self.svc.interact_task(self.user_id, self.cursor),
@@ -555,25 +621,14 @@ impl State {
             }
             Panel::Appearance => self.cycle_appearance(1),
             Panel::Crafting => {
-                use super::svc::CraftRow;
+                use super::svc::SectionRow;
                 match self.craft_rows().get(self.cursor).cloned() {
-                    // On a skill header: fold or unfold that category. Keep the
-                    // cursor on the header so the view doesn't jump.
-                    Some(CraftRow::Header { skill, .. }) => {
-                        if !self.collapsed_craft.remove(&skill) {
-                            self.collapsed_craft.insert(skill.clone());
-                        }
-                        let header_at = self.craft_rows().iter().position(
-                            |r| matches!(r, CraftRow::Header { skill: s, .. } if *s == skill),
-                        );
-                        if let Some(i) = header_at {
-                            self.cursor = i;
-                        }
-                    }
+                    // On a skill header: fold or unfold that category.
+                    Some(SectionRow::Header { key, .. }) => self.toggle_section(key),
                     // On a recipe: craft it.
-                    Some(CraftRow::Recipe { entry }) => {
+                    Some(SectionRow::Item { index }) => {
                         if let Some(cr) = self.view().crafting
-                            && let Some(e) = cr.entries.get(entry)
+                            && let Some(e) = cr.entries.get(index)
                         {
                             self.svc.craft_task(self.user_id, e.recipe);
                         }
@@ -609,8 +664,11 @@ impl State {
             return;
         }
         if self.panel == Panel::Inventory {
-            let view = self.view();
-            if let Some(row) = view.inventory.get(self.cursor) {
+            use super::svc::SectionRow;
+            // The cursor walks category headers + items; only an item row sells.
+            if let Some(SectionRow::Item { index }) = self.inv_rows().get(self.cursor).cloned()
+                && let Some(row) = self.view().inventory.get(index)
+            {
                 self.svc.sell_task(self.user_id, row.item_id);
             }
         }

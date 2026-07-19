@@ -19,7 +19,7 @@ use super::{
     appearance,
     classes::Class,
     state::{Panel, State},
-    svc::{CraftRow, LogKind, PlayerView},
+    svc::{LogKind, PlayerView, SectionRow},
     world::{Dir, MapCell, MiniMap},
 };
 
@@ -354,8 +354,8 @@ fn draw_side(
         Panel::Room => unreachable!("room panel is rendered by draw_room_side"),
         Panel::Character => (character_panel(view), None),
         Panel::Abilities => abilities_panel(view, state.cursor()),
-        Panel::Inventory => inventory_panel(view, state.cursor()),
-        Panel::Shop => shop_panel(view, state.cursor()),
+        Panel::Inventory => inventory_panel(&state.inv_rows(), view, state.cursor()),
+        Panel::Shop => shop_panel(&state.shop_rows(), view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
         Panel::Titles => titles_panel(view, state.cursor()),
         Panel::Quests => (quests_panel(view), None),
@@ -1558,7 +1558,11 @@ fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
     (lines, sel_line)
 }
 
-fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+fn inventory_panel(
+    rows: &[SectionRow],
+    view: &PlayerView,
+    cursor: usize,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let mut sel_line = None;
     let mut lines = vec![
         section("Inventory"),
@@ -1579,39 +1583,54 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
-    for (i, it) in view.inventory.iter().enumerate() {
+    for (i, row) in rows.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
-        let marker = if selected { ">" } else { " " };
-        let tag = inventory_item_tag(it.equipped, it.slot.as_deref());
-        let style = if selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(rarity_color(&it.rarity))
-        };
-        let spans = vec![Span::styled(format!("{marker} {}{}", it.name, tag), style)];
-        lines.push(Line::from(spans));
-        if !it.stats.is_empty() {
-            let mut stat_spans = vec![Span::styled(
-                format!("    {}", it.stats),
-                Style::default().fg(theme::TEXT_DIM()),
-            )];
-            if let Some(cmp) = compare_span(it.compare_pct) {
-                stat_spans.push(cmp);
+        match row {
+            SectionRow::Header {
+                label,
+                count,
+                collapsed,
+                ..
+            } => lines.push(section_header_line(label, *count, *collapsed, selected)),
+            SectionRow::Item { index } => {
+                let Some(it) = view.inventory.get(*index) else {
+                    continue;
+                };
+                let marker = if selected { ">" } else { " " };
+                let tag = inventory_item_tag(it.equipped, it.slot.as_deref());
+                let style = if selected {
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(rarity_color(&it.rarity))
+                };
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{marker} {}{}", it.name, tag),
+                    style,
+                )]));
+                if !it.stats.is_empty() {
+                    let mut stat_spans = vec![Span::styled(
+                        format!("    {}", it.stats),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    )];
+                    if let Some(cmp) = compare_span(it.compare_pct) {
+                        stat_spans.push(cmp);
+                    }
+                    lines.push(Line::from(stat_spans));
+                }
+                if let Some(cmp) = compare_line(&it.compare) {
+                    lines.push(cmp);
+                }
             }
-            lines.push(Line::from(stat_spans));
-        }
-        if let Some(cmp) = compare_line(&it.compare) {
-            lines.push(cmp);
         }
     }
     lines.push(Line::raw(""));
-    lines.push(hint("w/s", "select  Enter equip/use"));
+    lines.push(hint("w/s", "select  Enter equip/use/fold"));
     lines.push(hint("x", "sell one (at a shop)"));
     lines.push(hint("A/C/J", "sell all / commons / non-upgrades"));
     lines.push(hint("t", "close"));
@@ -1664,7 +1683,11 @@ fn inventory_item_tag(equipped: bool, slot: Option<&str>) -> String {
     slot.map(|slot| format!(" ({slot})")).unwrap_or_default()
 }
 
-fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+fn shop_panel(
+    rows: &[SectionRow],
+    view: &PlayerView,
+    cursor: usize,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(shop) = &view.shop else {
         return (
             vec![Line::from(Span::styled(
@@ -1696,58 +1719,92 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<u
         )),
         Line::raw(""),
     ];
-    for (i, e) in shop.entries.iter().enumerate() {
+    for (i, row) in rows.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
-        let marker = if selected { ">" } else { " " };
-        let price_color = if e.affordable {
-            theme::BADGE_GOLD()
-        } else {
-            theme::ERROR()
-        };
-        let name_style = if selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(rarity_color(&e.rarity))
-        };
-        let mut spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
-        if !e.stats.is_empty() {
-            lines.push(Line::from(spans));
-            let mut stat_spans = vec![
-                Span::styled(
-                    format!("    {}", e.stats),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-                Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
-            ];
-            if let Some(cmp) = compare_span(e.compare_pct) {
-                stat_spans.push(cmp);
+        match row {
+            SectionRow::Header {
+                label,
+                count,
+                collapsed,
+                ..
+            } => lines.push(section_header_line(label, *count, *collapsed, selected)),
+            SectionRow::Item { index } => {
+                let Some(e) = shop.entries.get(*index) else {
+                    continue;
+                };
+                let marker = if selected { ">" } else { " " };
+                let price_color = if e.affordable {
+                    theme::BADGE_GOLD()
+                } else {
+                    theme::ERROR()
+                };
+                let name_style = if selected {
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(rarity_color(&e.rarity))
+                };
+                let mut spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+                if !e.stats.is_empty() {
+                    lines.push(Line::from(spans));
+                    let mut stat_spans = vec![
+                        Span::styled(
+                            format!("    {}", e.stats),
+                            Style::default().fg(theme::TEXT_DIM()),
+                        ),
+                        Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
+                    ];
+                    if let Some(cmp) = compare_span(e.compare_pct) {
+                        stat_spans.push(cmp);
+                    }
+                    lines.push(Line::from(stat_spans));
+                    if let Some(cmp) = compare_line(&e.compare) {
+                        lines.push(cmp);
+                    }
+                } else {
+                    spans.push(Span::styled(
+                        format!("  {}g", e.price),
+                        Style::default().fg(price_color),
+                    ));
+                    lines.push(Line::from(spans));
+                }
             }
-            lines.push(Line::from(stat_spans));
-            if let Some(cmp) = compare_line(&e.compare) {
-                lines.push(cmp);
-            }
-            continue;
         }
-        spans.push(Span::styled(
-            format!("  {}g", e.price),
-            Style::default().fg(price_color),
-        ));
-        lines.push(Line::from(spans));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("w/s", "select  Enter buy"));
+    lines.push(hint("w/s", "select  Enter buy/fold"));
     lines.push(hint("b", "leave shop"));
     (lines, sel_line)
 }
 
+/// A collapsible category header line: "▾ Weapons (3)" / "▸ Weapons (3)".
+fn section_header_line(
+    label: &str,
+    count: usize,
+    collapsed: bool,
+    selected: bool,
+) -> Line<'static> {
+    let arrow = if collapsed { "▸" } else { "▾" };
+    let style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    };
+    Line::from(Span::styled(format!("{arrow} {label} ({count})"), style))
+}
+
 fn crafting_panel(
-    rows: &[CraftRow],
+    rows: &[SectionRow],
     view: &PlayerView,
     cursor: usize,
 ) -> (Vec<Line<'static>>, Option<usize>) {
@@ -1783,30 +1840,17 @@ fn crafting_panel(
         }
         match row {
             // A collapsible skill header: "▾ Cooking (10)" / "▸ Cooking (10)".
-            CraftRow::Header {
-                skill,
+            SectionRow::Header {
+                label,
                 count,
                 collapsed,
+                ..
             } => {
-                let arrow = if *collapsed { "▸" } else { "▾" };
-                let style = if selected {
-                    Style::default()
-                        .fg(theme::TEXT_BRIGHT())
-                        .bg(theme::BG_SELECTION())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD)
-                };
-                lines.push(Line::from(Span::styled(
-                    format!("{arrow} {skill} ({count})"),
-                    style,
-                )));
+                lines.push(section_header_line(label, *count, *collapsed, selected));
             }
             // A recipe under an expanded header.
-            CraftRow::Recipe { entry } => {
-                let Some(e) = craft.entries.get(*entry) else {
+            SectionRow::Item { index } => {
+                let Some(e) = craft.entries.get(*index) else {
                     continue;
                 };
                 let marker = if selected { ">" } else { " " };

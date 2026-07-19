@@ -373,53 +373,74 @@ pub struct CraftView {
     pub entries: Vec<CraftEntryView>,
 }
 
-/// One navigable row of the crafting panel: a collapsible skill header, or a
-/// recipe beneath an expanded header. The cursor moves over these rows so a
-/// long recipe list can be folded down to just its skill headers.
+/// One navigable row of a collapsible list panel (crafting / inventory / shop):
+/// a category header, or an item beneath an expanded header. The cursor moves
+/// over these rows so a long list can be folded down to just its headers.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CraftRow {
-    /// A skill group header (e.g. "Cooking"), with how many recipes it holds and
-    /// whether it is currently collapsed.
+pub enum SectionRow {
+    /// A category header. `key` is the stable collapse key (panel-prefixed, e.g.
+    /// `"craft:Cooking"`); `label` is what's shown; `count` is the items it holds.
     Header {
-        skill: String,
+        key: String,
+        label: String,
         count: usize,
         collapsed: bool,
     },
-    /// A recipe row; `entry` indexes into `CraftView::entries`.
-    Recipe { entry: usize },
+    /// An item row; `index` indexes into the panel's underlying list.
+    Item { index: usize },
+}
+
+/// Group `count` items into collapsible sections. `category(i)` returns the
+/// `(collapse-key, display label)` for item `i`; sections appear in first-seen
+/// order. A section whose key is in `collapsed` shows only its header. The row
+/// list is exactly what the cursor navigates and the panel draws.
+pub fn section_rows(
+    count: usize,
+    category: impl Fn(usize) -> (String, String),
+    collapsed: &std::collections::HashSet<String>,
+) -> Vec<SectionRow> {
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, (String, Vec<usize>)> =
+        std::collections::HashMap::new();
+    for i in 0..count {
+        let (key, label) = category(i);
+        groups
+            .entry(key.clone())
+            .or_insert_with(|| {
+                order.push(key.clone());
+                (label, Vec::new())
+            })
+            .1
+            .push(i);
+    }
+    let mut rows = Vec::new();
+    for key in order {
+        let (label, items) = &groups[&key];
+        let is_collapsed = collapsed.contains(&key);
+        rows.push(SectionRow::Header {
+            key: key.clone(),
+            label: label.clone(),
+            count: items.len(),
+            collapsed: is_collapsed,
+        });
+        if !is_collapsed {
+            rows.extend(items.iter().map(|&index| SectionRow::Item { index }));
+        }
+    }
+    rows
 }
 
 impl CraftView {
-    /// Group the recipes under collapsible skill headers, in first-seen order.
-    /// Recipes of a collapsed skill are omitted, so the row list is exactly what
-    /// the cursor navigates and the panel draws.
-    pub fn rows(&self, collapsed: &std::collections::HashSet<String>) -> Vec<CraftRow> {
-        let mut order: Vec<&str> = Vec::new();
-        for e in &self.entries {
-            if !order.contains(&e.skill.as_str()) {
-                order.push(&e.skill);
-            }
-        }
-        let mut rows = Vec::new();
-        for skill in order {
-            let members: Vec<usize> = self
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.skill == skill)
-                .map(|(i, _)| i)
-                .collect();
-            let is_collapsed = collapsed.contains(skill);
-            rows.push(CraftRow::Header {
-                skill: skill.to_string(),
-                count: members.len(),
-                collapsed: is_collapsed,
-            });
-            if !is_collapsed {
-                rows.extend(members.into_iter().map(|entry| CraftRow::Recipe { entry }));
-            }
-        }
-        rows
+    /// Rows grouped under collapsible skill headers (keys `"craft:<skill>"`).
+    pub fn rows(&self, collapsed: &std::collections::HashSet<String>) -> Vec<SectionRow> {
+        section_rows(
+            self.entries.len(),
+            |i| {
+                let skill = &self.entries[i].skill;
+                (format!("craft:{skill}"), skill.clone())
+            },
+            collapsed,
+        )
     }
 }
 
@@ -475,6 +496,9 @@ pub struct InvView {
     /// shown green; negative = worse, red). None for non-gear or the item
     /// already equipped. Drives the batch-sell "non-upgrades" filter.
     pub compare_pct: Option<i32>,
+    /// The collapsible category this item groups under (Weapons / Armor /
+    /// Consumables / Valuables).
+    pub category: &'static str,
 }
 
 /// A batch-sell request at a merchant. Consumables and equipped gear are never
@@ -503,6 +527,20 @@ pub struct ShopEntryView {
     pub compare: String,
     /// The same comparison as a percent power change (see `InvView::compare_pct`).
     pub compare_pct: Option<i32>,
+    /// The collapsible category this item groups under (Weapons / Armor /
+    /// Consumables / Valuables).
+    pub category: &'static str,
+}
+
+/// The collapsible-panel category an item belongs to.
+pub(super) fn item_category(kind: &super::items::ItemKind) -> &'static str {
+    use super::items::{ItemKind, Slot};
+    match kind {
+        ItemKind::Equipment(Slot::Weapon) => "Weapons",
+        ItemKind::Equipment(_) => "Armor",
+        ItemKind::Consumable { .. } => "Consumables",
+        ItemKind::Valuable => "Valuables",
+    }
 }
 
 /// The player's live companion, for the room/character panels.
@@ -6894,6 +6932,7 @@ impl WorldState {
                     stats: it.stat_summary(),
                     compare: compare_to_worn(&player.equipped, it),
                     compare_pct: player.compare_gear(it),
+                    category: item_category(&it.kind),
                 })
                 .chain(
                     player
@@ -6910,6 +6949,7 @@ impl WorldState {
                             stats: it.stat_summary(),
                             compare: String::new(),
                             compare_pct: None,
+                            category: item_category(&it.kind),
                         }),
                 )
                 .collect();
@@ -6931,6 +6971,7 @@ impl WorldState {
                         stats: it.stat_summary(),
                         compare: compare_to_worn(&player.equipped, it),
                         compare_pct: player.compare_gear(it),
+                        category: item_category(&it.kind),
                     })
                     .collect(),
             });
@@ -7361,6 +7402,63 @@ mod tests {
     }
 
     #[test]
+    fn item_category_maps_kinds_to_panel_sections() {
+        use super::super::items::{ItemKind, Slot};
+        assert_eq!(item_category(&ItemKind::Equipment(Slot::Weapon)), "Weapons");
+        assert_eq!(item_category(&ItemKind::Equipment(Slot::Chest)), "Armor");
+        assert_eq!(item_category(&ItemKind::Equipment(Slot::Ring)), "Armor");
+        assert_eq!(
+            item_category(&ItemKind::Consumable {
+                heal: 30,
+                restore: 0
+            }),
+            "Consumables"
+        );
+        assert_eq!(item_category(&ItemKind::Valuable), "Valuables");
+    }
+
+    #[test]
+    fn section_rows_group_and_fold_generically() {
+        use std::collections::HashSet;
+        // Three items across two categories; first-seen order preserved.
+        let cats = ["A", "B", "A"];
+        let cat = |i: usize| (format!("p:{}", cats[i]), cats[i].to_string());
+        let rows = section_rows(3, cat, &HashSet::new());
+        assert_eq!(
+            rows,
+            vec![
+                SectionRow::Header {
+                    key: "p:A".into(),
+                    label: "A".into(),
+                    count: 2,
+                    collapsed: false
+                },
+                SectionRow::Item { index: 0 },
+                SectionRow::Item { index: 2 },
+                SectionRow::Header {
+                    key: "p:B".into(),
+                    label: "B".into(),
+                    count: 1,
+                    collapsed: false
+                },
+                SectionRow::Item { index: 1 },
+            ]
+        );
+        // Folding a category hides exactly its items.
+        let folded: HashSet<String> = ["p:A".to_string()].into_iter().collect();
+        let rows = section_rows(3, cat, &folded);
+        assert!(
+            !rows
+                .iter()
+                .any(|r| matches!(r, SectionRow::Item { index } if *index == 0 || *index == 2))
+        );
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r, SectionRow::Item { index } if *index == 1))
+        );
+    }
+
+    #[test]
     fn craft_rows_group_under_collapsible_skill_headers() {
         use std::collections::HashSet;
         let view = CraftView {
@@ -7376,39 +7474,43 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                CraftRow::Header {
-                    skill: "Smithing".into(),
+                SectionRow::Header {
+                    key: "craft:Smithing".into(),
+                    label: "Smithing".into(),
                     count: 2,
                     collapsed: false
                 },
-                CraftRow::Recipe { entry: 0 },
-                CraftRow::Recipe { entry: 1 },
-                CraftRow::Header {
-                    skill: "Cooking".into(),
+                SectionRow::Item { index: 0 },
+                SectionRow::Item { index: 1 },
+                SectionRow::Header {
+                    key: "craft:Cooking".into(),
+                    label: "Cooking".into(),
                     count: 1,
                     collapsed: false
                 },
-                CraftRow::Recipe { entry: 2 },
+                SectionRow::Item { index: 2 },
             ]
         );
         // Collapsing Smithing hides its recipes but keeps the header (marked
         // collapsed); Cooking is untouched.
-        let collapsed: HashSet<String> = ["Smithing".to_string()].into_iter().collect();
+        let collapsed: HashSet<String> = ["craft:Smithing".to_string()].into_iter().collect();
         let rows = view.rows(&collapsed);
         assert_eq!(
             rows,
             vec![
-                CraftRow::Header {
-                    skill: "Smithing".into(),
+                SectionRow::Header {
+                    key: "craft:Smithing".into(),
+                    label: "Smithing".into(),
                     count: 2,
                     collapsed: true
                 },
-                CraftRow::Header {
-                    skill: "Cooking".into(),
+                SectionRow::Header {
+                    key: "craft:Cooking".into(),
+                    label: "Cooking".into(),
                     count: 1,
                     collapsed: false
                 },
-                CraftRow::Recipe { entry: 2 },
+                SectionRow::Item { index: 2 },
             ]
         );
     }
