@@ -154,11 +154,7 @@ async fn admin_can_delete_moderators_diagram() {
     User::set_moderator(&client, owner.id, true)
         .await
         .expect("grant owner moderator");
-    client
-        .execute(
-            "UPDATE users SET is_admin = true WHERE id = $1",
-            &[&admin.id],
-        )
+    User::set_admin(&client, admin.id, true)
         .await
         .expect("grant admin");
     let diagram = create_diagram(&client, owner.id, "Admin Deletes").await;

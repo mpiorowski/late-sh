@@ -6,10 +6,13 @@ use std::time::Instant;
 
 use crate::test_helpers::new_test_db;
 use late_core::models::{
+    artboard_ban::ArtboardBan,
     chat_room::ChatRoom,
     chips::{INITIAL_CHIP_BALANCE, UserChips},
+    moderation_audit_log::ModerationAuditLog,
     profile::{Profile, ProfileParams},
-    server_ban::ServerBan,
+    room_ban::RoomBan,
+    server_ban::{ServerBan, ServerBanActivation},
     user::{RightSidebarMode, User, UserParams, default_right_sidebar_components},
 };
 use late_core::test_utils::create_test_user;
@@ -58,15 +61,10 @@ async fn find_profile_creates_profile_and_publishes_snapshot() {
     assert_eq!(profile.username, "profile-user");
 
     let client = test_db.db.get().await.expect("db client");
-    let chip_row_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM user_chips WHERE user_id = $1",
-            &[&user.id],
-        )
+    let chips = UserChips::find(&client, user.id)
         .await
-        .expect("count chip rows")
-        .get(0);
-    assert_eq!(chip_row_count, 0);
+        .expect("load chips");
+    assert!(chips.is_none(), "profile access must not create a chip row");
 }
 
 #[tokio::test]
@@ -328,83 +326,69 @@ async fn delete_account_preserves_moderation_rows_and_allows_key_reuse() {
         .await
         .expect("ensure lounge room");
 
-    client
-        .execute(
-            "INSERT INTO moderation_audit_log
-             (actor_user_id, action, target_kind, target_id)
-             VALUES ($1, 'server_ban', 'user', $2)",
-            &[&actor.id, &target.id],
-        )
+    ModerationAuditLog::record(
+        &client,
+        actor.id,
+        "server_ban",
+        "user",
+        Some(target.id),
+        serde_json::json!({}),
+    )
+    .await
+    .expect("record audit row");
+    RoomBan::activate(&client, room.id, target.id, actor.id, "", None)
         .await
-        .expect("insert audit row");
-    client
-        .execute(
-            "INSERT INTO room_bans
-             (room_id, target_user_id, actor_user_id)
-             VALUES ($1, $2, $3)",
-            &[&room.id, &target.id, &actor.id],
-        )
+        .expect("activate room ban");
+    ServerBan::activate(
+        &client,
+        ServerBanActivation {
+            target_user_id: target.id,
+            fingerprint: None,
+            ip_address: None,
+            snapshot_username: None,
+            actor_user_id: actor.id,
+            reason: "",
+            expires_at: None,
+        },
+    )
+    .await
+    .expect("activate server ban");
+    ArtboardBan::activate(&client, target.id, actor.id, "", None)
         .await
-        .expect("insert room ban");
-    client
-        .execute(
-            "INSERT INTO server_bans
-             (target_user_id, actor_user_id)
-             VALUES ($1, $2)",
-            &[&target.id, &actor.id],
-        )
-        .await
-        .expect("insert server ban");
-    client
-        .execute(
-            "INSERT INTO artboard_bans
-             (target_user_id, actor_user_id)
-             VALUES ($1, $2)",
-            &[&target.id, &actor.id],
-        )
-        .await
-        .expect("insert artboard ban");
+        .expect("activate artboard ban");
 
     let service = ProfileService::new(test_db.db.clone(), default_active_users());
 
     service.delete_account(actor.id);
     wait_for_user_deleted(&client, actor.id).await;
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM moderation_audit_log WHERE actor_user_id = $1",
-            &[&actor.id],
-        )
-        .await
-        .expect("count audit rows")
-        .get(0);
-    let room_ban_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM room_bans WHERE actor_user_id = $1",
-            &[&actor.id],
-        )
-        .await
-        .expect("count room bans")
-        .get(0);
-    let server_ban_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM server_bans WHERE actor_user_id = $1",
-            &[&actor.id],
-        )
-        .await
-        .expect("count server bans")
-        .get(0);
-    let artboard_ban_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM artboard_bans WHERE actor_user_id = $1",
-            &[&actor.id],
-        )
-        .await
-        .expect("count artboard bans")
-        .get(0);
-    assert_eq!(audit_count, 1);
-    assert_eq!(room_ban_count, 1);
-    assert_eq!(server_ban_count, 1);
-    assert_eq!(artboard_ban_count, 1);
+
+    // Deleting the actor must not cascade away the moderation records they
+    // authored: the target stays banned and the actor's audit trail survives.
+    assert_eq!(
+        ModerationAuditLog::count_for_actor(&client, actor.id)
+            .await
+            .expect("count audit rows"),
+        1
+    );
+    assert!(
+        RoomBan::is_active_for_room_and_user(&client, room.id, target.id)
+            .await
+            .expect("room ban lookup"),
+        "room ban survives actor deletion"
+    );
+    assert!(
+        ServerBan::find_active_for_user_id(&client, target.id)
+            .await
+            .expect("server ban lookup")
+            .is_some(),
+        "server ban survives actor deletion"
+    );
+    assert!(
+        ArtboardBan::is_active_for_user(&client, target.id)
+            .await
+            .expect("artboard ban lookup"),
+        "artboard ban survives actor deletion"
+    );
 
     let recreated = User::create(
         &client,
@@ -427,36 +411,33 @@ async fn delete_account_preserves_server_ban_against_deleted_target() {
     let target = create_test_user(&test_db.db, "target-delete-banned").await;
     let banned_ip = "203.0.113.77";
 
-    client
-        .execute(
-            "INSERT INTO server_bans
-             (target_user_id, fingerprint, ip_address, snapshot_username, actor_user_id)
-             VALUES ($1, $2, $3, $4, $5)",
-            &[
-                &target.id,
-                &target.fingerprint,
-                &banned_ip,
-                &target.username,
-                &actor.id,
-            ],
-        )
-        .await
-        .expect("insert server ban");
+    ServerBan::activate(
+        &client,
+        ServerBanActivation {
+            target_user_id: target.id,
+            fingerprint: Some(&target.fingerprint),
+            ip_address: Some(banned_ip),
+            snapshot_username: Some(&target.username),
+            actor_user_id: actor.id,
+            reason: "",
+            expires_at: None,
+        },
+    )
+    .await
+    .expect("activate server ban");
 
     let service = ProfileService::new(test_db.db.clone(), default_active_users());
 
     service.delete_account(target.id);
     wait_for_user_deleted(&client, target.id).await;
 
-    let ban_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM server_bans WHERE target_user_id = $1",
-            &[&target.id],
-        )
-        .await
-        .expect("count server bans")
-        .get(0);
-    assert_eq!(ban_count, 1);
+    assert!(
+        ServerBan::find_active_for_user_id(&client, target.id)
+            .await
+            .expect("server ban lookup")
+            .is_some(),
+        "server ban row survives target deletion"
+    );
     assert!(
         ServerBan::find_active_for_fingerprint(&client, &target.fingerprint)
             .await

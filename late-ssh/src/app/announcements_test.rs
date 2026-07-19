@@ -2,6 +2,7 @@ use chrono::{Duration, Utc};
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::ChatRoom,
+    chat_room_member::ChatRoomMember,
 };
 use late_core::test_utils::create_test_user;
 use crate::app::announcements::load_login_announcements;
@@ -14,14 +15,7 @@ async fn login_announcements_missing_room_is_noop() {
     let client = test_db.db.get().await.expect("db client");
     let user = create_test_user(&test_db.db, "announcements-none").await;
 
-    client
-        .execute(
-            "DELETE FROM chat_rooms
-             WHERE slug = 'announcements'
-               AND kind = 'topic'
-               AND visibility = 'public'",
-            &[],
-        )
+    ChatRoom::delete_permanent(&client, "announcements")
         .await
         .expect("delete announcements room");
 
@@ -73,16 +67,9 @@ async fn login_announcements_return_unread_without_marking_read() {
     assert_eq!(announcements.messages[0].author, author.username);
     assert_eq!(announcements.messages[0].body, "server update tonight");
 
-    let last_read_at: Option<chrono::DateTime<chrono::Utc>> = client
-        .query_one(
-            "SELECT last_read_at
-             FROM chat_room_members
-             WHERE room_id = $1 AND user_id = $2",
-            &[&room.id, &viewer.id],
-        )
+    let last_read_at = ChatRoomMember::last_read_at(&client, room.id, viewer.id)
         .await
-        .expect("membership")
-        .get("last_read_at");
+        .expect("membership");
     assert!(last_read_at.is_none());
 
     let again = load_login_announcements(&client, viewer.id)
@@ -91,19 +78,14 @@ async fn login_announcements_return_unread_without_marking_read() {
         .expect("still unread announcements");
     assert_eq!(again.messages.len(), 1);
 
-    client
-        .execute(
-            "UPDATE chat_room_members
-             SET last_read_at = $3
-             WHERE room_id = $1 AND user_id = $2",
-            &[
-                &announcements.room_id,
-                &viewer.id,
-                &announcements.latest_displayed_at().expect("display cursor"),
-            ],
-        )
-        .await
-        .expect("mark displayed announcements read");
+    ChatRoomMember::mark_read_at(
+        &client,
+        announcements.room_id,
+        viewer.id,
+        announcements.latest_displayed_at().expect("display cursor"),
+    )
+    .await
+    .expect("mark displayed announcements read");
 
     let after_mark = load_login_announcements(&client, viewer.id)
         .await
@@ -156,19 +138,14 @@ async fn login_announcements_shows_newest_first_capped_at_ten() {
     // Marking read up to the newest displayed catches the viewer up; the two
     // announcements older than the 10-message window sit behind the cursor and
     // are treated as seen (an old-announcement backlog is not paged through).
-    client
-        .execute(
-            "UPDATE chat_room_members
-             SET last_read_at = $3
-             WHERE room_id = $1 AND user_id = $2",
-            &[
-                &first_batch.room_id,
-                &viewer.id,
-                &first_batch.latest_displayed_at().expect("display cursor"),
-            ],
-        )
-        .await
-        .expect("mark first batch read");
+    ChatRoomMember::mark_read_at(
+        &client,
+        first_batch.room_id,
+        viewer.id,
+        first_batch.latest_displayed_at().expect("display cursor"),
+    )
+    .await
+    .expect("mark first batch read");
 
     let after_mark = load_login_announcements(&client, viewer.id)
         .await
