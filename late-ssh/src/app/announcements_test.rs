@@ -1,3 +1,4 @@
+use crate::app::announcements::load_login_announcements;
 use chrono::{Duration, Utc};
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -5,7 +6,6 @@ use late_core::models::{
     chat_room_member::ChatRoomMember,
 };
 use late_core::test_utils::create_test_user;
-use crate::app::announcements::load_login_announcements;
 
 use crate::test_helpers::new_test_db;
 

@@ -1,6 +1,6 @@
 //! App-level dashboard input integration tests against a real ephemeral DB.
 
-
+use crate::paired_clients::PairControlMessage;
 use crate::test_helpers::{
     make_app, make_app_with_paired_client, new_test_db, render_plain, wait_for_render_contains,
 };
@@ -10,7 +10,6 @@ use late_core::models::{
     chat_room_member::ChatRoomMember,
 };
 use late_core::test_utils::create_test_user;
-use crate::paired_clients::PairControlMessage;
 
 async fn make_app_harness() -> (late_core::test_utils::TestDb, crate::app::state::App) {
     let test_db = new_test_db().await;

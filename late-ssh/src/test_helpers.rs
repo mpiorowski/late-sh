@@ -1,11 +1,5 @@
 #![allow(dead_code)]
 
-use late_core::{
-    api_types::NowPlaying,
-    db::Db,
-    rate_limit::IpRateLimiter,
-    test_utils::{TestDb, test_db},
-};
 use crate::app::activity::event::ActivityEvent;
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::ai::svc::AiService;
@@ -38,6 +32,12 @@ use crate::config::{AiConfig, Config, WebTunnelConfig};
 use crate::paired_clients::{PairControlMessage, PairedClientRegistry};
 use crate::session::SessionRegistry;
 use crate::state::State;
+use late_core::{
+    api_types::NowPlaying,
+    db::Db,
+    rate_limit::IpRateLimiter,
+    test_utils::{TestDb, test_db},
+};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};

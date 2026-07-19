@@ -1,3 +1,7 @@
+use crate::app::ai::svc::AiService;
+use crate::app::chat::news::svc::ArticleService;
+use crate::app::chat::notifications::svc::NotificationService;
+use crate::app::chat::svc::ChatService;
 use late_core::models::{
     article::{Article, ArticleParams},
     article::{ArticleEvent, NEWS_MARKER},
@@ -5,10 +9,6 @@ use late_core::models::{
     chat_room::ChatRoom,
     moderation_audit_log::ModerationAuditLog,
 };
-use crate::app::ai::svc::AiService;
-use crate::app::chat::news::svc::ArticleService;
-use crate::app::chat::notifications::svc::NotificationService;
-use crate::app::chat::svc::ChatService;
 use tokio::time::{Duration, timeout};
 
 use crate::test_helpers::new_test_db;
@@ -295,4 +295,3 @@ async fn deleting_article_removes_lounge_news_announcement() {
         .expect("reload announcement");
     assert!(deleted.is_none());
 }
-

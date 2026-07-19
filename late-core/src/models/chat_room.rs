@@ -65,10 +65,7 @@ impl ChatRoom {
     /// then the oldest match. Used by the login announcements splash, which
     /// must resolve `#announcements` to the same room `auto_join_public_rooms`
     /// joins users to.
-    pub async fn find_public_non_dm_by_slug(
-        client: &Client,
-        slug: &str,
-    ) -> Result<Option<Self>> {
+    pub async fn find_public_non_dm_by_slug(client: &Client, slug: &str) -> Result<Option<Self>> {
         let row = client
             .query_opt(
                 "SELECT *

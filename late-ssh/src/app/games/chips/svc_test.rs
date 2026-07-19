@@ -1,3 +1,4 @@
+use crate::app::games::chips::svc::ChipService;
 use late_core::{
     models::{
         chips::{
@@ -7,7 +8,6 @@ use late_core::{
     },
     test_utils::create_test_user,
 };
-use crate::app::games::chips::svc::ChipService;
 
 use crate::test_helpers::new_test_db;
 

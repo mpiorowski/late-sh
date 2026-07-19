@@ -1,12 +1,3 @@
-use late_core::{
-    models::{
-        chat_room::ChatRoom,
-        chat_room_member::ChatRoomMember,
-        daily_match::DailyMatch,
-        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
-    },
-    test_utils::{TestDb, create_test_user},
-};
 use crate::app::activity::event::{ActivityEvent, ActivityKind};
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::games::chips::svc::ChipService;
@@ -15,6 +6,15 @@ use crate::app::lobby::daily::connect4::DailyConnect4State;
 use crate::app::lobby::daily::games::DailyGame;
 use crate::app::lobby::daily::svc::{
     DAILY_MAX_ACTIVE_ENTRIES, DailyChessState, DailyOutcome, DailyService,
+};
+use late_core::{
+    models::{
+        chat_room::ChatRoom,
+        chat_room_member::ChatRoomMember,
+        daily_match::DailyMatch,
+        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
+    },
+    test_utils::{TestDb, create_test_user},
 };
 use tokio::sync::broadcast;
 use uuid::Uuid;

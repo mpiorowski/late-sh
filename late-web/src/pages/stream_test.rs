@@ -1,6 +1,6 @@
+use crate::{AppState, app, config::Config};
 use axum::{body::Body, http::StatusCode, response::IntoResponse, routing::get};
 use late_core::db::{Db, DbConfig};
-use crate::{AppState, app, config::Config};
 use std::time::Duration;
 use tokio::sync::oneshot;
 

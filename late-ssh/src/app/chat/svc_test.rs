@@ -1,3 +1,13 @@
+use crate::app::artboard::provenance::ArtboardProvenance;
+use crate::app::chat::notifications::svc::NotificationService;
+use crate::app::chat::svc::{ChatEvent, ChatService};
+use crate::authz::Permissions;
+use crate::dartboard;
+use crate::moderation::command::ServerUserAction;
+use crate::moderation::event::ModerationEvent;
+use crate::moderation::service::ModerationInfra;
+use crate::session::{SessionMessage, SessionRegistry};
+use crate::state::{ActiveSession, ActiveUser};
 use dartboard_core::{Canvas, CanvasOp, Pos, RgbColor};
 use late_core::models::{
     artboard::Snapshot as ArtboardSnapshot,
@@ -12,16 +22,6 @@ use late_core::models::{
     server_ban::ServerBan,
     user::{RightSidebarMode, User, default_right_sidebar_components},
 };
-use crate::app::artboard::provenance::ArtboardProvenance;
-use crate::app::chat::notifications::svc::NotificationService;
-use crate::app::chat::svc::{ChatEvent, ChatService};
-use crate::authz::Permissions;
-use crate::dartboard;
-use crate::moderation::command::ServerUserAction;
-use crate::moderation::event::ModerationEvent;
-use crate::moderation::service::ModerationInfra;
-use crate::session::{SessionMessage, SessionRegistry};
-use crate::state::{ActiveSession, ActiveUser};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};

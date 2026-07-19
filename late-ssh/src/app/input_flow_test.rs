@@ -1,6 +1,6 @@
 //! App input integration tests against a real ephemeral DB.
 
-
+use crate::authz::Permissions;
 use crate::test_helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
     make_app_with_permissions, new_test_db, render_plain, wait_for_render_contains, wait_until,
@@ -13,7 +13,6 @@ use late_core::models::{
     user::User,
 };
 use late_core::test_utils::create_test_user;
-use crate::authz::Permissions;
 use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;

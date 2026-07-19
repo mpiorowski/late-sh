@@ -97,9 +97,7 @@ pub async fn bump_created_past_now(
 ) {
     let updated = client
         .execute(
-            &format!(
-                "UPDATE {table} SET created = now() + interval '1 second' WHERE {filter_sql}"
-            ),
+            &format!("UPDATE {table} SET created = now() + interval '1 second' WHERE {filter_sql}"),
             params,
         )
         .await

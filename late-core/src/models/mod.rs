@@ -1,15 +1,15 @@
 pub mod account_link;
 pub mod arcade_handle;
 pub mod artboard;
+pub mod artboard_ban;
 #[cfg(test)]
 mod artboard_test;
-pub mod artboard_ban;
 pub mod article;
-#[cfg(test)]
-mod article_test;
 pub mod article_feed_read;
 #[cfg(test)]
 mod article_feed_read_test;
+#[cfg(test)]
+mod article_test;
 pub mod asterion;
 pub mod audio_ban;
 pub mod birthday;
@@ -19,16 +19,16 @@ pub mod bonsai;
 mod bonsai_test;
 pub mod character_sheet;
 pub mod chat_message;
+pub mod chat_message_reaction;
 #[cfg(test)]
 mod chat_message_test;
-pub mod chat_message_reaction;
 pub mod chat_poll;
 pub mod chat_room;
-#[cfg(test)]
-mod chat_room_test;
 pub mod chat_room_member;
 #[cfg(test)]
 mod chat_room_member_test;
+#[cfg(test)]
+mod chat_room_test;
 pub mod chat_slow_mode;
 pub mod chips;
 pub mod daily_match;

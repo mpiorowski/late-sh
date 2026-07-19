@@ -9,8 +9,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use getrandom::SysRng;
 use crate::app::door::rebels::proxy::{ProxyConfig, ProxyStatus, RebelsProxy};
+use getrandom::SysRng;
 use russh::keys::signature::rand_core::UnwrapErr;
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Config, Handler, Msg, Server, Session};

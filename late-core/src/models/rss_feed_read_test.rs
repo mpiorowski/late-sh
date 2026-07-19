@@ -1,4 +1,3 @@
-use chrono::{Duration as ChronoDuration, Utc};
 use crate::{
     models::{
         rss_entry::{RssEntry, RssEntryParams},
@@ -7,6 +6,7 @@ use crate::{
     },
     test_utils::{bump_created_past_now, create_test_user, test_db},
 };
+use chrono::{Duration as ChronoDuration, Utc};
 
 #[tokio::test]
 async fn rss_feed_unread_uses_timestamp_cursor() {

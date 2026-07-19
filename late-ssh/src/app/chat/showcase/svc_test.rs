@@ -1,3 +1,4 @@
+use crate::app::chat::showcase::svc::{ShowcaseEvent, ShowcaseService};
 use late_core::{
     models::{
         showcase::{Showcase, ShowcaseParams},
@@ -5,7 +6,6 @@ use late_core::{
     },
     test_utils::create_test_user,
 };
-use crate::app::chat::showcase::svc::{ShowcaseEvent, ShowcaseService};
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 

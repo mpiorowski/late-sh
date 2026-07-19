@@ -1,10 +1,10 @@
-use late_core::{
-    models::media_queue_item::MediaQueueItem,
-    test_utils::{create_test_user, test_db},
-};
 use crate::{
     app::audio::{svc::AudioService, youtube::YoutubeVideo},
     paired_clients::PairedClientRegistry,
+};
+use late_core::{
+    models::media_queue_item::MediaQueueItem,
+    test_utils::{create_test_user, test_db},
 };
 
 #[tokio::test]

@@ -4,6 +4,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::app::profile::svc::{ProfileEvent, ProfileService};
+use crate::session::{SessionMessage, SessionRegistry};
+use crate::state::{ActiveSession, ActiveUser};
 use crate::test_helpers::new_test_db;
 use late_core::models::{
     artboard_ban::ArtboardBan,
@@ -16,9 +19,6 @@ use late_core::models::{
     user::{RightSidebarMode, User, UserParams, default_right_sidebar_components},
 };
 use late_core::test_utils::create_test_user;
-use crate::app::profile::svc::{ProfileEvent, ProfileService};
-use crate::session::{SessionMessage, SessionRegistry};
-use crate::state::{ActiveSession, ActiveUser};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep, timeout};
 
@@ -61,9 +61,7 @@ async fn find_profile_creates_profile_and_publishes_snapshot() {
     assert_eq!(profile.username, "profile-user");
 
     let client = test_db.db.get().await.expect("db client");
-    let chips = UserChips::find(&client, user.id)
-        .await
-        .expect("load chips");
+    let chips = UserChips::find(&client, user.id).await.expect("load chips");
     assert!(chips.is_none(), "profile access must not create a chip row");
 }
 

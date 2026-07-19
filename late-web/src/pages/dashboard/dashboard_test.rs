@@ -1,6 +1,6 @@
+use crate::{AppState, app, config::Config};
 use axum::{Json, routing::get};
 use late_core::db::{Db, DbConfig};
-use crate::{AppState, app, config::Config};
 use serde_json::json;
 use std::sync::Once;
 use tokio::sync::oneshot;

@@ -108,7 +108,14 @@ mod tests {
     fn all_games_are_listed_in_order() {
         assert_eq!(
             HubGame::ALL.map(HubGame::label),
-            ["Lateania", "NetHack", "DCSS", "Green Dragon", "Rebels", "dopewars"],
+            [
+                "Lateania",
+                "NetHack",
+                "DCSS",
+                "Green Dragon",
+                "Rebels",
+                "dopewars"
+            ],
         );
     }
 }

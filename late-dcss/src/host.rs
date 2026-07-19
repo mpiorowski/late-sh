@@ -180,7 +180,9 @@ async fn run_bridge(
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
         .stdin(Stdio::from(
-            slave.try_clone().context("clone dcss pty slave for stdin")?,
+            slave
+                .try_clone()
+                .context("clone dcss pty slave for stdin")?,
         ))
         .stdout(Stdio::from(
             slave
@@ -361,7 +363,11 @@ fn send_sighup(pid: u32, playname: &str) {
 /// (already sanitized, `[A-Za-z0-9_]`) playname so no two handles can share
 /// macro state; crawl writes `macro.txt` inside it.
 fn macro_dir(data_dir: &str, playname: &str) -> String {
-    format!("{}/.crawl/macros/{}", data_dir.trim_end_matches('/'), playname)
+    format!(
+        "{}/.crawl/macros/{}",
+        data_dir.trim_end_matches('/'),
+        playname
+    )
 }
 
 /// Push a new window size to the PTY; the kernel signals SIGWINCH to the child's

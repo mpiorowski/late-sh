@@ -181,10 +181,7 @@ impl PinstarDiagram {
     /// the full member roster, ordered most-recently-updated first. Public
     /// diagrams are visible to everyone as read-only viewers, so this lists all
     /// diagrams, not just owned or joined ones. Drives the diagram browser.
-    pub async fn list_for_viewer(
-        client: &Client,
-        user_id: Uuid,
-    ) -> Result<Vec<DiagramListEntry>> {
+    pub async fn list_for_viewer(client: &Client, user_id: Uuid) -> Result<Vec<DiagramListEntry>> {
         let rows = client
             .query(
                 "SELECT d.id,

@@ -1,6 +1,6 @@
-use late_core::models::minesweeper::{Game, GameParams};
 use crate::app::activity::event::ActivityEvent;
 use crate::app::arcade::minesweeper::svc::MinesweeperService;
+use late_core::models::minesweeper::{Game, GameParams};
 use tokio::sync::broadcast;
 
 use crate::test_helpers::new_test_db;

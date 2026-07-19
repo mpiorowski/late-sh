@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use crate::config::IrcConfig;
+use crate::state::State;
 use late_core::models::{
     chat_message::ChatMessage,
     chat_room::ChatRoom,
@@ -11,8 +13,6 @@ use late_core::models::{
 };
 use late_core::shutdown::CancellationToken;
 use late_core::test_utils::{TestDb, create_test_user};
-use crate::config::IrcConfig;
-use crate::state::State;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -46,13 +46,8 @@ impl IrcTestServer {
         let task_state = state.clone();
         let task_shutdown = shutdown.clone();
         let task = tokio::spawn(async move {
-            crate::ircd::serve::run_with_listener(
-                task_state,
-                Some(task_shutdown),
-                listener,
-                None,
-            )
-            .await
+            crate::ircd::serve::run_with_listener(task_state, Some(task_shutdown), listener, None)
+                .await
         });
 
         Self {

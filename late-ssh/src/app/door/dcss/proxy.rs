@@ -229,4 +229,3 @@ async fn run_bridge(
         .await;
     Ok(())
 }
-

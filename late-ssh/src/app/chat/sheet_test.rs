@@ -1,14 +1,14 @@
 //! Integration tests for character sheets (model + chat service tasks)
 //! against a real ephemeral DB.
 
+use crate::app::chat::notifications::svc::NotificationService;
+use crate::app::chat::svc::{ChatEvent, ChatService};
 use late_core::models::{
     character_sheet::{CharacterSheet, CharacterSheetParams},
     chat_room::ChatRoom,
     chat_room_member::ChatRoomMember,
 };
 use late_core::test_utils::create_test_user;
-use crate::app::chat::notifications::svc::NotificationService;
-use crate::app::chat::svc::{ChatEvent, ChatService};
 use tokio::sync::broadcast;
 use tokio::time::{Duration, sleep, timeout};
 use uuid::Uuid;

@@ -1,3 +1,4 @@
+use crate::app::pinstar::browser::{delete_diagram_for_user, load_diagram_list_with_client};
 use late_core::{
     models::{
         pinstar_diagram::{PinstarDiagram, PinstarDiagramParams},
@@ -6,7 +7,6 @@ use late_core::{
     },
     test_utils::{create_test_user, test_db},
 };
-use crate::app::pinstar::browser::{delete_diagram_for_user, load_diagram_list_with_client};
 
 async fn create_diagram(
     client: &tokio_postgres::Client,

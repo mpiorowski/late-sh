@@ -1,11 +1,11 @@
 //! State-level integration tests for artboard client behavior.
 
-use dartboard_core::{Canvas, CanvasOp, Pos};
-use late_core::models::artboard::Snapshot;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::artboard::state::State;
 use crate::app::artboard::svc::ArtboardSnapshotService;
 use crate::dartboard;
+use dartboard_core::{Canvas, CanvasOp, Pos};
+use late_core::models::artboard::Snapshot;
 
 use super::test_support::{connected_service, shared_provenance, test_color, wait_for};
 use crate::test_helpers::new_test_db;

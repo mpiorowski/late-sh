@@ -1,4 +1,3 @@
-use chrono::{Duration, Utc};
 use crate::{
     models::{
         bonsai::{Grave, Tree},
@@ -6,6 +5,7 @@ use crate::{
     },
     test_utils::test_db,
 };
+use chrono::{Duration, Utc};
 use std::sync::Arc;
 use tokio::sync::Barrier;
 
@@ -170,13 +170,21 @@ async fn watering_is_scoped_to_the_owner() {
     .await
     .expect("create other");
 
-    let owner_tree = Tree::ensure(&client, owner.id, 1).await.expect("ensure owner tree");
-    let other_tree = Tree::ensure(&client, other.id, 2).await.expect("ensure other tree");
+    let owner_tree = Tree::ensure(&client, owner.id, 1)
+        .await
+        .expect("ensure owner tree");
+    let other_tree = Tree::ensure(&client, other.id, 2)
+        .await
+        .expect("ensure other tree");
     assert_ne!(owner_tree.id, other_tree.id);
 
     let today = Utc::now().date_naive();
-    Tree::water(&client, owner.id, today).await.expect("water owner tree");
-    Tree::add_growth(&client, owner.id, 10).await.expect("grow owner tree");
+    Tree::water(&client, owner.id, today)
+        .await
+        .expect("water owner tree");
+    Tree::add_growth(&client, owner.id, 10)
+        .await
+        .expect("grow owner tree");
 
     let other_after = Tree::find_by_user_id(&client, other.id)
         .await

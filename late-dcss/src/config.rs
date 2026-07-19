@@ -46,8 +46,7 @@ impl Config {
             data_dir: optional("LATE_DCSS_DATA_DIR")
                 .unwrap_or_else(|| "/var/lib/late-dcss".to_string()),
             secret,
-            listen_addr: optional("LATE_DCSS_LISTEN_ADDR")
-                .unwrap_or_else(|| "0.0.0.0".to_string()),
+            listen_addr: optional("LATE_DCSS_LISTEN_ADDR").unwrap_or_else(|| "0.0.0.0".to_string()),
             port: optional_parse("LATE_DCSS_PORT", 2325)?,
             idle_timeout: optional_parse("LATE_DCSS_IDLE_TIMEOUT", 3600)?,
         })

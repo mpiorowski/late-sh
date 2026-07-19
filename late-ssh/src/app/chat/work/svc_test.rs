@@ -1,3 +1,4 @@
+use crate::app::chat::work::svc::{WorkEvent, WorkService};
 use late_core::{
     models::{
         moderation_audit_log::ModerationAuditLog,
@@ -6,7 +7,6 @@ use late_core::{
     },
     test_utils::create_test_user,
 };
-use crate::app::chat::work::svc::{WorkEvent, WorkService};
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 

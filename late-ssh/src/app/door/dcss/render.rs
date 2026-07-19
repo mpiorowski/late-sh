@@ -83,7 +83,11 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         Line::from(""),
         landing::stat("saves", "kept per player, resume any time", 8),
         landing::stat("runes", "collect 3 of 15, then the Realm of Zot opens", 8),
-        landing::stat("builds", "dozens of species and backgrounds, no two runs alike", 8),
+        landing::stat(
+            "builds",
+            "dozens of species and backgrounds, no two runs alike",
+            8,
+        ),
         landing::stat("style", "tactics over grinding: every fight is a puzzle", 8),
         Line::from(""),
         flavor_headline(),

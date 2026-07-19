@@ -1,8 +1,8 @@
-use chrono::NaiveDate;
 use crate::{
     models::le_word::{DailyWin, DailyWord, Game, GameParams},
     test_utils::{create_test_user, test_db},
 };
+use chrono::NaiveDate;
 
 #[tokio::test]
 async fn daily_word_records_one_global_answer_per_date() {

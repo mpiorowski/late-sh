@@ -1,4 +1,3 @@
-use chrono::NaiveDate;
 use crate::{
     models::{
         minesweeper::{DailyWin, Game, GameParams},
@@ -6,6 +5,7 @@ use crate::{
     },
     test_utils::test_db,
 };
+use chrono::NaiveDate;
 use uuid::Uuid;
 
 async fn create_user(client: &tokio_postgres::Client) -> Uuid {
