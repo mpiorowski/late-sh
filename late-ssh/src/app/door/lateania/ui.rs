@@ -19,7 +19,7 @@ use super::{
     appearance,
     classes::Class,
     state::{Panel, State},
-    svc::{LogKind, PlayerView},
+    svc::{CraftRow, LogKind, PlayerView},
     world::{Dir, MapCell, MiniMap},
 };
 
@@ -365,7 +365,7 @@ fn draw_side(
         Panel::Housing => housing_panel(view, state.cursor()),
         Panel::Portal => portal_panel(view, state.cursor()),
         Panel::Appearance => (appearance_panel(view, state.cursor()), None),
-        Panel::Crafting => crafting_panel(view, state.cursor()),
+        Panel::Crafting => crafting_panel(&state.craft_rows(), view, state.cursor()),
         Panel::Map => (atlas_panel(view), None),
     };
     let off = scroll_offset(
@@ -1746,7 +1746,11 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<u
     (lines, sel_line)
 }
 
-fn crafting_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+fn crafting_panel(
+    rows: &[CraftRow],
+    view: &PlayerView,
+    cursor: usize,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(craft) = &view.crafting else {
         return (
             vec![Line::from(Span::styled(
@@ -1772,39 +1776,69 @@ fn crafting_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opti
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
-    for (i, e) in craft.entries.iter().enumerate() {
+    for (i, row) in rows.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
-        let marker = if selected { ">" } else { " " };
-        let name_style = if selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else if e.craftable {
-            Style::default().fg(theme::TEXT())
-        } else {
-            Style::default().fg(theme::TEXT_DIM())
-        };
-        // Name row, with a gated reason when it can't be made.
-        let mut name_spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
-        if !e.craftable && !e.reason.is_empty() {
-            name_spans.push(Span::styled(
-                format!("  ({})", e.reason),
-                Style::default().fg(theme::ERROR()),
-            ));
+        match row {
+            // A collapsible skill header: "▾ Cooking (10)" / "▸ Cooking (10)".
+            CraftRow::Header {
+                skill,
+                count,
+                collapsed,
+            } => {
+                let arrow = if *collapsed { "▸" } else { "▾" };
+                let style = if selected {
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("{arrow} {skill} ({count})"),
+                    style,
+                )));
+            }
+            // A recipe under an expanded header.
+            CraftRow::Recipe { entry } => {
+                let Some(e) = craft.entries.get(*entry) else {
+                    continue;
+                };
+                let marker = if selected { ">" } else { " " };
+                let name_style = if selected {
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD)
+                } else if e.craftable {
+                    Style::default().fg(theme::TEXT())
+                } else {
+                    Style::default().fg(theme::TEXT_DIM())
+                };
+                // Name row, with a gated reason when it can't be made.
+                let mut name_spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+                if !e.craftable && !e.reason.is_empty() {
+                    name_spans.push(Span::styled(
+                        format!("  ({})", e.reason),
+                        Style::default().fg(theme::ERROR()),
+                    ));
+                }
+                lines.push(Line::from(name_spans));
+                // Ingredient row.
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", e.inputs),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )));
+            }
         }
-        lines.push(Line::from(name_spans));
-        // Ingredient row.
-        lines.push(Line::from(Span::styled(
-            format!("    {} · {}", e.skill.to_lowercase(), e.inputs),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("w/s", "select  Enter craft"));
+    lines.push(hint("w/s", "select  Enter craft/fold"));
     lines.push(hint("u", "close"));
     (lines, sel_line)
 }

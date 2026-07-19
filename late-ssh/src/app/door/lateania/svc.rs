@@ -373,6 +373,56 @@ pub struct CraftView {
     pub entries: Vec<CraftEntryView>,
 }
 
+/// One navigable row of the crafting panel: a collapsible skill header, or a
+/// recipe beneath an expanded header. The cursor moves over these rows so a
+/// long recipe list can be folded down to just its skill headers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CraftRow {
+    /// A skill group header (e.g. "Cooking"), with how many recipes it holds and
+    /// whether it is currently collapsed.
+    Header {
+        skill: String,
+        count: usize,
+        collapsed: bool,
+    },
+    /// A recipe row; `entry` indexes into `CraftView::entries`.
+    Recipe { entry: usize },
+}
+
+impl CraftView {
+    /// Group the recipes under collapsible skill headers, in first-seen order.
+    /// Recipes of a collapsed skill are omitted, so the row list is exactly what
+    /// the cursor navigates and the panel draws.
+    pub fn rows(&self, collapsed: &std::collections::HashSet<String>) -> Vec<CraftRow> {
+        let mut order: Vec<&str> = Vec::new();
+        for e in &self.entries {
+            if !order.contains(&e.skill.as_str()) {
+                order.push(&e.skill);
+            }
+        }
+        let mut rows = Vec::new();
+        for skill in order {
+            let members: Vec<usize> = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.skill == skill)
+                .map(|(i, _)| i)
+                .collect();
+            let is_collapsed = collapsed.contains(skill);
+            rows.push(CraftRow::Header {
+                skill: skill.to_string(),
+                count: members.len(),
+                collapsed: is_collapsed,
+            });
+            if !is_collapsed {
+                rows.extend(members.into_iter().map(|entry| CraftRow::Recipe { entry }));
+            }
+        }
+        rows
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OccupantView {
     pub user_id: Uuid,
@@ -7297,6 +7347,70 @@ mod tests {
 
     fn uid(n: u128) -> Uuid {
         Uuid::from_u128(n)
+    }
+
+    fn craft_entry(name: &str, skill: &str) -> CraftEntryView {
+        CraftEntryView {
+            recipe: 0,
+            name: name.to_string(),
+            skill: skill.to_string(),
+            inputs: String::new(),
+            craftable: true,
+            reason: String::new(),
+        }
+    }
+
+    #[test]
+    fn craft_rows_group_under_collapsible_skill_headers() {
+        use std::collections::HashSet;
+        let view = CraftView {
+            stations: "forge, kitchen".to_string(),
+            entries: vec![
+                craft_entry("Iron Sword", "Smithing"),
+                craft_entry("Iron Shield", "Smithing"),
+                craft_entry("Trout Stew", "Cooking"),
+            ],
+        };
+        // Expanded: a header per skill (first-seen order) followed by its recipes.
+        let rows = view.rows(&HashSet::new());
+        assert_eq!(
+            rows,
+            vec![
+                CraftRow::Header {
+                    skill: "Smithing".into(),
+                    count: 2,
+                    collapsed: false
+                },
+                CraftRow::Recipe { entry: 0 },
+                CraftRow::Recipe { entry: 1 },
+                CraftRow::Header {
+                    skill: "Cooking".into(),
+                    count: 1,
+                    collapsed: false
+                },
+                CraftRow::Recipe { entry: 2 },
+            ]
+        );
+        // Collapsing Smithing hides its recipes but keeps the header (marked
+        // collapsed); Cooking is untouched.
+        let collapsed: HashSet<String> = ["Smithing".to_string()].into_iter().collect();
+        let rows = view.rows(&collapsed);
+        assert_eq!(
+            rows,
+            vec![
+                CraftRow::Header {
+                    skill: "Smithing".into(),
+                    count: 2,
+                    collapsed: true
+                },
+                CraftRow::Header {
+                    skill: "Cooking".into(),
+                    count: 1,
+                    collapsed: false
+                },
+                CraftRow::Recipe { entry: 2 },
+            ]
+        );
     }
 
     fn world() -> WorldState {

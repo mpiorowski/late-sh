@@ -72,6 +72,9 @@ pub struct State {
     /// (which only holds `&State`) can keep the highlighted row inside a
     /// scroll-off margin. Reset whenever the panel changes.
     list_scroll: Cell<usize>,
+    /// Skill headers the player has collapsed in the crafting panel (by skill
+    /// name). Session-only; folds a long recipe list down to its categories.
+    collapsed_craft: std::collections::HashSet<String>,
     joined: bool,
     join_pending: bool,
     join_requested_at: Instant,
@@ -103,6 +106,7 @@ impl State {
             panel: Panel::Room,
             cursor: 0,
             list_scroll: Cell::new(0),
+            collapsed_craft: std::collections::HashSet::new(),
             joined: true,
             join_pending: true,
             join_requested_at,
@@ -224,6 +228,15 @@ impl State {
         self.list_scroll.set(cur + SCROLL_STEP);
     }
 
+    /// The crafting panel's navigable rows (collapsible skill headers + the
+    /// recipes of expanded skills), for both the cursor and the renderer.
+    pub fn craft_rows(&self) -> Vec<super::svc::CraftRow> {
+        self.view()
+            .crafting
+            .map(|c| c.rows(&self.collapsed_craft))
+            .unwrap_or_default()
+    }
+
     /// Current list length for whichever list panel is active (for cursor clamp).
     fn list_len(&self) -> usize {
         match self.panel {
@@ -238,7 +251,8 @@ impl State {
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
             Panel::Appearance => self.view().appearance.len(),
-            Panel::Crafting => self.view().crafting.map(|c| c.entries.len()).unwrap_or(0),
+            // The crafting cursor walks headers + visible recipes, not entries.
+            Panel::Crafting => self.craft_rows().len(),
             _ => 0,
         }
     }
@@ -541,10 +555,30 @@ impl State {
             }
             Panel::Appearance => self.cycle_appearance(1),
             Panel::Crafting => {
-                if let Some(cr) = self.view().crafting
-                    && let Some(entry) = cr.entries.get(self.cursor)
-                {
-                    self.svc.craft_task(self.user_id, entry.recipe);
+                use super::svc::CraftRow;
+                match self.craft_rows().get(self.cursor).cloned() {
+                    // On a skill header: fold or unfold that category. Keep the
+                    // cursor on the header so the view doesn't jump.
+                    Some(CraftRow::Header { skill, .. }) => {
+                        if !self.collapsed_craft.remove(&skill) {
+                            self.collapsed_craft.insert(skill.clone());
+                        }
+                        let header_at = self.craft_rows().iter().position(
+                            |r| matches!(r, CraftRow::Header { skill: s, .. } if *s == skill),
+                        );
+                        if let Some(i) = header_at {
+                            self.cursor = i;
+                        }
+                    }
+                    // On a recipe: craft it.
+                    Some(CraftRow::Recipe { entry }) => {
+                        if let Some(cr) = self.view().crafting
+                            && let Some(e) = cr.entries.get(entry)
+                        {
+                            self.svc.craft_task(self.user_id, e.recipe);
+                        }
+                    }
+                    None => {}
                 }
             }
             _ => {}
