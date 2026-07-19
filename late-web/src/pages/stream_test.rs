@@ -108,14 +108,20 @@ async fn stream_proxy_falls_back_to_silence_when_upstream_is_down() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let mut response = response;
-    let first = tokio::time::timeout(Duration::from_secs(2), response.chunk())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
 
+    // The fallback loops the silence asset forever; read one full cycle so a
+    // truncated response cannot pass on a short prefix match.
     let silence = include_bytes!("../../assets/silence.mp3");
-    assert_eq!(first.as_ref(), &silence[..first.len()]);
+    let mut collected = Vec::new();
+    while collected.len() < silence.len() {
+        let chunk = tokio::time::timeout(Duration::from_secs(2), response.chunk())
+            .await
+            .expect("chunk timeout")
+            .expect("chunk read")
+            .expect("stream ended before a full silence cycle");
+        collected.extend_from_slice(&chunk);
+    }
+    assert_eq!(&collected[..silence.len()], silence.as_slice());
 
     let _ = shutdown_tx.send(());
 }

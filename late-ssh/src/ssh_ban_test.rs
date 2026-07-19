@@ -135,3 +135,35 @@ async fn has_active_server_ban_matches_user_fingerprint_and_ip() {
             .expect("ip ban lookup")
     );
 }
+
+#[tokio::test]
+async fn expired_server_ban_is_not_active() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "ban_exp_actor").await;
+    let target = create_test_user(&test_db.db, "ban_exp_target").await;
+    let banned_ip_text = "203.0.113.77".to_string();
+
+    ServerBan::activate(
+        &client,
+        ServerBanActivation {
+            target_user_id: target.id,
+            fingerprint: Some(&target.fingerprint),
+            ip_address: Some(&banned_ip_text),
+            snapshot_username: Some(&target.username),
+            actor_user_id: actor.id,
+            reason: "expired ban",
+            expires_at: Some(chrono::Utc::now() - chrono::Duration::minutes(5)),
+        },
+    )
+    .await
+    .expect("activate expired ban");
+
+    let banned_ip = IpAddr::from_str(&banned_ip_text).expect("test ip");
+    assert!(
+        !has_active_server_ban(&client, &target, &target.fingerprint, Some(banned_ip))
+            .await
+            .expect("ban lookup"),
+        "an expired ban must not gate the target, their fingerprint, or their ip"
+    );
+}

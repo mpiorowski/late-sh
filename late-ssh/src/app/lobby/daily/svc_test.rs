@@ -1045,3 +1045,52 @@ async fn stale_match_chat_rooms_are_reaped_after_30_days() {
         );
     }
 }
+
+#[tokio::test]
+async fn play_move_against_unknown_match_is_rejected() {
+    let test_db = new_test_db().await;
+    let player = create_test_user(&test_db.db, "daily-unknown-mover").await;
+    let svc = daily_service(&test_db).await;
+
+    let error = svc
+        .play_move(player.id, Uuid::now_v7(), 0, 0)
+        .await
+        .expect_err("moving in a nonexistent match must fail");
+    assert_eq!(error.to_string(), "match is not active");
+}
+
+#[tokio::test]
+async fn claim_against_unknown_challenge_is_rejected() {
+    let test_db = new_test_db().await;
+    let player = create_test_user(&test_db.db, "daily-unknown-claimer").await;
+    let svc = daily_service(&test_db).await;
+
+    let error = svc
+        .claim_challenge(player.id, Uuid::now_v7())
+        .await
+        .expect_err("claiming a nonexistent challenge must fail");
+    assert_eq!(error.to_string(), "challenge is no longer open");
+}
+
+#[tokio::test]
+async fn claimed_challenge_rejects_a_later_claim() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-late-poster").await;
+    let opponent = create_test_user(&test_db.db, "daily-late-first").await;
+    let latecomer = create_test_user(&test_db.db, "daily-late-second").await;
+    let svc = daily_service(&test_db).await;
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::ConnectFour, None)
+        .await
+        .expect("post challenge");
+    svc.claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("first claim succeeds");
+
+    let error = svc
+        .claim_challenge(latecomer.id, challenge.id)
+        .await
+        .expect_err("a claimed challenge must reject a later claim");
+    assert_eq!(error.to_string(), "challenge is no longer open");
+}

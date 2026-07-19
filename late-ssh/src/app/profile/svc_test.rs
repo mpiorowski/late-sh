@@ -523,3 +523,86 @@ async fn delete_account_terminates_active_sessions() {
             .contains_key(&user.id)
     );
 }
+
+#[tokio::test]
+async fn edit_profile_snapshots_stay_per_user() {
+    let test_db = new_test_db().await;
+    let user_a = create_test_user(&test_db.db, "profile-scope-a").await;
+    let user_b = create_test_user(&test_db.db, "profile-scope-b").await;
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut a_rx = service.subscribe_snapshot(user_a.id);
+    let mut b_rx = service.subscribe_snapshot(user_b.id);
+
+    service.find_profile(user_a.id);
+    timeout(Duration::from_secs(2), a_rx.changed())
+        .await
+        .expect("a snapshot timeout")
+        .expect("watch changed");
+    service.find_profile(user_b.id);
+    timeout(Duration::from_secs(2), b_rx.changed())
+        .await
+        .expect("b snapshot timeout")
+        .expect("watch changed");
+    let b_username = b_rx
+        .borrow_and_update()
+        .profile
+        .clone()
+        .expect("b profile")
+        .username;
+
+    service.edit_profile(
+        user_a.id,
+        ProfileParams {
+            username: "scoped-owl".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            ide: None,
+            terminal: None,
+            os: None,
+            langs: Vec::new(),
+            notify_kinds: Vec::new(),
+            notify_bell: false,
+            notify_cooldown_mins: 0,
+            notify_format: None,
+            theme_id: None,
+            enable_background_color: false,
+            text_brightness_adjustment: 0,
+            show_right_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_components: default_right_sidebar_components(),
+            show_room_list_sidebar: true,
+            keep_composer_focused: false,
+            start_with_music_muted: false,
+            land_on_home: false,
+            show_flag_fallback: false,
+            show_pet_strip: true,
+            favorite_room_ids: Vec::new(),
+            birthday: None,
+        },
+    );
+
+    // A's own snapshot refresh marks the save task as fully processed.
+    timeout(Duration::from_secs(2), a_rx.changed())
+        .await
+        .expect("a updated snapshot timeout")
+        .expect("watch changed");
+    assert_eq!(
+        a_rx.borrow_and_update()
+            .profile
+            .clone()
+            .expect("a profile")
+            .username,
+        "scoped-owl"
+    );
+
+    assert!(
+        !b_rx.has_changed().expect("b channel alive"),
+        "user A's save must not push a snapshot to user B"
+    );
+    assert_eq!(
+        b_rx.borrow().profile.clone().expect("b profile").username,
+        b_username,
+        "user B's profile must be untouched by user A's save"
+    );
+}

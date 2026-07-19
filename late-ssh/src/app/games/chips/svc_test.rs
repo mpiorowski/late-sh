@@ -191,3 +191,47 @@ async fn buy_drink_for_charges_payer_and_buzzes_recipient() {
     assert_eq!(ledger.get::<_, i64>("delta"), -300);
     assert_eq!(ledger.get::<_, String>("source_ref"), "Kernel Panic Punch");
 }
+
+#[tokio::test]
+async fn transfer_chips_leaves_unrelated_users_untouched() {
+    let test_db = new_test_db().await;
+    let sender = create_test_user(&test_db.db, "gift-scope-sender").await;
+    let recipient = create_test_user(&test_db.db, "gift-scope-recipient").await;
+    let bystander = create_test_user(&test_db.db, "gift-scope-bystander").await;
+    let client = test_db.db.get().await.expect("db client");
+    UserChips::ensure(&client, sender.id)
+        .await
+        .expect("sender chips");
+    UserChips::ensure(&client, recipient.id)
+        .await
+        .expect("recipient chips");
+    UserChips::ensure(&client, bystander.id)
+        .await
+        .expect("bystander chips");
+
+    let chips = ChipService::new(test_db.db.clone());
+    chips
+        .transfer_chips(sender.id, recipient.id, 500)
+        .await
+        .expect("gift succeeds");
+
+    let balance: i64 = client
+        .query_one(
+            "SELECT balance FROM user_chips WHERE user_id = $1",
+            &[&bystander.id],
+        )
+        .await
+        .expect("bystander balance")
+        .get(0);
+    assert_eq!(balance, 1_000, "a transfer must not touch a third user");
+
+    let ledger_rows: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM chip_ledger WHERE user_id = $1",
+            &[&bystander.id],
+        )
+        .await
+        .expect("bystander ledger")
+        .get(0);
+    assert_eq!(ledger_rows, 0);
+}
