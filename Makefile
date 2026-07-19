@@ -78,6 +78,10 @@ LATE_DOPEWARS_HOST ?= service-dopewars                      # late-dopewars host
 LATE_DOPEWARS_PORT ?= 2324                                  # late-dopewars SSH port
 LATE_DOPEWARS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret authorizing late-ssh -> late-dopewars
 LATE_DOPEWARS_SCORE_FILE ?= /tmp/late-dopewars.sco          # Shared high-score file on the dopewars host (a PVC path in prod)
+LATE_DCSS_ENABLED ?= 1                                      # Enable the DCSS door game (1=on, 0=off)
+LATE_DCSS_HOST ?= service-dcss                              # late-dcss host (compose service name; 127.0.0.1 for a bare run)
+LATE_DCSS_PORT ?= 2325                                      # late-dcss SSH port
+LATE_DCSS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret authorizing late-ssh -> late-dcss
 
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
@@ -171,6 +175,10 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_DOPEWARS_PORT=$(LATE_DOPEWARS_PORT)" >> .env
 	@echo "LATE_DOPEWARS_SECRET=$(LATE_DOPEWARS_SECRET)" >> .env
 	@echo "LATE_DOPEWARS_SCORE_FILE=$(LATE_DOPEWARS_SCORE_FILE)" >> .env
+	@echo "LATE_DCSS_ENABLED=$(LATE_DCSS_ENABLED)" >> .env
+	@echo "LATE_DCSS_HOST=$(LATE_DCSS_HOST)" >> .env
+	@echo "LATE_DCSS_PORT=$(LATE_DCSS_PORT)" >> .env
+	@echo "LATE_DCSS_SECRET=$(LATE_DCSS_SECRET)" >> .env
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
@@ -209,6 +217,9 @@ INSTANCE2_OVERRIDES = \
 
 CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview
 CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+# Cap parallel compile/link jobs locally; 16-way builds spike past RAM on a
+# swapless machine and freeze the desktop. CI overrides via CHECK_BUILD_JOBS.
+CHECK_BUILD_JOBS ?= 8
 CHECK_INSTANCE ?= late-check
 CHECK_PG_HOST_PORT ?= 55433
 CHECK_COMPOSE = CHECK_PG_HOST_PORT=$(CHECK_PG_HOST_PORT) docker compose -p $(CHECK_INSTANCE) -f docker-compose.check.yml
@@ -237,14 +248,27 @@ check-db:
 check-db-down:
 	$(CHECK_DB_STOP)
 
+# Targeted, memory-capped test run for LLM agents.
+# Usage: make test-llm ARGS="-p late-ssh -E 'test(chat)'"
+# MemoryHigh throttles the build before the desktop starves; MemoryMax kills
+# the scope outright instead of freezing a swapless machine.
+TEST_LLM_MEM_HIGH ?= 10G
+TEST_LLM_MEM_MAX ?= 12G
+.PHONY: test-llm
+test-llm: .env
+	@set -e; \
+	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
+	$(CHECK_DB_START); \
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q -p MemoryHigh=$(TEST_LLM_MEM_HIGH) -p MemoryMax=$(TEST_LLM_MEM_MAX) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS)
+
 .PHONY: check
 check: .env
 	@set -e; \
 	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
 	$(CHECK_DB_START); \
 	cargo fmt $(CHECK_PACKAGES) -- --check; \
-	$(CHECK_CARGO_ENV) cargo clippy $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run $(CHECK_PACKAGES) --all-targets --no-fail-fast --failure-output final
+	$(CHECK_CARGO_ENV) cargo clippy -j $(CHECK_BUILD_JOBS) $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings; \
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) $(CHECK_PACKAGES) --all-targets --no-fail-fast --failure-output final
 
 .PHONY: checkci
 checkci: .env

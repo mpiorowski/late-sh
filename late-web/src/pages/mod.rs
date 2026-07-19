@@ -10,6 +10,9 @@ pub mod profiles;
 pub mod shared;
 pub mod stream;
 
+#[cfg(test)]
+mod stream_test;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(home::router())

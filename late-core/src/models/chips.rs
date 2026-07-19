@@ -49,6 +49,17 @@ impl From<tokio_postgres::Row> for UserChips {
 }
 
 impl UserChips {
+    /// Load the user's chips row without creating one, `None` if they have no
+    /// chip account yet. Chip rows are created lazily on the first chip
+    /// operation, not on profile access, so callers verifying that invariant
+    /// need a read that never inserts.
+    pub async fn find(client: &Client, user_id: Uuid) -> Result<Option<Self>> {
+        let row = client
+            .query_opt("SELECT * FROM user_chips WHERE user_id = $1", &[&user_id])
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     /// Ensure a chips row exists for the user. Called on SSH login.
     pub async fn ensure(client: &Client, user_id: Uuid) -> Result<Self> {
         let row = client

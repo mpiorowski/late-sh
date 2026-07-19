@@ -1,6 +1,8 @@
 pub mod activity;
 pub mod ai;
 pub mod announcements;
+#[cfg(test)]
+mod announcements_test;
 pub mod arcade;
 pub mod artboard;
 pub mod audio;
@@ -10,6 +12,8 @@ pub mod chat;
 pub mod clubhouse;
 pub mod common;
 pub mod dashboard;
+#[cfg(test)]
+mod dashboard_flow_test;
 pub(crate) mod directory;
 pub mod door;
 pub mod files;
@@ -18,6 +22,8 @@ pub(crate) mod help_modal;
 pub(crate) mod hub;
 pub(crate) mod icon_picker;
 pub mod input;
+#[cfg(test)]
+mod input_flow_test;
 pub mod lobby;
 pub(crate) mod mod_modal;
 pub(crate) mod notify;
@@ -30,7 +36,13 @@ mod render;
 pub(crate) mod room_search_modal;
 pub(crate) mod settings_modal;
 pub(crate) mod sheet_modal;
+#[cfg(test)]
+mod singleton_isolation_test;
+#[cfg(test)]
+mod smoke_test;
 pub mod state;
+#[cfg(test)]
+mod state_test;
 mod tick;
 pub(crate) mod ultimates;
 pub mod voice;

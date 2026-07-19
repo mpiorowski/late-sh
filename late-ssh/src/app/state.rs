@@ -214,6 +214,14 @@ pub struct SessionConfig {
     /// Chip/badge grant sink for NetHack milestones (Amulet, ascension). `None`
     /// on headless/test paths, which disables milestone awards.
     pub nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    /// DCSS door game: reached over SSH like nethack (host `late-dcss`).
+    pub dcss_enabled: bool,
+    pub dcss_host: String,
+    pub dcss_port: u16,
+    pub dcss_secret: String,
+    /// Accessor for the account's arcade handle (the public door-game name;
+    /// crawl's `-name`), claimed once from the DCSS launcher.
+    pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     /// dopewars door game: reached over SSH like nethack (host `late-dopewars`).
     pub dopewars_enabled: bool,
     pub dopewars_host: String,
@@ -475,6 +483,16 @@ pub struct App {
     pub(crate) nethack_secret: String,
     /// Chip/badge grant sink threaded into the per-session NetHack door state.
     pub(crate) nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    pub(crate) dcss_state: Option<crate::app::door::dcss::state::State>,
+    /// Per-session TERM string (from the PTY request), forwarded to the DCSS
+    /// host so curses gets a real terminfo entry.
+    pub(crate) dcss_term: String,
+    /// DCSS door game: enable flag + host connection details (global Config).
+    pub(crate) dcss_enabled: bool,
+    pub(crate) dcss_host: String,
+    pub(crate) dcss_port: u16,
+    pub(crate) dcss_secret: String,
+    pub(crate) arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     pub(crate) dopewars_state: Option<crate::app::door::dopewars::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the dopewars
     /// host so curses gets a real terminfo entry.
@@ -1105,6 +1123,13 @@ impl App {
             nethack_port: config.nethack_port,
             nethack_secret: config.nethack_secret,
             nethack_awards: config.nethack_awards,
+            dcss_state: None,
+            dcss_term: config.term.clone(),
+            dcss_enabled: config.dcss_enabled,
+            dcss_host: config.dcss_host,
+            dcss_port: config.dcss_port,
+            dcss_secret: config.dcss_secret,
+            arcade_handle_service: config.arcade_handle_service,
             dopewars_state: None,
             dopewars_term: config.term.clone(),
             dopewars_enabled: config.dopewars_enabled,
@@ -1282,12 +1307,35 @@ impl App {
             self.nethack_enabled,
             self.repaint_signal.clone(),
             self.nethack_awards.clone(),
+            Some(self.arcade_handle_service.clone()),
         ));
     }
 
     fn leave_nethack(&mut self) {
         // Dropping the State drops the process, which kills the child nethack.
         self.nethack_state = None;
+    }
+
+    pub(crate) fn enter_dcss(&mut self) {
+        if self.dcss_state.is_some() {
+            return;
+        }
+        self.dcss_state = Some(crate::app::door::dcss::state::State::new(
+            self.user_id,
+            self.dcss_host.clone(),
+            self.dcss_port,
+            self.dcss_secret.clone(),
+            self.dcss_term.clone(),
+            self.dcss_enabled,
+            self.repaint_signal.clone(),
+            Some(self.arcade_handle_service.clone()),
+        ));
+    }
+
+    fn leave_dcss(&mut self) {
+        // Dropping the State drops the process; the host then SIGHUP-saves the
+        // child crawl so the run resumes next launch.
+        self.dcss_state = None;
     }
 
     pub(crate) fn enter_dopewars(&mut self) {
@@ -1506,6 +1554,9 @@ impl App {
             if screen == Screen::Nethack {
                 self.enter_nethack();
             }
+            if screen == Screen::Dcss {
+                self.enter_dcss();
+            }
             if screen == Screen::Dopewars {
                 self.enter_dopewars();
             }
@@ -1535,6 +1586,11 @@ impl App {
 
         if self.screen == Screen::Nethack {
             self.leave_nethack();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::Dcss {
+            self.leave_dcss();
             self.force_full_repaint();
         }
 
@@ -1573,6 +1629,9 @@ impl App {
         }
         if self.screen == Screen::Nethack {
             self.enter_nethack();
+        }
+        if self.screen == Screen::Dcss {
+            self.enter_dcss();
         }
         if self.screen == Screen::Dopewars {
             self.enter_dopewars();
@@ -1727,6 +1786,23 @@ impl App {
         // global quit and drop the whole SSH session.
         if self.screen == crate::app::common::primitives::Screen::Nethack
             && let Some(state) = self.nethack_state.as_ref()
+            && state.in_exit_grace()
+        {
+            return;
+        }
+        // DCSS: same raw passthrough + F1->`?` remap as nethack (both are
+        // roguelikes hosted the same way), and the same post-exit input grace.
+        if self.screen == crate::app::common::primitives::Screen::Dcss
+            && let Some(state) = self.dcss_state.as_mut()
+            && state.is_running()
+        {
+            if !state.intercept_input(data) {
+                state.forward_input(data);
+            }
+            return;
+        }
+        if self.screen == crate::app::common::primitives::Screen::Dcss
+            && let Some(state) = self.dcss_state.as_ref()
             && state.in_exit_grace()
         {
             return;

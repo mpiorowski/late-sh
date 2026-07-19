@@ -16,6 +16,7 @@ pub struct HubView {
     pub delete_confirm: bool,
     pub rebels_enabled: bool,
     pub nethack_enabled: bool,
+    pub dcss_enabled: bool,
     pub dopewars_enabled: bool,
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
     /// Players currently in the Lateania world, shown on its landing card.
@@ -69,6 +70,9 @@ pub fn draw_games_hub(
         }
         HubGame::Nethack => {
             crate::app::door::nethack::render::draw_landing(frame, layout[3], view.nethack_enabled);
+        }
+        HubGame::Dcss => {
+            crate::app::door::dcss::render::draw_landing(frame, layout[3], view.dcss_enabled);
         }
         HubGame::GreenDragon => {
             crate::app::door::greendragon::screen::draw_landing(

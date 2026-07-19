@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -165,6 +166,96 @@ impl PinstarDiagram {
             .await?;
         Ok(count)
     }
+
+    /// Delete a diagram by id, unconditionally. The caller is responsible for
+    /// the permission check; takes a generic client so it can run inside the
+    /// transaction that also records the moderation audit entry.
+    pub async fn delete_by_id(client: &impl GenericClient, id: Uuid) -> Result<u64> {
+        let count = client
+            .execute("DELETE FROM pinstar_diagrams WHERE id = $1", &[&id])
+            .await?;
+        Ok(count)
+    }
+
+    /// Every diagram visible to `user_id`, with the user's effective role and
+    /// the full member roster, ordered most-recently-updated first. Public
+    /// diagrams are visible to everyone as read-only viewers, so this lists all
+    /// diagrams, not just owned or joined ones. Drives the diagram browser.
+    pub async fn list_for_viewer(client: &Client, user_id: Uuid) -> Result<Vec<DiagramListEntry>> {
+        let rows = client
+            .query(
+                "SELECT d.id,
+                        d.title,
+                        d.owner_id,
+                        d.created,
+                        d.updated,
+                        COALESCE(NULLIF(owner.username, ''), substring(d.owner_id::text, 1, 8)) AS owner_name,
+                        CASE
+                            WHEN d.owner_id = $1 THEN 'owner'
+                            WHEN self_member.role IN ('editor', 'viewer') THEN self_member.role
+                            ELSE 'viewer'
+                        END AS effective_role,
+                        (d.owner_id = $1 OR self_member.user_id IS NOT NULL) AS is_member,
+                        COALESCE(
+                            string_agg(
+                                COALESCE(NULLIF(member_user.username, ''), substring(member_user.id::text, 1, 8))
+                                    || ':' || m.role,
+                                ', '
+                                ORDER BY member_user.username, member_user.id
+                            ) FILTER (WHERE m.user_id IS NOT NULL),
+                            ''
+                        ) AS member_names
+                   FROM pinstar_diagrams d
+                   JOIN users owner ON owner.id = d.owner_id
+                   LEFT JOIN pinstar_diagram_members self_member
+                          ON self_member.diagram_id = d.id
+                         AND self_member.user_id = $1
+                   LEFT JOIN pinstar_diagram_members m ON m.diagram_id = d.id
+                   LEFT JOIN users member_user ON member_user.id = m.user_id
+                  GROUP BY d.id,
+                           d.title,
+                           d.owner_id,
+                           d.created,
+                           d.updated,
+                           owner.username,
+                           self_member.user_id,
+                           self_member.role
+                  ORDER BY d.updated DESC",
+                &[&user_id],
+            )
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| DiagramListEntry {
+                id: row.get("id"),
+                title: row.get("title"),
+                owner_id: row.get("owner_id"),
+                owner_name: row.get("owner_name"),
+                effective_role: row.get("effective_role"),
+                is_member: row.get("is_member"),
+                member_names: row.get("member_names"),
+                created: row.get("created"),
+                updated: row.get("updated"),
+            })
+            .collect())
+    }
+}
+
+/// A row of the diagram browser: a diagram plus the viewer's effective role
+/// and the resolved member roster. `owner_id` lets the caller derive
+/// ownership against the viewing user.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiagramListEntry {
+    pub id: Uuid,
+    pub title: String,
+    pub owner_id: Uuid,
+    pub owner_name: String,
+    pub effective_role: String,
+    pub is_member: bool,
+    pub member_names: String,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
 }
 
 fn valid_member_role(role: &str) -> Option<&'static str> {

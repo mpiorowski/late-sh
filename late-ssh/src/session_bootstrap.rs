@@ -385,6 +385,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_minesweeper_games,
         lateania_service: state.lateania_service.clone(),
         greendragon_service: state.greendragon_service.clone(),
+        arcade_handle_service: state.arcade_handle_service.clone(),
         daily_service: state.daily_service.clone(),
         house_registry: state.house_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),
@@ -424,6 +425,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             )
             .with_username_directory(state.username_directory.clone()),
         )),
+        dcss_enabled: state.config.dcss_enabled,
+        dcss_host: state.config.dcss_host.clone(),
+        dcss_port: state.config.dcss_port,
+        dcss_secret: state.config.dcss_secret.clone(),
         dopewars_enabled: state.config.dopewars_enabled,
         dopewars_host: state.config.dopewars_host.clone(),
         dopewars_port: state.config.dopewars_port,

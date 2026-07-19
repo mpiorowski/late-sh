@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-17 (Super Snake joined the house tables: a 4-seat real-time DOS-snake port with 20 embedded text arenas in `late-ssh/assets/ssnake_levels/`, warp-tunnel edges, and a 300-chip cooldown win payout via `ssnake_win`, migration 118; see `late-ssh/src/app/lobby/house/CONTEXT.md`)
+- Last updated: 2026-07-19 (test layout migration complete: every test lives adjacent to the code it exercises as `<file>_test.rs` wired with `#[cfg(test)] mod`, DB and listener smoke tests included; no crate has a `tests/` directory; shared harness at `late-ssh/src/test_helpers.rs`; see Test Strategy)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -50,6 +50,7 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 | `late-ssh/src/app/door/greendragon/CONTEXT.md` | Green Dragon door screen, the native LORD-style remake's village/forest/shops/training/dragon flow, combat resolver, character persistence, or its Games-hub landing/launch/leave/reset. | Single Green Dragon context: module map, LoGD balance-data provenance, the pure combat resolver, the Character model and rules, the per-user save schema, integration points, and deferred gaps. |
 | `late-ssh/src/app/door/nethack/CONTEXT.md` | NetHack door screen, launcher/launch/leave behavior, the local PTY process bridge, raw input forwarding/filtering, the F1 cheat sheet, or NetHack config/deploy wiring. | NetHack door context: screen lifecycle, module map, PTY bridge architecture (openpty/vt100/status), input capture and mouse/paste stripping, launcher UI, config knobs and binary sourcing, invariants, tests, and gotchas. |
 | `late-ssh/src/app/door/dopewars/CONTEXT.md` | dopewars door screen, launcher/launch/leave behavior, the local-PTY child proxy, raw input forwarding/filtering, the `-t -n -b -f` spawn args, or dopewars config/build wiring. | dopewars door context: the simplest door (local `openpty` child, no host crate/auth/save-lock/awards), module map, spawn args (incl. the load-bearing `-b` readability fix), config knobs, the from-source 1.6.2 build + link-bug workaround, invariants, tests, and gotchas. |
+| `late-ssh/src/app/door/dcss/CONTEXT.md` | DCSS door screen, launcher/launch/leave behavior, the SSH client transport, the `late-dcss` host (PTY bridge / auth / TERM handling), input forwarding, the F1→`?` remap, or DCSS config/deploy wiring. | DCSS door context: the NetHack-twin network door (client + `late-dcss` host crate), module map, `-name` playname identity, SIGHUP-save teardown, from-source 0.34.1 build, config knobs, invariants, tests, and deferred file-based milestones. |
 | `late-ssh/src/app/chat/CONTEXT.md` | Home chat, DMs, public/private rooms, embedded Rooms chat, composer commands, moderation, notifications, message rendering, or chat-adjacent feed services. | Chat service/state/input/UI ownership, room ordering, snapshots versus tails, message/reaction/pin/reply/edit/delete contracts, RSS/News/Mentions/Voice/Discover entries, Directory-backed Showcase/Work services, row caches, commands, and chat integration tests. |
 | `late-ssh/src/ircd/CONTEXT.md` | Embedded IRC server, IRC token auth, IRC client compatibility, IRC TLS/listener behavior, IRC channel/DM projection, or IRC moderation mapping. | Listener/config, token registration, welcome/MOTD burst, channel and DM bridge, moderation projection, registry disconnect semantics, and protocol helper tests. |
 | `late-ssh/src/app/artboard/CONTEXT.md` | Shared ASCII Artboard, dartboard code, editor input/rendering, canvas persistence, provenance, gallery snapshots, archives, or artboard bans. | Artboard lifecycle, live `dartboard_local` server, per-session editor state, active/view/archive input routing, swatches/glyph picker, provenance, persistence/archive rollovers, gallery contract, tests, and fragile layout/provenance areas. |
@@ -72,10 +73,10 @@ Routing rules for future LLM agents:
 
 `ssh late.sh` and you're in. Zero friction, terminal-first, always-on vibes.
 
-The system is a Rust workspace with four main crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) — plus `late-webview` (the CLI's embedded YouTube helper, split out so `late` never links WebKitGTK on Linux) and the standalone door hosts (`late-dopewars`, `late-nethack`) — backed by PostgreSQL, Icecast audio streaming, Liquidsoap playlist management, and LiveKit voice media.
+The system is a Rust workspace with four main crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) — plus `late-webview` (the CLI's embedded YouTube helper, split out so `late` never links WebKitGTK on Linux) and the standalone door hosts (`late-dcss`, `late-dopewars`, `late-nethack`) — backed by PostgreSQL, Icecast audio streaming, Liquidsoap playlist management, and LiveKit voice media.
 
 - **Primary entry points:** SSH server (russh on port 2222), optional embedded IRC server (plaintext 6667 or TLS 6697), HTTP API (axum on port 4000), Web server (axum on port 3000), LiveKit RTC (`rtc.<domain>`)
-- **Main responsibilities:** Multi-screen TUI over SSH (Clubhouse `0`, Home/Dashboard `1`, The Arcade `2`, Games `3`, Artboard `4`, Directory `5`, World Cup `6`; top-level pages are selected by their number key or cycled with `Tab`/`Shift+Tab`. The Clubhouse `0` is the landing screen for every session: the walkable multiplayer Late Lounge tavern (see `late-ssh/src/app/clubhouse/CONTEXT.md`). The World Cup screen `6` is a compact, colorful live HUD for the FIFA World Cup: live/upcoming matches beside group standings, with `Space` toggling a knockout-bracket view, fed by a process-global FotMob poller that only fetches while at least one session is on the screen; upcoming kick-off times render in the viewer's account timezone (the profile `timezone` tweak, parsed via `chrono_tz`) when set, falling back to UTC otherwise, and the UPCOMING header reads `UPCOMING (local time)` while a timezone is active; the Games hub at page `3` is the dedicated landing/launcher for the Lateania, NetHack, Green Dragon, Rebels, and dopewars door games: a selector row of game cards with the selected game's full two-column landing rendered below it (arrows/h/l switch, Enter launches). These games are no longer top-level tabs but live-game screens reached only through the hub), optional IRC access to late.sh chat, public web frontend, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, the `Ctrl+Q` Lobby (daily correspondence matches + fixed house tables), a shared multi-user ASCII Artboard, Lateania's persistent shared world, the Rebels in the Sky SSH door-game proxy, the NetHack door game (real upstream NetHack run locally on a PTY), the Green Dragon door game (a native, in-process LORD-style remake of LoGD with per-user persistent characters), the dopewars door game (real upstream dopewars run locally on a PTY as an in-process child of late-ssh), a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray shown only in the Home Lounge view, toggled with the `/aquarium` composer command (alias `/aq`; state persists per user), and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (a pinned two-row core block — online human count + clock, then connected friends or the AFK indicator — plus a user-ordered, individually toggleable list of visualizer, audio playback, daily games, and bonsai panels; the bonsai panel is the one flexible panel and absorbs leftover rows, its tree scaling to the space) shown on Home and Arcade only via a master on/off, the Home room-list rail, and the pet strip above the Lounge chat composer (Pet Companion owners only, `Pet companion strip` tweak or the `/pet` command); these live under `Ctrl+O` settings (Tweaks → Appearance), where the sidebar panel editor reorders panels and toggles each on/off; when vertical space runs short the sidebar drops panels by a fixed shrink priority (visualizer first, then bonsai, daily; the music stage is the last panel standing) independent of the user's display order. The former sidebar Activity panel is retired: stale `"activity"` entries in stored panel lists are dropped on read, and the public feed ships to #lounge instead (see the `Activity` service row). Pet care runs through the strip: click the bowls/pet or use `/feed`, `/water`; locked users are dropped straight into the Hub Shop tab (`Ctrl+G` on its own opens Hub on Quests). Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Clubhouse `0`, Home/Dashboard `1`, The Arcade `2`, Games `3`, Artboard `4`, Directory `5`, World Cup `6`; top-level pages are selected by their number key or cycled with `Tab`/`Shift+Tab`. The Clubhouse `0` is the landing screen for every session: the walkable multiplayer Late Lounge tavern (see `late-ssh/src/app/clubhouse/CONTEXT.md`). The World Cup screen `6` is a compact, colorful live HUD for the FIFA World Cup: live/upcoming matches beside group standings, with `Space` toggling a knockout-bracket view, fed by a process-global FotMob poller that only fetches while at least one session is on the screen; upcoming kick-off times render in the viewer's account timezone (the profile `timezone` tweak, parsed via `chrono_tz`) when set, falling back to UTC otherwise, and the UPCOMING header reads `UPCOMING (local time)` while a timezone is active; the Games hub at page `3` is the dedicated landing/launcher for the Lateania, NetHack, DCSS, Green Dragon, Rebels, and dopewars door games: a selector row of game cards with the selected game's full two-column landing rendered below it (arrows/h/l switch, Enter launches). These games are no longer top-level tabs but live-game screens reached only through the hub), optional IRC access to late.sh chat, public web frontend, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, the `Ctrl+Q` Lobby (daily correspondence matches + fixed house tables), a shared multi-user ASCII Artboard, Lateania's persistent shared world, the Rebels in the Sky SSH door-game proxy, the NetHack door game (real upstream NetHack run locally on a PTY), the Green Dragon door game (a native, in-process LORD-style remake of LoGD with per-user persistent characters), the dopewars door game (real upstream dopewars run locally on a PTY as an in-process child of late-ssh), a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray shown only in the Home Lounge view, toggled with the `/aquarium` composer command (alias `/aq`; state persists per user), and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (a pinned two-row core block — online human count + clock, then connected friends or the AFK indicator — plus a user-ordered, individually toggleable list of visualizer, audio playback, daily games, and bonsai panels; the bonsai panel is the one flexible panel and absorbs leftover rows, its tree scaling to the space) shown on Home and Arcade only via a master on/off, the Home room-list rail, and the pet strip above the Lounge chat composer (Pet Companion owners only, `Pet companion strip` tweak or the `/pet` command); these live under `Ctrl+O` settings (Tweaks → Appearance), where the sidebar panel editor reorders panels and toggles each on/off; when vertical space runs short the sidebar drops panels by a fixed shrink priority (visualizer first, then bonsai, daily; the music stage is the last panel standing) independent of the user's display order. The former sidebar Activity panel is retired: stale `"activity"` entries in stored panel lists are dropped on read, and the public feed ships to #lounge instead (see the `Activity` service row). Pet care runs through the strip: click the bowls/pet or use `/feed`, `/water`; locked users are dropped straight into the Hub Shop tab (`Ctrl+G` on its own opens Hub on Quests). Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -88,61 +89,45 @@ The system is a Rust workspace with four main crates (`late-cli`, `late-core`, `
 - Keep most tests close to code under change (small, deterministic, focused).
 - Use integration/smoke tests for boundary behavior across crates/services.
 
-### Strict test boundary rules (required)
+### Test layout rules (required)
 
-**Unit tests (`#[cfg(test)] mod tests` inside `src/` files):**
-- MUST be pure logic only: no database, no services, no network, no async runtime required.
-- Test input/output transformations, state transitions, parsing, formatting, validation math.
-- If you need a `Db`, `Service`, `State`, or any I/O — it is NOT a unit test. Move it to `tests/`.
-- Good examples: `rate_limit.rs` (in-memory limiter logic), `state.rs` (enum transitions), `input.rs` (key → action mapping).
-- Preferred source layout for a domain is `src/.../<domain>/mod.rs` plus adjacent `state.rs`, `input.rs`, `ui.rs`, `svc.rs` as needed. `mod.rs` files must only contain `pub mod` declarations — never `pub use` re-exports.
-- Keep pure unit tests inline in those source files. Do NOT create `src/.../<domain>/tests/` folders just to split unit tests.
-
-**Integration tests (`late-ssh/tests/`, `late-web/tests/`, `late-core/tests/`):**
-- MUST use the shared DB test helper for database access — always go through `late_core::test_utils::test_db()` (or the `helpers::new_test_db()` wrapper in `late-ssh`).
-- NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings as a substitute for real DB access in integration tests.
-- Exception: `late-web` route smoke tests that instantiate `AppState` but do not exercise DB-backed routes may use an inert `Db::new(&DbConfig::default())`; the moment a test hits `/gallery`, `/profiles`, or any DB code path, use `late_core::test_utils::test_db()`.
-- `late-core::test_utils` owns shared test infrastructure: `test_db()`, `create_test_user()`. Use these everywhere instead of rolling per-test user creation — except in `late-core` model tests that are testing `User::create` itself.
-- `late-ssh/tests/helpers/mod.rs` re-exports `create_test_user` from `late-core` and adds ssh-specific helpers (`test_config`, `test_app_state`, `make_app`, etc.). Domain test directories access these via `#[path = "../helpers/mod.rs"] mod helpers;` in their `main.rs`.
-- Any test that touches DB, services, network, or cross-module orchestration belongs here.
-- Preferred integration layout is domain-oriented under crate `tests/`, mirroring the source structure: `tests/<domain>/main.rs` with sibling `svc.rs`, `state.rs`, etc. as needed. `late-core` tests are named after their domain (`user.rs`, `bonsai.rs`, `chat/`).
+**One rule: tests live next to the code they exercise.**
+- Tests for `src/.../foo.rs` go in `foo_test.rs` beside it, wired with `#[cfg(test)] mod foo_test;` in the parent module file. This applies to every test kind, pure and DB-backed alike.
+- Small pure unit tests may stay inline in the source file's own `#[cfg(test)] mod tests` block (e.g. `rate_limit.rs`, `input.rs` key routing). Do NOT create `src/.../<domain>/tests/` folders.
+- Preferred source layout for a domain is `src/.../<domain>/mod.rs` plus adjacent `state.rs`, `input.rs`, `ui.rs`, `svc.rs` as needed. `mod.rs` files must only contain `mod`/`pub mod` declarations (cfg-gated test `mod`s included), never `pub use` re-exports.
+- DB access always goes through `late_core::test_utils::test_db()` and `create_test_user()`. NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings as a substitute for real DB access. Exception: `late-web` route smoke tests that instantiate `AppState` but do not exercise DB-backed routes may use an inert `Db::new(&DbConfig::default())`.
+- `late-ssh/src/test_helpers.rs` (`#[cfg(test)]`, declared in `lib.rs`) owns the shared app-level harness: `new_test_db`, `test_config`, `test_app_state`, `make_app*`, `render_plain`, `wait_for_render_contains`, `wait_until`, `chat_compose_app`, etc. Test files import it as `crate::test_helpers`.
+- External-boundary smoke tests (real listeners) live adjacent too: `src/ssh_test.rs` (SSH over TCP), `src/api_test.rs` (WebSocket pairing), `src/ircd/serve_test.rs` (IRC over TCP), `src/app/door/rebels/proxy_test.rs` (stub SSH door server). No crate has a `tests/` directory.
 
 **LLM enforcement:**
-- On every code change, check: does this need a test? If yes, classify it strictly as unit or integration per the rules above.
-- LLM agents must NOT run `cargo test`, `cargo nextest`, or `cargo clippy` in this repo. The human owner runs verification manually because those commands are too blocking in normal agent workflows.
-- Do NOT put integration-flavored tests (DB calls, service interactions, spawning tasks) inside `#[cfg(test)]` module blocks in `src/` files.
-- Do NOT invent extra source-side test directory structure when inline `#[cfg(test)] mod tests` is sufficient; reserve directory splits for crate-level integration tests under `tests/`.
+- On every code change, check: does this need a test? If yes, write it in the adjacent `<file>_test.rs` (or inline `mod tests` for small pure cases).
+- LLM agents run the tests targeted at their change via `make test-llm ARGS="-p <crate> -E 'test(<filter>)'"` — it starts the check DB and runs `cargo nextest` inside a memory-capped systemd scope so a heavy build cannot freeze the machine. Never run raw `cargo test`/`cargo nextest`/`cargo clippy` or full-suite runs; `make check` stays the human-owned gate.
 - If a test is intentionally deferred (WIP/incomplete dependency), document the gap and cleanup plan in PR/context notes.
 
 ### Preferred test pyramid for this repo
 
-1. Unit tests in module files — pure logic only, no I/O (`state.rs`, `input.rs`, `ui.rs`, `rate_limit.rs`).
-2. Integration tests in `late-ssh/tests/` and `late-web/tests/` — real DB via `TEST_DATABASE_URL`, shared helpers.
-3. Workspace-wide checks before merge (`fmt`, `clippy`, `nextest`).
+1. Adjacent `<file>_test.rs` and inline `#[cfg(test)]` tests in `src/` — pure logic, DB-backed service/model tests, and listener smoke tests alike.
+2. Workspace-wide checks before merge (`fmt`, `clippy`, `nextest`).
 
 ### Per-app guidance
 
 For `late-ssh`:
 
-- `app/*/state.rs`: unit tests for transition rules, event drains, selection/filter logic (includes profile field navigation).
-- `app/*/input.rs`: unit tests for key routing and mode guards.
-- `app/*/ui.rs`: unit tests for pure formatting/layout helpers only; avoid brittle pixel snapshots.
-- `app/*/{mod,state,input,ui,svc,model}.rs`: keep the domain module flat and predictable; add pure unit tests inline in the relevant file instead of under `src/app/*/tests/`.
-- `app/render.rs` / `app/tick.rs`: integration tests for orchestration (needs services/DB → goes in `tests/`).
-- `app/*/svc.rs`: integration tests in `tests/<domain>/svc.rs` (needs real DB).
-- Integration test directories mirror the source domain structure: `tests/<domain>/main.rs` with split files like `svc.rs`, `state.rs` as needed. Arcade game tests live under `tests/arcade/<game>.rs`.
-- `ssh.rs` / `api.rs`: smoke tests in `tests/ssh_smoke.rs` / `tests/ws_smoke.rs`.
+- `app/*/state.rs` / `input.rs` / `ui.rs`: pure unit tests, inline or in adjacent `<file>_test.rs`.
+- `app/*/svc.rs`: DB-backed tests in the adjacent `svc_test.rs` (real DB via `crate::test_helpers::new_test_db`).
+- Whole-App flow tests (drive `App::handle_input` + render against a real DB) live in `src/app/*_test.rs`: `smoke_test.rs`, `input_flow_test.rs`, `dashboard_flow_test.rs`, `singleton_isolation_test.rs`, `state_test.rs` (splash lifecycle).
+- `ssh.rs` / `api.rs` / ircd / rebels proxy: listener smoke tests in the adjacent `src/ssh_test.rs`, `src/api_test.rs`, `src/ircd/serve_test.rs`, `src/app/door/rebels/proxy_test.rs`.
 
 For `late-web`:
 
-- Handler/route behavior in `late-web/tests/*` with request/response assertions.
-- Page/model transformations as unit tests under `src/pages/*` (pure logic only).
+- Handler/route behavior in adjacent `_test.rs` files under `src/pages/` (`pages/stream_test.rs`, `pages/dashboard/dashboard_test.rs`) with request/response assertions.
+- Page/model transformations as inline unit tests under `src/pages/*` (pure logic only).
 - Error mapping tests in `src/error.rs` for stable status/body behavior (pure logic only).
 
 ### Command policy
 
-- LLM agents must not run tests or lint gates locally. Do not run `cargo test`, `cargo nextest`, or `cargo clippy`; leave all verification to the human owner.
-- If code changes would normally merit verification, note the expected command(s) in handoff instead of running them.
+- LLM agents run the tests targeted at their change through `make test-llm ARGS="..."` (memory-capped `cargo nextest` with the check DB; `TEST_LLM_MEM_HIGH`/`TEST_LLM_MEM_MAX` tune the cap).
+- Full-suite verification and lint gates stay with the human owner; if broader verification is merited, note the expected command(s) in handoff instead of running them.
 - The human owner may still use the full CI-equivalent gate locally:
 
 ```bash
@@ -458,7 +443,7 @@ The Arcade source domain is `late-ssh/src/app/arcade`. It owns single-player ter
 
 ### 2.9 Lateania Runtime Notes
 
-The Lateania source domain is `late-ssh/src/app/door/lateania`, with top-level screen wiring still under `late-ssh/src/app/door` for historical reasons. Lateania is launched from the Games hub (`late-ssh/src/app/door/hub`, page `3`): the hub is a selector of door-game cards (Lateania, NetHack, Green Dragon, Rebels, dopewars) that renders the selected game's full two-column landing, and `Enter` on the selected game enters the live world directly; `d` while Lateania is selected opens a confirmation prompt to delete the current user's saved character. Active Lateania captures ordinary keys, including number keys and `q`, while `Esc` leaves the live world back to the Games hub and reserved/global modal shortcuts plus `?` remain available. Lateania character state persists to `mud_characters`, including progression, inventory/equipment, ability scores, visited rooms, earned title levels, active title selection, and completed Frontier quests; shared mob/world runtime state persists to `mud_world_states`; per-player combat targets/cooldowns/effects and auto-follow targets remain transient. Detailed lifecycle, runtime, content, and input contracts live in `late-ssh/src/app/door/lateania/CONTEXT.md`.
+The Lateania source domain is `late-ssh/src/app/door/lateania`, with top-level screen wiring still under `late-ssh/src/app/door` for historical reasons. Lateania is launched from the Games hub (`late-ssh/src/app/door/hub`, page `3`): the hub is a selector of door-game cards (Lateania, NetHack, DCSS, Green Dragon, Rebels, dopewars) that renders the selected game's full two-column landing, and `Enter` on the selected game enters the live world directly; `d` while Lateania is selected opens a confirmation prompt to delete the current user's saved character. Active Lateania captures ordinary keys, including number keys and `q`, while `Esc` leaves the live world back to the Games hub and reserved/global modal shortcuts plus `?` remain available. Lateania character state persists to `mud_characters`, including progression, inventory/equipment, ability scores, visited rooms, earned title levels, active title selection, and completed Frontier quests; shared mob/world runtime state persists to `mud_world_states`; per-player combat targets/cooldowns/effects and auto-follow targets remain transient. Detailed lifecycle, runtime, content, and input contracts live in `late-ssh/src/app/door/lateania/CONTEXT.md`.
 
 ### 2.10 Local CLI
 
@@ -504,7 +489,7 @@ late-sh/
 │       ├── models/             # Core DB-backed domain entities
 │       ├── nonogram.rs         # Shared pack schema, clue derivation, daily selection
 │       ├── rate_limit.rs       # Sliding-window per-IP limiter
-│       └── test_utils.rs       # DB integration test helpers
+│       └── test_utils.rs       # shared DB test helpers
 ├── late-ssh/
 │   ├── src/
 │   │   ├── main.rs             # Starts SSH + API + background loops
@@ -529,7 +514,6 @@ late-sh/
 │   │       └── profile/        # Username/profile settings and stats
 │   │   └── ircd/               # Optional embedded IRC server: token auth, channel/DM bridge, moderation projection
 │   ├── assets/nonograms/       # Prebuilt puzzle packs
-│   └── tests/                  # Integration/smoke tests grouped by feature
 ├── late-cli/
 │   ├── CONTEXT.md              # Companion CLI details: SSH modes, pairing, audio, installers
 │   └── src/                    # Standalone CLI: main + config, identity, raw_mode, pty, ssh, ws, audio/{decoder,resampler,output,decoder_thread,analyzer}
@@ -1107,10 +1091,10 @@ WHERE jsonb_array_length(coalesce(data->'house_furniture', '[]'::jsonb)) > 0;
 |--------|-----|--------|-------------|
 | **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, chat center for chat/synthetic entries, and room shortcuts; the public activity feed ships to #lounge as system lines (see the `Activity` service row); the sidebar shows presence in its pinned core block. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
 | **Arcade** | 2 | Active | The Arcade lobby, high-score games, daily puzzle games, chips, and leaderboard/sidebar surfaces. Detailed behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; multiplayer play lives behind the `Ctrl+Q` Lobby. |
-| **Games** | 3 | Active | Dedicated landing/launcher hub for the immersive door games. A selector row of game cards (Lateania, NetHack, Green Dragon, Rebels, dopewars) renders the selected game's full two-column landing below it; arrows or `h`/`l`/`j`/`k` switch cards, `Enter` launches the selected game, and `d` resets the Lateania character when Lateania is selected. Lives in `late-ssh/src/app/door/hub`. |
+| **Games** | 3 | Active | Dedicated landing/launcher hub for the immersive door games. A selector row of game cards (Lateania, NetHack, DCSS, Green Dragon, Rebels, dopewars) renders the selected game's full two-column landing below it; arrows or `h`/`l`/`j`/`k` switch cards, `Enter` launches the selected game, and `d` resets the Lateania character when Lateania is selected. Lives in `late-ssh/src/app/door/hub`. |
 | **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 | **Directory** | 5 | Active | Profiles, Projects, and Pinstar tabs, switched with `[` / `]` or idle `h` / `l`. Profiles is the in-app work-profile browser/editor and its detail panel previews the public web profile sections (work fields, Settings Bio, late.fetch, Showcases); Projects is the Showcase browser/editor; Pinstar embeds the existing collaborative diagram browser/editor. |
-| _Lateania / NetHack / Green Dragon / Rebels / dopewars_ | — | Active | Live door-game screens, not top-level tabs. Launched only from the Games hub (page 3); `Esc` (Lateania) or quitting the game (Rebels/NetHack/dopewars, e.g. `Ctrl-C`) returns to the hub. Per-game behavior lives in each door's CONTEXT.md (`lateania/`, `greendragon/`, `nethack/`, `dopewars/`). |
+| _Lateania / NetHack / DCSS / Green Dragon / Rebels / dopewars_ | — | Active | Live door-game screens, not top-level tabs. Launched only from the Games hub (page 3); `Esc` (Lateania) or quitting the game (Rebels/NetHack/DCSS/dopewars, e.g. `Ctrl-C`, or `S` save in the roguelikes) returns to the hub. Per-game behavior lives in each door's CONTEXT.md (`lateania/`, `greendragon/`, `nethack/`, `dcss/`, `dopewars/`). |
 | _Daily match board_ | — | Active | Full-screen correspondence board (`Screen::DailyMatch`), not a top-level tab. Entered only from the Lobby modal (`Ctrl+Q`); `Esc` returns to the modal. Lives in `late-ssh/src/app/lobby/daily/`. |
 | _House table_ | — | Active | Full-screen fixed table (`Screen::HouseTable`, poker/blackjack/asterion/tron), not a top-level tab. Entered only from the Lobby modal; `q`/`Esc` returns to the modal. Lives in `late-ssh/src/app/lobby/house/`. |
 
@@ -1187,7 +1171,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `Enter` | Arcade lobby | Launch selected game |
 | `Esc` | Active Arcade game | Exit back to Arcade lobby |
 | Arcade game keys | Arcade | See `late-ssh/src/app/arcade/CONTEXT.md` and each game's info panel. |
-| arrows / `h`/`l`/`j`/`k` | Games hub (page 3) | Switch the selected door-game card (Lateania / NetHack / Green Dragon / Rebels / dopewars) |
+| arrows / `h`/`l`/`j`/`k` | Games hub (page 3) | Switch the selected door-game card (Lateania / NetHack / DCSS / Green Dragon / Rebels / dopewars) |
 | `Enter` | Games hub | Launch the selected door game directly into its live screen |
 | `d` | Games hub, Lateania selected | Reset the current user's Lateania character after confirmation |
 | `Esc` | Active Lateania | Exit back to the Games hub |

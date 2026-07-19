@@ -280,21 +280,10 @@ async fn slow_mode_remaining_for_mode(
     user_id: Uuid,
     slow_mode: ChatSlowMode,
 ) -> Result<Option<Duration>> {
-    let Some(row) = client
-        .query_opt(
-            "SELECT created
-             FROM chat_messages
-             WHERE room_id = $1 AND user_id = $2
-             ORDER BY created DESC, id DESC
-             LIMIT 1",
-            &[&room_id, &user_id],
-        )
-        .await?
-    else {
+    let Some(last_sent) = ChatMessage::last_sent_at_in_room(client, room_id, user_id).await? else {
         return Ok(None);
     };
 
-    let last_sent: DateTime<Utc> = row.get("created");
     let elapsed = Utc::now()
         .signed_duration_since(last_sent)
         .num_seconds()
@@ -312,22 +301,10 @@ async fn server_slow_mode_remaining_for_mode(
     user_id: Uuid,
     slow_mode: ChatSlowMode,
 ) -> Result<Option<Duration>> {
-    let Some(row) = client
-        .query_opt(
-            "SELECT cm.created
-             FROM chat_messages cm
-             JOIN chat_rooms cr ON cr.id = cm.room_id
-             WHERE cm.user_id = $1 AND cr.kind <> 'dm'
-             ORDER BY cm.created DESC, cm.id DESC
-             LIMIT 1",
-            &[&user_id],
-        )
-        .await?
-    else {
+    let Some(last_sent) = ChatMessage::last_sent_at_in_public_rooms(client, user_id).await? else {
         return Ok(None);
     };
 
-    let last_sent: DateTime<Utc> = row.get("created");
     let elapsed = Utc::now()
         .signed_duration_since(last_sent)
         .num_seconds()
@@ -1400,17 +1377,7 @@ impl ChatService {
         read_at: DateTime<Utc>,
     ) -> Result<()> {
         let client = self.db.get().await?;
-        let count = client
-            .execute(
-                "UPDATE chat_room_members
-                 SET last_read_at = GREATEST(
-                    COALESCE(last_read_at, '-infinity'::timestamptz),
-                    $3
-                 )
-                 WHERE room_id = $1 AND user_id = $2",
-                &[&room_id, &user_id, &read_at],
-            )
-            .await?;
+        let count = ChatRoomMember::mark_read_at(&client, room_id, user_id, read_at).await?;
         if count == 0 {
             anyhow::bail!("user is not a member of room");
         }
@@ -1522,15 +1489,7 @@ impl ChatService {
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
-        let row = client
-            .query_opt(
-                "SELECT last_read_at
-                 FROM chat_room_members
-                 WHERE room_id = $1 AND user_id = $2",
-                &[&room_id, &user_id],
-            )
-            .await?;
-        let last_read_at = row.and_then(|row| row.get("last_read_at"));
+        let last_read_at = ChatRoomMember::last_read_at(&client, room_id, user_id).await?;
 
         let messages = ChatMessage::list_recent(&client, room_id, HISTORY_LIMIT).await?;
         let message_ids: Vec<Uuid> = messages.iter().map(|message| message.id).collect();
@@ -2046,11 +2005,7 @@ impl ChatService {
             body,
         };
         let chat = ChatMessage::create_with_reply_to(&tx, message, None).await?;
-        tx.execute(
-            "UPDATE chat_rooms SET updated = current_timestamp WHERE id = $1",
-            &[&poll.poll.room_id],
-        )
-        .await?;
+        ChatRoom::touch_updated(&tx, poll.poll.room_id).await?;
         tx.commit().await?;
 
         let target_user_ids = ChatRoom::get_target_user_ids(&client, poll.poll.room_id).await?;

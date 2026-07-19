@@ -105,82 +105,50 @@ State structs subscribe to both on init and drain them in `tick()`.
 
 ## Test rules
 
-Tests are required for all changes. The boundary between unit and integration
-tests is strict.
+Tests are required for all changes. One rule: tests live next to the code they
+exercise.
 
-### Unit tests — inline in source files
+### Adjacent test files
+
+Tests for `src/.../foo.rs` go in `foo_test.rs` beside it, wired from the
+parent module file:
 
 ```rust
+// in app/<domain>/mod.rs
 #[cfg(test)]
-mod tests {
-    use super::*;
-    // ...
-}
+mod svc_test;
 ```
 
-- Pure logic only: no database, no services, no network, no async runtime.
-- Good for: state transitions, input routing, formatting, validation, math.
-- Live inside the source file they test — do NOT create `src/.../tests/`
+```
+app/<domain>/
+  mod.rs          # pub mod declarations (+ cfg-gated test mods)
+  svc.rs
+  svc_test.rs     # tests for svc.rs — DB-backed tests included
+  state.rs
+  state_test.rs   # tests for state.rs
+```
+
+- This applies to every test kind, pure and DB-backed alike.
+- Small pure unit tests may stay inline in the source file's own
+  `#[cfg(test)] mod tests` block instead. Do NOT create `src/.../tests/`
   directories.
-
-### Integration tests — in `tests/`
-
-The test directory mirrors the source domain structure:
-
-```
-late-ssh/tests/
-  helpers/mod.rs              # shared setup: test DB, app state, test users
-  vote/
-    main.rs                   # mirrors app/vote/
-    svc.rs
-  profile/
-    main.rs                   # mirrors app/profile/
-    svc.rs
-  chat/
-    main.rs                   # mirrors app/chat/
-    svc.rs
-    state.rs
-    news.rs
-  bonsai/
-    main.rs                   # mirrors app/bonsai/
-    svc.rs
-  arcade/
-    main.rs                   # mirrors app/arcade/ — all game tests compile here
-    minesweeper/
-      mod.rs
-      svc.rs
-    nonogram.rs
-    sudoku.rs
-    solitaire.rs
-    twenty_forty_eight.rs
-  app_smoke.rs                # app-wide smoke tests (top-level, not domain-specific)
-  ssh_smoke.rs
-  ws_smoke.rs
-
-late-core/tests/
-  db.rs                       # infrastructure
-  model_macro.rs              # infrastructure
-  user.rs                     # mirrors models/user.rs
-  vote.rs                     # mirrors models/vote.rs
-  article.rs                  # mirrors models/article.rs
-  bonsai.rs                   # mirrors models/bonsai.rs
-  minesweeper.rs              # mirrors models/minesweeper.rs
-  chat/
-    main.rs                   # mirrors models/chat_*.rs group
-    room.rs
-    member.rs
-    message.rs
-```
-
-- Anything that touches the database, services, or cross-module orchestration.
-- Always use `helpers::new_test_db()` — never hardcoded
-  connection strings.
-- Mirror the domain structure: `tests/<domain>/svc.rs` tests `app/<domain>/svc.rs`.
+- DB access always goes through `late_core::test_utils::test_db()` and
+  `create_test_user()`; never hardcoded connection strings.
+- In `late-ssh`, the shared app-level harness lives in
+  `src/test_helpers.rs` (test DB, app state, `make_app`, render/wait
+  helpers); import it as `crate::test_helpers`.
+- Whole-App flow tests live in `late-ssh/src/app/*_test.rs`
+  (`smoke_test.rs`, `input_flow_test.rs`, `dashboard_flow_test.rs`, ...).
+- In `late-core`, model tests sit next to the model:
+  `src/models/user.rs` / `src/models/user_test.rs`.
 
 ### Quick rule of thumb
 
-If you need a `Db`, `Service`, or any I/O — it's an integration test. Move it
-to `tests/`.
+Every test goes next to the file it tests, external-boundary smoke tests
+included: `src/ssh_test.rs` (real SSH client against a spawned server),
+`src/api_test.rs` (real WebSocket pairing), `src/ircd/serve_test.rs` (real
+IRC client over TCP), `src/app/door/rebels/proxy_test.rs` (stub SSH door
+server). No crate has a `tests/` directory.
 
 ## Using AI to contribute
 
@@ -217,7 +185,8 @@ that file too — it's a living document meant to stay in sync with the code.
 
 - Larger features welcome: new game domains, service additions, new screens.
 - Follow the domain module pattern above.
-- Integration tests expected for anything touching the DB or services.
+- DB-backed tests in adjacent `_test.rs` files expected for anything touching
+  the DB or services.
 - Read `CONTEXT.md` for architecture details, invariants, and gotchas before
   diving in.
 

@@ -3541,6 +3541,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "late-dcss"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "getrandom 0.4.3",
+ "nix 0.29.0",
+ "russh",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "late-dopewars"
 version = "0.1.0"
 dependencies = [

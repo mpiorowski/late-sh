@@ -2,6 +2,7 @@
 members = [
     "late-cli",
     "late-core",
+    "late-dcss",
     "late-dopewars",
     "late-nethack",
     "late-ssh",
@@ -96,6 +97,13 @@ vte = "0.15"
 
 [patch.crates-io]
 asterion-core = { path = "vendor/asterion-core" }
+
+[profile.dev]
+# Full debuginfo makes linking the many test binaries eat several GB each
+# (freezes a swapless machine under `cargo nextest run`); line tables keep
+# readable backtraces at a fraction of the memory. Override locally with
+# CARGO_PROFILE_DEV_DEBUG=2 when a real debugger session needs full info.
+debug = "line-tables-only"
 
 [profile.release]
 # Strip debug info but keep symbols for readable panic stack traces

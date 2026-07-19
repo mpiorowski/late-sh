@@ -47,15 +47,14 @@ late-ssh/src/app/chat/
 Related tests:
 
 ```text
-late-ssh/tests/chat/
-|-- main.rs
-|-- announcements.rs             # Login #announcements loading/read-cursor behavior
-|-- svc.rs                       # Broad ChatService integration coverage
-|-- news.rs                      # ArticleService integration coverage
-|-- sheet.rs                     # Character-sheet model/service coverage
-|-- showcase.rs                  # ShowcaseService integration coverage
-|-- work.rs                      # WorkService integration coverage
-`-- state.rs                     # Placeholder; direct ChatState integration tests need more accessors
+late-ssh/src/app/chat/           # adjacent _test.rs files, wired with #[cfg(test)] mod
+|-- svc_test.rs                  # Broad ChatService DB-backed coverage
+|-- sheet_test.rs                # Character-sheet model/service coverage
+|-- state_test.rs                # Placeholder; direct ChatState tests need more accessors
+|-- news/svc_test.rs             # ArticleService DB-backed coverage
+|-- showcase/svc_test.rs         # ShowcaseService DB-backed coverage
+`-- work/svc_test.rs             # WorkService DB-backed coverage
+late-ssh/src/app/announcements_test.rs   # Login #announcements loading/read-cursor behavior
 ```
 
 Core models used by chat live in `late-core/src/models/`:
@@ -650,17 +649,17 @@ Do not reintroduce the old per-session "load every room's history every 10s" beh
 
 Repo-wide rule from root context still applies:
 - Pure unit tests stay inline under `src/`.
-- DB/service/network tests go in `late-ssh/tests/chat/`.
+- DB/service tests go in adjacent `_test.rs` files beside the source they exercise (see tree above).
 - LLM agents must not run `cargo test`, `cargo nextest`, or `cargo clippy`; note expected commands for the human owner instead.
 
-Existing integration coverage:
-- `tests/chat/announcements.rs`: login #announcements loading, read cursor behavior, paging.
-- `tests/chat/svc.rs`: send, reactions, pins, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore, message search (membership/game-room/ignored exclusions, room scoping, LIKE-metacharacter escaping, context-window ordering).
-- `tests/chat/news.rs`: article snapshots, empty list, author resolution, duplicate URL failure, direct DB inserts appearing after list refresh.
-- `tests/chat/sheet.rs`: character sheet model/upsert plus `open_sheet_task`/`save_sheet_task` room-scoped authorization.
-- `tests/chat/showcase.rs`: create event/snapshot, non-owner update failure, admin delete, unread cursor behavior.
-- `tests/chat/work.rs`: profile create/update snapshot behavior, public slug preservation, non-owner update failure, admin delete, unread cursor behavior.
-- `tests/chat/state.rs`: placeholder; direct `ChatState` tests need accessors or indirect UI/input tests.
+Existing DB-backed coverage:
+- `src/app/announcements_test.rs`: login #announcements loading, read cursor behavior, paging.
+- `svc_test.rs`: send, reactions, pins, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore, message search (membership/game-room/ignored exclusions, room scoping, LIKE-metacharacter escaping, context-window ordering).
+- `news/svc_test.rs`: article snapshots, empty list, author resolution, duplicate URL failure, direct DB inserts appearing after list refresh.
+- `sheet_test.rs`: character sheet model/upsert plus `open_sheet_task`/`save_sheet_task` room-scoped authorization.
+- `showcase/svc_test.rs`: create event/snapshot, non-owner update failure, admin delete, unread cursor behavior.
+- `work/svc_test.rs`: profile create/update snapshot behavior, public slug preservation, non-owner update failure, admin delete, unread cursor behavior.
+- `state_test.rs`: placeholder; direct `ChatState` tests need accessors or indirect UI/input tests.
 
 Existing unit coverage:
 - `state.rs`: command parsing, autocomplete ranking, visual order, reply preview/target helpers, DM sort keys, textarea theme behavior.
@@ -670,9 +669,9 @@ Existing unit coverage:
 - Synthetic modules: selection clamp/move helpers, tag parsing, URL validation, payload sanitation, loading transitions.
 
 Test gaps:
-- Dedicated notification-service integration tests for mention creation/list/mark-read.
+- Dedicated notification-service DB-backed tests for mention creation/list/mark-read.
 - Direct input-handler tests for News/Showcase/Work/Notifications/Discover.
-- Direct `ChatState` synthetic-panel integration tests.
+- Direct `ChatState` synthetic-panel tests.
 - Full News process success path is hard to cover because extraction depends on AI/search/network behavior.
 
 ---

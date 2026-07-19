@@ -46,11 +46,7 @@ impl LeWordService {
         }
 
         let tx = client.transaction().await?;
-        tx.query_one(
-            "SELECT pg_advisory_xact_lock(hashtextextended('le_word_daily_word', 0))",
-            &[],
-        )
-        .await?;
+        DailyWord::lock_daily_creation(&*tx).await?;
 
         if let Some(word) = DailyWord::find_by_date(&*tx, puzzle_date).await? {
             tx.commit().await?;

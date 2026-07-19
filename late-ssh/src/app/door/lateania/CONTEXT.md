@@ -433,7 +433,7 @@ Inline pure tests currently cover:
 - `persist.rs`: character and world JSON round trips, empty blob as no-save, missing-field defaults.
 - `damage.rs`, `stats.rs`: resistance math, minimum damage, D&D modifiers/roll ranges/defaults.
 - Pure landing/input helpers can be unit-tested inline in `screen.rs` if any are extracted.
-- DB/service coverage for Lateania belongs under `late-ssh/tests/door/` and must use shared testcontainers helpers.
+- DB/service coverage for Lateania goes in adjacent `_test.rs` files beside the module they exercise, using `crate::test_helpers::new_test_db`.
 
 Lateania unit tests also lock broader gameplay invariants: world size/reachability, shop/item validity and gold sinks, Frontier gates/warnings, follow chains, wildlife hunting/boons, death/gold/veteran resurrection, the dead/corpse state (lingering corpse not an instant temple trip, release-to-temple, healer resurrection in place vs. an incapable class), combat companions (buying costs gold/refuses when unaffordable, the pet bites the owner's target, is downed by a barrage, and is revived/strengthened by feeding; every capital has a stable), player housing (claiming a deed, one-home-per-name, furnishing only a home you own while visitors cannot, the 50+-piece catalogue and non-overlapping plots), boss achievement mapping, saved-character level reconciliation, and persistence JSON round trips.
 
@@ -443,7 +443,7 @@ Expected focused command for human verification after Lateania changes:
 cargo test -p late-ssh lateania
 ```
 
-Use integration tests under `late-ssh/tests/door/` only for DB/service orchestration that cannot stay pure.
+Put DB/service orchestration tests that cannot stay pure in adjacent `_test.rs` files beside the module they exercise; everything else stays inline and pure.
 
 ---
 

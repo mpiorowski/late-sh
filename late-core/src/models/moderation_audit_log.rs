@@ -23,6 +23,22 @@ pub struct ModerationAuditLogListItem {
 }
 
 impl ModerationAuditLog {
+    /// Number of audit entries recorded by an actor. Deleting a user must not
+    /// erase the moderation actions they took, so this stays non-zero after
+    /// their account is gone.
+    pub async fn count_for_actor(
+        client: &tokio_postgres::Client,
+        actor_user_id: Uuid,
+    ) -> Result<i64> {
+        let row = client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM moderation_audit_log WHERE actor_user_id = $1",
+                &[&actor_user_id],
+            )
+            .await?;
+        Ok(row.get(0))
+    }
+
     pub async fn recent_with_usernames(
         client: &tokio_postgres::Client,
         limit: i64,

@@ -1315,6 +1315,17 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 /// World Cup screen keys: `Space` toggles overview/bracket and `j`/`k` (plus
 /// the down/up arrows) scroll the active view. Returns `false` for everything
 /// else so global navigation (Tab, page numbers, `?`, `q`, …) still works.
+/// The key byte a door launcher should see, if the event carries one. The vt
+/// parser emits printables as `Char` and control bytes (Enter, backspace) as
+/// `Byte`; the arcade-name claim prompt needs both.
+fn launcher_key_byte(event: &ParsedInput) -> Option<u8> {
+    match event {
+        ParsedInput::Byte(b) => Some(*b),
+        ParsedInput::Char(c) if c.is_ascii() => Some(*c as u8),
+        _ => None,
+    }
+}
+
 fn handle_worldcup_input(app: &mut App, event: &ParsedInput) -> bool {
     let byte = match event {
         ParsedInput::Byte(b) => *b,
@@ -1446,6 +1457,18 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
                 state.connect();
             }
         }
+        HubGame::Dcss => {
+            if !app.dcss_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "DCSS is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Dcss);
+            if let Some(state) = app.dcss_state.as_mut() {
+                state.connect();
+            }
+        }
         HubGame::GreenDragon => {
             app.set_screen(Screen::GreenDragon);
             app.enter_greendragon();
@@ -1505,16 +1528,50 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Nethack {
+        // While the arcade-name claim modal is up, the modal router
+        // (`handle_modal_input`) owns key bytes; fall through so they reach it.
+        if app
+            .nethack_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
         // Running-mode bytes never reach here (intercepted in handle_input), so
-        // this only handles the Launcher. Enter launches the game; every other
-        // key (Tab/1-8 nav, `q` to quit, `?` for help, ...) falls through to the
-        // normal global handling, so the launcher behaves like a plain page.
-        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+        // this only handles the Launcher. Keys go to the launcher first: Enter
+        // plays or reopens the claim modal depending on the arcade-name state.
+        // The vt parser emits printables as `Char` and control bytes as
+        // `Byte`, so both funnel in. Unconsumed keys keep the normal global
+        // handling, so the launcher still behaves like a plain page.
+        if let Some(b) = launcher_key_byte(event) {
             app.enter_nethack();
-            if let Some(state) = app.nethack_state.as_mut() {
-                state.connect();
+            if let Some(state) = app.nethack_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
             }
-            return true;
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Dcss {
+        // Same as NetHack above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .dcss_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_dcss();
+            if let Some(state) = app.dcss_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -3171,6 +3228,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Running-mode arrows are forwarded raw in App::handle_input; the
         // Launcher ignores them.
         Screen::Nethack => false,
+        Screen::Dcss => false,
         Screen::Dopewars => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3192,6 +3250,33 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 }
 
 fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
+    // The arcade-name claim modal swallows every key byte while it is up:
+    // printables and backspace edit the name, Enter claims, Esc closes, and
+    // everything else (Tab, digits-as-nav, `q`) is inert so the app can't
+    // navigate away underneath the modal.
+    if ctx.screen == Screen::Nethack
+        && let Some(state) = app.nethack_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Dcss
+        && let Some(state) = app.dcss_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+
     if is_chat_composer_context(ctx) {
         chat::input::handle_compose_input(
             app,
@@ -3827,6 +3912,11 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Nethack => {
             // Same as Rebels: Launcher Enter is handled in
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
+        Screen::Dcss => {
+            // Same as Nethack: Launcher Enter is handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }

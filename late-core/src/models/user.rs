@@ -922,6 +922,25 @@ impl User {
         Ok(())
     }
 
+    pub async fn set_admin(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        is_admin: bool,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET is_admin = $1, updated = current_timestamp
+                 WHERE id = $2",
+                &[&is_admin, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     pub async fn rename(
         client: &impl GenericClient,
         user_id: Uuid,

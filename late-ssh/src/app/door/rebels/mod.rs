@@ -6,5 +6,7 @@
 // rebels: https://github.com/ricott1/rebels-in-the-sky
 pub mod identity;
 pub mod proxy;
+#[cfg(test)]
+mod proxy_test;
 pub mod render;
 pub mod state;

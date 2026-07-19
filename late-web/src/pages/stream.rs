@@ -125,6 +125,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normalize_mount_falls_back_to_chill_for_unknown_mounts() {
+        assert_eq!(normalize_mount("classical"), "classical");
+        assert_eq!(normalize_mount("chill"), "chill");
+        assert_eq!(normalize_mount("dubstep"), "chill");
+        assert_eq!(normalize_mount(""), "chill");
+    }
+
+    #[test]
     fn upstream_stream_url_appends_suffix_once() {
         assert_eq!(
             upstream_stream_url("http://icecast:8000", "chill"),

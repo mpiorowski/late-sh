@@ -174,3 +174,6 @@ mod tests {
         assert_eq!(cpu_at_0, cpu_at_40);
     }
 }
+
+#[cfg(test)]
+mod dashboard_test;

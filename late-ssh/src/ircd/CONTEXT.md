@@ -236,7 +236,7 @@ Unit tests:
 - Unit tests must not touch DB, services, sockets, or async process orchestration.
 
 Integration tests:
-- Registration/auth, DB-backed channel membership, message delivery through `ChatService`, moderation mapping, and listener behavior belong under `late-ssh/tests/`.
+- Registration/auth, DB-backed channel membership, message delivery through `ChatService`, moderation mapping, and listener behavior belong in the adjacent `serve_test.rs` (real IRC client over TCP, via `crate::test_helpers`).
 - Use shared DB helpers for any DB-backed test.
 
 Agent command policy:

@@ -1,0 +1,56 @@
+/// crawl's `MAX_NAME_LENGTH` is 30; names longer than that are rejected at the
+/// name prompt, so never pass one to `-name`.
+const MAX_NAME_LENGTH: usize = 30;
+
+/// Used when a connection presents an empty or fully-stripped username. Should
+/// not happen in practice (late-ssh always sends an account-derived playname),
+/// but we never pass an empty `-name` to the child.
+const FALLBACK: &str = "late";
+
+/// Sanitize the SSH username into a PTY-safe crawl `-name` playname.
+///
+/// late-ssh already derives a safe, account-stable name (`late_` + UUID hex) and
+/// sends it as the SSH username, so this is defense in depth: keep only ASCII
+/// alphanumerics and underscore (both valid in crawl names), and cap at crawl's
+/// name limit. Anything else is dropped rather than passed through to the
+/// child's argv.
+pub fn sanitize(username: &str) -> String {
+    let cleaned: String = username
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take(MAX_NAME_LENGTH)
+        .collect();
+    if cleaned.is_empty() {
+        FALLBACK.to_string()
+    } else {
+        cleaned
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_alphanumerics_and_underscore() {
+        assert_eq!(sanitize("late_9f3c1122"), "late_9f3c1122");
+    }
+
+    #[test]
+    fn strips_punctuation_and_shell_metachars() {
+        assert_eq!(sanitize("bob; rm -rf /"), "bobrmrf");
+        assert_eq!(sanitize("a b\tc"), "abc");
+    }
+
+    #[test]
+    fn caps_at_crawl_name_limit() {
+        let name = sanitize(&"x".repeat(100));
+        assert_eq!(name.len(), MAX_NAME_LENGTH);
+    }
+
+    #[test]
+    fn empty_falls_back() {
+        assert_eq!(sanitize(""), FALLBACK);
+        assert_eq!(sanitize("!@#$"), FALLBACK);
+    }
+}

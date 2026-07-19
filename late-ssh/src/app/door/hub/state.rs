@@ -10,15 +10,17 @@ pub enum HubGame {
     Lateania,
     Rebels,
     Nethack,
+    Dcss,
     GreenDragon,
     Dopewars,
 }
 
 impl HubGame {
     /// Selector order, left to right.
-    pub const ALL: [HubGame; 5] = [
+    pub const ALL: [HubGame; 6] = [
         HubGame::Lateania,
         HubGame::Nethack,
+        HubGame::Dcss,
         HubGame::GreenDragon,
         HubGame::Rebels,
         HubGame::Dopewars,
@@ -29,6 +31,7 @@ impl HubGame {
             HubGame::Lateania => "Lateania",
             HubGame::Rebels => "Rebels",
             HubGame::Nethack => "NetHack",
+            HubGame::Dcss => "DCSS",
             HubGame::GreenDragon => "Green Dragon",
             HubGame::Dopewars => "dopewars",
         }
@@ -81,6 +84,8 @@ mod tests {
         s.select_next();
         assert_eq!(s.selected_game(), HubGame::Nethack);
         s.select_next();
+        assert_eq!(s.selected_game(), HubGame::Dcss);
+        s.select_next();
         assert_eq!(s.selected_game(), HubGame::GreenDragon);
         s.select_next();
         assert_eq!(s.selected_game(), HubGame::Rebels);
@@ -93,7 +98,7 @@ mod tests {
     #[test]
     fn select_jumps_directly() {
         let mut s = State::default();
-        s.select(2);
+        s.select(3);
         assert_eq!(s.selected_game(), HubGame::GreenDragon);
         s.select(99);
         assert_eq!(s.selected_game(), HubGame::GreenDragon);
@@ -103,7 +108,14 @@ mod tests {
     fn all_games_are_listed_in_order() {
         assert_eq!(
             HubGame::ALL.map(HubGame::label),
-            ["Lateania", "NetHack", "Green Dragon", "Rebels", "dopewars"],
+            [
+                "Lateania",
+                "NetHack",
+                "DCSS",
+                "Green Dragon",
+                "Rebels",
+                "dopewars"
+            ],
         );
     }
 }

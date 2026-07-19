@@ -18,22 +18,25 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
     }
 }
 
+/// The door-screen launcher: the landing with a handle-aware Launch block (the
+/// one-time arcade-name claim prompt, then the play action; see
+/// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
-    draw_landing(frame, area, state.is_enabled());
+    if !state.is_enabled() {
+        draw_landing(frame, area, false);
+        return;
+    }
+    let launch = landing::handle_launch_block(
+        state.handle_status(),
+        state.entry_input(),
+        landing::action(">", "Enter", "descend into the dungeon", theme::SUCCESS()),
+    );
+    render_landing(frame, area, launch);
 }
 
-/// NetHack landing copy, used by both the standalone screen fallback and the
-/// Games hub when NetHack is selected.
+/// NetHack landing copy with the classic one-line Launch block, used by the
+/// Games hub when NetHack is selected (the hub has no per-session door state).
 pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
-    let inner = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(area)[1];
-
     let action_line = if enabled {
         landing::action(">", "Enter", "descend into the dungeon", theme::SUCCESS())
     } else {
@@ -42,6 +45,19 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
             Style::default().fg(theme::ERROR()),
         ))
     };
+    render_landing(frame, area, vec![action_line]);
+}
+
+/// The landing body around a caller-supplied Launch block.
+fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
+    let inner = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(area)[1];
 
     let mut lines = vec![Line::raw("")];
     lines.extend(nethack_logo());
@@ -89,7 +105,9 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         )),
         Line::from(""),
         landing::heading("Launch"),
-        action_line,
+    ]);
+    lines.extend(launch);
+    lines.extend([
         Line::from(""),
         landing::heading("Once Inside"),
         landing::hint("? or F1", "NetHack's own in-game help menu", 8),

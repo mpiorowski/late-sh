@@ -104,6 +104,45 @@ impl ChatRoomMember {
         Ok(count)
     }
 
+    /// Advance the member's read cursor to `read_at`, never moving it
+    /// backwards. Returns 0 if the user is not a member of the room.
+    pub async fn mark_read_at(
+        client: &Client,
+        room_id: Uuid,
+        user_id: Uuid,
+        read_at: DateTime<Utc>,
+    ) -> Result<u64> {
+        let count = client
+            .execute(
+                "UPDATE chat_room_members
+                 SET last_read_at = GREATEST(
+                    COALESCE(last_read_at, '-infinity'::timestamptz),
+                    $3
+                 )
+                 WHERE room_id = $1 AND user_id = $2",
+                &[&room_id, &user_id, &read_at],
+            )
+            .await?;
+        Ok(count)
+    }
+
+    /// The member's read cursor, `None` if never read or not a member.
+    pub async fn last_read_at(
+        client: &Client,
+        room_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let row = client
+            .query_opt(
+                "SELECT last_read_at
+                 FROM chat_room_members
+                 WHERE room_id = $1 AND user_id = $2",
+                &[&room_id, &user_id],
+            )
+            .await?;
+        Ok(row.and_then(|row| row.get("last_read_at")))
+    }
+
     pub async fn is_member(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<bool> {
         let row = client
             .query_one(

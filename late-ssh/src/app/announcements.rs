@@ -1,5 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use late_core::models::chat_message::ChatMessage;
+use late_core::models::chat_room::ChatRoom;
 use late_core::models::chat_room_member::ChatRoomMember;
 use ratatui::{
     Frame,
@@ -57,53 +59,24 @@ pub async fn load_login_announcements(
     client: &Client,
     user_id: Uuid,
 ) -> Result<Option<LoginAnnouncements>> {
-    let Some(row) = client
-        .query_opt(
-            "SELECT id
-             FROM chat_rooms
-             WHERE slug = $1
-               AND kind <> 'dm'
-               AND visibility = 'public'
-             ORDER BY permanent DESC, created ASC, id ASC
-             LIMIT 1",
-            &[&ANNOUNCEMENTS_SLUG],
-        )
-        .await?
-    else {
+    let Some(room) = ChatRoom::find_public_non_dm_by_slug(client, ANNOUNCEMENTS_SLUG).await? else {
         return Ok(None);
     };
-    let room_id: Uuid = row.get("id");
+    let room_id = room.id;
 
     ChatRoomMember::join(client, room_id, user_id).await?;
 
-    let rows = client
-        .query(
-            "SELECT msg.id,
-                    msg.created,
-                    msg.body,
-                    u.username AS author
-             FROM chat_room_members member
-             JOIN chat_messages msg ON msg.room_id = member.room_id
-             JOIN users u ON u.id = msg.user_id
-             WHERE member.room_id = $1
-               AND member.user_id = $2
-               AND msg.user_id <> $2
-               AND msg.created > COALESCE(member.last_read_at, '-infinity'::timestamptz)
-             ORDER BY msg.created DESC, msg.id DESC
-             LIMIT $3",
-            &[&room_id, &user_id, &LOGIN_ANNOUNCEMENT_LIMIT],
-        )
-        .await?;
-
-    let messages: Vec<LoginAnnouncementMessage> = rows
-        .into_iter()
-        .map(|row| LoginAnnouncementMessage {
-            id: row.get("id"),
-            created: row.get("created"),
-            author: row.get("author"),
-            body: row.get("body"),
-        })
-        .collect();
+    let messages: Vec<LoginAnnouncementMessage> =
+        ChatMessage::list_unread_for_member(client, room_id, user_id, LOGIN_ANNOUNCEMENT_LIMIT)
+            .await?
+            .into_iter()
+            .map(|message| LoginAnnouncementMessage {
+                id: message.id,
+                created: message.created,
+                author: message.author,
+                body: message.body,
+            })
+            .collect();
 
     if messages.is_empty() {
         return Ok(None);

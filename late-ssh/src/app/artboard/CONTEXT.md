@@ -210,14 +210,14 @@ Mouse-specific extras:
 
 ## Tests
 
-Primary integration tests:
-- `late-ssh/tests/artboard/main.rs` contains shared helpers.
-- `late-ssh/tests/artboard/svc.rs` covers shared canvas sync, provenance attribution, peer join/leave, overflow rejection, unknown/system replace provenance resync, persistent save/restore, explicit flush, daily prune, and monthly rollover blanking.
-- `late-ssh/tests/artboard/state.rs` covers multiline paste and archive browser read-only/return-to-live behavior, including curated snapshots in the browser.
+Primary DB-backed tests (adjacent `_test.rs` files in this directory):
+- `test_support.rs` contains shared cfg(test) helpers.
+- `svc_test.rs` covers shared canvas sync, provenance attribution, peer join/leave, overflow rejection, unknown/system replace provenance resync, persistent save/restore, explicit flush, daily prune, and monthly rollover blanking.
+- `state_test.rs` covers multiline paste and archive browser read-only/return-to-live behavior, including curated snapshots in the browser.
 
-Related integration tests:
-- `late-ssh/tests/app_input_flow.rs` covers Artboard screen switching, active-mode global hotkey blocking, `Ctrl+C` copy behavior, local help routing, and active `?` drawing behavior.
-- `late-core/tests/artboard_snapshot.rs` covers snapshot upsert replacement, uniqueness, special/daily/monthly archive listing, insert-if-absent, prefix listing, and delete by board key.
+Related tests:
+- `late-ssh/src/app/input_flow_test.rs` covers Artboard screen switching, active-mode global hotkey blocking, `Ctrl+C` copy behavior, local help routing, and active `?` drawing behavior.
+- `late-core/src/models/artboard_test.rs` covers snapshot upsert replacement, uniqueness, special/daily/monthly archive listing, insert-if-absent, prefix listing, and delete by board key.
 
 Inline module tests:
 - `provenance.rs`: paint/clear provenance and replace retagging.

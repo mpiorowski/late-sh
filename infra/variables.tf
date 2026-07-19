@@ -52,6 +52,11 @@ variable "DOPEWARS_IMAGE_TAG" {
   type        = string
 }
 
+variable "DCSS_IMAGE_TAG" {
+  description = "Docker image for late-dcss, the DCSS door host (e.g., ghcr.io/org/late-dcss:sha-abc123)."
+  type        = string
+}
+
 # =============================================================================
 # SSH Host Key
 # =============================================================================
@@ -191,6 +196,17 @@ variable "DOPEWARS_ENABLED" {
   validation {
     condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DOPEWARS_ENABLED)))
     error_message = "DOPEWARS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
+variable "DCSS_ENABLED" {
+  description = "Enable the DCSS door game CLIENT (service-ssh reaches the late-dcss host over SSH; the host pod is always deployed). Empty defaults to on."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DCSS_ENABLED)))
+    error_message = "DCSS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
   }
 }
 
