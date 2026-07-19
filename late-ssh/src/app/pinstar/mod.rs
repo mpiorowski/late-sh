@@ -1,4 +1,6 @@
 pub mod browser;
+#[cfg(test)]
+mod browser_test;
 pub mod data;
 pub mod helpers;
 pub mod input;

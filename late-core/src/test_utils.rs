@@ -84,3 +84,25 @@ pub async fn create_test_user(db: &Db, username: &str) -> User {
     .await
     .expect("create user")
 }
+
+/// Test-only clock control: push matching rows' `created` one second past
+/// `now()`, so `created > <cursor taken now>` comparisons are decisive
+/// instead of racing the clock's microsecond resolution. Tests must not
+/// hand-roll this UPDATE; this helper is the one place that fudges `created`.
+pub async fn bump_created_past_now(
+    client: &tokio_postgres::Client,
+    table: &str,
+    filter_sql: &str,
+    params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+) {
+    let updated = client
+        .execute(
+            &format!(
+                "UPDATE {table} SET created = now() + interval '1 second' WHERE {filter_sql}"
+            ),
+            params,
+        )
+        .await
+        .expect("bump created past now");
+    assert!(updated > 0, "bump_created_past_now matched no rows");
+}

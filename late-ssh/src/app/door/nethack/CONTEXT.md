@@ -73,7 +73,7 @@ Cross-module wiring (client side, outside this folder):
 - `app/input.rs`: launcher `Enter` → `enter_nethack` + `connect`; `7` global screen switch; topbar hit-test columns; arrows are a no-op (Running-mode arrows are forwarded raw upstream).
 - `app/render.rs`: takes `nethack_state` out (like pinstar/rebels) so the draw path can `set_viewport(content_area)` before blitting.
 - `app/tick.rs`: calls `State::tick()` each app tick to detect connection close.
-- `config.rs`, `state.rs` (`SessionConfig`), `ssh.rs`, `session_bootstrap.rs`, `tests/helpers/mod.rs`: thread the `nethack_enabled`/`nethack_host`/`nethack_port`/`nethack_secret` fields through.
+- `config.rs`, `state.rs` (`SessionConfig`), `ssh.rs`, `session_bootstrap.rs`, `src/test_helpers.rs`: thread the `nethack_enabled`/`nethack_host`/`nethack_port`/`nethack_secret` fields through.
 
 ---
 

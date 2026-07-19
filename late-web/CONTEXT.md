@@ -177,20 +177,20 @@ cargo nextest run --workspace --all-targets
 
 `late-web` test placement:
 
-- Handler/route behavior belongs in `late-web/tests/*`.
+- Handler/route behavior belongs in adjacent `<file>_test.rs` files under `src/pages/`, wired with `#[cfg(test)] mod <file>_test;` (`late-web` has no `tests/` directory).
 - Pure page/model transformations belong in inline `#[cfg(test)]` modules under `src/pages/*`.
 - Error mapping tests belong in `src/error.rs`.
-- DB-touching integration tests should use the shared DB helper path from `late-core::test_utils`.
+- DB-touching tests should use the shared DB helper path from `late-core::test_utils`.
 
 Current tests:
 
-- `tests/dashboard.rs`: spawns the web app and a mock now-playing server; asserts dashboard and HTMX partial rendering.
-- `tests/stream.rs`: verifies `/stream` upstream passthrough and silence fallback.
+- `src/pages/dashboard/dashboard_test.rs`: spawns the web app and a mock now-playing server; asserts dashboard and HTMX partial rendering.
+- `src/pages/stream_test.rs`: verifies `/stream` upstream passthrough and silence fallback.
 - Inline pure tests cover status value generation, stream URL/silence helpers, gallery labels/titles, profile formatting helpers, tunnel URL conversion, and error mapping.
 
 Known web smoke-test exception:
 
-- `tests/dashboard.rs` and `tests/stream.rs` currently create an inert `Db::new(&DbConfig::default())` because they do not touch DB routes. This is only acceptable for non-DB route smoke tests. If a web integration test uses DB-backed routes (`/gallery`, `/profiles`), use `late_core::test_utils::test_db()` instead of the inert DB shortcut.
+- `dashboard_test.rs` and `stream_test.rs` currently create an inert `Db::new(&DbConfig::default())` because they do not touch DB routes. This is only acceptable for non-DB route smoke tests. If a web test uses DB-backed routes (`/gallery`, `/profiles`), use `late_core::test_utils::test_db()` instead of the inert DB shortcut.
 
 ---
 

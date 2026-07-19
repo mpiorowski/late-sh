@@ -65,7 +65,7 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         Line::from(""),
         Line::from(vec![
             Span::styled(
-                "Dungeon Crawl Stone Soup ",
+                "The best roguelike in active development ",
                 Style::default()
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),
@@ -83,6 +83,7 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         Line::from(""),
         landing::stat("saves", "kept per player, resume any time", 8),
         landing::stat("runes", "collect 3 of 15, then the Realm of Zot opens", 8),
+        landing::stat("builds", "dozens of species and backgrounds, no two runs alike", 8),
         landing::stat("style", "tactics over grinding: every fight is a puzzle", 8),
         Line::from(""),
         flavor_headline(),
@@ -170,11 +171,12 @@ fn dungeon_legend() -> Line<'static> {
     ])
 }
 
-/// The pitch in one line: NetHack's living successor generation. Community-run
-/// since 2006, still shipping yearly versions with public tournaments.
+/// The pitch in one line: NetHack's living successor generation, and today's
+/// most-played traditional roguelike (the public online servers' logfiles are
+/// the receipts). Community-run since 2006, tournament every release.
 fn legend_credentials() -> Line<'static> {
     Line::from(Span::styled(
-        "Born 2006 from Linley's Crawl \u{b7} yearly releases \u{b7} tournaments still running",
+        "Born 2006 from Linley's Crawl \u{b7} most-played roguelike online \u{b7} yearly tournaments",
         Style::default().fg(theme::AMBER_DIM()),
     ))
 }

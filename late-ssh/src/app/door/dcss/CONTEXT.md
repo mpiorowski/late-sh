@@ -65,7 +65,7 @@ The door is gated behind `LATE_DCSS_ENABLED` (default `false`); when disabled, `
 | `identity.rs` | `derive_client_key(secret)` — identical to the client copy. |
 | `playname.rs` | `sanitize(username)`: keep `[A-Za-z0-9_]`, cap at crawl's `MAX_NAME_LENGTH` (30), fall back to `late`. Defense-in-depth on the `-name` arg. |
 
-Cross-module wiring (client side, outside this folder) mirrors nethack exactly: `app/state.rs` (`dcss_state`/`enter_dcss`/`leave_dcss`, Running-mode passthrough with F1 intercept + exit grace), `app/input.rs` (hub launch, launcher Enter, arrow no-op), `app/render.rs` (state taken out for `set_viewport` before blitting; `by crawl.develz.org` chrome + in-game key hints), `app/tick.rs` (tick + return-to-hub), `config.rs`/`state.rs` (`SessionConfig`)/`ssh.rs`/`session_bootstrap.rs`/`tests/helpers` (the `dcss_enabled`/`dcss_host`/`dcss_port`/`dcss_secret` fields), hub `state.rs`/`ui.rs` (the `HubGame::Dcss` card).
+Cross-module wiring (client side, outside this folder) mirrors nethack exactly: `app/state.rs` (`dcss_state`/`enter_dcss`/`leave_dcss`, Running-mode passthrough with F1 intercept + exit grace), `app/input.rs` (hub launch, launcher Enter, arrow no-op), `app/render.rs` (state taken out for `set_viewport` before blitting; `by crawl.develz.org` chrome + in-game key hints), `app/tick.rs` (tick + return-to-hub), `config.rs`/`state.rs` (`SessionConfig`)/`ssh.rs`/`session_bootstrap.rs`/`src/test_helpers.rs` (the `dcss_enabled`/`dcss_host`/`dcss_port`/`dcss_secret` fields), hub `state.rs`/`ui.rs` (the `HubGame::Dcss` card).
 
 ---
 

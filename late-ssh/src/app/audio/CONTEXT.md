@@ -715,7 +715,7 @@ A Postgres advisory-lock leader (§20) would prevent a *second pod* from also wr
 
 ### Regression coverage
 
-`late-ssh/tests/audio_queue_reconcile.rs` covers both prod shapes:
+`late-ssh/src/app/audio/svc_test.rs` covers both prod shapes:
 1. DB has a `playing` row while the service memory is empty; a subsequent submit adopts the DB current instead of surfacing the singleton violation.
 2. Service memory points at an already-`played` row while DB has a different `playing` row; `/audio skip` reconciles and does not mutate the played row to `skipped`.
 

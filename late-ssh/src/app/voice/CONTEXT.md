@@ -282,7 +282,7 @@ Source-side unit tests are appropriate for pure logic only:
 - Participant sorting/status formatting helpers if extracted.
 - TUI label/count formatting helpers if kept pure.
 
-Integration tests belong under `late-ssh/tests/` if they need services, DB, API routes, pair-WS orchestration, or rate limiters.
+Tests that need services, DB, API routes, pair-WS orchestration, or rate limiters go in adjacent `_test.rs` files beside the module they exercise, using `crate::test_helpers`.
 
 LLM agents must not run `cargo test`, `cargo nextest`, or `cargo clippy` in this repo. Note expected verification commands in handoff instead.
 

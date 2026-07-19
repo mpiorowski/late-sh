@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-17 (Super Snake joined the house tables: a 4-seat real-time DOS-snake port with 20 embedded text arenas in `late-ssh/assets/ssnake_levels/`, warp-tunnel edges, and a 300-chip cooldown win payout via `ssnake_win`, migration 118; see `late-ssh/src/app/lobby/house/CONTEXT.md`)
+- Last updated: 2026-07-19 (test layout migration complete: every test lives adjacent to the code it exercises as `<file>_test.rs` wired with `#[cfg(test)] mod`, DB and listener smoke tests included; no crate has a `tests/` directory; shared harness at `late-ssh/src/test_helpers.rs`; see Test Strategy)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -89,55 +89,39 @@ The system is a Rust workspace with four main crates (`late-cli`, `late-core`, `
 - Keep most tests close to code under change (small, deterministic, focused).
 - Use integration/smoke tests for boundary behavior across crates/services.
 
-### Strict test boundary rules (required)
+### Test layout rules (required)
 
-**Unit tests (`#[cfg(test)] mod tests` inside `src/` files):**
-- MUST be pure logic only: no database, no services, no network, no async runtime required.
-- Test input/output transformations, state transitions, parsing, formatting, validation math.
-- If you need a `Db`, `Service`, `State`, or any I/O — it is NOT a unit test. Move it to `tests/`.
-- Good examples: `rate_limit.rs` (in-memory limiter logic), `state.rs` (enum transitions), `input.rs` (key → action mapping).
-- Preferred source layout for a domain is `src/.../<domain>/mod.rs` plus adjacent `state.rs`, `input.rs`, `ui.rs`, `svc.rs` as needed. `mod.rs` files must only contain `pub mod` declarations — never `pub use` re-exports.
-- Keep pure unit tests inline in those source files. Do NOT create `src/.../<domain>/tests/` folders just to split unit tests.
-
-**Integration tests (`late-ssh/tests/`, `late-web/tests/`, `late-core/tests/`):**
-- MUST use the shared DB test helper for database access — always go through `late_core::test_utils::test_db()` (or the `helpers::new_test_db()` wrapper in `late-ssh`).
-- NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings as a substitute for real DB access in integration tests.
-- Exception: `late-web` route smoke tests that instantiate `AppState` but do not exercise DB-backed routes may use an inert `Db::new(&DbConfig::default())`; the moment a test hits `/gallery`, `/profiles`, or any DB code path, use `late_core::test_utils::test_db()`.
-- `late-core::test_utils` owns shared test infrastructure: `test_db()`, `create_test_user()`. Use these everywhere instead of rolling per-test user creation — except in `late-core` model tests that are testing `User::create` itself.
-- `late-ssh/tests/helpers/mod.rs` re-exports `create_test_user` from `late-core` and adds ssh-specific helpers (`test_config`, `test_app_state`, `make_app`, etc.). Domain test directories access these via `#[path = "../helpers/mod.rs"] mod helpers;` in their `main.rs`.
-- Any test that touches DB, services, network, or cross-module orchestration belongs here.
-- Preferred integration layout is domain-oriented under crate `tests/`, mirroring the source structure: `tests/<domain>/main.rs` with sibling `svc.rs`, `state.rs`, etc. as needed. `late-core` tests are named after their domain (`user.rs`, `bonsai.rs`, `chat/`).
+**One rule: tests live next to the code they exercise.**
+- Tests for `src/.../foo.rs` go in `foo_test.rs` beside it, wired with `#[cfg(test)] mod foo_test;` in the parent module file. This applies to every test kind, pure and DB-backed alike.
+- Small pure unit tests may stay inline in the source file's own `#[cfg(test)] mod tests` block (e.g. `rate_limit.rs`, `input.rs` key routing). Do NOT create `src/.../<domain>/tests/` folders.
+- Preferred source layout for a domain is `src/.../<domain>/mod.rs` plus adjacent `state.rs`, `input.rs`, `ui.rs`, `svc.rs` as needed. `mod.rs` files must only contain `mod`/`pub mod` declarations (cfg-gated test `mod`s included), never `pub use` re-exports.
+- DB access always goes through `late_core::test_utils::test_db()` and `create_test_user()`. NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings as a substitute for real DB access. Exception: `late-web` route smoke tests that instantiate `AppState` but do not exercise DB-backed routes may use an inert `Db::new(&DbConfig::default())`.
+- `late-ssh/src/test_helpers.rs` (`#[cfg(test)]`, declared in `lib.rs`) owns the shared app-level harness: `new_test_db`, `test_config`, `test_app_state`, `make_app*`, `render_plain`, `wait_for_render_contains`, `wait_until`, `chat_compose_app`, etc. Test files import it as `crate::test_helpers`.
+- External-boundary smoke tests (real listeners) live adjacent too: `src/ssh_test.rs` (SSH over TCP), `src/api_test.rs` (WebSocket pairing), `src/ircd/serve_test.rs` (IRC over TCP), `src/app/door/rebels/proxy_test.rs` (stub SSH door server). No crate has a `tests/` directory.
 
 **LLM enforcement:**
-- On every code change, check: does this need a test? If yes, classify it strictly as unit or integration per the rules above.
+- On every code change, check: does this need a test? If yes, write it in the adjacent `<file>_test.rs` (or inline `mod tests` for small pure cases).
 - LLM agents run the tests targeted at their change via `make test-llm ARGS="-p <crate> -E 'test(<filter>)'"` — it starts the check DB and runs `cargo nextest` inside a memory-capped systemd scope so a heavy build cannot freeze the machine. Never run raw `cargo test`/`cargo nextest`/`cargo clippy` or full-suite runs; `make check` stays the human-owned gate.
-- Do NOT put integration-flavored tests (DB calls, service interactions, spawning tasks) inside `#[cfg(test)]` module blocks in `src/` files.
-- Do NOT invent extra source-side test directory structure when inline `#[cfg(test)] mod tests` is sufficient; reserve directory splits for crate-level integration tests under `tests/`.
 - If a test is intentionally deferred (WIP/incomplete dependency), document the gap and cleanup plan in PR/context notes.
 
 ### Preferred test pyramid for this repo
 
-1. Unit tests in module files — pure logic only, no I/O (`state.rs`, `input.rs`, `ui.rs`, `rate_limit.rs`).
-2. Integration tests in `late-ssh/tests/` and `late-web/tests/` — real DB via `TEST_DATABASE_URL`, shared helpers.
-3. Workspace-wide checks before merge (`fmt`, `clippy`, `nextest`).
+1. Adjacent `<file>_test.rs` and inline `#[cfg(test)]` tests in `src/` — pure logic, DB-backed service/model tests, and listener smoke tests alike.
+2. Workspace-wide checks before merge (`fmt`, `clippy`, `nextest`).
 
 ### Per-app guidance
 
 For `late-ssh`:
 
-- `app/*/state.rs`: unit tests for transition rules, event drains, selection/filter logic (includes profile field navigation).
-- `app/*/input.rs`: unit tests for key routing and mode guards.
-- `app/*/ui.rs`: unit tests for pure formatting/layout helpers only; avoid brittle pixel snapshots.
-- `app/*/{mod,state,input,ui,svc,model}.rs`: keep the domain module flat and predictable; add pure unit tests inline in the relevant file instead of under `src/app/*/tests/`.
-- `app/render.rs` / `app/tick.rs`: integration tests for orchestration (needs services/DB → goes in `tests/`).
-- `app/*/svc.rs`: integration tests in `tests/<domain>/svc.rs` (needs real DB).
-- Integration test directories mirror the source domain structure: `tests/<domain>/main.rs` with split files like `svc.rs`, `state.rs` as needed. Arcade game tests live under `tests/arcade/<game>.rs`.
-- `ssh.rs` / `api.rs`: smoke tests in `tests/ssh_smoke.rs` / `tests/ws_smoke.rs`.
+- `app/*/state.rs` / `input.rs` / `ui.rs`: pure unit tests, inline or in adjacent `<file>_test.rs`.
+- `app/*/svc.rs`: DB-backed tests in the adjacent `svc_test.rs` (real DB via `crate::test_helpers::new_test_db`).
+- Whole-App flow tests (drive `App::handle_input` + render against a real DB) live in `src/app/*_test.rs`: `smoke_test.rs`, `input_flow_test.rs`, `dashboard_flow_test.rs`, `singleton_isolation_test.rs`, `state_test.rs` (splash lifecycle).
+- `ssh.rs` / `api.rs` / ircd / rebels proxy: listener smoke tests in the adjacent `src/ssh_test.rs`, `src/api_test.rs`, `src/ircd/serve_test.rs`, `src/app/door/rebels/proxy_test.rs`.
 
 For `late-web`:
 
-- Handler/route behavior in `late-web/tests/*` with request/response assertions.
-- Page/model transformations as unit tests under `src/pages/*` (pure logic only).
+- Handler/route behavior in adjacent `_test.rs` files under `src/pages/` (`pages/stream_test.rs`, `pages/dashboard/dashboard_test.rs`) with request/response assertions.
+- Page/model transformations as inline unit tests under `src/pages/*` (pure logic only).
 - Error mapping tests in `src/error.rs` for stable status/body behavior (pure logic only).
 
 ### Command policy
@@ -505,7 +489,7 @@ late-sh/
 │       ├── models/             # Core DB-backed domain entities
 │       ├── nonogram.rs         # Shared pack schema, clue derivation, daily selection
 │       ├── rate_limit.rs       # Sliding-window per-IP limiter
-│       └── test_utils.rs       # DB integration test helpers
+│       └── test_utils.rs       # shared DB test helpers
 ├── late-ssh/
 │   ├── src/
 │   │   ├── main.rs             # Starts SSH + API + background loops
@@ -530,7 +514,6 @@ late-sh/
 │   │       └── profile/        # Username/profile settings and stats
 │   │   └── ircd/               # Optional embedded IRC server: token auth, channel/DM bridge, moderation projection
 │   ├── assets/nonograms/       # Prebuilt puzzle packs
-│   └── tests/                  # Integration/smoke tests grouped by feature
 ├── late-cli/
 │   ├── CONTEXT.md              # Companion CLI details: SSH modes, pairing, audio, installers
 │   └── src/                    # Standalone CLI: main + config, identity, raw_mode, pty, ssh, ws, audio/{decoder,resampler,output,decoder_thread,analyzer}

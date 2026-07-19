@@ -188,7 +188,7 @@ Future Events work:
 ## Testing Guidance
 
 - Pure state/input/layout helpers can have inline unit tests.
-- DB/service behavior belongs in `late-ssh/tests/` and must use the shared testcontainers helpers.
+- DB/service behavior belongs in adjacent `_test.rs` files beside the module it exercises, using `crate::test_helpers::new_test_db`.
 - Root test policy applies: agents do not run `cargo test`, `cargo nextest`, or `cargo clippy`.
 
 ## Known Gaps

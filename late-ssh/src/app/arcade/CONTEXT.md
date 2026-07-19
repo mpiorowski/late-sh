@@ -105,7 +105,7 @@ Leaderboard/Hub checklist:
 
 Testing guidance:
 - Pure rules and key-routing helpers get inline unit tests in `state.rs` or `input.rs`.
-- DB/service coverage belongs under `late-ssh/tests/arcade/` and must use the shared testcontainers helpers.
+- DB/service coverage lives in the adjacent `svc_test.rs` beside each game's `svc.rs` (wired with `#[cfg(test)] mod svc_test;`), using `crate::test_helpers::new_test_db`.
 - Do not run `cargo test`, `cargo nextest`, or `cargo clippy` as an agent; leave those gates for the human owner.
 
 ## Persistence And Services
@@ -161,9 +161,9 @@ Destructive daily/personal puzzle reset keys use a local confirmation flag. Sudo
 ## Tests
 
 - Pure state/input/render helper tests stay inline in `src/app/arcade/**`.
-- DB/service tests live under `late-ssh/tests/arcade/` and must use shared testcontainers helpers.
+- DB/service tests live in adjacent `svc_test.rs` files beside each game's `svc.rs`, using `crate::test_helpers::new_test_db` (chip payout tests sit at `src/app/games/chips/svc_test.rs`).
 - Root test policy still applies: agents do not run `cargo test`, `cargo nextest`, or `cargo clippy`.
-- App flow tests outside `tests/arcade/` may assert global Arcade navigation and render copy.
+- App flow tests in `src/app/*_test.rs` may assert global Arcade navigation and render copy.
 
 ## Known Gaps
 

@@ -70,7 +70,7 @@ Cross-module wiring (client side, outside this folder — the ~10 door touchpoin
 - `app/tick.rs`: `State::tick()` each app tick + return-to-`Games` once `!is_running() && !in_exit_grace()`.
 - `app/render.rs`: `DrawContext.dopewars_enabled`/`dopewars_state`, take/restore `dopewars_state` (like rebels/nethack) so the draw path can `set_viewport(content_area)` before blitting, the dispatch arm, and the title-bar credit + in-game `Ctrl-C quit` hint.
 - `app/input.rs`: hub launch arm (`set_screen` + `connect`, banner if disabled), dedicated-screen `Enter` launcher, and arrow/key dispatch no-ops (Running-mode bytes are forwarded raw upstream).
-- `config.rs`, `state.rs` (`SessionConfig`), `ssh.rs`, `session_bootstrap.rs`, `tests/helpers/mod.rs`: thread `dopewars_enabled`/`dopewars_host`/`dopewars_port`/`dopewars_secret`.
+- `config.rs`, `state.rs` (`SessionConfig`), `ssh.rs`, `session_bootstrap.rs`, `src/test_helpers.rs`: thread `dopewars_enabled`/`dopewars_host`/`dopewars_port`/`dopewars_secret`.
 
 ---
 
