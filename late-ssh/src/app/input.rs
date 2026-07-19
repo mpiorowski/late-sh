@@ -1315,6 +1315,17 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 /// World Cup screen keys: `Space` toggles overview/bracket and `j`/`k` (plus
 /// the down/up arrows) scroll the active view. Returns `false` for everything
 /// else so global navigation (Tab, page numbers, `?`, `q`, …) still works.
+/// The key byte a door launcher should see, if the event carries one. The vt
+/// parser emits printables as `Char` and control bytes (Enter, backspace) as
+/// `Byte`; the arcade-name claim prompt needs both.
+fn launcher_key_byte(event: &ParsedInput) -> Option<u8> {
+    match event {
+        ParsedInput::Byte(b) => Some(*b),
+        ParsedInput::Char(c) if c.is_ascii() => Some(*c as u8),
+        _ => None,
+    }
+}
+
 fn handle_worldcup_input(app: &mut App, event: &ParsedInput) -> bool {
     let byte = match event {
         ParsedInput::Byte(b) => *b,
@@ -1518,16 +1529,17 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
 
     if ctx.screen == Screen::Nethack {
         // Running-mode bytes never reach here (intercepted in handle_input), so
-        // this only handles the Launcher. Key bytes go to the launcher first:
-        // Enter plays, claims, or retries depending on the arcade-name state,
-        // and while the claim prompt is open typed bytes feed the compose
-        // buffer (a typed `q` must not fall through to the global quit).
-        // Unconsumed keys keep the normal global handling, so the launcher
-        // still behaves like a plain page.
-        if let ParsedInput::Byte(b) = event {
+        // this only handles the Launcher. Keys go to the launcher first: Enter
+        // plays, claims, or retries depending on the arcade-name state, and
+        // while the claim prompt is open typed characters feed the compose
+        // buffer (a typed `q` must not fall through to the global quit). The
+        // vt parser emits printables as `Char` and control bytes as `Byte`, so
+        // both must funnel in. Unconsumed keys keep the normal global
+        // handling, so the launcher still behaves like a plain page.
+        if let Some(b) = launcher_key_byte(event) {
             app.enter_nethack();
             if let Some(state) = app.nethack_state.as_mut()
-                && state.launcher_key(*b)
+                && state.launcher_key(b)
             {
                 return true;
             }
@@ -1536,17 +1548,12 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Dcss {
-        // Running-mode bytes never reach here (intercepted in handle_input), so
-        // this only handles the Launcher. Key bytes go to the launcher state
-        // machine: Enter plays, claims, or retries depending on where the
-        // arcade-name lookup stands, and while the claim prompt is open every
-        // printable feeds the compose buffer (a typed `q` must not fall through
-        // to the global quit). Unconsumed keys keep the normal global handling,
-        // so the launcher still behaves like a plain page.
-        if let ParsedInput::Byte(b) = event {
+        // Same as NetHack above: launcher-first key routing, with `Char` and
+        // `Byte` both funneled into the arcade-name state machine.
+        if let Some(b) = launcher_key_byte(event) {
             app.enter_dcss();
             if let Some(state) = app.dcss_state.as_mut()
-                && state.launcher_key(*b)
+                && state.launcher_key(b)
             {
                 return true;
             }
