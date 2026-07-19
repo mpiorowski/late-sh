@@ -95,6 +95,7 @@ Most of the NetHack door's invariants (§7 of its CONTEXT) apply verbatim — au
 
 - The `-name` playname keys the save; the arcade handle is therefore immutable once claimed (no rename path exists on purpose), and a claimed handle row must never be deleted or reassigned. It must stay ≤30 chars (crawl rejects longer names at the prompt — and `-name` bypasses the prompt, so an over-long name would misbehave, not error cleanly); `HANDLE_MAX_LEN` 20 keeps margin.
 - Keep `LANG`/`LC_ALL=C.UTF-8` in the child env: crawl's map uses Unicode glyphs through ncursesw, and a POSIX locale degrades the whole dungeon to mojibake.
+- The host must pass `-macro $HOME/.crawl/macros/<playname>/` (created before spawn). Without it crawl persists in-game keymaps/macros to one shared `$HOME/.crawl/macro.txt` (the per-name filename needs the `DGL_NAMED_MACRO_FILE` compile flag our plain build doesn't set), letting one player rebind keys for everyone. Saves/scores/logfile/morgues deliberately stay shared under HOME for the stats-publishing path.
 - On teardown with a live child, SIGHUP before any SIGKILL so the run is saved; `PtyHost::Drop` must not abort the bridge task. (Stakes are lower than nethack — no door-wide wedge — but a SIGKILLed run is a lost game and crawl's next launch shows a crash-recovery prompt.)
 - crawl wants ≥80x24; below that it draws a "terminal too small" notice itself. Don't add a late.sh-side size gate — the game's own messaging is the contract.
 
@@ -104,7 +105,7 @@ Most of the NetHack door's invariants (§7 of its CONTEXT) apply verbatim — au
 
 Root policy applies: agents run `cargo check --tests`; humans run the suite.
 
-Inline pure tests cover: `late-core` `models::arcade_handle` (shape + reserved rules), client+host `identity.rs` (derivation determinism + distinctness; add a cross-crate KAT fingerprint from the first real test run, mirroring nethack's), client `state.rs` (disabled connect no-op, forward without proxy no-op, mouse/paste stripping, F1 both encodings, exit grace, claim-prompt byte handling/caps/validation errors), host `playname.rs` (sanitize), host `server.rs` (`effective_term` fallback), hub `state.rs` (card order incl. DCSS).
+Inline pure tests cover: `late-core` `models::arcade_handle` (shape + reserved rules), client+host `identity.rs` (derivation determinism + distinctness + the cross-crate known-answer fingerprint pinning `late.sh/dcss/v1`, mirroring nethack's), client `state.rs` (disabled connect no-op, forward without proxy no-op, mouse/paste stripping, F1 both encodings, exit grace, claim-prompt byte handling/caps/validation errors), host `playname.rs` (sanitize), host `server.rs` (`effective_term` fallback), hub `state.rs` (card order incl. DCSS).
 
 ```bash
 cargo test -p late-dcss && cargo test -p late-ssh dcss
@@ -118,5 +119,4 @@ The PTY bridge and russh loops are process/network-bound and not unit-tested; ve
 
 - **Milestone awards from the host's files, not the screen.** crawl appends machine-readable lines to `~/.crawl/logfile` (game ends: wins with `ktyp=winning`) and `~/.crawl/milestones` (rune pickups, Zot entry, orb pickup) — a spoof-proof source nethack never had. An award pipe (chips/badges for a rune, the Orb, a win) should read those host-side and signal late-ssh, rather than scraping vt100. Needs a cross-crate signal path that deliberately doesn't exist yet.
 - Shared ghosts/scores already work (one playground), but nothing surfaces the shared scoreboard in the landing. crawl's `-scores` flag could feed it.
-- A KAT fingerprint test pinning the `late.sh/dcss/v1` derivation across the two crates (currently guarded by the weaker determinism tests + comments).
 - Per-user/global concurrency cap on the host pod if the envelope gets too loose (same posture as nethack: bounded 1:1 by late-ssh's conn caps today).
