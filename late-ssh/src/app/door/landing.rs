@@ -114,7 +114,7 @@ pub fn handle_launch_block(
 }
 
 const NAME_MODAL_WIDTH: u16 = 62;
-const NAME_MODAL_HEIGHT: u16 = 12;
+const NAME_MODAL_HEIGHT: u16 = 13;
 
 /// The one-time arcade-name claim modal, shared by every door that keys saves
 /// by the handle (DCSS, NetHack). Pops centered over the door landing the
@@ -146,7 +146,7 @@ pub fn draw_name_modal(
 
     let rows = Layout::vertical([
         Constraint::Length(1), // breathing room
-        Constraint::Length(2), // what this is
+        Constraint::Length(3), // what this is
         Constraint::Length(1), // gap
         Constraint::Length(1), // name input
         Constraint::Length(1), // gap
@@ -164,6 +164,12 @@ pub fn draw_name_modal(
         Line::from(Span::styled(
             "and public scores, and cannot be changed later.",
             Style::default().fg(theme::TEXT()),
+        )),
+        // Sequell and dcss-stats merge players by bare name across servers,
+        // so a common name inherits someone else's score history.
+        Line::from(Span::styled(
+            "Roguelike stat sites merge by name; pick one that's yours.",
+            Style::default().fg(theme::TEXT_FAINT()),
         )),
     ];
     frame.render_widget(Paragraph::new(intro).centered(), rows[1]);

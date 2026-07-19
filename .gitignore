@@ -39,3 +39,6 @@ chat_dumps/
 # DragonPrime 1.1.2). CC BY-NC-SA source: consult, never copy or commit.
 # Re-fetch: git clone --depth 1 https://github.com/jimlunsford/lotgd upstream-lotgd
 upstream-lotgd/
+
+# Symlink to personal AI guidelines (canonical copy in dotfiles).
+GUIDE.md
