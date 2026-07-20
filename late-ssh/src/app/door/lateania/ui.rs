@@ -587,7 +587,7 @@ fn room_panel(
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
-    lines.extend(side_text_wrap(&view.zone, theme::TEXT(), width));
+    lines.extend(side_text_wrap(&view.zone, LAT_TEXT, width));
     // The living-world clock: time of day and weather.
     lines.push(Line::from(Span::styled(
         format!("  {} · {}", view.time_of_day, view.weather),
@@ -2490,9 +2490,9 @@ fn summarize_names<'a>(names: impl Iterator<Item = &'a str>, visible: usize) -> 
 
 fn wrapped_log_line(kind: LogKind, text: &str, width: usize) -> Vec<Line<'static>> {
     let color = match kind {
-        LogKind::Room => theme::TEXT_DIM(),
+        LogKind::Room => LAT_TEXT_DIM,
         LogKind::Travel => theme::AMBER_DIM(),
-        LogKind::Normal => theme::TEXT(),
+        LogKind::Normal => LAT_TEXT,
         LogKind::Combat => theme::ERROR(),
         LogKind::System => theme::AMBER_DIM(),
         LogKind::Say => theme::CHAT_BODY(),
@@ -2598,7 +2598,7 @@ fn wrap(text: &str, width: usize) -> Vec<Line<'static>> {
         if line.len() + word.len() + 1 > width && !line.trim().is_empty() {
             out.push(Line::from(Span::styled(
                 line.clone(),
-                Style::default().fg(theme::TEXT_DIM()),
+                Style::default().fg(LAT_TEXT_DIM),
             )));
             line = String::from("  ");
         }
@@ -2608,7 +2608,7 @@ fn wrap(text: &str, width: usize) -> Vec<Line<'static>> {
     if !line.trim().is_empty() {
         out.push(Line::from(Span::styled(
             line,
-            Style::default().fg(theme::TEXT_DIM()),
+            Style::default().fg(LAT_TEXT_DIM),
         )));
     }
     out
@@ -2738,13 +2738,32 @@ fn follow_panel(
     (lines, sel_line)
 }
 
-fn rarity_color(rarity: &str) -> ratatui::style::Color {
+// Lateania reads in its own warm, parchment-toned prose so the world feels
+// distinct from the cool chat UI around it. Body/description text uses these;
+// headers, rarity, and interactables keep their own accents.
+const LAT_TEXT: Color = Color::Rgb(0xdc, 0xc9, 0xa4);
+const LAT_TEXT_DIM: Color = Color::Rgb(0xac, 0x9b, 0x79);
+
+// The established, widely-understood RPG item-rarity palette — fixed, iconic
+// hues so item and creature tiers read at a glance. Intentionally NOT
+// theme-driven: this is a convention players already know (common white,
+// uncommon green, rare blue, epic purple, legendary orange).
+const RARITY_COMMON: Color = Color::Rgb(0xff, 0xff, 0xff);
+const RARITY_UNCOMMON: Color = Color::Rgb(0x1e, 0xff, 0x00);
+const RARITY_RARE: Color = Color::Rgb(0x00, 0x70, 0xdd);
+const RARITY_EPIC: Color = Color::Rgb(0xa3, 0x35, 0xee);
+const RARITY_LEGENDARY: Color = Color::Rgb(0xff, 0x80, 0x00);
+
+/// Colour for an item (or a creature, by its rank) in the standard RPG rarity
+/// scheme, so tier reads instantly.
+fn rarity_color(rarity: &str) -> Color {
     match rarity {
-        "uncommon" => theme::SUCCESS(),
-        "rare" => theme::MENTION(),
-        "epic" => theme::AMBER_GLOW(),
-        "legendary" => theme::BADGE_GOLD(),
-        _ => theme::TEXT(),
+        "uncommon" => RARITY_UNCOMMON,
+        "rare" => RARITY_RARE,
+        "epic" => RARITY_EPIC,
+        "legendary" => RARITY_LEGENDARY,
+        // "common" and anything unlabelled read as common white.
+        _ => RARITY_COMMON,
     }
 }
 
@@ -2778,7 +2797,21 @@ fn is_actionable_feature(kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_span, fit, inventory_item_tag, meter, score_dots, scroll_offset};
+    use super::{
+        compare_span, fit, inventory_item_tag, meter, rarity_color, score_dots, scroll_offset,
+    };
+    use ratatui::style::Color;
+
+    #[test]
+    fn rarity_color_uses_the_standard_rpg_palette() {
+        assert_eq!(rarity_color("common"), Color::Rgb(0xff, 0xff, 0xff));
+        assert_eq!(rarity_color("uncommon"), Color::Rgb(0x1e, 0xff, 0x00));
+        assert_eq!(rarity_color("rare"), Color::Rgb(0x00, 0x70, 0xdd));
+        assert_eq!(rarity_color("epic"), Color::Rgb(0xa3, 0x35, 0xee));
+        assert_eq!(rarity_color("legendary"), Color::Rgb(0xff, 0x80, 0x00));
+        // Anything unlabelled falls back to common white.
+        assert_eq!(rarity_color("mystery"), Color::Rgb(0xff, 0xff, 0xff));
+    }
     use unicode_width::UnicodeWidthStr;
 
     #[test]
