@@ -8,7 +8,6 @@ use ratatui::{
 
 use super::state::HubGame;
 use crate::app::common::{primitives::hint_line, theme};
-use crate::app::files::terminal_image::{TerminalImageFrame, TerminalImageProtocol};
 
 /// View data the renderer needs for one frame of the Games hub.
 pub struct HubView {
@@ -19,17 +18,11 @@ pub struct HubView {
     pub dcss_enabled: bool,
     pub usurper_enabled: bool,
     pub dopewars_enabled: bool,
-    pub terminal_image_protocol: Option<TerminalImageProtocol>,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
 }
 
-pub fn draw_games_hub(
-    frame: &mut Frame,
-    area: Rect,
-    view: &HubView,
-    terminal_images: &mut TerminalImageFrame,
-) {
+pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
     if area.height < 6 || area.width < 40 {
         frame.render_widget(
             Paragraph::new("Terminal too small for Games")
@@ -55,16 +48,14 @@ pub fn draw_games_hub(
     draw_selector_row(frame, layout[1], selected);
     frame.render_widget(full_rule(layout[2].width), layout[2]);
 
-    // The selected game owns the body, rendered with its real two-column
-    // landing (logo, stats, native banner/art) so it fills the width.
+    // The selected game owns the body, rendered with its real landing (logo,
+    // stats, actions) so it fills the width.
     match HubGame::ALL[selected] {
         HubGame::Lateania => crate::app::door::lateania::screen::draw_landing(
             frame,
             layout[3],
             view.delete_confirm,
             view.lateania_online,
-            view.terminal_image_protocol,
-            terminal_images,
         ),
         HubGame::Rebels => {
             crate::app::door::rebels::render::draw_landing(frame, layout[3], view.rebels_enabled);

@@ -1258,10 +1258,8 @@ impl App {
                         dcss_enabled: ctx.dcss_enabled,
                         usurper_enabled: ctx.usurper_enabled,
                         dopewars_enabled: ctx.dopewars_enabled,
-                        terminal_image_protocol: ctx.terminal_image_protocol,
                         lateania_online: ctx.lateania_online,
                     },
-                    terminal_images,
                 );
             }
             Screen::Lateania => {
@@ -1272,7 +1270,6 @@ impl App {
                         delete_confirm: ctx.door_delete_confirm,
                         state: ctx.lateania_state,
                         usernames: ctx.usernames,
-                        terminal_image_protocol: ctx.terminal_image_protocol,
                         online: ctx.lateania_online,
                     },
                     terminal_images,
