@@ -1,9 +1,10 @@
 # Door Games & MUDs - Candidate Research
 
 Investigation notes for slowly adding more door games / MUDs to late.sh.
-Status: **research notes.** Last updated 2026-07-20 (twclone protocol spike
-done: full repo audit + local build, findings in the deep dive below; local
-clone kept at `~/projects/twclone`).
+Status: **research notes.** Last updated 2026-07-21 (roadmap re-cut: Brogue CE
+is the next door, one marketing beat before the Green Dragon push (see root
+`DRAGON.md`); TradeWars/twclone re-parked as future season/event content
+despite a green spike; museum wing passed on).
 
 ## TL;DR
 
@@ -228,6 +229,11 @@ ever want the gladiator-arena vibe, a **native Rust original** inspired by it
 (mechanics aren't copyrightable) is the only sane route - and at that point it's
 really a new Lateania-style game, not "The Pit."
 
+**Resolved 2026-07-21:** the gladiator vibe is absorbed into the Green Dragon
+plan instead - a town arena where player characters fight each other, results
+called into #lounge (see root `DRAGON.md`, we-own-it liberties). Gladiators
+fighting is a mechanic, not a door; The Pit stays red and stays unhosted.
+
 ## Recommended order of attack
 
 1. **dopewars** - **done, shipped.** GPL, terminal-native. Runs as its own
@@ -248,12 +254,24 @@ really a new Lateania-style game, not "The Pit."
    Dragon door: an in-process Rust remake of LoGD with per-user persistent
    characters (pattern 1, Lateania-style). See
    `late-ssh/src/app/door/greendragon/CONTEXT.md`.
-5. **TradeWars via twclone** - the most-requested game, finally tractable.
-   Run the GPL-2 twclone server next to our Postgres and write a native Rust
-   JSON client. More work than dopewars but no licensing/DOS/BBS nightmare, and
-   the payoff is the game people keep asking for. **Protocol spike done
-   2026-07-20 (see deep dive): verdict green**, protocol is structured data
-   end to end, Postgres coexists on our instance, caveats are all handleable.
+5. **Brogue CE** - **next up (decided 2026-07-21).** The one-more-game
+   marketing beat before the Green Dragon push: NetHack/DCSS host shape
+   reused almost verbatim (new host crate + image + screen), short gorgeous
+   interruptible runs that fit the ambient format, and the best screenshots a
+   terminal can produce. Caveats for the build: per-user save/highscore dir
+   handling like the other hosts, and no machine-readable milestone files
+   (unlike DCSS), so v1 ships without awards, like dopewars did. Museum wing
+   (Rogue/Hack/Umoria) was considered for the same slot and passed on.
+6. **TradeWars via twclone** - **parked until it can be a season.** Protocol
+   spike done 2026-07-20 (see deep dive): verdict green on the tech
+   (structured-data protocol end to end, Postgres coexists on our instance,
+   caveats handleable). Parked anyway: an always-on persistent universe is
+   appointment gaming that needs player density we don't have; at ~30
+   concurrent it's an empty 500-sector world, and its stories (ambushes, corp
+   wars) all require other players. The right format is **event content after
+   the dragon ships**: a fresh small universe per season (`bigbang` makes
+   regeneration cheap), a daily turn ration, "highest net worth by Sunday",
+   #lounge coronation, universe dies. Do not build the always-on version.
 MUDs are intentionally **not** in this list anymore - see Parked below.
 
 ## Open questions before building anything
