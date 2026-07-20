@@ -1,4 +1,4 @@
-use crate::app::common::splash_tips::{NEW_AND_RETURNING_TIPS, RETURNING_USER_TIPS, choose_splash_hint, tip_candidates};
+use super::*;
 
 #[test]
 fn new_users_only_receive_shared_tip_candidates() {

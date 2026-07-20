@@ -1,3 +1,4 @@
+use ratatui::layout::Rect;
 use crate::app::chat::svc::DiscoverRoomItem;
 use crate::app::chat::discover::ui::*;
 use crate::app::chat::svc::PreviewMessage;

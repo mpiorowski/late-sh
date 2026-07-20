@@ -1,4 +1,4 @@
-use ratatui_textarea::{Input, Key};
+use ratatui_textarea::Key;
 use crate::app::common::readline::*;
 
 #[test]

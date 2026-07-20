@@ -1,3 +1,4 @@
+use ratatui::layout::Rect;
 use crate::app::arcade::ui::*;
 
 #[test]

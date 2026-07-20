@@ -32,9 +32,6 @@ mod primitives_test;
 mod readline_test;
 
 #[cfg(test)]
-mod splash_tips_test;
-
-#[cfg(test)]
 mod textarea_input_test;
 
 #[cfg(test)]

@@ -1,4 +1,6 @@
+use ratatui::style::{Modifier, Style};
 use crate::app::common::mentions::*;
+use crate::app::common::theme;
 
 #[test]
 fn extract_single_mention() {

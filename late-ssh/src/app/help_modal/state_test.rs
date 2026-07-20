@@ -1,4 +1,4 @@
-use super::data::{HelpTopic, lines_for};
+use super::data::HelpTopic;
 use ratatui::layout::Rect;
 use crate::app::help_modal::state::*;
 

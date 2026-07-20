@@ -1,5 +1,5 @@
-use crate::app::input::{ParsedInput, sanitize_paste_markers};
-use ratatui_textarea::{CursorMove, TextArea};
+use crate::app::input::ParsedInput;
+use ratatui_textarea::TextArea;
 use crate::app::common::textarea_input::*;
 
 fn ta(text: &str) -> TextArea<'static> {

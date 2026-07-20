@@ -1,6 +1,6 @@
 use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier};
+use ratatui::layout::Rect;
 use crate::app::door::rebels::render::*;
 
 fn parser(rows: u16, cols: u16, bytes: &[u8]) -> vt100::Parser {

@@ -1,5 +1,5 @@
 use super::model::Character;
-use serde_json::{Value, json};
+use serde_json::json;
 use crate::app::door::greendragon::persist::*;
 
 #[test]

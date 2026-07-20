@@ -1,3 +1,5 @@
+use crate::app::icon_picker::{IconPickerState, IconPickerTab};
+use crate::app::icon_picker::catalog::{IconCatalogData, IconEntry, SectionView};
 use crate::app::icon_picker::picker::*;
 
 fn make_entry(name: &str) -> IconEntry {

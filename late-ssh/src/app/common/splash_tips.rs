@@ -44,4 +44,8 @@ pub(crate) fn choose_splash_hint(is_new_user: bool) -> String {
     candidates[idx].to_string()
 }
 
+#[cfg(test)]
+#[path = "splash_tips_test.rs"]
+mod splash_tips_test;
+
 

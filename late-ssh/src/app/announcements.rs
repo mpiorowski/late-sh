@@ -178,26 +178,3 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .split(vertical[0]);
     horizontal[0]
 }
-
-#[cfg(test)]
-mod tests {
-    use super::LoginAnnouncements;
-
-    #[test]
-    fn scroll_is_not_capped_to_message_count() {
-        let mut announcements = LoginAnnouncements {
-            room_id: uuid::Uuid::nil(),
-            messages: Vec::new(),
-            scroll_offset: 0,
-        };
-
-        announcements.scroll(20);
-        assert_eq!(announcements.scroll_offset, 20);
-
-        announcements.scroll(-3);
-        assert_eq!(announcements.scroll_offset, 17);
-
-        announcements.scroll(-99);
-        assert_eq!(announcements.scroll_offset, 0);
-    }
-}

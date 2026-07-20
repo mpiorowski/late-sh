@@ -1,4 +1,4 @@
-use super::state::{ModLogKind, ModLogLine, ModModalState};
+use super::state::ModModalState;
 use crate::app::mod_modal::ui::*;
 use ratatui::{Terminal, backend::TestBackend};
 

@@ -1,3 +1,4 @@
+use crate::app::worldcup::model::{Qual, Winner};
 use crate::app::worldcup::fotmob::*;
 
 const FIXTURE_HTML: &str = r##"<html><body>

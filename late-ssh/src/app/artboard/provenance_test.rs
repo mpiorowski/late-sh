@@ -1,4 +1,4 @@
-use dartboard_core::{Canvas, CanvasOp, CellValue, ColShift, Pos, RgbColor, RowShift};
+use dartboard_core::{Canvas, CanvasOp, Pos, RgbColor};
 use crate::app::artboard::provenance::*;
 
 #[test]

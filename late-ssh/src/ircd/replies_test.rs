@@ -1,4 +1,4 @@
-use irc_proto::{Command, Message, Prefix, Response};
+use irc_proto::{Command, Response};
 use crate::ircd::replies::*;
 
 #[test]

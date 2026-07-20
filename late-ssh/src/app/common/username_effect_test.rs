@@ -1,5 +1,6 @@
-use late_core::{MutexRecover, models::username_effect::UsernameEffect};
-use chrono::{DateTime, Utc};
+use ratatui::style::{Color, Style};
+use late_core::models::username_effect::UsernameEffect;
+use chrono::Utc;
 use uuid::Uuid;
 use chrono::Duration;
 use late_core::models::username_effect::{GlowColor, GradientPair};

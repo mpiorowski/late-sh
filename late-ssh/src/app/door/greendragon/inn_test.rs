@@ -1,4 +1,4 @@
-use super::model::{self, AddressStyle, Character};
+use super::model::Character;
 use crate::app::door::greendragon::inn::*;
 use rand::{SeedableRng, rngs::StdRng};
 

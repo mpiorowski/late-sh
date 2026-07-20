@@ -1,4 +1,5 @@
-use super::classes::Class;
+use crate::app::door::lateania::classes::Class;
+use crate::app::door::lateania::stats::AbilityScores;
 use uuid::Uuid;
 use crate::app::door::lateania::persist::*;
 

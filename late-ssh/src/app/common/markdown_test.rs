@@ -1,5 +1,10 @@
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use ratatui::{
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
+use unicode_width::UnicodeWidthStr;
 use crate::app::common::markdown::*;
+use crate::app::common::theme;
 
 fn lines_to_strings(lines: &[Line]) -> Vec<String> {
     lines

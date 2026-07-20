@@ -1,4 +1,4 @@
-use ratatui_textarea::{TextArea, WrapMode};
+use ratatui_textarea::WrapMode;
 use crate::app::common::composer::*;
 use crate::app::common::theme;
 

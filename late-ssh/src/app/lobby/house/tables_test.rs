@@ -1,3 +1,5 @@
+use crate::app::lobby::house::ssnake::settings::SsnakeSpeed;
+use crate::app::lobby::house::tron::settings::{TronMode, TronSpeed};
 use crate::app::lobby::house::tables::*;
 
 #[test]
