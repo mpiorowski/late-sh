@@ -23,7 +23,10 @@ fn seeds_missing_files_but_never_overwrites() {
     prepare_game_dir(seed.to_str().unwrap(), game.to_str().unwrap()).unwrap();
 
     // Missing file arrived; existing world data untouched.
-    assert_eq!(fs::read_to_string(game.join("USURPER.CFG")).unwrap(), "seed-cfg");
+    assert_eq!(
+        fs::read_to_string(game.join("USURPER.CFG")).unwrap(),
+        "seed-cfg"
+    );
     assert_eq!(
         fs::read_to_string(game.join("DATA/MONSTER.DAT")).unwrap(),
         "live-world"

@@ -281,9 +281,7 @@ pub(super) fn strip_input_noise(data: &[u8]) -> Vec<u8> {
                     continue;
                 }
                 // Linux-console F1-F5: ESC [ [ A..E
-                if rest.first() == Some(&b'[')
-                    && rest.len() >= 2
-                    && matches!(rest[1], b'A'..=b'E')
+                if rest.first() == Some(&b'[') && rest.len() >= 2 && matches!(rest[1], b'A'..=b'E')
                 {
                     i += 4;
                     continue;

@@ -67,11 +67,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
             crate::app::door::dcss::render::draw_landing(frame, layout[3], view.dcss_enabled);
         }
         HubGame::Usurper => {
-            crate::app::door::usurper::render::draw_landing(
-                frame,
-                layout[3],
-                view.usurper_enabled,
-            );
+            crate::app::door::usurper::render::draw_landing(frame, layout[3], view.usurper_enabled);
         }
         HubGame::GreenDragon => {
             crate::app::door::greendragon::screen::draw_landing(

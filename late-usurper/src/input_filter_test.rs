@@ -28,22 +28,22 @@ fn assert_every_split(input: &[u8], expected: &[u8]) {
 // The load-bearing sysop keys DDPlus binds in local mode: F2 chat, F7/F8 time
 // credit, F10 terminate. Each must vanish at every split.
 const PROTECTED: &[&[u8]] = &[
-    b"\x1bOP",     // F1 (SS3)
-    b"\x1bOQ",     // F2 (SS3)
-    b"\x1bOR",     // F3 (SS3)
-    b"\x1bOS",     // F4 (SS3)
-    b"\x1b[11~",   // F1 (CSI)
-    b"\x1b[12~",   // F2
-    b"\x1b[15~",   // F5
-    b"\x1b[17~",   // F6
-    b"\x1b[18~",   // F7
-    b"\x1b[19~",   // F8
-    b"\x1b[20~",   // F9
-    b"\x1b[21~",   // F10 -> HosedMessage; halt
-    b"\x1b[23~",   // F11
-    b"\x1b[24~",   // F12
-    b"\x1b[[A",    // F1 (linux console)
-    b"\x1b[[E",    // F5 (linux console)
+    b"\x1bOP",   // F1 (SS3)
+    b"\x1bOQ",   // F2 (SS3)
+    b"\x1bOR",   // F3 (SS3)
+    b"\x1bOS",   // F4 (SS3)
+    b"\x1b[11~", // F1 (CSI)
+    b"\x1b[12~", // F2
+    b"\x1b[15~", // F5
+    b"\x1b[17~", // F6
+    b"\x1b[18~", // F7
+    b"\x1b[19~", // F8
+    b"\x1b[20~", // F9
+    b"\x1b[21~", // F10 -> HosedMessage; halt
+    b"\x1b[23~", // F11
+    b"\x1b[24~", // F12
+    b"\x1b[[A",  // F1 (linux console)
+    b"\x1b[[E",  // F5 (linux console)
 ];
 
 #[test]

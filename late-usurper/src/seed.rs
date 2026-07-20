@@ -29,7 +29,9 @@ pub fn prepare_game_dir(seed_dir: &str, game_dir: &str) -> Result<()> {
         match fs::remove_file(&path) {
             Ok(()) => tracing::info!(file = %path.display(), "swept stale lock file at boot"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(file = %path.display(), error = ?e, "could not sweep stale lock file"),
+            Err(e) => {
+                tracing::warn!(file = %path.display(), error = ?e, "could not sweep stale lock file")
+            }
         }
     }
     Ok(())
@@ -71,9 +73,10 @@ fn copy_atomic(from: &Path, to: &Path) -> Result<()> {
     tmp_name.push(".seedtmp");
     let tmp = to.with_file_name(tmp_name);
     {
-        let mut src = fs::File::open(from).with_context(|| format!("opening {}", from.display()))?;
-        let mut dst = fs::File::create(&tmp)
-            .with_context(|| format!("creating temp {}", tmp.display()))?;
+        let mut src =
+            fs::File::open(from).with_context(|| format!("opening {}", from.display()))?;
+        let mut dst =
+            fs::File::create(&tmp).with_context(|| format!("creating temp {}", tmp.display()))?;
         std::io::copy(&mut src, &mut dst)
             .with_context(|| format!("streaming {} -> {}", from.display(), tmp.display()))?;
         dst.flush().ok();

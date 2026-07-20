@@ -27,7 +27,8 @@ pub fn write_door32(game_dir: &str, node: u16, playname: &str) -> Result<String>
     // node number. The game keys the player record on the uppercased real
     // name; time is per-session and generous (the game's own daily turn
     // limits are what actually bound play).
-    let contents = format!("0\n0\n38400\nlate.sh\n1\n{playname}\n{playname}\n100\n999\n1\n{node}\n");
+    let contents =
+        format!("0\n0\n38400\nlate.sh\n1\n{playname}\n{playname}\n100\n999\n1\n{node}\n");
     let path = dir.join("door32.sys");
     fs::write(&path, contents).with_context(|| format!("writing {}", path.display()))?;
     Ok(rel)
