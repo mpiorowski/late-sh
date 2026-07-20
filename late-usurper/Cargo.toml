@@ -1,0 +1,43 @@
+[package]
+name = "late-usurper"
+version = "0.1.0"
+edition = "2024"
+
+# Standalone host for the Usurper door game. Runs the real upstream Usurper
+# binary (Rick Parrish's Free Pascal port of the classic BBS door) on a PTY and
+# exposes it over SSH, so late-ssh reaches it as a network-proxied door (the
+# same shape as the nethack/dcss hosts). See
+# late-ssh/src/app/door/usurper/CONTEXT.md.
+
+[[bin]]
+name = "late-usurper"
+path = "src/main.rs"
+
+[features]
+# No-op: CI builds/tests the workspace with `--features otel`, which requires
+# every member to define the feature. This host has no telemetry deps of its own
+# (it logs via tracing-subscriber fmt), so `otel` is a no-op here. Wire real OTLP
+# exporters in if host-side traces/metrics are ever wanted.
+otel = []
+
+[dependencies]
+# Core Utils
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Async / Runtime
+tokio = { workspace = true }
+
+# SSH transport
+russh = { workspace = true }
+
+# Identity: shared-secret -> derived ed25519 client key (mirrors the other hosts)
+blake3 = { workspace = true }
+
+# Server host-key generation (matches late-ssh's RNG usage)
+getrandom = { workspace = true }
+
+# PTY allocation for the game child (openpty/setsid/TIOCSWINSZ) plus `signal`
+# for the teardown kill path. Linux-only host, so nix is an unconditional dep.
+nix = { workspace = true, features = ["term", "process", "signal"] }

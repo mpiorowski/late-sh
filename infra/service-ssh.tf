@@ -279,6 +279,31 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # Usurper is served by the late-usurper host pod (service-usurper.tf);
+          # late-ssh connects to it over SSH. HOST/PORT target that Service and
+          # SECRET (shared with the host) authorizes the connection.
+          env {
+            name  = "LATE_USURPER_ENABLED"
+            value = local.usurper_enabled
+          }
+          env {
+            name  = "LATE_USURPER_HOST"
+            value = local.usurper_service_host
+          }
+          env {
+            name  = "LATE_USURPER_PORT"
+            value = local.usurper_port
+          }
+          env {
+            name = "LATE_USURPER_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.usurper_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
           # --- Files / uploads ---
           env {
             name  = "LATE_FILES_S3_ENDPOINT"

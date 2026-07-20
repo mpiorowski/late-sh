@@ -6,6 +6,7 @@ members = [
     "late-dopewars",
     "late-nethack",
     "late-ssh",
+    "late-usurper",
     "late-web",
     "late-webview",
 ]
