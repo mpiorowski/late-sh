@@ -279,16 +279,22 @@ async fn bridge_loop(
     // can't spin the select loop.
     let mut watch_live = true;
 
+    // Authoritative, stream-stateful input sanitizer. This host is the trust
+    // boundary for client input, not the door's client-side strip: it drops the
+    // sysop function keys (F1-F12) the DDPlus local console binds and mouse/
+    // paste noise, and it retains an incomplete escape-sequence prefix across
+    // chunk boundaries so a split F10 can't reach the child. See input_filter.
+    let mut input_filter = crate::input_filter::InputFilter::new();
+
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
                 Some(Command::Input(bytes)) => {
-                    // Keep the input stream byte-clean for the game: it reads
-                    // CP437/ASCII, so multi-byte UTF-8 from the client (which
-                    // would arrive as high bytes the game misreads as CP437
-                    // glyph codes) is dropped; ASCII keys and the ESC-prefixed
-                    // arrow sequences pass through untouched.
-                    let filtered: Vec<u8> = bytes.into_iter().filter(|b| *b < 0x80).collect();
+                    // Sanitize before the bytes reach the child's tty: drop the
+                    // high bytes it can't read (CP437/ASCII game), the sysop
+                    // function keys, and mouse/paste noise, reassembling across
+                    // chunk boundaries. Arrow and nav sequences pass through.
+                    let filtered = input_filter.push(&bytes);
                     if filtered.is_empty() {
                         continue;
                     }

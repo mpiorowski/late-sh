@@ -20,6 +20,9 @@ mod host;
 mod identity;
 #[cfg(test)]
 mod identity_test;
+mod input_filter;
+#[cfg(test)]
+mod input_filter_test;
 mod nodes;
 #[cfg(test)]
 mod nodes_test;

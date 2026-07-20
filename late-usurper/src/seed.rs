@@ -44,9 +44,43 @@ fn copy_missing(seed: &Path, target: &Path) -> Result<()> {
             fs::create_dir_all(&to).with_context(|| format!("creating {}", to.display()))?;
             copy_missing(&from, &to)?;
         } else if !to.exists() {
-            fs::copy(&from, &to)
+            copy_atomic(&from, &to)
                 .with_context(|| format!("copying {} -> {}", from.display(), to.display()))?;
         }
     }
+    Ok(())
+}
+
+/// Copy `from` to `to` so an interrupted boot can never leave a half-written
+/// file at the final path. A crash mid-`fs::copy` would otherwise leave a
+/// truncated destination that the next boot's `!to.exists()` check treats as
+/// already-seeded, baking corruption into the shared world permanently.
+///
+/// Write to a sibling temp file, fsync it, then rename into place: the rename
+/// is atomic within the directory, so `to` only ever appears complete. The
+/// temp name is the final name with a `.seedtmp` suffix appended (not the
+/// extension replaced, so `X.DAT` and `X.CFG` never collide); a leftover temp
+/// from an earlier crash is overwritten by the next boot's create and never
+/// mistaken for a real seed file (the copy keys off the final name, not the
+/// temp).
+fn copy_atomic(from: &Path, to: &Path) -> Result<()> {
+    use std::ffi::OsString;
+    use std::io::Write;
+
+    let mut tmp_name: OsString = to.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".seedtmp");
+    let tmp = to.with_file_name(tmp_name);
+    {
+        let mut src = fs::File::open(from).with_context(|| format!("opening {}", from.display()))?;
+        let mut dst = fs::File::create(&tmp)
+            .with_context(|| format!("creating temp {}", tmp.display()))?;
+        std::io::copy(&mut src, &mut dst)
+            .with_context(|| format!("streaming {} -> {}", from.display(), tmp.display()))?;
+        dst.flush().ok();
+        dst.sync_all()
+            .with_context(|| format!("fsync {}", tmp.display()))?;
+    }
+    fs::rename(&tmp, to)
+        .with_context(|| format!("publishing {} -> {}", tmp.display(), to.display()))?;
     Ok(())
 }

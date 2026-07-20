@@ -32,6 +32,29 @@ fn seeds_missing_files_but_never_overwrites() {
 }
 
 #[test]
+fn seed_files_are_published_whole_over_a_stale_temp() {
+    // Simulate a crash mid-copy on an earlier boot: a leftover `.seedtmp`
+    // sits next to a file that never made it to its final name. The next boot
+    // must still produce the complete file at the final path and leave no temp
+    // behind, never a truncated final.
+    let root = tmpdir("atomic");
+    let seed = root.join("seed");
+    let game = root.join("game");
+    fs::create_dir_all(&seed).unwrap();
+    fs::create_dir_all(&game).unwrap();
+    let body = "x".repeat(50_000);
+    fs::write(seed.join("USURPER.CFG"), &body).unwrap();
+    // Leftover truncated temp from a prior interrupted boot.
+    fs::write(game.join("USURPER.CFG.seedtmp"), "half").unwrap();
+
+    prepare_game_dir(seed.to_str().unwrap(), game.to_str().unwrap()).unwrap();
+
+    assert_eq!(fs::read_to_string(game.join("USURPER.CFG")).unwrap(), body);
+    assert!(!game.join("USURPER.CFG.seedtmp").exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn sweeps_stale_locks_at_boot() {
     let root = tmpdir("sweep");
     let seed = root.join("seed");

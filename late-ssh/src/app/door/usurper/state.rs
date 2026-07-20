@@ -219,6 +219,11 @@ impl State {
     /// function keys. There is no F1 help remap here (the game has no
     /// universal help key; its menus are self-describing), so unlike
     /// nethack/dcss nothing is intercepted, only stripped.
+    ///
+    /// This strip is best-effort noise reduction. The authoritative F-key
+    /// filter is on the host (late-usurper `input_filter`), which is
+    /// stateful across chunk boundaries and cannot be bypassed by a raw SSH
+    /// client to the host or by splitting a sequence across two chunks.
     pub fn forward_input(&self, data: &[u8]) {
         if let Some(proxy) = &self.proxy {
             let filtered = strip_input_noise(data);
