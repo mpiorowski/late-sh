@@ -57,6 +57,11 @@ variable "DCSS_IMAGE_TAG" {
   type        = string
 }
 
+variable "USURPER_IMAGE_TAG" {
+  description = "Docker image for late-usurper, the Usurper door host (e.g., ghcr.io/org/late-usurper:sha-abc123)."
+  type        = string
+}
+
 # =============================================================================
 # SSH Host Key
 # =============================================================================
@@ -207,6 +212,17 @@ variable "DCSS_ENABLED" {
   validation {
     condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DCSS_ENABLED)))
     error_message = "DCSS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
+variable "USURPER_ENABLED" {
+  description = "Enable the Usurper door game CLIENT (service-ssh reaches the late-usurper host over SSH; the host pod is always deployed). Empty defaults to on."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.USURPER_ENABLED)))
+    error_message = "USURPER_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
   }
 }
 

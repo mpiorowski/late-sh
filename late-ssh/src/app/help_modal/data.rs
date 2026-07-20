@@ -155,7 +155,7 @@ pub fn bot_app_context() -> String {
         - The buzz sobers up on its own over time, no action needed: it decays 150 points an hour, so even a maxed-out binge is fully sober again in about a day.\n\
         - Drunk level tints the username label's background everywhere it appears (the Clubhouse floor and chat author labels alike), light green through yellow and orange to red as the level climbs.\n\
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Directory (5), and World Cup (6).\n\
-        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Green Dragon, dopewars, and Rebels; each is launched from there, not from its own top-level page.\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Usurper, Green Dragon, dopewars, and Rebels; each is launched from there, not from its own top-level page.\n\
         - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
@@ -181,7 +181,7 @@ pub fn bot_app_context() -> String {
 /// in depth, so anything past "which screen / which key" should route there.
 pub fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
-    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games), 3 Games hub (Lateania, NetHack, DCSS, Green Dragon, dopewars, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar), 6 World Cup (live scores).\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games), 3 Games hub (Lateania, NetHack, DCSS, Usurper, Green Dragon, dopewars, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar), 6 World Cup (live scores).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens Hub (Quests, Shop, Leaderboard, Events). Ctrl+Q opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake).\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
@@ -988,12 +988,11 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "  Bio               multiline markdown bio".to_string(),
         "  Themes            expanded theme browser".to_string(),
+        "  Tweaks            power-user toggles for appearance, compose, music, display, and startup"
+            .to_string(),
+        "  Account           link SSH keys across accounts, reset/revoke your IRC access token, or delete your account"
+            .to_string(),
         "  RSS               private RSS/Atom subscriptions".to_string(),
-        "  Account           link SSH keys across accounts, or delete your account".to_string(),
-        "  IRC access token  create, reset, or revoke the token used by IRC clients"
-            .to_string(),
-        "  Special           show-settings-on-connect toggle; unlocks after profile setup"
-            .to_string(),
         "".to_string(),
         "What you can set".to_string(),
         "  username".to_string(),
@@ -1004,8 +1003,8 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  background color, room list, and the Activity boxes toggle".to_string(),
-        "  right sidebar mode (on/off/custom) for Home and Arcade".to_string(),
+        "  Tweaks: background color, text brightness, right sidebar mode, room list, pet strip, composer send behavior, music mute-on-start, chat flag fallback, land on Home"
+            .to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "  IRC access token for external IRC clients".to_string(),
         "".to_string(),
@@ -1037,6 +1036,30 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "Account deletion".to_string(),
         "  Settings > Account > Delete Account opens delete confirmation; type DELETE to confirm".to_string(),
+        "".to_string(),
+        "Tweaks tab".to_string(),
+        "  Power-user toggles, grouped by area:".to_string(),
+        "  Appearance".to_string(),
+        "    Background color        theme background fill on/off; off keeps text colors on your terminal's own background"
+            .to_string(),
+        "    Text Brightness         nudge overall text brightness up or down".to_string(),
+        "    Right sidebar           on / off / custom for Home and Arcade; Custom opens a panel checklist"
+            .to_string(),
+        "    Room list               show/hide the Home room-list rail".to_string(),
+        "    Pet companion strip     show/hide the pet strip above the Lounge chat composer (pet owners only)"
+            .to_string(),
+        "  Compose".to_string(),
+        "    Send and keep open on Enter   Enter sends without closing the composer; while on, Alt+S becomes a no-op"
+            .to_string(),
+        "  Music".to_string(),
+        "    Start app with music muted    mutes the first paired audio client on each new session so music doesn't auto-play"
+            .to_string(),
+        "  Display".to_string(),
+        "    Chat flag text fallback       show text/boxed-letter labels instead of flag emoji in chat badges, Shop Flags, and World Cup"
+            .to_string(),
+        "  Startup".to_string(),
+        "    Land on Home page             land on Home (page 1) instead of the Clubhouse (page 0) when a session starts"
+            .to_string(),
         "".to_string(),
         "RSS tab".to_string(),
         "  j / k or arrows move through RSS rows".to_string(),

@@ -10,3 +10,4 @@ pub mod landing;
 pub mod lateania;
 pub mod nethack;
 pub mod rebels;
+pub mod usurper;

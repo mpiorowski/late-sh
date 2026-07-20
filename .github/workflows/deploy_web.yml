@@ -142,10 +142,32 @@ jobs:
           tag=$(kubectl get deployment late-dcss -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
 
+  get_usurper_image:
+    name: get_current_usurper_image_tag
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web')) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      usurper_image_tag: ${{ steps.usurper_image.outputs.image_tag }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: get_usurper_image_tag
+        id: usurper_image
+        run: |
+          tag=$(kubectl get deployment late-usurper -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
   terraform:
     name: terraform_apply
     if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web')) }}
-    needs: [build_web, get_ssh_image, get_nethack_image, get_dopewars_image, get_dcss_image]
+    needs: [build_web, get_ssh_image, get_nethack_image, get_dopewars_image, get_dcss_image, get_usurper_image]
     uses: ./.github/workflows/terraform.yml
     permissions:
       contents: read
@@ -156,6 +178,7 @@ jobs:
       nethack_image_tag: ${{ needs.get_nethack_image.outputs.nethack_image_tag }}
       dopewars_image_tag: ${{ needs.get_dopewars_image.outputs.dopewars_image_tag }}
       dcss_image_tag: ${{ needs.get_dcss_image.outputs.dcss_image_tag }}
+      usurper_image_tag: ${{ needs.get_usurper_image.outputs.usurper_image_tag }}
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
