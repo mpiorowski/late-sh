@@ -82,6 +82,10 @@ LATE_DCSS_ENABLED ?= 1                                      # Enable the DCSS do
 LATE_DCSS_HOST ?= service-dcss                              # late-dcss host (compose service name; 127.0.0.1 for a bare run)
 LATE_DCSS_PORT ?= 2325                                      # late-dcss SSH port
 LATE_DCSS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret authorizing late-ssh -> late-dcss
+LATE_USURPER_ENABLED ?= 1                                   # Enable the Usurper door game (1=on, 0=off)
+LATE_USURPER_HOST ?= service-usurper                        # late-usurper host (compose service name; 127.0.0.1 for a bare run)
+LATE_USURPER_PORT ?= 2326                                   # late-usurper SSH port
+LATE_USURPER_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret authorizing late-ssh -> late-usurper
 
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
@@ -179,6 +183,10 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_DCSS_HOST=$(LATE_DCSS_HOST)" >> .env
 	@echo "LATE_DCSS_PORT=$(LATE_DCSS_PORT)" >> .env
 	@echo "LATE_DCSS_SECRET=$(LATE_DCSS_SECRET)" >> .env
+	@echo "LATE_USURPER_ENABLED=$(LATE_USURPER_ENABLED)" >> .env
+	@echo "LATE_USURPER_HOST=$(LATE_USURPER_HOST)" >> .env
+	@echo "LATE_USURPER_PORT=$(LATE_USURPER_PORT)" >> .env
+	@echo "LATE_USURPER_SECRET=$(LATE_USURPER_SECRET)" >> .env
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env

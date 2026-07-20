@@ -18,6 +18,9 @@ on:
       dcss_image_tag:
         required: true
         type: string
+      usurper_image_tag:
+        required: true
+        type: string
       environment:
         required: false
         type: string
@@ -41,6 +44,7 @@ jobs:
       TF_VAR_NETHACK_IMAGE_TAG: ${{ inputs.nethack_image_tag }}
       TF_VAR_DOPEWARS_IMAGE_TAG: ${{ inputs.dopewars_image_tag }}
       TF_VAR_DCSS_IMAGE_TAG: ${{ inputs.dcss_image_tag }}
+      TF_VAR_USURPER_IMAGE_TAG: ${{ inputs.usurper_image_tag }}
       TF_VAR_DOCKER_CONFIG_JSON: ${{ secrets.DOCKER_CONFIG_JSON }}
       TF_VAR_SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
       TF_VAR_SSH_OPEN: ${{ vars.SSH_OPEN }}
@@ -63,6 +67,7 @@ jobs:
       TF_VAR_NETHACK_ENABLED: ${{ vars.NETHACK_ENABLED }}
       TF_VAR_DOPEWARS_ENABLED: ${{ vars.DOPEWARS_ENABLED }}
       TF_VAR_DCSS_ENABLED: ${{ vars.DCSS_ENABLED }}
+      TF_VAR_USURPER_ENABLED: ${{ vars.USURPER_ENABLED }}
       TF_VAR_VOICE_ENABLED: ${{ vars.VOICE_ENABLED }}
       TF_VAR_VOICE_ROOM: ${{ vars.VOICE_ROOM }}
       TF_VAR_LIVEKIT_SUBDOMAIN: ${{ vars.LIVEKIT_SUBDOMAIN }}

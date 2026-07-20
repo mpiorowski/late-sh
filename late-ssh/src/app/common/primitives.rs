@@ -65,6 +65,7 @@ pub enum Screen {
     Nethack,
     Dcss,
     Dopewars,
+    Usurper,
     GreenDragon,
     Artboard,
     Pinstar,
@@ -99,6 +100,7 @@ impl Screen {
             | Screen::Nethack
             | Screen::Dcss
             | Screen::Dopewars
+            | Screen::Usurper
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
@@ -119,6 +121,7 @@ impl Screen {
             | Screen::Nethack
             | Screen::Dcss
             | Screen::Dopewars
+            | Screen::Usurper
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
@@ -142,6 +145,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Nethack => "NetHack",
         Screen::Dcss => "DCSS",
         Screen::Dopewars => "dopewars",
+        Screen::Usurper => "Usurper",
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "Arcade",
         Screen::Artboard => "Artboard",
@@ -273,6 +277,7 @@ mod tests {
             Screen::Nethack,
             Screen::Dcss,
             Screen::Dopewars,
+            Screen::Usurper,
             Screen::GreenDragon,
         ] {
             assert_eq!(door.next(), Screen::Games);

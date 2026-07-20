@@ -1,0 +1,140 @@
+name: usurper
+
+# Dedicated CI/CD for the Usurper door, responsible only for the from-source
+# binaries and their standalone SSH host (late-usurper, twin of late-dcss):
+#   - build_validate: compile the usurper-build stage (Free Pascal build of
+#     USURPER.EXE + EDITOR.EXE plus the scripted EDITOR reset that generates
+#     the seed world data) and prove the artifacts landed. Runs on changes to
+#     the build and weekly, to catch upstream / checksum breakage early (the
+#     build fetches a pinned tarball from GitHub over the network).
+#   - build_runtime_usurper: build the runtime-usurper target (the late-usurper
+#     host image) to catch breakage in that stage on Dockerfile PRs. Nothing
+#     else builds runtime-usurper on PR.
+#   - verify_deployed: manual, per-environment. Confirms the live late-usurper
+#     deployment is rolled out and the door is enabled on service-ssh.
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - scripts/usurper_seed_data.py
+      - .github/workflows/usurper.yml
+  schedule:
+    - cron: "0 6 * * 4" # Thursdays 06:00 UTC (staggered a day after dcss')
+  workflow_dispatch:
+    inputs:
+      run_verify_deployed:
+        description: "Also verify the door is enabled on the live pod after building"
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: "Target environment for verify_deployed"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+permissions:
+  contents: read
+
+jobs:
+  build_validate:
+    name: build_validate_usurper_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build only the usurper-build stage and load it locally so we can probe
+      # the artifacts. The stage itself already asserts the binaries and the
+      # generated seed world files fail-closed; we re-prove them here.
+      - name: build_usurper_stage
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: usurper-build
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: usurper-build:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: smoke_test_artifacts
+        run: |
+          docker run --rm usurper-build:ci sh -c '
+            test -x /opt/usurper/bin/USURPER.EXE &&
+            test -x /opt/usurper/bin/EDITOR.EXE &&
+            test -s /opt/usurper/seed/DATA/MONSTER.DAT &&
+            test -s /opt/usurper/seed/DATA/NPCS.DAT &&
+            test -s /opt/usurper/seed/USURPER.CFG &&
+            test -s /opt/usurper/seed/TEXT/MAINMENU.ANS &&
+            test -s /opt/usurper/seed/COPYING'
+
+  build_runtime_usurper:
+    name: build_runtime_usurper_image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build the runtime-usurper target (the late-usurper host image) to catch
+      # breakage in that stage on Dockerfile PRs. We only prove it builds; it is
+      # not pushed here (deploy_usurper.yml builds and pushes the released
+      # image).
+      - name: build_runtime_usurper_target
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime-usurper
+          platforms: linux/amd64
+          push: false
+          tags: late-usurper:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  verify_deployed:
+    name: verify_deployed
+    needs: build_validate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_verify_deployed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment/late-usurper -n default --timeout=180s
+
+      - name: verify_door_enabled
+        run: |
+          # LATE_USURPER_ENABLED is a CLIENT flag: it lives on service-ssh
+          # (which reaches the host over SSH), NOT on the late-usurper host
+          # pod. Read it there, mirroring dcss.yml.
+          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
+          echo "service-ssh pod: ${POD}"
+          enabled=$(kubectl exec "${POD}" -- printenv LATE_USURPER_ENABLED || true)
+          echo "LATE_USURPER_ENABLED=${enabled}"
+          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) echo "door enabled" ;;
+            *) echo "::warning::Usurper door is not enabled (LATE_USURPER_ENABLED=${enabled})" ;;
+          esac

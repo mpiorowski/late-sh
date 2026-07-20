@@ -132,6 +132,7 @@ struct DrawContext<'a> {
     rebels_enabled: bool,
     nethack_enabled: bool,
     dcss_enabled: bool,
+    usurper_enabled: bool,
     dopewars_enabled: bool,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
@@ -140,6 +141,7 @@ struct DrawContext<'a> {
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
     dcss_state: Option<&'a mut crate::app::door::dcss::state::State>,
+    usurper_state: Option<&'a mut crate::app::door::usurper::state::State>,
     dopewars_state: Option<&'a mut crate::app::door::dopewars::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
@@ -891,6 +893,7 @@ impl App {
         let mut rebels_state_taken = self.rebels_state.take();
         let mut nethack_state_taken = self.nethack_state.take();
         let mut dcss_state_taken = self.dcss_state.take();
+        let mut usurper_state_taken = self.usurper_state.take();
         let mut dopewars_state_taken = self.dopewars_state.take();
 
         let pinstar_browser = if screen == Screen::Pinstar {
@@ -918,6 +921,7 @@ impl App {
                         rebels_enabled: self.rebels_enabled,
                         nethack_enabled: self.nethack_enabled,
                         dcss_enabled: self.dcss_enabled,
+                        usurper_enabled: self.usurper_enabled,
                         dopewars_enabled: self.dopewars_enabled,
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
@@ -925,6 +929,7 @@ impl App {
                         rebels_state: rebels_state_taken.as_mut(),
                         nethack_state: nethack_state_taken.as_mut(),
                         dcss_state: dcss_state_taken.as_mut(),
+                        usurper_state: usurper_state_taken.as_mut(),
                         dopewars_state: dopewars_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
@@ -1047,6 +1052,7 @@ impl App {
         self.rebels_state = rebels_state_taken;
         self.nethack_state = nethack_state_taken;
         self.dcss_state = dcss_state_taken;
+        self.usurper_state = usurper_state_taken;
         self.dopewars_state = dopewars_state_taken;
         draw_result?;
 
@@ -1250,11 +1256,10 @@ impl App {
                         rebels_enabled: ctx.rebels_enabled,
                         nethack_enabled: ctx.nethack_enabled,
                         dcss_enabled: ctx.dcss_enabled,
+                        usurper_enabled: ctx.usurper_enabled,
                         dopewars_enabled: ctx.dopewars_enabled,
-                        terminal_image_protocol: ctx.terminal_image_protocol,
                         lateania_online: ctx.lateania_online,
                     },
-                    terminal_images,
                 );
             }
             Screen::Lateania => {
@@ -1265,7 +1270,6 @@ impl App {
                         delete_confirm: ctx.door_delete_confirm,
                         state: ctx.lateania_state,
                         usernames: ctx.usernames,
-                        terminal_image_protocol: ctx.terminal_image_protocol,
                         online: ctx.lateania_online,
                     },
                     terminal_images,
@@ -1302,6 +1306,13 @@ impl App {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(content_area);
                     crate::app::door::dcss::render::draw_page(frame, content_area, state);
+                }
+            }
+            Screen::Usurper => {
+                if let Some(state) = ctx.usurper_state.as_deref_mut() {
+                    // Size the child PTY to the exact widget area before blitting.
+                    state.set_viewport(content_area);
+                    crate::app::door::usurper::render::draw_page(frame, content_area, state);
                 }
             }
             Screen::Dopewars => {
@@ -1557,6 +1568,17 @@ impl App {
                 state.entry_input(),
             );
         }
+        if screen == Screen::Usurper
+            && let Some(state) = ctx.usurper_state.as_deref()
+            && state.name_modal_visible()
+        {
+            crate::app::door::landing::draw_name_modal(
+                frame,
+                inner,
+                state.handle_status(),
+                state.entry_input(),
+            );
+        }
 
         if let Some(modal) = ctx.login_announcements {
             announcements::draw(frame, inner, modal);
@@ -1663,6 +1685,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                         | Screen::Rebels
                         | Screen::Nethack
                         | Screen::Dcss
+                        | Screen::Usurper
                         | Screen::Dopewars
                         | Screen::GreenDragon
                 ))
@@ -1686,6 +1709,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
         Screen::Dcss => "DCSS",
+        Screen::Usurper => "Usurper",
         Screen::Dopewars => "dopewars",
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
@@ -1754,6 +1778,26 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         if in_game {
             spans.push(Span::styled(
                 "· ? help · S save · Ctrl-Q abandon ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
+    if screen == Screen::Usurper {
+        spans.push(Span::styled(
+            "by usurper.info ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        // While a game is live, surface the leave key in the chrome (it sits
+        // outside the game grid, so it never covers glyphs). Players who
+        // skipped the launcher otherwise mash Esc trying to get out.
+        let in_game = ctx
+            .usurper_state
+            .as_deref()
+            .is_some_and(|state| state.is_running());
+        if in_game {
+            spans.push(Span::styled(
+                "\u{b7} menus list their keys \u{b7} Q quits at the main menus ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }

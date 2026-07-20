@@ -222,6 +222,11 @@ pub struct SessionConfig {
     /// Accessor for the account's arcade handle (the public door-game name;
     /// crawl's `-name`), claimed once from the DCSS launcher.
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
+    /// Usurper door game: reached over SSH like nethack (host `late-usurper`).
+    pub usurper_enabled: bool,
+    pub usurper_host: String,
+    pub usurper_port: u16,
+    pub usurper_secret: String,
     /// dopewars door game: reached over SSH like nethack (host `late-dopewars`).
     pub dopewars_enabled: bool,
     pub dopewars_host: String,
@@ -493,6 +498,15 @@ pub struct App {
     pub(crate) dcss_port: u16,
     pub(crate) dcss_secret: String,
     pub(crate) arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
+    pub(crate) usurper_state: Option<crate::app::door::usurper::state::State>,
+    /// Per-session TERM string (from the PTY request); the Usurper host pins
+    /// the child's TERM itself, this only sizes the request.
+    pub(crate) usurper_term: String,
+    /// Usurper door game: enable flag + host connection details (global Config).
+    pub(crate) usurper_enabled: bool,
+    pub(crate) usurper_host: String,
+    pub(crate) usurper_port: u16,
+    pub(crate) usurper_secret: String,
     pub(crate) dopewars_state: Option<crate::app::door::dopewars::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the dopewars
     /// host so curses gets a real terminfo entry.
@@ -1130,6 +1144,12 @@ impl App {
             dcss_port: config.dcss_port,
             dcss_secret: config.dcss_secret,
             arcade_handle_service: config.arcade_handle_service,
+            usurper_state: None,
+            usurper_term: config.term.clone(),
+            usurper_enabled: config.usurper_enabled,
+            usurper_host: config.usurper_host,
+            usurper_port: config.usurper_port,
+            usurper_secret: config.usurper_secret,
             dopewars_state: None,
             dopewars_term: config.term.clone(),
             dopewars_enabled: config.dopewars_enabled,
@@ -1336,6 +1356,28 @@ impl App {
         // Dropping the State drops the process; the host then SIGHUP-saves the
         // child crawl so the run resumes next launch.
         self.dcss_state = None;
+    }
+
+    pub(crate) fn enter_usurper(&mut self) {
+        if self.usurper_state.is_some() {
+            return;
+        }
+        self.usurper_state = Some(crate::app::door::usurper::state::State::new(
+            self.user_id,
+            self.usurper_host.clone(),
+            self.usurper_port,
+            self.usurper_secret.clone(),
+            self.usurper_term.clone(),
+            self.usurper_enabled,
+            self.repaint_signal.clone(),
+            Some(self.arcade_handle_service.clone()),
+        ));
+    }
+
+    fn leave_usurper(&mut self) {
+        // Dropping the State drops the process; the host then tears the child
+        // down (the game's state is already on disk in the shared world).
+        self.usurper_state = None;
     }
 
     pub(crate) fn enter_dopewars(&mut self) {
@@ -1557,6 +1599,9 @@ impl App {
             if screen == Screen::Dcss {
                 self.enter_dcss();
             }
+            if screen == Screen::Usurper {
+                self.enter_usurper();
+            }
             if screen == Screen::Dopewars {
                 self.enter_dopewars();
             }
@@ -1591,6 +1636,11 @@ impl App {
 
         if self.screen == Screen::Dcss {
             self.leave_dcss();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::Usurper {
+            self.leave_usurper();
             self.force_full_repaint();
         }
 
@@ -1632,6 +1682,9 @@ impl App {
         }
         if self.screen == Screen::Dcss {
             self.enter_dcss();
+        }
+        if self.screen == Screen::Usurper {
+            self.enter_usurper();
         }
         if self.screen == Screen::Dopewars {
             self.enter_dopewars();
@@ -1803,6 +1856,23 @@ impl App {
         }
         if self.screen == crate::app::common::primitives::Screen::Dcss
             && let Some(state) = self.dcss_state.as_ref()
+            && state.in_exit_grace()
+        {
+            return;
+        }
+        // Usurper: raw passthrough with no F1 remap (the game has no universal
+        // help key); the state's own forward_input strips mouse noise and the
+        // function keys (in DOOR32 local mode they are DDPlus sysop keys).
+        // Same post-exit input grace as the others.
+        if self.screen == crate::app::common::primitives::Screen::Usurper
+            && let Some(state) = self.usurper_state.as_ref()
+            && state.is_running()
+        {
+            state.forward_input(data);
+            return;
+        }
+        if self.screen == crate::app::common::primitives::Screen::Usurper
+            && let Some(state) = self.usurper_state.as_ref()
             && state.in_exit_grace()
         {
             return;
