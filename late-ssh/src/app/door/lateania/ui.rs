@@ -151,6 +151,8 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
     let cursor = cursor.min(Class::ALL.len() - 1);
+    let chosen = Class::ALL[cursor];
+    let accent = class_accent(chosen.name());
     let mut lines = vec![
         Line::from(Span::styled(
             "~ LATEANIA ~",
@@ -173,9 +175,11 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: u
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]),
-        score_row(view),
-        Line::raw(""),
     ];
+    // The rolled scores in the same rated rows as the character sheet, with the
+    // highlighted class's primary score glowing in its accent.
+    lines.extend(attribute_lines(view, primary_label(chosen.name()), accent));
+    lines.push(Line::raw(""));
     // One compact row per class; the highlighted one is expanded below.
     for (i, class) in Class::ALL.iter().enumerate() {
         let selected = i == cursor;
@@ -208,7 +212,6 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: u
         ]));
     }
     // Detail panel for the highlighted class.
-    let chosen = Class::ALL[cursor];
     lines.push(Line::raw(""));
     lines.push(Line::from(vec![
         Span::styled(
@@ -964,29 +967,56 @@ fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
 
 /// Middle column: the six ability scores as dot ratings, the class's primary
 /// score highlighted, then the passive trait.
-fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
-    let mut lines = vec![section("Attributes")];
-    let primary = primary_label(&view.class_name);
-    for (label, value, modifier) in view.scores.rows() {
+/// The six ability scores as rated rows: a star-rated header, then each
+/// score's value coloured by tier plus its own 5-star rating; the `primary`
+/// score glows in the class `accent`. Shared by the character sheet and the
+/// creation screen so the rolled fate reads the same as the finished hero.
+fn attribute_lines(view: &PlayerView, primary: &str, accent: Color) -> Vec<Line<'static>> {
+    let rows = view.scores.rows();
+    let avg = if rows.is_empty() {
+        0
+    } else {
+        rows.iter().map(|(_, v, _)| *v).sum::<i32>() / rows.len() as i32
+    };
+    let mut lines = vec![section_stars("Attributes", avg, 18, accent)];
+    for (label, value, modifier) in rows {
         let sign = if modifier >= 0 { "+" } else { "" };
         let is_primary = label == primary;
-        let (label_color, dot_color, weight) = if is_primary {
-            (accent, accent, Modifier::BOLD)
+        let label_color = if is_primary {
+            accent
         } else {
-            (theme::TEXT_DIM(), theme::CHAT_BODY(), Modifier::empty())
+            theme::TEXT_DIM()
         };
-        lines.push(Line::from(vec![
+        let weight = if is_primary {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
+        // The value coloured by tier (weak/faint → strong/green); the primary
+        // score's stars glow in the class accent, the rest in their tier colour.
+        let star_color = if is_primary {
+            accent
+        } else {
+            tier_color(value, 18)
+        };
+        let mut spans = vec![
             Span::styled(
                 format!("  {label} "),
                 Style::default().fg(label_color).add_modifier(weight),
             ),
             Span::styled(
                 format!("{value:>2}({sign}{modifier}) "),
-                Style::default().fg(theme::TEXT_BRIGHT()),
+                Style::default().fg(tier_color(value, 18)),
             ),
-            Span::styled(score_dots(value), Style::default().fg(dot_color)),
-        ]));
+        ];
+        spans.extend(star_rating(value, 18, star_color));
+        lines.push(Line::from(spans));
     }
+    lines
+}
+
+fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
+    let mut lines = attribute_lines(view, primary_label(&view.class_name), accent);
     lines.push(Line::raw(""));
     lines.push(section("Trait"));
     lines.push(Line::from(Span::styled(
@@ -1003,13 +1033,24 @@ fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
 
 /// Right column: combat numbers, revives, earned titles, and the XP meter.
 fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
-    let mut lines = vec![section("Combat")];
-    lines.push(stat("attack", format!("+{}", view.attack)));
-    lines.push(stat("armor", view.armor.to_string()));
+    // Combat rated by level; attack reads as offence (green), armour as
+    // defence (blue), split for clarity.
+    let mut lines = vec![section_stars("Combat", view.level, 50, accent)];
+    lines.push(stat_colored(
+        "attack",
+        format!("+{}", view.attack),
+        theme::SUCCESS(),
+    ));
+    lines.push(stat_colored(
+        "armor",
+        view.armor.to_string(),
+        theme::MENTION(),
+    ));
     if view.resurrection_cap > 0 {
-        lines.push(stat(
+        lines.push(stat_colored(
             "revives",
             format!("{}/{}", view.resurrections_left, view.resurrection_cap),
+            theme::AMBER(),
         ));
     }
     lines.push(Line::raw(""));
@@ -1055,7 +1096,12 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
 /// readout. Shown on both the full character sheet and the narrow panel; the `y`
 /// hint teaches how to work a node.
 fn skills_block(view: &PlayerView) -> Vec<Line<'static>> {
-    let mut lines = vec![section("Trades")];
+    let avg = if view.skills.is_empty() {
+        0
+    } else {
+        view.skills.iter().map(|s| s.level).sum::<i32>() / view.skills.len() as i32
+    };
+    let mut lines = vec![section_stars("Trades", avg, 50, theme::AMBER())];
     if view.skills.is_empty() {
         lines.push(Line::from(Span::styled(
             "  untrained",
@@ -1106,13 +1152,52 @@ fn meter_caption(cur: i32, max: i32) -> Line<'static> {
     ))
 }
 
-/// An ability score (4d6 range 3..=18) as an 8-cell dot rating.
-fn score_dots(value: i32) -> String {
-    const WIDTH: i32 = 8;
-    let filled = (value.clamp(0, 18) * WIDTH / 18).clamp(0, WIDTH);
-    (0..WIDTH)
-        .map(|i| if i < filled { '●' } else { '○' })
-        .collect()
+/// A 5-star rating: filled stars in `color`, the remainder dim. `value` is
+/// scored out of `max`.
+fn star_rating(value: i32, max: i32, color: Color) -> Vec<Span<'static>> {
+    const OF: i32 = 5;
+    let filled = if max <= 0 {
+        0
+    } else {
+        ((value.clamp(0, max) * OF + max / 2) / max).clamp(0, OF)
+    } as usize;
+    vec![
+        Span::styled("★".repeat(filled), Style::default().fg(color)),
+        Span::styled(
+            "☆".repeat(OF as usize - filled),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ),
+    ]
+}
+
+/// Colour a numeric attribute by how strong it is out of `max`: faint for a
+/// weak stat, amber for middling, green for strong — so strengths and
+/// weaknesses pop at a glance.
+fn tier_color(value: i32, max: i32) -> Color {
+    if max <= 0 {
+        return theme::TEXT_DIM();
+    }
+    let pct = value.clamp(0, max) * 100 / max;
+    if pct >= 66 {
+        theme::SUCCESS()
+    } else if pct >= 33 {
+        theme::AMBER()
+    } else {
+        theme::TEXT_DIM()
+    }
+}
+
+/// A section header carrying a 5-star rating, e.g. ` - Attributes ★★★☆☆`.
+fn section_stars(title: &str, value: i32, max: i32, accent: Color) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(" - ", Style::default().fg(theme::BORDER())),
+        Span::styled(
+            format!("{title} "),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    spans.extend(star_rating(value, max, accent));
+    Line::from(spans)
 }
 
 /// A filled progress meter (`█████░░░`) of the given cell width.
@@ -1309,8 +1394,11 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(stat("attack", view.attack.to_string()));
     lines.push(stat("armor", view.armor.to_string()));
     lines.push(Line::raw(""));
-    lines.push(section("Scores"));
-    lines.push(score_row(view));
+    lines.extend(attribute_lines(
+        view,
+        primary_label(&view.class_name),
+        class_accent(&view.class_name),
+    ));
     if view.resurrection_cap > 0 {
         lines.push(stat(
             "revives",
@@ -1412,22 +1500,6 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Optio
 }
 
 /// One compact line of the six ability scores with their modifiers.
-fn score_row(view: &PlayerView) -> Line<'static> {
-    let mut spans = vec![Span::raw("  ")];
-    for (label, value, modifier) in view.scores.rows() {
-        let sign = if modifier >= 0 { "+" } else { "" };
-        spans.push(Span::styled(
-            format!("{label} "),
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-        spans.push(Span::styled(
-            format!("{value}({sign}{modifier}) "),
-            Style::default().fg(theme::TEXT_BRIGHT()),
-        ));
-    }
-    Line::from(spans)
-}
-
 fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Abilities")];
     let mut sel_line = None;
@@ -2575,12 +2647,17 @@ fn section(title: &str) -> Line<'static> {
 }
 
 fn stat(label: &str, value: String) -> Line<'static> {
+    stat_colored(label, value, theme::TEXT_BRIGHT())
+}
+
+/// A `label   value` stat line with the value in a chosen colour.
+fn stat_colored(label: &str, value: String, color: Color) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("  {label:<7}"),
             Style::default().fg(theme::TEXT_DIM()),
         ),
-        Span::styled(value, Style::default().fg(theme::TEXT_BRIGHT())),
+        Span::styled(value, Style::default().fg(color)),
     ])
 }
 
@@ -2778,7 +2855,8 @@ fn is_actionable_feature(kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_span, fit, inventory_item_tag, meter, score_dots, scroll_offset};
+    use super::{compare_span, fit, inventory_item_tag, meter, scroll_offset, star_rating};
+    use ratatui::style::Color;
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -2807,13 +2885,20 @@ mod tests {
     }
 
     #[test]
-    fn score_dots_scale_from_empty_to_full() {
-        assert_eq!(score_dots(3).chars().filter(|c| *c == '●').count(), 1);
-        assert_eq!(score_dots(10).chars().filter(|c| *c == '●').count(), 4);
-        assert_eq!(score_dots(18), "●●●●●●●●");
-        // Every rating is exactly eight cells wide.
+    fn star_rating_fills_proportionally() {
+        let stars = |v, m| {
+            let spans = star_rating(v, m, Color::White);
+            let filled = spans[0].content.chars().filter(|c| *c == '★').count();
+            let empty = spans[1].content.chars().filter(|c| *c == '☆').count();
+            (filled, empty)
+        };
+        assert_eq!(stars(0, 18), (0, 5));
+        assert_eq!(stars(18, 18), (5, 0));
+        assert_eq!(stars(9, 18), (3, 2)); // (9*5 + 9) / 18 = 3
+        // Always exactly five stars, whatever the value.
         for v in 0..=18 {
-            assert_eq!(score_dots(v).chars().count(), 8);
+            let (f, e) = stars(v, 18);
+            assert_eq!(f + e, 5, "value {v}");
         }
     }
 
