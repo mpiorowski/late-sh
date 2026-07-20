@@ -1,5 +1,7 @@
 pub mod account_link;
 pub mod arcade_handle;
+#[cfg(test)]
+mod arcade_handle_test;
 pub mod artboard;
 pub mod artboard_ban;
 #[cfg(test)]
@@ -13,6 +15,8 @@ mod article_test;
 pub mod asterion;
 pub mod audio_ban;
 pub mod birthday;
+#[cfg(test)]
+mod birthday_test;
 pub mod blackjack;
 pub mod bonsai;
 #[cfg(test)]
@@ -31,6 +35,8 @@ mod chat_room_member_test;
 mod chat_room_test;
 pub mod chat_slow_mode;
 pub mod chips;
+#[cfg(test)]
+mod chips_test;
 pub mod daily_match;
 pub mod drinks;
 #[cfg(test)]
@@ -77,8 +83,12 @@ pub mod pinstar_diagram_member;
 pub mod pinstar_invite;
 pub mod profile;
 pub mod profile_award;
+#[cfg(test)]
+mod profile_award_test;
 pub mod quest;
 pub mod reward;
+#[cfg(test)]
+mod reward_test;
 pub mod room_ban;
 pub mod rss_entry;
 pub mod rss_feed;
