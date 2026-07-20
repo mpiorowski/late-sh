@@ -1,9 +1,9 @@
 # Door Games & MUDs - Candidate Research
 
 Investigation notes for slowly adding more door games / MUDs to late.sh.
-Status: **research notes.** Last updated 2026-07-20 (Usurper shipped as a door:
-`late-usurper` host + the Usurper screen; see
-`late-ssh/src/app/door/usurper/CONTEXT.md`).
+Status: **research notes.** Last updated 2026-07-20 (twclone protocol spike
+done: full repo audit + local build, findings in the deep dive below; local
+clone kept at `~/projects/twclone`).
 
 ## TL;DR
 
@@ -134,15 +134,75 @@ late.sh instead of being a blitted foreign terminal. The JSON protocol means no
 screen-scraping for milestones either (contrast NetHack, where we scrape vt100
 for the Amulet/ascension) - we read game state straight off the wire.
 
-**Open questions specific to twclone:**
-- Does its JSON protocol expose enough state to render a full TUI, or is the
-  bundled terminal client doing logic we'd have to reimplement? Read
-  `data/menus.json` + the protocol spec first.
-- Shared universe (one server, Lateania-style) vs. per-player - TW is
-  inherently a shared persistent universe, so this is one global instance, not
-  isolated NetHack-style sessions.
-- Does it want its **own** Postgres or can it share ours with a schema/db
-  separation? Prefer a separate database on the same instance.
+### Protocol spike results (2026-07-20, repo audit + local build)
+
+Audited the full repo (docs, both bundled clients, server source, SQL, test
+rig) and built it locally on Arch: `./configure && make` produces `server` and
+`bigbang` cleanly (needs `touch aclocal.m4 configure Makefile.in` first to
+stop autotools regen on fresh clones). Local reference clone: `~/projects/twclone`.
+
+**The key question is answered: YES, the protocol is data, not screens.**
+- Newline-delimited JSON over TCP (default port 1234), request/response
+  correlated by `id`/`reply_to`; frames without `reply_to` are async push
+  events (pub-sub via `subscribe.*`). Docs explicitly mandate "no prose inside
+  `data`": everything is codes/ids/enums, the client renders.
+- Menus are 100% client-side (`client/menus.json` is the Python client's own
+  config; the server never sees it). Our ratatui UI is unconstrained.
+- All game logic is server-side: trade math, combat, pathfinding
+  (`move.pathfind`), autopilot routes, economy. Both bundled clients (Python
+  menu client + the LLM-driven `ai_player` bot) are thin protocol clients
+  using zero hidden commands. A Rust client owns only rendering, input,
+  framing, and deserialization.
+- Command surface: **235 commands registered** in `src/server_loop.c` (the
+  shipped `published_commands.json` lists 177 and is stale). Move/trade/
+  combat/planets/citadels/corps/stock market/banking/tavern gambling/mail/
+  news/bounties/insurance are all real implementations with protocol-level
+  integration tests (`tests.v2/`, ~185 commands covered). Discover schemas at
+  runtime via `system.cmd_list` / `system.describe_schema`, NOT from the docs.
+- Identity: one TCP connection = one authenticated player (session token from
+  `auth.login`/`auth.register`). No single-socket multiplexing, so late-ssh
+  opens one connection per active door session. Fits the arcade-handle +
+  host-held random password pattern we already use for Usurper dropfiles.
+
+**Postgres: shares our instance fine.** Postgres is the only real backend
+(MySQL driver is a stub; server hard-fails on non-PG). Wants a dedicated
+database (unqualified names in `public`), no extensions, no pg_cron (cron is
+a DB table driven by its own engine), no superuser if we pre-create the DB and
+role. Config via a `bigbang.json` (libpq conninfo), not env vars. `bigbang` is
+the one-time universe generator (default 500 sectors).
+
+**Caveats found (none fatal, all handleable):**
+- **Plaintext password storage** (`repo_auth.c`: raw `strcmp` against a
+  `passwd` column). Contained for us: users never type a password, our host
+  mints random per-user credentials, and the server sits on the internal
+  network. Never expose port 1234 publicly.
+- **One blocking libpq connection per client thread**: 100 players = 100 PG
+  backends. Upstream's answer is pgbouncer (their deploy script even ships a
+  hardcoded password - ignore it, we do our own deploy). Our concurrent door
+  sessions will be small; a hard client cap or pgbouncer in the pod solves it.
+- **Ships a dev build**: `bin/Makefile.am` bakes in ASan/UBSan. Strip
+  sanitizers for the prod image.
+- **Server auto-generates a universe if the DB looks empty** - point the
+  conninfo carefully.
+- Docs are partly aspirational and contradict the wire (e.g. `passwd` vs
+  `password`, money fields int-or-string, police bribe/surrender and bank
+  standing orders are stubs, federation/S2S is not real). Trust the runtime
+  schema endpoints and `tests.v2/`, not the markdown.
+- **Project pulse**: solo, heavily AI-assisted development; quiet since
+  2026-02-14; 175 open issues (P0s are mostly a localisation epic + test
+  infra, not broken gameplay; 42 "canon" deviations from real TW2002 open).
+  Plan to pin a commit and treat it as ours to patch (GPL-2; the README
+  claims the rewrite is MIT but COPYING/LICENSE both say GPLv2 - either way
+  fine, we run it as a separate process).
+
+**Integration shape:** twclone server + own PG database as one pod (own
+image, sanitizers stripped, TLS off - internal network, SSH fronts it);
+`door/tradewars` native ratatui client in late-ssh speaking NDJSON over TCP;
+one shared persistent universe (Lateania-style, not per-player); milestones
+and achievements read straight off the wire (no scraping). Effort sits
+between dopewars and a native port: no game to design, but a full multi-panel
+TUI to build. Start with the core loop (sector view, warp, port trade, ship,
+bank) and grow toward planets/corps/stardock.
 
 ## The Pit (the gladiator one)
 
@@ -184,16 +244,16 @@ really a new Lateania-style game, not "The Pit."
    scripting the EDITOR's Reset Game at image build. First rollout must be
    `deploy_usurper.yml` (it builds the image). See
    `late-ssh/src/app/door/usurper/CONTEXT.md`.
-4. **Legend of the Green Dragon** - the marquee "this is basically LORD" feature,
-   but budget real effort: it's a web app, so either a native Rust port
-   (Lateania-style) or a TUI shim over the PHP backend. Decide pattern before
-   starting.
+4. **Legend of the Green Dragon** - **done, shipped** as the native Green
+   Dragon door: an in-process Rust remake of LoGD with per-user persistent
+   characters (pattern 1, Lateania-style). See
+   `late-ssh/src/app/door/greendragon/CONTEXT.md`.
 5. **TradeWars via twclone** - the most-requested game, finally tractable.
    Run the GPL-2 twclone server next to our Postgres and write a native Rust
    JSON client. More work than dopewars but no licensing/DOS/BBS nightmare, and
-   the payoff is the game people keep asking for. It's still a v1.0.0-rc1 with
-   big systems deferred, so do the protocol spike first (see deep dive) before
-   committing.
+   the payoff is the game people keep asking for. **Protocol spike done
+   2026-07-20 (see deep dive): verdict green**, protocol is structured data
+   end to end, Postgres coexists on our instance, caveats are all handleable.
 MUDs are intentionally **not** in this list anymore - see Parked below.
 
 ## Open questions before building anything
