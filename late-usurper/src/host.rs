@@ -224,7 +224,10 @@ async fn run_bridge(
 
     match stop {
         StopReason::ChildExited => {
-            tracing::debug!(node = cfg.node.number(), "usurper child exited; closing channel");
+            tracing::debug!(
+                node = cfg.node.number(),
+                "usurper child exited; closing channel"
+            );
         }
         StopReason::Teardown => {
             // Client hung up or the host is shutting down with the game still

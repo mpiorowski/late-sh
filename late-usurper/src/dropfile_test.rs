@@ -12,7 +12,10 @@ fn writes_local_mode_dropfile_with_identity() {
     assert_eq!(rel, "DROP/3/");
     let written = fs::read_to_string(root.join("DROP/3/door32.sys")).unwrap();
     let lines: Vec<&str> = written.lines().collect();
-    assert_eq!(lines[0], "0", "comm type must be 0 = local (PTY, no socket)");
+    assert_eq!(
+        lines[0], "0",
+        "comm type must be 0 = local (PTY, no socket)"
+    );
     assert_eq!(lines[5], "Gnoll_Fan", "real name carries the identity");
     assert_eq!(lines[6], "Gnoll_Fan");
     assert_eq!(lines[9], "1", "ANSI emulation");

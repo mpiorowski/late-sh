@@ -396,9 +396,13 @@ async fn ensure_period_assignments(
         if existing_slots.contains(slot) {
             continue;
         }
-        let Some(template) =
-            choose_template(&templates, cadence, period_start, *slot, &selected_templates)
-        else {
+        let Some(template) = choose_template(
+            &templates,
+            cadence,
+            period_start,
+            *slot,
+            &selected_templates,
+        ) else {
             continue;
         };
 
@@ -1041,7 +1045,12 @@ mod tests {
             template("easy_sudoku", "easy", "puzzle", "daily_puzzle_win"),
             template("medium_sudoku", "medium", "puzzle", "daily_puzzle_win"),
             template("medium_2048", "medium", "arcade", "arcade_score"),
-            template("solve_rubiks_cube", "medium", "arcade", "arcade_puzzle_solved"),
+            template(
+                "solve_rubiks_cube",
+                "medium",
+                "arcade",
+                "arcade_puzzle_solved",
+            ),
         ];
         let easy_pick = templates[0].id;
 

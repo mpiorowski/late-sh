@@ -78,10 +78,26 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         )),
         legend_credentials(),
         Line::from(""),
-        landing::stat("world", "one shared realm; every player walks the same town", 8),
-        landing::stat("daily", "turns refresh each day; a session is a quick visit", 8),
-        landing::stat("gangs", "form teams, brawl rivals, hold the town together", 8),
-        landing::stat("throne", "dethrone the king, or reach the darkest dungeon", 8),
+        landing::stat(
+            "world",
+            "one shared realm; every player walks the same town",
+            8,
+        ),
+        landing::stat(
+            "daily",
+            "turns refresh each day; a session is a quick visit",
+            8,
+        ),
+        landing::stat(
+            "gangs",
+            "form teams, brawl rivals, hold the town together",
+            8,
+        ),
+        landing::stat(
+            "throne",
+            "dethrone the king, or reach the darkest dungeon",
+            8,
+        ),
         Line::from(""),
         flavor_headline(),
         flavor_quote(),
@@ -92,7 +108,11 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
     lines.extend([
         Line::from(""),
         landing::heading("Once Inside"),
-        landing::hint("menus", "every screen lists its own keys; letters choose", 8),
+        landing::hint(
+            "menus",
+            "every screen lists its own keys; letters choose",
+            8,
+        ),
         landing::hint("Q", "quit to the hub from the main menus", 8),
         landing::hint("size", "a classic 80x25 screen; keep the window roomy", 8),
         Line::from(""),
