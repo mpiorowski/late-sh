@@ -193,3 +193,6 @@ fn new_search_textarea() -> TextArea<'static> {
     ta.set_wrap_mode(WrapMode::None);
     ta
 }
+
+#[cfg(test)]
+mod picker_test;

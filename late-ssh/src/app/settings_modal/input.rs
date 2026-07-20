@@ -604,16 +604,6 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "input_test.rs"]
+mod input_test;
 
-    #[test]
-    fn close_keys_include_esc_and_q() {
-        assert!(is_close_event(&ParsedInput::Byte(0x1B)));
-        assert!(is_close_event(&ParsedInput::Char('q')));
-        assert!(is_close_event(&ParsedInput::Char('Q')));
-        assert!(is_close_event(&ParsedInput::Byte(b'q')));
-        assert!(is_close_event(&ParsedInput::Byte(b'Q')));
-        assert!(!is_close_event(&ParsedInput::Char('?')));
-    }
-}

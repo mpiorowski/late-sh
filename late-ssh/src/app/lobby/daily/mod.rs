@@ -16,3 +16,6 @@ pub mod state;
 pub mod svc;
 #[cfg(test)]
 mod svc_test;
+
+#[cfg(test)]
+mod games_test;
