@@ -23,22 +23,10 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     draw_landing(frame, area, state.is_enabled());
 }
 
-/// Two-column Rebels landing (copy left, ship art right), used by both the
-/// standalone screen fallback and the Games hub when Rebels is selected.
+/// Rebels landing, used by both the standalone screen fallback and the Games
+/// hub when Rebels is selected.
 pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(if area.width >= 122 && area.height >= 20 {
-            [Constraint::Min(62), Constraint::Length(38)]
-        } else {
-            [Constraint::Min(0), Constraint::Length(0)]
-        })
-        .split(area);
-
-    draw_launch_copy(frame, layout[0], enabled);
-    if layout.len() > 1 && layout[1].width > 0 {
-        draw_sky_art(frame, layout[1]);
-    }
+    draw_launch_copy(frame, area, enabled);
 }
 
 fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
@@ -105,31 +93,6 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_sky_art(frame: &mut Frame, area: Rect) {
-    let inner = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(12),
-            Constraint::Length(2),
-            Constraint::Min(0),
-        ])
-        .split(area);
-
-    frame.render_widget(Paragraph::new(spaceship_ascii()), inner[1]);
-    frame.render_widget(
-        Paragraph::new(vec![
-            landing::heading("Starter ships"),
-            Line::raw(""),
-            fact_line("Bresci", "fast shuttle"),
-            fact_line("Orwell", "sturdy pincher"),
-            fact_line("Ibarruri", "double-engine jester"),
-        ])
-        .wrap(Wrap { trim: false }),
-        inner[3],
-    );
-}
-
 fn rebels_logo() -> Vec<Line<'static>> {
     [
         "██████╗ ███████╗██████╗ ███████╗██╗     ███████╗",
@@ -151,26 +114,6 @@ fn rebels_logo() -> Vec<Line<'static>> {
     .collect()
 }
 
-fn spaceship_ascii() -> Vec<Line<'static>> {
-    [
-        "          .        *",
-        "    *                  .",
-        "              /\\",
-        "             /  \\",
-        "            /_==_\\",
-        "       ____/|_||_|\\____",
-        "   ___/  _    ||    _  \\___",
-        "  /___  /_\\___||___/_\\  ___\\",
-        "      \\____   ||   ____/",
-        "           \\__||__/",
-        "            /_||_\\",
-        "          ==  ||  ==",
-    ]
-    .into_iter()
-    .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::TEXT_DIM()))))
-    .collect()
-}
-
 fn game_stats() -> Vec<Line<'static>> {
     vec![
         landing::stat("remote ssh", "proxied live into this terminal", 12),
@@ -178,6 +121,11 @@ fn game_stats() -> Vec<Line<'static>> {
         landing::stat("style", "explore, crew up, settle it on the court", 12),
         Line::from(""),
         flavor_quote(),
+        Line::from(""),
+        landing::heading("Starter ships"),
+        fact_line("Bresci", "fast shuttle"),
+        fact_line("Orwell", "sturdy pincher"),
+        fact_line("Ibarruri", "double-engine jester"),
         Line::from(""),
         landing::heading("Launch"),
     ]

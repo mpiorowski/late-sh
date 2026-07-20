@@ -197,6 +197,31 @@ resource "kubernetes_secret_v1" "dcss_identity_secret" {
 }
 
 # =============================================================================
+# Usurper Door Identity Seed
+# =============================================================================
+# Shared secret authorizing late-ssh -> late-usurper. The same value is
+# injected into BOTH the service-ssh client (LATE_USURPER_SECRET) and the
+# late-usurper host pod, which each derive the same ed25519 key from it (see
+# late-usurper).
+
+resource "random_password" "usurper_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "usurper_identity_secret" {
+  metadata {
+    name = "usurper-identity-secret"
+  }
+
+  data = {
+    secret = random_password.usurper_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Icecast Passwords
 # =============================================================================
 
