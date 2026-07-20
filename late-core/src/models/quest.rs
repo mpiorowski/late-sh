@@ -378,19 +378,16 @@ async fn ensure_period_assignments(
 
     let rows = client
         .query(
-            "SELECT a.*, t.domain
-             FROM quest_assignments a
-             JOIN reward_templates t ON t.id = a.template_id
-             WHERE a.cadence = $1 AND a.period_start = $2",
+            "SELECT template_id, slot
+             FROM quest_assignments
+             WHERE cadence = $1 AND period_start = $2",
             &[&cadence, &period_start],
         )
         .await?;
     let mut selected_templates: Vec<Uuid> = Vec::new();
-    let mut selected_domains: Vec<String> = Vec::new();
     let mut existing_slots: Vec<i32> = Vec::new();
     for row in rows {
         selected_templates.push(row.get("template_id"));
-        selected_domains.push(row.get("domain"));
         existing_slots.push(row.get("slot"));
     }
 
@@ -399,14 +396,9 @@ async fn ensure_period_assignments(
         if existing_slots.contains(slot) {
             continue;
         }
-        let Some(template) = choose_template(
-            &templates,
-            cadence,
-            period_start,
-            *slot,
-            &selected_templates,
-            &selected_domains,
-        ) else {
+        let Some(template) =
+            choose_template(&templates, cadence, period_start, *slot, &selected_templates)
+        else {
             continue;
         };
 
@@ -421,7 +413,6 @@ async fn ensure_period_assignments(
             .await?;
         if inserted > 0 {
             selected_templates.push(template.id);
-            selected_domains.push(template.domain.clone());
             changed = true;
         }
     }
@@ -455,34 +446,12 @@ fn choose_template<'a>(
     period_start: NaiveDate,
     slot: i32,
     selected_templates: &[Uuid],
-    selected_domains: &[String],
 ) -> Option<&'a QuestTemplate> {
     let difficulty = slot_difficulty_preference(cadence, slot);
     let source = slot_source_preference(cadence, slot);
-    let mut pool = filtered_pool(
-        templates,
-        difficulty,
-        source,
-        selected_templates,
-        selected_domains,
-        true,
-    );
+    let mut pool = filtered_pool(templates, difficulty, source, selected_templates);
     if pool.is_empty() {
-        pool = filtered_pool(
-            templates,
-            difficulty,
-            source,
-            selected_templates,
-            selected_domains,
-            false,
-        );
-    }
-    if pool.is_empty() {
-        pool = templates
-            .iter()
-            .filter(|template| !selected_templates.contains(&template.id))
-            .filter(|template| source.is_none_or(|source| quest_source(template) == source))
-            .collect();
+        pool = filtered_pool(templates, None, source, selected_templates);
     }
     weighted_pick(&pool, cadence, period_start, slot)
 }
@@ -492,7 +461,9 @@ fn choose_template<'a>(
 /// a medium quest, the weekly slot a hard one — all from the arcade page
 /// (score/level runs plus the daily puzzles). The room-game templates were
 /// deactivated by migration 110; the Rooms demolition (phase 3) deletes
-/// their events.
+/// their events. Each slot rolls from the full difficulty bucket; there is no
+/// cross-slot domain avoidance, so an easy and a medium puzzle of the same
+/// family can both appear on the same day.
 fn slot_difficulty_preference(cadence: &str, slot: i32) -> Option<&'static str> {
     match (cadence, slot) {
         ("daily", 1) => Some("easy"),
@@ -529,15 +500,12 @@ fn filtered_pool<'a>(
     difficulty: Option<&str>,
     source: Option<QuestSource>,
     selected_templates: &[Uuid],
-    selected_domains: &[String],
-    avoid_domains: bool,
 ) -> Vec<&'a QuestTemplate> {
     templates
         .iter()
         .filter(|template| !selected_templates.contains(&template.id))
         .filter(|template| difficulty.is_none_or(|difficulty| template.difficulty == difficulty))
         .filter(|template| source.is_none_or(|source| quest_source(template) == source))
-        .filter(|template| !avoid_domains || !selected_domains.contains(&template.domain))
         .collect()
 }
 
@@ -1054,13 +1022,44 @@ mod tests {
             template("medium_other", "medium", "bonsai", "bonsai_watered"),
         ];
 
-        let slot_one = choose_template(&templates, "daily", period_start, 1, &[], &[]).unwrap();
-        let slot_two = choose_template(&templates, "daily", period_start, 2, &[], &[]).unwrap();
-        let weekly = choose_template(&templates, "weekly", period_start, 1, &[], &[]).unwrap();
+        let slot_one = choose_template(&templates, "daily", period_start, 1, &[]).unwrap();
+        let slot_two = choose_template(&templates, "daily", period_start, 2, &[]).unwrap();
+        let weekly = choose_template(&templates, "weekly", period_start, 1, &[]).unwrap();
 
         assert_eq!(slot_one.key, "easy_arcade");
         assert_eq!(slot_two.key, "medium_arcade");
         assert_eq!(weekly.key, "hard_arcade");
+    }
+
+    #[test]
+    fn medium_slot_keeps_same_domain_puzzles_after_easy_pick() {
+        // Regression: slot 1 (easy) always consumes a puzzle-domain quest. The
+        // medium slot must still be able to draw a medium *puzzle*, not only the
+        // arcade-score games. Domain avoidance used to lock every puzzle out of
+        // slot 2, leaving Rubik's Cube to dominate the medium draw.
+        let templates = vec![
+            template("easy_sudoku", "easy", "puzzle", "daily_puzzle_win"),
+            template("medium_sudoku", "medium", "puzzle", "daily_puzzle_win"),
+            template("medium_2048", "medium", "arcade", "arcade_score"),
+            template("solve_rubiks_cube", "medium", "arcade", "arcade_puzzle_solved"),
+        ];
+        let easy_pick = templates[0].id;
+
+        let pool = filtered_pool(
+            &templates,
+            Some("medium"),
+            Some(QuestSource::Arcade),
+            &[easy_pick],
+        );
+        let keys: Vec<&str> = pool.iter().map(|template| template.key.as_str()).collect();
+
+        assert_eq!(pool.len(), 3, "full medium bucket must remain: {keys:?}");
+        assert!(
+            keys.contains(&"medium_sudoku"),
+            "medium puzzle must stay eligible after an easy puzzle pick: {keys:?}"
+        );
+        assert!(keys.contains(&"medium_2048"));
+        assert!(keys.contains(&"solve_rubiks_cube"));
     }
 
     #[test]
