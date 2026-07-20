@@ -66,6 +66,26 @@ other players' actions against you generate tomorrow's stories.
   how). Possibly one guided first-fight beat in the existing clubhouse
   tutorial.
 
+### Chat encounters (the third surface, and the onboarding funnel)
+- The Discord-bot lesson (Mudae, Pokécord): those games won because they don't
+  compete with chat for attention, they ARE chat content. Something spawns in
+  the room, whoever's around reacts, everyone else watches. Zero coordination,
+  works at any concurrency, stronger the more people idle in chat: exactly our
+  population shape.
+- Applied here: a monster wanders into #lounge, first person to hit it fights
+  with their dragon character, gold lands on their sheet, the kill line ships
+  to the feed. Someone who never opened the door now owns a level-1 character
+  and has a reason to visit the forest.
+- One character system, multiple surfaces: the door screen and the chat are
+  two views of the same sheet. Never a separate progression/wallet for the
+  chat game; that's two identity systems fighting for one presence layer.
+- This solves the dragon's hardest problem (onboarding without a manual) and
+  the chat game's hardest problem (no depth behind the tap) in one move. It is
+  the headline feature of the dragon launch, not an add-on.
+- Spawn cadence is a feed-budget question (rare enough to be an event, not
+  wallpaper); encounters probably don't consume daily rations, they mint
+  curiosity for the surfaces that do.
+
 ### Offline PvP as the story engine
 - Attacking sleeping players, player mail, bar gossip about real player
   actions. My ten minutes creates content for your session.
@@ -79,6 +99,12 @@ other players' actions against you generate tomorrow's stories.
 ### We-own-it liberties (raw, unsorted)
 - Classes/titles that reference late.sh itself rather than straight LORD
   parity; combat-math parity is explicitly NOT the goal, the social layer is.
+- **The arena (The Pit's soul).** A town arena where your character fights
+  other players' characters, results called into #lounge. Gladiators-fighting
+  is a mechanic, not a door: this absorbs the whole "host The Pit" idea
+  (DOOR.md red list) for free inside the game we own. Could double as the
+  consent-friendly face of PvP (arena is opt-in spectacle, ambush is the
+  risky wild).
 - Economy bridge: gold vs chips needs a deliberate decision (probably keep
   gold internal, pay chips only at milestone/award moments; beware creating a
   printing press).
@@ -123,3 +149,10 @@ people a reason to show up daily; the seeded score window (everyone plays the
 same seed all week, top 3 get awards, zero pairing logic) is the first thing
 to un-park when that day comes. TradeWars/twclone research lives in DOOR.md
 (spike done, parked).
+
+Future ref, bigger than the dragon: **chat-native games as a genre** (the
+Mudae/Pokécord shape: spawn in chat, react to play, watch others play). The
+dragon's chat encounters are our first instance of it, deliberately fused to
+one character system. If they work, the genre generalizes: other spawn types,
+seasonal chat events, maybe games that live ONLY in chat. Keep the mechanism
+(spawn → first-reactor claims → feed line) generic enough to reuse.
