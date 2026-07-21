@@ -1388,7 +1388,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                     Span::styled("the door games, page 3", text),
                 ]),
                 Line::from(Span::styled(
-                    "Lateania · NetHack · DCSS · Green Dragon · dopewars · Rebels",
+                    "Lateania · NetHack · DCSS · Usurper · Green Dragon · dopewars · Rebels",
                     dim,
                 )),
             ],

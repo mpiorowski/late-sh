@@ -19,7 +19,7 @@ use super::{
     appearance,
     classes::Class,
     state::{Panel, State},
-    svc::{LogKind, PlayerView},
+    svc::{LogKind, PlayerView, SectionRow},
     world::{Dir, MapCell, MiniMap},
 };
 
@@ -151,6 +151,8 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
     let cursor = cursor.min(Class::ALL.len() - 1);
+    let chosen = Class::ALL[cursor];
+    let accent = class_accent(chosen.name());
     let mut lines = vec![
         Line::from(Span::styled(
             "~ LATEANIA ~",
@@ -173,10 +175,14 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: u
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]),
-        score_row(view),
-        Line::raw(""),
     ];
-    // One compact row per class; the highlighted one is expanded below.
+    // The rolled scores in the same rated rows as the character sheet, with the
+    // highlighted class's primary score glowing in its accent.
+    lines.extend(attribute_lines(view, primary_label(chosen.name()), accent));
+    lines.push(Line::raw(""));
+    // One compact row per class; the highlighted one is expanded directly below
+    // its row so cursor-following scroll keeps the choice and its details together.
+    let mut selected_detail_line = 0;
     for (i, class) in Class::ALL.iter().enumerate() {
         let selected = i == cursor;
         let marker = if selected { ">" } else { " " };
@@ -206,36 +212,44 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: u
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
+        if selected {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {} ", chosen.name()),
+                    Style::default()
+                        .fg(theme::AMBER_GLOW())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(
+                        "· {} · trait: {}",
+                        chosen.resource().label(),
+                        chosen.trait_name()
+                    ),
+                    Style::default().fg(theme::AMBER_DIM()),
+                ),
+            ]));
+            lines.push(Line::from(Span::styled(
+                format!("    {}", chosen.trait_desc()),
+                Style::default().fg(theme::TEXT()),
+            )));
+            selected_detail_line = lines.len() - 1;
+        }
     }
-    // Detail panel for the highlighted class.
-    let chosen = Class::ALL[cursor];
-    lines.push(Line::raw(""));
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!("{} ", chosen.name()),
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                "· {} · trait: {}",
-                chosen.resource().label(),
-                chosen.trait_name()
-            ),
-            Style::default().fg(theme::AMBER_DIM()),
-        ),
-    ]));
-    lines.push(Line::from(Span::styled(
-        format!("  {}", chosen.trait_desc()),
-        Style::default().fg(theme::TEXT()),
-    )));
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         "World by Tasmania - thanks to late.sh and its contributors.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
-    frame.render_widget(Paragraph::new(lines), area);
+    let off = scroll_offset(
+        0,
+        &lines,
+        Some(selected_detail_line),
+        area.width as usize,
+        area.height as usize,
+    );
+    let shown: Vec<Line<'static>> = lines.into_iter().skip(off).collect();
+    frame.render_widget(Paragraph::new(shown).wrap(Wrap { trim: false }), area);
 }
 
 /// The level-10 archetype crossroads: two permanent paths, picked with 1/2.
@@ -354,8 +368,8 @@ fn draw_side(
         Panel::Room => unreachable!("room panel is rendered by draw_room_side"),
         Panel::Character => (character_panel(view), None),
         Panel::Abilities => abilities_panel(view, state.cursor()),
-        Panel::Inventory => inventory_panel(view, state.cursor()),
-        Panel::Shop => shop_panel(view, state.cursor()),
+        Panel::Inventory => inventory_panel(&state.inv_rows(), view, state.cursor()),
+        Panel::Shop => shop_panel(&state.shop_rows(), view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
         Panel::Titles => titles_panel(view, state.cursor()),
         Panel::Quests => (quests_panel(view), None),
@@ -365,13 +379,14 @@ fn draw_side(
         Panel::Housing => housing_panel(view, state.cursor()),
         Panel::Portal => portal_panel(view, state.cursor()),
         Panel::Appearance => (appearance_panel(view, state.cursor()), None),
-        Panel::Crafting => crafting_panel(view, state.cursor()),
+        Panel::Crafting => crafting_panel(&state.craft_rows(), view, state.cursor()),
         Panel::Map => (atlas_panel(view), None),
     };
     let off = scroll_offset(
         state.list_scroll(),
-        lines.len(),
+        &lines,
         selected,
+        area.width as usize,
         area.height as usize,
     );
     state.set_list_scroll(off);
@@ -389,31 +404,108 @@ fn draw_side(
 /// to show).
 const LIST_SCROLL_MARGIN: usize = 2;
 
-/// New first-visible line for a side panel, given the previous scroll `prev`.
+/// New first-visible *line* for a side panel, given the previous scroll `prev`.
 ///
-/// List panels pass the highlighted row as `selected` and auto-follow it,
-/// nudging only when it would come within `LIST_SCROLL_MARGIN` of an edge so
-/// the list scrolls under the cursor. Cursor-less text panels pass
-/// `selected = None` and are scrolled manually (`[` / `]`); here we just clamp
-/// the requested offset to the content.
-fn scroll_offset(prev: usize, total: usize, selected: Option<usize>, height: usize) -> usize {
-    if height == 0 || total <= height {
+/// `side_paragraph` word-wraps (`Wrap { trim: false }`), so one logical line can
+/// occupy several terminal rows — the crafting panel's ingredient/gated-reason
+/// rows routinely wrap in the 28-34-wide side panel. The scroll therefore counts
+/// **wrapped rows**, not logical lines; counting lines used to leave the last
+/// several recipes stranded below the screen.
+///
+/// List panels pass the highlighted line as `selected` and auto-follow it,
+/// nudging only when it would come within `LIST_SCROLL_MARGIN` rows of an edge.
+/// Cursor-less text panels pass `selected = None` and are scrolled manually
+/// (`[` / `]`); the offset is just clamped so it can't overscroll into blank.
+fn scroll_offset(
+    prev: usize,
+    lines: &[Line<'_>],
+    selected: Option<usize>,
+    width: usize,
+    height: usize,
+) -> usize {
+    let n = lines.len();
+    if height == 0 || n == 0 {
         return 0;
     }
-    let max = total - height;
+    let rows: Vec<usize> = lines.iter().map(|l| line_rows(l, width)).collect();
+    let total_rows: usize = rows.iter().sum();
+    if total_rows <= height {
+        return 0;
+    }
+    // prefix[i] = wrapped rows above logical line i.
+    let mut prefix = vec![0usize; n + 1];
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + rows[i];
+    }
+    // Largest line offset that still fills the screen (never scroll into blank).
+    let max_top = total_rows - height;
+    let max_off = (0..n).rev().find(|&i| prefix[i] <= max_top).unwrap_or(0);
+
     let Some(sel) = selected else {
         // Text panel: honor the manual offset, clamped to the content.
-        return prev.min(max);
+        return prev.min(max_off);
     };
     // Margin can't exceed what fits above and below within the window.
     let margin = LIST_SCROLL_MARGIN.min(height.saturating_sub(1) / 2);
-    let mut off = prev.min(max);
-    if sel < off + margin {
-        off = sel.saturating_sub(margin);
-    } else if sel + margin >= off + height {
-        off = sel + margin + 1 - height;
+    let mut off = prev.min(max_off);
+    // Scroll up until the selection's top row clears the margin (or we hit 0).
+    while off > 0 && prefix[sel] < prefix[off] + margin {
+        off -= 1;
     }
-    off.min(max)
+    // Scroll down until the selection's bottom row clears the margin.
+    while off < max_off && prefix[sel] + rows[sel] + margin > prefix[off] + height {
+        off += 1;
+    }
+    off.min(max_off)
+}
+
+/// Terminal rows a rendered `line` occupies in a `width`-wide side panel,
+/// matching `side_paragraph`'s word-wrap so the scroll can count rows.
+fn line_rows(line: &Line<'_>, width: usize) -> usize {
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    wrapped_rows(&text, width)
+}
+
+/// Word-wrap row count for `text` at `width`, approximating ratatui's
+/// `WordWrapper` (`Wrap { trim: false }`): break on spaces, split a word longer
+/// than the width across rows. Always at least 1.
+fn wrapped_rows(text: &str, width: usize) -> usize {
+    if width == 0 {
+        return 1;
+    }
+    let mut rows = 1usize;
+    let mut col = 0usize;
+    for (i, token) in text.split(' ').enumerate() {
+        if i > 0 {
+            // the single space that `split` consumed between tokens
+            if col + 1 > width {
+                rows += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        let tw = UnicodeWidthStr::width(token);
+        if tw == 0 {
+            continue;
+        }
+        if col + tw <= width {
+            col += tw;
+        } else {
+            if col > 0 {
+                rows += 1;
+            }
+            if tw > width {
+                // a single word longer than the panel breaks across rows
+                let extra = (tw - 1) / width;
+                rows += extra;
+                col = tw - extra * width;
+            } else {
+                col = tw;
+            }
+        }
+    }
+    rows
 }
 
 fn draw_room_side(
@@ -587,7 +679,7 @@ fn room_panel(
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
-    lines.extend(side_text_wrap(&view.zone, theme::TEXT(), width));
+    lines.extend(side_text_wrap(&view.zone, LAT_TEXT, width));
     // The living-world clock: time of day and weather.
     lines.push(Line::from(Span::styled(
         format!("  {} · {}", view.time_of_day, view.weather),
@@ -964,29 +1056,56 @@ fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
 
 /// Middle column: the six ability scores as dot ratings, the class's primary
 /// score highlighted, then the passive trait.
-fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
-    let mut lines = vec![section("Attributes")];
-    let primary = primary_label(&view.class_name);
-    for (label, value, modifier) in view.scores.rows() {
+/// The six ability scores as rated rows: a star-rated header, then each
+/// score's value coloured by tier plus its own 5-star rating; the `primary`
+/// score glows in the class `accent`. Shared by the character sheet and the
+/// creation screen so the rolled fate reads the same as the finished hero.
+fn attribute_lines(view: &PlayerView, primary: &str, accent: Color) -> Vec<Line<'static>> {
+    let rows = view.scores.rows();
+    let avg = if rows.is_empty() {
+        0
+    } else {
+        rows.iter().map(|(_, v, _)| *v).sum::<i32>() / rows.len() as i32
+    };
+    let mut lines = vec![section_stars("Attributes", avg, 18, accent)];
+    for (label, value, modifier) in rows {
         let sign = if modifier >= 0 { "+" } else { "" };
         let is_primary = label == primary;
-        let (label_color, dot_color, weight) = if is_primary {
-            (accent, accent, Modifier::BOLD)
+        let label_color = if is_primary {
+            accent
         } else {
-            (theme::TEXT_DIM(), theme::CHAT_BODY(), Modifier::empty())
+            theme::TEXT_DIM()
         };
-        lines.push(Line::from(vec![
+        let weight = if is_primary {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
+        // The value coloured by tier (weak/faint → strong/green); the primary
+        // score's stars glow in the class accent, the rest in their tier colour.
+        let star_color = if is_primary {
+            accent
+        } else {
+            tier_color(value, 18)
+        };
+        let mut spans = vec![
             Span::styled(
                 format!("  {label} "),
                 Style::default().fg(label_color).add_modifier(weight),
             ),
             Span::styled(
                 format!("{value:>2}({sign}{modifier}) "),
-                Style::default().fg(theme::TEXT_BRIGHT()),
+                Style::default().fg(tier_color(value, 18)),
             ),
-            Span::styled(score_dots(value), Style::default().fg(dot_color)),
-        ]));
+        ];
+        spans.extend(star_rating(value, 18, star_color));
+        lines.push(Line::from(spans));
     }
+    lines
+}
+
+fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
+    let mut lines = attribute_lines(view, primary_label(&view.class_name), accent);
     lines.push(Line::raw(""));
     lines.push(section("Trait"));
     lines.push(Line::from(Span::styled(
@@ -1003,13 +1122,24 @@ fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
 
 /// Right column: combat numbers, revives, earned titles, and the XP meter.
 fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
-    let mut lines = vec![section("Combat")];
-    lines.push(stat("attack", format!("+{}", view.attack)));
-    lines.push(stat("armor", view.armor.to_string()));
+    // Combat rated by level; attack reads as offence (green), armour as
+    // defence (blue), split for clarity.
+    let mut lines = vec![section_stars("Combat", view.level, 50, accent)];
+    lines.push(stat_colored(
+        "attack",
+        format!("+{}", view.attack),
+        theme::SUCCESS(),
+    ));
+    lines.push(stat_colored(
+        "armor",
+        view.armor.to_string(),
+        theme::MENTION(),
+    ));
     if view.resurrection_cap > 0 {
-        lines.push(stat(
+        lines.push(stat_colored(
             "revives",
             format!("{}/{}", view.resurrections_left, view.resurrection_cap),
+            theme::AMBER(),
         ));
     }
     lines.push(Line::raw(""));
@@ -1055,7 +1185,12 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
 /// readout. Shown on both the full character sheet and the narrow panel; the `y`
 /// hint teaches how to work a node.
 fn skills_block(view: &PlayerView) -> Vec<Line<'static>> {
-    let mut lines = vec![section("Trades")];
+    let avg = if view.skills.is_empty() {
+        0
+    } else {
+        view.skills.iter().map(|s| s.level).sum::<i32>() / view.skills.len() as i32
+    };
+    let mut lines = vec![section_stars("Trades", avg, 50, theme::AMBER())];
     if view.skills.is_empty() {
         lines.push(Line::from(Span::styled(
             "  untrained",
@@ -1106,13 +1241,52 @@ fn meter_caption(cur: i32, max: i32) -> Line<'static> {
     ))
 }
 
-/// An ability score (4d6 range 3..=18) as an 8-cell dot rating.
-fn score_dots(value: i32) -> String {
-    const WIDTH: i32 = 8;
-    let filled = (value.clamp(0, 18) * WIDTH / 18).clamp(0, WIDTH);
-    (0..WIDTH)
-        .map(|i| if i < filled { '●' } else { '○' })
-        .collect()
+/// A 5-star rating: filled stars in `color`, the remainder dim. `value` is
+/// scored out of `max`.
+fn star_rating(value: i32, max: i32, color: Color) -> Vec<Span<'static>> {
+    const OF: i32 = 5;
+    let filled = if max <= 0 {
+        0
+    } else {
+        ((value.clamp(0, max) * OF + max / 2) / max).clamp(0, OF)
+    } as usize;
+    vec![
+        Span::styled("★".repeat(filled), Style::default().fg(color)),
+        Span::styled(
+            "☆".repeat(OF as usize - filled),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ),
+    ]
+}
+
+/// Colour a numeric attribute by how strong it is out of `max`: faint for a
+/// weak stat, amber for middling, green for strong — so strengths and
+/// weaknesses pop at a glance.
+fn tier_color(value: i32, max: i32) -> Color {
+    if max <= 0 {
+        return theme::TEXT_DIM();
+    }
+    let pct = value.clamp(0, max) * 100 / max;
+    if pct >= 66 {
+        theme::SUCCESS()
+    } else if pct >= 33 {
+        theme::AMBER()
+    } else {
+        theme::TEXT_DIM()
+    }
+}
+
+/// A section header carrying a 5-star rating, e.g. ` - Attributes ★★★☆☆`.
+fn section_stars(title: &str, value: i32, max: i32, accent: Color) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(" - ", Style::default().fg(theme::BORDER())),
+        Span::styled(
+            format!("{title} "),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    spans.extend(star_rating(value, max, accent));
+    Line::from(spans)
 }
 
 /// A filled progress meter (`█████░░░`) of the given cell width.
@@ -1309,8 +1483,11 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(stat("attack", view.attack.to_string()));
     lines.push(stat("armor", view.armor.to_string()));
     lines.push(Line::raw(""));
-    lines.push(section("Scores"));
-    lines.push(score_row(view));
+    lines.extend(attribute_lines(
+        view,
+        primary_label(&view.class_name),
+        class_accent(&view.class_name),
+    ));
     if view.resurrection_cap > 0 {
         lines.push(stat(
             "revives",
@@ -1412,22 +1589,6 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Optio
 }
 
 /// One compact line of the six ability scores with their modifiers.
-fn score_row(view: &PlayerView) -> Line<'static> {
-    let mut spans = vec![Span::raw("  ")];
-    for (label, value, modifier) in view.scores.rows() {
-        let sign = if modifier >= 0 { "+" } else { "" };
-        spans.push(Span::styled(
-            format!("{label} "),
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-        spans.push(Span::styled(
-            format!("{value}({sign}{modifier}) "),
-            Style::default().fg(theme::TEXT_BRIGHT()),
-        ));
-    }
-    Line::from(spans)
-}
-
 fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Abilities")];
     let mut sel_line = None;
@@ -1480,7 +1641,11 @@ fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
     (lines, sel_line)
 }
 
-fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+fn inventory_panel(
+    rows: &[SectionRow],
+    view: &PlayerView,
+    cursor: usize,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let mut sel_line = None;
     let mut lines = vec![
         section("Inventory"),
@@ -1501,39 +1666,54 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
-    for (i, it) in view.inventory.iter().enumerate() {
+    for (i, row) in rows.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
-        let marker = if selected { ">" } else { " " };
-        let tag = inventory_item_tag(it.equipped, it.slot.as_deref());
-        let style = if selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(rarity_color(&it.rarity))
-        };
-        let spans = vec![Span::styled(format!("{marker} {}{}", it.name, tag), style)];
-        lines.push(Line::from(spans));
-        if !it.stats.is_empty() {
-            let mut stat_spans = vec![Span::styled(
-                format!("    {}", it.stats),
-                Style::default().fg(theme::TEXT_DIM()),
-            )];
-            if let Some(cmp) = compare_span(it.compare_pct) {
-                stat_spans.push(cmp);
+        match row {
+            SectionRow::Header {
+                label,
+                count,
+                collapsed,
+                ..
+            } => lines.push(section_header_line(label, *count, *collapsed, selected)),
+            SectionRow::Item { index } => {
+                let Some(it) = view.inventory.get(*index) else {
+                    continue;
+                };
+                let marker = if selected { ">" } else { " " };
+                let tag = inventory_item_tag(it.equipped, it.slot.as_deref());
+                let style = if selected {
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(rarity_color(&it.rarity))
+                };
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{marker} {}{}", it.name, tag),
+                    style,
+                )]));
+                if !it.stats.is_empty() {
+                    let mut stat_spans = vec![Span::styled(
+                        format!("    {}", it.stats),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    )];
+                    if let Some(cmp) = compare_span(it.compare_pct) {
+                        stat_spans.push(cmp);
+                    }
+                    lines.push(Line::from(stat_spans));
+                }
+                if let Some(cmp) = compare_line(&it.compare) {
+                    lines.push(cmp);
+                }
             }
-            lines.push(Line::from(stat_spans));
-        }
-        if let Some(cmp) = compare_line(&it.compare) {
-            lines.push(cmp);
         }
     }
     lines.push(Line::raw(""));
-    lines.push(hint("w/s", "select  Enter equip/use"));
+    lines.push(hint("w/s", "select  Enter equip/use/fold"));
     lines.push(hint("x", "sell one (at a shop)"));
     lines.push(hint("A/C/J", "sell all / commons / non-upgrades"));
     lines.push(hint("t", "close"));
@@ -1586,7 +1766,11 @@ fn inventory_item_tag(equipped: bool, slot: Option<&str>) -> String {
     slot.map(|slot| format!(" ({slot})")).unwrap_or_default()
 }
 
-fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+fn shop_panel(
+    rows: &[SectionRow],
+    view: &PlayerView,
+    cursor: usize,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(shop) = &view.shop else {
         return (
             vec![Line::from(Span::styled(
@@ -1618,57 +1802,95 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<u
         )),
         Line::raw(""),
     ];
-    for (i, e) in shop.entries.iter().enumerate() {
+    for (i, row) in rows.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
-        let marker = if selected { ">" } else { " " };
-        let price_color = if e.affordable {
-            theme::BADGE_GOLD()
-        } else {
-            theme::ERROR()
-        };
-        let name_style = if selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(rarity_color(&e.rarity))
-        };
-        let mut spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
-        if !e.stats.is_empty() {
-            lines.push(Line::from(spans));
-            let mut stat_spans = vec![
-                Span::styled(
-                    format!("    {}", e.stats),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-                Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
-            ];
-            if let Some(cmp) = compare_span(e.compare_pct) {
-                stat_spans.push(cmp);
+        match row {
+            SectionRow::Header {
+                label,
+                count,
+                collapsed,
+                ..
+            } => lines.push(section_header_line(label, *count, *collapsed, selected)),
+            SectionRow::Item { index } => {
+                let Some(e) = shop.entries.get(*index) else {
+                    continue;
+                };
+                let marker = if selected { ">" } else { " " };
+                let price_color = if e.affordable {
+                    theme::BADGE_GOLD()
+                } else {
+                    theme::ERROR()
+                };
+                let name_style = if selected {
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(rarity_color(&e.rarity))
+                };
+                let mut spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+                if !e.stats.is_empty() {
+                    lines.push(Line::from(spans));
+                    let mut stat_spans = vec![
+                        Span::styled(
+                            format!("    {}", e.stats),
+                            Style::default().fg(theme::TEXT_DIM()),
+                        ),
+                        Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
+                    ];
+                    if let Some(cmp) = compare_span(e.compare_pct) {
+                        stat_spans.push(cmp);
+                    }
+                    lines.push(Line::from(stat_spans));
+                    if let Some(cmp) = compare_line(&e.compare) {
+                        lines.push(cmp);
+                    }
+                } else {
+                    spans.push(Span::styled(
+                        format!("  {}g", e.price),
+                        Style::default().fg(price_color),
+                    ));
+                    lines.push(Line::from(spans));
+                }
             }
-            lines.push(Line::from(stat_spans));
-            if let Some(cmp) = compare_line(&e.compare) {
-                lines.push(cmp);
-            }
-            continue;
         }
-        spans.push(Span::styled(
-            format!("  {}g", e.price),
-            Style::default().fg(price_color),
-        ));
-        lines.push(Line::from(spans));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("w/s", "select  Enter buy"));
+    lines.push(hint("w/s", "select  Enter buy/fold"));
     lines.push(hint("b", "leave shop"));
     (lines, sel_line)
 }
 
-fn crafting_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+/// A collapsible category header line: "▾ Weapons (3)" / "▸ Weapons (3)".
+fn section_header_line(
+    label: &str,
+    count: usize,
+    collapsed: bool,
+    selected: bool,
+) -> Line<'static> {
+    let arrow = if collapsed { "▸" } else { "▾" };
+    let style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    };
+    Line::from(Span::styled(format!("{arrow} {label} ({count})"), style))
+}
+
+fn crafting_panel(
+    rows: &[SectionRow],
+    view: &PlayerView,
+    cursor: usize,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(craft) = &view.crafting else {
         return (
             vec![Line::from(Span::styled(
@@ -1694,39 +1916,56 @@ fn crafting_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opti
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
-    for (i, e) in craft.entries.iter().enumerate() {
+    for (i, row) in rows.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
-        let marker = if selected { ">" } else { " " };
-        let name_style = if selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else if e.craftable {
-            Style::default().fg(theme::TEXT())
-        } else {
-            Style::default().fg(theme::TEXT_DIM())
-        };
-        // Name row, with a gated reason when it can't be made.
-        let mut name_spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
-        if !e.craftable && !e.reason.is_empty() {
-            name_spans.push(Span::styled(
-                format!("  ({})", e.reason),
-                Style::default().fg(theme::ERROR()),
-            ));
+        match row {
+            // A collapsible skill header: "▾ Cooking (10)" / "▸ Cooking (10)".
+            SectionRow::Header {
+                label,
+                count,
+                collapsed,
+                ..
+            } => {
+                lines.push(section_header_line(label, *count, *collapsed, selected));
+            }
+            // A recipe under an expanded header.
+            SectionRow::Item { index } => {
+                let Some(e) = craft.entries.get(*index) else {
+                    continue;
+                };
+                let marker = if selected { ">" } else { " " };
+                let name_style = if selected {
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD)
+                } else if e.craftable {
+                    Style::default().fg(theme::TEXT())
+                } else {
+                    Style::default().fg(theme::TEXT_DIM())
+                };
+                // Name row, with a gated reason when it can't be made.
+                let mut name_spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+                if !e.craftable && !e.reason.is_empty() {
+                    name_spans.push(Span::styled(
+                        format!("  ({})", e.reason),
+                        Style::default().fg(theme::ERROR()),
+                    ));
+                }
+                lines.push(Line::from(name_spans));
+                // Ingredient row.
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", e.inputs),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )));
+            }
         }
-        lines.push(Line::from(name_spans));
-        // Ingredient row.
-        lines.push(Line::from(Span::styled(
-            format!("    {} · {}", e.skill.to_lowercase(), e.inputs),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("w/s", "select  Enter craft"));
+    lines.push(hint("w/s", "select  Enter craft/fold"));
     lines.push(hint("u", "close"));
     (lines, sel_line)
 }
@@ -2490,9 +2729,9 @@ fn summarize_names<'a>(names: impl Iterator<Item = &'a str>, visible: usize) -> 
 
 fn wrapped_log_line(kind: LogKind, text: &str, width: usize) -> Vec<Line<'static>> {
     let color = match kind {
-        LogKind::Room => theme::TEXT_DIM(),
+        LogKind::Room => LAT_TEXT_DIM,
         LogKind::Travel => theme::AMBER_DIM(),
-        LogKind::Normal => theme::TEXT(),
+        LogKind::Normal => LAT_TEXT,
         LogKind::Combat => theme::ERROR(),
         LogKind::System => theme::AMBER_DIM(),
         LogKind::Say => theme::CHAT_BODY(),
@@ -2575,12 +2814,17 @@ fn section(title: &str) -> Line<'static> {
 }
 
 fn stat(label: &str, value: String) -> Line<'static> {
+    stat_colored(label, value, theme::TEXT_BRIGHT())
+}
+
+/// A `label   value` stat line with the value in a chosen colour.
+fn stat_colored(label: &str, value: String, color: Color) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("  {label:<7}"),
             Style::default().fg(theme::TEXT_DIM()),
         ),
-        Span::styled(value, Style::default().fg(theme::TEXT_BRIGHT())),
+        Span::styled(value, Style::default().fg(color)),
     ])
 }
 
@@ -2598,7 +2842,7 @@ fn wrap(text: &str, width: usize) -> Vec<Line<'static>> {
         if line.len() + word.len() + 1 > width && !line.trim().is_empty() {
             out.push(Line::from(Span::styled(
                 line.clone(),
-                Style::default().fg(theme::TEXT_DIM()),
+                Style::default().fg(LAT_TEXT_DIM),
             )));
             line = String::from("  ");
         }
@@ -2608,7 +2852,7 @@ fn wrap(text: &str, width: usize) -> Vec<Line<'static>> {
     if !line.trim().is_empty() {
         out.push(Line::from(Span::styled(
             line,
-            Style::default().fg(theme::TEXT_DIM()),
+            Style::default().fg(LAT_TEXT_DIM),
         )));
     }
     out
@@ -2738,13 +2982,32 @@ fn follow_panel(
     (lines, sel_line)
 }
 
-fn rarity_color(rarity: &str) -> ratatui::style::Color {
+// Lateania reads in its own warm, parchment-toned prose so the world feels
+// distinct from the cool chat UI around it. Body/description text uses these;
+// headers, rarity, and interactables keep their own accents.
+const LAT_TEXT: Color = Color::Rgb(0xdc, 0xc9, 0xa4);
+const LAT_TEXT_DIM: Color = Color::Rgb(0xac, 0x9b, 0x79);
+
+// The established, widely-understood RPG item-rarity palette — fixed, iconic
+// hues so item and creature tiers read at a glance. Intentionally NOT
+// theme-driven: this is a convention players already know (common white,
+// uncommon green, rare blue, epic purple, legendary orange).
+const RARITY_COMMON: Color = Color::Rgb(0xff, 0xff, 0xff);
+const RARITY_UNCOMMON: Color = Color::Rgb(0x1e, 0xff, 0x00);
+const RARITY_RARE: Color = Color::Rgb(0x00, 0x70, 0xdd);
+const RARITY_EPIC: Color = Color::Rgb(0xa3, 0x35, 0xee);
+const RARITY_LEGENDARY: Color = Color::Rgb(0xff, 0x80, 0x00);
+
+/// Colour for an item (or a creature, by its rank) in the standard RPG rarity
+/// scheme, so tier reads instantly.
+fn rarity_color(rarity: &str) -> Color {
     match rarity {
-        "uncommon" => theme::SUCCESS(),
-        "rare" => theme::MENTION(),
-        "epic" => theme::AMBER_GLOW(),
-        "legendary" => theme::BADGE_GOLD(),
-        _ => theme::TEXT(),
+        "uncommon" => RARITY_UNCOMMON,
+        "rare" => RARITY_RARE,
+        "epic" => RARITY_EPIC,
+        "legendary" => RARITY_LEGENDARY,
+        // "common" and anything unlabelled read as common white.
+        _ => RARITY_COMMON,
     }
 }
 
@@ -2778,25 +3041,85 @@ fn is_actionable_feature(kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_span, fit, inventory_item_tag, meter, score_dots, scroll_offset};
+    use super::{
+        compare_span, fit, inventory_item_tag, line_rows, meter, rarity_color, scroll_offset,
+        star_rating, wrapped_rows,
+    };
+    use ratatui::style::Color;
+
+    #[test]
+    fn rarity_color_uses_the_standard_rpg_palette() {
+        assert_eq!(rarity_color("common"), Color::Rgb(0xff, 0xff, 0xff));
+        assert_eq!(rarity_color("uncommon"), Color::Rgb(0x1e, 0xff, 0x00));
+        assert_eq!(rarity_color("rare"), Color::Rgb(0x00, 0x70, 0xdd));
+        assert_eq!(rarity_color("epic"), Color::Rgb(0xa3, 0x35, 0xee));
+        assert_eq!(rarity_color("legendary"), Color::Rgb(0xff, 0x80, 0x00));
+        // Anything unlabelled falls back to common white.
+        assert_eq!(rarity_color("mystery"), Color::Rgb(0xff, 0xff, 0xff));
+    }
+    use ratatui::text::Line;
     use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn scroll_offset_keeps_the_selection_visible_in_a_long_list() {
         // A 40-row list in a 10-tall window: the highlighted row must always land
         // inside the visible window [off, off+height) so nothing you're on scrolls
-        // off-screen (the bug: titles/inventory ran off the bottom).
-        let (total, height) = (40usize, 10usize);
+        // off-screen (the bug: titles/inventory ran off the bottom). Short lines,
+        // so one logical line is one row.
+        let lines: Vec<Line> = (0..40).map(|i| Line::from(format!("row {i}"))).collect();
+        let (width, height) = (40usize, 10usize);
         let mut off = 0;
-        for sel in 0..total {
-            off = scroll_offset(off, total, Some(sel), height);
+        for sel in 0..lines.len() {
+            off = scroll_offset(off, &lines, Some(sel), width, height);
             assert!(
                 sel >= off && sel < off + height,
                 "row {sel} fell outside window [{off}, {})",
                 off + height
             );
-            assert!(off <= total - height, "offset never overscrolls");
+            assert!(off <= lines.len() - height, "offset never overscrolls");
         }
+    }
+
+    #[test]
+    fn wrapped_rows_matches_word_wrap() {
+        assert_eq!(wrapped_rows("", 10), 1);
+        assert_eq!(wrapped_rows("short", 10), 1);
+        assert_eq!(wrapped_rows("exactly-10", 10), 1);
+        // Two words that don't both fit wrap to a second row.
+        assert_eq!(wrapped_rows("hello world", 8), 2);
+        // A single word longer than the width breaks across rows (ceil 12/5).
+        assert_eq!(wrapped_rows("abcdefghijkl", 5), 3);
+        // A real crafting ingredient row wraps in the narrow side panel.
+        let ing = "    cooking · 3 river trout, 2 wild sage, 1 salt block";
+        assert!(wrapped_rows(ing, 28) >= 2, "long ingredient row must wrap");
+    }
+
+    #[test]
+    fn scroll_offset_reaches_the_end_when_rows_wrap() {
+        // Each recipe is a short name line + a long ingredient line that wraps to
+        // two rows in a narrow panel. The crafting bug: counting logical lines
+        // (not wrapped rows) left the last recipes stranded below the screen.
+        let (width, height) = (28usize, 12usize);
+        let mut lines: Vec<Line> = Vec::new();
+        let mut name_line = Vec::new();
+        for i in 0..20 {
+            name_line.push(lines.len());
+            lines.push(Line::from(format!("> Recipe {i}")));
+            lines.push(Line::from(format!(
+                "    cooking · 3 river trout, 2 wild sage, 1 salt block ({i})"
+            )));
+        }
+        let sel = *name_line.last().unwrap();
+        let off = scroll_offset(0, &lines, Some(sel), width, height);
+        // The selected line must sit inside the visible *rows*, not just lines.
+        let rows: Vec<usize> = lines.iter().map(|l| line_rows(l, width)).collect();
+        let win_top: usize = rows[..off].iter().sum();
+        let sel_top: usize = rows[..sel].iter().sum();
+        assert!(
+            sel_top >= win_top && sel_top < win_top + height,
+            "last recipe row {sel_top} outside visible rows [{win_top}, {})",
+            win_top + height
+        );
     }
 
     #[test]
@@ -2807,13 +3130,20 @@ mod tests {
     }
 
     #[test]
-    fn score_dots_scale_from_empty_to_full() {
-        assert_eq!(score_dots(3).chars().filter(|c| *c == '●').count(), 1);
-        assert_eq!(score_dots(10).chars().filter(|c| *c == '●').count(), 4);
-        assert_eq!(score_dots(18), "●●●●●●●●");
-        // Every rating is exactly eight cells wide.
+    fn star_rating_fills_proportionally() {
+        let stars = |v, m| {
+            let spans = star_rating(v, m, Color::White);
+            let filled = spans[0].content.chars().filter(|c| *c == '★').count();
+            let empty = spans[1].content.chars().filter(|c| *c == '☆').count();
+            (filled, empty)
+        };
+        assert_eq!(stars(0, 18), (0, 5));
+        assert_eq!(stars(18, 18), (5, 0));
+        assert_eq!(stars(9, 18), (3, 2)); // (9*5 + 9) / 18 = 3
+        // Always exactly five stars, whatever the value.
         for v in 0..=18 {
-            assert_eq!(score_dots(v).chars().count(), 8);
+            let (f, e) = stars(v, 18);
+            assert_eq!(f + e, 5, "value {v}");
         }
     }
 

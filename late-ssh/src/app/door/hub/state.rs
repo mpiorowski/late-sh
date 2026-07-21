@@ -11,16 +11,18 @@ pub enum HubGame {
     Rebels,
     Nethack,
     Dcss,
+    Usurper,
     GreenDragon,
     Dopewars,
 }
 
 impl HubGame {
     /// Selector order, left to right.
-    pub const ALL: [HubGame; 6] = [
+    pub const ALL: [HubGame; 7] = [
         HubGame::Lateania,
         HubGame::Nethack,
         HubGame::Dcss,
+        HubGame::Usurper,
         HubGame::GreenDragon,
         HubGame::Rebels,
         HubGame::Dopewars,
@@ -32,6 +34,7 @@ impl HubGame {
             HubGame::Rebels => "Rebels",
             HubGame::Nethack => "NetHack",
             HubGame::Dcss => "DCSS",
+            HubGame::Usurper => "Usurper",
             HubGame::GreenDragon => "Green Dragon",
             HubGame::Dopewars => "dopewars",
         }
@@ -86,6 +89,8 @@ mod tests {
         s.select_next();
         assert_eq!(s.selected_game(), HubGame::Dcss);
         s.select_next();
+        assert_eq!(s.selected_game(), HubGame::Usurper);
+        s.select_next();
         assert_eq!(s.selected_game(), HubGame::GreenDragon);
         s.select_next();
         assert_eq!(s.selected_game(), HubGame::Rebels);
@@ -98,7 +103,7 @@ mod tests {
     #[test]
     fn select_jumps_directly() {
         let mut s = State::default();
-        s.select(3);
+        s.select(4);
         assert_eq!(s.selected_game(), HubGame::GreenDragon);
         s.select(99);
         assert_eq!(s.selected_game(), HubGame::GreenDragon);
@@ -112,6 +117,7 @@ mod tests {
                 "Lateania",
                 "NetHack",
                 "DCSS",
+                "Usurper",
                 "Green Dragon",
                 "Rebels",
                 "dopewars"
