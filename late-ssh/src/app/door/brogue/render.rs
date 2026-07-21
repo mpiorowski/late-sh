@@ -32,7 +32,7 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         landing::action(
             ">",
             "Enter",
-            "descend for the Amulet of Yendor",
+            "descend into the Dungeons of Doom",
             theme::SUCCESS(),
         ),
     );
@@ -46,7 +46,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         landing::action(
             ">",
             "Enter",
-            "descend for the Amulet of Yendor",
+            "descend into the Dungeons of Doom",
             theme::SUCCESS(),
         )
     } else {
@@ -92,7 +92,7 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         dungeon_legend(),
         Line::from(""),
         landing::stat("saves", "kept per player, resume any time", 8),
-        landing::stat("goal", "the Amulet of Yendor waits on depth 26", 8),
+        landing::stat("goal", "steal the Amulet of Yendor from depth 26, then get out alive", 8),
         landing::stat(
             "style",
             "no grinding, no classes: your build is whatever you find and dare to use",
