@@ -162,7 +162,7 @@ pub(super) async fn spawn_ssh(
     token_tx: oneshot::Sender<String>,
 ) -> Result<SshProcess> {
     match config.ssh_mode {
-        SshMode::Subprocess => spawn_subprocess_ssh(config, identity_file, token_tx).await,
+        SshMode::Subprocess => spawn_subprocess_ssh(config, identity_file, token_tx),
         SshMode::Native => spawn_native_ssh(config, identity_file, token_tx).await,
         SshMode::OpenSsh => {
             anyhow::bail!("openssh mode must use prepare_openssh_ssh")
@@ -182,7 +182,7 @@ impl OpenSshSession {
         &self.token
     }
 
-    pub(super) async fn spawn_shell(self, config: &Config) -> Result<OpenSshProcess> {
+    pub(super) fn spawn_shell(self, config: &Config) -> Result<OpenSshProcess> {
         // Reuse the already-authenticated master connection for the real
         // interactive shell, so hardware-key auth is not prompted a second time.
         let spec = openssh_shell_command_spec(config, self.master.control_path())?;
@@ -521,7 +521,7 @@ pub(super) async fn forward_resize_events(handle: ResizeHandle) {
         };
 
         while sigwinch.recv().await.is_some() {
-            if let Err(err) = apply_resize(&handle).await {
+            if let Err(err) = apply_resize(&handle) {
                 debug!(error = ?err, "failed to forward local terminal resize");
             }
         }
@@ -536,7 +536,7 @@ pub(super) async fn forward_resize_events(handle: ResizeHandle) {
             let current = terminal_size_or_default();
             if current != last_size {
                 last_size = current;
-                if let Err(err) = apply_resize(&handle).await {
+                if let Err(err) = apply_resize(&handle) {
                     debug!(error = ?err, "failed to forward local terminal resize");
                     break;
                 }
@@ -546,7 +546,7 @@ pub(super) async fn forward_resize_events(handle: ResizeHandle) {
 }
 
 #[cfg(unix)]
-async fn apply_resize(handle: &ResizeHandle) -> Result<()> {
+fn apply_resize(handle: &ResizeHandle) -> Result<()> {
     match handle {
         ResizeHandle::Subprocess(handle) => handle.resize_to_current(),
         ResizeHandle::Native(tx) => {
@@ -571,7 +571,7 @@ async fn apply_resize(handle: &ResizeHandle) -> Result<()> {
 }
 
 #[cfg(unix)]
-async fn spawn_subprocess_ssh(
+fn spawn_subprocess_ssh(
     config: &Config,
     identity_file: &Path,
     token_tx: oneshot::Sender<String>,

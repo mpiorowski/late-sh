@@ -1350,7 +1350,7 @@ impl AudioService {
         });
     }
 
-    pub async fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
+    pub fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
         tracing::debug!(
             item_id = %report.item_id,
             state = ?report.state,
@@ -1407,7 +1407,7 @@ impl AudioService {
     pub fn report_player_state_task(&self, report: PlayerStateReport) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = service.report_player_state(report).await {
+            if let Err(err) = service.report_player_state(report) {
                 late_core::error_span!(
                     "audio_player_state_failed",
                     error = ?err,

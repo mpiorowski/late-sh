@@ -21,13 +21,13 @@ use uuid::Uuid;
 
 use crate::test_helpers::new_test_db;
 
-async fn daily_service(test_db: &TestDb) -> DailyService {
-    daily_service_with_activity(test_db).await.0
+fn daily_service(test_db: &TestDb) -> DailyService {
+    daily_service_with_activity(test_db).0
 }
 
 /// A service plus a receiver on its activity feed, for asserting the #lounge
 /// result line a finished match emits.
-async fn daily_service_with_activity(
+fn daily_service_with_activity(
     test_db: &TestDb,
 ) -> (DailyService, broadcast::Receiver<ActivityEvent>) {
     let (activity_tx, activity_rx) = broadcast::channel::<ActivityEvent>(64);
@@ -60,7 +60,7 @@ async fn claim_has_exactly_one_winner() {
     let challenger = create_test_user(&test_db.db, "daily-race-challenger").await;
     let first = create_test_user(&test_db.db, "daily-race-first").await;
     let second = create_test_user(&test_db.db, "daily-race-second").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, None)
@@ -105,7 +105,7 @@ async fn directed_challenge_is_claimable_only_by_target() {
     let challenger = create_test_user(&test_db.db, "daily-direct-challenger").await;
     let target = create_test_user(&test_db.db, "daily-direct-target").await;
     let bystander = create_test_user(&test_db.db, "daily-direct-bystander").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, Some(target.id))
@@ -128,7 +128,7 @@ async fn moves_validate_turn_and_legality() {
     let challenger = create_test_user(&test_db.db, "daily-move-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-move-opponent").await;
     let outsider = create_test_user(&test_db.db, "daily-move-outsider").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, None)
@@ -177,7 +177,7 @@ async fn checkmate_finishes_match_and_pays_the_winner() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-mate-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-mate-opponent").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, None)
@@ -243,7 +243,7 @@ async fn finished_match_posts_a_lounge_result_line() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-lounge-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-lounge-opponent").await;
-    let (svc, mut activity_rx) = daily_service_with_activity(&test_db).await;
+    let (svc, mut activity_rx) = daily_service_with_activity(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, None)
@@ -298,7 +298,7 @@ async fn resign_finishes_match_for_the_other_player() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-resign-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-resign-opponent").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, None)
@@ -328,7 +328,7 @@ async fn stale_revision_writes_are_rejected() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-rev-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-rev-opponent").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, None)
@@ -391,7 +391,7 @@ async fn same_revision_writes_that_keep_the_turn_are_serialized() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-cas-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-cas-opponent").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Battleship, None)
@@ -434,7 +434,7 @@ async fn sweeper_forfeits_matches_past_their_deadline() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-sweep-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-sweep-opponent").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, None)
@@ -480,7 +480,7 @@ async fn active_entry_cap_counts_challenges_and_matches() {
     let test_db = new_test_db().await;
     let poster = create_test_user(&test_db.db, "daily-cap-poster").await;
     let claimer = create_test_user(&test_db.db, "daily-cap-claimer").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let mut challenges = Vec::new();
     for _ in 0..DAILY_MAX_ACTIVE_ENTRIES {
@@ -526,7 +526,7 @@ async fn active_entry_cap_counts_challenges_and_matches() {
 async fn self_challenge_is_rejected() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "daily-self").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let result = svc
         .post_challenge(user.id, DailyGame::Chess, Some(user.id))
@@ -543,7 +543,7 @@ async fn battleship_hits_fire_again_and_sinking_the_fleet_pays() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-bs-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-bs-opponent").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Battleship, None)
@@ -662,7 +662,7 @@ async fn battleship_resign_finishes_for_the_other_player() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-bs-resigner").await;
     let opponent = create_test_user(&test_db.db, "daily-bs-survivor").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Battleship, None)
@@ -696,7 +696,7 @@ async fn connect4_turns_alternate_and_connecting_four_pays() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-c4-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-c4-opponent").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::ConnectFour, None)
@@ -797,7 +797,7 @@ async fn connect4_full_board_draws_and_pays_nobody() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-c4-drawer").await;
     let opponent = create_test_user(&test_db.db, "daily-c4-drawee").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::ConnectFour, None)
@@ -857,7 +857,7 @@ async fn finished_results_linger_until_each_player_acks() {
     let challenger = create_test_user(&test_db.db, "daily-seen-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-seen-opponent").await;
     let stranger = create_test_user(&test_db.db, "daily-seen-stranger").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, None)
@@ -917,7 +917,7 @@ async fn claim_creates_private_match_chat_with_voice() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-chat-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-chat-opponent").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::Chess, None)
@@ -975,7 +975,7 @@ async fn stale_match_chat_rooms_are_reaped_after_30_days() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-reap-challenger").await;
     let opponent = create_test_user(&test_db.db, "daily-reap-opponent").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let mut match_ids = Vec::new();
     for _ in 0..3 {
@@ -1050,7 +1050,7 @@ async fn stale_match_chat_rooms_are_reaped_after_30_days() {
 async fn play_move_against_unknown_match_is_rejected() {
     let test_db = new_test_db().await;
     let player = create_test_user(&test_db.db, "daily-unknown-mover").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let error = svc
         .play_move(player.id, Uuid::now_v7(), 0, 0)
@@ -1063,7 +1063,7 @@ async fn play_move_against_unknown_match_is_rejected() {
 async fn claim_against_unknown_challenge_is_rejected() {
     let test_db = new_test_db().await;
     let player = create_test_user(&test_db.db, "daily-unknown-claimer").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let error = svc
         .claim_challenge(player.id, Uuid::now_v7())
@@ -1078,7 +1078,7 @@ async fn claimed_challenge_rejects_a_later_claim() {
     let challenger = create_test_user(&test_db.db, "daily-late-poster").await;
     let opponent = create_test_user(&test_db.db, "daily-late-first").await;
     let latecomer = create_test_user(&test_db.db, "daily-late-second").await;
-    let svc = daily_service(&test_db).await;
+    let svc = daily_service(&test_db);
 
     let challenge = svc
         .post_challenge(challenger.id, DailyGame::ConnectFour, None)

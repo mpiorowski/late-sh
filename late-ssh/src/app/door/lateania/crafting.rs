@@ -67,7 +67,7 @@ const REFINE_XP: [i32; 5] = [8, 20, 45, 100, 200];
 const CRAFT_XP: [i32; 5] = [12, 30, 70, 150, 320];
 
 fn build_recipes() -> Vec<Recipe> {
-    use CraftSkill::*;
+    use CraftSkill::{Alchemy, Cooking, Leatherworking, Smithing, Woodworking};
     let mut r = Vec::new();
     for t in 0..5u32 {
         let ti = t as usize;

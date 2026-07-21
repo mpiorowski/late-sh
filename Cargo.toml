@@ -15,6 +15,14 @@ resolver = "2"
 [workspace.lints.rust]
 unreachable_pub = "warn"
 
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+enum_glob_use = "warn"
+wildcard_imports = "warn"
+unused_async = "warn"
+
 [workspace.dependencies]
 # Core Utils
 anyhow = "1"

@@ -242,7 +242,7 @@ async fn run_session(
                             &mut initial_sync,
                             &mut current_snapshot,
                             current_item.as_ref(),
-                        ).await;
+                        );
                         if result.send_client_state {
                             send_client_state(&mut ws, *audio_settings).await?;
                         }
@@ -505,7 +505,7 @@ fn start_seconds_for_load(
     (start_seconds > 0).then_some(start_seconds)
 }
 
-async fn handle_server_text(
+fn handle_server_text(
     text: &str,
     proxy: &EventLoopProxy<WebviewCommand>,
     audio_settings: &mut AudioSettings,
