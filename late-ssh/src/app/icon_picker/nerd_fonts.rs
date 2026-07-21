@@ -1,12 +1,12 @@
 use serde_json::Value;
 
-pub struct NerdFontGlyph {
+pub(crate) struct NerdFontGlyph {
     pub name: String,
     pub icon: String,
 }
 
 /// Parse the vendored glyphnames.json into a sorted list of glyphs.
-pub fn load() -> Vec<NerdFontGlyph> {
+pub(crate) fn load() -> Vec<NerdFontGlyph> {
     let raw = include_str!("glyphnames.json");
     let map: Value = serde_json::from_str(raw).expect("invalid glyphnames.json");
     let obj = map.as_object().expect("glyphnames.json is not an object");

@@ -1,4 +1,7 @@
-use super::presets::*;
+use super::presets::{
+    CITY_LANE, CITY_SCENERY, FOREST_SCENERY, HIGHWAY_DIVIDERS, HIGHWAY_SCENERY, NO_SHOULDERS,
+    RURAL_CAR_MIX, RURAL_DIVIDERS, RURAL_SCENERY, TOWN_SCENERY, URBAN_DIVIDERS, VILLAGE_SCENERY,
+};
 use crate::app::arcade::traffic::theme;
 use crate::app::arcade::traffic::track::{
     Lane, Lanes, Obstacle, ObstacleEffect, Road, RoadAspect, Sceneries, Shoulder, Shoulders, Stage,

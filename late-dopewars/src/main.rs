@@ -8,6 +8,8 @@
 mod config;
 mod host;
 mod identity;
+#[cfg(test)]
+mod identity_test;
 mod server;
 
 use std::sync::Arc;

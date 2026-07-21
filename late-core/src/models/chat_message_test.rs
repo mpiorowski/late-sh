@@ -1,12 +1,20 @@
 use crate::{
     models::{
-        chat_message::{ChatMessage, ChatMessageParams},
+        chat_message::{ChatMessage, ChatMessageParams, escape_like_pattern},
         chat_message_reaction::ChatMessageReaction,
         chat_room::ChatRoom,
         user::{User, UserParams},
     },
     test_utils::test_db,
 };
+
+#[test]
+fn escape_like_pattern_escapes_metacharacters() {
+    assert_eq!(escape_like_pattern("plain query"), "plain query");
+    assert_eq!(escape_like_pattern("100%"), "100\\%");
+    assert_eq!(escape_like_pattern("snake_case"), "snake\\_case");
+    assert_eq!(escape_like_pattern("back\\slash"), "back\\\\slash");
+}
 
 #[tokio::test]
 async fn test_chat_message() {

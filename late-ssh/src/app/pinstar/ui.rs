@@ -1,6 +1,9 @@
 use crate::app::pinstar::helpers::{PinstarTheme, clamped_context_menu_rect};
 use crate::app::pinstar::state::{PinstarConfirmAction, PinstarState};
-use ratatui::{prelude::*, widgets::*};
+use ratatui::{
+    prelude::*,
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
+};
 
 use super::browser::{BrowserMode, DiagramBrowser};
 

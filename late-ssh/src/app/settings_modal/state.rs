@@ -29,18 +29,18 @@ const LINK_CODE_MAX_LEN: usize = 16;
 const LINK_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
 pub(crate) const SYSTEM_FIELD_MAX_LEN: usize = 48;
 pub(crate) const FEED_URL_MAX_LEN: usize = 2000;
-pub const BIO_MAX_LEN: usize = 1000;
-pub const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
-pub const LINK_CONFIRM_MISMATCH: &str = "Typed username does not match the main username.";
+pub(crate) const BIO_MAX_LEN: usize = 1000;
+pub(crate) const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
+pub(crate) const LINK_CONFIRM_MISMATCH: &str = "Typed username does not match the main username.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PickerKind {
+pub(crate) enum PickerKind {
     Country,
     Timezone,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Row {
+pub(crate) enum Row {
     Username,
     Birthday,
     Ide,
@@ -59,7 +59,7 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 15] = [
+    pub(crate) const ALL: [Row; 15] = [
         Row::Username,
         Row::Country,
         Row::Timezone,
@@ -79,14 +79,14 @@ impl Row {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AccountRow {
+pub(crate) enum AccountRow {
     LinkAccounts,
     IrcToken,
     DeleteAccount,
 }
 
 impl AccountRow {
-    pub const ALL: [AccountRow; 3] = [
+    pub(crate) const ALL: [AccountRow; 3] = [
         AccountRow::LinkAccounts,
         AccountRow::IrcToken,
         AccountRow::DeleteAccount,
@@ -94,7 +94,7 @@ impl AccountRow {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TweakRow {
+pub(crate) enum TweakRow {
     // Appearance group.
     BackgroundColor,
     TextBrightness,
@@ -109,7 +109,7 @@ pub enum TweakRow {
 }
 
 impl TweakRow {
-    pub const ALL: [TweakRow; 9] = [
+    pub(crate) const ALL: [TweakRow; 9] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -123,20 +123,20 @@ impl TweakRow {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LinkAccountStep {
+pub(crate) enum LinkAccountStep {
     EnterCode,
     Confirm,
     Pending,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LinkAccountEnterCodeFocus {
+pub(crate) enum LinkAccountEnterCodeFocus {
     GenerateCode,
     PeerCode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SystemField {
+pub(crate) enum SystemField {
     Birthday,
     Ide,
     Terminal,
@@ -187,7 +187,7 @@ impl SystemField {
 /// the markdown editor + preview; `Tweaks` holds power-user toggles and the
 /// gem easter egg.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Tab {
+pub(crate) enum Tab {
     Settings,
     Tweaks,
     Bio,
@@ -197,7 +197,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub(crate) const ALL: [Tab; 6] = [
         Tab::Settings,
         Tab::Bio,
         Tab::Themes,
@@ -206,7 +206,7 @@ impl Tab {
         Tab::Feeds,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
             Tab::Tweaks => "Tweaks",
@@ -219,7 +219,7 @@ impl Tab {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ThemeTreeRow {
+pub(crate) enum ThemeTreeRow {
     Group {
         group: theme::ThemeGroup,
         collapsed: bool,
@@ -231,7 +231,7 @@ pub enum ThemeTreeRow {
 }
 
 #[derive(Default)]
-pub struct PickerState {
+pub(crate) struct PickerState {
     pub kind: Option<PickerKind>,
     pub query: String,
     pub selected_index: usize,
@@ -239,7 +239,7 @@ pub struct PickerState {
     pub visible_height: Cell<usize>,
 }
 
-pub struct DeleteAccountDialogState {
+pub(crate) struct DeleteAccountDialogState {
     open: bool,
     input: TextArea<'static>,
     status: Option<String>,
@@ -256,19 +256,19 @@ impl DeleteAccountDialogState {
         }
     }
 
-    pub fn open(&self) -> bool {
+    pub(crate) fn open(&self) -> bool {
         self.open
     }
 
-    pub fn input(&self) -> &TextArea<'static> {
+    pub(crate) fn input(&self) -> &TextArea<'static> {
         &self.input
     }
 
-    pub fn status(&self) -> Option<&str> {
+    pub(crate) fn status(&self) -> Option<&str> {
         self.status.as_deref()
     }
 
-    pub fn pending(&self) -> bool {
+    pub(crate) fn pending(&self) -> bool {
         self.pending
     }
 }
@@ -276,7 +276,7 @@ impl DeleteAccountDialogState {
 /// Which action button is focused in the IRC token dialog. `Reset` and
 /// `Revoke` are only reachable when a token currently exists.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum IrcTokenFocus {
+pub(crate) enum IrcTokenFocus {
     /// Create (no token yet) or Reset (token exists) — same slot.
     Primary,
     Revoke,
@@ -284,7 +284,7 @@ pub enum IrcTokenFocus {
 
 /// Settings → Account IRC token dialog. Drives mint/reset/revoke and shows a
 /// freshly minted token exactly once. See devdocs/FRD-IRCD.md §5.
-pub struct IrcTokenDialogState {
+pub(crate) struct IrcTokenDialogState {
     open: bool,
     /// `None` while the status load is in flight; `Some(None)` = no token;
     /// `Some(Some(_))` = an active token with metadata.
@@ -311,41 +311,41 @@ impl IrcTokenDialogState {
         }
     }
 
-    pub fn open(&self) -> bool {
+    pub(crate) fn open(&self) -> bool {
         self.open
     }
 
     /// `None` while loading, otherwise the current token status.
-    pub fn status(&self) -> Option<&Option<IrcTokenStatus>> {
+    pub(crate) fn status(&self) -> Option<&Option<IrcTokenStatus>> {
         self.status.as_ref()
     }
 
-    pub fn has_token(&self) -> bool {
+    pub(crate) fn has_token(&self) -> bool {
         matches!(self.status, Some(Some(_)))
     }
 
-    pub fn focus(&self) -> IrcTokenFocus {
+    pub(crate) fn focus(&self) -> IrcTokenFocus {
         self.focus
     }
 
-    pub fn revealed_token(&self) -> Option<&str> {
+    pub(crate) fn revealed_token(&self) -> Option<&str> {
         self.revealed_token.as_deref()
     }
 
-    pub fn confirming_revoke(&self) -> bool {
+    pub(crate) fn confirming_revoke(&self) -> bool {
         self.confirming_revoke
     }
 
-    pub fn pending(&self) -> bool {
+    pub(crate) fn pending(&self) -> bool {
         self.pending
     }
 
-    pub fn message(&self) -> Option<&str> {
+    pub(crate) fn message(&self) -> Option<&str> {
         self.message.as_deref()
     }
 }
 
-pub struct LinkAccountDialogState {
+pub(crate) struct LinkAccountDialogState {
     open: bool,
     step: LinkAccountStep,
     own_code: Option<String>,
@@ -380,56 +380,56 @@ impl LinkAccountDialogState {
         }
     }
 
-    pub fn open(&self) -> bool {
+    pub(crate) fn open(&self) -> bool {
         self.open
     }
 
-    pub fn step(&self) -> LinkAccountStep {
+    pub(crate) fn step(&self) -> LinkAccountStep {
         self.step
     }
 
-    pub fn own_code(&self) -> Option<&str> {
+    pub(crate) fn own_code(&self) -> Option<&str> {
         self.own_code.as_deref()
     }
 
-    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
+    pub(crate) fn expires_at(&self) -> Option<DateTime<Utc>> {
         self.expires_at.as_ref().cloned()
     }
 
-    pub fn enter_code_focus(&self) -> LinkAccountEnterCodeFocus {
+    pub(crate) fn enter_code_focus(&self) -> LinkAccountEnterCodeFocus {
         self.enter_code_focus
     }
 
-    pub fn code_input(&self) -> &TextArea<'static> {
+    pub(crate) fn code_input(&self) -> &TextArea<'static> {
         &self.code_input
     }
 
-    pub fn peer_username(&self) -> Option<&str> {
+    pub(crate) fn peer_username(&self) -> Option<&str> {
         self.peer_username.as_deref()
     }
 
-    pub fn peer_created(&self) -> Option<DateTime<Utc>> {
+    pub(crate) fn peer_created(&self) -> Option<DateTime<Utc>> {
         self.peer_created.as_ref().cloned()
     }
 
-    pub fn keep_current(&self) -> bool {
+    pub(crate) fn keep_current(&self) -> bool {
         self.keep_current
     }
 
-    pub fn confirm_input(&self) -> &TextArea<'static> {
+    pub(crate) fn confirm_input(&self) -> &TextArea<'static> {
         &self.confirm_input
     }
 
-    pub fn status(&self) -> Option<&str> {
+    pub(crate) fn status(&self) -> Option<&str> {
         self.status.as_deref()
     }
 
-    pub fn pending(&self) -> bool {
+    pub(crate) fn pending(&self) -> bool {
         self.pending
     }
 }
 
-pub struct SettingsModalState {
+pub(crate) struct SettingsModalState {
     profile_service: ProfileService,
     feed_service: FeedService,
     user_id: Uuid,
@@ -477,7 +477,11 @@ pub struct SettingsModalState {
 }
 
 impl SettingsModalState {
-    pub fn new(profile_service: ProfileService, feed_service: FeedService, user_id: Uuid) -> Self {
+    pub(crate) fn new(
+        profile_service: ProfileService,
+        feed_service: FeedService,
+        user_id: Uuid,
+    ) -> Self {
         let feed_snapshot_rx = feed_service.subscribe_snapshot();
         let feed_event_rx = feed_service.subscribe_events();
         let profile_event_rx = profile_service.subscribe_events();
@@ -521,15 +525,15 @@ impl SettingsModalState {
         }
     }
 
-    pub fn gem(&self) -> &GemState {
+    pub(crate) fn gem(&self) -> &GemState {
         &self.gem
     }
 
-    pub fn gem_mut(&mut self) -> &mut GemState {
+    pub(crate) fn gem_mut(&mut self) -> &mut GemState {
         &mut self.gem
     }
 
-    pub fn open_from_profile(&mut self, profile: &Profile) {
+    pub(crate) fn open_from_profile(&mut self, profile: &Profile) {
         self.draft = profile.clone();
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
@@ -551,7 +555,7 @@ impl SettingsModalState {
         self.feed_service.list_task(self.user_id);
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub(crate) fn tick(&mut self) -> Option<Banner> {
         self.drain_feed_snapshot();
         let mut banner = self.drain_profile_events();
         if let Some(feed_banner) = self.drain_feed_events() {
@@ -560,14 +564,14 @@ impl SettingsModalState {
         banner
     }
 
-    pub fn selected_tab(&self) -> Tab {
+    pub(crate) fn selected_tab(&self) -> Tab {
         self.selected_tab
     }
 
     /// Switch to the neighboring tab. Auto-saves + ends any in-flight bio
     /// edit when leaving the Bio tab so the preview reflects the draft.
     /// Skips the Special tab while it's hidden (no bio/country/timezone).
-    pub fn cycle_tab(&mut self, forward: bool) {
+    pub(crate) fn cycle_tab(&mut self, forward: bool) {
         let visible = self.visible_tabs();
         let idx = visible
             .iter()
@@ -585,7 +589,7 @@ impl SettingsModalState {
     /// strip), running the same auto-save / edit-cleanup logic as `cycle_tab`.
     /// Ignored if the tab isn't currently visible (e.g. clicking a stale
     /// rect for the Special tab after it was hidden again).
-    pub fn select_tab(&mut self, next: Tab) {
+    pub(crate) fn select_tab(&mut self, next: Tab) {
         if !self.visible_tabs().contains(&next) || next == self.selected_tab {
             return;
         }
@@ -615,17 +619,17 @@ impl SettingsModalState {
         self.selected_tab = next;
     }
 
-    pub fn set_tab_rects(&self, rects: [Option<Rect>; Tab::ALL.len()]) {
+    pub(crate) fn set_tab_rects(&self, rects: [Option<Rect>; Tab::ALL.len()]) {
         self.tab_rects.set(rects);
     }
 
-    pub fn set_body_area(&self, area: Rect) {
+    pub(crate) fn set_body_area(&self, area: Rect) {
         self.body_area.set(area);
     }
 
     /// Hit-test the tab strip. Returns the tab whose cell contains the
     /// (0-based ratatui) point, if any.
-    pub fn tab_at_point(&self, x: u16, y: u16) -> Option<Tab> {
+    pub(crate) fn tab_at_point(&self, x: u16, y: u16) -> Option<Tab> {
         let rects = self.tab_rects.get();
         Tab::ALL
             .iter()
@@ -634,57 +638,57 @@ impl SettingsModalState {
             .find_map(|(tab, slot)| slot.filter(|rect| rect_contains(*rect, x, y)).map(|_| tab))
     }
 
-    pub fn body_contains(&self, x: u16, y: u16) -> bool {
+    pub(crate) fn body_contains(&self, x: u16, y: u16) -> bool {
         rect_contains(self.body_area.get(), x, y)
     }
 
     /// Tabs to show in the tab strip in display order. All tabs are always
     /// visible — there is no unlock gating.
-    pub fn visible_tabs(&self) -> Vec<Tab> {
+    pub(crate) fn visible_tabs(&self) -> Vec<Tab> {
         Tab::ALL.to_vec()
     }
 
-    pub fn set_modal_width(&mut self, _modal_width: u16) {
+    pub(crate) fn set_modal_width(&mut self, _modal_width: u16) {
         // TextArea wraps internally at render time; nothing to sync here.
     }
 
-    pub fn draft(&self) -> &Profile {
+    pub(crate) fn draft(&self) -> &Profile {
         &self.draft
     }
 
-    pub fn selected_row(&self) -> Row {
+    pub(crate) fn selected_row(&self) -> Row {
         Row::ALL[self.row_index]
     }
 
-    pub fn right_sidebar_components_open(&self) -> bool {
+    pub(crate) fn right_sidebar_components_open(&self) -> bool {
         self.right_sidebar_components_open
     }
 
-    pub fn open_right_sidebar_components(&mut self) {
+    pub(crate) fn open_right_sidebar_components(&mut self) {
         self.right_sidebar_components_open = true;
         self.right_sidebar_components_index = 0;
     }
 
-    pub fn close_right_sidebar_components(&mut self) {
+    pub(crate) fn close_right_sidebar_components(&mut self) {
         self.right_sidebar_components_open = false;
     }
 
-    pub fn right_sidebar_components_index(&self) -> usize {
+    pub(crate) fn right_sidebar_components_index(&self) -> usize {
         self.right_sidebar_components_index
     }
 
-    pub fn right_sidebar_components(&self) -> &[RightSidebarComponentSetting] {
+    pub(crate) fn right_sidebar_components(&self) -> &[RightSidebarComponentSetting] {
         &self.draft.right_sidebar_components
     }
 
-    pub fn move_right_sidebar_components_cursor(&mut self, delta: isize) {
+    pub(crate) fn move_right_sidebar_components_cursor(&mut self, delta: isize) {
         let last = self.draft.right_sidebar_components.len().saturating_sub(1) as isize;
         self.right_sidebar_components_index =
             (self.right_sidebar_components_index as isize + delta).clamp(0, last) as usize;
     }
 
     /// Toggle the on/off state of the selected component.
-    pub fn toggle_right_sidebar_component(&mut self) {
+    pub(crate) fn toggle_right_sidebar_component(&mut self) {
         if let Some(setting) = self
             .draft
             .right_sidebar_components
@@ -697,7 +701,7 @@ impl SettingsModalState {
 
     /// Move the selected component up or down in the render order, keeping the
     /// cursor on the moved row.
-    pub fn move_right_sidebar_component(&mut self, delta: isize) {
+    pub(crate) fn move_right_sidebar_component(&mut self, delta: isize) {
         let len = self.draft.right_sidebar_components.len();
         if len == 0 {
             return;
@@ -713,25 +717,25 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn selected_account_row(&self) -> AccountRow {
+    pub(crate) fn selected_account_row(&self) -> AccountRow {
         AccountRow::ALL[self.account_row_index]
     }
 
-    pub fn move_account_row(&mut self, delta: isize) {
+    pub(crate) fn move_account_row(&mut self, delta: isize) {
         let last = AccountRow::ALL.len().saturating_sub(1) as isize;
         self.account_row_index = (self.account_row_index as isize + delta).clamp(0, last) as usize;
     }
 
-    pub fn selected_tweak_row(&self) -> TweakRow {
+    pub(crate) fn selected_tweak_row(&self) -> TweakRow {
         TweakRow::ALL[self.tweak_row_index]
     }
 
-    pub fn move_tweak_row(&mut self, delta: isize) {
+    pub(crate) fn move_tweak_row(&mut self, delta: isize) {
         let last = TweakRow::ALL.len().saturating_sub(1) as isize;
         self.tweak_row_index = (self.tweak_row_index as isize + delta).clamp(0, last) as usize;
     }
 
-    pub fn toggle_selected_tweak(&mut self) {
+    pub(crate) fn toggle_selected_tweak(&mut self) {
         match self.selected_tweak_row() {
             TweakRow::BackgroundColor => {
                 self.draft.enable_background_color ^= true;
@@ -767,7 +771,7 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn cycle_selected_tweak(&mut self, forward: bool) {
+    pub(crate) fn cycle_selected_tweak(&mut self, forward: bool) {
         match self.selected_tweak_row() {
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
             _ => self.toggle_selected_tweak(),
@@ -781,11 +785,11 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn link_account_dialog(&self) -> &LinkAccountDialogState {
+    pub(crate) fn link_account_dialog(&self) -> &LinkAccountDialogState {
         &self.link_account
     }
 
-    pub fn open_link_account_dialog(&mut self) {
+    pub(crate) fn open_link_account_dialog(&mut self) {
         self.link_account = LinkAccountDialogState {
             open: true,
             step: LinkAccountStep::EnterCode,
@@ -803,11 +807,11 @@ impl SettingsModalState {
         };
     }
 
-    pub fn close_link_account_dialog(&mut self) {
+    pub(crate) fn close_link_account_dialog(&mut self) {
         self.link_account = LinkAccountDialogState::new();
     }
 
-    pub fn generate_link_account_code(&mut self) {
+    pub(crate) fn generate_link_account_code(&mut self) {
         if self.link_account.pending {
             return;
         }
@@ -816,7 +820,7 @@ impl SettingsModalState {
         self.profile_service.create_account_link_code(self.user_id);
     }
 
-    pub fn move_link_account_enter_code_focus(&mut self, focus: LinkAccountEnterCodeFocus) {
+    pub(crate) fn move_link_account_enter_code_focus(&mut self, focus: LinkAccountEnterCodeFocus) {
         if self.link_account.step != LinkAccountStep::EnterCode {
             return;
         }
@@ -827,7 +831,7 @@ impl SettingsModalState {
         );
     }
 
-    pub fn activate_link_account_enter_code(&mut self) {
+    pub(crate) fn activate_link_account_enter_code(&mut self) {
         match self.link_account.enter_code_focus {
             LinkAccountEnterCodeFocus::GenerateCode => self.generate_link_account_code(),
             LinkAccountEnterCodeFocus::PeerCode => self.submit_link_account_code(),
@@ -849,7 +853,7 @@ impl SettingsModalState {
             .preview_account_link_code(self.user_id, code);
     }
 
-    pub fn select_link_account_main(&mut self, keep_current: bool) {
+    pub(crate) fn select_link_account_main(&mut self, keep_current: bool) {
         if self.link_account.keep_current != keep_current {
             self.link_account.keep_current = keep_current;
             self.link_account.confirm_input = new_short_textarea(true);
@@ -857,7 +861,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn submit_link_account_confirmation(&mut self) {
+    pub(crate) fn submit_link_account_confirmation(&mut self) {
         if self.link_account.pending || self.link_account.step != LinkAccountStep::Confirm {
             return;
         }
@@ -888,7 +892,7 @@ impl SettingsModalState {
             .complete_account_link(self.user_id, peer_user_id, code, kept_user_id);
     }
 
-    pub fn link_account_kept_username(&self) -> Option<String> {
+    pub(crate) fn link_account_kept_username(&self) -> Option<String> {
         if self.link_account.keep_current {
             Some(self.draft.username.clone())
         } else {
@@ -896,7 +900,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn link_account_push(&mut self, ch: char) {
+    pub(crate) fn link_account_push(&mut self, ch: char) {
         match self.link_account.step {
             LinkAccountStep::EnterCode => {
                 if self.link_account.enter_code_focus != LinkAccountEnterCodeFocus::PeerCode {
@@ -926,71 +930,71 @@ impl SettingsModalState {
         }
     }
 
-    pub fn link_account_backspace(&mut self) {
+    pub(crate) fn link_account_backspace(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.delete_char();
             self.link_account.status = None;
         }
     }
 
-    pub fn link_account_delete_right(&mut self) {
+    pub(crate) fn link_account_delete_right(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.delete_next_char();
             self.link_account.status = None;
         }
     }
 
-    pub fn link_account_delete_word_left(&mut self) {
+    pub(crate) fn link_account_delete_word_left(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.delete_word();
             self.link_account.status = None;
         }
     }
 
-    pub fn link_account_delete_word_right(&mut self) {
+    pub(crate) fn link_account_delete_word_right(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.delete_next_word();
             self.link_account.status = None;
         }
     }
 
-    pub fn link_account_cursor_left(&mut self) {
+    pub(crate) fn link_account_cursor_left(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::Back);
         }
     }
 
-    pub fn link_account_cursor_right(&mut self) {
+    pub(crate) fn link_account_cursor_right(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::Forward);
         }
     }
 
-    pub fn link_account_cursor_word_left(&mut self) {
+    pub(crate) fn link_account_cursor_word_left(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::WordBack);
         }
     }
 
-    pub fn link_account_cursor_word_right(&mut self) {
+    pub(crate) fn link_account_cursor_word_right(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::WordForward);
         }
     }
 
-    pub fn link_account_cursor_home(&mut self) {
+    pub(crate) fn link_account_cursor_home(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::Head);
         }
     }
 
-    pub fn link_account_cursor_end(&mut self) {
+    pub(crate) fn link_account_cursor_end(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::End);
         }
     }
 
-    pub fn clear_link_account_input(&mut self) {
+    pub(crate) fn clear_link_account_input(&mut self) {
         match self.link_account.step {
             LinkAccountStep::EnterCode => {
                 self.link_account.enter_code_focus = LinkAccountEnterCodeFocus::PeerCode;
@@ -1024,22 +1028,22 @@ impl SettingsModalState {
         self.link_account.confirm_input.lines().join("")
     }
 
-    pub fn delete_account_dialog(&self) -> &DeleteAccountDialogState {
+    pub(crate) fn delete_account_dialog(&self) -> &DeleteAccountDialogState {
         &self.delete_account
     }
 
-    pub fn open_delete_account_dialog(&mut self) {
+    pub(crate) fn open_delete_account_dialog(&mut self) {
         self.delete_account.open = true;
         self.delete_account.input = new_short_textarea(true);
         self.delete_account.status = None;
         self.delete_account.pending = false;
     }
 
-    pub fn close_delete_account_dialog(&mut self) {
+    pub(crate) fn close_delete_account_dialog(&mut self) {
         self.delete_account = DeleteAccountDialogState::new();
     }
 
-    pub fn submit_delete_account_confirmation(&mut self) {
+    pub(crate) fn submit_delete_account_confirmation(&mut self) {
         if self.delete_account.pending {
             return;
         }
@@ -1053,86 +1057,86 @@ impl SettingsModalState {
         self.profile_service.delete_account(self.user_id);
     }
 
-    pub fn delete_account_push(&mut self, ch: char) {
+    pub(crate) fn delete_account_push(&mut self, ch: char) {
         if single_line_char_count(&self.delete_account.input) < DELETE_CONFIRM_USERNAME_MAX_LEN {
             self.delete_account.input.insert_char(ch);
             self.delete_account.status = None;
         }
     }
 
-    pub fn delete_account_backspace(&mut self) {
+    pub(crate) fn delete_account_backspace(&mut self) {
         self.delete_account.input.delete_char();
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_delete_right(&mut self) {
+    pub(crate) fn delete_account_delete_right(&mut self) {
         self.delete_account.input.delete_next_char();
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_delete_word_left(&mut self) {
+    pub(crate) fn delete_account_delete_word_left(&mut self) {
         self.delete_account.input.delete_word();
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_delete_word_right(&mut self) {
+    pub(crate) fn delete_account_delete_word_right(&mut self) {
         self.delete_account.input.delete_next_word();
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_cursor_left(&mut self) {
+    pub(crate) fn delete_account_cursor_left(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::Back);
     }
 
-    pub fn delete_account_cursor_right(&mut self) {
+    pub(crate) fn delete_account_cursor_right(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::Forward);
     }
 
-    pub fn delete_account_cursor_word_left(&mut self) {
+    pub(crate) fn delete_account_cursor_word_left(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::WordBack);
     }
 
-    pub fn delete_account_cursor_word_right(&mut self) {
+    pub(crate) fn delete_account_cursor_word_right(&mut self) {
         self.delete_account
             .input
             .move_cursor(CursorMove::WordForward);
     }
 
-    pub fn delete_account_cursor_home(&mut self) {
+    pub(crate) fn delete_account_cursor_home(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::Head);
     }
 
-    pub fn delete_account_cursor_end(&mut self) {
+    pub(crate) fn delete_account_cursor_end(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::End);
     }
 
-    pub fn clear_delete_account_confirmation(&mut self) {
+    pub(crate) fn clear_delete_account_confirmation(&mut self) {
         self.delete_account.input = new_short_textarea(true);
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_text(&self) -> String {
+    pub(crate) fn delete_account_text(&self) -> String {
         self.delete_account.input.lines().join("")
     }
 
-    pub fn irc_token_dialog(&self) -> &IrcTokenDialogState {
+    pub(crate) fn irc_token_dialog(&self) -> &IrcTokenDialogState {
         &self.irc_token
     }
 
-    pub fn open_irc_token_dialog(&mut self) {
+    pub(crate) fn open_irc_token_dialog(&mut self) {
         self.irc_token = IrcTokenDialogState::new();
         self.irc_token.open = true;
         // status stays `None` (loading) until the service replies.
         self.profile_service.load_irc_token_status(self.user_id);
     }
 
-    pub fn close_irc_token_dialog(&mut self) {
+    pub(crate) fn close_irc_token_dialog(&mut self) {
         self.irc_token = IrcTokenDialogState::new();
     }
 
     /// Move focus between the IRC token action buttons. Only meaningful while a
     /// token exists (Create-only state has a single button).
-    pub fn move_irc_token_focus(&mut self, focus: IrcTokenFocus) {
+    pub(crate) fn move_irc_token_focus(&mut self, focus: IrcTokenFocus) {
         if self.irc_token.revealed_token.is_some() || !self.irc_token.has_token() {
             return;
         }
@@ -1142,7 +1146,7 @@ impl SettingsModalState {
     }
 
     /// Dismiss the one-time token reveal and reload the (now-active) status.
-    pub fn dismiss_irc_token_reveal(&mut self) {
+    pub(crate) fn dismiss_irc_token_reveal(&mut self) {
         if self.irc_token.revealed_token.take().is_some() {
             self.irc_token.message = None;
             self.irc_token.status = None;
@@ -1153,7 +1157,7 @@ impl SettingsModalState {
 
     /// Activate the focused IRC token action (Enter). Mints/resets or arms and
     /// then performs a revoke. No-op while a request is in flight.
-    pub fn activate_irc_token_focus(&mut self) {
+    pub(crate) fn activate_irc_token_focus(&mut self) {
         if self.irc_token.revealed_token.is_some() {
             self.dismiss_irc_token_reveal();
             return;
@@ -1192,24 +1196,24 @@ impl SettingsModalState {
         }
     }
 
-    pub fn move_row(&mut self, delta: isize) {
+    pub(crate) fn move_row(&mut self, delta: isize) {
         let last = Row::ALL.len().saturating_sub(1) as isize;
         self.row_index = (self.row_index as isize + delta).clamp(0, last) as usize;
     }
 
-    pub fn theme_selected_row(&self) -> usize {
+    pub(crate) fn theme_selected_row(&self) -> usize {
         self.theme_selected_row
     }
 
-    pub fn theme_scroll_offset(&self) -> usize {
+    pub(crate) fn theme_scroll_offset(&self) -> usize {
         self.theme_scroll_offset
     }
 
-    pub fn set_theme_visible_height(&self, height: usize) {
+    pub(crate) fn set_theme_visible_height(&self, height: usize) {
         self.theme_visible_height.set(height.max(1));
     }
 
-    pub fn move_theme_cursor(&mut self, delta: isize) {
+    pub(crate) fn move_theme_cursor(&mut self, delta: isize) {
         let rows = self.theme_tree_rows();
         let last = rows.len().saturating_sub(1) as isize;
         self.theme_selected_row =
@@ -1222,7 +1226,7 @@ impl SettingsModalState {
         self.keep_theme_cursor_visible();
     }
 
-    pub fn theme_cursor_left(&mut self) {
+    pub(crate) fn theme_cursor_left(&mut self) {
         let rows = self.theme_tree_rows();
         match rows.get(self.theme_selected_row).copied() {
             Some(ThemeTreeRow::Group {
@@ -1236,7 +1240,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn theme_cursor_right(&mut self) {
+    pub(crate) fn theme_cursor_right(&mut self) {
         let rows = self.theme_tree_rows();
         match rows.get(self.theme_selected_row).copied() {
             Some(ThemeTreeRow::Group {
@@ -1261,7 +1265,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn toggle_theme_tree_row(&mut self) {
+    pub(crate) fn toggle_theme_tree_row(&mut self) {
         let rows = self.theme_tree_rows();
         if let Some(row) = rows.get(self.theme_selected_row).copied() {
             match row {
@@ -1277,7 +1281,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn select_theme_index(&mut self, index: usize) {
+    pub(crate) fn select_theme_index(&mut self, index: usize) {
         let clamped = index.min(theme::OPTIONS.len().saturating_sub(1));
         self.expand_theme_group(theme::OPTIONS[clamped].group);
         self.theme_index = clamped;
@@ -1306,7 +1310,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn theme_tree_rows(&self) -> Vec<ThemeTreeRow> {
+    pub(crate) fn theme_tree_rows(&self) -> Vec<ThemeTreeRow> {
         let mut rows = Vec::new();
         for group in theme::ThemeGroup::ALL {
             let collapsed = self.theme_group_collapsed(group);
@@ -1398,23 +1402,23 @@ impl SettingsModalState {
         })
     }
 
-    pub fn editing_username(&self) -> bool {
+    pub(crate) fn editing_username(&self) -> bool {
         self.editing_username
     }
 
-    pub fn editing_system_field(&self) -> Option<SystemField> {
+    pub(crate) fn editing_system_field(&self) -> Option<SystemField> {
         self.editing_system_field
     }
 
-    pub fn editing_system_row(&self, row: Row) -> bool {
+    pub(crate) fn editing_system_row(&self, row: Row) -> bool {
         self.editing_system_field == SystemField::from_row(row)
     }
 
-    pub fn editing_bio(&self) -> bool {
+    pub(crate) fn editing_bio(&self) -> bool {
         self.editing_bio
     }
 
-    pub fn username_input(&self) -> &TextArea<'static> {
+    pub(crate) fn username_input(&self) -> &TextArea<'static> {
         &self.username_input
     }
 
@@ -1438,7 +1442,7 @@ impl SettingsModalState {
         self.username_input.lines().join("")
     }
 
-    pub fn system_input(&self) -> &TextArea<'static> {
+    pub(crate) fn system_input(&self) -> &TextArea<'static> {
         &self.system_input
     }
 
@@ -1446,23 +1450,23 @@ impl SettingsModalState {
         self.system_input.lines().join("")
     }
 
-    pub fn bio_input(&self) -> &TextArea<'static> {
+    pub(crate) fn bio_input(&self) -> &TextArea<'static> {
         &self.bio_input
     }
 
-    pub fn feeds(&self) -> &[RssFeed] {
+    pub(crate) fn feeds(&self) -> &[RssFeed] {
         &self.feeds
     }
 
-    pub fn feed_index(&self) -> usize {
+    pub(crate) fn feed_index(&self) -> usize {
         self.feed_index
     }
 
-    pub fn editing_feed_url(&self) -> bool {
+    pub(crate) fn editing_feed_url(&self) -> bool {
         self.editing_feed_url
     }
 
-    pub fn feed_url_input(&self) -> &TextArea<'static> {
+    pub(crate) fn feed_url_input(&self) -> &TextArea<'static> {
         &self.feed_url_input
     }
 
@@ -1470,34 +1474,34 @@ impl SettingsModalState {
         self.bio_input.lines().join("\n")
     }
 
-    pub fn picker(&self) -> &PickerState {
+    pub(crate) fn picker(&self) -> &PickerState {
         &self.picker
     }
 
-    pub fn picker_open(&self) -> bool {
+    pub(crate) fn picker_open(&self) -> bool {
         self.picker.kind.is_some()
     }
 
-    pub fn open_picker(&mut self, kind: PickerKind) {
+    pub(crate) fn open_picker(&mut self, kind: PickerKind) {
         self.picker.kind = Some(kind);
         self.picker.query.clear();
         self.picker.selected_index = 0;
         self.picker.scroll_offset = 0;
     }
 
-    pub fn close_picker(&mut self) {
+    pub(crate) fn close_picker(&mut self) {
         self.picker = PickerState::default();
     }
 
-    pub fn filtered_countries(&self) -> Vec<&'static CountryOption> {
+    pub(crate) fn filtered_countries(&self) -> Vec<&'static CountryOption> {
         filter_countries(&self.picker.query)
     }
 
-    pub fn filtered_timezones(&self) -> Vec<&'static str> {
+    pub(crate) fn filtered_timezones(&self) -> Vec<&'static str> {
         filter_timezones(&self.picker.query)
     }
 
-    pub fn picker_len(&self) -> usize {
+    pub(crate) fn picker_len(&self) -> usize {
         match self.picker.kind {
             Some(PickerKind::Country) => self.filtered_countries().len(),
             Some(PickerKind::Timezone) => self.filtered_timezones().len(),
@@ -1505,7 +1509,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn picker_move(&mut self, delta: isize) {
+    pub(crate) fn picker_move(&mut self, delta: isize) {
         let len = self.picker_len();
         if len == 0 {
             self.picker.selected_index = 0;
@@ -1522,19 +1526,19 @@ impl SettingsModalState {
         }
     }
 
-    pub fn picker_push(&mut self, ch: char) {
+    pub(crate) fn picker_push(&mut self, ch: char) {
         self.picker.query.push(ch);
         self.picker.selected_index = 0;
         self.picker.scroll_offset = 0;
     }
 
-    pub fn picker_backspace(&mut self) {
+    pub(crate) fn picker_backspace(&mut self) {
         self.picker.query.pop();
         self.picker.selected_index = 0;
         self.picker.scroll_offset = 0;
     }
 
-    pub fn apply_picker_selection(&mut self) {
+    pub(crate) fn apply_picker_selection(&mut self) {
         let mut mutated = false;
         match self.picker.kind {
             Some(PickerKind::Country) => {
@@ -1559,19 +1563,19 @@ impl SettingsModalState {
         }
     }
 
-    pub fn start_username_edit(&mut self) {
+    pub(crate) fn start_username_edit(&mut self) {
         self.editing_system_field = None;
         self.editing_username = true;
         self.username_input = new_short_textarea(true);
         self.username_input.insert_str(&self.draft.username);
     }
 
-    pub fn cancel_username_edit(&mut self) {
+    pub(crate) fn cancel_username_edit(&mut self) {
         self.editing_username = false;
         self.username_input = new_short_textarea(false);
     }
 
-    pub fn submit_username(&mut self) {
+    pub(crate) fn submit_username(&mut self) {
         self.editing_username = false;
         let normalized = sanitize_username_input(self.username_text().trim());
         self.username_input = new_short_textarea(false);
@@ -1579,7 +1583,7 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn start_system_field_edit(&mut self, field: SystemField) {
+    pub(crate) fn start_system_field_edit(&mut self, field: SystemField) {
         self.editing_username = false;
         self.editing_system_field = Some(field);
         self.system_input = new_short_textarea(true);
@@ -1588,12 +1592,12 @@ impl SettingsModalState {
         }
     }
 
-    pub fn cancel_system_field_edit(&mut self) {
+    pub(crate) fn cancel_system_field_edit(&mut self) {
         self.editing_system_field = None;
         self.system_input = new_short_textarea(false);
     }
 
-    pub fn submit_system_field(&mut self) {
+    pub(crate) fn submit_system_field(&mut self) {
         let Some(field) = self.editing_system_field.take() else {
             return;
         };
@@ -1603,13 +1607,13 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn start_bio_edit(&mut self) {
+    pub(crate) fn start_bio_edit(&mut self) {
         self.editing_bio = true;
         move_bio_cursor_to_end(&mut self.bio_input);
         set_bio_cursor_visible(&mut self.bio_input, true);
     }
 
-    pub fn stop_bio_edit(&mut self) {
+    pub(crate) fn stop_bio_edit(&mut self) {
         self.editing_bio = false;
         self.draft.bio = self.bio_text().trim_end().to_string();
         reset_bio_view_to_top(&mut self.bio_input);
@@ -1617,7 +1621,7 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn move_feed_cursor(&mut self, delta: isize) {
+    pub(crate) fn move_feed_cursor(&mut self, delta: isize) {
         let len = self.feed_slot_count();
         if len == 0 {
             self.feed_index = 0;
@@ -1626,25 +1630,25 @@ impl SettingsModalState {
         self.feed_index = (self.feed_index as isize + delta).clamp(0, len as isize - 1) as usize;
     }
 
-    pub fn feed_slot_count(&self) -> usize {
+    pub(crate) fn feed_slot_count(&self) -> usize {
         self.feeds.len() + 1
     }
 
-    pub fn feed_index_is_add_row(&self) -> bool {
+    pub(crate) fn feed_index_is_add_row(&self) -> bool {
         self.feed_index == self.feeds.len()
     }
 
-    pub fn start_feed_url_edit(&mut self) {
+    pub(crate) fn start_feed_url_edit(&mut self) {
         self.editing_feed_url = true;
         self.feed_url_input = new_short_textarea(true);
     }
 
-    pub fn cancel_feed_url_edit(&mut self) {
+    pub(crate) fn cancel_feed_url_edit(&mut self) {
         self.editing_feed_url = false;
         self.feed_url_input = new_short_textarea(false);
     }
 
-    pub fn submit_feed_url(&mut self) {
+    pub(crate) fn submit_feed_url(&mut self) {
         let url = self.feed_url_input.lines().join("").trim().to_string();
         self.cancel_feed_url_edit();
         if url.is_empty() {
@@ -1653,7 +1657,7 @@ impl SettingsModalState {
         self.feed_service.add_feed_task(self.user_id, url);
     }
 
-    pub fn remove_selected_feed(&mut self) {
+    pub(crate) fn remove_selected_feed(&mut self) {
         if self.feed_index_is_add_row() {
             return;
         }
@@ -1663,7 +1667,7 @@ impl SettingsModalState {
         self.feed_service.delete_feed_task(self.user_id, feed.id);
     }
 
-    pub fn refresh_feeds(&self) {
+    pub(crate) fn refresh_feeds(&self) {
         self.feed_service.poll_once_task();
         self.feed_service.list_task(self.user_id);
     }
@@ -1810,7 +1814,7 @@ impl SettingsModalState {
     /// Cycle the value of the currently selected row and auto-persist.
     /// Username/Country/Timezone don't cycle here (they open editors/pickers);
     /// this only fires for the toggle/enum rows.
-    pub fn cycle_setting(&mut self, forward: bool) {
+    pub(crate) fn cycle_setting(&mut self, forward: bool) {
         let mutated = match self.selected_row() {
             Row::Theme => {
                 let current = self
@@ -1857,7 +1861,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn save(&self) {
+    pub(crate) fn save(&self) {
         self.profile_service.edit_profile(
             self.user_id,
             ProfileParams {
@@ -2003,30 +2007,5 @@ fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalize_optional_text_trims_and_collapses_blank() {
-        assert_eq!(
-            normalize_optional_text("  VS   Code  ").as_deref(),
-            Some("VS Code")
-        );
-        assert_eq!(normalize_optional_text("   "), None);
-    }
-
-    #[test]
-    fn readonly_bio_textarea_resets_cursor_to_top() {
-        let input = bio_textarea_for_readonly_text("first line\nsecond line\nthird line");
-        assert_eq!(input.cursor(), (0usize, 0usize));
-    }
-
-    #[test]
-    fn move_bio_cursor_to_end_goes_to_last_line_end() {
-        let mut input = bio_textarea_for_readonly_text("first line\nsecond line\nthird line");
-
-        move_bio_cursor_to_end(&mut input);
-
-        assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

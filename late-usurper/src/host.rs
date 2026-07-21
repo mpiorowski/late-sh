@@ -24,21 +24,21 @@ enum StopReason {
 }
 
 /// Configuration for a single Usurper child process.
-pub struct HostConfig {
+pub(crate) struct HostConfig {
     /// Path to USURPER.EXE.
-    pub bin: String,
+    pub(crate) bin: String,
     /// The shared game tree; becomes the child's working directory (the game
     /// resolves DATA/, TEXT/, NODE/, the dropfile path, everything, relative
     /// to it).
-    pub game_dir: String,
+    pub(crate) game_dir: String,
     /// Game-relative dropfile directory for this session (from
     /// `dropfile::write_door32`), passed via `/P`.
-    pub drop_rel: String,
+    pub(crate) drop_rel: String,
     /// The leased node number, passed via `/N`. Held by the bridge task so the
     /// lease outlives the child and frees itself when the bridge ends.
-    pub node: NodeLease,
-    pub cols: u16,
-    pub rows: u16,
+    pub(crate) node: NodeLease,
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
 }
 
 enum Command {
@@ -54,12 +54,12 @@ enum Command {
 /// Same shape as the dcss host's `PtyHost`: the bridge task is detached, and on
 /// drop `cmd_tx` closes, the bridge sees the channel end, and it runs the
 /// teardown before exiting on its own.
-pub struct PtyHost {
+pub(crate) struct PtyHost {
     cmd_tx: mpsc::Sender<Command>,
 }
 
 impl PtyHost {
-    pub fn spawn(
+    pub(crate) fn spawn(
         cfg: HostConfig,
         handle: Handle,
         channel: ChannelId,
@@ -84,11 +84,11 @@ impl PtyHost {
         Self { cmd_tx }
     }
 
-    pub fn send_input(&self, bytes: Vec<u8>) {
+    pub(crate) fn send_input(&self, bytes: Vec<u8>) {
         let _ = self.cmd_tx.try_send(Command::Input(bytes));
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) {
+    pub(crate) fn resize(&self, cols: u16, rows: u16) {
         let _ = self.cmd_tx.try_send(Command::Resize { cols, rows });
     }
 }

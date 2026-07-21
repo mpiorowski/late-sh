@@ -307,7 +307,7 @@ impl ModerationService {
         let room = find_room_by_mod_slug(&client, slug).await?;
         let member_count = ChatRoomMember::count_for_room(&client, room.id).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
-        let voice_target = voice_target_for_room(&room).await?;
+        let voice_target = voice_target_for_room(&room)?;
         let voice_is_enabled = VoiceChannel::find_for_target(
             &client,
             voice_target.target_kind,
@@ -580,7 +580,7 @@ impl ModerationService {
         let mut client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, &slug).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
-        let voice_target = voice_target_for_room(&room).await?;
+        let voice_target = voice_target_for_room(&room)?;
         let current_enabled = VoiceChannel::find_for_target(
             &client,
             voice_target.target_kind,
@@ -711,7 +711,7 @@ impl ModerationService {
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
         let affected_voice_channel =
             if matches!(request.action, RoomModAction::Kick | RoomModAction::Ban) {
-                let voice_target = voice_target_for_room(&room).await?;
+                let voice_target = voice_target_for_room(&room)?;
                 VoiceChannel::find_for_target(
                     &client,
                     voice_target.target_kind,
@@ -1876,7 +1876,7 @@ struct RoomVoiceTarget {
     display_name: String,
 }
 
-async fn voice_target_for_room(room: &ChatRoom) -> Result<RoomVoiceTarget> {
+fn voice_target_for_room(room: &ChatRoom) -> Result<RoomVoiceTarget> {
     Ok(RoomVoiceTarget {
         target_kind: TARGET_CHAT_ROOM,
         target_id: room.id,

@@ -14,7 +14,7 @@ use crate::app::{
     state::App,
 };
 
-pub fn open_ultimate_modal(app: &mut App) {
+pub(crate) fn open_ultimate_modal(app: &mut App) {
     app.ultimate_state.clamp_selection(&app.shop_state);
     if owned_ultimates(&app.shop_state).is_empty() {
         app.banner = Some(Banner::error("No Ultimates unlocked yet"));
@@ -31,7 +31,7 @@ pub fn open_ultimate_modal(app: &mut App) {
     app.refresh_ultimate_cooldowns();
 }
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             app.show_ultimate_modal = false;
@@ -55,7 +55,7 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &UltimateState, shop: &ShopState) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &UltimateState, shop: &ShopState) {
     let popup = centered_percent_rect(54, 46, area);
     frame.render_widget(Clear, popup);
     let block = Block::default()

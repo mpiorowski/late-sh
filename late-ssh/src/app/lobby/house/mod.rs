@@ -16,3 +16,6 @@ pub mod tables;
 pub mod tron;
 pub mod types;
 pub mod ui;
+
+#[cfg(test)]
+mod tables_test;

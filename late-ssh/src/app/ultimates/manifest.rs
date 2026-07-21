@@ -4,10 +4,10 @@ use late_core::models::marketplace::{THEMATRIX_ULTIMATE_SKU, WONDERLAND_ULTIMATE
 
 use super::effects::{THEMATRIX_TOTAL_MS, UltimateEffectKind};
 
-pub const WONDERLAND_ID: &str = "wonderland";
-pub const THEMATRIX_ID: &str = "thematrix";
-pub const ULTIMATE_SPELL_DURATION_MS: u64 = 10_000;
-pub const ULTIMATE_CAST_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
+pub(super) const WONDERLAND_ID: &str = "wonderland";
+pub(super) const THEMATRIX_ID: &str = "thematrix";
+pub(super) const ULTIMATE_SPELL_DURATION_MS: u64 = 10_000;
+pub(crate) const ULTIMATE_CAST_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum UltimateKind {
@@ -16,7 +16,7 @@ pub enum UltimateKind {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct UltimateSpell {
+pub(crate) struct UltimateSpell {
     pub kind: UltimateKind,
     pub id: &'static str,
     pub sku: &'static str,
@@ -25,7 +25,7 @@ pub struct UltimateSpell {
     pub effect_kind: UltimateEffectKind,
 }
 
-pub const ULTIMATE_SPELLS: &[UltimateSpell] = &[
+pub(super) const ULTIMATE_SPELLS: &[UltimateSpell] = &[
     UltimateSpell {
         kind: UltimateKind::Wonderland,
         id: WONDERLAND_ID,

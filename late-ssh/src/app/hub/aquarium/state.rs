@@ -19,7 +19,7 @@ const SIMULATION_STEP: Duration = Duration::from_millis(220);
 const FEED_EFFECT_DURATION: Duration = Duration::from_secs(8);
 const HUNGRY_MOTION_DIVISOR: u64 = 4;
 
-pub struct AquariumState {
+pub(crate) struct AquariumState {
     pub(crate) definitions: Vec<CreatureDef>,
     pub(crate) entities: Vec<Entity>,
     pub(crate) tick: u64,
@@ -31,17 +31,17 @@ pub struct AquariumState {
     hungry: bool,
 }
 
-pub enum RuntimeMode {
+pub(crate) enum RuntimeMode {
     Tank(TankState),
     Reef(ReefState),
 }
 
-pub struct TankState {
+pub(crate) struct TankState {
     pub width: u16,
     pub height: u16,
 }
 
-pub struct ReefState {
+pub(crate) struct ReefState {
     pub world: ReefWorld,
     pub respawn_delay: Duration,
     pub last_area: Rect,
@@ -49,20 +49,20 @@ pub struct ReefState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct WaterBand {
+pub(crate) struct WaterBand {
     pub top: i32,
     pub bottom: i32,
 }
 
 impl WaterBand {
-    pub fn for_reef(world: &ReefWorld, terminal_height: u16) -> Self {
+    pub(crate) fn for_reef(world: &ReefWorld, terminal_height: u16) -> Self {
         Self {
             top: world.surface.height as i32,
             bottom: terminal_height.saturating_sub(world.floor.height) as i32,
         }
     }
 
-    pub fn random_y_for(&self, variant: &Variant, rng: &mut ThreadRng) -> Option<i32> {
+    pub(crate) fn random_y_for(&self, variant: &Variant, rng: &mut ThreadRng) -> Option<i32> {
         let max_y = self.bottom - variant.height as i32;
         if max_y < self.top {
             None
@@ -71,7 +71,7 @@ impl WaterBand {
         }
     }
 
-    pub fn clamp_y_for(&self, y: i32, variant: &Variant) -> Option<i32> {
+    pub(crate) fn clamp_y_for(&self, y: i32, variant: &Variant) -> Option<i32> {
         let max_y = self.bottom - variant.height as i32;
         if max_y < self.top {
             None
@@ -80,7 +80,7 @@ impl WaterBand {
         }
     }
 
-    pub fn y_bounds_for(&self, variant: &Variant) -> Option<(i32, i32)> {
+    pub(crate) fn y_bounds_for(&self, variant: &Variant) -> Option<(i32, i32)> {
         let max_y = self.bottom - variant.height as i32;
         if max_y < self.top {
             None
@@ -89,14 +89,14 @@ impl WaterBand {
         }
     }
 
-    pub fn floor_y_for(&self, variant: &Variant) -> Option<i32> {
+    pub(crate) fn floor_y_for(&self, variant: &Variant) -> Option<i32> {
         let y = self.bottom - variant.height as i32;
         if y < self.top { None } else { Some(y) }
     }
 }
 
 impl AquariumState {
-    pub fn default_for_area(launch_area: Rect) -> Result<Self> {
+    pub(crate) fn default_for_area(launch_area: Rect) -> Result<Self> {
         Self::new(
             crate::app::hub::aquarium::config::default_config()?,
             crate::app::hub::aquarium::creature::load_default_creatures()?,
@@ -104,7 +104,7 @@ impl AquariumState {
         )
     }
 
-    pub fn new(
+    pub(crate) fn new(
         config: AppConfig,
         definitions: Vec<CreatureDef>,
         launch_area: Rect,
@@ -185,7 +185,7 @@ impl AquariumState {
         }
     }
 
-    pub fn set_active_creatures(&mut self, active_creatures: &[(String, usize)]) {
+    pub(crate) fn set_active_creatures(&mut self, active_creatures: &[(String, usize)]) {
         if self.active_creature_counts_match(active_creatures) {
             return;
         }
@@ -239,7 +239,7 @@ impl AquariumState {
         current == desired
     }
 
-    pub fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         let now = Instant::now();
         if self
             .feed_started_at
@@ -293,7 +293,7 @@ impl AquariumState {
         }
     }
 
-    pub fn handle_resize(&mut self, width: u16, height: u16) {
+    pub(crate) fn handle_resize(&mut self, width: u16, height: u16) {
         let mut rng = rand::thread_rng();
         if let RuntimeMode::Reef(reef) = &mut self.mode {
             reef.last_area = Rect::new(0, 0, width, height);
@@ -308,7 +308,7 @@ impl AquariumState {
         }
     }
 
-    pub fn feed(&mut self) {
+    pub(crate) fn feed(&mut self) {
         self.feed_started_at = Some(Instant::now());
         self.hungry = false;
         for entity in self.entities.iter_mut().filter(|entity| entity.is_active()) {
@@ -327,13 +327,13 @@ impl AquariumState {
         }
     }
 
-    pub fn feed_effect_tick(&self) -> Option<u64> {
+    pub(crate) fn feed_effect_tick(&self) -> Option<u64> {
         let started = self.feed_started_at?;
         let elapsed = Instant::now().saturating_duration_since(started);
         (elapsed < FEED_EFFECT_DURATION).then_some(elapsed.as_millis() as u64 / 120)
     }
 
-    pub fn set_hungry(&mut self, hungry: bool) {
+    pub(crate) fn set_hungry(&mut self, hungry: bool) {
         self.hungry = hungry;
     }
 }

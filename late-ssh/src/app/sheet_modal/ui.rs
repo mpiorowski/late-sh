@@ -14,7 +14,7 @@ use super::state::{SheetField, SheetModalState};
 const MODAL_WIDTH: u16 = 80;
 const MODAL_HEIGHT: u16 = 28;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &SheetModalState) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &SheetModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 

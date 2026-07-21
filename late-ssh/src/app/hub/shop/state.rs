@@ -20,7 +20,7 @@ use late_core::models::{
     username_effect::{GlowColor, GradientPair, UsernameEffect},
 };
 
-pub struct ShopState {
+pub(crate) struct ShopState {
     user_id: Uuid,
     service: ShopService,
     snapshot_rx: watch::Receiver<ShopSnapshot>,
@@ -35,7 +35,7 @@ pub struct ShopState {
 }
 
 #[derive(Clone, Debug)]
-pub struct RoomEffectTarget {
+pub(crate) struct RoomEffectTarget {
     pub room_id: Uuid,
     pub label: String,
     pub kind: String,
@@ -45,7 +45,7 @@ pub struct RoomEffectTarget {
 }
 
 #[derive(Clone, Debug)]
-pub struct PendingRoomEffect {
+pub(crate) struct PendingRoomEffect {
     pub sku: String,
     pub item_name: String,
     pub price_chips: i64,
@@ -58,7 +58,7 @@ pub struct PendingRoomEffect {
 /// The style picker armed by Enter on a username-effect item: cycle through
 /// the tier's styles (each swatch previews in its real colors), Enter buys.
 #[derive(Clone, Debug)]
-pub struct PendingUsernameEffect {
+pub(crate) struct PendingUsernameEffect {
     pub sku: String,
     pub item_name: String,
     pub price_chips: i64,
@@ -67,7 +67,7 @@ pub struct PendingUsernameEffect {
 }
 
 impl PendingUsernameEffect {
-    pub fn selected_effect(&self) -> Option<UsernameEffect> {
+    pub(crate) fn selected_effect(&self) -> Option<UsernameEffect> {
         self.options.get(self.selected).copied()
     }
 }
@@ -89,13 +89,13 @@ fn username_effect_options(variant: Option<&str>) -> Vec<UsernameEffect> {
     }
 }
 
-pub struct ShopTick {
+pub(crate) struct ShopTick {
     pub banner: Option<Banner>,
     pub snapshot_changed: bool,
 }
 
 impl ShopState {
-    pub fn new(
+    pub(crate) fn new(
         user_id: Uuid,
         service: ShopService,
         snapshot_rx: watch::Receiver<ShopSnapshot>,
@@ -117,7 +117,7 @@ impl ShopState {
         }
     }
 
-    pub fn tick(&mut self) -> ShopTick {
+    pub(crate) fn tick(&mut self) -> ShopTick {
         let mut snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
         if snapshot_changed {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
@@ -145,31 +145,31 @@ impl ShopState {
         }
     }
 
-    pub fn balance(&self) -> i64 {
+    pub(crate) fn balance(&self) -> i64 {
         self.snapshot.balance
     }
 
-    pub fn is_loaded(&self) -> bool {
+    pub(crate) fn is_loaded(&self) -> bool {
         self.snapshot.user_id == Some(self.user_id)
     }
 
-    pub fn entitlements(&self) -> &ShopEntitlements {
+    pub(crate) fn entitlements(&self) -> &ShopEntitlements {
         &self.snapshot.entitlements
     }
 
-    pub fn all_items(&self) -> &[ShopCatalogItem] {
+    pub(crate) fn all_items(&self) -> &[ShopCatalogItem] {
         &self.snapshot.items
     }
 
-    pub fn selected_category(&self) -> ShopCategory {
+    pub(crate) fn selected_category(&self) -> ShopCategory {
         ShopCategory::ALL[self.category_index.min(ShopCategory::ALL.len() - 1)]
     }
 
-    pub fn selected_category_index(&self) -> usize {
+    pub(crate) fn selected_category_index(&self) -> usize {
         self.category_index
     }
 
-    pub fn visible_items(&self) -> Vec<&ShopCatalogItem> {
+    pub(crate) fn visible_items(&self) -> Vec<&ShopCatalogItem> {
         let category = self.selected_category();
         let mut items: Vec<&ShopCatalogItem> = self
             .snapshot
@@ -183,7 +183,7 @@ impl ShopState {
         items
     }
 
-    pub fn active_aquarium_fish(&self) -> Vec<(String, usize)> {
+    pub(crate) fn active_aquarium_fish(&self) -> Vec<(String, usize)> {
         if !self.snapshot.entitlements.has_aquarium() {
             return Vec::new();
         }
@@ -198,23 +198,23 @@ impl ShopState {
             .collect()
     }
 
-    pub fn active_room_effects(&self) -> &HashMap<Uuid, Vec<ActiveChatRoomEffect>> {
+    pub(crate) fn active_room_effects(&self) -> &HashMap<Uuid, Vec<ActiveChatRoomEffect>> {
         &self.snapshot.active_room_effects
     }
 
-    pub fn pending_room_effect(&self) -> Option<&PendingRoomEffect> {
+    pub(crate) fn pending_room_effect(&self) -> Option<&PendingRoomEffect> {
         self.pending_room_effect.as_ref()
     }
 
-    pub fn pending_username_effect(&self) -> Option<&PendingUsernameEffect> {
+    pub(crate) fn pending_username_effect(&self) -> Option<&PendingUsernameEffect> {
         self.pending_username_effect.as_ref()
     }
 
-    pub fn active_username_effect(&self) -> Option<ActiveUsernameEffect> {
+    pub(crate) fn active_username_effect(&self) -> Option<ActiveUsernameEffect> {
         self.snapshot.active_username_effect
     }
 
-    pub fn pet_food_quantity(&self) -> i32 {
+    pub(crate) fn pet_food_quantity(&self) -> i32 {
         self.snapshot
             .items
             .iter()
@@ -223,7 +223,7 @@ impl ShopState {
             .unwrap_or(0)
     }
 
-    pub fn aquarium_food_quantity(&self) -> i32 {
+    pub(crate) fn aquarium_food_quantity(&self) -> i32 {
         self.snapshot
             .items
             .iter()
@@ -232,11 +232,11 @@ impl ShopState {
             .unwrap_or(0)
     }
 
-    pub fn aquarium_hungry(&self) -> bool {
+    pub(crate) fn aquarium_hungry(&self) -> bool {
         self.snapshot.aquarium_hungry
     }
 
-    pub fn equipped_chat_badge(&self) -> Option<String> {
+    pub(crate) fn equipped_chat_badge(&self) -> Option<String> {
         let mut pieces = Vec::new();
         pieces.extend(
             self.snapshot
@@ -256,26 +256,26 @@ impl ShopState {
         (!badge.is_empty()).then_some(badge)
     }
 
-    pub fn dynamic_bonsai_enabled(&self) -> bool {
+    pub(crate) fn dynamic_bonsai_enabled(&self) -> bool {
         self.snapshot
             .items
             .iter()
             .any(|item| item.is_dynamic_bonsai() && item.equipped)
     }
 
-    pub fn has_dynamic_bonsai(&self) -> bool {
+    pub(crate) fn has_dynamic_bonsai(&self) -> bool {
         self.snapshot.entitlements.has_dynamic_bonsai()
     }
 
-    pub fn selected_index(&self) -> usize {
+    pub(crate) fn selected_index(&self) -> usize {
         self.selected_index
     }
 
-    pub fn selected_item(&self) -> Option<&ShopCatalogItem> {
+    pub(crate) fn selected_item(&self) -> Option<&ShopCatalogItem> {
         self.visible_items().get(self.selected_index).copied()
     }
 
-    pub fn move_selection(&mut self, delta: isize) {
+    pub(crate) fn move_selection(&mut self, delta: isize) {
         let len = self.visible_items().len();
         if len == 0 {
             self.selected_index = 0;
@@ -285,7 +285,7 @@ impl ShopState {
             (self.selected_index as isize + delta).rem_euclid(len as isize) as usize;
     }
 
-    pub fn select_next_category(&mut self) {
+    pub(crate) fn select_next_category(&mut self) {
         self.pending_room_effect = None;
         self.pending_username_effect = None;
         self.category_index = (self.category_index + 1) % ShopCategory::ALL.len();
@@ -296,7 +296,7 @@ impl ShopState {
     /// (e.g. clicking a chat-author store badge to open the shop on Badges)
     /// where stepping with `select_next_category` would be brittle to
     /// `ShopCategory::ALL` reordering.
-    pub fn select_category(&mut self, category: ShopCategory) {
+    pub(crate) fn select_category(&mut self, category: ShopCategory) {
         if let Some(idx) = ShopCategory::ALL.iter().position(|c| *c == category) {
             self.category_index = idx;
             self.selected_index = 0;
@@ -305,7 +305,7 @@ impl ShopState {
         }
     }
 
-    pub fn select_previous_category(&mut self) {
+    pub(crate) fn select_previous_category(&mut self) {
         self.pending_room_effect = None;
         self.pending_username_effect = None;
         self.category_index =
@@ -313,15 +313,15 @@ impl ShopState {
         self.selected_index = 0;
     }
 
-    pub fn set_category_rects(&self, rects: [Rect; ShopCategory::ALL.len()]) {
+    pub(crate) fn set_category_rects(&self, rects: [Rect; ShopCategory::ALL.len()]) {
         self.category_rects.set(rects);
     }
 
-    pub fn set_item_rects(&self, rects: Vec<(Rect, usize)>) {
+    pub(crate) fn set_item_rects(&self, rects: Vec<(Rect, usize)>) {
         *self.item_rects.borrow_mut() = rects;
     }
 
-    pub fn category_at_point(&self, x: u16, y: u16) -> Option<usize> {
+    pub(crate) fn category_at_point(&self, x: u16, y: u16) -> Option<usize> {
         let rects = self.category_rects.get();
         rects.iter().enumerate().find_map(|(idx, rect)| {
             if rect_contains(*rect, x, y) {
@@ -332,7 +332,7 @@ impl ShopState {
         })
     }
 
-    pub fn item_at_point(&self, x: u16, y: u16) -> Option<usize> {
+    pub(crate) fn item_at_point(&self, x: u16, y: u16) -> Option<usize> {
         let rects = self.item_rects.borrow();
         rects.iter().find_map(|(rect, idx)| {
             if rect_contains(*rect, x, y) {
@@ -343,7 +343,7 @@ impl ShopState {
         })
     }
 
-    pub fn select_item(&mut self, index: usize) {
+    pub(crate) fn select_item(&mut self, index: usize) {
         let len = self.visible_items().len();
         if len == 0 {
             self.selected_index = 0;
@@ -352,7 +352,7 @@ impl ShopState {
         }
     }
 
-    pub fn select_category_by_index(&mut self, index: usize) {
+    pub(crate) fn select_category_by_index(&mut self, index: usize) {
         if index < ShopCategory::ALL.len() {
             self.category_index = index;
             self.selected_index = 0;
@@ -361,7 +361,10 @@ impl ShopState {
         }
     }
 
-    pub fn activate_selected(&mut self, current_room: Option<RoomEffectTarget>) -> Option<Banner> {
+    pub(crate) fn activate_selected(
+        &mut self,
+        current_room: Option<RoomEffectTarget>,
+    ) -> Option<Banner> {
         let item = self.selected_item()?.clone();
         let is_dynamic_bonsai = item.is_dynamic_bonsai();
         let current_room_id = current_room.as_ref().map(|room| room.room_id);
@@ -443,7 +446,7 @@ impl ShopState {
         Some(Banner::success(&format!("Purchasing {}", item.name)))
     }
 
-    pub fn confirm_pending_room_effect(&mut self) -> Option<Banner> {
+    pub(crate) fn confirm_pending_room_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_room_effect.take()?;
         self.service
             .purchase_item_task(self.user_id, pending.sku, Some(pending.room_id), None);
@@ -453,7 +456,7 @@ impl ShopState {
         )))
     }
 
-    pub fn cancel_pending_room_effect(&mut self) -> Option<Banner> {
+    pub(crate) fn cancel_pending_room_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_room_effect.take()?;
         Some(Banner::success(&format!(
             "Cancelled {} for {}",
@@ -461,7 +464,7 @@ impl ShopState {
         )))
     }
 
-    pub fn cycle_pending_username_effect(&mut self, delta: isize) {
+    pub(crate) fn cycle_pending_username_effect(&mut self, delta: isize) {
         if let Some(pending) = &mut self.pending_username_effect {
             let len = pending.options.len();
             if len > 0 {
@@ -471,7 +474,7 @@ impl ShopState {
         }
     }
 
-    pub fn confirm_pending_username_effect(&mut self) -> Option<Banner> {
+    pub(crate) fn confirm_pending_username_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_username_effect.take()?;
         let effect = pending.selected_effect()?;
         self.service
@@ -482,12 +485,12 @@ impl ShopState {
         )))
     }
 
-    pub fn cancel_pending_username_effect(&mut self) -> Option<Banner> {
+    pub(crate) fn cancel_pending_username_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_username_effect.take()?;
         Some(Banner::success(&format!("Cancelled {}", pending.item_name)))
     }
 
-    pub fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
+    pub(crate) fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
         let item = self.selected_item()?.clone();
         if !item.is_aquarium_fish() {
             return None;
@@ -501,7 +504,7 @@ impl ShopState {
         Some(Banner::success(&format!("{label} {}", item.name)))
     }
 
-    pub fn use_aquarium_food(&mut self) -> Banner {
+    pub(crate) fn use_aquarium_food(&mut self) -> Banner {
         if !self.snapshot.entitlements.has_aquarium() {
             return Banner::error("Unlock Aquarium before feeding it");
         }
@@ -586,227 +589,5 @@ impl ShopState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_state() -> ShopState {
-        let snapshot = ShopSnapshot {
-            user_id: None,
-            balance: 0,
-            items: Vec::new(),
-            entitlements: ShopEntitlements::default(),
-            active_room_effects: HashMap::new(),
-            aquarium_hungry: false,
-            active_username_effect: None,
-        };
-        ShopState::for_test_snapshot(snapshot)
-    }
-
-    #[test]
-    fn category_at_point_hits_set_rect() {
-        let state = make_state();
-        let mut rects = [Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()];
-        rects[0] = Rect::new(2, 3, 12, 1);
-        rects[1] = Rect::new(15, 3, 6, 1);
-        state.set_category_rects(rects);
-
-        assert_eq!(state.category_at_point(2, 3), Some(0));
-        assert_eq!(state.category_at_point(13, 3), Some(0));
-        assert_eq!(state.category_at_point(15, 3), Some(1));
-        assert_eq!(state.category_at_point(20, 3), Some(1));
-        assert_eq!(state.category_at_point(0, 3), None);
-        assert_eq!(state.category_at_point(2, 4), None);
-    }
-
-    #[test]
-    fn item_at_point_hits_set_rect() {
-        let state = make_state();
-        let rects = vec![
-            (Rect::new(2, 5, 40, 1), 0),
-            (Rect::new(2, 6, 40, 1), 1),
-            (Rect::new(2, 8, 40, 1), 3),
-        ];
-        state.set_item_rects(rects);
-
-        assert_eq!(state.item_at_point(2, 5), Some(0));
-        assert_eq!(state.item_at_point(41, 5), Some(0));
-        assert_eq!(state.item_at_point(2, 6), Some(1));
-        assert_eq!(state.item_at_point(2, 8), Some(3));
-        assert_eq!(state.item_at_point(2, 7), None);
-        assert_eq!(state.item_at_point(0, 5), None);
-    }
-
-    #[test]
-    fn select_category_by_index_switches_and_resets_selection() {
-        let mut state = make_state();
-        assert_eq!(state.selected_category_index(), 0);
-        assert_eq!(state.selected_category(), ShopCategory::Chat);
-
-        state.selected_index = 5;
-        state.select_category_by_index(2);
-
-        assert_eq!(state.selected_category_index(), 2);
-        assert_eq!(state.selected_category(), ShopCategory::Aquarium);
-        assert_eq!(state.selected_index, 0);
-        assert!(state.pending_room_effect.is_none());
-    }
-
-    #[test]
-    fn select_category_by_index_out_of_bounds_is_noop() {
-        let mut state = make_state();
-        state.select_category_by_index(99);
-        assert_eq!(state.selected_category_index(), 0);
-    }
-
-    #[test]
-    fn select_item_handles_empty_list() {
-        let mut state = make_state();
-        state.selected_index = 5;
-        state.select_item(0);
-        assert_eq!(state.selected_index, 0);
-    }
-
-    #[test]
-    fn set_item_rects_replaces_previous() {
-        let state = make_state();
-        let first = vec![(Rect::new(0, 0, 10, 1), 0)];
-        state.set_item_rects(first);
-        assert_eq!(state.item_at_point(5, 0), Some(0));
-
-        let second = Vec::new();
-        state.set_item_rects(second);
-        assert_eq!(state.item_at_point(5, 0), None);
-    }
-
-    fn glow_item() -> ShopCatalogItem {
-        ShopCatalogItem {
-            sku: "username_glow_day".to_string(),
-            item_kind: "username_effect".to_string(),
-            slot: None,
-            name: "Name Glow".to_string(),
-            description: String::new(),
-            price_chips: 200,
-            owned: false,
-            equipped: false,
-            quantity: 0,
-            active_quantity: 0,
-            remaining_uses: None,
-            badge_emoji: None,
-            badge_tier: None,
-            aquarium_creature: None,
-            aquarium_size: None,
-            consumable_category: Some("identity".to_string()),
-            effect_kind: Some("username_effect".to_string()),
-            requires_room: false,
-            daily_limited: false,
-            username_effect_variant: Some("glow".to_string()),
-        }
-    }
-
-    fn make_state_with_glow_item() -> ShopState {
-        let snapshot = ShopSnapshot {
-            user_id: None,
-            balance: 1000,
-            items: vec![glow_item()],
-            entitlements: ShopEntitlements::default(),
-            active_room_effects: HashMap::new(),
-            aquarium_hungry: false,
-            active_username_effect: None,
-        };
-        ShopState::for_test_snapshot(snapshot)
-    }
-
-    #[test]
-    fn username_effect_enter_arms_picker_and_cycle_wraps() {
-        let mut state = make_state_with_glow_item();
-        // The Chat tab (index 0) shows username effects.
-        assert!(state.activate_selected(None).is_some());
-        let pending = state.pending_username_effect().expect("picker armed");
-        assert_eq!(pending.sku, "username_glow_day");
-        assert_eq!(pending.options.len(), 6);
-        assert_eq!(pending.selected, 0);
-
-        state.cycle_pending_username_effect(-1);
-        assert_eq!(
-            state.pending_username_effect().expect("armed").selected,
-            5,
-            "cycling left from 0 wraps to the last option"
-        );
-        state.cycle_pending_username_effect(1);
-        assert_eq!(state.pending_username_effect().expect("armed").selected, 0);
-    }
-
-    #[test]
-    fn username_effect_picker_clears_on_cancel_and_category_switch() {
-        let mut state = make_state_with_glow_item();
-        state.activate_selected(None);
-        assert!(state.pending_username_effect().is_some());
-        assert!(state.cancel_pending_username_effect().is_some());
-        assert!(state.pending_username_effect().is_none());
-
-        state.activate_selected(None);
-        assert!(state.pending_username_effect().is_some());
-        state.select_next_category();
-        assert!(state.pending_username_effect().is_none());
-    }
-
-    #[test]
-    fn visible_items_lead_with_username_effects() {
-        let confetti = ShopCatalogItem {
-            sku: "chat_confetti".to_string(),
-            item_kind: "chat_consumable".to_string(),
-            username_effect_variant: None,
-            ..glow_item()
-        };
-        let snapshot = ShopSnapshot {
-            user_id: None,
-            balance: 1000,
-            items: vec![confetti, glow_item()],
-            entitlements: ShopEntitlements::default(),
-            active_room_effects: HashMap::new(),
-            aquarium_hungry: false,
-            active_username_effect: None,
-        };
-        let state = ShopState::for_test_snapshot(snapshot);
-        let skus: Vec<&str> = state
-            .visible_items()
-            .iter()
-            .map(|item| item.sku.as_str())
-            .collect();
-        assert_eq!(skus, vec!["username_glow_day", "chat_confetti"]);
-    }
-
-    #[test]
-    fn username_effect_options_map_variants() {
-        assert_eq!(username_effect_options(Some("glow")).len(), 6);
-        assert_eq!(username_effect_options(Some("gradient")).len(), 6);
-        assert_eq!(
-            username_effect_options(Some("shimmer")),
-            vec![UsernameEffect::Shimmer]
-        );
-        assert!(username_effect_options(Some("sparkle")).is_empty());
-        assert!(username_effect_options(None).is_empty());
-    }
-
-    #[test]
-    fn expired_username_effect_prunes_and_flags_change() {
-        let mut state = make_state_with_glow_item();
-        state.snapshot.active_username_effect = Some(ActiveUsernameEffect {
-            effect: UsernameEffect::Shimmer,
-            ends_at: Utc::now() - chrono::Duration::seconds(1),
-        });
-        assert!(state.prune_expired_effects(Utc::now()));
-        assert!(state.snapshot.active_username_effect.is_none());
-        // Nothing left to prune: quiet second pass.
-        assert!(!state.prune_expired_effects(Utc::now()));
-    }
-
-    #[test]
-    fn rect_contains_edge_cases() {
-        assert!(!rect_contains(Rect::new(0, 0, 0, 1), 0, 0));
-        assert!(!rect_contains(Rect::new(0, 0, 1, 0), 0, 0));
-        assert!(rect_contains(Rect::new(2, 3, 5, 1), 2, 3));
-        assert!(!rect_contains(Rect::new(2, 3, 5, 1), 7, 3));
-        assert!(!rect_contains(Rect::new(2, 3, 5, 1), 2, 4));
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

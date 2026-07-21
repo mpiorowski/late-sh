@@ -27,14 +27,3 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 pub(crate) fn handle_escape(app: &mut App) {
     app.show_quit_confirm = false;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn second_q_confirms_and_escape_dismisses() {
-        assert_eq!(action_for(false), QuitAction::OpenConfirm);
-        assert_eq!(action_for(true), QuitAction::QuitNow);
-    }
-}

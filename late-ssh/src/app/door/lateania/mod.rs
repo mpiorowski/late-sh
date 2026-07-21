@@ -22,3 +22,24 @@ pub mod svc;
 pub mod taming;
 pub mod ui;
 pub mod world;
+
+#[cfg(test)]
+mod abilities_test;
+
+#[cfg(test)]
+mod appearance_test;
+
+#[cfg(test)]
+mod archipelago_test;
+
+#[cfg(test)]
+mod damage_test;
+
+#[cfg(test)]
+mod persist_test;
+
+#[cfg(test)]
+mod pets_test;
+
+#[cfg(test)]
+mod skills_test;
