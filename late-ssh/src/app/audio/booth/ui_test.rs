@@ -11,7 +11,6 @@ fn history_item(video_id: &str) -> HistoryItemView {
         is_stream: false,
         play_count: 2,
         last_played_at_ms: 0,
-        vote_score: 4,
     }
 }
 

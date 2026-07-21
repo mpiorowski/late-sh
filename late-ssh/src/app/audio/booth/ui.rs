@@ -525,27 +525,6 @@ fn history_line(
     } else {
         Style::default()
     };
-    let score = format!("{:+}", item.vote_score);
-    let score_style = if item.vote_score > 0 {
-        let base = Style::default()
-            .fg(theme::AMBER_GLOW())
-            .add_modifier(Modifier::BOLD);
-        if active {
-            base.bg(theme::BG_SELECTION())
-        } else {
-            base
-        }
-    } else if item.vote_score < 0 {
-        let base = Style::default().fg(theme::TEXT_DIM());
-        if active {
-            base.bg(theme::BG_SELECTION())
-        } else {
-            base
-        }
-    } else {
-        meta_style
-    };
-
     let title = item
         .title
         .clone()
@@ -558,10 +537,7 @@ fn history_line(
     let inner_width = width.saturating_sub(RIGHT_PAD);
     let duration_width = 5usize.min(inner_width.saturating_sub(prefix_w + 4));
     let plays_width = 5usize.min(inner_width.saturating_sub(prefix_w + duration_width + 5));
-    let score_width =
-        5usize.min(inner_width.saturating_sub(prefix_w + duration_width + plays_width + 6));
-    let label_width =
-        inner_width.saturating_sub(prefix_w + duration_width + plays_width + score_width + 3);
+    let label_width = inner_width.saturating_sub(prefix_w + duration_width + plays_width + 2);
 
     Line::from(vec![
         Span::styled(prefix, prefix_style),
@@ -581,11 +557,6 @@ fn history_line(
         Span::styled(
             pad_left(&truncate_to_width(&plays, plays_width), plays_width),
             meta_style,
-        ),
-        Span::styled(" ", trailing_style),
-        Span::styled(
-            pad_left(&truncate_to_width(&score, score_width), score_width),
-            score_style,
         ),
         Span::styled(" ".repeat(RIGHT_PAD), trailing_style),
     ])
@@ -642,8 +613,6 @@ fn draw_footer(
         Span::styled(" select  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("[/]", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" list  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("+/-/0", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" vote  ", Style::default().fg(theme::TEXT_DIM())),
     ];
     if focus == BoothFocus::History {
         spans.push(Span::styled("↵", Style::default().fg(theme::AMBER_DIM())));
@@ -664,6 +633,11 @@ fn draw_footer(
             ));
         }
     } else {
+        spans.push(Span::styled("+/-/0", Style::default().fg(theme::AMBER_DIM())));
+        spans.push(Span::styled(
+            " vote  ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
         spans.push(Span::styled("s", Style::default().fg(theme::AMBER_DIM())));
         spans.push(Span::styled(
             " skip  ",

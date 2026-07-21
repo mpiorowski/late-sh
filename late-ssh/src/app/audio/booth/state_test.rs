@@ -10,7 +10,6 @@ fn item(video_id: &str, title: Option<&str>, channel: Option<&str>) -> HistoryIt
         is_stream: false,
         play_count: 0,
         last_played_at_ms: 0,
-        vote_score: 0,
     }
 }
 
