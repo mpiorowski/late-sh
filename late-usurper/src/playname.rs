@@ -15,7 +15,7 @@ const FALLBACK: &str = "late";
 /// drop everything else. Crucially this can never produce whitespace or
 /// newlines: the name lands inside a line-oriented dropfile, and a space would
 /// split it into first/last name (changing the identity the game keys on).
-pub fn sanitize(username: &str) -> String {
+pub(crate) fn sanitize(username: &str) -> String {
     let cleaned: String = username
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_')

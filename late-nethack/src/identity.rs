@@ -13,7 +13,7 @@ const KEY_DOMAIN: &[u8] = b"late.sh/nethack/v1\0nethack\0";
 /// from late-ssh, which holds the same secret), while the SSH username carries
 /// *identity* (the NetHack `-u` playname). The server accepts exactly this one
 /// derived public key; both ends recompute it from `LATE_NETHACK_SECRET`.
-pub fn derive_client_key(secret: &str) -> PrivateKey {
+pub(crate) fn derive_client_key(secret: &str) -> PrivateKey {
     let master = blake3::hash(secret.as_bytes());
     let seed = blake3::Hasher::new_keyed(master.as_bytes())
         .update(KEY_DOMAIN)

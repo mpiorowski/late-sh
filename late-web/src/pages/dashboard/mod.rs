@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::{AppState, error::AppError, metrics, pages::shared::now_playing};
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(handler))
         .route("/now-playing", get(now_playing_handler))
@@ -58,7 +58,7 @@ struct StatusPartial {
 }
 
 #[tracing::instrument]
-pub async fn status_handler() -> Result<impl IntoResponse, AppError> {
+pub(crate) async fn status_handler() -> Result<impl IntoResponse, AppError> {
     tracing::info!("Handling dashboard status request");
     // Simple pseudo-randomness for demo purposes (using time)
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -82,7 +82,7 @@ pub async fn status_handler() -> Result<impl IntoResponse, AppError> {
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn now_playing_handler(
+pub(crate) async fn now_playing_handler(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {
     let partial = build_now_playing_partial(&state).await;
@@ -90,7 +90,7 @@ pub async fn now_playing_handler(
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+pub(crate) async fn handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     tracing::info!("Handling dashboard request");
     metrics::record_page_view("dashboard", false);
 

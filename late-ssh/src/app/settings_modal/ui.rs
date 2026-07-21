@@ -19,10 +19,10 @@ use super::{
     },
 };
 
-pub const MODAL_WIDTH: u16 = 96;
-pub const MODAL_HEIGHT: u16 = 34;
+pub(crate) const MODAL_WIDTH: u16 = 96;
+pub(crate) const MODAL_HEIGHT: u16 = 34;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 

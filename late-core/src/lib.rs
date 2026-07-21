@@ -14,7 +14,7 @@ mod db_test;
 pub mod icecast;
 pub mod model;
 #[cfg(test)]
-mod model_test;
+pub mod model_test;
 pub mod models;
 pub mod nonogram;
 pub mod rate_limit;

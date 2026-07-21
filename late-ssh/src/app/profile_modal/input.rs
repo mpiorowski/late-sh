@@ -3,7 +3,7 @@ use crate::app::{
     state::App,
 };
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     if is_close_event(&event) {
         close(app);
         return;
@@ -52,7 +52,7 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-pub fn handle_escape(app: &mut App) {
+pub(crate) fn handle_escape(app: &mut App) {
     close(app);
 }
 

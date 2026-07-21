@@ -26,17 +26,17 @@ enum StopReason {
 }
 
 /// Configuration for a single NetHack child process.
-pub struct HostConfig {
+pub(crate) struct HostConfig {
     /// Path to the nethack binary (e.g. `/usr/games/nethack`).
-    pub bin: String,
+    pub(crate) bin: String,
     /// `HOME` for the child, where its `.nethackrc` lives. Saves/bones live in
     /// the nethack install's own playground, keyed by the `-u` name.
-    pub data_dir: String,
+    pub(crate) data_dir: String,
     /// In-game player name, passed as `-u`. Already sanitized to be PTY-safe.
-    pub playname: String,
-    pub cols: u16,
-    pub rows: u16,
-    pub term: String,
+    pub(crate) playname: String,
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+    pub(crate) term: String,
 }
 
 enum Command {
@@ -57,12 +57,12 @@ enum Command {
 /// channel end, and it runs the graceful SIGHUP-save teardown (see
 /// [`run_bridge`]) before exiting on its own; it is deliberately NOT aborted,
 /// since aborting would SIGKILL nethack mid-game and leak its getlock slot.
-pub struct PtyHost {
+pub(crate) struct PtyHost {
     cmd_tx: mpsc::Sender<Command>,
 }
 
 impl PtyHost {
-    pub fn spawn(
+    pub(crate) fn spawn(
         cfg: HostConfig,
         handle: Handle,
         channel: ChannelId,
@@ -90,11 +90,11 @@ impl PtyHost {
         Self { cmd_tx }
     }
 
-    pub fn send_input(&self, bytes: Vec<u8>) {
+    pub(crate) fn send_input(&self, bytes: Vec<u8>) {
         let _ = self.cmd_tx.try_send(Command::Input(bytes));
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) {
+    pub(crate) fn resize(&self, cols: u16, rows: u16) {
         let _ = self.cmd_tx.try_send(Command::Resize { cols, rows });
     }
 }

@@ -1,3 +1,3 @@
-pub mod input;
-pub mod state;
-pub mod ui;
+pub(crate) mod input;
+pub(crate) mod state;
+pub(crate) mod ui;

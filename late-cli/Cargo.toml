@@ -11,6 +11,9 @@ otel = []
 name = "late"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 base64.workspace = true

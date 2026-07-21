@@ -105,7 +105,7 @@ impl HelpTopic {
     }
 }
 
-pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) -> Vec<String> {
+pub(crate) fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) -> Vec<String> {
     match topic {
         HelpTopic::Pair => pair_help_lines(pair_url),
         HelpTopic::Overview => overview_lines(),
@@ -143,7 +143,7 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
     }
 }
 
-pub fn bot_app_context() -> String {
+pub(crate) fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
@@ -179,7 +179,7 @@ pub fn bot_app_context() -> String {
 /// Trimmed app context for @bartender: navigation only, not the full guide.
 /// He is house furniture, not the help desk — @bot owns explaining features
 /// in depth, so anything past "which screen / which key" should route there.
-pub fn bartender_app_context() -> String {
+pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games), 3 Games hub (Lateania, NetHack, DCSS, Usurper, Green Dragon, dopewars, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar), 6 World Cup (live scores).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
@@ -307,7 +307,7 @@ fn economy_lines() -> Vec<String> {
     crate::app::help_modal::hub_guide::bot_context_lines()
 }
 
-pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
+pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
     let compose_send_lines: &[&str] = if keep_composer_focused {
         &["  Enter              send and keep open"]
     } else {

@@ -21,7 +21,7 @@ const SILENCE_MP3: &[u8] = include_bytes!("../../assets/silence.mp3");
 const SILENCE_CHUNK_BYTES: usize = 8 * 1024;
 const RETRY_INTERVAL: Duration = Duration::from_millis(500);
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/stream", get(stream_handler))
         .route("/stream/{mount}", get(stream_mount_handler))

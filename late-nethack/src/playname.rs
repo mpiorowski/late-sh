@@ -12,7 +12,7 @@ const FALLBACK: &str = "late";
 /// sends it as the SSH username, so this is defense in depth: keep only ASCII
 /// alphanumerics and underscore, and cap at `PL_NSIZ`. Anything else is dropped
 /// rather than passed through to the child's argv.
-pub fn sanitize(username: &str) -> String {
+pub(crate) fn sanitize(username: &str) -> String {
     let cleaned: String = username
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_')

@@ -13,7 +13,7 @@ const KEY_DOMAIN: &[u8] = b"late.sh/dcss/v1\0dcss\0";
 /// holds the same secret), while the SSH username carries *identity* (the crawl
 /// `-name` playname). The server accepts exactly this one derived public key;
 /// both ends recompute it from `LATE_DCSS_SECRET`.
-pub fn derive_client_key(secret: &str) -> PrivateKey {
+pub(crate) fn derive_client_key(secret: &str) -> PrivateKey {
     let master = blake3::hash(secret.as_bytes());
     let seed = blake3::Hasher::new_keyed(master.as_bytes())
         .update(KEY_DOMAIN)

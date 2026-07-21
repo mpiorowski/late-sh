@@ -14,7 +14,7 @@ const KEY_DOMAIN: &[u8] = b"late.sh/usurper/v1\0usurper\0";
 /// player name written into the per-session DOOR32.SYS dropfile). The server
 /// accepts exactly this one derived public key; both ends recompute it from
 /// `LATE_USURPER_SECRET`.
-pub fn derive_client_key(secret: &str) -> PrivateKey {
+pub(crate) fn derive_client_key(secret: &str) -> PrivateKey {
     let master = blake3::hash(secret.as_bytes());
     let seed = blake3::Hasher::new_keyed(master.as_bytes())
         .update(KEY_DOMAIN)

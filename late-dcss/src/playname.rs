@@ -14,7 +14,7 @@ const FALLBACK: &str = "late";
 /// alphanumerics and underscore (both valid in crawl names), and cap at crawl's
 /// name limit. Anything else is dropped rather than passed through to the
 /// child's argv.
-pub fn sanitize(username: &str) -> String {
+pub(crate) fn sanitize(username: &str) -> String {
     let cleaned: String = username
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_')

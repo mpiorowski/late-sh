@@ -4,23 +4,23 @@ use ratatui::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UltimateEffectKind {
+pub(crate) enum UltimateEffectKind {
     Wonderland,
     Thematrix,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UltimateThemeEffect {
+pub(crate) struct UltimateThemeEffect {
     pub kind: UltimateEffectKind,
     pub seed: u64,
     pub elapsed_ms: u64,
 }
 
-pub const THEMATRIX_MAIN_PHASE_MS: u64 = 10_000;
-pub const THEMATRIX_FADEOUT_MS: u64 = 3_000;
-pub const THEMATRIX_TOTAL_MS: u64 = THEMATRIX_MAIN_PHASE_MS + THEMATRIX_FADEOUT_MS;
+pub(crate) const THEMATRIX_MAIN_PHASE_MS: u64 = 10_000;
+pub(crate) const THEMATRIX_FADEOUT_MS: u64 = 3_000;
+pub(crate) const THEMATRIX_TOTAL_MS: u64 = THEMATRIX_MAIN_PHASE_MS + THEMATRIX_FADEOUT_MS;
 
-pub fn apply_ultimate_postprocess(buffer: &mut Buffer, effect: UltimateThemeEffect) {
+pub(crate) fn apply_ultimate_postprocess(buffer: &mut Buffer, effect: UltimateThemeEffect) {
     match effect.kind {
         UltimateEffectKind::Wonderland => apply_wonderland_postprocess(buffer, effect),
         UltimateEffectKind::Thematrix => apply_thematrix_postprocess(buffer, effect),

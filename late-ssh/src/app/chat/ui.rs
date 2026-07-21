@@ -1246,7 +1246,7 @@ impl HeaderSegment {
     /// `true` when `col` falls inside this segment's half-open
     /// `[start_col, end_col)` range. Used by the chat-scroll click
     /// dispatcher to map a click column onto a username/badge target.
-    pub fn contains(&self, col: u16) -> bool {
+    pub(crate) fn contains(&self, col: u16) -> bool {
         col >= self.start_col && col < self.end_col
     }
 }

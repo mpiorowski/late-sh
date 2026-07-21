@@ -19,12 +19,12 @@ struct Shared {
 }
 
 #[derive(Clone)]
-pub struct Server {
+pub(crate) struct Server {
     shared: Arc<Shared>,
 }
 
 impl Server {
-    pub fn new(config: &Config) -> Self {
+    pub(crate) fn new(config: &Config) -> Self {
         let authorized_key = derive_client_key(&config.secret).public_key().clone();
         Self {
             shared: Arc::new(Shared {
@@ -52,7 +52,7 @@ impl russh::server::Server for Server {
     }
 }
 
-pub struct ClientHandler {
+pub(crate) struct ClientHandler {
     shared: Arc<Shared>,
     /// Set once the shared-secret-derived key checks out.
     authorized: bool,

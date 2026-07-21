@@ -42,7 +42,7 @@ pub(crate) fn carve_top_tray(area: Rect) -> (Option<Rect>, Rect) {
     (Some(tray), rest)
 }
 
-pub fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
+pub(crate) fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -55,7 +55,7 @@ pub fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
     draw(frame, area, state);
 }
 
-pub fn draw(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
+pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
     match &app.mode {
         RuntimeMode::Tank(tank) => render_tank(frame, area, app, tank),
         RuntimeMode::Reef(reef) => {

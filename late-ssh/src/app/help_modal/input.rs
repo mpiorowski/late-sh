@@ -3,7 +3,7 @@ use crate::app::{
     state::App,
 };
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x09) => {
             app.help_modal_state.move_topic(1);
@@ -59,7 +59,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
     }
 }
 
-pub fn handle_escape(app: &mut App) {
+pub(crate) fn handle_escape(app: &mut App) {
     app.show_help = false;
 }
 

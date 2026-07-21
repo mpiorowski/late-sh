@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AppState, error::AppError, metrics};
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/gallery", get(handler))
 }
 

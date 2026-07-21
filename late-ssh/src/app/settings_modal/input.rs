@@ -11,7 +11,7 @@ use crate::app::common::textarea_input::{
 };
 use crate::app::settings_modal::state::SettingsModalState;
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     if app.settings_modal_state.link_account_dialog().open() {
         handle_link_account_dialog_input(app, event);
         return;
@@ -268,7 +268,7 @@ fn handle_account_tab_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-pub fn handle_escape(app: &mut App) {
+pub(crate) fn handle_escape(app: &mut App) {
     handle_input(app, ParsedInput::Byte(0x1B));
 }
 

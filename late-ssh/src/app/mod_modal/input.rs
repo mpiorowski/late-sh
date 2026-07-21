@@ -4,7 +4,7 @@ use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::input::{ParsedInput, insert_pasted_text};
 use crate::app::{mod_modal::state::ModModalState, state::App};
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     if let ParsedInput::Paste(pasted) = event {
         paste_into_command_input(&mut app.mod_modal_state, &pasted);
         update_autocomplete(app);

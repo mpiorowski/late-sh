@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 /// The playname is already sanitized (`playname::sanitize`): single token, no
 /// whitespace/newlines, so it can't split into a first/last name pair or break
 /// the line-oriented format.
-pub fn write_door32(game_dir: &str, node: u16, playname: &str) -> Result<String> {
+pub(crate) fn write_door32(game_dir: &str, node: u16, playname: &str) -> Result<String> {
     let rel = format!("DROP/{node}/");
     let dir = Path::new(game_dir).join("DROP").join(node.to_string());
     fs::create_dir_all(&dir).with_context(|| format!("creating dropfile dir {}", dir.display()))?;

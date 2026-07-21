@@ -45,8 +45,8 @@ mod inner {
 
 #[cfg(not(feature = "otel"))]
 mod inner {
-    pub fn record_page_view(_page: &str, _has_token: bool) {}
-    pub fn record_now_playing_fetch(_result: &str) {}
+    pub(crate) fn record_page_view(_page: &str, _has_token: bool) {}
+    pub(crate) fn record_now_playing_fetch(_result: &str) {}
 }
 
-pub use inner::*;
+pub(crate) use inner::*;

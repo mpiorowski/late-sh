@@ -18,7 +18,7 @@ use crate::app::{
     state::App,
 };
 
-pub fn owned_ultimates(shop: &ShopState) -> Vec<&ShopCatalogItem> {
+pub(crate) fn owned_ultimates(shop: &ShopState) -> Vec<&ShopCatalogItem> {
     shop.all_items()
         .iter()
         .filter(|item| item.owned && item.is_ultimate_spell())
@@ -193,7 +193,7 @@ fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-pub fn format_cooldown(duration: Duration) -> String {
+pub(crate) fn format_cooldown(duration: Duration) -> String {
     let secs = duration.as_secs();
     let hours = secs / 3600;
     let mins = (secs % 3600) / 60;

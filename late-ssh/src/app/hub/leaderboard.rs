@@ -13,7 +13,7 @@ use crate::app::common::theme;
 const TOP_LIMIT_RANKED: usize = 10;
 const TOP_LIMIT_SCORE: usize = 5;
 
-pub fn draw(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
     // The 124x41 modal gives us a body of ~34 rows. We split into two equal
     // rows of boards: chips/arcade up top (top 10 each), score games at the
     // bottom (monthly top 5 + all-time top 5 stacked vertically per game).

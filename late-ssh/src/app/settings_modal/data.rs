@@ -1,12 +1,12 @@
 use chrono_tz::TZ_VARIANTS;
 
 #[derive(Clone, Copy, Debug)]
-pub struct CountryOption {
+pub(crate) struct CountryOption {
     pub code: &'static str,
     pub name: &'static str,
 }
 
-pub const COUNTRIES: &[CountryOption] = &[
+pub(crate) const COUNTRIES: &[CountryOption] = &[
     CountryOption {
         code: "AF",
         name: "Afghanistan",
@@ -1005,7 +1005,7 @@ pub const COUNTRIES: &[CountryOption] = &[
     },
 ];
 
-pub fn country_label(code: Option<&str>) -> String {
+pub(crate) fn country_label(code: Option<&str>) -> String {
     let Some(code) = code else {
         return "Not set".to_string();
     };
@@ -1018,7 +1018,7 @@ pub fn country_label(code: Option<&str>) -> String {
     format!("[{normalized}] {name}")
 }
 
-pub fn filter_countries(query: &str) -> Vec<&'static CountryOption> {
+pub(crate) fn filter_countries(query: &str) -> Vec<&'static CountryOption> {
     let query = query.trim().to_ascii_lowercase();
     COUNTRIES
         .iter()
@@ -1030,7 +1030,7 @@ pub fn filter_countries(query: &str) -> Vec<&'static CountryOption> {
         .collect()
 }
 
-pub fn filter_timezones(query: &str) -> Vec<&'static str> {
+pub(crate) fn filter_timezones(query: &str) -> Vec<&'static str> {
     let query = query.trim().to_ascii_lowercase();
     TZ_VARIANTS
         .iter()

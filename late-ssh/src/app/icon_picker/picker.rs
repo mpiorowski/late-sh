@@ -13,12 +13,12 @@ use ratatui::{
 use std::time::Instant;
 
 /// Total number of selectable (non-header) entries across all sections.
-pub fn selectable_count(sections: &[SectionView<'_>]) -> usize {
+pub(crate) fn selectable_count(sections: &[SectionView<'_>]) -> usize {
     sections.iter().map(|section| section.entries.len()).sum()
 }
 
 /// Total number of flat rows (1 header + N entries per section).
-pub fn flat_len(sections: &[SectionView<'_>]) -> usize {
+pub(crate) fn flat_len(sections: &[SectionView<'_>]) -> usize {
     sections
         .iter()
         .map(|section| section.entries.len() + 1)
@@ -26,7 +26,7 @@ pub fn flat_len(sections: &[SectionView<'_>]) -> usize {
 }
 
 /// Map a selectable index -> flat row index.
-pub fn selectable_to_flat(sections: &[SectionView<'_>], selectable: usize) -> Option<usize> {
+pub(crate) fn selectable_to_flat(sections: &[SectionView<'_>], selectable: usize) -> Option<usize> {
     let mut flat = 0;
     let mut remaining = selectable;
     for section in sections {
@@ -42,7 +42,7 @@ pub fn selectable_to_flat(sections: &[SectionView<'_>], selectable: usize) -> Op
 }
 
 /// Map a flat row index -> selectable index. Returns None for header rows.
-pub fn flat_to_selectable(sections: &[SectionView<'_>], flat_idx: usize) -> Option<usize> {
+pub(crate) fn flat_to_selectable(sections: &[SectionView<'_>], flat_idx: usize) -> Option<usize> {
     let mut flat = 0;
     let mut selectable = 0;
     for section in sections {
@@ -61,7 +61,7 @@ pub fn flat_to_selectable(sections: &[SectionView<'_>], flat_idx: usize) -> Opti
 }
 
 /// Look up the IconEntry at a given selectable index.
-pub fn entry_at_selectable<'a>(
+pub(crate) fn entry_at_selectable<'a>(
     sections: &'a [SectionView<'a>],
     selectable: usize,
 ) -> Option<&'a IconEntry> {
@@ -76,7 +76,7 @@ pub fn entry_at_selectable<'a>(
     None
 }
 
-pub fn move_selection(state: &mut IconPickerState, catalog: &IconCatalogData, delta: isize) {
+pub(crate) fn move_selection(state: &mut IconPickerState, catalog: &IconCatalogData, delta: isize) {
     catalog.with_filtered(state.tab, &state.search_str(), |sections| {
         let max = selectable_count(sections);
         if max == 0 {
@@ -89,13 +89,13 @@ pub fn move_selection(state: &mut IconPickerState, catalog: &IconCatalogData, de
     });
 }
 
-pub fn selected_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
+pub(crate) fn selected_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
     catalog.with_filtered(state.tab, &state.search_str(), |sections| {
         entry_at_selectable(sections, state.selected_index).map(|entry| entry.icon.clone())
     })
 }
 
-pub fn selected_chat_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
+pub(crate) fn selected_chat_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
     selected_icon(state, catalog).map(|icon| {
         if state.tab == IconPickerTab::Kaomoji {
             wrap_inline_code(&icon)
@@ -111,7 +111,7 @@ pub(crate) fn wrap_inline_code(text: &str) -> String {
     format!("{marker}{text}{marker}")
 }
 
-pub fn click_list(state: &mut IconPickerState, catalog: &IconCatalogData, x: u16, y: u16) -> bool {
+pub(crate) fn click_list(state: &mut IconPickerState, catalog: &IconCatalogData, x: u16, y: u16) -> bool {
     let list = state.list_inner.get();
     if list.height == 0 || y < list.y || y >= list.y + list.height || x < list.x {
         return false;
@@ -144,14 +144,14 @@ pub fn click_list(state: &mut IconPickerState, catalog: &IconCatalogData, x: u16
     })
 }
 
-pub const TAB_STRIP_LEAD: u16 = 1;
-pub const TAB_STRIP_GAP: u16 = 2;
+pub(crate) const TAB_STRIP_LEAD: u16 = 1;
+pub(crate) const TAB_STRIP_GAP: u16 = 2;
 
 fn tab_cell_width(label: &str) -> u16 {
     4 + label.chars().count() as u16
 }
 
-pub fn tab_at_x(tabs_inner: Rect, x: u16) -> Option<IconPickerTab> {
+pub(crate) fn tab_at_x(tabs_inner: Rect, x: u16) -> Option<IconPickerTab> {
     if tabs_inner.width == 0 || x < tabs_inner.x {
         return None;
     }
@@ -177,7 +177,7 @@ pub fn tab_at_x(tabs_inner: Rect, x: u16) -> Option<IconPickerTab> {
     None
 }
 
-pub fn click_tab(state: &mut IconPickerState, x: u16, y: u16) -> bool {
+pub(crate) fn click_tab(state: &mut IconPickerState, x: u16, y: u16) -> bool {
     let tabs = state.tabs_inner.get();
     if tabs.height == 0 || y < tabs.y || y >= tabs.y + tabs.height {
         return false;
@@ -189,7 +189,7 @@ pub fn click_tab(state: &mut IconPickerState, x: u16, y: u16) -> bool {
     true
 }
 
-pub fn render(f: &mut Frame, area: Rect, state: &IconPickerState, catalog: &IconCatalogData) {
+pub(crate) fn render(f: &mut Frame, area: Rect, state: &IconPickerState, catalog: &IconCatalogData) {
     let height = ((area.height as u32 * 70) / 100) as u16;
     let height = height.clamp(14, area.height);
     let width = 64u16.min(area.width);

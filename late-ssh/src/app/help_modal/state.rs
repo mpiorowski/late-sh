@@ -6,9 +6,9 @@ use ratatui::layout::Rect;
 use super::data::{HelpTopic, lines_for};
 
 /// Max gap between two left-clicks (on the same topic) to count as a double-click.
-pub const HELP_DOUBLE_CLICK_WINDOW_MS: u128 = 400;
+pub(crate) const HELP_DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 
-pub struct HelpModalState {
+pub(crate) struct HelpModalState {
     selected_topic: HelpTopic,
     scroll_offsets: [u16; HelpTopic::ALL.len()],
     /// Per-topic on-screen rectangles for the tab strip, populated by the
@@ -31,7 +31,7 @@ impl Default for HelpModalState {
 }
 
 impl HelpModalState {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             selected_topic: HelpTopic::Pair,
             scroll_offsets: [0; HelpTopic::ALL.len()],
@@ -42,47 +42,47 @@ impl HelpModalState {
         }
     }
 
-    pub fn open(&mut self, topic: HelpTopic) {
+    pub(crate) fn open(&mut self, topic: HelpTopic) {
         self.selected_topic = topic;
     }
 
-    pub fn set_keep_composer_focused(&mut self, value: bool) {
+    pub(crate) fn set_keep_composer_focused(&mut self, value: bool) {
         self.keep_composer_focused = value;
     }
 
-    pub fn selected_topic(&self) -> HelpTopic {
+    pub(crate) fn selected_topic(&self) -> HelpTopic {
         self.selected_topic
     }
 
-    pub fn current_lines(&self, pair_url: &str) -> Vec<String> {
+    pub(crate) fn current_lines(&self, pair_url: &str) -> Vec<String> {
         lines_for(self.selected_topic, self.keep_composer_focused, pair_url)
     }
 
-    pub fn current_scroll(&self) -> u16 {
+    pub(crate) fn current_scroll(&self) -> u16 {
         self.scroll_offsets[self.selected_topic.index()]
     }
 
-    pub fn move_topic(&mut self, delta: isize) {
+    pub(crate) fn move_topic(&mut self, delta: isize) {
         let len = HelpTopic::ALL.len() as isize;
         let next = (self.selected_topic.index() as isize + delta).rem_euclid(len) as usize;
         self.selected_topic = HelpTopic::ALL[next];
     }
 
-    pub fn scroll(&mut self, delta: i16) {
+    pub(crate) fn scroll(&mut self, delta: i16) {
         let idx = self.selected_topic.index();
         let current = self.scroll_offsets[idx] as i32;
         self.scroll_offsets[idx] = (current + delta as i32).max(0) as u16;
     }
 
-    pub fn set_tab_rects(&self, rects: [Rect; HelpTopic::ALL.len()]) {
+    pub(crate) fn set_tab_rects(&self, rects: [Rect; HelpTopic::ALL.len()]) {
         self.tab_rects.set(rects);
     }
 
-    pub fn set_body_area(&self, area: Rect) {
+    pub(crate) fn set_body_area(&self, area: Rect) {
         self.body_area.set(area);
     }
 
-    pub fn topic_at_point(&self, x: u16, y: u16) -> Option<HelpTopic> {
+    pub(crate) fn topic_at_point(&self, x: u16, y: u16) -> Option<HelpTopic> {
         let rects = self.tab_rects.get();
         rects.iter().enumerate().find_map(|(idx, rect)| {
             if rect_contains(*rect, x, y) {
@@ -93,13 +93,13 @@ impl HelpModalState {
         })
     }
 
-    pub fn body_contains(&self, x: u16, y: u16) -> bool {
+    pub(crate) fn body_contains(&self, x: u16, y: u16) -> bool {
         rect_contains(self.body_area.get(), x, y)
     }
 
     /// Switch to the clicked topic. Returns `true` if it chained with the
     /// previous click on the same topic within the double-click window.
-    pub fn click_topic(&mut self, topic: HelpTopic) -> bool {
+    pub(crate) fn click_topic(&mut self, topic: HelpTopic) -> bool {
         let now = Instant::now();
         let is_double = match self.last_click {
             Some((prev_time, prev_topic)) => {

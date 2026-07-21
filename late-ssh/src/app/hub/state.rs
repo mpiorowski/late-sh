@@ -4,10 +4,10 @@ use std::time::Instant;
 use ratatui::layout::Rect;
 
 /// Max gap between two left-clicks (on the same tab) to count as a double-click.
-pub const HUB_DOUBLE_CLICK_WINDOW_MS: u128 = 400;
+pub(crate) const HUB_DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HubTab {
+pub(crate) enum HubTab {
     Leaderboard,
     Dailies,
     Shop,
@@ -16,16 +16,16 @@ pub enum HubTab {
 }
 
 impl HubTab {
-    pub const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::Dailies,
         Self::Shop,
         Self::Leaderboard,
         Self::Events,
         Self::Admin,
     ];
-    pub const PUBLIC: [Self; 4] = [Self::Dailies, Self::Shop, Self::Leaderboard, Self::Events];
+    pub(crate) const PUBLIC: [Self; 4] = [Self::Dailies, Self::Shop, Self::Leaderboard, Self::Events];
 
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Leaderboard => "Leaderboard",
             Self::Dailies => "Quests",
@@ -35,13 +35,13 @@ impl HubTab {
         }
     }
 
-    pub fn visible_tabs(is_admin: bool) -> &'static [Self] {
+    pub(crate) fn visible_tabs(is_admin: bool) -> &'static [Self] {
         if is_admin { &Self::ALL } else { &Self::PUBLIC }
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct HubState {
+pub(crate) struct HubState {
     selected_tab: HubTab,
     /// Per-tab on-screen rectangles, populated by the renderer each frame.
     /// `tab_rects[i]` corresponds to `HubTab::ALL[i]`. Indexed in 0-based
@@ -53,7 +53,7 @@ pub struct HubState {
 }
 
 impl HubState {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             selected_tab: HubTab::Dailies,
             tab_rects: Cell::new([Rect::new(0, 0, 0, 0); HubTab::ALL.len()]),
@@ -61,36 +61,36 @@ impl HubState {
         }
     }
 
-    pub fn open(&mut self, tab: HubTab) {
+    pub(crate) fn open(&mut self, tab: HubTab) {
         self.selected_tab = tab;
     }
 
-    pub fn selected_tab(&self) -> HubTab {
+    pub(crate) fn selected_tab(&self) -> HubTab {
         self.selected_tab
     }
 
-    pub fn select_next_tab(&mut self, is_admin: bool) {
+    pub(crate) fn select_next_tab(&mut self, is_admin: bool) {
         self.selected_tab = tab_at_offset(self.selected_tab, 1, is_admin);
     }
 
-    pub fn select_previous_tab(&mut self, is_admin: bool) {
+    pub(crate) fn select_previous_tab(&mut self, is_admin: bool) {
         let len = HubTab::visible_tabs(is_admin).len();
         self.selected_tab = tab_at_offset(self.selected_tab, len - 1, is_admin);
     }
 
-    pub fn ensure_visible_tab(&mut self, is_admin: bool) {
+    pub(crate) fn ensure_visible_tab(&mut self, is_admin: bool) {
         if !HubTab::visible_tabs(is_admin).contains(&self.selected_tab) {
             self.selected_tab = HubTab::Shop;
         }
     }
 
-    pub fn set_tab_rects(&self, rects: [Rect; HubTab::ALL.len()]) {
+    pub(crate) fn set_tab_rects(&self, rects: [Rect; HubTab::ALL.len()]) {
         self.tab_rects.set(rects);
     }
 
     /// Return the tab whose tab-strip cell contains the (0-based ratatui)
     /// point, if any.
-    pub fn tab_at_point(&self, x: u16, y: u16) -> Option<HubTab> {
+    pub(crate) fn tab_at_point(&self, x: u16, y: u16) -> Option<HubTab> {
         let rects = self.tab_rects.get();
         rects.iter().enumerate().find_map(|(idx, rect)| {
             if rect_contains(*rect, x, y) {
@@ -103,7 +103,7 @@ impl HubState {
 
     /// Switch to the clicked tab, returning `true` if this click chained with
     /// the previous click on the same tab inside the double-click window.
-    pub fn click_tab(&mut self, tab: HubTab) -> bool {
+    pub(crate) fn click_tab(&mut self, tab: HubTab) -> bool {
         let now = Instant::now();
         let is_double = match self.last_click {
             Some((prev_time, prev_tab)) => {

@@ -16,7 +16,7 @@ const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("tasmania", &[MODERATOR, DEVELOPER]),
 ];
 
-pub fn special_badges(username: &str) -> &'static [&'static str] {
+pub(crate) fn special_badges(username: &str) -> &'static [&'static str] {
     SPECIAL_BADGES
         .iter()
         .find_map(|(u, b)| u.eq_ignore_ascii_case(username).then_some(*b))

@@ -13,7 +13,7 @@ use crate::app::input::{MouseEvent, MouseEventKind};
 
 use super::state::{ModLogKind, ModLogLine, ModModalState};
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &ModModalState) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ModModalState) {
     let popup = centered_percent_rect(80, 80, area);
     frame.render_widget(Clear, popup);
 
@@ -49,7 +49,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ModModalState) {
     }
 }
 
-pub fn mouse_scroll_delta(mouse: MouseEvent) -> Option<i16> {
+pub(crate) fn mouse_scroll_delta(mouse: MouseEvent) -> Option<i16> {
     match mouse.kind {
         MouseEventKind::ScrollUp => Some(3),
         MouseEventKind::ScrollDown => Some(-3),

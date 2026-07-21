@@ -26,7 +26,7 @@ use super::{
 
 use std::sync::OnceLock;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // breathing

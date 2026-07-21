@@ -12,6 +12,9 @@ members = [
 ]
 resolver = "2"
 
+[workspace.lints.rust]
+unreachable_pub = "warn"
+
 [workspace.dependencies]
 # Core Utils
 anyhow = "1"

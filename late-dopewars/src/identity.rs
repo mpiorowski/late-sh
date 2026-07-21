@@ -15,7 +15,7 @@ const KEY_DOMAIN: &[u8] = b"late.sh/dopewars/v1\0dopewars\0";
 /// types their handle in-game and it lands in the shared high-score table. The
 /// server accepts exactly this one derived public key; both ends recompute it
 /// from `LATE_DOPEWARS_SECRET`.
-pub fn derive_client_key(secret: &str) -> PrivateKey {
+pub(crate) fn derive_client_key(secret: &str) -> PrivateKey {
     let master = blake3::hash(secret.as_bytes());
     let seed = blake3::Hasher::new_keyed(master.as_bytes())
         .update(KEY_DOMAIN)

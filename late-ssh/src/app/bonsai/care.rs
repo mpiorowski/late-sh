@@ -36,7 +36,7 @@ pub(crate) struct BonsaiCareState {
 }
 
 impl BonsaiCareState {
-    pub fn from_daily(care: DailyCare, seed: i64, stage: Stage) -> Self {
+    pub(crate) fn from_daily(care: DailyCare, seed: i64, stage: Stage) -> Self {
         let branch_goal = if care.branch_goal > 0 {
             care.branch_goal as usize
         } else {
@@ -55,7 +55,7 @@ impl BonsaiCareState {
         }
     }
 
-    pub fn fallback(date: NaiveDate, seed: i64, stage: Stage) -> Self {
+    pub(crate) fn fallback(date: NaiveDate, seed: i64, stage: Stage) -> Self {
         Self {
             date,
             watered: false,
@@ -69,16 +69,16 @@ impl BonsaiCareState {
         }
     }
 
-    pub fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         self.water_animation_ticks = self.water_animation_ticks.saturating_sub(1);
     }
 
-    pub fn set_cursor(&mut self, x: usize, y: usize) {
+    pub(crate) fn set_cursor(&mut self, x: usize, y: usize) {
         self.cursor_x = x;
         self.cursor_y = y;
     }
 
-    pub fn move_cursor(&mut self, dx: isize, dy: isize, width: usize, height: usize) {
+    pub(crate) fn move_cursor(&mut self, dx: isize, dy: isize, width: usize, height: usize) {
         if width == 0 || height == 0 {
             self.cursor_x = 0;
             self.cursor_y = 0;
@@ -90,20 +90,20 @@ impl BonsaiCareState {
         self.cursor_y = (self.cursor_y as isize + dy).clamp(0, max_y) as usize;
     }
 
-    pub fn mark_watered(&mut self) {
+    pub(crate) fn mark_watered(&mut self) {
         self.watered = true;
         self.water_animation_ticks = 18;
         self.message = Some("Water soaked in".to_string());
     }
 
-    pub fn reset_branch_cuts(&mut self) {
+    pub(crate) fn reset_branch_cuts(&mut self) {
         self.cut_branch_ids.clear();
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.mode = CareMode::Prune;
     }
 
-    pub fn reset_for_respawn(&mut self, seed: i64) {
+    pub(crate) fn reset_for_respawn(&mut self, seed: i64) {
         self.watered = false;
         self.cut_branch_ids.clear();
         self.branch_goal = branch_goal_for(Stage::Seed, seed, self.date);
@@ -113,7 +113,7 @@ impl BonsaiCareState {
         self.water_animation_ticks = 0;
     }
 
-    pub fn cut_at_cursor(&mut self, targets: &[BranchTarget]) -> Option<i32> {
+    pub(crate) fn cut_at_cursor(&mut self, targets: &[BranchTarget]) -> Option<i32> {
         let Some(target) = targets
             .iter()
             .find(|target| target.x == self.cursor_x && target.y == self.cursor_y)
@@ -130,11 +130,11 @@ impl BonsaiCareState {
         }
     }
 
-    pub fn branches_done(&self) -> usize {
+    pub(crate) fn branches_done(&self) -> usize {
         self.cut_branch_ids.len().min(self.branch_goal)
     }
 
-    pub fn all_branches_cut(&self) -> bool {
+    pub(crate) fn all_branches_cut(&self) -> bool {
         self.branches_done() >= self.branch_goal
     }
 }

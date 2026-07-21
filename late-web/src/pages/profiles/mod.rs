@@ -16,7 +16,7 @@ use late_core::models::{
 
 use crate::{AppState, error::AppError, metrics};
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/profiles", get(index_handler))
         .route("/profiles/{slug}", get(handler))
