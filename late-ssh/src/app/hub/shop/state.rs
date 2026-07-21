@@ -361,7 +361,10 @@ impl ShopState {
         }
     }
 
-    pub(crate) fn activate_selected(&mut self, current_room: Option<RoomEffectTarget>) -> Option<Banner> {
+    pub(crate) fn activate_selected(
+        &mut self,
+        current_room: Option<RoomEffectTarget>,
+    ) -> Option<Banner> {
         let item = self.selected_item()?.clone();
         let is_dynamic_bonsai = item.is_dynamic_bonsai();
         let current_room_id = current_room.as_ref().map(|room| room.room_id);

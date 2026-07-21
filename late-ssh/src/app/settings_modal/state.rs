@@ -477,7 +477,11 @@ pub(crate) struct SettingsModalState {
 }
 
 impl SettingsModalState {
-    pub(crate) fn new(profile_service: ProfileService, feed_service: FeedService, user_id: Uuid) -> Self {
+    pub(crate) fn new(
+        profile_service: ProfileService,
+        feed_service: FeedService,
+        user_id: Uuid,
+    ) -> Self {
         let feed_snapshot_rx = feed_service.subscribe_snapshot();
         let feed_event_rx = feed_service.subscribe_events();
         let profile_event_rx = profile_service.subscribe_events();

@@ -105,7 +105,11 @@ impl HelpTopic {
     }
 }
 
-pub(crate) fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) -> Vec<String> {
+pub(crate) fn lines_for(
+    topic: HelpTopic,
+    keep_composer_focused: bool,
+    pair_url: &str,
+) -> Vec<String> {
     match topic {
         HelpTopic::Pair => pair_help_lines(pair_url),
         HelpTopic::Overview => overview_lines(),

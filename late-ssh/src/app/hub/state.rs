@@ -23,7 +23,8 @@ impl HubTab {
         Self::Events,
         Self::Admin,
     ];
-    pub(crate) const PUBLIC: [Self; 4] = [Self::Dailies, Self::Shop, Self::Leaderboard, Self::Events];
+    pub(crate) const PUBLIC: [Self; 4] =
+        [Self::Dailies, Self::Shop, Self::Leaderboard, Self::Events];
 
     pub(crate) fn label(self) -> &'static str {
         match self {

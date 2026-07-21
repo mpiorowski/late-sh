@@ -28,7 +28,7 @@ mod inner {
         })
     }
 
-    pub fn record_page_view(page: &str, has_token: bool) {
+    pub(crate) fn record_page_view(page: &str, has_token: bool) {
         page_views_total().add(
             1,
             &[
@@ -38,7 +38,7 @@ mod inner {
         );
     }
 
-    pub fn record_now_playing_fetch(result: &str) {
+    pub(crate) fn record_now_playing_fetch(result: &str) {
         now_playing_fetch_total().add(1, &[KeyValue::new("result", result.to_string())]);
     }
 }

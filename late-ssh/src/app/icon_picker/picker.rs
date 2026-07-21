@@ -95,7 +95,10 @@ pub(crate) fn selected_icon(state: &IconPickerState, catalog: &IconCatalogData) 
     })
 }
 
-pub(crate) fn selected_chat_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
+pub(crate) fn selected_chat_icon(
+    state: &IconPickerState,
+    catalog: &IconCatalogData,
+) -> Option<String> {
     selected_icon(state, catalog).map(|icon| {
         if state.tab == IconPickerTab::Kaomoji {
             wrap_inline_code(&icon)
@@ -111,7 +114,12 @@ pub(crate) fn wrap_inline_code(text: &str) -> String {
     format!("{marker}{text}{marker}")
 }
 
-pub(crate) fn click_list(state: &mut IconPickerState, catalog: &IconCatalogData, x: u16, y: u16) -> bool {
+pub(crate) fn click_list(
+    state: &mut IconPickerState,
+    catalog: &IconCatalogData,
+    x: u16,
+    y: u16,
+) -> bool {
     let list = state.list_inner.get();
     if list.height == 0 || y < list.y || y >= list.y + list.height || x < list.x {
         return false;
@@ -189,7 +197,12 @@ pub(crate) fn click_tab(state: &mut IconPickerState, x: u16, y: u16) -> bool {
     true
 }
 
-pub(crate) fn render(f: &mut Frame, area: Rect, state: &IconPickerState, catalog: &IconCatalogData) {
+pub(crate) fn render(
+    f: &mut Frame,
+    area: Rect,
+    state: &IconPickerState,
+    catalog: &IconCatalogData,
+) {
     let height = ((area.height as u32 * 70) / 100) as u16;
     let height = height.clamp(14, area.height);
     let width = 64u16.min(area.width);
