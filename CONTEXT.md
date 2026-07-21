@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-20 (Lateania and Rebels landing pages dropped their right-column art/image panel and now render as a single column, matching the NetHack/DCSS landing style)
+- Last updated: 2026-07-21 (Booth History dropped community votes; it is now a 200-row most-recently-played list with the current track first)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -1167,7 +1167,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `v` then `1`-`5` | Home | Select within the active audio source: Icecast streams chill / classical (`1`/`2`), Radio stations Chillsynth / Nightride / Datawave / Spacesynth / Ambient (`1`-`5`). |
-| `v` then `v` | Home | Open the Music Booth (submit + queue + history votes). |
+| `v` then `v` | Home | Open the Music Booth (submit + queue votes + recently played history). |
 | Home chat keys | Home | See `late-ssh/src/app/chat/CONTEXT.md`. |
 | `Enter` | Arcade lobby | Launch selected game |
 | `Esc` | Active Arcade game | Exit back to Arcade lobby |

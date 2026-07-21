@@ -73,13 +73,12 @@ impl MediaHistoryItem {
                 )
                 .await?;
         } else {
-            let row = client
-                .query_one(
+            client
+                .execute(
                     "INSERT INTO media_history_items
                         (media_kind, external_id, title, channel, duration_ms,
                          is_stream, last_submitter_id)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)
-                     RETURNING *",
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
                     &[
                         &item.media_kind,
                         &item.external_id,
@@ -91,57 +90,35 @@ impl MediaHistoryItem {
                     ],
                 )
                 .await?;
-            let history_item = Self::from(row);
-            client
-                .execute(
-                    "INSERT INTO media_history_votes (item_id, user_id, value, created, updated)
-                     SELECT $1, user_id, value, created, updated
-                     FROM media_queue_votes
-                     WHERE item_id = $2
-                     ON CONFLICT (user_id, item_id) DO NOTHING",
-                    &[&history_item.id, &item.id],
-                )
-                .await?;
         }
 
         Self::prune_to_limit(client, limit).await?;
         Ok(())
     }
 
-    pub async fn list_ranked(client: &Client, limit: i64) -> Result<Vec<(Self, i32)>> {
+    /// Newest play first. A track re-entering `playing` bumps `last_played_at`,
+    /// so the currently playing item is always the first row.
+    pub async fn list_recent(client: &Client, limit: i64) -> Result<Vec<Self>> {
         let rows = client
             .query(
-                "SELECT mhi.*, COALESCE(SUM(mhv.value), 0)::int AS vote_score
-                 FROM media_history_items mhi
-                 LEFT JOIN media_history_votes mhv ON mhv.item_id = mhi.id
-                 GROUP BY mhi.id
-                 ORDER BY vote_score DESC, mhi.last_played_at DESC, mhi.created DESC
+                "SELECT * FROM media_history_items
+                 ORDER BY last_played_at DESC, created DESC
                  LIMIT $1",
                 &[&limit],
             )
             .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                let score: i32 = row.get("vote_score");
-                (Self::from(row), score)
-            })
-            .collect())
+        Ok(rows.into_iter().map(Self::from).collect())
     }
 
     pub async fn prune_to_limit(client: &Client, limit: i64) -> Result<u64> {
         let deleted = client
             .execute(
                 "WITH ranked AS (
-                    SELECT mhi.id,
+                    SELECT id,
                            row_number() OVER (
-                               ORDER BY COALESCE(SUM(mhv.value), 0)::int DESC,
-                                        mhi.last_played_at DESC,
-                                        mhi.created DESC
+                               ORDER BY last_played_at DESC, created DESC
                            ) AS rank
-                    FROM media_history_items mhi
-                    LEFT JOIN media_history_votes mhv ON mhv.item_id = mhi.id
-                    GROUP BY mhi.id
+                    FROM media_history_items
                  )
                  DELETE FROM media_history_items
                  WHERE id IN (SELECT id FROM ranked WHERE rank > $1)",
