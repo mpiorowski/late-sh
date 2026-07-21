@@ -15,7 +15,7 @@ const KEY_DOMAIN: &[u8] = b"late.sh/dopewars/v1\0dopewars\0";
 /// types their handle in-game and it lands in the shared high-score table. The
 /// server accepts exactly this one derived public key; both ends recompute it
 /// from `LATE_DOPEWARS_SECRET`.
-pub fn derive_client_key(secret: &str) -> PrivateKey {
+pub(crate) fn derive_client_key(secret: &str) -> PrivateKey {
     let master = blake3::hash(secret.as_bytes());
     let seed = blake3::Hasher::new_keyed(master.as_bytes())
         .update(KEY_DOMAIN)
@@ -29,25 +29,3 @@ pub fn derive_client_key(secret: &str) -> PrivateKey {
 // If they drift, the client derives a different key and the host rejects every
 // connection. (The nethack crates pin this with a known-answer fingerprint test;
 // mirror that here once test-running is back on.)
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use russh::keys::HashAlg;
-
-    fn fingerprint(secret: &str) -> String {
-        derive_client_key(secret)
-            .public_key()
-            .fingerprint(HashAlg::Sha256)
-            .to_string()
-    }
-
-    #[test]
-    fn key_is_deterministic_for_same_secret() {
-        assert_eq!(fingerprint("s3cret"), fingerprint("s3cret"));
-    }
-
-    #[test]
-    fn different_secrets_yield_different_keys() {
-        assert_ne!(fingerprint("a"), fingerprint("b"));
-    }
-}

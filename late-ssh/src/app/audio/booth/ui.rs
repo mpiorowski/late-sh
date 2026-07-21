@@ -525,27 +525,6 @@ fn history_line(
     } else {
         Style::default()
     };
-    let score = format!("{:+}", item.vote_score);
-    let score_style = if item.vote_score > 0 {
-        let base = Style::default()
-            .fg(theme::AMBER_GLOW())
-            .add_modifier(Modifier::BOLD);
-        if active {
-            base.bg(theme::BG_SELECTION())
-        } else {
-            base
-        }
-    } else if item.vote_score < 0 {
-        let base = Style::default().fg(theme::TEXT_DIM());
-        if active {
-            base.bg(theme::BG_SELECTION())
-        } else {
-            base
-        }
-    } else {
-        meta_style
-    };
-
     let title = item
         .title
         .clone()
@@ -558,10 +537,7 @@ fn history_line(
     let inner_width = width.saturating_sub(RIGHT_PAD);
     let duration_width = 5usize.min(inner_width.saturating_sub(prefix_w + 4));
     let plays_width = 5usize.min(inner_width.saturating_sub(prefix_w + duration_width + 5));
-    let score_width =
-        5usize.min(inner_width.saturating_sub(prefix_w + duration_width + plays_width + 6));
-    let label_width =
-        inner_width.saturating_sub(prefix_w + duration_width + plays_width + score_width + 3);
+    let label_width = inner_width.saturating_sub(prefix_w + duration_width + plays_width + 2);
 
     Line::from(vec![
         Span::styled(prefix, prefix_style),
@@ -581,11 +557,6 @@ fn history_line(
         Span::styled(
             pad_left(&truncate_to_width(&plays, plays_width), plays_width),
             meta_style,
-        ),
-        Span::styled(" ", trailing_style),
-        Span::styled(
-            pad_left(&truncate_to_width(&score, score_width), score_width),
-            score_style,
         ),
         Span::styled(" ".repeat(RIGHT_PAD), trailing_style),
     ])
@@ -642,8 +613,6 @@ fn draw_footer(
         Span::styled(" select  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("[/]", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" list  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("+/-/0", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" vote  ", Style::default().fg(theme::TEXT_DIM())),
     ];
     if focus == BoothFocus::History {
         spans.push(Span::styled("↵", Style::default().fg(theme::AMBER_DIM())));
@@ -664,6 +633,14 @@ fn draw_footer(
             ));
         }
     } else {
+        spans.push(Span::styled(
+            "+/-/0",
+            Style::default().fg(theme::AMBER_DIM()),
+        ));
+        spans.push(Span::styled(
+            " vote  ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
         spans.push(Span::styled("s", Style::default().fg(theme::AMBER_DIM())));
         spans.push(Span::styled(
             " skip  ",
@@ -792,42 +769,5 @@ fn truncate_to_width(text: &str, width: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use uuid::Uuid;
-
-    fn history_item(video_id: &str) -> HistoryItemView {
-        HistoryItemView {
-            id: Uuid::nil(),
-            video_id: video_id.to_string(),
-            title: Some("Current Track".to_string()),
-            channel: Some("Channel".to_string()),
-            duration_ms: Some(125_000),
-            is_stream: false,
-            play_count: 2,
-            last_played_at_ms: 0,
-            vote_score: 4,
-        }
-    }
-
-    fn line_text(line: &Line<'_>) -> String {
-        line.spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect()
-    }
-
-    #[test]
-    fn history_line_marks_current_track() {
-        let line = history_line(&history_item("abc123"), false, true, 80);
-
-        assert!(line_text(&line).starts_with(" ▶ Current Track"));
-    }
-
-    #[test]
-    fn selected_history_line_keeps_cursor_when_not_current() {
-        let line = history_line(&history_item("abc123"), true, false, 80);
-
-        assert!(line_text(&line).starts_with(" › Current Track"));
-    }
-}
+#[path = "ui_test.rs"]
+mod ui_test;

@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::*;
+use ratatui::widgets::{Block, Padding, Paragraph};
 use ratatui_textarea::{CursorMove, TextArea};
 
 #[derive(Debug, Clone)]
@@ -35,7 +35,10 @@ impl Default for PinstarTheme {
 
 impl PinstarTheme {
     pub fn current() -> Self {
-        use crate::app::common::theme::*;
+        use crate::app::common::theme::{
+            AMBER, BG_CANVAS, BORDER, BORDER_ACTIVE, CHAT_AUTHOR, ERROR, MENTION, SUCCESS, TEXT,
+            TEXT_BRIGHT, TEXT_DIM,
+        };
         Self {
             accent: BORDER_ACTIVE(),
             heading: TEXT_BRIGHT(),

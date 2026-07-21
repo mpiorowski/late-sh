@@ -3,3 +3,6 @@ pub mod cursor;
 pub mod piece_art;
 pub mod rules;
 pub mod types;
+
+#[cfg(test)]
+mod cursor_test;

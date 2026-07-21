@@ -1,6 +1,6 @@
 use crate::app::{common::primitives::Banner, input::ParsedInput, state::App};
 
-pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
+pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
     if !app.is_admin {
         app.banner = Some(Banner::error("Admin access required"));
         return true;

@@ -5,7 +5,13 @@
 //! micro car cobblestone city → 6+5 lane impossible highway →
 //! 1000 km/h final sprint.  ~69 km, ~9 min.
 
-use super::presets::*;
+use super::presets::{
+    CAR_HATCHBACK, CAR_MICRO, CAR_MONSTER, CAR_RV, CAR_SEMI, CAR_TRUCK, CITY_LANE, CITY_SCENERY,
+    COBBLE_LANE, CRASH_BARRIER_SHOULDERS, CRAZY_MIX, EURO_VILLAGE_SCENERY, GRIDLOCK_LANE,
+    GUARDRAIL_SHOULDERS, HIGHWAY_DIVIDERS, HIGHWAY_LANE, HIGHWAY_SHOULDERS, NEON_BARRIER_SHOULDERS,
+    PLAINS_LANE, PLAINS_SCENERY, RURAL_DIVIDERS, RURAL_SCENERY, SIDEWALK_SHOULDERS,
+    STARFIELD_SCENERY, TOWN_SCENERY, TURBO_LANE, URBAN_DIVIDERS,
+};
 use crate::app::arcade::traffic::theme;
 use crate::app::arcade::traffic::track::{
     Car, Lane, Lanes, Obstacle, ObstacleEffect, Road, RoadAspect, Sceneries, Scenery, Shoulders,

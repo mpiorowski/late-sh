@@ -96,6 +96,12 @@ impl VoiceRuntimeState {
         }
     }
 
+    // Linux and Windows await the media-room shutdown below. Keep the same
+    // async API on unsupported targets so callers remain platform-agnostic.
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "windows")),
+        allow(clippy::unused_async)
+    )]
     pub(super) async fn leave(&mut self) {
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         if let Some(media) = self.media.take() {

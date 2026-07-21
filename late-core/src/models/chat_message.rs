@@ -531,16 +531,3 @@ pub fn escape_like_pattern(query: &str) -> String {
     }
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::escape_like_pattern;
-
-    #[test]
-    fn escape_like_pattern_escapes_metacharacters() {
-        assert_eq!(escape_like_pattern("plain query"), "plain query");
-        assert_eq!(escape_like_pattern("100%"), "100\\%");
-        assert_eq!(escape_like_pattern("snake_case"), "snake\\_case");
-        assert_eq!(escape_like_pattern("back\\slash"), "back\\\\slash");
-    }
-}

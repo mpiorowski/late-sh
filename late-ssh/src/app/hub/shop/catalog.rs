@@ -6,7 +6,7 @@ use late_core::models::marketplace::{
 use super::svc::ShopCatalogItem;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ShopCategory {
+pub(crate) enum ShopCategory {
     Companions,
     Chat,
     Aquarium,
@@ -16,7 +16,7 @@ pub enum ShopCategory {
 }
 
 impl ShopCategory {
-    pub const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Chat,
         Self::Companions,
         Self::Aquarium,
@@ -25,7 +25,7 @@ impl ShopCategory {
         Self::Ultimates,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Companions => "Companions",
             Self::Chat => "Chat",
@@ -36,7 +36,7 @@ impl ShopCategory {
         }
     }
 
-    pub fn matches_item(self, item: &ShopCatalogItem) -> bool {
+    pub(crate) fn matches_item(self, item: &ShopCatalogItem) -> bool {
         match self {
             Self::Companions => {
                 item.item_kind == "feature_unlock"
@@ -54,14 +54,14 @@ impl ShopCategory {
     }
 }
 
-pub fn is_pet_companion_sku(sku: &str) -> bool {
+pub(crate) fn is_pet_companion_sku(sku: &str) -> bool {
     sku == PET_COMPANION_SKU
 }
 
-pub fn is_aquarium_sku(sku: &str) -> bool {
+pub(crate) fn is_aquarium_sku(sku: &str) -> bool {
     sku == AQUARIUM_SKU
 }
 
-pub fn is_chat_badge_slot(slot: Option<&str>) -> bool {
+pub(crate) fn is_chat_badge_slot(slot: Option<&str>) -> bool {
     matches!(slot, Some(CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
 }

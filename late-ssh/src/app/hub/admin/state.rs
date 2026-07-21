@@ -11,7 +11,7 @@ use crate::app::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AdminCategory {
+pub(crate) enum AdminCategory {
     DailyQuests,
     WeeklyQuests,
     PuzzleRewards,
@@ -21,7 +21,7 @@ pub enum AdminCategory {
 }
 
 impl AdminCategory {
-    pub const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::DailyQuests,
         Self::WeeklyQuests,
         Self::PuzzleRewards,
@@ -30,7 +30,7 @@ impl AdminCategory {
         Self::All,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::DailyQuests => "Daily quests",
             Self::WeeklyQuests => "Weekly quests",
@@ -58,7 +58,7 @@ impl AdminCategory {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AdminField {
+pub(crate) enum AdminField {
     Title,
     Description,
     Target,
@@ -84,7 +84,7 @@ impl AdminField {
         Self::Active,
     ];
 
-    pub fn label(self, draft_kind: AdminDraftKind) -> &'static str {
+    pub(crate) fn label(self, draft_kind: AdminDraftKind) -> &'static str {
         match (draft_kind, self) {
             (AdminDraftKind::Shop, Self::Title) => "name",
             (AdminDraftKind::Shop, Self::Reward) => "price",
@@ -98,25 +98,25 @@ impl AdminField {
         }
     }
 
-    pub fn is_text(self) -> bool {
+    pub(crate) fn is_text(self) -> bool {
         matches!(self, Self::Title | Self::Description)
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AdminDraftKind {
+pub(crate) enum AdminDraftKind {
     Reward,
     Shop,
 }
 
 #[derive(Clone, Debug)]
-pub enum AdminEntryRef<'a> {
+pub(crate) enum AdminEntryRef<'a> {
     Reward(&'a RewardTemplateAdminRow),
     Shop(&'a MarketplaceAdminRow),
 }
 
 impl AdminEntryRef<'_> {
-    pub fn title(&self) -> &str {
+    pub(crate) fn title(&self) -> &str {
         match self {
             Self::Reward(row) => &row.title,
             Self::Shop(row) => &row.name,
@@ -125,7 +125,7 @@ impl AdminEntryRef<'_> {
 }
 
 #[derive(Clone, Debug)]
-pub enum AdminDraft {
+pub(crate) enum AdminDraft {
     Reward(RewardAdminDraft),
     Shop(ShopAdminDraft),
 }
@@ -154,7 +154,7 @@ impl AdminDraft {
         })
     }
 
-    pub fn kind(&self) -> AdminDraftKind {
+    pub(crate) fn kind(&self) -> AdminDraftKind {
         match self {
             Self::Reward(_) => AdminDraftKind::Reward,
             Self::Shop(_) => AdminDraftKind::Shop,
@@ -170,7 +170,7 @@ impl AdminDraft {
 }
 
 #[derive(Clone, Debug)]
-pub struct RewardAdminDraft {
+pub(crate) struct RewardAdminDraft {
     pub id: Uuid,
     pub title: String,
     pub description: String,
@@ -181,7 +181,7 @@ pub struct RewardAdminDraft {
 }
 
 #[derive(Clone, Debug)]
-pub struct ShopAdminDraft {
+pub(crate) struct ShopAdminDraft {
     pub id: Uuid,
     pub name: String,
     pub description: String,
@@ -201,7 +201,7 @@ enum AdminAsyncResult {
     Failed(String),
 }
 
-pub struct AdminState {
+pub(crate) struct AdminState {
     quest_service: QuestService,
     shop_service: ShopService,
     templates: Vec<RewardTemplateAdminRow>,
@@ -221,12 +221,12 @@ pub struct AdminState {
     rx: mpsc::UnboundedReceiver<AdminAsyncResult>,
 }
 
-pub struct AdminTick {
+pub(crate) struct AdminTick {
     pub banner: Option<Banner>,
 }
 
 impl AdminState {
-    pub fn new(quest_service: QuestService, shop_service: ShopService) -> Self {
+    pub(crate) fn new(quest_service: QuestService, shop_service: ShopService) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         Self {
             quest_service,
@@ -249,7 +249,7 @@ impl AdminState {
         }
     }
 
-    pub fn tick(&mut self, is_admin: bool) -> AdminTick {
+    pub(crate) fn tick(&mut self, is_admin: bool) -> AdminTick {
         if is_admin && !self.loaded_once && !self.loading {
             self.reload(true);
         }
@@ -300,15 +300,15 @@ impl AdminState {
         AdminTick { banner }
     }
 
-    pub fn templates(&self) -> &[RewardTemplateAdminRow] {
+    pub(crate) fn templates(&self) -> &[RewardTemplateAdminRow] {
         &self.templates
     }
 
-    pub fn shop_items(&self) -> &[MarketplaceAdminRow] {
+    pub(crate) fn shop_items(&self) -> &[MarketplaceAdminRow] {
         &self.shop_items
     }
 
-    pub fn visible_entries(&self) -> Vec<AdminEntryRef<'_>> {
+    pub(crate) fn visible_entries(&self) -> Vec<AdminEntryRef<'_>> {
         let category = self.selected_category();
         let mut rows = self
             .templates
@@ -325,69 +325,69 @@ impl AdminState {
         rows
     }
 
-    pub fn selected_entry(&self) -> Option<AdminEntryRef<'_>> {
+    pub(crate) fn selected_entry(&self) -> Option<AdminEntryRef<'_>> {
         self.visible_entries().get(self.selected_index).cloned()
     }
 
-    pub fn selected_category(&self) -> AdminCategory {
+    pub(crate) fn selected_category(&self) -> AdminCategory {
         AdminCategory::ALL[self.category_index.min(AdminCategory::ALL.len() - 1)]
     }
 
-    pub fn selected_category_index(&self) -> usize {
+    pub(crate) fn selected_category_index(&self) -> usize {
         self.category_index
     }
 
-    pub fn selected_index(&self) -> usize {
+    pub(crate) fn selected_index(&self) -> usize {
         self.selected_index
     }
 
-    pub fn selected_field(&self) -> AdminField {
+    pub(crate) fn selected_field(&self) -> AdminField {
         self.available_fields()[self
             .field_index
             .min(self.available_fields().len().saturating_sub(1))]
     }
 
-    pub fn selected_field_index(&self) -> usize {
+    pub(crate) fn selected_field_index(&self) -> usize {
         self.field_index
             .min(self.available_fields().len().saturating_sub(1))
     }
 
-    pub fn available_fields(&self) -> &'static [AdminField] {
+    pub(crate) fn available_fields(&self) -> &'static [AdminField] {
         self.draft
             .as_ref()
             .map(AdminDraft::fields)
             .unwrap_or(&AdminField::REWARD_FIELDS)
     }
 
-    pub fn draft(&self) -> Option<&AdminDraft> {
+    pub(crate) fn draft(&self) -> Option<&AdminDraft> {
         self.draft.as_ref()
     }
 
-    pub fn is_dirty(&self) -> bool {
+    pub(crate) fn is_dirty(&self) -> bool {
         self.dirty
     }
 
-    pub fn is_editing(&self) -> bool {
+    pub(crate) fn is_editing(&self) -> bool {
         self.editing
     }
 
-    pub fn edit_buffer(&self) -> &str {
+    pub(crate) fn edit_buffer(&self) -> &str {
         &self.edit_buffer
     }
 
-    pub fn edit_cursor(&self) -> usize {
+    pub(crate) fn edit_cursor(&self) -> usize {
         self.edit_cursor.min(char_count(&self.edit_buffer))
     }
 
-    pub fn is_loading(&self) -> bool {
+    pub(crate) fn is_loading(&self) -> bool {
         self.loading
     }
 
-    pub fn is_saving(&self) -> bool {
+    pub(crate) fn is_saving(&self) -> bool {
         self.saving
     }
 
-    pub fn move_selection(&mut self, delta: isize) {
+    pub(crate) fn move_selection(&mut self, delta: isize) {
         if self.editing {
             return;
         }
@@ -402,7 +402,7 @@ impl AdminState {
         self.sync_draft_to_selected();
     }
 
-    pub fn select_next_category(&mut self) {
+    pub(crate) fn select_next_category(&mut self) {
         if self.editing {
             return;
         }
@@ -411,7 +411,7 @@ impl AdminState {
         self.sync_draft_to_selected();
     }
 
-    pub fn select_previous_category(&mut self) {
+    pub(crate) fn select_previous_category(&mut self) {
         if self.editing {
             return;
         }
@@ -421,14 +421,14 @@ impl AdminState {
         self.sync_draft_to_selected();
     }
 
-    pub fn select_next_field(&mut self) {
+    pub(crate) fn select_next_field(&mut self) {
         if self.editing {
             return;
         }
         self.field_index = (self.field_index + 1) % self.available_fields().len();
     }
 
-    pub fn select_previous_field(&mut self) {
+    pub(crate) fn select_previous_field(&mut self) {
         if self.editing {
             return;
         }
@@ -436,7 +436,7 @@ impl AdminState {
         self.field_index = (self.field_index + len - 1) % len;
     }
 
-    pub fn begin_edit(&mut self) -> Option<Banner> {
+    pub(crate) fn begin_edit(&mut self) -> Option<Banner> {
         let field = self.selected_field();
         if !field.is_text() {
             return self.adjust_or_toggle(1);
@@ -457,7 +457,7 @@ impl AdminState {
         )))
     }
 
-    pub fn cancel_edit(&mut self) -> Option<Banner> {
+    pub(crate) fn cancel_edit(&mut self) -> Option<Banner> {
         if !self.editing {
             return None;
         }
@@ -467,7 +467,7 @@ impl AdminState {
         Some(Banner::success("Edit cancelled"))
     }
 
-    pub fn commit_edit(&mut self) -> Option<Banner> {
+    pub(crate) fn commit_edit(&mut self) -> Option<Banner> {
         if !self.editing {
             return None;
         }
@@ -491,7 +491,7 @@ impl AdminState {
         Some(Banner::success("Draft updated"))
     }
 
-    pub fn push_edit_char(&mut self, ch: char) {
+    pub(crate) fn push_edit_char(&mut self, ch: char) {
         if !self.editing || ch.is_control() {
             return;
         }
@@ -500,7 +500,7 @@ impl AdminState {
         self.edit_cursor += 1;
     }
 
-    pub fn backspace_edit(&mut self) {
+    pub(crate) fn backspace_edit(&mut self) {
         if !self.editing || self.edit_cursor == 0 {
             return;
         }
@@ -510,7 +510,7 @@ impl AdminState {
         self.edit_buffer.replace_range(start..end, "");
     }
 
-    pub fn delete_edit(&mut self) {
+    pub(crate) fn delete_edit(&mut self) {
         if !self.editing || self.edit_cursor >= char_count(&self.edit_buffer) {
             return;
         }
@@ -519,14 +519,14 @@ impl AdminState {
         self.edit_buffer.replace_range(start..end, "");
     }
 
-    pub fn clear_edit(&mut self) {
+    pub(crate) fn clear_edit(&mut self) {
         if self.editing {
             self.edit_buffer.clear();
             self.edit_cursor = 0;
         }
     }
 
-    pub fn move_edit_cursor(&mut self, delta: isize) {
+    pub(crate) fn move_edit_cursor(&mut self, delta: isize) {
         if !self.editing {
             return;
         }
@@ -534,19 +534,19 @@ impl AdminState {
         self.edit_cursor = (self.edit_cursor as isize + delta).clamp(0, len) as usize;
     }
 
-    pub fn edit_cursor_home(&mut self) {
+    pub(crate) fn edit_cursor_home(&mut self) {
         if self.editing {
             self.edit_cursor = 0;
         }
     }
 
-    pub fn edit_cursor_end(&mut self) {
+    pub(crate) fn edit_cursor_end(&mut self) {
         if self.editing {
             self.edit_cursor = char_count(&self.edit_buffer);
         }
     }
 
-    pub fn adjust_or_toggle(&mut self, direction: i32) -> Option<Banner> {
+    pub(crate) fn adjust_or_toggle(&mut self, direction: i32) -> Option<Banner> {
         let field = self.selected_field();
         let draft = self.draft.as_mut()?;
         match draft {
@@ -588,7 +588,7 @@ impl AdminState {
         Some(Banner::success("Draft updated"))
     }
 
-    pub fn reload(&mut self, is_admin: bool) {
+    pub(crate) fn reload(&mut self, is_admin: bool) {
         if !is_admin || self.loading {
             return;
         }
@@ -614,7 +614,7 @@ impl AdminState {
         });
     }
 
-    pub fn save(&mut self, is_admin: bool) -> Option<Banner> {
+    pub(crate) fn save(&mut self, is_admin: bool) -> Option<Banner> {
         if !is_admin {
             return Some(Banner::error("Admin access required"));
         }

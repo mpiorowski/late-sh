@@ -12,57 +12,57 @@ use super::kdl_parse;
 const DEFAULT_CONFIG: &str = include_str!("../../../../assets/aquarium/config.kdl");
 
 #[derive(Debug, Clone)]
-pub struct AppConfig {
+pub(crate) struct AppConfig {
     pub mode: Mode,
     pub reef: ReefConfig,
     pub tank: TankConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
+pub(crate) enum Mode {
     Reef,
     Tank,
 }
 
 #[derive(Debug, Clone)]
-pub struct ReefConfig {
+pub(crate) struct ReefConfig {
     pub horizontal: HorizontalConfig,
     pub creatures: CreatureBehaviorConfig,
 }
 
 #[derive(Debug, Clone)]
-pub struct HorizontalConfig {
+pub(crate) struct HorizontalConfig {
     pub floor: LayerConfig,
     pub surface: LayerConfig,
 }
 
 #[derive(Debug, Clone)]
-pub struct LayerConfig {
+pub(crate) struct LayerConfig {
     pub file: PathBuf,
     pub color: Color,
 }
 
 #[derive(Debug, Clone)]
-pub struct CreatureBehaviorConfig {
+pub(crate) struct CreatureBehaviorConfig {
     pub respawn_delay_ms: u64,
     pub count_scale: f64,
 }
 
 #[derive(Debug, Clone)]
-pub struct TankConfig {
+pub(crate) struct TankConfig {
     pub width: u16,
     pub height: u16,
 }
 
 #[allow(dead_code)]
-pub fn load_config(path: &Path) -> Result<AppConfig> {
+pub(crate) fn load_config(path: &Path) -> Result<AppConfig> {
     let source = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let doc = kdl_parse::parse_document(path, &source)?;
 
     parse_config(&doc)
 }
 
-pub fn default_config() -> Result<AppConfig> {
+pub(crate) fn default_config() -> Result<AppConfig> {
     let doc = kdl_parse::parse_document(Path::new("assets/aquarium/config.kdl"), DEFAULT_CONFIG)?;
     parse_config(&doc)
 }

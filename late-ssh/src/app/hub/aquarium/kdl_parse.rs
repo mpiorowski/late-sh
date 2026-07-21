@@ -3,14 +3,14 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 use kdl::{KdlDocument, KdlError};
 
-pub fn parse_document(path: &Path, source: &str) -> Result<KdlDocument> {
+pub(crate) fn parse_document(path: &Path, source: &str) -> Result<KdlDocument> {
     source
         .parse::<KdlDocument>()
         .map_err(|error| anyhow!("{}", format_parse_error(path, source, &error)))
         .with_context(|| format!("parsing {}", path.display()))
 }
 
-pub fn format_parse_error(path: &Path, source: &str, error: &KdlError) -> String {
+pub(crate) fn format_parse_error(path: &Path, source: &str, error: &KdlError) -> String {
     let mut output = format!("KDL parse error in {}", path.display());
 
     if error.diagnostics.is_empty() {

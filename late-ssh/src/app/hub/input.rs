@@ -4,7 +4,7 @@ use crate::app::{
     state::App,
 };
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     app.hub_state.ensure_visible_tab(app.is_admin);
     if app.hub_state.selected_tab() == HubTab::Admin
         && crate::app::hub::admin::input::handle_input(app, &event)
@@ -67,7 +67,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
     }
 }
 
-pub fn handle_escape(app: &mut App) {
+pub(crate) fn handle_escape(app: &mut App) {
     // A bare Esc arrives via `dispatch_escape`, not `handle_input`, so the
     // shop's pending picker/confirm must be peeled here too.
     if crate::app::hub::shop::input::handle_escape(app) {

@@ -10,3 +10,12 @@ pub mod proxy;
 mod proxy_test;
 pub mod render;
 pub mod state;
+
+#[cfg(test)]
+mod identity_test;
+
+#[cfg(test)]
+mod render_test;
+
+#[cfg(test)]
+mod state_test;

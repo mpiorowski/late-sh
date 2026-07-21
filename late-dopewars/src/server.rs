@@ -19,12 +19,12 @@ struct Shared {
 }
 
 #[derive(Clone)]
-pub struct Server {
+pub(crate) struct Server {
     shared: Arc<Shared>,
 }
 
 impl Server {
-    pub fn new(config: &Config) -> Self {
+    pub(crate) fn new(config: &Config) -> Self {
         let authorized_key = derive_client_key(&config.secret).public_key().clone();
         Self {
             shared: Arc::new(Shared {
@@ -52,7 +52,7 @@ impl russh::server::Server for Server {
     }
 }
 
-pub struct ClientHandler {
+pub(crate) struct ClientHandler {
     shared: Arc<Shared>,
     /// Set once the shared-secret-derived key checks out.
     authorized: bool,
@@ -256,30 +256,5 @@ impl Handler for ClientHandler {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unknown_term_falls_back_to_xterm_256color() {
-        // A terminfo name the host cannot possibly have (and which is charset-valid)
-        // must fall back so dopewars doesn't abort with "Unknown terminal type".
-        assert_eq!(
-            effective_term("definitely-not-a-real-term-xyz"),
-            "xterm-256color"
-        );
-    }
-
-    #[test]
-    fn hostile_term_is_rejected_and_falls_back() {
-        // Path-traversal / junk TERM never reaches the child's argv-env verbatim.
-        assert_eq!(effective_term("../../etc/passwd"), "xterm-256color");
-        assert_eq!(effective_term(""), "xterm-256color");
-    }
-
-    #[test]
-    fn supported_term_passes_through() {
-        // xterm-256color ships in ncurses-base, so it is present anywhere tests run
-        // (and on the host); it must pass through unchanged.
-        assert_eq!(effective_term("xterm-256color"), "xterm-256color");
-    }
-}
+#[path = "server_test.rs"]
+mod server_test;

@@ -14,3 +14,9 @@ pub mod proxy;
 pub mod render;
 pub mod state;
 pub mod status;
+
+#[cfg(test)]
+mod milestone_test;
+
+#[cfg(test)]
+mod status_test;

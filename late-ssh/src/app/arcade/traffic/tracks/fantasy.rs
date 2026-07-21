@@ -4,7 +4,12 @@
 //! → a bridge over pure void → ancient ruins → the Dark Realm → elven highway
 //! → the obsidian Citadel → Realm's End.  ~78 km, ~14 min.
 
-use super::presets::*;
+use super::presets::{
+    COBBLE_LANE, CRYSTAL_CAVE_SCENERY, CRYSTAL_LANE, DARK_REALM_SCENERY, EURO_VILLAGE_SCENERY,
+    FANTASY_MIX, FOREST_DIVIDERS, FOREST_LANE, GUARDRAIL_SHOULDERS, HIGHWAY_DIVIDERS, HIGHWAY_LANE,
+    LAVA_SCENERY, MAGIC_FOREST_SCENERY, MAGIC_RUNE_SHOULDERS, MOUNTAIN_LANE, NO_SHOULDERS,
+    RURAL_DIVIDERS, SIDEWALK_SHOULDERS, URBAN_DIVIDERS,
+};
 use crate::app::arcade::traffic::theme;
 use crate::app::arcade::traffic::track::{
     Lane, Lanes, Obstacle, ObstacleEffect, Road, RoadAspect, Sceneries, Scenery, Shoulders, Stage,

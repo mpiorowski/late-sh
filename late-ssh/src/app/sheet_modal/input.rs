@@ -8,7 +8,7 @@ use crate::app::{
 
 use super::state::SheetField;
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let state = &mut app.sheet_modal_state;
 
     if state.editing() {
@@ -63,7 +63,7 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-pub fn handle_escape(app: &mut App) {
+pub(crate) fn handle_escape(app: &mut App) {
     handle_input(app, ParsedInput::Byte(0x1B));
 }
 

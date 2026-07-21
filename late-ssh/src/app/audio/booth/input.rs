@@ -161,9 +161,6 @@ fn handle_history_input(app: &mut App, event: ParsedInput, history_len: usize) {
         }
         ParsedInput::PageUp => app.booth_modal_state.move_selection(-8, history_len),
         ParsedInput::PageDown => app.booth_modal_state.move_selection(8, history_len),
-        ParsedInput::Char('+') | ParsedInput::Char('=') => cast_selected_history_vote(app, 1),
-        ParsedInput::Char('-') | ParsedInput::Char('_') => cast_selected_history_vote(app, -1),
-        ParsedInput::Char('0') => clear_selected_history_vote(app),
         ParsedInput::Byte(b'\r') => requeue_selected_history(app),
         ParsedInput::Char('d') | ParsedInput::Char('D') => delete_selected_history(app),
         ParsedInput::Char('/') | ParsedInput::Char('?') => {
@@ -206,28 +203,6 @@ fn toggle_unskippable_selected(app: &mut App) {
         return;
     };
     app.audio.booth_toggle_unskippable(item_id);
-}
-
-fn cast_selected_history_vote(app: &mut App, value: i16) {
-    let snapshot = app.audio.queue_snapshot();
-    let Some(item_id) = app
-        .booth_modal_state
-        .selected_history_item_id(&snapshot.history)
-    else {
-        return;
-    };
-    app.audio.booth_history_vote(item_id, value);
-}
-
-fn clear_selected_history_vote(app: &mut App) {
-    let snapshot = app.audio.queue_snapshot();
-    let Some(item_id) = app
-        .booth_modal_state
-        .selected_history_item_id(&snapshot.history)
-    else {
-        return;
-    };
-    app.audio.booth_history_clear_vote(item_id);
 }
 
 fn requeue_selected_history(app: &mut App) {

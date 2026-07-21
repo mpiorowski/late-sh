@@ -27,7 +27,7 @@ const HIGH: [char; 128] = [
 ];
 
 /// Transcode a chunk of raw CP437 terminal output into UTF-8 bytes.
-pub fn to_utf8(input: &[u8]) -> Vec<u8> {
+pub(crate) fn to_utf8(input: &[u8]) -> Vec<u8> {
     // High bytes expand to up to 3 UTF-8 bytes; most chunks are mostly ASCII.
     let mut out = Vec::with_capacity(input.len() + input.len() / 4);
     let mut buf = [0u8; 4];

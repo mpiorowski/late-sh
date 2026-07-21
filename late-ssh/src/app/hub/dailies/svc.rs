@@ -448,7 +448,7 @@ fn param_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(Value::as_str)
 }
 
-pub fn daily_streak_bonus_label(level: i32) -> String {
+pub(crate) fn daily_streak_bonus_label(level: i32) -> String {
     format!(
         "{} chips",
         i64::from(level.clamp(0, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL))

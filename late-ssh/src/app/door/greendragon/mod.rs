@@ -31,3 +31,21 @@ pub mod state;
 pub mod svc;
 pub mod tavern;
 pub mod ui;
+
+#[cfg(test)]
+mod commentary_test;
+
+#[cfg(test)]
+mod data_test;
+
+#[cfg(test)]
+mod events_test;
+
+#[cfg(test)]
+mod inn_test;
+
+#[cfg(test)]
+mod persist_test;
+
+#[cfg(test)]
+mod tavern_test;

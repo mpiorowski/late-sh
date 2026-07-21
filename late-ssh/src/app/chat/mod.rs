@@ -20,3 +20,6 @@ mod svc_test;
 pub mod ui;
 pub(crate) mod ui_text;
 pub mod work;
+
+#[cfg(test)]
+mod action_test;

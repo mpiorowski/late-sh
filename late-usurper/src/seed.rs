@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 /// - `NODE/ONLINERS.DAT` is the who-is-playing table; nobody is playing at
 ///   boot, and the sysop docs bless deleting it exactly then. Stale entries
 ///   otherwise show ghost players until the game's own kick-out ages them.
-pub fn prepare_game_dir(seed_dir: &str, game_dir: &str) -> Result<()> {
+pub(crate) fn prepare_game_dir(seed_dir: &str, game_dir: &str) -> Result<()> {
     fs::create_dir_all(game_dir)
         .with_context(|| format!("creating usurper game dir {game_dir}"))?;
     copy_missing(Path::new(seed_dir), Path::new(game_dir))

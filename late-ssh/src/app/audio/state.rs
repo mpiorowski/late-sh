@@ -89,15 +89,6 @@ impl AudioState {
         self.service.toggle_unskippable_task(self.user_id, item_id);
     }
 
-    pub fn booth_history_vote(&self, item_id: Uuid, value: i16) {
-        self.service
-            .cast_history_vote_task(self.user_id, item_id, value);
-    }
-
-    pub fn booth_history_clear_vote(&self, item_id: Uuid) {
-        self.service.clear_history_vote_task(self.user_id, item_id);
-    }
-
     pub fn booth_history_requeue(&self, item_id: Uuid) {
         self.service
             .requeue_history_item_task(self.user_id, item_id);
@@ -204,18 +195,6 @@ impl AudioState {
                     banner = Some(Banner::success(&format!(
                         "Skip vote registered ({votes}/{threshold})"
                     )));
-                }
-                AudioEvent::BoothHistoryVoteApplied { user_id, score }
-                    if user_id == self.user_id =>
-                {
-                    banner = Some(Banner::success(&format!(
-                        "History vote registered (score {score})"
-                    )));
-                }
-                AudioEvent::BoothHistoryVoteFailed { user_id, message }
-                    if user_id == self.user_id =>
-                {
-                    banner = Some(Banner::error(&message));
                 }
                 AudioEvent::BoothHistoryRequeued { user_id, position }
                     if user_id == self.user_id =>

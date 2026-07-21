@@ -5,19 +5,19 @@ use crate::app::common::primitives::Banner;
 
 use super::svc::{QuestEvent, QuestService, QuestSnapshot};
 
-pub struct QuestState {
+pub(crate) struct QuestState {
     user_id: Uuid,
     snapshot_rx: watch::Receiver<QuestSnapshot>,
     event_rx: broadcast::Receiver<QuestEvent>,
     snapshot: QuestSnapshot,
 }
 
-pub struct QuestTick {
+pub(crate) struct QuestTick {
     pub banner: Option<Banner>,
 }
 
 impl QuestState {
-    pub fn new(
+    pub(crate) fn new(
         user_id: Uuid,
         service: QuestService,
         snapshot_rx: watch::Receiver<QuestSnapshot>,
@@ -32,7 +32,7 @@ impl QuestState {
         }
     }
 
-    pub fn tick(&mut self) -> QuestTick {
+    pub(crate) fn tick(&mut self) -> QuestTick {
         let snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
         if snapshot_changed {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
@@ -67,11 +67,11 @@ impl QuestState {
         QuestTick { banner }
     }
 
-    pub fn snapshot(&self) -> &QuestSnapshot {
+    pub(crate) fn snapshot(&self) -> &QuestSnapshot {
         &self.snapshot
     }
 
-    pub fn is_loaded(&self) -> bool {
+    pub(crate) fn is_loaded(&self) -> bool {
         self.snapshot.user_id == Some(self.user_id)
     }
 }

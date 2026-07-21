@@ -1,10 +1,80 @@
 use crate::{
     models::{
         chips::{CHIP_FLOOR, DRINK_PURCHASE_REASON, DRINK_PURCHASE_SOURCE_KIND, UserChips},
-        drinks::{DRUNK_DECAY_PER_HOUR, MAX_DRUNK_POINTS, UserDrinks},
+        drinks::{
+            DRUNK_DECAY_PER_HOUR, MAX_DRUNK_POINTS, UserDrinks, WELCOME_DRINK_POINTS,
+            decayed_points, drunk_label_word, drunk_level,
+        },
     },
     test_utils::{create_test_user, test_db},
 };
+use chrono::Utc;
+use uuid::Uuid;
+
+#[test]
+fn decayed_points_wears_off_linearly() {
+    assert_eq!(decayed_points(600, 0), 600);
+    assert_eq!(decayed_points(600, 3600), 450);
+    assert_eq!(decayed_points(600, 7200), 300);
+    assert_eq!(decayed_points(600, 14400), 0);
+    assert_eq!(decayed_points(600, 36000), 0);
+}
+
+#[test]
+fn decayed_points_handles_edge_inputs() {
+    assert_eq!(decayed_points(0, 3600), 0);
+    assert_eq!(decayed_points(-5, 0), 0);
+    // Clock skew: a last_drink_at in the future never inflates the buzz.
+    assert_eq!(decayed_points(600, -3600), 600);
+}
+
+#[test]
+fn drunk_level_buckets() {
+    assert_eq!(drunk_level(0), 0);
+    assert_eq!(drunk_level(1), 1);
+    // The welcome round lands on level 1: a glow, but no printed word yet.
+    assert_eq!(drunk_level(WELCOME_DRINK_POINTS), 1);
+    assert_eq!(drunk_level(299), 1);
+    assert_eq!(drunk_level(300), 2);
+    assert_eq!(drunk_level(999), 2);
+    assert_eq!(drunk_level(1000), 3);
+    assert_eq!(drunk_level(1999), 3);
+    assert_eq!(drunk_level(2000), 4);
+    assert_eq!(drunk_level(MAX_DRUNK_POINTS), 4);
+}
+
+#[test]
+fn drunk_label_word_starts_at_level_two() {
+    // Below 300 points the glow stands alone; from level 2 up a word prints.
+    assert_eq!(drunk_label_word(0), None);
+    assert_eq!(drunk_label_word(1), None);
+    assert_eq!(drunk_label_word(drunk_level(WELCOME_DRINK_POINTS)), None);
+    assert_eq!(drunk_label_word(2), Some("buzzed"));
+    assert_eq!(drunk_label_word(3), Some("sloshed"));
+    assert_eq!(drunk_label_word(4), Some("wasted"));
+}
+
+#[test]
+fn max_cap_dries_out_within_active_window() {
+    // The 36h window in all_active must cover the slowest sober-up.
+    let hours_to_sober = (MAX_DRUNK_POINTS + DRUNK_DECAY_PER_HOUR - 1) / DRUNK_DECAY_PER_HOUR;
+    assert!(hours_to_sober <= 36);
+    assert_eq!(decayed_points(MAX_DRUNK_POINTS, hours_to_sober * 3600), 0);
+}
+
+#[test]
+fn effective_points_uses_last_drink_at() {
+    let now = Utc::now();
+    let drinks = UserDrinks {
+        user_id: Uuid::nil(),
+        drunk_points: 600,
+        lifetime_spent: 600,
+        drink_count: 1,
+        last_drink_at: now - chrono::Duration::hours(1),
+    };
+    assert_eq!(drinks.effective_points(now), 450);
+    assert_eq!(drinks.level(now), 2);
+}
 
 #[tokio::test]
 async fn record_purchase_creates_then_decays_and_accumulates() {

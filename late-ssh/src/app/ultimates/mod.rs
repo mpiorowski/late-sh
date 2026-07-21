@@ -18,7 +18,7 @@ use crate::app::{
     state::App,
 };
 
-pub fn owned_ultimates(shop: &ShopState) -> Vec<&ShopCatalogItem> {
+pub(crate) fn owned_ultimates(shop: &ShopState) -> Vec<&ShopCatalogItem> {
     shop.all_items()
         .iter()
         .filter(|item| item.owned && item.is_ultimate_spell())
@@ -193,7 +193,7 @@ fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-pub fn format_cooldown(duration: Duration) -> String {
+pub(crate) fn format_cooldown(duration: Duration) -> String {
     let secs = duration.as_secs();
     let hours = secs / 3600;
     let mins = (secs % 3600) / 60;
@@ -207,74 +207,4 @@ pub fn format_cooldown(duration: Duration) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app::hub::shop::svc::ShopSnapshot;
-    use late_core::models::marketplace::{THEMATRIX_ULTIMATE_SKU, WONDERLAND_ULTIMATE_SKU};
-
-    #[test]
-    fn owned_ultimates_returns_only_owned_ultimate_items() {
-        let shop = ShopState::for_test_snapshot(ShopSnapshot {
-            items: vec![
-                item(WONDERLAND_ULTIMATE_SKU, "ultimate_spell", true),
-                item(THEMATRIX_ULTIMATE_SKU, "ultimate_spell", true),
-                item("ultimate_locked", "ultimate_spell", false),
-                item("badge_cat", "badge", true),
-            ],
-            ..ShopSnapshot::default()
-        });
-
-        let ultimates = owned_ultimates(&shop);
-
-        assert_eq!(ultimates.len(), 2);
-        assert_eq!(ultimates[0].sku, WONDERLAND_ULTIMATE_SKU);
-        assert_eq!(ultimates[1].sku, THEMATRIX_ULTIMATE_SKU);
-    }
-
-    #[test]
-    fn new_cast_replaces_active_ultimate_effect() {
-        let mut state = UltimateState::default();
-
-        state.apply_cast(&UltimateCast {
-            ultimate_id: "wonderland".to_string(),
-            seed: 1,
-            duration_ms: 10_000,
-        });
-        state.apply_cast(&UltimateCast {
-            ultimate_id: "thematrix".to_string(),
-            seed: 2,
-            duration_ms: 10_000,
-        });
-
-        let effects = state.active_theme_effects();
-
-        assert_eq!(effects.len(), 1);
-        assert_eq!(effects[0].kind, effects::UltimateEffectKind::Thematrix);
-        assert_eq!(effects[0].seed, 2);
-    }
-
-    fn item(sku: &str, item_kind: &str, owned: bool) -> ShopCatalogItem {
-        ShopCatalogItem {
-            sku: sku.to_string(),
-            item_kind: item_kind.to_string(),
-            slot: None,
-            name: sku.to_string(),
-            description: String::new(),
-            price_chips: 0,
-            owned,
-            equipped: false,
-            quantity: 0,
-            active_quantity: 0,
-            remaining_uses: None,
-            badge_emoji: None,
-            badge_tier: None,
-            aquarium_creature: None,
-            aquarium_size: None,
-            consumable_category: None,
-            effect_kind: None,
-            requires_room: false,
-            daily_limited: false,
-            username_effect_variant: None,
-        }
-    }
-}
+mod ultimates_test;

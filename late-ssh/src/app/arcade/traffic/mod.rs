@@ -7,3 +7,6 @@ pub mod theme;
 pub mod track;
 pub mod tracks;
 pub mod ui;
+
+#[cfg(test)]
+mod input_test;

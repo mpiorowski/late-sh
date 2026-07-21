@@ -12,7 +12,6 @@ use late_core::{
     models::{
         audio_ban::AudioBan,
         media_history_item::MediaHistoryItem,
-        media_history_vote::MediaHistoryVote,
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
@@ -187,14 +186,6 @@ pub enum AudioEvent {
         votes: u32,
         threshold: u32,
     },
-    BoothHistoryVoteApplied {
-        user_id: Uuid,
-        score: i32,
-    },
-    BoothHistoryVoteFailed {
-        user_id: Uuid,
-        message: String,
-    },
     BoothHistoryRequeued {
         user_id: Uuid,
         position: i64,
@@ -269,8 +260,6 @@ pub struct HistoryItemView {
     pub is_stream: bool,
     pub play_count: i32,
     pub last_played_at_ms: i64,
-    #[serde(default)]
-    pub vote_score: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -827,53 +816,6 @@ impl AudioService {
         Ok(score)
     }
 
-    pub async fn cast_history_vote(
-        &self,
-        user_id: Uuid,
-        history_item_id: Uuid,
-        value: i16,
-    ) -> Result<i32> {
-        if value != 1 && value != -1 {
-            anyhow::bail!("invalid vote value");
-        }
-
-        let client = self.db.get().await?;
-        if AudioBan::is_active_for_user(&client, user_id).await? {
-            anyhow::bail!("audio ban: voting blocked");
-        }
-        if MediaHistoryItem::find_by_id(&client, history_item_id)
-            .await?
-            .is_none()
-        {
-            anyhow::bail!("history item not found");
-        }
-        let score = MediaHistoryVote::upsert(&client, user_id, history_item_id, value).await?;
-        drop(client);
-
-        let mut state = self.state.lock().await;
-        self.publish_queue_update_with_guard(&mut state).await?;
-        Ok(score)
-    }
-
-    pub async fn clear_history_vote(&self, user_id: Uuid, history_item_id: Uuid) -> Result<i32> {
-        let client = self.db.get().await?;
-        if AudioBan::is_active_for_user(&client, user_id).await? {
-            anyhow::bail!("audio ban: voting blocked");
-        }
-        if MediaHistoryItem::find_by_id(&client, history_item_id)
-            .await?
-            .is_none()
-        {
-            anyhow::bail!("history item not found");
-        }
-        let score = MediaHistoryVote::delete_vote(&client, user_id, history_item_id).await?;
-        drop(client);
-
-        let mut state = self.state.lock().await;
-        self.publish_queue_update_with_guard(&mut state).await?;
-        Ok(score)
-    }
-
     pub async fn requeue_history_item(
         &self,
         user_id: Uuid,
@@ -1098,43 +1040,6 @@ impl AudioService {
         });
     }
 
-    pub fn cast_history_vote_task(&self, user_id: Uuid, history_item_id: Uuid, value: i16) {
-        let service = self.clone();
-        tokio::spawn(async move {
-            match service
-                .cast_history_vote(user_id, history_item_id, value)
-                .await
-            {
-                Ok(score) => {
-                    service.publish_event(AudioEvent::BoothHistoryVoteApplied { user_id, score });
-                }
-                Err(err) => {
-                    service.publish_event(AudioEvent::BoothHistoryVoteFailed {
-                        user_id,
-                        message: booth_history_error_message(&err),
-                    });
-                }
-            }
-        });
-    }
-
-    pub fn clear_history_vote_task(&self, user_id: Uuid, history_item_id: Uuid) {
-        let service = self.clone();
-        tokio::spawn(async move {
-            match service.clear_history_vote(user_id, history_item_id).await {
-                Ok(score) => {
-                    service.publish_event(AudioEvent::BoothHistoryVoteApplied { user_id, score });
-                }
-                Err(err) => {
-                    service.publish_event(AudioEvent::BoothHistoryVoteFailed {
-                        user_id,
-                        message: booth_history_error_message(&err),
-                    });
-                }
-            }
-        });
-    }
-
     pub fn requeue_history_item_task(&self, user_id: Uuid, history_item_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -1350,7 +1255,7 @@ impl AudioService {
         });
     }
 
-    pub async fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
+    pub fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
         tracing::debug!(
             item_id = %report.item_id,
             state = ?report.state,
@@ -1407,7 +1312,7 @@ impl AudioService {
     pub fn report_player_state_task(&self, report: PlayerStateReport) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = service.report_player_state(report).await {
+            if let Err(err) = service.report_player_state(report) {
                 late_core::error_span!(
                     "audio_player_state_failed",
                     error = ?err,
@@ -1847,7 +1752,7 @@ impl AudioService {
     async fn load_snapshot(&self, mode: AudioMode) -> Result<QueueSnapshot> {
         let client = self.db.get().await?;
         let items = MediaQueueItem::list_snapshot(&client, QUEUE_SNAPSHOT_LIMIT).await?;
-        let history_items = MediaHistoryItem::list_ranked(&client, HISTORY_LIMIT).await?;
+        let history_items = MediaHistoryItem::list_recent(&client, HISTORY_LIMIT).await?;
         let user_ids = items
             .iter()
             .map(|(item, _)| item.submitter_id)
@@ -1869,10 +1774,7 @@ impl AudioService {
             audio_mode: mode,
             current,
             queue,
-            history: history_items
-                .into_iter()
-                .map(|(item, score)| history_item_view(item, score))
-                .collect(),
+            history: history_items.into_iter().map(history_item_view).collect(),
             skip_progress: None,
         })
     }
@@ -2275,7 +2177,7 @@ fn queue_item_view(
     }
 }
 
-fn history_item_view(item: MediaHistoryItem, vote_score: i32) -> HistoryItemView {
+fn history_item_view(item: MediaHistoryItem) -> HistoryItemView {
     HistoryItemView {
         id: item.id,
         video_id: item.external_id,
@@ -2285,29 +2187,9 @@ fn history_item_view(item: MediaHistoryItem, vote_score: i32) -> HistoryItemView
         is_stream: item.is_stream,
         play_count: item.play_count,
         last_played_at_ms: item.last_played_at.timestamp_millis(),
-        vote_score,
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::skip_threshold;
-
-    #[test]
-    fn skip_threshold_floors_at_two_and_uses_thirty_percent_ceil() {
-        // Small rooms collapse to the floor: at least two YouTube-pref users
-        // must agree before a skip fires.
-        assert_eq!(skip_threshold(0), 2);
-        assert_eq!(skip_threshold(1), 2);
-        assert_eq!(skip_threshold(5), 2);
-        assert_eq!(skip_threshold(6), 2);
-        // 30% ceil kicks in above 6 paired clients.
-        assert_eq!(skip_threshold(7), 3);
-        assert_eq!(skip_threshold(10), 3);
-        assert_eq!(skip_threshold(11), 4);
-        assert_eq!(skip_threshold(20), 6);
-        assert_eq!(skip_threshold(21), 7);
-        assert_eq!(skip_threshold(100), 30);
-        assert_eq!(skip_threshold(101), 31);
-    }
-}
+#[path = "svc_internal_test.rs"]
+mod svc_internal_test;

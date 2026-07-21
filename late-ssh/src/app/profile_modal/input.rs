@@ -3,7 +3,7 @@ use crate::app::{
     state::App,
 };
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     if is_close_event(&event) {
         close(app);
         return;
@@ -52,7 +52,7 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-pub fn handle_escape(app: &mut App) {
+pub(crate) fn handle_escape(app: &mut App) {
     close(app);
 }
 
@@ -90,16 +90,5 @@ fn close(app: &mut App) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn close_keys_include_printable_q_variants() {
-        assert!(is_close_event(&ParsedInput::Char('q')));
-        assert!(is_close_event(&ParsedInput::Char('Q')));
-        assert!(is_close_event(&ParsedInput::Byte(b'q')));
-        assert!(is_close_event(&ParsedInput::Byte(b'Q')));
-        assert!(is_close_event(&ParsedInput::Byte(0x1B)));
-        assert!(!is_close_event(&ParsedInput::Char('j')));
-    }
-}
+#[path = "input_test.rs"]
+mod input_test;

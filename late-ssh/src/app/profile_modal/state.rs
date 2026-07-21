@@ -45,7 +45,7 @@ impl ProfileTab {
     }
 }
 
-pub struct ProfileModalState {
+pub(crate) struct ProfileModalState {
     profile_service: ProfileService,
     showcase_service: ShowcaseService,
     bonsai_service: BonsaiService,
@@ -82,7 +82,7 @@ impl Drop for ProfileModalState {
 }
 
 impl ProfileModalState {
-    pub fn new(
+    pub(crate) fn new(
         profile_service: ProfileService,
         showcase_service: ShowcaseService,
         bonsai_service: BonsaiService,
@@ -113,7 +113,7 @@ impl ProfileModalState {
         }
     }
 
-    pub fn open(&mut self, user_id: Uuid, fallback_name: impl Into<String>) {
+    pub(crate) fn open(&mut self, user_id: Uuid, fallback_name: impl Into<String>) {
         self.prune_current_channel();
         self.viewed_user_id = Some(user_id);
         self.fallback_name = fallback_name.into();
@@ -131,7 +131,7 @@ impl ProfileModalState {
         self.showcase_service.list_task();
     }
 
-    pub fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         self.prune_current_channel();
         self.viewed_user_id = None;
         self.fallback_name.clear();
@@ -148,7 +148,7 @@ impl ProfileModalState {
         self.snapshot_rx = None;
     }
 
-    pub fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         if let Ok(true) = self.showcase_snapshot_rx.has_changed() {
             self.showcases = self.showcase_snapshot_rx.borrow_and_update().items.clone();
         }
@@ -210,7 +210,7 @@ impl ProfileModalState {
         };
     }
 
-    pub fn showcases_for_viewed(&self) -> Vec<&ShowcaseFeedItem> {
+    pub(crate) fn showcases_for_viewed(&self) -> Vec<&ShowcaseFeedItem> {
         let Some(user_id) = self.viewed_user_id else {
             return Vec::new();
         };
@@ -237,7 +237,7 @@ impl ProfileModalState {
         self.set_tab(ProfileTab::ALL[next]);
     }
 
-    pub fn bonsai(&self) -> Option<&Tree> {
+    pub(crate) fn bonsai(&self) -> Option<&Tree> {
         self.bonsai.as_ref()
     }
 
@@ -275,11 +275,11 @@ impl ProfileModalState {
         &self.profile_awards
     }
 
-    pub fn profile(&self) -> Option<&Profile> {
+    pub(crate) fn profile(&self) -> Option<&Profile> {
         self.profile.as_ref()
     }
 
-    pub fn chip_balance(&self) -> Option<i64> {
+    pub(crate) fn chip_balance(&self) -> Option<i64> {
         self.chip_balance
     }
 
@@ -287,15 +287,15 @@ impl ProfileModalState {
         &self.fallback_name
     }
 
-    pub fn loading(&self) -> bool {
+    pub(crate) fn loading(&self) -> bool {
         self.profile.is_none()
     }
 
-    pub fn scroll_offset(&self) -> u16 {
+    pub(crate) fn scroll_offset(&self) -> u16 {
         self.scroll_offset
     }
 
-    pub fn scroll_by(&mut self, delta: i16) {
+    pub(crate) fn scroll_by(&mut self, delta: i16) {
         let next = self.scroll_offset as i32 + delta as i32;
         self.scroll_offset = next.clamp(0, u16::MAX as i32) as u16;
     }

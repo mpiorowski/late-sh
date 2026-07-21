@@ -42,7 +42,7 @@ pub(crate) fn carve_top_tray(area: Rect) -> (Option<Rect>, Rect) {
     (Some(tray), rest)
 }
 
-pub fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
+pub(crate) fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -55,7 +55,7 @@ pub fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
     draw(frame, area, state);
 }
 
-pub fn draw(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
+pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
     match &app.mode {
         RuntimeMode::Tank(tank) => render_tank(frame, area, app, tank),
         RuntimeMode::Reef(reef) => {
@@ -489,36 +489,5 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app::dashboard::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE;
-
-    const TALL_ENOUGH: u16 = TOP_TRAY_HEIGHT + MIN_CHAT_HEIGHT_WITH_LOUNGE;
-
-    #[test]
-    fn carves_a_full_height_tray_when_the_lounge_still_fits() {
-        let (tray, rest) = carve_top_tray(Rect::new(0, 0, 80, TALL_ENOUGH));
-        let tray = tray.expect("tray fits");
-        assert_eq!(tray.height, TOP_TRAY_HEIGHT);
-        assert_eq!(rest.y, tray.bottom());
-        assert_eq!(rest.height, MIN_CHAT_HEIGHT_WITH_LOUNGE);
-    }
-
-    #[test]
-    fn skips_the_tray_rather_than_squeezing_the_lounge_below_its_minimum() {
-        // One row short: the composer must survive, since `/aquarium` typed
-        // into it is the only way back out of the tray.
-        let area = Rect::new(0, 0, 80, TALL_ENOUGH - 1);
-        let (tray, rest) = carve_top_tray(area);
-        assert!(tray.is_none());
-        assert_eq!(rest, area);
-    }
-
-    #[test]
-    fn skips_the_tray_on_a_terminal_too_short_to_hold_it() {
-        let area = Rect::new(0, 0, 80, TOP_TRAY_HEIGHT - 1);
-        let (tray, rest) = carve_top_tray(area);
-        assert!(tray.is_none());
-        assert_eq!(rest, area);
-    }
-}
+#[path = "ui_test.rs"]
+mod ui_test;

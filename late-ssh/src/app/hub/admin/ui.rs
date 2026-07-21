@@ -13,7 +13,7 @@ use crate::app::{
     },
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &AdminState, is_admin: bool) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &AdminState, is_admin: bool) {
     if !is_admin {
         frame.render_widget(
             Paragraph::new(Line::from(vec![

@@ -14,7 +14,7 @@ use crate::app::{
     hub::{admin::state::AdminState, dailies::state::QuestState, shop::state::ShopState},
 };
 
-pub struct HubDrawProps<'a> {
+pub(crate) struct HubDrawProps<'a> {
     pub state: &'a HubState,
     pub quest_state: &'a QuestState,
     pub shop_state: &'a ShopState,
@@ -31,7 +31,7 @@ struct HubLayout {
     footer: Rect,
 }
 
-pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     let HubDrawProps {
         state,
         quest_state,

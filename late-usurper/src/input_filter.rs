@@ -49,17 +49,17 @@ enum Match {
 /// Per-connection filter state: the tail of the previous chunk when it ended
 /// mid escape-sequence.
 #[derive(Default)]
-pub struct InputFilter {
+pub(crate) struct InputFilter {
     pending: Vec<u8>,
 }
 
 impl InputFilter {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Feed one inbound chunk; return the bytes safe to write to the child.
-    pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
         // Work over the retained prefix followed by the new chunk.
         let mut buf = std::mem::take(&mut self.pending);
         buf.extend_from_slice(chunk);

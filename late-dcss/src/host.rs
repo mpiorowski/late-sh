@@ -26,17 +26,17 @@ enum StopReason {
 }
 
 /// Configuration for a single crawl child process.
-pub struct HostConfig {
+pub(crate) struct HostConfig {
     /// Path to the crawl console binary (e.g. `/usr/games/crawl`).
-    pub bin: String,
+    pub(crate) bin: String,
     /// `HOME` for the child. crawl keeps everything under `$HOME/.crawl`: saves
     /// keyed by the `-name` playname, shared scores/logfile/milestones, morgues.
-    pub data_dir: String,
+    pub(crate) data_dir: String,
     /// In-game player name, passed as `-name`. Already sanitized to be PTY-safe.
-    pub playname: String,
-    pub cols: u16,
-    pub rows: u16,
-    pub term: String,
+    pub(crate) playname: String,
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+    pub(crate) term: String,
 }
 
 enum Command {
@@ -54,12 +54,12 @@ enum Command {
 /// channel end, and it runs the SIGHUP-save teardown (see [`run_bridge`]) before
 /// exiting on its own; it is deliberately NOT aborted, since aborting would
 /// SIGKILL crawl mid-game and lose the run.
-pub struct PtyHost {
+pub(crate) struct PtyHost {
     cmd_tx: mpsc::Sender<Command>,
 }
 
 impl PtyHost {
-    pub fn spawn(
+    pub(crate) fn spawn(
         cfg: HostConfig,
         handle: Handle,
         channel: ChannelId,
@@ -87,11 +87,11 @@ impl PtyHost {
         Self { cmd_tx }
     }
 
-    pub fn send_input(&self, bytes: Vec<u8>) {
+    pub(crate) fn send_input(&self, bytes: Vec<u8>) {
         let _ = self.cmd_tx.try_send(Command::Input(bytes));
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) {
+    pub(crate) fn resize(&self, cols: u16, rows: u16) {
         let _ = self.cmd_tx.try_send(Command::Resize { cols, rows });
     }
 }
@@ -389,16 +389,5 @@ fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn macro_dirs_are_distinct_per_playname() {
-        let a = macro_dir("/data", "alice");
-        let b = macro_dir("/data", "bob");
-        assert_ne!(a, b);
-        assert_eq!(a, "/data/.crawl/macros/alice");
-        // A trailing slash on the configured data dir must not double up.
-        assert_eq!(macro_dir("/data/", "bob"), "/data/.crawl/macros/bob");
-    }
-}
+#[path = "host_test.rs"]
+mod host_test;

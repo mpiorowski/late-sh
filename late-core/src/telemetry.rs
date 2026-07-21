@@ -7,8 +7,9 @@ use tracing_subscriber::{EnvFilter, Registry, layer::SubscriberExt, util::Subscr
 
 #[cfg(feature = "otel")]
 mod init {
-    use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::{EnvFilter, Registry, SubscriberExt, SubscriberInitExt};
 
     use anyhow::anyhow;
     use opentelemetry::global;
@@ -137,7 +138,7 @@ mod init {
 
 #[cfg(not(feature = "otel"))]
 mod init {
-    use super::*;
+    use super::{EnvFilter, Registry, SubscriberExt, SubscriberInitExt};
 
     #[must_use]
     pub struct TelemetryGuard;

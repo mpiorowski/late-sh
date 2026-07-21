@@ -57,7 +57,7 @@ impl CellTier {
     /// The sub-row of a cell that carries the glyph (and the row label):
     /// the middle row, rounding up for even heights — glyphs hang low in
     /// their character box, so the upper-middle row reads as centred.
-    pub fn glyph_sub(self) -> u16 {
+    pub(super) fn glyph_sub(self) -> u16 {
         (self.ch - 1) / 2
     }
 }

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, procedural browser-pair visualizer fallback, and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-07-15 (Webview helper resiliency: the helper's pair WS reconnects on drops instead of exiting, the parent CLI respawns a dead helper from a 1s heartbeat watchdog instead of waiting for a `set_playback_source` replay, helper mute/volume are seeded from the parent at spawn via `LATE_WEBVIEW_INITIAL_MUTED`/`LATE_WEBVIEW_INITIAL_VOLUME`, and the server aligns connecting webview clients to the live CLI entry's runtime mute rather than `start_with_music_muted`. See §17.)
+- Last updated: 2026-07-21 (Booth History dropped community votes: `media_history_votes` is gone (migration `122`), history lists and prunes by `last_played_at DESC` so the now-playing track sits at the top, and the History pane lost its `+/-/0` keys)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -14,7 +14,7 @@
 Owned by this domain:
 - Always-on Icecast house radio playback (the `<audio>` and CLI symphonia path).
 - Global, DB-backed YouTube queue: submission, persistence, single-playing invariant, server-driven track switching (per-browser playback timeline), fallback debounce.
-- Community Booth History: max 200 unique previously played YouTube tracks, independent history votes, and requeue-from-history.
+- Community Booth History: max 200 unique previously played YouTube tracks, ordered most recently played first, with requeue-from-history.
 - The singleton "YouTube fallback" stream that plays when the queue is empty.
 - Audio source arbitration between paired CLI and paired browser clients on the same SSH token (`set_playback_source` + browser Icecast gate).
 - Procedural browser-pair visualizer fallback used when browser playback is the audible surface.
@@ -46,8 +46,8 @@ late-ssh/src/app/audio/
 ├── booth/
 │   ├── mod.rs
 │   ├── state.rs            # BoothModalState: open flag, submit input, queue/history selections, focus
-│   ├── input.rs            # modal-open key dispatch (submit/queue/history focus, +/- vote, s skip, Enter requeue)
-│   └── ui.rs               # ratatui modal: submit row, current track, queue/history lists with duration + score
+│   ├── input.rs            # modal-open key dispatch (submit/queue focus, +/- vote, s skip, history focus, Enter requeue)
+│   └── ui.rs               # ratatui modal: submit row, current track, queue list with duration + score, history list with duration + play count
 ├── now_playing/
 │   ├── mod.rs
 │   └── svc.rs              # NowPlayingService: 10s Icecast poll, watch<HashMap<mount, NowPlaying>>
@@ -58,12 +58,12 @@ late-ssh/src/app/audio/
 
 Cross-crate touchpoints:
 - `late-core/src/models/media_queue_item.rs`, `media_source.rs`,
-  `media_queue_vote.rs`, `media_history_item.rs`,
-  `media_history_vote.rs` — DB models.
+  `media_queue_vote.rs`, `media_history_item.rs` — DB models.
 - `late-core/migrations/047_create_media_queue_items.sql`,
   `048_create_media_sources.sql`,
   `049_create_media_queue_votes.sql`,
-  `073_create_media_history.sql`.
+  `073_create_media_history.sql`,
+  `122_drop_media_history_votes.sql`.
 - `late-core/src/audio.rs` — `VizFrame { bands[8], rms, track_pos_ms }` shared between server and CLI.
 - `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::SetPlaybackSource`, source/surface policy.
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
@@ -92,7 +92,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 
 ### Channels and state
 - `ws_tx: broadcast::Sender<AudioWsMessage>` (cap 512) — server-authoritative pair-WS events, fanned out to every paired client.
-- `event_tx: broadcast::Sender<AudioEvent>` (cap 256) — per-user banners (success/failure on submit, fallback set, history vote/requeue). Consumed only by `AudioState`.
+- `event_tx: broadcast::Sender<AudioEvent>` (cap 256) — per-user banners (success/failure on submit, fallback set, history requeue/delete). Consumed only by `AudioState`.
 - `state: Arc<Mutex<QueueState>>` — `{ mode: AudioMode, current_item_id, sequence, playback_cancel: Option<oneshot>, fallback_cancel: Option<oneshot> }`.
 
 ### Constants (`svc.rs:15-21`)
@@ -117,7 +117,6 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `submit_trusted_url` / `submit_trusted_url_task` — used by `/audio` (staff). Bypasses rate limit but still validates via YouTube Data API. Normal videos require a server-side duration; live streams set `is_stream=true` and use the 1h cap.
 - `set_trusted_youtube_fallback` / `set_trusted_youtube_fallback_task` — used by `/audio fallback`. Also validates via YouTube Data API before upserting the singleton `media_sources` row.
 - `report_player_state` / `report_player_state_task` — `api.rs:329`, ingress for browser `player_state` reports.
-- `cast_history_vote` / `clear_history_vote` — same `+/-/0` voting semantics as queue votes, but against `media_history_votes`.
 - `requeue_history_item` — inserts a fresh `media_queue_items` row from stored validated history metadata. Live queue votes always start at 0.
 - `delete_history_item` — requires centralized `Caps::DELETE_AUDIO_TRACK` via `Permissions::can_delete_audio_track(false)`.
 - `toggle_unskippable` / `toggle_unskippable_task` — staff-only path that flips `media_queue_items.unskippable` only while the item is still `queued`; `u` in Booth Queue mode triggers it.
@@ -141,12 +140,12 @@ All transitions go through `svc.rs`:
 ### Booth History
 - History is community-wide and unique by `(media_kind, external_id)`, currently YouTube-only.
 - A track is recorded when `advance_to_next_with_guard` successfully promotes a queued row to `playing`. This is the moment it "lands" in history.
-- On first history insert, live queue votes for that queue row are copied into `media_history_votes`, preserving the up/down signal that got the track into Now Playing.
-- If the same YouTube video plays again, history updates `last_played_at`, `play_count`, and metadata, but it does not overwrite existing history votes. The historical score remains a durable community rating.
-- History pruning sorts by `history vote score DESC`, then `last_played_at DESC`, then `created DESC`; rows after rank 200 are deleted. A weak new track can insert and immediately prune itself if the full history already has 200 better/newer rows.
-- Requeueing from history uses stored validated metadata to create a new `media_queue_items` row. It does not copy history votes into live queue votes; the fresh queue item starts with score 0 and competes normally.
+- If the same YouTube video plays again, history updates `last_played_at`, `play_count`, and metadata on the existing row rather than inserting a second one.
+- History is ordered by `last_played_at DESC`, so the track that just started playing is always the first row. Requeueing an old track only moves it to the top once it actually reaches Now Playing, not when it is queued.
+- History pruning sorts the same way; rows after rank 200 are deleted. History is therefore a rolling window of the last 200 distinct videos: a track nobody replays eventually falls off no matter how well liked it was.
+- Requeueing from history uses stored validated metadata to create a new `media_queue_items` row. The fresh queue item starts with score 0 and competes normally.
 - Queue deletion and History deletion share one moderation-policy permission: `Caps::DELETE_AUDIO_TRACK`. Queue deletion passes `is_owner=true` for the submitter, so users can still delete their own queued rows; History deletion always passes `false`.
-- The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode uses `+/-/0` for history votes, Enter to requeue, and permission-gated `d` to delete a history row.
+- The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode has no voting keys and uses `/` to filter, Enter to requeue, and permission-gated `d` to delete a history row.
 - The History list compares each row's `video_id` to `QueueSnapshot.current.video_id`; the matching row renders with a play marker and amber emphasis so users can see which historical track is live now.
 
 ### Timers
@@ -487,16 +486,16 @@ Stream URL notes:
 - `external_id` non-empty, `title`, `channel`, `is_stream BOOLEAN NOT NULL DEFAULT true`, `updated_by → users ON DELETE SET NULL`.
 - Unique index on `source_kind` → singleton fallback row, upserted via `MediaSource::upsert_youtube_fallback`.
 
-### `media_history_items` / `media_history_votes` (migration `073`)
+### `media_history_items` (migrations `073`, `122`)
 - `media_history_items` stores community Booth History rows, unique by `(media_kind, external_id)`.
 - Columns mirror validated queue metadata (`title`, `channel`, `duration_ms`, `is_stream`) plus `first_played_at`, `last_played_at`, `play_count`, and nullable `last_submitter_id`.
-- `media_history_votes` mirrors live queue votes structurally: one `-1`/`+1` vote per `(user_id, item_id)`.
-- History is pruned to `HISTORY_LIMIT = 200` rows by rank: aggregate score descending, `last_played_at` descending, `created` descending.
+- `media_history_votes` was dropped by migration `122`. History has no votes; it is a pure recency list.
+- History is listed and pruned to `HISTORY_LIMIT = 200` rows by `last_played_at` descending, then `created` descending. `idx_media_history_last_played` covers that sort.
 
 Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - `MediaQueueItem::{insert_youtube, find_by_id, list_snapshot, queued_before_count, recent_submission_count, first_queued, current_playing, mark_playing, mark_played, mark_failed, mark_skipped, sweep_orphan_playing}`. Status/kind constants: `STATUS_QUEUED`, `STATUS_PLAYING`, `STATUS_PLAYED`, `STATUS_SKIPPED`, `STATUS_FAILED`, `KIND_YOUTUBE`.
 - `MediaSource::{youtube_fallback, upsert_youtube_fallback}`. Constants: `KIND_YOUTUBE_FALLBACK`, `MEDIA_KIND_YOUTUBE`.
-- `MediaHistoryItem::{record_play_from_queue_item, list_ranked, prune_to_limit, delete_by_id}` and `MediaHistoryVote::{upsert, delete_vote, aggregate_for_item}`.
+- `MediaHistoryItem::{record_play_from_queue_item, list_recent, prune_to_limit, delete_by_id, find_by_id}`.
 
 ---
 

@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::{AppState, error::AppError, metrics, pages::shared::now_playing};
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(handler))
         .route("/now-playing", get(now_playing_handler))
@@ -58,7 +58,7 @@ struct StatusPartial {
 }
 
 #[tracing::instrument]
-pub async fn status_handler() -> Result<impl IntoResponse, AppError> {
+pub(crate) async fn status_handler() -> Result<impl IntoResponse, AppError> {
     tracing::info!("Handling dashboard status request");
     // Simple pseudo-randomness for demo purposes (using time)
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -82,7 +82,7 @@ pub async fn status_handler() -> Result<impl IntoResponse, AppError> {
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn now_playing_handler(
+pub(crate) async fn now_playing_handler(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {
     let partial = build_now_playing_partial(&state).await;
@@ -90,7 +90,7 @@ pub async fn now_playing_handler(
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+pub(crate) async fn handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     tracing::info!("Handling dashboard request");
     metrics::record_page_view("dashboard", false);
 
@@ -139,41 +139,8 @@ fn generate_status_values(now_secs: u64) -> (u8, u8) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::generate_status_values;
-
-    #[test]
-    fn status_values_are_deterministic() {
-        let first = generate_status_values(123456);
-        let second = generate_status_values(123456);
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn status_values_stay_in_expected_ranges() {
-        for now in [0_u64, 1, 39, 40, 41, 999_999] {
-            let (cpu, mem) = generate_status_values(now);
-            assert!((20..=60).contains(&cpu));
-            assert!((40..=70).contains(&mem));
-        }
-    }
-
-    #[test]
-    fn status_values_differ_across_inputs() {
-        let a = generate_status_values(100);
-        let b = generate_status_values(105);
-        // Different inputs should produce different CPU values (mod 40 cycle)
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn status_values_at_modulo_boundaries() {
-        // CPU = now % 40 + 20, so at now=40 we wrap
-        let (cpu_at_0, _) = generate_status_values(0);
-        let (cpu_at_40, _) = generate_status_values(40);
-        assert_eq!(cpu_at_0, cpu_at_40);
-    }
-}
+mod dashboard_test;
 
 #[cfg(test)]
-mod dashboard_test;
+#[path = "dashboard_internal_test.rs"]
+mod dashboard_internal_test;

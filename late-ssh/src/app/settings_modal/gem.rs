@@ -28,7 +28,7 @@ const PALETTE: &[Color] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GemPosition {
+pub(crate) enum GemPosition {
     Left,
     Right,
 }
@@ -37,7 +37,7 @@ pub enum GemPosition {
 /// transient speed trail on the next render. Cleared on the next
 /// non-teleporting interaction so the gem only "smokes" right after a jump.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MoveDirection {
+pub(crate) enum MoveDirection {
     Leftward,
     Rightward,
 }
@@ -46,7 +46,7 @@ pub enum MoveDirection {
 /// the same key — `<space><space>` is one interaction, `<space><j><space>`
 /// is three.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GemKey {
+pub(crate) enum GemKey {
     H,
     #[cfg_attr(not(test), allow(dead_code))]
     J,
@@ -55,7 +55,7 @@ pub enum GemKey {
     Space,
 }
 
-pub struct GemState {
+pub(crate) struct GemState {
     color: Color,
     position: GemPosition,
     /// Brand displayed inside the small gem. `0` = unbranded; otherwise 1..=9.
@@ -73,7 +73,7 @@ pub struct GemState {
 }
 
 impl GemState {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             color: PALETTE[0],
             position: GemPosition::Left,
@@ -87,36 +87,36 @@ impl GemState {
         }
     }
 
-    pub fn color(&self) -> Color {
+    pub(crate) fn color(&self) -> Color {
         self.color
     }
 
-    pub fn position(&self) -> GemPosition {
+    pub(crate) fn position(&self) -> GemPosition {
         self.position
     }
 
-    pub fn brand(&self) -> u8 {
+    pub(crate) fn brand(&self) -> u8 {
         self.brand
     }
 
-    pub fn evolved(&self) -> bool {
+    pub(crate) fn evolved(&self) -> bool {
         self.evolved
     }
 
-    pub fn shining(&self) -> bool {
+    pub(crate) fn shining(&self) -> bool {
         self.shining
     }
 
-    pub fn shine_color(&self) -> Color {
+    pub(crate) fn shine_color(&self) -> Color {
         self.shine_color
     }
 
-    pub fn last_move(&self) -> Option<MoveDirection> {
+    pub(crate) fn last_move(&self) -> Option<MoveDirection> {
         self.last_move
     }
 
     /// Process a key press. Consecutive presses of the same key are ignored.
-    pub fn handle_key(&mut self, key: GemKey) {
+    pub(crate) fn handle_key(&mut self, key: GemKey) {
         if self.last_key == Some(key) {
             return;
         }
@@ -127,7 +127,7 @@ impl GemState {
     /// Process a mouse click. Mouse clicks aren't subject to the key dedupe
     /// rule, but they do reset it so a subsequent same-as-before key press
     /// counts again.
-    pub fn handle_click(&mut self) {
+    pub(crate) fn handle_click(&mut self) {
         self.last_key = None;
         self.interact();
     }
@@ -185,44 +185,5 @@ fn random_color_excluding(current: Color) -> Color {
         if candidate != current {
             return candidate;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn duplicate_consecutive_keys_are_deduped() {
-        let mut gem = GemState::new();
-        let initial = gem.color();
-
-        gem.handle_key(GemKey::Space);
-        let after_first = gem.color();
-        assert_ne!(initial, after_first, "first press must change color");
-
-        // Second identical press is dropped — color stays put.
-        gem.handle_key(GemKey::Space);
-        assert_eq!(gem.color(), after_first);
-
-        // A different key counts again.
-        gem.handle_key(GemKey::J);
-        assert_ne!(gem.color(), after_first);
-    }
-
-    #[test]
-    fn mouse_click_resets_key_dedupe() {
-        let mut gem = GemState::new();
-        gem.handle_key(GemKey::Space);
-        let after_key = gem.color();
-
-        gem.handle_click();
-        let after_click = gem.color();
-        assert_ne!(after_key, after_click);
-
-        // Same key as before the click now counts because the click reset
-        // the dedupe state.
-        gem.handle_key(GemKey::Space);
-        assert_ne!(gem.color(), after_click);
     }
 }
