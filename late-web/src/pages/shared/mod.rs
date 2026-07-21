@@ -1,1 +1,1 @@
-pub mod now_playing;
+pub(crate) mod now_playing;

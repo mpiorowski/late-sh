@@ -17,7 +17,7 @@ use super::{
 
 const STREAK_PROGRESS_BAR_MAX_WIDTH: usize = 42;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &QuestState) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &QuestState) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // hint

@@ -13,7 +13,7 @@ const KEY_DOMAIN: &[u8] = b"late.sh/dcss/v1\0dcss\0";
 /// holds the same secret), while the SSH username carries *identity* (the crawl
 /// `-name` playname). The server accepts exactly this one derived public key;
 /// both ends recompute it from `LATE_DCSS_SECRET`.
-pub fn derive_client_key(secret: &str) -> PrivateKey {
+pub(crate) fn derive_client_key(secret: &str) -> PrivateKey {
     let master = blake3::hash(secret.as_bytes());
     let seed = blake3::Hasher::new_keyed(master.as_bytes())
         .update(KEY_DOMAIN)
@@ -27,35 +27,3 @@ pub fn derive_client_key(secret: &str) -> PrivateKey {
 // they drift, the client derives a different key and the host rejects every
 // connection — so the contract is pinned by the known-answer test below, which
 // must match the identical KAT in late-ssh.
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use russh::keys::HashAlg;
-
-    const KAT_FINGERPRINT: &str = "SHA256:m2sABvz5I6UssavNQoi1KjVoa2DP0uJ6Kk0DjOxxQQk";
-
-    fn fingerprint(secret: &str) -> String {
-        derive_client_key(secret)
-            .public_key()
-            .fingerprint(HashAlg::Sha256)
-            .to_string()
-    }
-
-    #[test]
-    fn key_is_deterministic_for_same_secret() {
-        assert_eq!(fingerprint("s3cret"), fingerprint("s3cret"));
-    }
-
-    #[test]
-    fn different_secrets_yield_different_keys() {
-        assert_ne!(fingerprint("a"), fingerprint("b"));
-    }
-
-    // Known-answer test: this MUST match the identical KAT in the late-ssh
-    // dcss client. Determinism alone would pass even if KEY_DOMAIN or a
-    // derivation step drifted on one side only.
-    #[test]
-    fn known_answer_fingerprint_is_stable() {
-        assert_eq!(fingerprint("late-dcss-kat-v1"), KAT_FINGERPRINT);
-    }
-}

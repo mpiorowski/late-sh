@@ -12,14 +12,14 @@ use super::{
 use crate::app::hub::shop::state::ShopState;
 
 #[derive(Clone, Debug)]
-pub struct UltimateCast {
+pub(crate) struct UltimateCast {
     pub ultimate_id: String,
     pub seed: u64,
     pub duration_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct ActiveUltimateEffect {
+pub(super) struct ActiveUltimateEffect {
     kind: UltimateKind,
     seed: u64,
     started_at: Instant,
@@ -27,14 +27,14 @@ pub struct ActiveUltimateEffect {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct UltimateState {
+pub(crate) struct UltimateState {
     selected_index: usize,
     active_effects: HashMap<UltimateKind, ActiveUltimateEffect>,
     cooldown_ready_at: HashMap<String, Instant>,
 }
 
 impl UltimateState {
-    pub fn with_cooldowns(cooldowns: Vec<UltimateCooldown>) -> Self {
+    pub(crate) fn with_cooldowns(cooldowns: Vec<UltimateCooldown>) -> Self {
         let mut state = Self::default();
         for cooldown in cooldowns {
             state.set_cooldown(&cooldown.ultimate_id, cooldown.remaining);
@@ -42,14 +42,14 @@ impl UltimateState {
         state
     }
 
-    pub fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         self.active_effects
             .retain(|_, effect| effect.started_at.elapsed() < effect.duration);
         let now = Instant::now();
         self.cooldown_ready_at.retain(|_, ready_at| *ready_at > now);
     }
 
-    pub fn move_selection(&mut self, delta: isize, shop: &ShopState) {
+    pub(crate) fn move_selection(&mut self, delta: isize, shop: &ShopState) {
         let len = super::owned_ultimates(shop).len();
         if len == 0 {
             self.selected_index = 0;
@@ -59,7 +59,7 @@ impl UltimateState {
             (self.selected_index as isize + delta).rem_euclid(len as isize) as usize;
     }
 
-    pub fn clamp_selection(&mut self, shop: &ShopState) {
+    pub(crate) fn clamp_selection(&mut self, shop: &ShopState) {
         let len = super::owned_ultimates(shop).len();
         if len == 0 {
             self.selected_index = 0;
@@ -68,23 +68,23 @@ impl UltimateState {
         }
     }
 
-    pub fn selected_index(&self) -> usize {
+    pub(crate) fn selected_index(&self) -> usize {
         self.selected_index
     }
 
-    pub fn selected_kind(&self, shop: &ShopState) -> Option<UltimateKind> {
+    pub(crate) fn selected_kind(&self, shop: &ShopState) -> Option<UltimateKind> {
         super::owned_ultimates(shop)
             .get(self.selected_index)
             .and_then(|item| UltimateKind::from_sku(&item.sku))
     }
 
-    pub fn has_active_effect(&self) -> bool {
+    pub(crate) fn has_active_effect(&self) -> bool {
         self.active_effects
             .values()
             .any(|effect| effect.started_at.elapsed() < effect.duration)
     }
 
-    pub fn apply_cast(&mut self, cast: &UltimateCast) -> Option<UltimateKind> {
+    pub(crate) fn apply_cast(&mut self, cast: &UltimateCast) -> Option<UltimateKind> {
         let kind = UltimateKind::from_id(&cast.ultimate_id)?;
         self.active_effects.clear();
         self.active_effects.insert(
@@ -99,7 +99,7 @@ impl UltimateState {
         Some(kind)
     }
 
-    pub fn active_theme_effects(&self) -> Vec<UltimateThemeEffect> {
+    pub(crate) fn active_theme_effects(&self) -> Vec<UltimateThemeEffect> {
         ULTIMATE_SPELLS
             .iter()
             .filter_map(|spell| {
@@ -113,14 +113,14 @@ impl UltimateState {
             .collect()
     }
 
-    pub fn cooldown_remaining(&self, kind: UltimateKind) -> Option<Duration> {
+    pub(crate) fn cooldown_remaining(&self, kind: UltimateKind) -> Option<Duration> {
         self.cooldown_ready_at
             .get(kind.id())
             .map(|ready_at| ready_at.saturating_duration_since(Instant::now()))
             .filter(|remaining| !remaining.is_zero())
     }
 
-    pub fn set_cooldown(&mut self, ultimate_id: &str, remaining: Duration) {
+    pub(crate) fn set_cooldown(&mut self, ultimate_id: &str, remaining: Duration) {
         if remaining.is_zero() {
             self.cooldown_ready_at.remove(ultimate_id);
             return;
@@ -129,7 +129,7 @@ impl UltimateState {
             .insert(ultimate_id.to_string(), Instant::now() + remaining);
     }
 
-    pub fn replace_cooldowns(&mut self, cooldowns: Vec<(String, Duration)>) {
+    pub(crate) fn replace_cooldowns(&mut self, cooldowns: Vec<(String, Duration)>) {
         self.cooldown_ready_at.clear();
         for (ultimate_id, remaining) in cooldowns {
             self.set_cooldown(&ultimate_id, remaining);

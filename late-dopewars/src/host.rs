@@ -14,17 +14,17 @@ use tokio::sync::mpsc;
 static HOME_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Configuration for a single dopewars child process.
-pub struct HostConfig {
+pub(crate) struct HostConfig {
     /// Path to the dopewars binary (e.g. `/usr/games/dopewars`).
-    pub bin: String,
+    pub(crate) bin: String,
     /// The shared high-score file, passed as `-f`. Every session points at the
     /// same file (on the PVC), so scores form one global leaderboard that
     /// survives restarts. dopewars locks it during updates, so concurrent
     /// sessions writing it is safe.
-    pub score_file: String,
-    pub cols: u16,
-    pub rows: u16,
-    pub term: String,
+    pub(crate) score_file: String,
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+    pub(crate) term: String,
 }
 
 enum Command {
@@ -41,12 +41,12 @@ enum Command {
 /// the same `openpty` child, but the transport is an SSH channel rather than a
 /// shared `vt100::Parser`. dopewars has no savegame and no save-lock, so teardown
 /// is a plain kill -- none of the nethack host's SIGHUP-save dance.
-pub struct PtyHost {
+pub(crate) struct PtyHost {
     cmd_tx: mpsc::Sender<Command>,
 }
 
 impl PtyHost {
-    pub fn spawn(cfg: HostConfig, handle: Handle, channel: ChannelId) -> Self {
+    pub(crate) fn spawn(cfg: HostConfig, handle: Handle, channel: ChannelId) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(256);
         // Detached: the JoinHandle drops here, but the task runs to completion.
         // Keep a clone of the handle so we can guarantee the channel is closed
@@ -69,11 +69,11 @@ impl PtyHost {
         Self { cmd_tx }
     }
 
-    pub fn send_input(&self, bytes: Vec<u8>) {
+    pub(crate) fn send_input(&self, bytes: Vec<u8>) {
         let _ = self.cmd_tx.try_send(Command::Input(bytes));
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) {
+    pub(crate) fn resize(&self, cols: u16, rows: u16) {
         let _ = self.cmd_tx.try_send(Command::Resize { cols, rows });
     }
 }

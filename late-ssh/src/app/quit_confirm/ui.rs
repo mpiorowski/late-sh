@@ -41,7 +41,7 @@ pub(crate) fn sayonara_scene_area(modal_area: Rect) -> Option<Rect> {
     ))
 }
 
-pub fn draw(frame: &mut Frame, area: Rect) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 

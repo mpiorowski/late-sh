@@ -1,5 +1,5 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TerminalHelpTopic {
+pub(crate) enum TerminalHelpTopic {
     Copy,
     Links,
     Images,
@@ -8,7 +8,7 @@ pub enum TerminalHelpTopic {
     CliYoutube,
 }
 
-pub fn lines_for(topic: TerminalHelpTopic) -> Vec<String> {
+pub(crate) fn lines_for(topic: TerminalHelpTopic) -> Vec<String> {
     match topic {
         TerminalHelpTopic::Copy => copy_lines(),
         TerminalHelpTopic::Links => link_lines(),

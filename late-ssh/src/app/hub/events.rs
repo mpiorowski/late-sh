@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::app::common::theme;
 
-pub fn draw(frame: &mut Frame, area: Rect) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // hint

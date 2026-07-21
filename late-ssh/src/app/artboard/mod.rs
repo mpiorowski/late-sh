@@ -12,3 +12,6 @@ mod state_test;
 mod svc_test;
 #[cfg(test)]
 mod test_support;
+
+#[cfg(test)]
+mod provenance_test;

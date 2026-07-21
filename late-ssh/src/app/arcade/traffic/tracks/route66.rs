@@ -4,7 +4,12 @@
 //! the iconic journey from Chicago skyscrapers through endless prairies, Texas
 //! flatlands, New Mexico mesas, and Arizona/Mojave desert to the Pacific Ocean.
 
-use super::presets::*;
+use super::presets::{
+    AMERICAN_CAR_MIX, CITY_CAR_MIX, CITY_LANE, CITY_SCENERY, COASTAL_SCENERY, DESERT_LANE,
+    DESERT_SCENERY, FOREST_SCENERY, HIGHWAY_DIVIDERS, INTERSTATE_LANE, PLAINS_LANE, PLAINS_SCENERY,
+    ROAD_CITY_2X2, RURAL_DIVIDERS, RURAL_SCENERY, RURAL_SHOULDERS, SIDEWALK_SHOULDERS,
+    SOUTHWESTERN_SCENERY, TOWN_SCENERY, URBAN_DIVIDERS,
+};
 use crate::app::arcade::traffic::theme;
 use crate::app::arcade::traffic::track::{
     Lane, Lanes, Obstacle, ObstacleEffect, Road, RoadAspect, Sceneries, Shoulder, Shoulders, Stage,

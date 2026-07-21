@@ -1,4 +1,39 @@
+use crate::db::{Db, DbConfig, create_pool};
 use crate::test_utils::test_db;
+
+#[test]
+fn default_config_values() {
+    let cfg = DbConfig::default();
+    assert_eq!(cfg.host, "localhost");
+    assert_eq!(cfg.port, 5432);
+    assert_eq!(cfg.user, "postgres");
+    assert_eq!(cfg.password, "postgres");
+    assert_eq!(cfg.dbname, "postgres");
+    assert_eq!(cfg.max_pool_size, 16);
+}
+
+#[test]
+fn pool_creation_is_lazy() {
+    let cfg = DbConfig::default();
+    let result = create_pool(&cfg);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn db_new_succeeds_without_connection() {
+    let cfg = DbConfig::default();
+    let result = Db::new(&cfg);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn db_status_starts_empty() {
+    let cfg = DbConfig::default();
+    let db = Db::new(&cfg).unwrap();
+    let status = db.status();
+    assert_eq!(status.size, 0);
+    assert_eq!(status.available, 0);
+}
 
 #[tokio::test]
 async fn health_check() {

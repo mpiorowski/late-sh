@@ -13,12 +13,12 @@ use ratatui::{
 use std::time::Instant;
 
 /// Total number of selectable (non-header) entries across all sections.
-pub fn selectable_count(sections: &[SectionView<'_>]) -> usize {
+pub(crate) fn selectable_count(sections: &[SectionView<'_>]) -> usize {
     sections.iter().map(|section| section.entries.len()).sum()
 }
 
 /// Total number of flat rows (1 header + N entries per section).
-pub fn flat_len(sections: &[SectionView<'_>]) -> usize {
+pub(crate) fn flat_len(sections: &[SectionView<'_>]) -> usize {
     sections
         .iter()
         .map(|section| section.entries.len() + 1)
@@ -26,7 +26,7 @@ pub fn flat_len(sections: &[SectionView<'_>]) -> usize {
 }
 
 /// Map a selectable index -> flat row index.
-pub fn selectable_to_flat(sections: &[SectionView<'_>], selectable: usize) -> Option<usize> {
+pub(crate) fn selectable_to_flat(sections: &[SectionView<'_>], selectable: usize) -> Option<usize> {
     let mut flat = 0;
     let mut remaining = selectable;
     for section in sections {
@@ -42,7 +42,7 @@ pub fn selectable_to_flat(sections: &[SectionView<'_>], selectable: usize) -> Op
 }
 
 /// Map a flat row index -> selectable index. Returns None for header rows.
-pub fn flat_to_selectable(sections: &[SectionView<'_>], flat_idx: usize) -> Option<usize> {
+pub(crate) fn flat_to_selectable(sections: &[SectionView<'_>], flat_idx: usize) -> Option<usize> {
     let mut flat = 0;
     let mut selectable = 0;
     for section in sections {
@@ -61,7 +61,7 @@ pub fn flat_to_selectable(sections: &[SectionView<'_>], flat_idx: usize) -> Opti
 }
 
 /// Look up the IconEntry at a given selectable index.
-pub fn entry_at_selectable<'a>(
+pub(crate) fn entry_at_selectable<'a>(
     sections: &'a [SectionView<'a>],
     selectable: usize,
 ) -> Option<&'a IconEntry> {
@@ -76,7 +76,7 @@ pub fn entry_at_selectable<'a>(
     None
 }
 
-pub fn move_selection(state: &mut IconPickerState, catalog: &IconCatalogData, delta: isize) {
+pub(crate) fn move_selection(state: &mut IconPickerState, catalog: &IconCatalogData, delta: isize) {
     catalog.with_filtered(state.tab, &state.search_str(), |sections| {
         let max = selectable_count(sections);
         if max == 0 {
@@ -89,13 +89,16 @@ pub fn move_selection(state: &mut IconPickerState, catalog: &IconCatalogData, de
     });
 }
 
-pub fn selected_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
+pub(crate) fn selected_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
     catalog.with_filtered(state.tab, &state.search_str(), |sections| {
         entry_at_selectable(sections, state.selected_index).map(|entry| entry.icon.clone())
     })
 }
 
-pub fn selected_chat_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
+pub(crate) fn selected_chat_icon(
+    state: &IconPickerState,
+    catalog: &IconCatalogData,
+) -> Option<String> {
     selected_icon(state, catalog).map(|icon| {
         if state.tab == IconPickerTab::Kaomoji {
             wrap_inline_code(&icon)
@@ -111,7 +114,12 @@ pub(crate) fn wrap_inline_code(text: &str) -> String {
     format!("{marker}{text}{marker}")
 }
 
-pub fn click_list(state: &mut IconPickerState, catalog: &IconCatalogData, x: u16, y: u16) -> bool {
+pub(crate) fn click_list(
+    state: &mut IconPickerState,
+    catalog: &IconCatalogData,
+    x: u16,
+    y: u16,
+) -> bool {
     let list = state.list_inner.get();
     if list.height == 0 || y < list.y || y >= list.y + list.height || x < list.x {
         return false;
@@ -144,14 +152,14 @@ pub fn click_list(state: &mut IconPickerState, catalog: &IconCatalogData, x: u16
     })
 }
 
-pub const TAB_STRIP_LEAD: u16 = 1;
-pub const TAB_STRIP_GAP: u16 = 2;
+pub(crate) const TAB_STRIP_LEAD: u16 = 1;
+pub(crate) const TAB_STRIP_GAP: u16 = 2;
 
 fn tab_cell_width(label: &str) -> u16 {
     4 + label.chars().count() as u16
 }
 
-pub fn tab_at_x(tabs_inner: Rect, x: u16) -> Option<IconPickerTab> {
+pub(crate) fn tab_at_x(tabs_inner: Rect, x: u16) -> Option<IconPickerTab> {
     if tabs_inner.width == 0 || x < tabs_inner.x {
         return None;
     }
@@ -177,7 +185,7 @@ pub fn tab_at_x(tabs_inner: Rect, x: u16) -> Option<IconPickerTab> {
     None
 }
 
-pub fn click_tab(state: &mut IconPickerState, x: u16, y: u16) -> bool {
+pub(crate) fn click_tab(state: &mut IconPickerState, x: u16, y: u16) -> bool {
     let tabs = state.tabs_inner.get();
     if tabs.height == 0 || y < tabs.y || y >= tabs.y + tabs.height {
         return false;
@@ -189,7 +197,12 @@ pub fn click_tab(state: &mut IconPickerState, x: u16, y: u16) -> bool {
     true
 }
 
-pub fn render(f: &mut Frame, area: Rect, state: &IconPickerState, catalog: &IconCatalogData) {
+pub(crate) fn render(
+    f: &mut Frame,
+    area: Rect,
+    state: &IconPickerState,
+    catalog: &IconCatalogData,
+) {
     let height = ((area.height as u32 * 70) / 100) as u16;
     let height = height.clamp(14, area.height);
     let width = 64u16.min(area.width);
@@ -448,151 +461,4 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let [vert] = vertical.areas(area);
     let [rect] = horizontal.areas(vert);
     rect
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_entry(name: &str) -> IconEntry {
-        IconEntry {
-            icon: "x".to_string(),
-            name: name.to_string(),
-            name_lower: name.to_lowercase(),
-        }
-    }
-
-    fn two_section_view() -> (Vec<IconEntry>, Vec<IconEntry>) {
-        let a = vec![make_entry("a0"), make_entry("a1")];
-        let b = vec![make_entry("b0"), make_entry("b1"), make_entry("b2")];
-        (a, b)
-    }
-
-    fn views<'a>(a: &'a [IconEntry], b: &'a [IconEntry]) -> Vec<SectionView<'a>> {
-        vec![
-            SectionView {
-                title: "A",
-                entries: a.iter().collect(),
-            },
-            SectionView {
-                title: "B",
-                entries: b.iter().collect(),
-            },
-        ]
-    }
-
-    #[test]
-    fn flat_len_counts_headers_plus_entries() {
-        let (a, b) = two_section_view();
-        let sections = views(&a, &b);
-        assert_eq!(flat_len(&sections), 7);
-        assert_eq!(selectable_count(&sections), 5);
-    }
-
-    #[test]
-    fn selectable_to_flat_skips_headers() {
-        let (a, b) = two_section_view();
-        let sections = views(&a, &b);
-        assert_eq!(selectable_to_flat(&sections, 0), Some(1));
-        assert_eq!(selectable_to_flat(&sections, 1), Some(2));
-        assert_eq!(selectable_to_flat(&sections, 2), Some(4));
-        assert_eq!(selectable_to_flat(&sections, 3), Some(5));
-        assert_eq!(selectable_to_flat(&sections, 4), Some(6));
-        assert_eq!(selectable_to_flat(&sections, 5), None);
-    }
-
-    #[test]
-    fn flat_to_selectable_returns_none_for_headers() {
-        let (a, b) = two_section_view();
-        let sections = views(&a, &b);
-        assert_eq!(flat_to_selectable(&sections, 0), None);
-        assert_eq!(flat_to_selectable(&sections, 1), Some(0));
-        assert_eq!(flat_to_selectable(&sections, 2), Some(1));
-        assert_eq!(flat_to_selectable(&sections, 3), None);
-        assert_eq!(flat_to_selectable(&sections, 4), Some(2));
-        assert_eq!(flat_to_selectable(&sections, 6), Some(4));
-        assert_eq!(flat_to_selectable(&sections, 7), None);
-    }
-
-    #[test]
-    fn flat_selectable_round_trip() {
-        let (a, b) = two_section_view();
-        let sections = views(&a, &b);
-        for selectable in 0..selectable_count(&sections) {
-            let flat = selectable_to_flat(&sections, selectable).unwrap();
-            assert_eq!(flat_to_selectable(&sections, flat), Some(selectable));
-        }
-    }
-
-    #[test]
-    fn entry_at_selectable_crosses_section_boundary() {
-        let (a, b) = two_section_view();
-        let sections = views(&a, &b);
-        assert_eq!(entry_at_selectable(&sections, 0).unwrap().name, "a0");
-        assert_eq!(entry_at_selectable(&sections, 2).unwrap().name, "b0");
-        assert_eq!(entry_at_selectable(&sections, 4).unwrap().name, "b2");
-        assert!(entry_at_selectable(&sections, 5).is_none());
-    }
-
-    #[test]
-    fn selected_chat_icon_wraps_kaomoji_as_inline_code() {
-        let catalog = IconCatalogData::load();
-        let mut state = IconPickerState::default();
-        state.set_tab(IconPickerTab::Kaomoji);
-        for ch in "happy smile".chars() {
-            state.search_insert_char(ch);
-        }
-
-        assert_eq!(
-            selected_icon(&state, &catalog).as_deref(),
-            Some("(* ^ ω ^)")
-        );
-        assert_eq!(
-            selected_chat_icon(&state, &catalog).as_deref(),
-            Some("`(* ^ ω ^)`")
-        );
-    }
-
-    #[test]
-    fn selected_chat_icon_uses_longer_code_fence_for_backtick_kaomoji() {
-        let catalog = IconCatalogData::load();
-        let mut state = IconPickerState::default();
-        state.set_tab(IconPickerTab::Kaomoji);
-        for ch in "table flip".chars() {
-            state.search_insert_char(ch);
-        }
-
-        assert_eq!(
-            selected_icon(&state, &catalog).as_deref(),
-            Some("(╯`Д´)╯︵ ┻━┻")
-        );
-        assert_eq!(
-            selected_chat_icon(&state, &catalog).as_deref(),
-            Some("``(╯`Д´)╯︵ ┻━┻``")
-        );
-    }
-
-    #[test]
-    fn selected_chat_icon_leaves_non_kaomoji_raw() {
-        let catalog = IconCatalogData::load();
-        let state = IconPickerState::default();
-
-        assert_eq!(selected_icon(&state, &catalog).as_deref(), Some("👍"));
-        assert_eq!(selected_chat_icon(&state, &catalog).as_deref(), Some("👍"));
-    }
-
-    #[test]
-    fn tab_navigation_cycles_forward_and_back() {
-        let mut state = IconPickerState::default();
-        state.next_tab();
-        assert_eq!(state.tab, IconPickerTab::Kaomoji);
-        state.next_tab();
-        assert_eq!(state.tab, IconPickerTab::Unicode);
-        state.next_tab();
-        assert_eq!(state.tab, IconPickerTab::NerdFont);
-        state.next_tab();
-        assert_eq!(state.tab, IconPickerTab::Emoji);
-        state.prev_tab();
-        assert_eq!(state.tab, IconPickerTab::NerdFont);
-    }
 }

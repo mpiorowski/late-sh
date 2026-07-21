@@ -15,6 +15,9 @@ otel = [
     "opentelemetry-http",
 ]
 
+[lints]
+workspace = true
+
 [dependencies]
 # Core Utils
 anyhow = { workspace = true }

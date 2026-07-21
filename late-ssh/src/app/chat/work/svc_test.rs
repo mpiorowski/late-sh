@@ -1,4 +1,4 @@
-use crate::app::chat::work::svc::{WorkEvent, WorkService};
+use crate::app::chat::work::svc::{WorkEvent, WorkService, parse_links, parse_words};
 use late_core::{
     models::{
         moderation_audit_log::ModerationAuditLog,
@@ -355,4 +355,16 @@ async fn unread_count_uses_work_read_cursor() {
         .await
         .expect("count unread after new profile");
     assert_eq!(unread_after_new, 1);
+}
+
+#[test]
+fn parse_words_normalizes_and_caps() {
+    let raw = "Rust, CLI rust, web-dev extra one two three four five six seven";
+    assert_eq!(parse_words(raw, 3), vec!["rust", "cli", "web-dev"]);
+}
+
+#[test]
+fn parse_links_keeps_http_urls_only() {
+    let links = parse_links("late.sh, https://late.sh, http://x.test\nftp://no");
+    assert_eq!(links, vec!["https://late.sh", "http://x.test"]);
 }

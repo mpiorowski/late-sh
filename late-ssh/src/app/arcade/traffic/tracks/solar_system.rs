@@ -5,7 +5,11 @@
 //! through Saturn's rings, and into the lonely deep of space to Pluto's edge.
 //! ~85 km displayed, ~10 min.
 
-use super::presets::*;
+use super::presets::{
+    ALPINE_SCENERY, CITY_LANE, CITY_SCENERY, DESERT_LANE, FOREST_DIVIDERS, MOUNTAIN_LANE,
+    PLAINS_SCENERY, ROAD_CITY_2X2, ROAD_SPACE_2X2, ROAD_SPACE_3X2, RURAL_DIVIDERS,
+    SOUTHWESTERN_SCENERY, SPACE_BEACON_SHOULDERS, SPACE_LANE, SPACE_SHIP_MIX, STARFIELD_SCENERY,
+};
 use crate::app::arcade::traffic::theme;
 use crate::app::arcade::traffic::track::{
     Lane, Lanes, Object, Obstacle, ObstacleEffect, Road, RoadAspect, Sceneries, Scenery, Shoulders,

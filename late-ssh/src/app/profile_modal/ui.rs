@@ -32,7 +32,7 @@ const TAB_HEIGHT: u16 = 34;
 /// Pinned late.fetch card: 2 border rows + 3 grid rows.
 const LATE_FETCH_BOX_HEIGHT: u16 = 5;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     // Show the roomy dashboard when the terminal can hold it; fall back to the
     // compact tabbed layout on small screens.
     let dashboard = area.width >= DASH_WIDTH && area.height >= DASH_HEIGHT;

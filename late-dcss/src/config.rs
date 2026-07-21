@@ -4,22 +4,22 @@ use anyhow::Context;
 /// environment. Mirrors the nethack host's knobs: crawl keys per-player saves by
 /// the `-name` argument inside a shared `HOME` (`data_dir`), so the shape is the
 /// same shared playground.
-pub struct Config {
+pub(crate) struct Config {
     /// Path to the crawl console binary.
-    pub bin: String,
+    pub(crate) bin: String,
     /// `HOME` for each child. crawl writes everything under `$HOME/.crawl`
     /// (saves keyed by `-name`, shared scores/logfile/milestones, morgues), so
     /// this is the persistent playground (the PVC in prod).
-    pub data_dir: String,
+    pub(crate) data_dir: String,
     /// Shared secret. The single authorized client key is derived from this; it
     /// must match late-ssh's `LATE_DCSS_SECRET`.
-    pub secret: String,
+    pub(crate) secret: String,
     /// Address to bind the SSH listener to.
-    pub listen_addr: String,
+    pub(crate) listen_addr: String,
     /// Port to bind the SSH listener to.
-    pub port: u16,
+    pub(crate) port: u16,
     /// SSH inactivity timeout in seconds.
-    pub idle_timeout: u64,
+    pub(crate) idle_timeout: u64,
 }
 
 fn optional(key: &str) -> Option<String> {
@@ -39,7 +39,7 @@ where
 }
 
 impl Config {
-    pub fn from_env() -> anyhow::Result<Self> {
+    pub(crate) fn from_env() -> anyhow::Result<Self> {
         let secret = optional("LATE_DCSS_SECRET").context("LATE_DCSS_SECRET must be set")?;
         Ok(Self {
             bin: optional("LATE_DCSS_BIN").unwrap_or_else(|| "/usr/games/crawl".to_string()),

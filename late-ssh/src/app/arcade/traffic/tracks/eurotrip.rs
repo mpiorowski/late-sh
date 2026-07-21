@@ -4,7 +4,13 @@
 //! (no speed limit!), Austrian motorways, the Swiss/Austrian Alps, northern
 //! Italy, the French Riviera, Monaco's cobblestones, and into Barcelona.
 
-use super::presets::*;
+use super::presets::{
+    ALPINE_SCENERY, AUTOBAHN_LANE, CITY_LANE, CITY_SCENERY, COASTAL_SCENERY, COBBLE_LANE,
+    EURO_CITY_MIX, EURO_HIGHWAY_MIX, EURO_VILLAGE_SCENERY, HIGHWAY_DIVIDERS, HIGHWAY_SCENERY,
+    HIGHWAY_SHOULDERS, MOTORWAY_LANE, MOUNTAIN_LANE, MOUNTAIN_SCENERY, ROAD_CITY_2X2,
+    ROAD_MOTORWAY_2X2, ROAD_MOTORWAY_3X2, RURAL_DIVIDERS, RURAL_SCENERY, SIDEWALK_SHOULDERS,
+    TOWN_SCENERY, TUNNEL_SCENERY, URBAN_DIVIDERS,
+};
 use crate::app::arcade::traffic::theme;
 use crate::app::arcade::traffic::track::{
     Lane, Lanes, Obstacle, ObstacleEffect, Road, RoadAspect, Sceneries, Shoulder, Shoulders, Stage,

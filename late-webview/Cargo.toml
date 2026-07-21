@@ -18,6 +18,9 @@ edition = "2024"
 name = "late-webview"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }

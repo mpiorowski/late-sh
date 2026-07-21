@@ -243,7 +243,7 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
         info!("local audio disabled on this platform");
     }
     info!("starting OpenSSH interactive session");
-    let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config).await?;
+    let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config)?;
     let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
 
     audio.stop.store(true, Ordering::Relaxed);
