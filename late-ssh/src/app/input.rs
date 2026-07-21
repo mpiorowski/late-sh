@@ -1469,6 +1469,18 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
                 state.connect();
             }
         }
+        HubGame::Brogue => {
+            if !app.brogue_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Brogue is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Brogue);
+            if let Some(state) = app.brogue_state.as_mut() {
+                state.connect();
+            }
+        }
         HubGame::Usurper => {
             if !app.usurper_enabled {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
@@ -1580,6 +1592,28 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if let Some(b) = launcher_key_byte(event) {
             app.enter_dcss();
             if let Some(state) = app.dcss_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Brogue {
+        // Same as DCSS above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .brogue_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_brogue();
+            if let Some(state) = app.brogue_state.as_mut()
                 && state.launcher_key(b)
             {
                 return true;
@@ -3263,6 +3297,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Launcher ignores them.
         Screen::Nethack => false,
         Screen::Dcss => false,
+        Screen::Brogue => false,
         Screen::Usurper => false,
         Screen::Dopewars => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
@@ -3302,6 +3337,17 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
     if ctx.screen == Screen::Dcss
         && let Some(state) = app.dcss_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Brogue
+        && let Some(state) = app.brogue_state.as_mut()
         && state.name_modal_visible()
     {
         if byte == 0x1B {
@@ -3963,6 +4009,11 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Dcss => {
             // Same as Nethack: Launcher Enter is handled in
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
+        Screen::Brogue => {
+            // Same as DCSS: Launcher keys are handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }

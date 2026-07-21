@@ -89,6 +89,12 @@ pub struct Config {
     pub dcss_host: String,
     pub dcss_port: u16,
     pub dcss_secret: String,
+    /// Brogue door game: reached over SSH like dcss. `enabled` gates only
+    /// the client; the host (`late-brogue`) is deployed unconditionally.
+    pub brogue_enabled: bool,
+    pub brogue_host: String,
+    pub brogue_port: u16,
+    pub brogue_secret: String,
     /// Usurper door game: reached over SSH like nethack. `enabled` gates only
     /// the client; the host (`late-usurper`) is deployed unconditionally.
     pub usurper_enabled: bool,
@@ -248,6 +254,13 @@ impl Config {
             "dcss: DCSS door-game host (late-dcss) target and status"
         );
         tracing::info!(
+            enabled = self.brogue_enabled,
+            host = %self.brogue_host,
+            port = self.brogue_port,
+            has_secret = !self.brogue_secret.is_empty(),
+            "brogue: Brogue door-game host (late-brogue) target and status"
+        );
+        tracing::info!(
             enabled = self.usurper_enabled,
             host = %self.usurper_host,
             port = self.usurper_port,
@@ -319,6 +332,13 @@ impl Config {
                 .context("LATE_DCSS_SECRET must be set when LATE_DCSS_ENABLED is true")?
         } else {
             optional("LATE_DCSS_SECRET").unwrap_or_default()
+        };
+        let brogue_enabled = optional_bool("LATE_BROGUE_ENABLED", false)?;
+        let brogue_secret = if brogue_enabled {
+            optional("LATE_BROGUE_SECRET")
+                .context("LATE_BROGUE_SECRET must be set when LATE_BROGUE_ENABLED is true")?
+        } else {
+            optional("LATE_BROGUE_SECRET").unwrap_or_default()
         };
 
         let usurper_enabled = optional_bool("LATE_USURPER_ENABLED", false)?;
@@ -443,6 +463,10 @@ impl Config {
             dcss_host: optional("LATE_DCSS_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
             dcss_port: optional_parse("LATE_DCSS_PORT", 2325)?,
             dcss_secret,
+            brogue_enabled,
+            brogue_host: optional("LATE_BROGUE_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
+            brogue_port: optional_parse("LATE_BROGUE_PORT", 2327)?,
+            brogue_secret,
             usurper_enabled,
             usurper_host: optional("LATE_USURPER_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
             usurper_port: optional_parse("LATE_USURPER_PORT", 2326)?,

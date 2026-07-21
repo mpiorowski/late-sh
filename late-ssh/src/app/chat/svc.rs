@@ -1747,7 +1747,7 @@ impl ChatService {
         client: &tokio_postgres::Client,
         rooms: &mut [DiscoverRoomItem],
     ) -> Result<()> {
-        const PREVIEW_MESSAGES_PER_ROOM: i64 = 5;
+        const PREVIEW_MESSAGES_PER_ROOM: i64 = 10;
 
         let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.room_id).collect();
         if room_ids.is_empty() {

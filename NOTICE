@@ -154,6 +154,52 @@ GPLv2 compliance notes:
     the Dockerfile build recipe with the distribution so recipients can obtain
     and rebuild that source.
 
+
+Brogue CE
+---------
+
+late.sh hosts Brogue Community Edition as a door game (the "Brogue" screen).
+The curses-only game binary is compiled from official upstream source in the
+Dockerfile ("brogue-build" stage) and ships in the "runtime-brogue" image,
+where the late-brogue host runs it as a child process; players reach it
+remotely over the late.sh SSH server.
+
+  Program:    Brogue Community Edition 1.15.1 (terminal/curses build)
+  License:    GNU Affero General Public License, version 3 (AGPL-3.0)
+              https://www.gnu.org/licenses/agpl-3.0.html
+  Copyright:  Copyright (C) 2009-2020 Brian Walker; Community Edition
+              maintained by Toby Mewett and contributors
+  Upstream:   https://github.com/tmewett/BrogueCE
+  Installed:  Built from the official upstream v1.15.1 source tag in the
+              Dockerfile ("brogue-build" stage). The source tarball's SHA-256
+              is verified (sha256sum -c, fail-closed) before building.
+  Source:     The complete, corresponding machine-readable source is the
+              pinned upstream tag tarball recorded in the Dockerfile
+              (BROGUE_URL / BROGUE_VERSION / BROGUE_SHA256) plus the one
+              patch below, both available from this repository. Our build
+              recipe is the Dockerfile.
+  Modified:   Yes, one patch: scripts/brogue_hangup_save.patch adds a
+              SIGHUP/SIGTERM handler to the curses platform that saves the
+              game in progress via upstream's own quitImmediately path, so a
+              dropped SSH connection or host redeploy does not lose the run.
+              The patch file ships in this repository next to the Dockerfile.
+
+AGPL-3.0 compliance notes:
+
+  - Brogue CE's own copyright and license notices are part of the upstream
+    source tree we build and are left intact.
+  - Unlike the GPLv2 games above, the AGPL DOES have a network clause
+    (section 13): users interacting with a MODIFIED version over a network
+    must be offered the corresponding source. We run a modified version (the
+    hangup-save patch), so the complete corresponding source (the pinned
+    upstream tarball plus scripts/brogue_hangup_save.patch and the Dockerfile
+    build recipe) must remain publicly available for as long as the door is
+    hosted; this repository satisfies that offer.
+  - If you redistribute a build of late.sh that includes the brogue binary
+    (for example, by publishing the runtime-brogue Docker image), AGPL-3.0
+    likewise requires making that corresponding source available to
+    recipients.
+
 Usurper
 -------
 

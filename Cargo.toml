@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "late-brogue",
     "late-cli",
     "late-core",
     "late-dcss",

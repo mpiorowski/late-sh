@@ -212,6 +212,11 @@ pub const DOOR_SIGN: Zone = Zone {
 /// from players); the torso renders one row below.
 pub const BARTENDER: (u16, u16) = (28, 6);
 
+/// @bot's standing spot: the narrow aisle column between the arcade cabinet
+/// and the poker table, on the east side of the room. Not part of the
+/// general pool; he stands here whenever he is online (always).
+pub const BOT_SPOT: (u16, u16) = (154, 9);
+
 /// The dog's home cell beside the hearth rug: where the `(ᴥ)` sprite body
 /// centers when the room starts. The dog itself is shared lobby state
 /// (`lobby.rs`); it wanders between `DOG_WAYPOINTS` and naps back here.

@@ -219,6 +219,11 @@ pub struct SessionConfig {
     pub dcss_host: String,
     pub dcss_port: u16,
     pub dcss_secret: String,
+    /// Brogue door game: reached over SSH like dcss (host `late-brogue`).
+    pub brogue_enabled: bool,
+    pub brogue_host: String,
+    pub brogue_port: u16,
+    pub brogue_secret: String,
     /// Accessor for the account's arcade handle (the public door-game name;
     /// crawl's `-name`), claimed once from the DCSS launcher.
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
@@ -367,6 +372,7 @@ pub struct App {
     /// tutorial's bartender greeting.
     pub(crate) clubhouse_bartender_id: Option<Uuid>,
     pub(crate) clubhouse_graybeard_id: Option<Uuid>,
+    pub(crate) clubhouse_bot_id: Option<Uuid>,
     /// Per-author drunk levels (1-4) copied from the shared lobby about once
     /// a second; chat author labels tint from this owned map, never the mutex.
     pub(crate) drunk_levels: HashMap<Uuid, u8>,
@@ -497,6 +503,15 @@ pub struct App {
     pub(crate) dcss_host: String,
     pub(crate) dcss_port: u16,
     pub(crate) dcss_secret: String,
+    pub(crate) brogue_state: Option<crate::app::door::brogue::state::State>,
+    /// Per-session TERM string (from the PTY request), forwarded to the Brogue
+    /// host so curses gets a real terminfo entry.
+    pub(crate) brogue_term: String,
+    /// Brogue door game: enable flag + host connection details (global Config).
+    pub(crate) brogue_enabled: bool,
+    pub(crate) brogue_host: String,
+    pub(crate) brogue_port: u16,
+    pub(crate) brogue_secret: String,
     pub(crate) arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     pub(crate) usurper_state: Option<crate::app::door::usurper::state::State>,
     /// Per-session TERM string (from the PTY request); the Usurper host pins
@@ -1038,6 +1053,7 @@ impl App {
             chip_service: config.chip_service,
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,
+            clubhouse_bot_id: None,
             drunk_levels: HashMap::new(),
             name_styles: HashMap::new(),
             flair_directory: config.flair_directory,
@@ -1143,6 +1159,12 @@ impl App {
             dcss_host: config.dcss_host,
             dcss_port: config.dcss_port,
             dcss_secret: config.dcss_secret,
+            brogue_state: None,
+            brogue_term: config.term.clone(),
+            brogue_enabled: config.brogue_enabled,
+            brogue_host: config.brogue_host,
+            brogue_port: config.brogue_port,
+            brogue_secret: config.brogue_secret,
             arcade_handle_service: config.arcade_handle_service,
             usurper_state: None,
             usurper_term: config.term.clone(),
@@ -1356,6 +1378,30 @@ impl App {
         // Dropping the State drops the process; the host then SIGHUP-saves the
         // child crawl so the run resumes next launch.
         self.dcss_state = None;
+    }
+
+    pub(crate) fn enter_brogue(&mut self) {
+        if self.brogue_state.is_some() {
+            return;
+        }
+        self.brogue_state = Some(crate::app::door::brogue::state::State::new(
+            crate::app::door::brogue::state::StateConfig {
+                user_id: self.user_id,
+                host: self.brogue_host.clone(),
+                port: self.brogue_port,
+                secret: self.brogue_secret.clone(),
+                term: self.brogue_term.clone(),
+                enabled: self.brogue_enabled,
+                repaint: self.repaint_signal.clone(),
+                handle_svc: Some(self.arcade_handle_service.clone()),
+            },
+        ));
+    }
+
+    fn leave_brogue(&mut self) {
+        // Dropping the State drops the process; the host then SIGHUP-saves the
+        // child brogue so the run resumes next launch.
+        self.brogue_state = None;
     }
 
     pub(crate) fn enter_usurper(&mut self) {
@@ -1599,6 +1645,9 @@ impl App {
             if screen == Screen::Dcss {
                 self.enter_dcss();
             }
+            if screen == Screen::Brogue {
+                self.enter_brogue();
+            }
             if screen == Screen::Usurper {
                 self.enter_usurper();
             }
@@ -1636,6 +1685,11 @@ impl App {
 
         if self.screen == Screen::Dcss {
             self.leave_dcss();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::Brogue {
+            self.leave_brogue();
             self.force_full_repaint();
         }
 
@@ -1682,6 +1736,9 @@ impl App {
         }
         if self.screen == Screen::Dcss {
             self.enter_dcss();
+        }
+        if self.screen == Screen::Brogue {
+            self.enter_brogue();
         }
         if self.screen == Screen::Usurper {
             self.enter_usurper();
@@ -1860,6 +1917,23 @@ impl App {
         {
             return;
         }
+        // Brogue: same raw passthrough + F1->`?` remap as dcss (both are
+        // roguelikes hosted the same way), and the same post-exit input grace.
+        if self.screen == crate::app::common::primitives::Screen::Brogue
+            && let Some(state) = self.brogue_state.as_mut()
+            && state.is_running()
+        {
+            if !state.intercept_input(data) {
+                state.forward_input(data);
+            }
+            return;
+        }
+        if self.screen == crate::app::common::primitives::Screen::Brogue
+            && let Some(state) = self.brogue_state.as_ref()
+            && state.in_exit_grace()
+        {
+            return;
+        }
         // Usurper: raw passthrough with no F1 remap (the game has no universal
         // help key); the state's own forward_input strips mouse noise and the
         // function keys (in DOOR32 local mode they are DDPlus sysop keys).
@@ -1920,6 +1994,7 @@ impl App {
             let mut roster = Vec::new();
             let mut graybeard = None;
             let mut bartender = None;
+            let mut bot = None;
             if let Some(active_users) = &self.active_users {
                 let active_users = active_users.lock_recover();
                 for (user_id, user) in active_users.iter() {
@@ -1929,6 +2004,7 @@ impl App {
                         match user.username.as_str() {
                             "graybeard" => graybeard = Some(*user_id),
                             "bartender" => bartender = Some(*user_id),
+                            "bot" => bot = Some(*user_id),
                             _ => {}
                         }
                         continue;
@@ -1943,8 +2019,10 @@ impl App {
             }
             self.clubhouse.graybeard_online = graybeard.is_some();
             self.clubhouse.bartender_online = bartender.is_some();
+            self.clubhouse.bot_online = bot.is_some();
             self.clubhouse_graybeard_id = graybeard;
             self.clubhouse_bartender_id = bartender;
+            self.clubhouse_bot_id = bot;
             self.clubhouse.refresh_roster(roster);
         }
 

@@ -310,6 +310,9 @@ impl App {
         if let Some(state) = self.dcss_state.as_mut() {
             state.tick();
         }
+        if let Some(state) = self.brogue_state.as_mut() {
+            state.tick();
+        }
         if let Some(state) = self.usurper_state.as_mut() {
             state.tick();
         }
@@ -341,6 +344,16 @@ impl App {
         if self.screen == Screen::Dcss
             && self
                 .dcss_state
+                .as_ref()
+                // `awaiting_handle` holds the screen through the arcade-name
+                // lookup and claim prompt, which run before any game does.
+                .is_none_or(|s| !s.is_running() && !s.in_exit_grace() && !s.awaiting_handle())
+        {
+            self.set_screen(Screen::Games);
+        }
+        if self.screen == Screen::Brogue
+            && self
+                .brogue_state
                 .as_ref()
                 // `awaiting_handle` holds the screen through the arcade-name
                 // lookup and claim prompt, which run before any game does.
