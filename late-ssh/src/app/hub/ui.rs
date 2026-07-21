@@ -25,6 +25,12 @@ pub struct HubDrawProps<'a> {
     pub is_admin: bool,
 }
 
+struct HubLayout {
+    popup: Rect,
+    body: Rect,
+    footer: Rect,
+}
+
 pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     let HubDrawProps {
         state,
@@ -37,7 +43,58 @@ pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
         is_admin,
     } = props;
 
+    let layout = draw_hub_shell(frame, area, state, is_admin);
+    let leaderboard_selected = state.selected_tab() == HubTab::Leaderboard;
+    match state.selected_tab() {
+        HubTab::Leaderboard => {
+            crate::app::hub::leaderboard::draw(frame, layout.popup, leaderboard, user_id, is_admin)
+        }
+        HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout.body, quest_state),
+        HubTab::Shop => {
+            crate::app::hub::shop::ui::draw(frame, layout.body, shop_state, pet_species)
+        }
+        HubTab::Events => crate::app::hub::events::draw(frame, layout.body),
+        HubTab::Admin => {
+            crate::app::hub::admin::ui::draw(frame, layout.body, admin_state, is_admin)
+        }
+    }
+    if !leaderboard_selected {
+        draw_footer(frame, layout.footer, state.selected_tab(), is_admin);
+    }
+}
+
+pub(crate) fn draw_leaderboard_preview(
+    frame: &mut Frame,
+    area: Rect,
+    state: &HubState,
+    leaderboard: &LeaderboardData,
+    user_id: Uuid,
+    edge_to_edge: bool,
+) {
+    let popup = leaderboard_preview_popup(area, edge_to_edge);
+    let layout = draw_hub_shell_at(frame, popup, state, false);
+    crate::app::hub::leaderboard::draw(frame, layout.popup, leaderboard, user_id, false);
+}
+
+fn draw_hub_shell(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) -> HubLayout {
     let popup = centered_percent_rect(80, 85, area);
+    draw_hub_shell_at(frame, popup, state, is_admin)
+}
+
+fn leaderboard_preview_popup(area: Rect, edge_to_edge: bool) -> Rect {
+    if edge_to_edge {
+        area
+    } else {
+        centered_percent_rect(80, 85, area)
+    }
+}
+
+fn draw_hub_shell_at(
+    frame: &mut Frame,
+    popup: Rect,
+    state: &HubState,
+    is_admin: bool,
+) -> HubLayout {
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -52,7 +109,7 @@ pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let layout = Layout::vertical([
+    let rows = Layout::vertical([
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // tabs
         Constraint::Length(1), // breathing room
@@ -62,17 +119,12 @@ pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     ])
     .split(inner);
 
-    draw_tabs(frame, layout[1], state, is_admin);
-    match state.selected_tab() {
-        HubTab::Leaderboard => {
-            crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id)
-        }
-        HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout[3], quest_state),
-        HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state, pet_species),
-        HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
-        HubTab::Admin => crate::app::hub::admin::ui::draw(frame, layout[3], admin_state, is_admin),
+    draw_tabs(frame, rows[1], state, is_admin);
+    HubLayout {
+        popup,
+        body: rows[3],
+        footer: rows[5],
     }
-    draw_footer(frame, layout[5], state.selected_tab(), is_admin);
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) {
@@ -111,7 +163,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, _tab: HubTab, is_admin: bool) {
+pub(super) fn draw_footer(frame: &mut Frame, area: Rect, _tab: HubTab, is_admin: bool) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let text = Style::default().fg(theme::TEXT_DIM());
     let mut spans = vec![
@@ -141,4 +193,20 @@ fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         Constraint::Percentage((100 - percent_x) / 2),
     ])
     .split(vertical[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn leaderboard_preview_can_remove_simulated_margins() {
+        let terminal = Rect::new(0, 0, 139, 48);
+
+        assert_eq!(
+            leaderboard_preview_popup(terminal, false),
+            Rect::new(14, 3, 111, 41)
+        );
+        assert_eq!(leaderboard_preview_popup(terminal, true), terminal);
+    }
 }

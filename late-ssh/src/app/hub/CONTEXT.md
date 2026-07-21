@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-06-17
+- Last updated: 2026-07-20
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -19,7 +19,19 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `state.rs`: selected Hub tab and tab cycling.
 - `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1 Quests`, `2 Shop`, `3 Leaderboard`, `4 Events`, `5 Admin` for admins, `Esc/q` close).
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
-- `leaderboard.rs`: compact leaderboard panels.
+- `leaderboard.rs`: responsive dense leaderboard grid, compact ranked-row
+  formatting, and cell-exact reference geometry.
+- `../../leaderboard_preview.rs` + `../../bin/leaderboard_tui.rs`: resizable,
+  database-free leaderboard TUI with deterministic mock data for exact layout
+  inspection (`cargo run -p late-ssh --bin leaderboard_tui`). A `48x139`
+  terminal produces the `41x111` Hub modal used by the dense-layout reference;
+  above that width, surplus lower-grid columns are shared across all five panels.
+  Pass `-- --edge2edge` to make the preview modal fill the terminal instead of
+  simulating the production modal's outer margins.
+  Each panel stops right-aligning scores once its widest visible line fits with
+  the full username, a two-cell name/score gap, and the trailing edge pad. Each
+  monthly score subsection reserves two rows after its top five for the optional
+  ellipsis/current-user tail before the all-time subsection begins.
 - `admin/`:
   - `state.rs`: admin reward-template and shop-item catalogs, editable draft state, cursor-aware inline edit buffer, async load/save result drain.
   - `input.rs`: Admin-tab row/category/field navigation, inline text edits with Left/Right/Home/End cursor movement, numeric/toggle edits, save/reload actions.
@@ -76,9 +88,15 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 Current compact boards:
 - `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
 - `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, Minesweeper, Le Word, and Rubik's Cube.
-- `Lateris`, `2048`, `Snake`: each score-game panel shows monthly score events and all-time high scores.
+- `Lateris`, `2048`, `Snake`, `Traffic`: each score-game panel shows monthly score events and all-time high scores.
+- `Le Word`: monthly and all-time daily solve counts, plus win-streak leaders
+  ranked by each user's longest consecutive-day solve streak. The win-streak
+  subsection uses leftover vertical space for up to five rows and disappears
+  before monthly or all-time rows are compressed.
 
-Monthly windows use UTC calendar months. Score all-time boards persist.
+Monthly windows use UTC calendar months. Score and Le Word all-time boards persist;
+the Le Word win-streak board measures consecutive `puzzle_date` values across all
+recorded daily wins.
 
 Monthly profile awards:
 - Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement. Migration `081_limit_profile_awards_to_top_three.sql` removes old rank 4/5 rows and enforces top-3 awards.
