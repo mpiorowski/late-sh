@@ -633,7 +633,10 @@ fn draw_footer(
             ));
         }
     } else {
-        spans.push(Span::styled("+/-/0", Style::default().fg(theme::AMBER_DIM())));
+        spans.push(Span::styled(
+            "+/-/0",
+            Style::default().fg(theme::AMBER_DIM()),
+        ));
         spans.push(Span::styled(
             " vote  ",
             Style::default().fg(theme::TEXT_DIM()),

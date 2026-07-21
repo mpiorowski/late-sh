@@ -1774,10 +1774,7 @@ impl AudioService {
             audio_mode: mode,
             current,
             queue,
-            history: history_items
-                .into_iter()
-                .map(history_item_view)
-                .collect(),
+            history: history_items.into_iter().map(history_item_view).collect(),
             skip_progress: None,
         })
     }
