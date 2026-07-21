@@ -141,5 +141,3 @@ fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
         && y >= rect.y
         && y < rect.y + rect.height
 }
-
-

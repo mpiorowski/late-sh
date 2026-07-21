@@ -1,5 +1,5 @@
-use serde_json::json;
 use crate::app::lobby::house::ssnake::settings::*;
+use serde_json::json;
 
 #[test]
 fn settings_round_trip() {

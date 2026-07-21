@@ -113,5 +113,3 @@ impl SsnakeTableSettings {
             .unwrap_or_else(|| "random arena".to_string())
     }
 }
-
-

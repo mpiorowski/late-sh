@@ -689,4 +689,3 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 #[cfg(test)]
 #[path = "modal_ui_test.rs"]
 mod modal_ui_test;
-

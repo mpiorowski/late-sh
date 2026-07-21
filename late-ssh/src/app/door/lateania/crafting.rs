@@ -217,4 +217,3 @@ pub fn recipe_indices_for(skill: CraftSkill) -> Vec<usize> {
 #[cfg(test)]
 #[path = "crafting_test.rs"]
 mod crafting_test;
-

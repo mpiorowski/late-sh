@@ -191,4 +191,3 @@ fn alt_key_input(key: Key) -> Input {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

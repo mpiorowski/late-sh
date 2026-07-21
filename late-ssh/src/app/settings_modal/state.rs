@@ -2005,4 +2005,3 @@ fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

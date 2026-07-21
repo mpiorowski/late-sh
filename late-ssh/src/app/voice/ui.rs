@@ -206,4 +206,3 @@ fn participant_spans(participant: &VoiceParticipant, current_user: bool) -> Vec<
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

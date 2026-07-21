@@ -299,4 +299,3 @@ fn shift_and_merge(line: &mut [u32; 4], score: &mut i32) -> bool {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

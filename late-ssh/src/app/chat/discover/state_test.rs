@@ -1,5 +1,5 @@
-use crate::app::chat::svc::DiscoverRoomItem;
 use crate::app::chat::discover::state::*;
+use crate::app::chat::svc::DiscoverRoomItem;
 use chrono::Utc;
 use uuid::Uuid;
 

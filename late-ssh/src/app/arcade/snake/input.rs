@@ -43,4 +43,3 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

@@ -1515,4 +1515,3 @@ fn reject_publickey_only() -> Auth {
 #[cfg(test)]
 #[path = "ssh_internal_test.rs"]
 mod ssh_internal_test;
-

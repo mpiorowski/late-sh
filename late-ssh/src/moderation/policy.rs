@@ -166,4 +166,3 @@ impl Permissions {
 #[cfg(test)]
 #[path = "policy_test.rs"]
 mod policy_test;
-

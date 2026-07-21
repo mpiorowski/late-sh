@@ -316,4 +316,3 @@ fn share_lines(lines: &[String]) -> String {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

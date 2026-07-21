@@ -1358,4 +1358,3 @@ pub fn format_deadline(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

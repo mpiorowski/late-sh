@@ -1,5 +1,5 @@
-use serde_json::json;
 use crate::app::lobby::house::tron::settings::*;
+use serde_json::json;
 
 #[test]
 fn settings_round_trip_speed() {
@@ -12,8 +12,7 @@ fn settings_round_trip_speed() {
 
 #[test]
 fn unknown_values_fall_back_to_safe_defaults() {
-    let settings =
-        TronTableSettings::from_json(&json!({ "speed": "warp", "mode": "overdrive" }));
+    let settings = TronTableSettings::from_json(&json!({ "speed": "warp", "mode": "overdrive" }));
     assert_eq!(settings.speed, TronSpeed::Standard);
     assert_eq!(settings.mode, TronMode::Classic);
 }

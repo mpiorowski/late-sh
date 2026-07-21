@@ -9,5 +9,3 @@ pub fn timezone_current_time(now: DateTime<Utc>, timezone: Option<&str>) -> Opti
     let tz: Tz = timezone.parse().ok()?;
     Some(now.with_timezone(&tz).format("%a %H:%M").to_string())
 }
-
-

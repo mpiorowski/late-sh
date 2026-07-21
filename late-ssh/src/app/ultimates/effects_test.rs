@@ -142,9 +142,7 @@ fn thematrix_z_extremes_have_distinct_green_intensity() {
 fn thematrix_fadeout_keeps_cutoff_lines_without_spawning_new_cycles() {
     let cutoff_secs = THEMATRIX_MAIN_PHASE_MS as f32 / 1000.0;
     let (col, cutoff_line) = (0..80)
-        .find_map(|col| {
-            thematrix_line_for_col(12, 99, col, cutoff_secs).map(|line| (col, line))
-        })
+        .find_map(|col| thematrix_line_for_col(12, 99, col, cutoff_secs).map(|line| (col, line)))
         .expect("expected at least one active cutoff line");
 
     let fadeout_line =

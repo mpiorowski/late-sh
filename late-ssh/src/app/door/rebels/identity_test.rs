@@ -1,6 +1,6 @@
-use uuid::Uuid;
 use crate::app::door::rebels::identity::*;
 use russh::keys::HashAlg;
+use uuid::Uuid;
 
 fn fingerprint(id: &RebelsIdentity) -> String {
     id.key.public_key().fingerprint(HashAlg::Sha256).to_string()

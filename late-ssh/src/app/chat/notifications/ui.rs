@@ -190,4 +190,3 @@ fn finalize_preview_rows(mut rows: Vec<String>, max_rows: usize, truncated: bool
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

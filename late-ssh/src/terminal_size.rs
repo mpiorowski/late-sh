@@ -18,5 +18,3 @@ pub(crate) fn clamp_terminal_size(cols: u32, rows: u32) -> TerminalSize {
         clamped: cols != u32::from(clamped_cols) || rows != u32::from(clamped_rows),
     }
 }
-
-

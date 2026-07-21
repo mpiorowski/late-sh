@@ -903,5 +903,3 @@ pub fn graveyard_favor_range(level: u8) -> (u32, u32) {
     let bump = (level as f64 / 3.0).round() as u32;
     (10 + bump, 20 + bump)
 }
-
-

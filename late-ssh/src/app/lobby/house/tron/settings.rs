@@ -126,5 +126,3 @@ impl TronTableSettings {
         format!("{} · {}", self.speed.label(), self.mode.label())
     }
 }
-
-

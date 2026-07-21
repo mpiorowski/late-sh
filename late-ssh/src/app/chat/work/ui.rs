@@ -448,4 +448,3 @@ fn draw_empty_placeholder(frame: &mut Frame, area: Rect, placeholder: &str, acti
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

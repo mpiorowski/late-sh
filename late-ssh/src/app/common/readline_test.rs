@@ -1,5 +1,5 @@
-use ratatui_textarea::Key;
 use crate::app::common::readline::*;
+use ratatui_textarea::Key;
 
 #[test]
 fn maps_ctrl_a_through_ctrl_z() {

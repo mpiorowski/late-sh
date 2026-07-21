@@ -24,9 +24,7 @@ fn snapshot_with_level(level: SsnakeLevel) -> SsnakeSnapshot {
         players: [
             SsnakePlayerSnapshot {
                 body: vec![Pos { x: 2, y: 2 }, Pos { x: 3, y: 2 }],
-                motion: Motion::Moving(
-                    crate::app::lobby::house::ssnake::state::Direction::Left,
-                ),
+                motion: Motion::Moving(crate::app::lobby::house::ssnake::state::Direction::Left),
                 lives: 3,
                 score: 0,
                 eliminated: false,

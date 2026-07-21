@@ -1,7 +1,7 @@
-use late_core::models::character_sheet::SHEET_NAME_MAX_CHARS;
 use crate::app::chat::state::SheetOpenRequest;
-use uuid::Uuid;
 use crate::app::sheet_modal::state::*;
+use late_core::models::character_sheet::SHEET_NAME_MAX_CHARS;
+use uuid::Uuid;
 
 fn request(editable: bool) -> SheetOpenRequest {
     SheetOpenRequest {

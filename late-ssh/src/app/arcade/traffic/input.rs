@@ -125,5 +125,3 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
         TrafficScreen::Racing => handle_race_arrow(state, key),
     }
 }
-
-

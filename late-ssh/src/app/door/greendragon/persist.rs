@@ -54,5 +54,3 @@ fn migrate_v1_dragon_boons(c: &mut Character) {
         c.dragon_ff_bonus = c.dragon_kills.min(10);
     }
 }
-
-

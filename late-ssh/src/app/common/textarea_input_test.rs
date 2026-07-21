@@ -1,6 +1,6 @@
+use crate::app::common::textarea_input::*;
 use crate::app::input::ParsedInput;
 use ratatui_textarea::TextArea;
-use crate::app::common::textarea_input::*;
 
 fn ta(text: &str) -> TextArea<'static> {
     let mut ta = TextArea::default();

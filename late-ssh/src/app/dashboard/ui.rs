@@ -146,4 +146,3 @@ fn draw_amber_rule(frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

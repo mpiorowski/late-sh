@@ -219,5 +219,3 @@ fn room_lines(item: &DiscoverRoomItem, selected: bool) -> Vec<Line<'static>> {
 
     vec![name_line, stats_line]
 }
-
-

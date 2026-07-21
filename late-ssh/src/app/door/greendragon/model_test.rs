@@ -804,8 +804,7 @@ fn buff_foe_scales_with_investment() {
     vet.dragon_defense_bonus = 7;
     vet.dragon_hp_bonus = 25; // 5 points
     let foe = vet.buff_foe(base, &mut StdRng::seed_from_u64(2));
-    let spent =
-        (foe.attack - base.attack) + (foe.defense - base.defense) + (foe.hp - base.hp) / 5;
+    let spent = (foe.attack - base.attack) + (foe.defense - base.defense) + (foe.hp - base.hp) / 5;
     assert_eq!(spent, 6);
     assert!(foe.gold >= base.gold);
 }

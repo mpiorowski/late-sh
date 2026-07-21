@@ -590,5 +590,3 @@ pub(crate) fn pad_to_width(text: &str, width: usize) -> String {
     out.push_str(&" ".repeat(width.saturating_sub(used)));
     out
 }
-
-

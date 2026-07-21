@@ -338,5 +338,3 @@ pub fn portal_destinations() -> Vec<(&'static str, RoomId)> {
     }
     out
 }
-
-

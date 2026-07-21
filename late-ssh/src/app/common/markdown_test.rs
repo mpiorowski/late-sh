@@ -1,10 +1,10 @@
+use crate::app::common::markdown::*;
+use crate::app::common::theme;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
-use crate::app::common::markdown::*;
-use crate::app::common::theme;
 
 fn lines_to_strings(lines: &[Line]) -> Vec<String> {
     lines
@@ -96,8 +96,7 @@ fn renders_fenced_code_block() {
 
 #[test]
 fn renders_inline_code_without_mention_highlight() {
-    let lines =
-        render_body_to_lines("look at `@graybeard`", 80, Span::raw(""), Style::default());
+    let lines = render_body_to_lines("look at `@graybeard`", 80, Span::raw(""), Style::default());
     let code_span = lines[0]
         .spans
         .iter()

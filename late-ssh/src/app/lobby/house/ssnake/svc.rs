@@ -922,4 +922,3 @@ fn wrap_pos(head: Pos, direction: Direction, width: usize, height: usize) -> Pos
 #[cfg(test)]
 #[path = "svc_test.rs"]
 mod svc_test;
-

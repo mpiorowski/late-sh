@@ -1719,4 +1719,3 @@ impl TinyRng {
 #[cfg(test)]
 #[path = "ghost_test.rs"]
 mod ghost_test;
-

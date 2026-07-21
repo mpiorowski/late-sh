@@ -2797,5 +2797,3 @@ pub fn learned_at(class: Class, level: i32) -> Option<&'static Ability> {
         .iter()
         .find(|a| a.class == class && a.level_req == level)
 }
-
-

@@ -198,4 +198,3 @@ fn parse_level(source: &str) -> Result<SsnakeLevel> {
 #[cfg(test)]
 #[path = "levels_test.rs"]
 mod levels_test;
-

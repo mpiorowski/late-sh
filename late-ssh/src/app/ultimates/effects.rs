@@ -367,4 +367,3 @@ fn rainbow_gradient(value: f32) -> Color {
 #[cfg(test)]
 #[path = "effects_test.rs"]
 mod effects_test;
-

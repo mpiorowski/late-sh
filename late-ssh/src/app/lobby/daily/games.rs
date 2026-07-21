@@ -140,5 +140,3 @@ impl DailyGame {
             .join("|")
     }
 }
-
-

@@ -647,4 +647,3 @@ impl LobbyInner {
 #[cfg(test)]
 #[path = "lobby_test.rs"]
 mod lobby_test;
-

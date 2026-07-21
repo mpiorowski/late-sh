@@ -245,8 +245,7 @@ fn visible_components_skips_unfit_panel_without_stopping() {
         on(RightSidebarComponent::Music),
         on(RightSidebarComponent::Bonsai),
     ];
-    let height =
-        TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + RULE_HEIGHT + VISUALIZER_HEIGHT;
+    let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + RULE_HEIGHT + VISUALIZER_HEIGHT;
     assert_eq!(
         visible_components(&components, height),
         vec![

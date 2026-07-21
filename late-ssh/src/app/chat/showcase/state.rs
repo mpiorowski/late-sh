@@ -562,4 +562,3 @@ fn move_index(current: usize, delta: isize, len: usize) -> usize {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

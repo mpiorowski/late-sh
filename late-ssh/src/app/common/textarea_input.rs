@@ -172,5 +172,3 @@ fn clear(ta: &mut TextArea<'static>) {
     ta.select_all();
     ta.cut();
 }
-
-

@@ -176,4 +176,3 @@ pub(crate) fn rank_command_matches(
 #[cfg(test)]
 #[path = "commands_test.rs"]
 mod commands_test;
-

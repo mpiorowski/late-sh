@@ -4502,4 +4502,3 @@ pub fn BADGE_GOLD() -> Color {
 #[cfg(test)]
 #[path = "theme_test.rs"]
 mod theme_test;
-

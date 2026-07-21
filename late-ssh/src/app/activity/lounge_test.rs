@@ -56,11 +56,8 @@ fn username_effect_repeat_keys_on_full_style_slug() {
     assert!(is_repeat(&mut recent, &ember));
     // ...but a new color or a new style visibly changed the name, so it
     // announces again.
-    let sky = ActivityEvent::username_effect_applied(
-        user,
-        "mira",
-        UsernameEffect::Glow(GlowColor::Sky),
-    );
+    let sky =
+        ActivityEvent::username_effect_applied(user, "mira", UsernameEffect::Glow(GlowColor::Sky));
     assert!(!is_repeat(&mut recent, &sky));
     let shimmer = ActivityEvent::username_effect_applied(user, "mira", UsernameEffect::Shimmer);
     assert!(!is_repeat(&mut recent, &shimmer));

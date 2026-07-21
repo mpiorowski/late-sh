@@ -1,5 +1,5 @@
-use ratatui::layout::Rect;
 use crate::app::arcade::ui::*;
+use ratatui::layout::Rect;
 
 #[test]
 fn centered_rect_centers_inside_larger_area() {

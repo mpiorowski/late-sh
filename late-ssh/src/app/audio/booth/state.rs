@@ -252,4 +252,3 @@ fn history_item_matches(item: &HistoryItemView, query: &str) -> bool {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

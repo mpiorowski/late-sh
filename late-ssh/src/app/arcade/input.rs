@@ -275,4 +275,3 @@ fn right_sidebar_visible(app: &App) -> bool {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

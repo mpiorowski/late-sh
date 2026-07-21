@@ -342,4 +342,3 @@ fn count(grid: &Grid) -> (usize, usize) {
 #[cfg(test)]
 #[path = "reversi_test.rs"]
 mod reversi_test;
-

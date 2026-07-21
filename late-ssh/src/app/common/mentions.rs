@@ -140,5 +140,3 @@ fn advance_past_backticks(text: &str, mut idx: usize) -> usize {
     }
     idx
 }
-
-

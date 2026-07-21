@@ -711,5 +711,3 @@ fn shuffle(cards: &mut [PlayingCard]) {
         cards.swap(idx, swap_idx);
     }
 }
-
-

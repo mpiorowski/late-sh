@@ -319,5 +319,3 @@ pub fn compose_line(name: &str, body: &str) -> String {
     }
     format!("{name} says, \"{body}\"")
 }
-
-

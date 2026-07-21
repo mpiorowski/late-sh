@@ -89,5 +89,3 @@ pub fn has_death(screen_text: &str) -> bool {
     // together so ordinary text can't trip it. Shown only at true game over.
     screen_text.contains("REST") && screen_text.contains("PEACE")
 }
-
-

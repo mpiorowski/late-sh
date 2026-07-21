@@ -740,4 +740,3 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

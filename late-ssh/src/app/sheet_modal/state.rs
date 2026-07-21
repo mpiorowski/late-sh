@@ -228,5 +228,3 @@ fn scroll_to_top(ta: &mut TextArea<'static>) {
     ta.move_cursor(CursorMove::Top);
     ta.move_cursor(CursorMove::Head);
 }
-
-

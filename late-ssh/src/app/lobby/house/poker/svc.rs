@@ -2248,4 +2248,3 @@ fn shuffle(cards: &mut [PlayingCard]) {
 #[cfg(test)]
 #[path = "svc_test.rs"]
 mod svc_test;
-

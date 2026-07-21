@@ -240,5 +240,3 @@ pub fn blit_screen(buf: &mut Buffer, area: Rect, screen: &vt100::Screen) {
         }
     }
 }
-
-

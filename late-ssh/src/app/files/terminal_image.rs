@@ -798,4 +798,3 @@ fn push_decimal(out: &mut Vec<u8>, value: usize) {
 #[cfg(test)]
 #[path = "terminal_image_test.rs"]
 mod terminal_image_test;
-

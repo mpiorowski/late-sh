@@ -79,8 +79,8 @@ fn full_column_and_off_board_are_rejected() {
 /// on the main diagonal long before the board fills. This order was found by
 /// searching for a sequence where no drop ever completes a line.
 const DRAW_ORDER: [usize; CELLS] = [
-    4, 5, 4, 2, 3, 1, 3, 0, 2, 3, 3, 4, 2, 2, 2, 3, 0, 3, 2, 1, 4, 5, 1, 4, 5, 6, 0, 6, 4, 5,
-    5, 0, 0, 1, 0, 1, 5, 1, 6, 6, 6, 6,
+    4, 5, 4, 2, 3, 1, 3, 0, 2, 3, 3, 4, 2, 2, 2, 3, 0, 3, 2, 1, 4, 5, 1, 4, 5, 6, 0, 6, 4, 5, 5, 0,
+    0, 1, 0, 1, 5, 1, 6, 6, 6, 6,
 ];
 
 #[test]

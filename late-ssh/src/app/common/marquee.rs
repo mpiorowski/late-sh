@@ -28,5 +28,3 @@ pub(crate) fn marquee_text(text: &str, width: usize, tick: usize) -> String {
     .min(travel);
     chars[offset..offset + width].iter().collect()
 }
-
-

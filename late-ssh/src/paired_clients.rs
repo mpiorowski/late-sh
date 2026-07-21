@@ -613,5 +613,3 @@ fn token_hint(token: &str) -> String {
     let prefix: String = token.chars().take(8).collect();
     format!("{prefix}..({})", token.len())
 }
-
-

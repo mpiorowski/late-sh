@@ -1,6 +1,6 @@
 use super::data::HelpTopic;
-use ratatui::layout::Rect;
 use crate::app::help_modal::state::*;
+use ratatui::layout::Rect;
 
 #[test]
 fn move_topic_wraps_at_both_ends() {

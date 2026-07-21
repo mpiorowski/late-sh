@@ -1,5 +1,5 @@
-use irc_proto::{Command, Response};
 use crate::ircd::replies::*;
+use irc_proto::{Command, Response};
 
 #[test]
 fn numeric_puts_nick_first_and_prefixes_server() {

@@ -1591,4 +1591,3 @@ fn retexture_line(line: &str, form: usize) -> String {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

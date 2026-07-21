@@ -141,5 +141,3 @@ fn centered_percent_rect(width_percent: u16, height_percent: u16, area: Rect) ->
 fn percent_of(value: u16, percent: u16) -> u16 {
     ((value as u32 * percent as u32) / 100) as u16
 }
-
-

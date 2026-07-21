@@ -262,4 +262,3 @@ fn hash_parts(seed: i64, date: NaiveDate, salt: u64) -> u64 {
 #[cfg(test)]
 #[path = "care_test.rs"]
 mod care_test;
-

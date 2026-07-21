@@ -59,5 +59,3 @@ pub fn flag_emoji(name: &str) -> &'static str {
         _ => "",
     }
 }
-
-

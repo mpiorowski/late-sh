@@ -171,5 +171,3 @@ fn rewrite_sgr_mouse_body(
     let new_y = y - y_offset;
     Some(format!("\x1b[<{b};{new_x};{new_y}{}", terminator as char).into_bytes())
 }
-
-

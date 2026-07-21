@@ -125,5 +125,3 @@ fn move_index(current: usize, delta: isize, len: usize) -> usize {
     }
     (current as isize + delta).clamp(0, len as isize - 1) as usize
 }
-
-

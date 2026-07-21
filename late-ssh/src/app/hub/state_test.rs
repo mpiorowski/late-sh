@@ -1,5 +1,5 @@
-use ratatui::layout::Rect;
 use crate::app::hub::state::*;
+use ratatui::layout::Rect;
 
 #[test]
 fn tab_at_point_hits_set_rect() {

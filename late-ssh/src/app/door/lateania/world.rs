@@ -10083,4 +10083,3 @@ const CAVERNS_BOSS_LOOT: &[u32] = &[
 #[cfg(test)]
 #[path = "world_test.rs"]
 mod world_test;
-

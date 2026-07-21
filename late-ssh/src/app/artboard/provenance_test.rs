@@ -1,5 +1,5 @@
-use dartboard_core::{Canvas, CanvasOp, Pos, RgbColor};
 use crate::app::artboard::provenance::*;
+use dartboard_core::{Canvas, CanvasOp, Pos, RgbColor};
 
 #[test]
 fn paint_cell_tracks_last_writer() {

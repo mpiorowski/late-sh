@@ -245,4 +245,3 @@ fn new_command_input() -> TextArea<'static> {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

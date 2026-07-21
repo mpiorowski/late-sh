@@ -358,4 +358,3 @@ fn row_label(row: usize) -> char {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

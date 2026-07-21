@@ -266,5 +266,3 @@ fn suit_monogram(suit: CardSuit) -> &'static str {
         CardSuit::Spades => "S",
     }
 }
-
-

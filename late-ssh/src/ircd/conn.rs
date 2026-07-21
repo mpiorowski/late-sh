@@ -2091,4 +2091,3 @@ async fn send_all(framed: &mut IrcStream, messages: Vec<Message>) -> Result<()> 
 #[cfg(test)]
 #[path = "conn_test.rs"]
 mod conn_test;
-

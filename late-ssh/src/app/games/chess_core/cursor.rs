@@ -25,5 +25,3 @@ pub fn legal_targets(legal_moves: &[ChessMoveSpec], selected: Option<usize>) -> 
         .filter_map(|mv| (mv.from == selected).then_some(mv.to))
         .collect()
 }
-
-

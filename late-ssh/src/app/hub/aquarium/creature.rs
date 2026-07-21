@@ -1441,4 +1441,3 @@ fn clamp_velocity(value: i128) -> i16 {
 #[cfg(test)]
 #[path = "creature_test.rs"]
 mod creature_test;
-

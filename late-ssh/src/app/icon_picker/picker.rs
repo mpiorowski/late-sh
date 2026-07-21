@@ -449,5 +449,3 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let [rect] = horizontal.areas(vert);
     rect
 }
-
-

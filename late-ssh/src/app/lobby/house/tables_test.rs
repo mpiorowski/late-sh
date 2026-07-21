@@ -1,6 +1,6 @@
 use crate::app::lobby::house::ssnake::settings::SsnakeSpeed;
-use crate::app::lobby::house::tron::settings::{TronMode, TronSpeed};
 use crate::app::lobby::house::tables::*;
+use crate::app::lobby::house::tron::settings::{TronMode, TronSpeed};
 
 #[test]
 fn table_ids_are_distinct() {

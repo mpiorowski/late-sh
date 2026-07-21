@@ -265,5 +265,3 @@ impl SavedWorld {
         (saved.version == WORLD_SCHEMA_VERSION).then_some(saved)
     }
 }
-
-

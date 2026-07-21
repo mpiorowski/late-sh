@@ -216,4 +216,3 @@ fn packed_truecolor(color: u32) -> Option<Color> {
 #[cfg(test)]
 #[path = "inline_image_test.rs"]
 mod inline_image_test;
-

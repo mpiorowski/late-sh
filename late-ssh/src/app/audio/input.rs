@@ -86,4 +86,3 @@ fn poll_option_position(byte: u8) -> Option<i32> {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

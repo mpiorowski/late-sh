@@ -200,8 +200,7 @@ fn parse_bartender_order_refuses_out_of_range_price() {
 #[test]
 fn parse_bartender_order_downgrades_unaffordable_pour() {
     // In range, but more than the patron can spend: no charge, just the line.
-    let raw =
-        r#"{"action": "pour", "drink": "top shelf", "price": 800, "line": "the good stuff"}"#;
+    let raw = r#"{"action": "pour", "drink": "top shelf", "price": 800, "line": "the good stuff"}"#;
     assert_eq!(
         parse_bartender_order(raw, 300, "bartender", &[]),
         BartenderDecision::Say {
@@ -299,8 +298,7 @@ fn parse_bartender_order_recovers_from_stray_trailing_quote() {
     assert_eq!(
         parse_bartender_order(raw, 900, "bartender", &[]),
         BartenderDecision::Say {
-            line: "The top shelf is closed for you tonight, friend. Here is ice water."
-                .to_string()
+            line: "The top shelf is closed for you tonight, friend. Here is ice water.".to_string()
         }
     );
 }

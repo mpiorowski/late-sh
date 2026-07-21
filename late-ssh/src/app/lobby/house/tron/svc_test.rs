@@ -5,9 +5,7 @@ fn state_with_two_players() -> (SharedState, Uuid, Uuid) {
     state_with_two_players_and_settings(TronTableSettings::default())
 }
 
-fn state_with_two_players_and_settings(
-    settings: TronTableSettings,
-) -> (SharedState, Uuid, Uuid) {
+fn state_with_two_players_and_settings(settings: TronTableSettings) -> (SharedState, Uuid, Uuid) {
     let mut state = SharedState::new(Uuid::now_v7(), settings);
     let a = Uuid::now_v7();
     let b = Uuid::now_v7();

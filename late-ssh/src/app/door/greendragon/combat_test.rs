@@ -96,8 +96,7 @@ fn buff_curse_reduces_incoming_damage() {
         let mut cursed = vec![curse];
         let mut cc = Vec::new();
         let mut r2 = StdRng::seed_from_u64(seed);
-        let d =
-            resolve_round_buffed(&mut r2, p, e, 1000, &mut cursed, &mut cc).damage_to_player;
+        let d = resolve_round_buffed(&mut r2, p, e, 1000, &mut cursed, &mut cc).damage_to_player;
         cursed_total += d.max(0) as i64;
     }
     assert!(cursed_total > 0);

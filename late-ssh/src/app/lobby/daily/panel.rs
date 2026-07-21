@@ -237,4 +237,3 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 #[path = "panel_test.rs"]
 mod panel_test;
-

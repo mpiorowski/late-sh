@@ -698,4 +698,3 @@ pub fn simulate_fight(
 #[cfg(test)]
 #[path = "combat_test.rs"]
 mod combat_test;
-

@@ -480,4 +480,3 @@ fn score_style(score: LetterScore) -> Style {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

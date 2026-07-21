@@ -178,4 +178,3 @@ fn mark_stale(tx: &watch::Sender<Arc<WorldCupSnapshot>>) {
 #[cfg(test)]
 #[path = "svc_test.rs"]
 mod svc_test;
-

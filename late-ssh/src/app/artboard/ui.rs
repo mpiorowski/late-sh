@@ -1179,4 +1179,3 @@ fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTab) {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

@@ -699,4 +699,3 @@ pub fn furniture_by_key(key: &str) -> Option<&'static Furniture> {
 #[cfg(test)]
 #[path = "housing_test.rs"]
 mod housing_test;
-

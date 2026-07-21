@@ -1,6 +1,6 @@
 use super::model::Character;
-use serde_json::json;
 use crate::app::door::greendragon::persist::*;
+use serde_json::json;
 
 #[test]
 fn round_trips_a_character() {

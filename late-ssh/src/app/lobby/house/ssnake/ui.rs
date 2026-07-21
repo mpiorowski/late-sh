@@ -619,4 +619,3 @@ fn body_color(seat: usize) -> Color {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

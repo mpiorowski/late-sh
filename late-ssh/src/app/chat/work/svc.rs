@@ -459,20 +459,3 @@ pub fn looks_like_url(s: &str) -> bool {
     let s = s.trim();
     s.starts_with("http://") || s.starts_with("https://")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_links, parse_words};
-
-    #[test]
-    fn parse_words_normalizes_and_caps() {
-        let raw = "Rust, CLI rust, web-dev extra one two three four five six seven";
-        assert_eq!(parse_words(raw, 3), vec!["rust", "cli", "web-dev"]);
-    }
-
-    #[test]
-    fn parse_links_keeps_http_urls_only() {
-        let links = parse_links("late.sh, https://late.sh, http://x.test\nftp://no");
-        assert_eq!(links, vec!["https://late.sh", "http://x.test"]);
-    }
-}

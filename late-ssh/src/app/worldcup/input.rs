@@ -26,5 +26,3 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
         _ => false,
     }
 }
-
-

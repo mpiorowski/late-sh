@@ -966,4 +966,3 @@ fn tableau_to_top_index(col: usize) -> usize {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

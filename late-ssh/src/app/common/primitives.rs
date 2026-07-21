@@ -242,5 +242,3 @@ pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
     }
     Line::from(spans)
 }
-
-

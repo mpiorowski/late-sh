@@ -174,9 +174,8 @@ fn wrap_news_to_lines_respects_terminal_cell_width() {
         Style::default(),
         NewsPayload {
             title: "Nobody understands the point of hybrid cars".to_string(),
-            summary:
-                "YouTube video by Technology Connections.\nOpen the link to watch on YouTube."
-                    .to_string(),
+            summary: "YouTube video by Technology Connections.\nOpen the link to watch on YouTube."
+                .to_string(),
             url: "https://www.youtube.com/watch?v=KnUFH5GX_fI".to_string(),
             ascii_art: ".. .-:::----\n. .:==-.....\n:-:--:     .".to_string(),
         },

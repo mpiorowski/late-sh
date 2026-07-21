@@ -731,4 +731,3 @@ fn put(grid: &mut [Vec<Option<Cell>>], x: usize, y: usize, cell: Cell) {
 #[cfg(test)]
 #[path = "render_test.rs"]
 mod render_test;
-

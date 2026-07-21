@@ -1,7 +1,7 @@
 use super::{
     HelpHintStyle, app_frame_bottom_titles, app_frame_help_hint_title, app_frame_sponsor_title,
-    dashboard_home_selected, line_width, resolve_right_sidebar_enabled,
-    room_list_sidebar_enabled, sidebar_enabled, sponsor_line, status_hud_title,
+    dashboard_home_selected, line_width, resolve_right_sidebar_enabled, room_list_sidebar_enabled,
+    sidebar_enabled, sponsor_line, status_hud_title,
 };
 use crate::app::common::primitives::Screen;
 use late_core::models::user::RightSidebarMode;
@@ -144,8 +144,7 @@ fn sponsor_title_drops_optional_segments_before_overlapping_help_hints() {
         " thanks for hanging out ☕ https://ko-fi.com/mateuszpiorowski "
     );
 
-    let url_only =
-        app_frame_sponsor_title(full_width - 1).expect("url-only sponsor should fit");
+    let url_only = app_frame_sponsor_title(full_width - 1).expect("url-only sponsor should fit");
     assert_eq!(line_text(&url_only), "https://ko-fi.com/mateuszpiorowski ");
 
     let short_url =

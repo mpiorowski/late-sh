@@ -164,5 +164,3 @@ pub fn styled_name_spans(name: &str, style: NameStyle, base: Style) -> Vec<Span<
         .map(|(index, ch)| Span::styled(ch.to_string(), base.fg(char_color(style, index, len))))
         .collect()
 }
-
-

@@ -149,5 +149,3 @@ impl IrcRegistry {
         self.inner.lock_recover().keys().copied().collect()
     }
 }
-
-

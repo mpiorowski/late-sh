@@ -464,4 +464,3 @@ fn piece_offsets(kind: PieceKind, rotation: usize) -> [(i32, i32); 4] {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

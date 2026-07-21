@@ -624,4 +624,3 @@ fn fallback_name(user_id: Uuid) -> String {
 #[cfg(test)]
 #[path = "svc_test.rs"]
 mod svc_test;
-

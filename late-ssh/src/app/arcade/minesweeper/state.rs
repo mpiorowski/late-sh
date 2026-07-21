@@ -737,4 +737,3 @@ fn accounted_mine_count(player_grid: &[Vec<u8>], mine_count: usize) -> usize {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

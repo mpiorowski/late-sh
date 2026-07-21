@@ -426,16 +426,13 @@ fn chat_view<'a>(
     static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static IGNORED_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
-    static VOICE_CHANNELS: OnceLock<
-        HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
-    > = OnceLock::new();
+    static VOICE_CHANNELS: OnceLock<HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>> =
+        OnceLock::new();
     static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
     static ACTIVE_ROOM_EFFECTS: OnceLock<HashMap<Uuid, Vec<ActiveChatRoomEffect>>> =
         OnceLock::new();
-    static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
-        OnceLock::new();
-    static ROOM_UNREAD_MARKERS: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
-        OnceLock::new();
+    static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
+    static ROOM_UNREAD_MARKERS: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
     static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
     static NAME_STYLES: OnceLock<HashMap<Uuid, NameStyle>> = OnceLock::new();
 
@@ -944,8 +941,7 @@ fn empty_composer_placeholder_contextualizes_selected_image_message() {
     view.selected_message = true;
     view.selected_image_message = true;
 
-    let expected =
-        "f react · r reply · e edit · d delete · p profile · c copy · Enter view image";
+    let expected = "f react · r reply · e edit · d delete · p profile · c copy · Enter view image";
     let width = expected.chars().count() as u16;
     let placeholder = empty_composer_placeholder(&view, width as usize);
     let backend = TestBackend::new(width, 1);
@@ -1393,13 +1389,11 @@ fn room_list_hit_test_maps_public_room_row_to_room_slot() {
     let hint_rows = build_rail_nav_hint_lines().len() as u16;
     let footer_reserve = hint_rows + 2;
     let list_area = if inner.height > footer_reserve + 2 {
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)]).split(inner)
-            [0]
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)]).split(inner)[0]
     } else {
         inner
     };
-    let room_rows =
-        build_cozy_room_rail_rows(&room_list_view, rooms_area.width.saturating_sub(2));
+    let room_rows = build_cozy_room_rail_rows(&room_list_view, rooms_area.width.saturating_sub(2));
     let rust_row = room_rows
         .hit_slots
         .iter()

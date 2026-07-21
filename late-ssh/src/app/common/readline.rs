@@ -32,5 +32,3 @@ pub fn ctrl_byte_to_input(byte: u8) -> Option<Input> {
         shift: false,
     })
 }
-
-

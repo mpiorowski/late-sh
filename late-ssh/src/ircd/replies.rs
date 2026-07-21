@@ -56,5 +56,3 @@ pub fn error(text: impl Into<String>) -> Message {
         command: Command::ERROR(text.into()),
     }
 }
-
-

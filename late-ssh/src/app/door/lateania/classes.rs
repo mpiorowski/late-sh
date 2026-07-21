@@ -953,4 +953,3 @@ pub fn archetype_by_key(key: &str) -> Option<&'static ArchetypeDef> {
 #[cfg(test)]
 #[path = "classes_test.rs"]
 mod classes_test;
-

@@ -466,4 +466,3 @@ pub(crate) fn tick_message_search(app: &mut crate::app::state::App) {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

@@ -29,5 +29,3 @@ pub fn parse_dlvl(screen_text: &str) -> Option<i32> {
     }
     None
 }
-
-

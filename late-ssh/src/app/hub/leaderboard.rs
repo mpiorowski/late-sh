@@ -536,4 +536,3 @@ fn format_number(value: i64) -> String {
 #[cfg(test)]
 #[path = "leaderboard_test.rs"]
 mod leaderboard_test;
-

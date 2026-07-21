@@ -1,5 +1,5 @@
-use std::time::{Duration, Instant};
 use crate::app::common::primitives::*;
+use std::time::{Duration, Instant};
 
 #[test]
 fn screen_next_cycles_top_level_screens() {

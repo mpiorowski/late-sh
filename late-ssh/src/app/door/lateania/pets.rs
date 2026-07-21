@@ -168,5 +168,3 @@ impl Pet {
         self.level() > before
     }
 }
-
-

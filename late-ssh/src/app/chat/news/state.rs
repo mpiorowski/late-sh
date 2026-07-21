@@ -418,4 +418,3 @@ fn new_news_textarea() -> TextArea<'static> {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

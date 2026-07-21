@@ -688,4 +688,3 @@ fn decode_escaped_field(input: &str) -> String {
 #[cfg(test)]
 #[path = "ui_text_test.rs"]
 mod ui_text_test;
-

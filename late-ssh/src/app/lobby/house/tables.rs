@@ -166,5 +166,3 @@ impl HouseTable {
             .find(|table| table.chat_slug() == slug)
     }
 }
-
-

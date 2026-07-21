@@ -661,4 +661,3 @@ pub fn slot_target(slot: usize, seat: Color) -> Option<BgTarget> {
 #[cfg(test)]
 #[path = "backgammon_test.rs"]
 mod backgammon_test;
-

@@ -464,4 +464,3 @@ pub fn walkable(x: u16, y: u16) -> bool {
 #[cfg(test)]
 #[path = "map_test.rs"]
 mod map_test;
-

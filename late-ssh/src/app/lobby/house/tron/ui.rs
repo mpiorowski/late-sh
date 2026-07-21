@@ -576,4 +576,3 @@ fn pickup_color(pickup: TronPickup) -> Color {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

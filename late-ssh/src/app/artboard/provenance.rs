@@ -254,5 +254,3 @@ pub fn apply_shared_op(
 ) {
     shared.lock_recover().apply_op(before, op, username);
 }
-
-

@@ -360,5 +360,3 @@ fn parse_utc(s: &str) -> Option<DateTime<Utc>> {
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
 }
-
-

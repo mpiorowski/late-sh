@@ -1157,4 +1157,3 @@ fn help_lines(lines: &[&str]) -> Vec<String> {
 #[cfg(test)]
 #[path = "command_test.rs"]
 mod command_test;
-

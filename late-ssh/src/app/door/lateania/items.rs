@@ -1958,4 +1958,3 @@ pub fn shop_at(room: super::world::RoomId) -> Option<&'static Shop> {
 #[cfg(test)]
 #[path = "items_test.rs"]
 mod items_test;
-

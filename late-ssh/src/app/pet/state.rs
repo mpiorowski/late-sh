@@ -346,4 +346,3 @@ fn next_care_streak_days(
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

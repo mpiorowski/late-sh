@@ -268,4 +268,3 @@ impl<B: Barcode, P: Polarity> Styled for QrWidget<'_, B, P> {
 #[cfg(test)]
 #[path = "widget_test.rs"]
 mod widget_test;
-

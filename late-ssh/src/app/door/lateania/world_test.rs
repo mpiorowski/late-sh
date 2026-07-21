@@ -231,8 +231,7 @@ fn the_reaches_are_mazes_and_caverns_not_grids() {
         dead_ends >= 20,
         "the Reaches should wind into dead-ends, not be square blocks (got {dead_ends})"
     );
-    let degrees: std::collections::HashSet<usize> =
-        reaches.iter().map(|r| r.exits.len()).collect();
+    let degrees: std::collections::HashSet<usize> = reaches.iter().map(|r| r.exits.len()).collect();
     assert!(
         degrees.len() >= 3,
         "rooms should vary in how many ways they branch (got {degrees:?})"
@@ -255,8 +254,7 @@ fn kaelmyr_is_mazes_and_calderas_not_grids() {
         dead_ends >= 20,
         "Kaelmyr should wind into dead-ends, not be square blocks (got {dead_ends})"
     );
-    let degrees: std::collections::HashSet<usize> =
-        kaelmyr.iter().map(|r| r.exits.len()).collect();
+    let degrees: std::collections::HashSet<usize> = kaelmyr.iter().map(|r| r.exits.len()).collect();
     assert!(
         degrees.len() >= 3,
         "Kaelmyr rooms should vary in how many ways they branch (got {degrees:?})"
@@ -363,8 +361,7 @@ fn the_sunderlakes_are_mazes_and_caverns_not_grids() {
         dead_ends >= 20,
         "the Sunderlakes should wind into dead-ends, not be square blocks (got {dead_ends})"
     );
-    let degrees: std::collections::HashSet<usize> =
-        lakes.iter().map(|r| r.exits.len()).collect();
+    let degrees: std::collections::HashSet<usize> = lakes.iter().map(|r| r.exits.len()).collect();
     assert!(
         degrees.len() >= 3,
         "Sunderlakes rooms should vary in how many ways they branch (got {degrees:?})"
@@ -484,8 +481,7 @@ fn broceliande_is_mazes_and_caverns_not_grids() {
         dead_ends >= 20,
         "Broceliande should wind into dead-ends, not be square blocks (got {dead_ends})"
     );
-    let degrees: std::collections::HashSet<usize> =
-        wood.iter().map(|r| r.exits.len()).collect();
+    let degrees: std::collections::HashSet<usize> = wood.iter().map(|r| r.exits.len()).collect();
     assert!(
         degrees.len() >= 3,
         "Broceliande rooms should vary in how many ways they branch (got {degrees:?})"
@@ -619,9 +615,7 @@ fn catacombs_have_behavior_driven_mobs() {
     let catacomb_spawns: Vec<&MobSpawn> = world
         .spawns
         .iter()
-        .filter(|s| {
-            s.id >= CATACOMBS_SPAWN_ID_START && s.id < CATACOMBS_SPAWN_ID_START + 10_000
-        })
+        .filter(|s| s.id >= CATACOMBS_SPAWN_ID_START && s.id < CATACOMBS_SPAWN_ID_START + 10_000)
         .collect();
     assert!(
         !catacomb_spawns.is_empty(),
@@ -685,9 +679,7 @@ fn drowned_caverns_are_one_connected_organic_cave() {
         .rooms
         .keys()
         .copied()
-        .filter(|id| {
-            *id >= CAVERNS_BASE && *id < CAVERNS_BASE + (CAVERNS_W * CAVERNS_H) as RoomId
-        })
+        .filter(|id| *id >= CAVERNS_BASE && *id < CAVERNS_BASE + (CAVERNS_W * CAVERNS_H) as RoomId)
         .collect();
     // Organic, not a grid: a sparse subset of the cell field survives.
     assert!(

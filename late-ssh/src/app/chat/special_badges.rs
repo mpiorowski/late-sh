@@ -26,4 +26,3 @@ pub fn special_badges(username: &str) -> &'static [&'static str] {
 #[cfg(test)]
 #[path = "special_badges_test.rs"]
 mod special_badges_test;
-

@@ -188,4 +188,3 @@ async fn ensure_system_user(db: &Db, username_directory: &UsernameDirectory) -> 
 #[cfg(test)]
 #[path = "lounge_test.rs"]
 mod lounge_test;
-

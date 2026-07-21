@@ -70,9 +70,8 @@ fn bot_context_includes_account_linking_flow() {
     assert!(context.contains("Choose the main account to keep: Current or Other."));
     assert!(context.contains("Both SSH keys will open the main account after linking."));
     assert!(
-        context.contains(
-            "chips, messages, scores, streaks, settings, and other data are not merged"
-        )
+        context
+            .contains("chips, messages, scores, streaks, settings, and other data are not merged")
     );
 }
 

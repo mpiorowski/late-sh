@@ -654,4 +654,3 @@ fn clip_name(s: &str, max: usize) -> String {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

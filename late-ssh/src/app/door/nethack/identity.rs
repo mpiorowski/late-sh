@@ -22,4 +22,3 @@ pub fn derive_client_key(secret: &str) -> PrivateKey {
 #[cfg(test)]
 #[path = "identity_test.rs"]
 mod identity_test;
-

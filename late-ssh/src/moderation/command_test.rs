@@ -50,9 +50,9 @@ fn command_help_explains_ban_arguments() {
     let lines = mod_help_lines(Some("ban"));
 
     assert!(
-        lines.iter().any(
-            |line| line == "ban <server|#room|artboard|audio> @name [duration] [reason...]"
-        )
+        lines
+            .iter()
+            .any(|line| line == "ban <server|#room|artboard|audio> @name [duration] [reason...]")
     );
     assert!(
         lines.iter().any(|line| line.contains("s/m/h/d")),

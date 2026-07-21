@@ -247,4 +247,3 @@ fn run_cells(
 #[cfg(test)]
 #[path = "connect4_test.rs"]
 mod connect4_test;
-

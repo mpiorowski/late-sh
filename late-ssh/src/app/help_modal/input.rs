@@ -73,4 +73,3 @@ fn is_close_event(event: &ParsedInput) -> bool {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

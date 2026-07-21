@@ -21,5 +21,3 @@ pub fn derive_client_key(secret: &str) -> PrivateKey {
     let kp = Ed25519Keypair::from_seed(seed.as_bytes());
     PrivateKey::new(KeypairData::from(kp), "late.sh dopewars derived").expect("valid ed25519 key")
 }
-
-

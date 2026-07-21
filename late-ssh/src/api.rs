@@ -774,4 +774,3 @@ fn forwarded_for_ip(headers: &HeaderMap) -> Option<IpAddr> {
 #[cfg(test)]
 #[path = "api_internal_test.rs"]
 mod api_internal_test;
-

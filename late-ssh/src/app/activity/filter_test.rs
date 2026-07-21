@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
-use crate::app::activity::filter::*;
 use crate::app::activity::event::ActivityEvent;
+use crate::app::activity::filter::*;
 
 #[test]
 fn dashboard_filter_includes_public_activity() {

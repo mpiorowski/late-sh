@@ -606,4 +606,3 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

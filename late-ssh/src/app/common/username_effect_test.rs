@@ -1,9 +1,9 @@
-use ratatui::style::{Color, Style};
-use late_core::models::username_effect::UsernameEffect;
-use chrono::Utc;
-use uuid::Uuid;
 use chrono::Duration;
+use chrono::Utc;
+use late_core::models::username_effect::UsernameEffect;
 use late_core::models::username_effect::{GlowColor, GradientPair};
+use ratatui::style::{Color, Style};
+use uuid::Uuid;
 
 use crate::app::common::username_effect::*;
 
@@ -28,8 +28,7 @@ fn shimmer_cycles_with_period_six_and_moving_endpoints() {
         let NameStyle::TwoTone(from, to) = resolve(UsernameEffect::Shimmer, phase) else {
             panic!("shimmer must resolve to a two-tone style");
         };
-        let NameStyle::TwoTone(next_from, _) = resolve(UsernameEffect::Shimmer, phase + 1)
-        else {
+        let NameStyle::TwoTone(next_from, _) = resolve(UsernameEffect::Shimmer, phase + 1) else {
             panic!("shimmer must resolve to a two-tone style");
         };
         // The trailing endpoint becomes the next phase's leading one.

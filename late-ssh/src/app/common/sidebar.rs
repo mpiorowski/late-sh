@@ -1121,4 +1121,3 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 #[path = "sidebar_test.rs"]
 mod sidebar_test;
-

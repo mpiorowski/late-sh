@@ -1,5 +1,5 @@
-use crate::app::worldcup::model::{Qual, Winner};
 use crate::app::worldcup::fotmob::*;
+use crate::app::worldcup::model::{Qual, Winner};
 
 const FIXTURE_HTML: &str = r##"<html><body>
 <script id="__NEXT_DATA__" type="application/json">

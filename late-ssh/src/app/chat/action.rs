@@ -16,5 +16,3 @@ pub(crate) fn parse_action_body(body: &str) -> Option<&str> {
         .map(|rest| rest.trim_end_matches(ACTION_MESSAGE_SUFFIX).trim())
         .filter(|action| !action.is_empty())
 }
-
-

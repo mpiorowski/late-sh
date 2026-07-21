@@ -771,4 +771,3 @@ pub fn load_default_library() -> Result<Library> {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

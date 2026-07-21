@@ -560,4 +560,3 @@ fn map_button(button: MouseButton) -> Option<AppPointerButton> {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

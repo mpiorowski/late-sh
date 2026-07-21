@@ -5,8 +5,7 @@ fn all_embedded_creatures_parse() {
     // Tripwire: any new `.kdl` added to DEFAULT_CREATURE_SOURCES must
     // parse cleanly. Catches typos in tag names, heredoc fences, or
     // missing required fields before they hit a live aquarium.
-    let creatures =
-        load_default_creatures().expect("embedded creature kdl files must all parse");
+    let creatures = load_default_creatures().expect("embedded creature kdl files must all parse");
     assert!(
         !creatures.is_empty(),
         "expected at least one default creature"

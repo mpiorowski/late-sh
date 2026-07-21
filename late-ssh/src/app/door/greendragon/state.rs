@@ -7677,4 +7677,3 @@ fn shop_menu(c: &Character, weapon: bool) -> Vec<(String, bool)> {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

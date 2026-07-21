@@ -161,5 +161,3 @@ fn project_matches(item: &ShowcaseFeedItem, query: &str) -> bool {
 fn normalize_query(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
-
-

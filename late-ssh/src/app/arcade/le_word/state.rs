@@ -249,5 +249,3 @@ fn score_rank(score: LetterScore) -> u8 {
         LetterScore::Absent => 1,
     }
 }
-
-

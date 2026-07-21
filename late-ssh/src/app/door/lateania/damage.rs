@@ -114,5 +114,3 @@ impl DamageProfile {
         (scaled, def)
     }
 }
-
-

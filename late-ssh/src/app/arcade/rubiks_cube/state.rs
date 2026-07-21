@@ -685,4 +685,3 @@ fn dot(a: Coord, b: Coord) -> i8 {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

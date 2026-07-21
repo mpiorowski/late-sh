@@ -281,4 +281,3 @@ fn strip_input_noise(data: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

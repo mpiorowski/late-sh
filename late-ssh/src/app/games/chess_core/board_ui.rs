@@ -546,4 +546,3 @@ pub fn king_square(pieces: &[Option<ChessPiece>; 64], color: ChessColor) -> Opti
 #[cfg(test)]
 #[path = "board_ui_test.rs"]
 mod board_ui_test;
-

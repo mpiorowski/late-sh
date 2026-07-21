@@ -1,7 +1,7 @@
 use crate::app::door::lateania::classes::Class;
+use crate::app::door::lateania::persist::*;
 use crate::app::door::lateania::stats::AbilityScores;
 use uuid::Uuid;
-use crate::app::door::lateania::persist::*;
 
 #[test]
 fn round_trips_through_json() {

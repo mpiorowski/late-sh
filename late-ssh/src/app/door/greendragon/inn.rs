@@ -234,5 +234,3 @@ pub fn chat(c: &Character, rng: &mut impl Rng) -> String {
     };
     lines[idx.min(lines.len() - 1)].to_string()
 }
-
-

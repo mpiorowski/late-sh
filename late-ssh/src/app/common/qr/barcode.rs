@@ -59,4 +59,3 @@ impl Barcode for FullBlock {
 #[cfg(test)]
 #[path = "barcode_test.rs"]
 mod barcode_test;
-

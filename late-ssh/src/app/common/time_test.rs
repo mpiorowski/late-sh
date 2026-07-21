@@ -1,6 +1,6 @@
-use chrono::Utc;
 use crate::app::common::time::*;
 use chrono::TimeZone;
+use chrono::Utc;
 
 #[test]
 fn formats_valid_timezone() {

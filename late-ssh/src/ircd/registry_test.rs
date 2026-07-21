@@ -1,6 +1,6 @@
+use crate::ircd::registry::*;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use crate::ircd::registry::*;
 
 fn handle() -> (
     mpsc::UnboundedSender<IrcControl>,

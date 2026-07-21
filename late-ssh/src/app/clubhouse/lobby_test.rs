@@ -14,8 +14,7 @@ fn sync_seats_everyone_without_collisions() {
     lobby.sync(&roster(20));
     let snap = lobby.snapshot();
     assert_eq!(snap.headcount(), 20);
-    let mut cells: Vec<(u16, u16)> =
-        snap.people.iter().map(|p| p.placement.position()).collect();
+    let mut cells: Vec<(u16, u16)> = snap.people.iter().map(|p| p.placement.position()).collect();
     cells.sort_unstable();
     cells.dedup();
     assert_eq!(cells.len(), 20, "two patrons share a spot");

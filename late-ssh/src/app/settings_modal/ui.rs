@@ -2619,4 +2619,3 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

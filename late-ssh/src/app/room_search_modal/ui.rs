@@ -697,4 +697,3 @@ fn truncate_to_width(text: &str, width: usize) -> String {
 #[cfg(test)]
 #[path = "ui_test.rs"]
 mod ui_test;
-

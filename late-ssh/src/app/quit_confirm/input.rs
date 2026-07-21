@@ -27,5 +27,3 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 pub(crate) fn handle_escape(app: &mut App) {
     app.show_quit_confirm = false;
 }
-
-

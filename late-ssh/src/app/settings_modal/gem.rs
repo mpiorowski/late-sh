@@ -187,5 +187,3 @@ fn random_color_excluding(current: Color) -> Color {
         }
     }
 }
-
-

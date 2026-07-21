@@ -72,8 +72,7 @@ fn rewrite_text_shape_metadata_roundtrip() {
 #[test]
 fn rename_selected_updates_group_label_not_id() {
     let _env_guard = PINSTAR_ENV_LOCK.lock().unwrap();
-    let root =
-        std::env::temp_dir().join(format!("late-sh-pinstar-test-{}", uuid::Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("late-sh-pinstar-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let _root_env = EnvVarRestore::set_path("LATE_PINSTAR_LOCAL_ROOT", &root);
 

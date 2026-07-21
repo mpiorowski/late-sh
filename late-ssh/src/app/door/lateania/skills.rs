@@ -233,5 +233,3 @@ pub fn skill_progress(xp: i64) -> (i64, i64) {
     let next = xp_for_skill_level(level + 1);
     (xp - floor, next - floor)
 }
-
-

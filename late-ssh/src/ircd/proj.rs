@@ -182,5 +182,3 @@ pub fn parse_ctcp_action(text: &str) -> Option<&str> {
     text.strip_prefix("\u{1}ACTION ")
         .map(|rest| rest.trim_end_matches('\u{1}'))
 }
-
-

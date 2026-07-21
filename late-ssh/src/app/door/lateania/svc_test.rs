@@ -757,8 +757,7 @@ fn beastlord_pack_bond_toughens_the_companion() {
     let mut plain = world();
     plain.join(uid(1));
     plain.choose_class(uid(1), Class::Ranger);
-    plain.players.get_mut(&uid(1)).unwrap().pet =
-        Some(super::super::pets::Pet::new(species, 0));
+    plain.players.get_mut(&uid(1)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
     plain.wound_pet(uid(1), 100);
     let plain_hp = plain.players[&uid(1)].pet.unwrap().hp;
 
@@ -1444,8 +1443,7 @@ fn taming_a_beast_makes_it_your_companion_and_trains_the_trade() {
     // Stand where the easiest beasts (level 1) gather, and be well-trained so
     // the roll is a near-sure thing; force success by maxing the odds.
     s.players.get_mut(&uid(1)).unwrap().room = broceliande_beast_room();
-    s.players.get_mut(&uid(1)).unwrap().taming_xp =
-        super::super::skills::xp_for_skill_level(50);
+    s.players.get_mut(&uid(1)).unwrap().taming_xp = super::super::skills::xp_for_skill_level(50);
     // The easiest beast in the room is the first tameable species.
     let beasts = super::super::taming::beasts_at(broceliande_beast_room());
     assert!(!beasts.is_empty(), "beasts roam the first forest gate");
@@ -1473,8 +1471,8 @@ fn an_underskilled_tamer_cannot_take_a_great_beast() {
     s.choose_class(uid(1), Class::Ranger);
     // Deep in Broceliande the great beasts need a near-master tamer; a fresh
     // Ranger has no taming training, so the attempt is refused outright.
-    let deep = super::super::world::BROCELIANDE_BASE
-        + 19 * super::super::world::BROCELIANDE_ZONE_STRIDE;
+    let deep =
+        super::super::world::BROCELIANDE_BASE + 19 * super::super::world::BROCELIANDE_ZONE_STRIDE;
     s.players.get_mut(&uid(1)).unwrap().room = deep;
     let beasts = super::super::taming::beasts_at(deep);
     assert!(!beasts.is_empty(), "great beasts roam the deep gate");

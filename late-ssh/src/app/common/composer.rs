@@ -128,5 +128,3 @@ fn visible_textarea_cursor_style() -> Style {
         .bg(theme::TEXT())
         .add_modifier(Modifier::BOLD)
 }
-
-

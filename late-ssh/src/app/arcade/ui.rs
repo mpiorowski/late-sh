@@ -779,5 +779,3 @@ fn draw_game_entry(
     }
     lines.push(Line::from(""));
 }
-
-

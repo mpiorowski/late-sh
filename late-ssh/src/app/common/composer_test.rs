@@ -1,6 +1,6 @@
-use ratatui_textarea::WrapMode;
 use crate::app::common::composer::*;
 use crate::app::common::theme;
+use ratatui_textarea::WrapMode;
 
 #[test]
 fn composer_rows_soft_wrap_words() {

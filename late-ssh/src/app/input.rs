@@ -4682,4 +4682,3 @@ fn selected_raw_icon(app: &mut App, keep_open: bool) -> Option<String> {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

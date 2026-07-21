@@ -249,4 +249,3 @@ fn random_fleet(rng: &mut impl Rng) -> Vec<Ship> {
 #[cfg(test)]
 #[path = "battleship_test.rs"]
 mod battleship_test;
-

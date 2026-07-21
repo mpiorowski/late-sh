@@ -182,4 +182,3 @@ fn draw_sayonara_rgba() -> RgbaImage {
 #[cfg(test)]
 #[path = "sayonara_sixel_test.rs"]
 mod sayonara_sixel_test;
-

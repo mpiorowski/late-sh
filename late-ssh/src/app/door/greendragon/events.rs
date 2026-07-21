@@ -423,5 +423,3 @@ impl ForestEvent {
         Vec::new()
     }
 }
-
-

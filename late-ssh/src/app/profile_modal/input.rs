@@ -92,4 +92,3 @@ fn close(app: &mut App) {
 #[cfg(test)]
 #[path = "input_test.rs"]
 mod input_test;
-

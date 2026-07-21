@@ -7385,4 +7385,3 @@ fn push_log(log: &mut Vec<LogLine>, kind: LogKind, text: String) {
 #[cfg(test)]
 #[path = "svc_test.rs"]
 mod svc_test;
-

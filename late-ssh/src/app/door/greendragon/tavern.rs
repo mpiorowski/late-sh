@@ -141,5 +141,3 @@ pub fn fivesix_roll(rng: &mut impl Rng) -> (Vec<u32>, u32) {
     let sixes = dice.iter().filter(|&&d| d == 6).count() as u32;
     (dice, sixes)
 }
-
-

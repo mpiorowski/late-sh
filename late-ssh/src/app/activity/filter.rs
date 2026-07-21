@@ -103,5 +103,3 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         ActivityKind::BonsaiLost { .. } => false,
     }
 }
-
-

@@ -485,4 +485,3 @@ fn apply_path(grid: &mut Grid, path: &[(usize, usize)]) {
 #[cfg(test)]
 #[path = "checkers_test.rs"]
 mod checkers_test;
-

@@ -254,4 +254,3 @@ fn handle_action(app: &mut App, action: super::input::InputAction) -> bool {
 #[cfg(test)]
 #[path = "page_test.rs"]
 mod page_test;
-

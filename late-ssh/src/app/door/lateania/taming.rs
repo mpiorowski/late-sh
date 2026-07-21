@@ -673,4 +673,3 @@ pub fn taming_key() -> &'static str {
 #[cfg(test)]
 #[path = "taming_test.rs"]
 mod taming_test;
-

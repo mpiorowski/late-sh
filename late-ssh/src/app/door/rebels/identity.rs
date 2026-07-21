@@ -42,5 +42,3 @@ pub fn derive_identity(secret: &str, user_id: Uuid) -> RebelsIdentity {
 
     RebelsIdentity { username, key }
 }
-
-

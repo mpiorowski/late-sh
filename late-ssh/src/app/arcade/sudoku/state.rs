@@ -672,4 +672,3 @@ fn puzzle_date_for_mode(mode: Mode, today: NaiveDate) -> Option<NaiveDate> {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

@@ -52,8 +52,7 @@ fn article_modal_lines_use_feed_style_without_news_emoji() {
         summary: "YouTube video by Technology Connections.\nOpen the link to watch on YouTube."
             .to_string(),
         url: "https://www.youtube.com/watch?v=KnUFH5GX_fI".to_string(),
-        ascii_art: ".. .-:::----\n. .:==-.....\n:-:--:     .\n-===---:   :\n      .."
-            .to_string(),
+        ascii_art: ".. .-:::----\n. .:==-.....\n:-:--:     .\n-===---:   :\n      ..".to_string(),
     };
     let view = ArticleModalView {
         payload: &payload,
