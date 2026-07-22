@@ -26,13 +26,6 @@ mod inner {
         global::meter("late-ssh")
     }
 
-    fn render_reason_label(reason: RenderReason) -> &'static str {
-        match reason {
-            RenderReason::Input => "input",
-            RenderReason::WorldTick => "tick",
-        }
-    }
-
     fn game_label(game: ActivityGame) -> &'static str {
         match game {
             ActivityGame::Asterion => "asterion",
