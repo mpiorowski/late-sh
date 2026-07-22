@@ -3674,8 +3674,7 @@ impl ChatState {
                                 self.bonsai_glyphs.remove(&message.user_id).is_some();
                         }
                         if !chat_badges.contains_key(&message.user_id) {
-                            context_changed |=
-                                self.chat_badges.remove(&message.user_id).is_some();
+                            context_changed |= self.chat_badges.remove(&message.user_id).is_some();
                         }
                         if !profile_award_badges.contains_key(&message.user_id) {
                             context_changed |=
@@ -4320,8 +4319,7 @@ impl ChatState {
 
         let ignored = &self.ignored_user_ids;
         let usernames = &self.usernames;
-        let before: Vec<(Uuid, DateTime<Utc>)> =
-            stored.iter().map(|m| (m.id, m.updated)).collect();
+        let before: Vec<(Uuid, DateTime<Utc>)> = stored.iter().map(|m| (m.id, m.updated)).collect();
         *stored = merged
             .into_iter()
             .filter(|message| {

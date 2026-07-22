@@ -1481,15 +1481,14 @@ fn ensure_chat_rows_cache(
             profile_award_badges,
             afk_badge,
         );
-        let drunk = ctx
+        let drunk_word = ctx
             .drunk_levels
             .get(&msg.user_id)
-            .and_then(|level| theme::DRUNK_LABEL_BG(*level).map(|bg| (*level, bg)));
+            .and_then(|level| late_core::models::drinks::drunk_label_word(*level));
         let name_style = ctx.name_styles.get(&msg.user_id).copied();
-        let author_tint = (drunk.is_some() || name_style.is_some()).then(|| AuthorTint {
+        let author_tint = (drunk_word.is_some() || name_style.is_some()).then_some(AuthorTint {
             range: author_range,
-            bg: drunk.map(|(_, bg)| bg),
-            word: drunk.and_then(|(level, _)| late_core::models::drinks::drunk_label_word(level)),
+            word: drunk_word,
             name_style,
         });
 

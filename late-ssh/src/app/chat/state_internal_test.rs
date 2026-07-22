@@ -1867,7 +1867,7 @@ fn extend_changed_reports_only_real_changes() {
 
 /// A ChatState wired to a real DB with inert side services, for exercising
 /// the row-cache counter contract directly.
-async fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) -> ChatState {
+fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) -> ChatState {
     let db = test_db.db.clone();
     let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
@@ -1927,7 +1927,7 @@ async fn identical_snapshot_reapply_keeps_row_cache_counters_stable() {
     .await
     .expect("first message");
 
-    let mut state = counter_test_state(&test_db, user.id).await;
+    let mut state = counter_test_state(&test_db, user.id);
     refresh_and_drain(&mut state).await;
     assert!(!state.rooms.is_empty(), "initial snapshot loads rooms");
     let epoch = state.context_epoch();
@@ -1961,7 +1961,7 @@ async fn push_message_bumps_only_its_room_version() {
         .await
         .expect("join other");
 
-    let mut state = counter_test_state(&test_db, user.id).await;
+    let mut state = counter_test_state(&test_db, user.id);
     refresh_and_drain(&mut state).await;
     let lounge_version = state.room_version(lounge.id);
     let other_version = state.room_version(other.id);

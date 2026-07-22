@@ -1326,7 +1326,12 @@ impl ChatService {
             }
             .instrument(info_span!("chat.refresh_registration", user_id = %user_id, session_id = %session_id)),
         );
-        (snapshot_rx, event_rx, force_refresh_tx, handle.abort_handle())
+        (
+            snapshot_rx,
+            event_rx,
+            force_refresh_tx,
+            handle.abort_handle(),
+        )
     }
 
     /// Deliver a single-recipient event to every registered session of
@@ -1522,8 +1527,10 @@ impl ChatService {
         tokio::spawn(
             async move {
                 if let Err(e) = service.load_room_tail(user_id, room_id).await {
-                    service
-                        .send_user_event(user_id, ChatEvent::RoomTailLoadFailed { user_id, room_id });
+                    service.send_user_event(
+                        user_id,
+                        ChatEvent::RoomTailLoadFailed { user_id, room_id },
+                    );
                     late_core::error_span!(
                         "chat_load_room_tail_failed",
                         error = ?e,
