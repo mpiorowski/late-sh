@@ -445,7 +445,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         radio_meta_rx: Some(state.radio_meta_rx.clone()),
         worldcup_service: Some(state.worldcup_service.clone()),
         active_users: Some(state.active_users.clone()),
-        ai_service: Some(state.ai_service.clone()),
         clubhouse_lobby: Some(state.clubhouse_lobby.clone()),
         clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
             &user.settings,

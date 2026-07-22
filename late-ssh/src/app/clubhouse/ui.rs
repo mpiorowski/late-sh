@@ -27,7 +27,7 @@ use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
 
 use super::lobby::{Emote, Placement};
 use super::map;
-use super::state::{ClubhouseHit, State, Tutorial};
+use super::state::{BannerLine, ClubhouseHit, State, Tutorial};
 
 const LABEL_MAX: usize = 10;
 const FIRE_CHARS: [char; 6] = ['(', ')', '~', '^', '*', '\''];
@@ -1112,16 +1112,20 @@ fn draw_overlays(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
 /// for how long, is the banner queue's call (`State::update_bartender_banner`):
 /// a burst of answers plays one at a time instead of overwriting itself.
 fn draw_bartender_banner(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
-    let Some(message_id) = view.state.bartender_banner_message_id() else {
-        return;
-    };
-    let Some(message) = view.lounge_messages.iter().find(|m| m.id == message_id) else {
-        return;
+    let body = match view.state.bartender_banner_line() {
+        None => return,
+        Some(BannerLine::Local(line)) => line.as_str(),
+        Some(BannerLine::Lounge(message_id)) => {
+            let Some(message) = view.lounge_messages.iter().find(|m| m.id == *message_id) else {
+                return;
+            };
+            message.body.as_str()
+        }
     };
     // Roomy on purpose: his replies are up to three sanitized lines of real
     // directions, and the banner is the only place they render.
     let width_budget = usize::from(inner.width.saturating_sub(6)).min(56);
-    let (lines, _) = wrap_bubble(bubble_text(&message.body), width_budget.max(16), 8);
+    let (lines, _) = wrap_bubble(bubble_text(body), width_budget.max(16), 8);
     if lines.is_empty() {
         return;
     }

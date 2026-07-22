@@ -125,6 +125,16 @@ fn lounge_msg(n: u128, author: u128, created: chrono::DateTime<chrono::Utc>) -> 
     }
 }
 
+/// The #lounge message currently in the banner. These tests only feed real
+/// lounge lines, so a local line surfacing here is a bug in the code under test.
+fn banner_id(state: &State) -> Option<Uuid> {
+    match state.bartender_banner_line() {
+        None => None,
+        Some(BannerLine::Lounge(id)) => Some(*id),
+        Some(BannerLine::Local(line)) => panic!("unexpected local banner line: {line}"),
+    }
+}
+
 #[test]
 fn bartender_banner_queues_a_burst_and_plays_it_in_order() {
     let mut state = state_with_lobby(false);
@@ -139,7 +149,7 @@ fn bartender_banner_queues_a_burst_and_plays_it_in_order() {
     ];
     state.update_bartender_banner(bartender, &tail, now);
     assert_eq!(
-        state.bartender_banner_message_id(),
+        banner_id(&state),
         Some(Uuid::from_u128(1)),
         "the oldest answer of the burst shows first"
     );
@@ -149,15 +159,12 @@ fn bartender_banner_queues_a_burst_and_plays_it_in_order() {
         state.tick(true);
         state.update_bartender_banner(bartender, &tail, now);
     }
-    assert_eq!(
-        state.bartender_banner_message_id(),
-        Some(Uuid::from_u128(1))
-    );
+    assert_eq!(banner_id(&state), Some(Uuid::from_u128(1)));
 
     state.tick(true);
     state.update_bartender_banner(bartender, &tail, now);
     assert_eq!(
-        state.bartender_banner_message_id(),
+        banner_id(&state),
         Some(Uuid::from_u128(2)),
         "dwell elapsed with a queue waiting: next answer takes the banner"
     );
@@ -170,24 +177,21 @@ fn bartender_banner_holds_a_lone_line_for_the_full_window_then_clears() {
     let bartender = Some(Uuid::from_u128(BARTENDER));
     let tail = vec![lounge_msg(1, BARTENDER, now)];
     state.update_bartender_banner(bartender, &tail, now);
-    assert_eq!(
-        state.bartender_banner_message_id(),
-        Some(Uuid::from_u128(1))
-    );
+    assert_eq!(banner_id(&state), Some(Uuid::from_u128(1)));
 
     for _ in 0..BANNER_FULL_TICKS - 1 {
         state.tick(true);
         state.update_bartender_banner(bartender, &tail, now);
     }
     assert_eq!(
-        state.bartender_banner_message_id(),
+        banner_id(&state),
         Some(Uuid::from_u128(1)),
         "nothing queued: the line keeps the full reading window"
     );
 
     state.tick(true);
     state.update_bartender_banner(bartender, &tail, now);
-    assert_eq!(state.bartender_banner_message_id(), None);
+    assert_eq!(banner_id(&state), None);
 }
 
 #[test]
@@ -202,7 +206,7 @@ fn bartender_banner_skips_stale_backlog_and_caps_the_queue() {
         now - chrono::Duration::seconds(60),
     )];
     state.update_bartender_banner(bartender, &stale, now);
-    assert_eq!(state.bartender_banner_message_id(), None);
+    assert_eq!(banner_id(&state), None);
 
     // A flood wider than the cap drops the oldest answers.
     let mut state = state_with_lobby(false);
@@ -218,10 +222,45 @@ fn bartender_banner_skips_stale_backlog_and_caps_the_queue() {
         .collect();
     state.update_bartender_banner(bartender, &flood, now);
     assert_eq!(
-        state.bartender_banner_message_id(),
+        banner_id(&state),
         Some(Uuid::from_u128(4)),
         "three oldest of eleven dropped, the fourth heads the banner"
     );
+}
+
+#[test]
+fn tutorial_welcome_takes_the_banner_ahead_of_a_queued_answer() {
+    let mut state = state_with_lobby(true);
+    let now = chrono::Utc::now();
+    let bartender = Some(Uuid::from_u128(BARTENDER));
+    let tail = vec![
+        lounge_msg(2, BARTENDER, now),
+        lounge_msg(1, BARTENDER, now - chrono::Duration::seconds(1)),
+    ];
+    state.update_bartender_banner(bartender, &tail, now);
+    assert_eq!(banner_id(&state), Some(Uuid::from_u128(1)));
+
+    state.show_local_bartender_line("@me first one's on the house.".to_string());
+    assert_eq!(
+        state.bartender_banner_line(),
+        Some(&BannerLine::Local(
+            "@me first one's on the house.".to_string()
+        )),
+        "the welcome cuts the queue: it is why the newcomer walked to the bar"
+    );
+
+    // It holds its own dwell, then the queued answer resumes as usual.
+    state.tick(true);
+    state.update_bartender_banner(bartender, &tail, now);
+    assert!(matches!(
+        state.bartender_banner_line(),
+        Some(BannerLine::Local(_))
+    ));
+    for _ in 0..BANNER_QUEUE_DWELL_TICKS {
+        state.tick(true);
+        state.update_bartender_banner(bartender, &tail, now);
+    }
+    assert_eq!(banner_id(&state), Some(Uuid::from_u128(2)));
 }
 
 #[test]
