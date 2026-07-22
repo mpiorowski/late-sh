@@ -1,5 +1,16 @@
 use crate::app::activity::event::ActivityGame;
 
+/// Why the render loop drew a frame. The loop can only distinguish its two
+/// wake sources; event-driven renders currently ride the world tick, so they
+/// count as `WorldTick` until the loop becomes event-driven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderReason {
+    /// Keystroke or resize, rendered without advancing world time.
+    Input,
+    /// The 66ms world tick, which advanced animations first.
+    WorldTick,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -9,10 +20,17 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
-    use super::ActivityGame;
+    use super::{ActivityGame, RenderReason};
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
+    }
+
+    fn render_reason_label(reason: RenderReason) -> &'static str {
+        match reason {
+            RenderReason::Input => "input",
+            RenderReason::WorldTick => "tick",
+        }
     }
 
     fn game_label(game: ActivityGame) -> &'static str {

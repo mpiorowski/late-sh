@@ -135,6 +135,11 @@ const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
 const BARTENDER_USERNAME: &str = "bartender";
 const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(30);
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
+/// Hardcoded rather than sourced from `AiConfig::model`: the bartender's order
+/// decision is a small ungrounded/schema-enforced JSON call, so it runs on
+/// flash instead of the pro model configured for @bot/news. Revisit once this
+/// needs to be configurable per-bot.
+const BARTENDER_MODEL: &str = "gemini-3.6-flash";
 /// Cap on the grounded JSON order call; on timeout the mention is dropped
 /// (never charged) and the cooldown lets the patron re-ask.
 const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(60);
@@ -770,6 +775,7 @@ impl GhostService {
         let reply = match tokio::time::timeout(
             BARTENDER_ORDER_TIMEOUT,
             self.ai_service.generate_json(
+                BARTENDER_MODEL,
                 &system_prompt,
                 &history_with_prompt,
                 bartender_order_schema(),
