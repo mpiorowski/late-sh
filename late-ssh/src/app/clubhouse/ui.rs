@@ -121,12 +121,30 @@ fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
         lines.push(Line::default());
     }
     for row in cells.iter().skip(cam_y).take(vh.saturating_sub(pad_y)) {
-        let mut spans: Vec<Span> = Vec::with_capacity(vw);
+        let mut spans: Vec<Span> = Vec::new();
         if pad_x > 0 {
             spans.push(Span::raw(" ".repeat(pad_x)));
         }
+        // Batch runs of same-styled cells into one span per run instead of
+        // one heap string per cell; room floors are long same-style runs.
+        let mut run = String::new();
+        let mut run_style: Option<Style> = None;
         for &(ch, style) in row.iter().skip(cam_x).take(vw.saturating_sub(pad_x)) {
-            spans.push(Span::styled(ch.to_string(), style));
+            match run_style {
+                Some(current) if current == style => run.push(ch),
+                Some(current) => {
+                    spans.push(Span::styled(std::mem::take(&mut run), current));
+                    run.push(ch);
+                    run_style = Some(style);
+                }
+                None => {
+                    run.push(ch);
+                    run_style = Some(style);
+                }
+            }
+        }
+        if let Some(style) = run_style {
+            spans.push(Span::styled(run, style));
         }
         lines.push(Line::from(spans));
     }

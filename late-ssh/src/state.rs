@@ -71,6 +71,17 @@ pub fn new_afk_users() -> AfkUsers {
     Arc::new(Mutex::new(Arc::new(HashSet::new())))
 }
 
+/// Connected humans only: the always-on bots (@bartender, @graybeard, @bot)
+/// register with no fingerprint and are excluded, matching the clubhouse
+/// headcount.
+pub fn online_human_count(active_users: &ActiveUsers) -> usize {
+    active_users
+        .lock_recover()
+        .values()
+        .filter(|user| user.fingerprint.is_some())
+        .count()
+}
+
 pub fn afk_users_snapshot(afk_users: &AfkUsers) -> Arc<HashSet<Uuid>> {
     Arc::clone(&afk_users.lock_recover())
 }

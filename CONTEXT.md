@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-21 (Booth History dropped community votes; it is now a 200-row most-recently-played list with the current track first)
+- Last updated: 2026-07-22 (render-cost pass, phase 0: per-frame work trimmed across sessions — nonogram library Arc-shared instead of deep-cloned per connect, presence (online count + friend names) cached on a 1s cadence instead of locking `active_users` twice per render, chat row caches validated by counters instead of hashing bodies, single-recipient chat events point-to-point instead of broadcast, terminal backend writes batched to a few `SharedBuffer` locks per frame, clubhouse cells batched into run-length spans)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -848,6 +848,8 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorite
 ## 8.5 Input Lag Investigation (~60 concurrent users) [VOLATILE]
 
 Repo-level finding: input now lands in a per-session queue and the render loop wakes on input, so ordinary keystrokes no longer wait on the app mutex before being queued. Remaining broad risk is render cost under high fan-out because `render_once` still holds the app lock across synchronous `app.tick()` + `app.render()`.
+
+Phase 0 of the render-cost plan shipped (2026-07-22): Arc-shared nonogram library, 1s-cadence presence cache (`App.online_count` / `App.active_friend_names` in `tick.rs`), counter-based chat row cache validation (see `late-ssh/src/app/chat/CONTEXT.md`), point-to-point single-recipient chat events, batched terminal-backend writes (`frame_writer`, one `SharedBuffer` lock per ~64KB instead of per ANSI command), and run-length clubhouse spans. Next planned: a dirty gate to skip clean frames (phase 1), then replacing the global 66ms tick with deadline-based scheduling (phase 2).
 
 Chat-specific row-cache, snapshot, unread-count, and scoped-loading performance notes live in `late-ssh/src/app/chat/CONTEXT.md`. Crash/OOM incidents (as opposed to slowness) live in the Runbook incident log, §10.5.
 

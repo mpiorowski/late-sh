@@ -653,15 +653,29 @@ impl App {
         // into paintable styles (which is also what steps shimmer at 1 Hz)
         // and expired at read.
         if self.marquee_tick.is_multiple_of(15) {
-            self.drunk_levels = self.clubhouse.drunk_levels();
+            let drunk_levels = self.clubhouse.drunk_levels();
+            if self.drunk_levels != drunk_levels {
+                self.drunk_levels = drunk_levels;
+                self.chat_ctx_epoch += 1;
+            }
             if let Some(directory) = &self.flair_directory {
                 let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
-                self.name_styles = crate::app::common::username_effect::resolve_all(
+                let name_styles = crate::app::common::username_effect::resolve_all(
                     &crate::app::common::username_effect::snapshot(directory),
                     phase,
                     chrono::Utc::now(),
                 );
+                if self.name_styles != name_styles {
+                    self.name_styles = name_styles;
+                    self.chat_ctx_epoch += 1;
+                }
             }
+            // Presence reads on the same cadence: renders consume these owned
+            // values instead of locking `active_users` twice per frame.
+            if let Some(active_users) = &self.active_users {
+                self.online_count = crate::state::online_human_count(active_users);
+            }
+            self.active_friend_names = self.chat.active_friend_names();
         }
 
         // Leaderboard

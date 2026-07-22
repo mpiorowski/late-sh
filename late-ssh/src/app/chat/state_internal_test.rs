@@ -1828,3 +1828,39 @@ fn parse_brb_rejects_non_command() {
     assert_eq!(parse_brb_command("hello /brb"), None);
     assert_eq!(parse_brb_command(""), None);
 }
+
+#[test]
+fn set_context_value_reports_only_real_changes() {
+    let user_id = Uuid::from_u128(1);
+    let mut map = HashMap::new();
+
+    // Insert, same-value no-op, change, blank clears, clear of absent key.
+    assert!(set_context_value(&mut map, user_id, Some("mod")));
+    assert!(!set_context_value(&mut map, user_id, Some("mod")));
+    assert!(set_context_value(&mut map, user_id, Some("artist")));
+    assert!(set_context_value(&mut map, user_id, Some("  ")));
+    assert!(map.is_empty());
+    assert!(!set_context_value(&mut map, user_id, None));
+}
+
+#[test]
+fn extend_changed_reports_only_real_changes() {
+    let a = Uuid::from_u128(1);
+    let b = Uuid::from_u128(2);
+    let mut map = HashMap::from([(a, "alice".to_string())]);
+
+    // Identical merge is a no-op; a new key or changed value reports true.
+    assert!(!extend_changed(
+        &mut map,
+        HashMap::from([(a, "alice".to_string())])
+    ));
+    assert!(extend_changed(
+        &mut map,
+        HashMap::from([(b, "bob".to_string())])
+    ));
+    assert!(extend_changed(
+        &mut map,
+        HashMap::from([(a, "alicia".to_string())])
+    ));
+    assert_eq!(map.get(&a).map(String::as_str), Some("alicia"));
+}

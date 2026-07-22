@@ -12,8 +12,7 @@ use ratatui::{
 use ratatui_textarea::TextArea;
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, hash_map::DefaultHasher},
-    hash::{Hash, Hasher},
+    collections::{HashMap, HashSet},
 };
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
@@ -76,6 +75,7 @@ pub struct DashboardChatView<'a> {
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
+    pub rows_versions: ChatRowsVersions,
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
@@ -1106,6 +1106,7 @@ pub fn draw_dashboard_chat_card(
             view.messages.iter().collect(),
             width,
             ChatRowsContext {
+                versions: view.rows_versions,
                 current_user_id: view.current_user_id,
                 afk_user_ids: view.afk_user_ids,
                 show_flag_fallback: view.show_flag_fallback,
@@ -1188,6 +1189,7 @@ pub fn draw_dashboard_chat_card(
 // ── Chat rows cache & scroll ────────────────────────────────
 
 struct ChatRowsContext<'a> {
+    versions: ChatRowsVersions,
     current_user_id: Uuid,
     afk_user_ids: &'a HashSet<Uuid>,
     show_flag_fallback: bool,
@@ -1292,10 +1294,37 @@ enum RowKindLite {
     Image,
 }
 
+/// Counter inputs that decide chat row cache validity. `room_version` bumps
+/// on any message-store change in the rendered room (new message, edit,
+/// delete, tail merge, reactions); the two epochs bump when author context
+/// (usernames, badges, glyphs, drunk levels, name styles, AFK, images)
+/// changes on the chat state or the app respectively. Comparing these is the
+/// whole per-frame validity check; nothing hashes message bodies anymore.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct ChatRowsVersions {
+    pub room_id: Option<Uuid>,
+    pub room_version: u64,
+    pub chat_ctx_epoch: u64,
+    pub app_ctx_epoch: u64,
+}
+
+/// Full cache key: the counters plus the cheap render inputs that also shape
+/// the painted rows. The minute stamp keeps relative timestamps ("5 mins
+/// ago") fresh.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct ChatRowsCacheKey {
+    versions: ChatRowsVersions,
+    width: usize,
+    theme: theme::ThemeKind,
+    minute: i64,
+    unread_marker: Option<DateTime<Utc>>,
+    current_user_id: Uuid,
+    show_flag_fallback: bool,
+}
+
 #[derive(Default)]
 pub struct ChatRowsCache {
-    width: usize,
-    fingerprint: u64,
+    key: Option<ChatRowsCacheKey>,
     all_rows: Vec<Line<'static>>,
     selected_ranges: HashMap<Uuid, (usize, usize)>,
     highlighted_ranges: HashMap<Uuid, (usize, usize)>,
@@ -1309,51 +1338,17 @@ pub struct ChatRowsCache {
     header_segments: HashMap<Uuid, Vec<HeaderSegment>>,
 }
 
-fn chat_rows_fingerprint(
-    messages: &[&ChatMessage],
-    ctx: &ChatRowsContext<'_>,
-    width: usize,
-) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    width.hash(&mut hasher);
-    ctx.current_user_id.hash(&mut hasher);
-    ctx.show_flag_fallback.hash(&mut hasher);
-    ctx.unread_marker.hash(&mut hasher);
-    theme::current_kind().hash(&mut hasher);
-    // Include current minute so relative timestamps ("5 mins ago") stay fresh.
-    (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
-
-    for msg in messages {
-        msg.id.hash(&mut hasher);
-        msg.user_id.hash(&mut hasher);
-        msg.created.hash(&mut hasher);
-        msg.body.hash(&mut hasher);
-        ctx.usernames.get(&msg.user_id).hash(&mut hasher);
-        ctx.countries.get(&msg.user_id).hash(&mut hasher);
-        ctx.friend_user_ids.contains(&msg.user_id).hash(&mut hasher);
-        ctx.afk_user_ids.contains(&msg.user_id).hash(&mut hasher);
-        ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
-        ctx.chat_badges.get(&msg.user_id).hash(&mut hasher);
-        ctx.profile_award_badges.get(&msg.user_id).hash(&mut hasher);
-        ctx.drunk_levels.get(&msg.user_id).hash(&mut hasher);
-        // Resolved name style (not the raw effect): shimmer's phase step
-        // lands here, so an animated name re-renders at most once a second.
-        ctx.name_styles.get(&msg.user_id).hash(&mut hasher);
-        ctx.message_reactions.get(&msg.id).hash(&mut hasher);
-        if let Some(lines) = ctx.inline_images.get(&msg.id) {
-            true.hash(&mut hasher);
-            lines.len().hash(&mut hasher);
-            lines
-                .iter()
-                .map(|line| line.spans.len())
-                .sum::<usize>()
-                .hash(&mut hasher);
-        } else {
-            false.hash(&mut hasher);
-        }
+fn chat_rows_cache_key(ctx: &ChatRowsContext<'_>, width: usize) -> ChatRowsCacheKey {
+    ChatRowsCacheKey {
+        versions: ctx.versions,
+        width,
+        theme: theme::current_kind(),
+        // Current minute so relative timestamps ("5 mins ago") stay fresh.
+        minute: chrono::Utc::now().timestamp() / 60,
+        unread_marker: ctx.unread_marker,
+        current_user_id: ctx.current_user_id,
+        show_flag_fallback: ctx.show_flag_fallback,
     }
-
-    hasher.finish()
 }
 
 fn push_new_messages_divider(
@@ -1390,8 +1385,8 @@ fn ensure_chat_rows_cache(
     width: usize,
     ctx: ChatRowsContext<'_>,
 ) {
-    let fingerprint = chat_rows_fingerprint(&messages, &ctx, width);
-    if cache.width == width && cache.fingerprint == fingerprint {
+    let key = chat_rows_cache_key(&ctx, width);
+    if cache.key == Some(key) {
         return;
     }
 
@@ -1593,8 +1588,7 @@ fn ensure_chat_rows_cache(
     debug_assert_eq!(all_rows.len(), row_message.len());
     debug_assert_eq!(all_rows.len(), row_kind.len());
 
-    cache.width = width;
-    cache.fingerprint = fingerprint;
+    cache.key = Some(key);
     cache.all_rows = all_rows;
     cache.row_message = row_message;
     cache.row_kind = row_kind;
@@ -2374,6 +2368,9 @@ pub struct ChatRenderInput<'a> {
     pub discover_selected: bool,
     pub discover_view: super::discover::ui::DiscoverListView<'a>,
     pub rows_cache: &'a mut ChatRowsCache,
+    pub room_versions: &'a HashMap<Uuid, u64>,
+    pub chat_ctx_epoch: u64,
+    pub app_ctx_epoch: u64,
     pub chat_rooms: &'a [(
         late_core::models::chat_room::ChatRoom,
         Vec<late_core::models::chat_message::ChatMessage>,
@@ -2501,6 +2498,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
+    pub rows_versions: ChatRowsVersions,
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
@@ -2604,6 +2602,7 @@ pub fn draw_embedded_room_chat(
         view.messages.iter().collect(),
         width,
         ChatRowsContext {
+            versions: view.rows_versions,
             current_user_id: view.current_user_id,
             afk_user_ids: view.afk_user_ids,
             show_flag_fallback: view.show_flag_fallback,
@@ -3944,6 +3943,12 @@ fn draw_selected_content(
                 messages.iter().collect(),
                 width,
                 ChatRowsContext {
+                    versions: ChatRowsVersions {
+                        room_id: Some(room.id),
+                        room_version: view.room_versions.get(&room.id).copied().unwrap_or(0),
+                        chat_ctx_epoch: view.chat_ctx_epoch,
+                        app_ctx_epoch: view.app_ctx_epoch,
+                    },
                     current_user_id,
                     afk_user_ids: view.afk_user_ids,
                     show_flag_fallback: view.show_flag_fallback,

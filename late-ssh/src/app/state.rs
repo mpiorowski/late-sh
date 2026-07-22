@@ -127,6 +127,15 @@ impl Write for SharedBuffer {
     }
 }
 
+/// Terminal backend writer: batches ratatui's many small per-cell writes in
+/// a local buffer so `SharedBuffer`'s mutex is taken a handful of times per
+/// frame instead of once per ANSI command. ratatui flushes the backend at
+/// the end of every `draw`, so the buffer is empty between frames and
+/// `SharedBuffer::take()` never races unflushed frame bytes.
+fn frame_writer(shared: &SharedBuffer) -> io::BufWriter<SharedBuffer> {
+    io::BufWriter::with_capacity(64 * 1024, shared.clone())
+}
+
 // Passed to App::new() to configure the app on startup
 pub struct SessionConfig {
     /// Terminal / layout
@@ -327,7 +336,7 @@ pub struct App {
     pub(crate) vt_input: crate::app::input::VtInputParser,
 
     /// Terminal / rendering
-    pub(super) terminal: Terminal<CrosstermBackend<SharedBuffer>>,
+    pub(super) terminal: Terminal<CrosstermBackend<io::BufWriter<SharedBuffer>>>,
     pub(super) shared: SharedBuffer,
     pub(super) visualizer: Visualizer,
     pub(super) viz_frame_buffer: VecDeque<VizFrame>,
@@ -371,6 +380,19 @@ pub struct App {
     /// about once a second (which also steps shimmer); renderers read this
     /// owned map, never the directory mutex.
     pub(crate) name_styles: HashMap<Uuid, crate::app::common::username_effect::NameStyle>,
+    /// Human headcount and connected-friend names, recomputed on the same
+    /// ~1s cadence; renderers read these owned values instead of locking the
+    /// shared `active_users` map every frame.
+    pub(crate) online_count: usize,
+    pub(crate) active_friend_names: Vec<String>,
+    /// App-owned author-context epoch for the chat row caches: bumps when
+    /// AFK, drunk levels, name styles, or the username directory change.
+    /// Pairs with `ChatState::context_epoch` in `ChatRowsVersions`.
+    pub(crate) chat_ctx_epoch: u64,
+    /// Last username-directory snapshot, kept for the pointer-equality change
+    /// check that feeds `chat_ctx_epoch` (the directory swaps its `Arc` on
+    /// every real change).
+    pub(super) last_username_directory: Option<Arc<HashMap<Uuid, String>>>,
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
@@ -714,7 +736,7 @@ impl App {
         tracing::debug!(cols, rows, "initializing app");
 
         let shared = SharedBuffer::default();
-        let backend = CrosstermBackend::new(shared.clone());
+        let backend = CrosstermBackend::new(frame_writer(&shared));
         let viewport = Viewport::Fixed(Rect::new(0, 0, cols, rows));
         let terminal = Terminal::with_options(backend, TerminalOptions { viewport })
             .context("failed to create terminal backend")?;
@@ -1036,6 +1058,13 @@ impl App {
             clubhouse_graybeard_id: None,
             drunk_levels: HashMap::new(),
             name_styles: HashMap::new(),
+            online_count: active_users
+                .as_ref()
+                .map(crate::state::online_human_count)
+                .unwrap_or(0),
+            active_friend_names: Vec::new(),
+            chat_ctx_epoch: 0,
+            last_username_directory: None,
             flair_directory: config.flair_directory,
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
@@ -1795,7 +1824,7 @@ impl App {
         // with a `Viewport::Fixed` is pure state construction and never
         // touches the backend, and `force_full_repaint` supplies the client
         // clear + full redraw that `Terminal::resize` used to perform.
-        let backend = CrosstermBackend::new(self.shared.clone());
+        let backend = CrosstermBackend::new(frame_writer(&self.shared));
         let viewport = Viewport::Fixed(Rect::new(0, 0, cols, rows));
         self.terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
         self.force_full_repaint();
