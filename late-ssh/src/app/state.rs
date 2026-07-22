@@ -323,6 +323,10 @@ pub struct App {
     pub(crate) show_bonsai_v2_modal: bool,
     pub(crate) show_lobby_modal: bool,
     pub(crate) show_ultimate_modal: bool,
+    /// Edge detector for the cooldown label's ready flip: the countdown is
+    /// minute-granularity (rides the per-minute global frame), so only the
+    /// running -> ready transition needs its own one-shot frame.
+    pub(crate) ultimate_cooldown_was_running: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
@@ -1006,6 +1010,7 @@ impl App {
             show_bonsai_v2_modal: false,
             show_lobby_modal: false,
             show_ultimate_modal: false,
+            ultimate_cooldown_was_running: false,
             login_announcements: config.initial_announcements,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),

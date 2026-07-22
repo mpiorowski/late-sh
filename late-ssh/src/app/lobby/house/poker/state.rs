@@ -40,9 +40,14 @@ impl State {
         self.svc.room_id()
     }
 
-    pub fn tick(&mut self) {
+    /// Returns true when a snapshot landed. The action-clock countdown is
+    /// client-computed at draw and never re-pushed, so its 1Hz cadence is
+    /// paid by the caller via `has_action_deadline`.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
         if self.public_rx.has_changed().unwrap_or(false) {
             self.public_snapshot = self.public_rx.borrow_and_update().clone();
+            changed = true;
         }
         if self.private_rx.has_changed().unwrap_or(false) {
             self.private_snapshot = self.private_rx.borrow_and_update().clone();
@@ -50,7 +55,14 @@ impl State {
             if let Some(balance) = self.private_snapshot.global_balance {
                 self.global_balance = balance;
             }
+            changed = true;
         }
+        changed
+    }
+
+    /// True while the table shows a counting-down action clock.
+    pub fn has_action_deadline(&self) -> bool {
+        self.public_snapshot.action_deadline.is_some()
     }
 
     pub fn public_snapshot(&self) -> &PokerPublicSnapshot {

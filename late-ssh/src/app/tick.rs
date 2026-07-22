@@ -44,14 +44,24 @@ impl App {
                 messages.push(msg);
             }
         }
-        if !messages.is_empty() {
+        // Heartbeats are a liveness no-op (matched below); a heartbeat-only
+        // drain must not pay a frame.
+        if messages
+            .iter()
+            .any(|m| !matches!(m, SessionMessage::Heartbeat))
+        {
             changed = true;
         }
 
         self.sync_visible_chat_room();
         self.tick_clubhouse();
-        if self.screen == Screen::Clubhouse {
-            // Walkers, bubbles, and the bar animate while the screen is up.
+        if self.screen == Screen::Clubhouse && self.marquee_tick.is_multiple_of(4) {
+            // Only cosmetic ambience animates on the tick counter (jukebox
+            // EQ, emote arms, fire/candles/stars); walker positions are
+            // input-driven and the dog step is wall-clock. A ~4fps
+            // heartbeat keeps the ambience moving at a quarter of the
+            // cost, and every discrete change (input, chat bubbles, door
+            // events) still lands within 266ms of its tick.
             changed = true;
         }
 
@@ -140,7 +150,9 @@ impl App {
             self.open_profile_modal(pending.user_id, pending.username);
             changed = true;
         }
-        if let Some(b) = self.audio.tick() {
+        let audio_tick = self.audio.tick();
+        changed |= audio_tick.changed;
+        if let Some(b) = audio_tick.banner {
             self.banner = Some(b);
             changed = true;
         }
@@ -156,12 +168,14 @@ impl App {
         self.chat
             .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
         changed |= self.sudoku_state.poll_daily_generation();
-        if let Some(b) = self.settings_modal_state.tick() {
+        let settings_tick = self.settings_modal_state.tick();
+        changed |= settings_tick.changed;
+        if let Some(b) = settings_tick.banner {
             self.banner = Some(b);
             changed = true;
         }
         if self.show_profile_modal {
-            self.profile_modal_state.tick();
+            changed |= self.profile_modal_state.tick();
         }
         if self.show_settings
             && self.settings_modal_state.draft().username.is_empty()
@@ -299,9 +313,7 @@ impl App {
                     changed |= self.snake_state.tick();
                 }
                 GAME_SELECTION_TRAFFIC => {
-                    // Traffic animates continuously while playing.
-                    self.traffic_state.tick();
-                    changed = true;
+                    changed |= self.traffic_state.tick();
                 }
                 _ => (),
             }
@@ -328,11 +340,18 @@ impl App {
                 self.chat.join_game_room_chat(chat_room_id);
             }
         }
-        self.house.tick();
+        let house_changed = self.house.tick();
         if self.screen == crate::app::common::primitives::Screen::HouseTable {
-            // Table games animate (dealer sweeps, turn clocks) while the
-            // screen is up; off-screen turn alerts ride the notify outbox.
-            changed = true;
+            // The five runtimes report real change from their snapshot
+            // peeks (server loops go quiet between rounds); poker's
+            // draw-computed action clock pays a 1Hz cadence on top.
+            // Off-screen turn alerts ride the notify outbox.
+            changed |= house_changed;
+            changed |= self
+                .house
+                .client()
+                .is_some_and(|c| c.has_draw_computed_clock())
+                && self.marquee_tick.is_multiple_of(15);
             self.sync_visible_chat_room();
             if let Some(chat_room_id) = self.house.chat_room_id()
                 && !self.house.chat_join_requested
@@ -342,17 +361,18 @@ impl App {
             }
         }
         if let Some(state) = self.dartboard_state.as_mut() {
-            // The shared canvas drains remote ops and snapshot swaps here;
-            // it only exists while the Artboard screen is up.
-            state.tick();
-            changed = true;
+            // The shared canvas drains remote ops, snapshot swaps, and
+            // archive loads here; it only exists while the Artboard screen
+            // is up, and it reports its own changes (own edits are
+            // input-driven).
+            changed |= state.tick();
         }
         if let Some(state) = self.lateania_state.as_mut() {
-            state.tick();
-        }
-        if matches!(self.screen, Screen::Lateania | Screen::GreenDragon) {
-            // Live door worlds: tavern chatter, roster, world snapshots.
-            changed = true;
+            // Drain even off-screen so the snapshot stays current; only an
+            // on-screen change pays a frame (the screen switch itself is
+            // input-driven and forces one).
+            let lateania_changed = state.tick();
+            changed |= lateania_changed && self.screen == Screen::Lateania;
         }
         if let Some(state) = self.rebels_state.as_mut() {
             state.tick();
@@ -370,7 +390,9 @@ impl App {
             state.tick();
         }
         if let Some(state) = self.greendragon_state.as_mut() {
-            state.tick();
+            // Same off-screen drain rule as Lateania above.
+            let greendragon_changed = state.tick();
+            changed |= greendragon_changed && self.screen == Screen::GreenDragon;
         }
         // Door games are launched from the Games hub, so they return there when
         // they exit. Rebels flips out of Running the tick its proxy closes;
@@ -826,6 +848,7 @@ impl App {
         }
 
         let admin_tick = self.hub_admin_state.tick(self.is_admin);
+        changed |= admin_tick.changed;
         if let Some(banner) = admin_tick.banner {
             self.banner = Some(banner);
             changed = true;
@@ -895,7 +918,7 @@ impl App {
             changed |= self.aquarium_state.tick();
         }
         if self.show_bonsai_modal {
-            self.bonsai_care_state.tick();
+            changed |= self.bonsai_care_state.tick();
         }
 
         // The activity feed subscription survives the retired sidebar panel
@@ -998,27 +1021,34 @@ impl App {
             changed = true;
         }
 
-        // Overlays that poll async data or animate while open. A frame per
-        // tick while one is up matches pre-gate behavior; tightening these is
-        // follow-up material.
-        changed |= self.show_settings
-            || self.show_ultimate_modal
-            || self.show_hub_modal
-            || self.show_lobby_modal
-            || self.show_profile_modal
-            || self.show_bonsai_modal
-            || self.show_bonsai_v2_modal
-            || self.show_poll_modal
-            || self.icon_picker_open
-            || self.booth_modal_state.is_open()
-            || self.room_search_modal_state.is_open()
-            // The image modal's Sixel fetch is requested from inside render
-            // (it needs the capacity recorded by the previous draw), so the
-            // modal must keep frames coming while open.
-            || self.chat.image_modal().is_some();
+        // Most overlays are static between input and the async results their
+        // tick paths already report (settings, hub, profile, poll, icon
+        // picker, booth, room search, bonsai modals). The remaining coarse
+        // spots each carry a reason:
+        // - The lobby modal reads live table occupancy from the registry at
+        //   draw time; a 1Hz cadence keeps those counts moving.
+        // - The ultimate modal's cooldown label is minute-granularity and
+        //   rides the per-minute global frame; only the running -> ready
+        //   flip pays a one-shot frame here.
+        // - The profile modal ticks a live aquarium during draw whenever the
+        //   viewed profile owns fish.
+        // The image modal's Sixel fetch keys off the capacity recorded by
+        // the draw that opened or resized the modal (both input-forced
+        // frames), so requesting here needs no frames of its own; the
+        // fetch completion reports through poll_terminal_images above.
+        self.chat
+            .request_image_modal_terminal_image(self.terminal_image_protocol);
+        changed |= self.show_lobby_modal && self.marquee_tick.is_multiple_of(15);
+        let ultimate_cooldown_running = self.ultimate_state.has_cooldown_running();
+        changed |= self.show_ultimate_modal
+            && self.ultimate_cooldown_was_running
+            && !ultimate_cooldown_running;
+        self.ultimate_cooldown_was_running = ultimate_cooldown_running;
+        changed |= self.show_profile_modal && self.profile_modal_state.aquarium_animating();
 
-        // Daily boards redraw live while on screen.
-        changed |= matches!(self.screen, Screen::DailyMatch);
+        // Daily boards are event-driven (daily_tick, chat, input); the 1Hz
+        // cadence keeps the move-deadline clock honest while on screen.
+        changed |= self.screen == Screen::DailyMatch && self.marquee_tick.is_multiple_of(15);
 
         // Outputs that only ship during a render: queued terminal commands,
         // a pending OSC 52 clipboard write, and desktop notifications.

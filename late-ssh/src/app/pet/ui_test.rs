@@ -1,5 +1,5 @@
-use super::state::PetMood;
-use super::ui::strip_frame_changed;
+use super::strip_frame_changed;
+use crate::app::pet::state::PetMood;
 
 #[test]
 fn parked_sad_pet_never_pays_a_frame() {

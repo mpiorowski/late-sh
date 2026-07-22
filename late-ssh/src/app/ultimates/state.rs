@@ -120,6 +120,15 @@ impl UltimateState {
             .filter(|remaining| !remaining.is_zero())
     }
 
+    /// True while any spell still has cooldown time on the clock. The
+    /// ultimate modal's countdown label only needs frames while this holds.
+    pub(crate) fn has_cooldown_running(&self) -> bool {
+        let now = Instant::now();
+        self.cooldown_ready_at
+            .values()
+            .any(|ready_at| *ready_at > now)
+    }
+
     pub(crate) fn set_cooldown(&mut self, ultimate_id: &str, remaining: Duration) {
         if remaining.is_zero() {
             self.cooldown_ready_at.remove(ultimate_id);

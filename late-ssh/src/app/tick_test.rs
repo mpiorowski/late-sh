@@ -89,3 +89,20 @@ async fn idle_ticks_settle_clean_and_chat_send_marks_changed() {
 
     settle_clean(&mut app, 30).await;
 }
+
+/// Phase-1 tightening: an open, untouched modal is static between async
+/// results, so it settles clean instead of paying a frame every tick (the
+/// pre-tightening behavior). Settings is the busiest converted modal: it
+/// fires a feed-list load on open and drains profile/feed events.
+#[tokio::test]
+async fn open_settings_modal_settles_clean() {
+    let (_test_db, mut app) = chat_compose_app("tick-gate-modal").await;
+
+    settle_clean(&mut app, 30).await;
+
+    app.handle_input(&[0x0F]); // Ctrl+O
+    assert!(app.show_settings, "ctrl+o opens the settings modal");
+    drain_frame(&mut app);
+
+    settle_clean(&mut app, 30).await;
+}

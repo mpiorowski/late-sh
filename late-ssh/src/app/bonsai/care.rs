@@ -69,8 +69,12 @@ impl BonsaiCareState {
         }
     }
 
-    pub(crate) fn tick(&mut self) {
+    /// Advance the watering animation. Returns true while it plays (each
+    /// tick draws a different droplet frame, including the final clear).
+    pub(crate) fn tick(&mut self) -> bool {
+        let animating = self.water_animation_ticks > 0;
         self.water_animation_ticks = self.water_animation_ticks.saturating_sub(1);
+        animating
     }
 
     pub(crate) fn set_cursor(&mut self, x: usize, y: usize) {

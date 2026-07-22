@@ -387,8 +387,6 @@ impl App {
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let visualizer = &self.visualizer;
-        self.chat
-            .request_image_modal_terminal_image(self.terminal_image_protocol);
         // The username directory snapshot is refreshed on the ~1s tick
         // cadence (tick.rs), where its pointer-compare also bumps the row
         // cache epoch; renders read the stored Arc only.

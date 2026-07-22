@@ -129,10 +129,15 @@ impl State {
         self.svc.room_id()
     }
 
-    pub fn tick(&mut self) {
+    /// Returns true when a snapshot landed. The round loop publishes at
+    /// its speed cadence and self-terminates outside Running, so the peek
+    /// covers all animation.
+    pub fn tick(&mut self) -> bool {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+            return true;
         }
+        false
     }
 
     pub fn snapshot(&self) -> &TronSnapshot {
