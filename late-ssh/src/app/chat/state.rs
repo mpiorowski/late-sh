@@ -364,6 +364,15 @@ pub struct SheetOpenRequest {
     pub editable: bool,
 }
 
+/// Outcome of one chat tick: the banner to surface plus whether the tick may
+/// have changed render-visible chat state. `changed` over-reports by design
+/// (prove-clean, not prove-dirty): every queued event or snapshot counts,
+/// even ones that end up filtered out during the drain.
+pub struct ChatTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct ChatState {
     pub(crate) service: ChatService,
     user_id: Uuid,
@@ -2946,15 +2955,18 @@ impl ChatState {
         }
     }
 
-    pub(crate) fn poll_terminal_images(&mut self) {
+    /// Returns true when any fetch completed; the image modal renders from
+    /// this cache, so a completion must count as a render-visible change.
+    pub(crate) fn poll_terminal_images(&mut self) -> bool {
         let Some(rx) = self.terminal_image_rx.as_mut() else {
-            return;
+            return false;
         };
 
         let mut completed = Vec::new();
         while let Ok(result) = rx.try_recv() {
             completed.push(result);
         }
+        let any_completed = !completed.is_empty();
 
         for (msg_id, result) in completed {
             self.terminal_image_requested.remove(&msg_id);
@@ -2974,6 +2986,7 @@ impl ChatState {
             }
             self.track_inline_image_id(msg_id);
         }
+        any_completed
     }
 
     pub(crate) fn request_image_modal_terminal_image(
@@ -3076,26 +3089,45 @@ impl ChatState {
         }
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> ChatTick {
         self.sync_refresh_room_id();
+        // Peek every source before draining: anything queued may change
+        // render-visible chat state (messages, unread badges, tab lists), so
+        // it must count as changed. Over-reporting here only costs a frame;
+        // a wrong "clean" freezes the UI.
+        let changed = self.username_rx.has_changed().unwrap_or(false)
+            || self.snapshot_rx.has_changed().unwrap_or(false)
+            || self.pinned_rx.has_changed().unwrap_or(false)
+            || !self.targeted_event_rx.is_empty()
+            || !self.event_rx.is_empty()
+            || !self.moderation_event_rx.is_empty();
         self.drain_username_directory();
         self.drain_snapshot();
         self.drain_pinned_messages();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
-        let feeds_banner = self.feeds.tick();
-        let news_banner = self.news.tick();
-        let notif_banner = self.notifications.tick();
-        let showcase_banner = self.showcase.tick();
-        let work_banner = self.work.tick();
+        let feeds_tick = self.feeds.tick();
+        let news_tick = self.news.tick();
+        let notif_tick = self.notifications.tick();
+        let showcase_tick = self.showcase.tick();
+        let work_tick = self.work.tick();
         self.flush_pending_read_cursors_if_due();
-        moderation_banner
+        let banner = moderation_banner
             .or(banner)
-            .or(feeds_banner)
-            .or(news_banner)
-            .or(notif_banner)
-            .or(showcase_banner)
-            .or(work_banner)
+            .or(feeds_tick.banner)
+            .or(news_tick.banner)
+            .or(notif_tick.banner)
+            .or(showcase_tick.banner)
+            .or(work_tick.banner);
+        ChatTick {
+            banner,
+            changed: changed
+                || feeds_tick.changed
+                || news_tick.changed
+                || notif_tick.changed
+                || showcase_tick.changed
+                || work_tick.changed,
+        }
     }
 
     pub fn select_feeds(&mut self) {

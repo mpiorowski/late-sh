@@ -131,11 +131,19 @@ impl State {
         Some(Banner::success("RSS entry dismissed."))
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> FeedsTick {
+        // Peek before draining: anything queued may change the rendered tab
+        // (badge counts, entry list), so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false)
+            || !self.event_rx.is_empty()
+            || !self.article_event_rx.is_empty();
         self.drain_snapshot();
         let feed_banner = self.drain_events();
         let article_banner = self.drain_article_events();
-        feed_banner.or(article_banner)
+        FeedsTick {
+            banner: feed_banner.or(article_banner),
+            changed,
+        }
     }
 
     fn drain_snapshot(&mut self) {

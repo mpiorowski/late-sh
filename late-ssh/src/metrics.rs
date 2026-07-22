@@ -123,6 +123,28 @@ mod inner {
         })
     }
 
+    fn renders_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_renders_total")
+                .with_description("Frames actually drawn, by render loop wake reason")
+                .build()
+        })
+    }
+
+    fn renders_skipped_clean_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_renders_skipped_clean_total")
+                .with_description(
+                    "Render passes skipped because neither input nor the world tick changed visible state",
+                )
+                .build()
+        })
+    }
+
     fn render_frame_drops_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -223,6 +245,14 @@ mod inner {
         );
     }
 
+    pub fn record_render(reason: RenderReason) {
+        renders_total().add(1, &[KeyValue::new("reason", render_reason_label(reason))]);
+    }
+
+    pub fn record_render_skipped_clean() {
+        renders_skipped_clean_total().add(1, &[]);
+    }
+
     pub fn record_render_frame_drop() {
         render_frame_drops_total().add(1, &[]);
     }
@@ -250,9 +280,11 @@ mod inner {
 
 #[cfg(not(feature = "otel"))]
 mod inner {
-    use super::ActivityGame;
+    use super::{ActivityGame, RenderReason};
 
     pub fn record_ssh_connection() {}
+    pub fn record_render(_reason: RenderReason) {}
+    pub fn record_render_skipped_clean() {}
     pub fn add_ssh_session(_delta: i64) {}
     pub fn record_ws_pair_success() {}
     pub fn record_ws_pair_rejected_unknown_token() {}

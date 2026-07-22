@@ -321,7 +321,17 @@ impl State {
         self.current_task = Some(self.article_service.process_url(self.user_id, url.trim()));
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> NewsTick {
+        // Peek before draining: anything queued may change the rendered tab
+        // (badge counts, article list), so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
+        NewsTick {
+            banner: self.drain_snapshot_and_events(),
+            changed,
+        }
+    }
+
+    fn drain_snapshot_and_events(&mut self) -> Option<Banner> {
         self.drain_snapshot();
         self.drain_events()
     }
