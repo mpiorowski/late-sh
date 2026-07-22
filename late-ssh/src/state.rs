@@ -91,6 +91,10 @@ pub fn set_afk_user(afk_users: &AfkUsers, user_id: Uuid, is_afk: bool) {
     if guard.contains(&user_id) == is_afk {
         return;
     }
+    // Readers retain their snapshot Arc (`App.afk_user_ids`), so `make_mut`
+    // always clones and swaps the pointer. The render loop's Arc::ptr_eq
+    // change check (chat row cache epoch) depends on that: never mutate the
+    // set in place.
     let users = Arc::make_mut(&mut *guard);
     if is_afk {
         users.insert(user_id);

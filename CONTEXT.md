@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-22 (render-cost pass, phase 0: per-frame work trimmed across sessions — nonogram library Arc-shared instead of deep-cloned per connect, presence (online count + friend names) cached on a 1s cadence instead of locking `active_users` twice per render, chat row caches validated by counters instead of hashing bodies, single-recipient chat events point-to-point instead of broadcast, terminal backend writes batched to a few `SharedBuffer` locks per frame, clubhouse cells batched into run-length spans)
+- Last updated: 2026-07-22 (render-cost pass, phase 0: per-frame work trimmed across sessions: nonogram library Arc-shared instead of deep-cloned per connect, presence (online count + friend names) cached on a 1s cadence instead of locking `active_users` twice per render, chat row caches validated by counters instead of hashing bodies, single-recipient chat events point-to-point instead of broadcast, terminal backend writes batched to a few `SharedBuffer` locks per frame, clubhouse cells batched into run-length spans)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
