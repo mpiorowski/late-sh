@@ -472,8 +472,12 @@ async fn render_once(
         if !app.running {
             return Ok(true);
         }
-        signal.dirty.store(false, Ordering::Release);
+        // Same dirty gate as the SSH loop in ssh.rs: remember whether the
+        // signal was set, drain input, tick, and skip the draw when nothing
+        // render-visible changed.
+        let mut changed = signal.dirty.swap(false, Ordering::AcqRel);
         while let Ok(event) = input_rx.try_recv() {
+            changed = true;
             match event {
                 InputEvent::Bytes(data) => app.handle_input(&data),
                 InputEvent::Resize { cols, rows } => {
@@ -487,8 +491,17 @@ async fn render_once(
             }
         }
         if advance_world {
-            app.tick();
+            changed |= app.tick();
         }
+        if !changed {
+            metrics::record_render_skipped_clean();
+            return Ok(false);
+        }
+        metrics::record_render(if advance_world {
+            metrics::RenderReason::WorldTick
+        } else {
+            metrics::RenderReason::Input
+        });
         let frame = app.render().context("rendering frame")?;
         let terminal_commands = std::mem::take(&mut app.pending_terminal_commands);
         (frame, terminal_commands)

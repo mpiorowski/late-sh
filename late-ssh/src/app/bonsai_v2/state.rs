@@ -301,20 +301,24 @@ impl BonsaiV2State {
         }
     }
 
-    pub(crate) fn tick(&mut self, active: bool) {
+    /// Returns true when the tree visibly changed (a passive growth step);
+    /// the activity counter alone is not render-visible.
+    pub(crate) fn tick(&mut self, active: bool) -> bool {
         if !self.is_alive || !active {
-            return;
+            return false;
         }
         self.ticks_since_growth += 1;
         if self.ticks_since_growth < PASSIVE_GROWTH_ACTIVE_TICK_INTERVAL {
-            return;
+            return false;
         }
         self.ticks_since_growth = 0;
         if self.vigor >= 50 {
             self.grow_once(GrowthCause::Passive);
             self.message = Some("A tip crept outward".to_string());
             self.persist();
+            return true;
         }
+        false
     }
 
     pub(crate) fn water(&mut self) -> bool {

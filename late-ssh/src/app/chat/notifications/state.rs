@@ -7,6 +7,13 @@ use late_core::models::notification::NotificationView;
 
 use super::svc::{NotificationEvent, NotificationService, NotificationSnapshot};
 
+/// Outcome of one tab tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed the rendered tab (badge counts, mention list).
+pub struct NotificationsTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct State {
     service: NotificationService,
     user_id: Uuid,
@@ -78,9 +85,16 @@ impl State {
         self.service.mark_all_read_task(self.user_id);
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> NotificationsTick {
+        // Peek before draining: anything queued may change the rendered tab
+        // (badge counts, mention list), so it counts as changed.
+        let changed =
+            self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
-        self.drain_events()
+        NotificationsTick {
+            banner: self.drain_events(),
+            changed,
+        }
     }
 
     fn drain_snapshot(&mut self) {

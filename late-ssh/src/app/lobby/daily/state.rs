@@ -52,6 +52,13 @@ impl ChallengeDraft {
 /// Per-session daily-games UI state: the modal, the lobby glow, and the
 /// full-screen board. The system of record is `DailyService`'s snapshot;
 /// everything here is presentation plus the in-flight optimistic move.
+/// Outcome of one daily tick: the banner to surface plus whether anything
+/// drained may have changed render-visible state.
+pub struct DailyTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct DailyState {
     user_id: Uuid,
     svc: DailyService,
@@ -329,12 +336,16 @@ impl DailyState {
     }
 
     /// Drain the snapshot watch, the event feed, and any board load in
-    /// flight. Returns a banner for events targeted at this user.
-    pub fn tick(&mut self) -> Option<Banner> {
+    /// flight. Returns a banner for events targeted at this user plus
+    /// whether anything drained may have changed render-visible state
+    /// (board, lobby glow, turn markers).
+    pub fn tick(&mut self) -> DailyTick {
         let mut banner = None;
+        let mut changed = !self.event_rx.is_empty();
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.notify_turn_edges();
+            changed = true;
         }
         loop {
             match self.event_rx.try_recv() {
@@ -346,12 +357,15 @@ impl DailyState {
                 Err(broadcast::error::TryRecvError::Empty) => break,
                 Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
                     tracing::warn!(skipped, "daily event feed lagged");
+                    changed = true;
                 }
                 Err(broadcast::error::TryRecvError::Closed) => break,
             }
         }
-        self.poll_board_load();
-        banner
+        if self.poll_board_load() {
+            changed = true;
+        }
+        DailyTick { banner, changed }
     }
 
     fn apply_event(&mut self, event: DailyEvent) -> Option<Banner> {
@@ -766,13 +780,16 @@ impl DailyState {
         board.load_rx = Some(rx);
     }
 
-    fn poll_board_load(&mut self) {
+    /// Returns true when a board load completed (or its channel closed),
+    /// mutating the rendered board.
+    fn poll_board_load(&mut self) -> bool {
         let Some(board) = &mut self.board else {
-            return;
+            return false;
         };
         let Some(rx) = &mut board.load_rx else {
-            return;
+            return false;
         };
+        let mut changed = true;
         match rx.try_recv() {
             Ok(Ok(Some(row))) => {
                 board.load_rx = None;
@@ -793,7 +810,9 @@ impl DailyState {
                 board.load_rx = None;
                 board.load_error = Some(message);
             }
-            Err(oneshot::error::TryRecvError::Empty) => {}
+            Err(oneshot::error::TryRecvError::Empty) => {
+                changed = false;
+            }
             Err(oneshot::error::TryRecvError::Closed) => {
                 board.load_rx = None;
             }
@@ -805,6 +824,7 @@ impl DailyState {
         {
             self.request_board_reload();
         }
+        changed
     }
 
     pub fn board_orientation(&self) -> ChessColor {

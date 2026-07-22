@@ -54,9 +54,11 @@ impl BonsaiState {
         }
     }
 
-    pub fn tick(&mut self) {
+    /// Returns true when the tree visibly changed (death or a growth grant);
+    /// the passive tick counter alone is not render-visible.
+    pub fn tick(&mut self) -> bool {
         if !self.is_alive {
-            return;
+            return false;
         }
 
         // Check death during live session (not just on login)
@@ -64,7 +66,7 @@ impl BonsaiState {
         if should_die(reference_date, BonsaiService::today()) {
             self.is_alive = false;
             // Fire-and-forget: the next login will also detect this and record the graveyard entry
-            return;
+            return true;
         }
 
         self.ticks_since_growth += 1;
@@ -72,8 +74,10 @@ impl BonsaiState {
             self.ticks_since_growth = 0;
             if self.add_growth_locally(1) > 0 {
                 self.svc.add_growth_task(self.user_id, 1);
+                return true;
             }
         }
+        false
     }
 
     /// Water the tree. Returns growth points granted, or None if already watered today or dead.

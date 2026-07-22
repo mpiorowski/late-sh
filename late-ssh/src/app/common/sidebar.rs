@@ -423,12 +423,89 @@ fn draw_core_block(
 /// The list scrolls (marquee) when it overruns the rail instead of stopping
 /// at the few names that happen to fit, so the whole crowd can be read.
 fn friend_names_text(names: &[String], width: usize, tick: usize) -> String {
-    let joined = names
+    crate::app::common::marquee::marquee_text(&friend_names_joined(names), width, tick)
+}
+
+fn friend_names_joined(names: &[String]) -> String {
+    names
         .iter()
         .map(|name| format!("@{name}"))
         .collect::<Vec<_>>()
-        .join(" ");
-    crate::app::common::marquee::marquee_text(&joined, width, tick)
+        .join(" ")
+}
+
+/// Conservative lower bound on any marquee rail width in the sidebar. Real
+/// rails are 22-24 columns; using the smaller bound means overflow (and so
+/// "still animating") can only be over-reported, never missed.
+const MARQUEE_RAIL_MIN: usize = 20;
+/// Queue detail rows lose ~6 columns to the index and vote score.
+const MARQUEE_QUEUE_RAIL_MIN: usize = MARQUEE_RAIL_MIN - 6;
+
+/// Inputs for [`sidebar_marquee_scrolling`], mirroring what the draw path
+/// feeds its marquee rows.
+pub(crate) struct SidebarMarqueeInputs<'a> {
+    pub components: &'a [RightSidebarComponentSetting],
+    pub active_friend_names: &'a [String],
+    pub icecast_now_playing: Option<&'a NowPlaying>,
+    pub radio_now_playing: Option<&'a str>,
+    pub selected_station: RadioStation,
+    pub source: AudioSource,
+    pub queue: Option<&'a QueueSnapshot>,
+}
+
+/// True when any sidebar marquee row currently overflows its rail and is
+/// therefore scrolling. The render gate treats that as continuous animation;
+/// hold phases are not modeled (tightening pass material). Must stay in sync
+/// with the rows the draw path feeds through `marquee_text`: the friends
+/// row, the three music dock track rows, and the youtube queue detail rows.
+pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bool {
+    use crate::app::common::marquee::marquee_scrolls;
+
+    if marquee_scrolls(
+        &friend_names_joined(inputs.active_friend_names),
+        MARQUEE_RAIL_MIN,
+    ) {
+        return true;
+    }
+    let music_visible = inputs
+        .components
+        .iter()
+        .any(|setting| setting.component == RightSidebarComponent::Music && setting.enabled);
+    if !music_visible {
+        return false;
+    }
+    let station_name = stations::radio_station_display_name(inputs.selected_station);
+    if marquee_scrolls(
+        inputs.radio_now_playing.unwrap_or(station_name),
+        MARQUEE_RAIL_MIN,
+    ) {
+        return true;
+    }
+    if inputs
+        .icecast_now_playing
+        .is_some_and(|now| marquee_scrolls(&icecast_track_text(now), MARQUEE_RAIL_MIN))
+    {
+        return true;
+    }
+    let Some(queue) = inputs.queue else {
+        return false;
+    };
+    if marquee_scrolls(&youtube_track_text(queue), MARQUEE_RAIL_MIN) {
+        return true;
+    }
+    // Queue detail rows (current + up next) render only for the youtube source.
+    inputs.source == AudioSource::Youtube
+        && queue
+            .current
+            .iter()
+            .chain(queue.queue.iter())
+            .any(|item| {
+                let title = item
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| format!("yt:{}", item.video_id));
+                marquee_scrolls(&title, MARQUEE_QUEUE_RAIL_MIN)
+            })
 }
 
 /// Section name rendered into each panel's separator rule. Keeps panel

@@ -1450,17 +1450,31 @@ async fn render_once(
         }
         // Clear `dirty` before draining the queued input so any input arriving
         // during this render flips it back to `true` and schedules another
-        // pass instead of being erased by this batch.
-        ctx.signal.dirty.store(false, Ordering::Release);
+        // pass instead of being erased by this batch. Remember the old value:
+        // it is one of the gate's changed sources.
+        let mut changed = ctx.signal.dirty.swap(false, Ordering::AcqRel);
         while let Ok(data) = input_rx.try_recv() {
+            changed = true;
             app.handle_input(&data);
             if !app.running {
                 return Ok(true);
             }
         }
         if advance_world {
-            app.tick();
+            changed |= app.tick();
         }
+        // Dirty gate: a world tick that changed nothing render-visible skips
+        // the draw entirely. Ratatui's diff state does not advance on a skip,
+        // so the next real frame needs no forced repaint.
+        if !changed {
+            metrics::record_render_skipped_clean();
+            return Ok(false);
+        }
+        metrics::record_render(if advance_world {
+            metrics::RenderReason::WorldTick
+        } else {
+            metrics::RenderReason::Input
+        });
         let frame = app.render().context("rendering frame")?;
         let terminal_commands = std::mem::take(&mut app.pending_terminal_commands);
         (frame, terminal_commands)

@@ -7,6 +7,13 @@ use crate::app::{chat::news::svc::ArticleService, common::primitives::Banner};
 
 use super::svc::{FeedEvent, FeedService, FeedSnapshot};
 
+/// Outcome of one tab tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed the rendered tab (badge counts, entry list).
+pub struct FeedsTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct State {
     service: FeedService,
     article_service: ArticleService,

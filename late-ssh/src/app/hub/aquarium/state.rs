@@ -239,16 +239,20 @@ impl AquariumState {
         current == desired
     }
 
-    pub(crate) fn tick(&mut self) {
+    /// Returns true when a simulation step ran (the tray visibly moved); the
+    /// 220ms self-throttle makes most world ticks report no change.
+    pub(crate) fn tick(&mut self) -> bool {
         let now = Instant::now();
+        let mut changed = false;
         if self
             .feed_started_at
             .is_some_and(|started| now.saturating_duration_since(started) >= FEED_EFFECT_DURATION)
         {
             self.feed_started_at = None;
+            changed = true;
         }
         if now.saturating_duration_since(self.last_step_at) < SIMULATION_STEP {
-            return;
+            return changed;
         }
 
         self.last_step_at = now;
@@ -291,6 +295,7 @@ impl AquariumState {
                 &mut rng,
             ),
         }
+        true
     }
 
     pub(crate) fn handle_resize(&mut self, width: u16, height: u16) {

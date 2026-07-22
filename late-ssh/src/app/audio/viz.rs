@@ -13,6 +13,9 @@ const REAL_BAND_RELEASE: f32 = 0.28;
 const REAL_RMS_ATTACK: f32 = 0.5;
 const REAL_RMS_RELEASE: f32 = 0.22;
 const IDLE_BAND_DECAY: f32 = 0.94;
+/// Below this level no rendered bar shows any height, so decay counts as
+/// settled and the idle tick stops reporting change.
+const SETTLE_EPSILON: f32 = 0.004;
 
 pub struct Visualizer {
     bands: [f32; 8],
@@ -84,29 +87,44 @@ impl Visualizer {
         self.beat
     }
 
-    pub fn tick_idle(&mut self) {
+    /// Returns true while the decay is still visibly animating. Once every
+    /// level falls below [`SETTLE_EPSILON`] the state snaps to zero and stays
+    /// settled (no further change) until the next real frame arrives.
+    pub fn tick_idle(&mut self) -> bool {
         if !self.has_viz {
-            return;
+            return false;
         }
         self.rms = (self.rms * 0.96).max(0.0);
         for band in &mut self.bands {
             *band = (*band * IDLE_BAND_DECAY).max(0.0);
         }
         self.beat = (self.beat * 0.9).max(0.0);
+        let settled = self.rms < SETTLE_EPSILON
+            && self.beat < SETTLE_EPSILON
+            && self.bands.iter().all(|band| *band < SETTLE_EPSILON);
+        if settled {
+            self.rms = 0.0;
+            self.beat = 0.0;
+            self.bands = [0.0; 8];
+            self.has_viz = false;
+        }
+        true
     }
 
     pub fn set_procedural_active(&mut self, active: bool) {
         self.procedural_active = active;
     }
 
-    pub fn tick_procedural(&mut self) {
+    /// Returns true while the procedural wave is animating.
+    pub fn tick_procedural(&mut self) -> bool {
         if !self.procedural_active {
-            return;
+            return false;
         }
         self.procedural_phase += 0.08;
         if self.procedural_phase > std::f32::consts::TAU * 1024.0 {
             self.procedural_phase -= std::f32::consts::TAU * 1024.0;
         }
+        true
     }
 
     fn procedural_bands(&self) -> [f32; 8] {

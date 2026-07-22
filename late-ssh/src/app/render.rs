@@ -399,22 +399,10 @@ impl App {
         let visualizer = &self.visualizer;
         self.chat
             .request_image_modal_terminal_image(self.terminal_image_protocol);
-        let username_directory_snapshot = self
-            .username_directory
-            .as_ref()
-            .map(crate::usernames::snapshot);
-        // The directory swaps its Arc on every real change, so pointer
-        // equality is the change signal for the row cache epoch.
-        let directory_changed = match (&username_directory_snapshot, &self.last_username_directory)
-        {
-            (Some(current), Some(previous)) => !Arc::ptr_eq(current, previous),
-            (None, None) => false,
-            _ => true,
-        };
-        if directory_changed {
-            self.last_username_directory = username_directory_snapshot.clone();
-            self.chat_ctx_epoch += 1;
-        }
+        // The username directory snapshot is refreshed on the ~1s tick
+        // cadence (tick.rs), where its pointer-compare also bumps the row
+        // cache epoch; renders read the stored Arc only.
+        let username_directory_snapshot = self.last_username_directory.clone();
         let render_usernames = crate::usernames::UsernameLookup::new(
             self.chat.usernames(),
             username_directory_snapshot.as_deref(),
@@ -429,11 +417,6 @@ impl App {
         // Presence values are recomputed on the ~1s tick cadence
         // (`tick.rs`), not per frame; reads here are owned-memory only.
         let online_count = self.online_count;
-        let afk_user_ids = crate::state::afk_users_snapshot(&self.afk_users);
-        if !Arc::ptr_eq(&afk_user_ids, &self.afk_user_ids) {
-            self.afk_user_ids = afk_user_ids;
-            self.chat_ctx_epoch += 1;
-        }
         let image_modal = self
             .chat
             .image_modal()

@@ -385,6 +385,9 @@ pub struct App {
     /// shared `active_users` map every frame.
     pub(crate) online_count: usize,
     pub(crate) active_friend_names: Vec<String>,
+    /// Last rendered sidebar clock text, compared on the ~1s tick so minute
+    /// rollovers count as a render-visible change.
+    pub(super) last_sidebar_clock: String,
     /// App-owned author-context epoch for the chat row caches: bumps when
     /// AFK, drunk levels, name styles, or the username directory change.
     /// Pairs with `ChatState::context_epoch` in `ChatRowsVersions`.
@@ -1063,6 +1066,7 @@ impl App {
                 .map(crate::state::online_human_count)
                 .unwrap_or(0),
             active_friend_names: Vec::new(),
+            last_sidebar_clock: String::new(),
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
@@ -2214,10 +2218,15 @@ impl App {
         });
     }
 
-    pub(crate) fn drain_voice_join_results(&mut self) {
+    /// Returns true when any join result was drained (banner or voice state
+    /// change), so the tick can report the frame as changed.
+    pub(crate) fn drain_voice_join_results(&mut self) -> bool {
+        let mut changed = false;
         while let Ok(result) = self.voice_join_rx.try_recv() {
             self.handle_voice_join_result(result);
+            changed = true;
         }
+        changed
     }
 
     fn handle_voice_join_result(&mut self, result: VoiceJoinTaskResult) {
