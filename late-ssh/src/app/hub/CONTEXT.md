@@ -20,14 +20,9 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1 Quests`, `2 Shop`, `3 Leaderboard`, `4 Events`, `5 Admin` for admins, `Esc/q` close).
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
 - `leaderboard.rs`: responsive dense leaderboard grid, compact ranked-row
-  formatting, and cell-exact reference geometry.
-- `../../leaderboard_preview.rs` + `../../bin/leaderboard_tui.rs`: resizable,
-  database-free leaderboard TUI with deterministic mock data for exact layout
-  inspection (`cargo run -p late-ssh --bin leaderboard_tui`). A `48x139`
-  terminal produces the `41x111` Hub modal used by the dense-layout reference;
-  above that width, surplus lower-grid columns are shared across all five panels.
-  Pass `-- --edge2edge` to make the preview modal fill the terminal instead of
-  simulating the production modal's outer margins.
+  formatting, and cell-exact reference geometry. A `48x139` terminal produces
+  the `41x111` Hub modal used by the dense-layout reference; above that width,
+  surplus lower-grid columns are shared across all five panels.
   Each panel stops right-aligning scores once its widest visible line fits with
   the full username, a two-cell name/score gap, and the trailing edge pad. Each
   monthly score subsection reserves two rows after its top five for the optional

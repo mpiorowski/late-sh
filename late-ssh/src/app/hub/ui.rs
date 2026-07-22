@@ -63,38 +63,8 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     }
 }
 
-pub(crate) fn draw_leaderboard_preview(
-    frame: &mut Frame,
-    area: Rect,
-    state: &HubState,
-    leaderboard: &LeaderboardData,
-    user_id: Uuid,
-    edge_to_edge: bool,
-) {
-    let popup = leaderboard_preview_popup(area, edge_to_edge);
-    let layout = draw_hub_shell_at(frame, popup, state, false);
-    crate::app::hub::leaderboard::draw(frame, layout.popup, leaderboard, user_id, false);
-}
-
 fn draw_hub_shell(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) -> HubLayout {
     let popup = centered_percent_rect(80, 85, area);
-    draw_hub_shell_at(frame, popup, state, is_admin)
-}
-
-fn leaderboard_preview_popup(area: Rect, edge_to_edge: bool) -> Rect {
-    if edge_to_edge {
-        area
-    } else {
-        centered_percent_rect(80, 85, area)
-    }
-}
-
-fn draw_hub_shell_at(
-    frame: &mut Frame,
-    popup: Rect,
-    state: &HubState,
-    is_admin: bool,
-) -> HubLayout {
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -193,20 +163,4 @@ fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         Constraint::Percentage((100 - percent_x) / 2),
     ])
     .split(vertical[1])[1]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn leaderboard_preview_can_remove_simulated_margins() {
-        let terminal = Rect::new(0, 0, 139, 48);
-
-        assert_eq!(
-            leaderboard_preview_popup(terminal, false),
-            Rect::new(14, 3, 111, 41)
-        );
-        assert_eq!(leaderboard_preview_popup(terminal, true), terminal);
-    }
 }

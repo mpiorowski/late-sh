@@ -6,7 +6,6 @@ pub mod authz;
 pub mod config;
 pub mod dartboard;
 pub mod ircd;
-pub mod leaderboard_preview;
 pub mod metrics;
 pub mod moderation;
 pub mod paired_clients;
