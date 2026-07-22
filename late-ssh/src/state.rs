@@ -129,6 +129,9 @@ pub struct State {
     pub ultimate_service: crate::app::UltimateService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    /// Concurrent `/api/ws/pair` sockets per IP. Separate from `conn_counts`
+    /// so pair-socket floods and SSH connections cap independently.
+    pub pair_ws_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
     /// Process-global clubhouse presence: who sits where, who is walking.
     pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,

@@ -217,18 +217,6 @@ impl GhostService {
             });
         }
 
-        if self.ai_service.is_enabled() {
-            let svc = self.clone();
-            let mention_shutdown = shutdown.clone();
-            let mention_bot = bot_user.clone();
-            tokio::spawn(async move {
-                svc.run_bot_mention_task(mention_bot, mention_shutdown)
-                    .await;
-            });
-        } else {
-            tracing::info!("@bot responder disabled because AI service is not configured");
-        }
-
         // Initialize graybeard — the burned-out dev who haunts #lounge
         if self.ai_service.is_enabled() {
             match self.ensure_graybeard_user().await {
@@ -250,9 +238,11 @@ impl GhostService {
         // clubhouse furniture (fixed spot behind the bar, tutorial greeting,
         // speech bubbles), so he boots even without AI; only the mention
         // responder needs the AI service.
+        let mut bartender_id = None;
         match self.ensure_bartender_user().await {
             Ok(bartender) => {
                 self.set_always_on(&bartender);
+                bartender_id = Some(bartender.id);
                 if self.ai_service.is_enabled() {
                     let svc = self.clone();
                     let bt_shutdown = shutdown.clone();
@@ -268,6 +258,21 @@ impl GhostService {
             Err(err) => {
                 tracing::error!(error = ?err, "ghost service failed to initialize @bartender user");
             }
+        }
+
+        // Started last, once the bartender's id is known: he points patrons at
+        // @bot on purpose ("go ask @bot, he knows all of that"), and that
+        // hand-off must not pull @bot into the room to answer him.
+        if self.ai_service.is_enabled() {
+            let svc = self.clone();
+            let mention_shutdown = shutdown.clone();
+            let mention_bot = bot_user.clone();
+            tokio::spawn(async move {
+                svc.run_bot_mention_task(mention_bot, bartender_id, mention_shutdown)
+                    .await;
+            });
+        } else {
+            tracing::info!("@bot responder disabled because AI service is not configured");
         }
 
         tracing::info!("ghost service started (bot + graybeard + bartender always-on)");
@@ -298,9 +303,14 @@ impl GhostService {
             .send(ActivityEvent::joined(bot.id, bot.username.clone()));
     }
 
+    /// `bartender_id` is the one author @bot stays silent for: the bartender's
+    /// persona sends deeper questions to @bot by name, so his lines would
+    /// otherwise read as mentions and the two would answer each other in front
+    /// of the room. `None` only when the bartender user failed to initialize.
     async fn run_bot_mention_task(
         self,
         bot: BotUser,
+        bartender_id: Option<Uuid>,
         shutdown: late_core::shutdown::CancellationToken,
     ) {
         let mut events = self.chat_service.subscribe_events();
@@ -316,7 +326,7 @@ impl GhostService {
                 recv_result = events.recv() => {
                     match recv_result {
                         Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
-                            if message.user_id == bot.id {
+                            if message.user_id == bot.id || Some(message.user_id) == bartender_id {
                                 continue;
                             }
                             if !should_handle_bot_mention_event(

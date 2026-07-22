@@ -290,12 +290,58 @@ async fn ws_handler(
     }
     ws.max_message_size(PAIR_WS_MAX_MESSAGE_BYTES)
         .max_frame_size(PAIR_WS_MAX_MESSAGE_BYTES)
-        .on_upgrade(move |socket| async move { handle_socket(socket, params.token, state).await })
+        .on_upgrade(move |socket| async move {
+            handle_socket(socket, params.token, state, client_ip).await
+        })
 }
 
-async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
+/// Decrements the per-IP pair socket count on drop, covering every exit path
+/// out of `handle_socket`.
+struct PairWsIpGuard {
+    state: State,
+    ip: IpAddr,
+}
+
+impl Drop for PairWsIpGuard {
+    fn drop(&mut self) {
+        let mut counts = self.state.pair_ws_counts.lock_recover();
+        if let Some(count) = counts.get_mut(&self.ip) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
+}
+
+fn try_acquire_pair_ws_slot(state: &State, ip: IpAddr) -> Option<PairWsIpGuard> {
+    {
+        let mut counts = state.pair_ws_counts.lock_recover();
+        let count = counts.entry(ip).or_insert(0);
+        if *count >= state.config.max_conns_per_ip {
+            return None;
+        }
+        *count += 1;
+    }
+    Some(PairWsIpGuard {
+        state: state.clone(),
+        ip,
+    })
+}
+
+async fn handle_socket(mut socket: WebSocket, token: String, state: State, client_ip: IpAddr) {
     let token_hint = token_hint(&token);
-    let (control_tx, mut control_rx) = tokio::sync::mpsc::unbounded_channel();
+    let Some(_ip_guard) = try_acquire_pair_ws_slot(&state, client_ip) else {
+        tracing::warn!(
+            ip = %client_ip,
+            token_hint = %token_hint,
+            limit = state.config.max_conns_per_ip,
+            "ws pair rejected: per-ip pair socket limit reached"
+        );
+        return;
+    };
+    let (control_tx, mut control_rx) =
+        tokio::sync::mpsc::channel(crate::paired_clients::PAIR_CONTROL_QUEUE_CAP);
     // The session must still be live (we just checked `has_session`). The
     // race window where the SSH session disconnects between the check and
     // this lookup is closed by giving up the WS upgrade if user_for returns
@@ -329,10 +375,17 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         Err(_) => false,
     };
     let mut applied_initial_mute = false;
-    let registration_id =
+    let Some(registration_id) =
         state
             .paired_client_registry
-            .register(token.clone(), control_tx, user_id, audio_source);
+            .register(token.clone(), control_tx, user_id, audio_source)
+    else {
+        tracing::warn!(
+            token_hint = %token_hint,
+            "ws pair rejected: token at paired-client capacity"
+        );
+        return;
+    };
     state
         .paired_client_registry
         .set_stream_preferences(user_id, icecast_stream, radio_station);

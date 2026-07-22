@@ -358,6 +358,7 @@ async fn main() -> anyhow::Result<()> {
         ultimate_service,
         conn_limit,
         conn_counts,
+        pair_ws_counts: Arc::new(Mutex::new(HashMap::new())),
         active_users,
         clubhouse_lobby,
         afk_users,
