@@ -390,3 +390,7 @@ fn mood_color(mood: PetMood) -> Color {
         PetMood::Sad => theme::TEXT_DIM(),
     }
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;
