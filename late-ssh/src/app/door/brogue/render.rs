@@ -224,5 +224,33 @@ fn draw_running(frame: &mut Frame, area: Rect, state: &State) {
         return;
     };
     let buf = frame.buffer_mut();
-    proxy.with_screen(|screen| blit_screen(buf, area, screen));
+    proxy.with_screen(|screen| {
+        blit_screen(buf, area, screen);
+        clear_canvas_black(buf, area);
+    });
 }
+
+/// Turn brogue's canvas black transparent so the late.sh theme background shows
+/// through, matching how nethack and dcss default-background cells render.
+/// Those games emit the terminal-default color for empty space; brogue never
+/// does (its curses build paints every cell an explicit color, black included),
+/// so the equivalent is keying out its black after the blit. Rgb(0,0,0) is the
+/// host's 24-bit output (COLORTERM=truecolor); Indexed(16), the color-cube
+/// black, covers a host still on the 256-color coercion path.
+fn clear_canvas_black(buf: &mut ratatui::buffer::Buffer, area: Rect) {
+    for y in area.y..area.y.saturating_add(area.height) {
+        for x in area.x..area.x.saturating_add(area.width) {
+            let Some(cell) = buf.cell_mut((x, y)) else {
+                continue;
+            };
+            let bg = cell.style().bg;
+            if bg == Some(Color::Rgb(0, 0, 0)) || bg == Some(Color::Indexed(16)) {
+                cell.set_style(cell.style().bg(Color::Reset));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "render_test.rs"]
+mod render_test;

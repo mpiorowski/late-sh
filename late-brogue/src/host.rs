@@ -154,6 +154,10 @@ async fn run_bridge(
     // Spawn with a cleared environment and an explicit allowlist. The curses
     // build needs only TERM (it renders pure ASCII, so no locale is required);
     // HOME points at the player dir for tidiness should anything resolve `~`.
+    // COLORTERM selects term.c's 24-bit path: exact `48;2;r;g;b` colors instead
+    // of the 6x6x6 cube coercion, which both preserves brogue's gradients and
+    // makes its canvas black exactly rgb(0,0,0) so the late-ssh client can key
+    // it out and let the theme background show through.
     // The window size comes ONLY from the pty (openpty winsize + TIOCSWINSZ):
     // LINES/COLUMNS must NOT be exported, because ncurses treats them as an
     // override of the OS size and then ignores SIGWINCH, freezing brogue at its
@@ -161,6 +165,7 @@ async fn run_bridge(
     cmd.env_clear()
         .current_dir(&player)
         .env("TERM", &cfg.term)
+        .env("COLORTERM", "truecolor")
         .env("HOME", &player)
         .stdin(Stdio::from(
             slave
