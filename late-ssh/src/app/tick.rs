@@ -870,22 +870,28 @@ impl App {
         if self.use_bonsai_v2() {
             changed |= self.bonsai_v2_state.tick(bonsai_v2_active);
         }
-        self.pet_state.tick();
-        // The pet wanders, blinks, and flicks its tail whenever its strip or
-        // roaming sprite is on screen (tightening pass material).
-        let pet_strip_setting = if self.show_settings {
-            self.settings_modal_state.draft().show_pet_strip
-        } else {
-            self.profile_state.profile().show_pet_strip
-        };
-        if self.pet_state.roaming_active()
-            || (self.screen == Screen::Dashboard
-                && pet_strip_setting
-                && self.shop_state.entitlements().has_pet_companion())
-        {
+        // Pet: state edges (feedback expiry, roam end, day-rollover mood and
+        // needs flips) always count; the wander/blink/tail animation only
+        // pays frames on ticks where the drawn strip actually differs, and
+        // only while the last frame drew a strip at all (the travel slot is
+        // rewritten every render). Every transition into visibility (screen
+        // switch, settings, entitlements, roam end) dirties a frame through
+        // its own path, which re-records the slot.
+        changed |= self.pet_state.tick();
+        if self.pet_state.roaming_active() {
+            // The full-screen stroll overlay animates continuously.
             changed = true;
+        } else if let Some(travel) = self.last_pet_strip_travel.get() {
+            changed |= crate::app::pet::ui::strip_frame_changed(
+                self.pet_state.mood(),
+                self.pet_state.animation_ticks(),
+                travel,
+            );
         }
-        if self.show_aquarium_tray {
+        // Mirror the render condition (render.rs `aquarium_tray_enabled`):
+        // the tray setting defaults on for everyone, but only aquarium owners
+        // ever see it, so only their sessions pay simulation frames.
+        if self.show_aquarium_tray && self.shop_state.entitlements().has_aquarium() {
             changed |= self.aquarium_state.tick();
         }
         if self.show_bonsai_modal {
@@ -922,55 +928,59 @@ impl App {
         let procedural = has_browser
             && (self.paired_browser_source == AudioSource::Youtube || browser_owns_icecast);
         self.visualizer.set_procedural_active(procedural);
-        changed |= if procedural {
+        let sidebar_visible = if self.show_settings {
+            crate::app::render::resolve_right_sidebar_enabled(
+                self.settings_modal_state.draft().right_sidebar_mode,
+                self.screen,
+            )
+        } else {
+            crate::app::render::resolve_right_sidebar_enabled(
+                self.profile_state.profile().right_sidebar_mode,
+                self.screen,
+            )
+        };
+        // The visualizer state always advances so decay keeps settling, but
+        // it only costs frames while a surface that draws it is visible: the
+        // right sidebar (viz and music-stage panels) or a bonsai modal
+        // (beat-driven sway).
+        let viz_ticked = if procedural {
             self.visualizer.tick_procedural()
         } else {
             self.visualizer.tick_idle()
         };
+        changed |=
+            viz_ticked && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
         // MARQUEE_STEP_TICKS and every transition lands on a multiple of it,
         // so only those boundary ticks need a frame.
         if self.marquee_tick.is_multiple_of(crate::app::common::marquee::MARQUEE_STEP_TICKS)
-            && matches!(self.screen, Screen::Dashboard | Screen::Arcade)
+            && sidebar_visible
         {
-            let sidebar_visible = if self.show_settings {
-                crate::app::render::resolve_right_sidebar_enabled(
-                    self.settings_modal_state.draft().right_sidebar_mode,
-                    self.screen,
-                )
-            } else {
-                crate::app::render::resolve_right_sidebar_enabled(
-                    self.profile_state.profile().right_sidebar_mode,
-                    self.screen,
-                )
+            let selected_icecast_stream = self.selected_icecast_stream;
+            let icecast_now_playing = self.now_playing_rx.as_ref().and_then(|rx| {
+                rx.borrow()
+                    .get(selected_icecast_stream.as_str())
+                    .cloned()
+            });
+            let selected_radio_station = self.selected_radio_station;
+            let radio_now_playing = self.radio_meta_rx.as_ref().and_then(|rx| {
+                rx.borrow()
+                    .get(selected_radio_station.as_str())
+                    .map(|meta| format!("{} - {}", meta.artist, meta.title))
+            });
+            let queue = self.audio.queue_snapshot();
+            let inputs = crate::app::common::sidebar::SidebarMarqueeInputs {
+                components: &self.profile_state.profile().right_sidebar_components,
+                active_friend_names: &self.active_friend_names,
+                icecast_now_playing: icecast_now_playing.as_ref(),
+                radio_now_playing: radio_now_playing.as_deref(),
+                selected_station: selected_radio_station,
+                source: self.paired_browser_source,
+                queue: Some(&queue),
             };
-            if sidebar_visible {
-                let selected_icecast_stream = self.selected_icecast_stream;
-                let icecast_now_playing = self.now_playing_rx.as_ref().and_then(|rx| {
-                    rx.borrow()
-                        .get(selected_icecast_stream.as_str())
-                        .cloned()
-                });
-                let selected_radio_station = self.selected_radio_station;
-                let radio_now_playing = self.radio_meta_rx.as_ref().and_then(|rx| {
-                    rx.borrow()
-                        .get(selected_radio_station.as_str())
-                        .map(|meta| format!("{} - {}", meta.artist, meta.title))
-                });
-                let queue = self.audio.queue_snapshot();
-                let inputs = crate::app::common::sidebar::SidebarMarqueeInputs {
-                    components: &self.profile_state.profile().right_sidebar_components,
-                    active_friend_names: &self.active_friend_names,
-                    icecast_now_playing: icecast_now_playing.as_ref(),
-                    radio_now_playing: radio_now_playing.as_deref(),
-                    selected_station: selected_radio_station,
-                    source: self.paired_browser_source,
-                    queue: Some(&queue),
-                };
-                changed |= crate::app::common::sidebar::sidebar_marquee_scrolling(&inputs);
-            }
+            changed |= crate::app::common::sidebar::sidebar_marquee_scrolling(&inputs);
         }
         // Now-playing metadata changes repaint even between marquee steps.
         changed |= self
@@ -1007,8 +1017,8 @@ impl App {
             // modal must keep frames coming while open.
             || self.chat.image_modal().is_some();
 
-        // World Cup and daily boards redraw live while on screen.
-        changed |= matches!(self.screen, Screen::WorldCup | Screen::DailyMatch);
+        // Daily boards redraw live while on screen.
+        changed |= matches!(self.screen, Screen::DailyMatch);
 
         // Outputs that only ship during a render: queued terminal commands,
         // a pending OSC 52 clipboard write, and desktop notifications.

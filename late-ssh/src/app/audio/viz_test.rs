@@ -267,3 +267,30 @@ fn procedural_takes_priority_over_real_viz() {
     }
     assert!(!top_row.contains('█'));
 }
+
+#[test]
+fn idle_decay_settles_and_stops_reporting_change() {
+    let mut viz = Visualizer::new();
+
+    // Untouched visualizer: nothing to decay, nothing to repaint.
+    assert!(!viz.tick_idle());
+
+    viz.update(&late_core::audio::VizFrame {
+        bands: [1.0; 8],
+        rms: 1.0,
+        track_pos_ms: 0,
+    });
+    assert!(viz.tick_idle(), "fresh energy must animate the decay");
+
+    // Decay runs out within a bounded number of ticks and then goes quiet.
+    let mut settled_at = None;
+    for tick in 0..500 {
+        if !viz.tick_idle() {
+            settled_at = Some(tick);
+            break;
+        }
+    }
+    assert!(settled_at.is_some(), "idle decay never settled");
+    assert!(!viz.tick_idle(), "settled visualizer must stay quiet");
+    assert_eq!(viz.rms(), 0.0);
+}

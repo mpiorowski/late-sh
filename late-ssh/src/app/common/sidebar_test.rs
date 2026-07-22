@@ -19,7 +19,8 @@ fn friend_names_text_scrolls_past_the_names_that_do_not_fit() {
     // column is reserved.
     assert_eq!(friend_names_text(&names, 12, 0), "@ada @bob @c");
     // Held at the start, then scrolled to the end: the tail is readable.
-    assert_eq!(friend_names_text(&names, 12, 40), "da @bob @cyd");
+    // With hold 45 and step 15, the far extreme spans ticks 75..120.
+    assert_eq!(friend_names_text(&names, 12, 90), "da @bob @cyd");
 }
 
 fn line_text(line: &Line<'_>) -> String {

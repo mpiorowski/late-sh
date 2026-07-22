@@ -3091,18 +3091,19 @@ impl ChatState {
 
     pub fn tick(&mut self) -> ChatTick {
         self.sync_refresh_room_id();
-        // Peek every source before draining: anything queued may change
+        // Peek every event source before draining: anything queued may change
         // render-visible chat state (messages, unread badges, tab lists), so
         // it must count as changed. Over-reporting here only costs a frame;
-        // a wrong "clean" freezes the UI.
+        // a wrong "clean" freezes the UI. Snapshots are the exception: they
+        // arrive on a fixed cadence whether or not anything changed, so
+        // drain_snapshot reports real change itself instead of being peeked.
         let changed = self.username_rx.has_changed().unwrap_or(false)
-            || self.snapshot_rx.has_changed().unwrap_or(false)
             || self.pinned_rx.has_changed().unwrap_or(false)
             || !self.targeted_event_rx.is_empty()
             || !self.event_rx.is_empty()
             || !self.moderation_event_rx.is_empty();
         self.drain_username_directory();
-        self.drain_snapshot();
+        let changed = self.drain_snapshot() || changed;
         self.drain_pinned_messages();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
@@ -3477,19 +3478,22 @@ impl ChatState {
         &self.message_reactions
     }
 
-    fn drain_snapshot(&mut self) {
+    /// Returns true when applying the snapshot changed anything
+    /// render-visible. Snapshots arrive on a fixed cadence whether or not
+    /// anything changed, so every write below detects real change before
+    /// reporting; an unchanged snapshot must not invalidate caches or pay a
+    /// frame.
+    fn drain_snapshot(&mut self) -> bool {
         if !self.snapshot_rx.has_changed().unwrap_or(false) {
-            return;
+            return false;
         }
 
         let snapshot = self.snapshot_rx.borrow_and_update().clone();
         if snapshot.user_id != Some(self.user_id) {
-            return;
+            return false;
         }
 
-        // Snapshots arrive on a fixed cadence whether or not anything changed,
-        // so every write below detects real change before bumping the row
-        // cache counters; an unchanged snapshot must not invalidate caches.
+        let mut changed = false;
         let mut context_changed = false;
         let refreshed_author_ids = snapshot
             .chat_rooms
@@ -3524,9 +3528,12 @@ impl ChatState {
             self.friend_user_ids = friend_user_ids;
             context_changed = true;
         }
-        self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
+        if self.voice_channels_by_room_id != snapshot.voice_channels_by_room_id {
+            self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
+            changed = true;
+        }
         for (_, messages) in &snapshot.chat_rooms {
-            self.note_activity_ticker_from(messages);
+            changed |= self.note_activity_ticker_from(messages);
         }
         let previous_room_signatures: HashMap<Uuid, Vec<(Uuid, DateTime<Utc>)>> = self
             .rooms
@@ -3538,7 +3545,17 @@ impl ChatState {
                 )
             })
             .collect();
+        // Room metadata and list order matter to the room rail even when no
+        // message signature moved: compare the room structs themselves.
+        let previous_rooms_meta: Vec<ChatRoom> =
+            self.rooms.iter().map(|(room, _)| room.clone()).collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
+        changed |= self.rooms.len() != previous_rooms_meta.len()
+            || self
+                .rooms
+                .iter()
+                .zip(&previous_rooms_meta)
+                .any(|((room, _), previous)| room != previous);
         let changed_room_ids: Vec<Uuid> = self
             .rooms
             .iter()
@@ -3549,13 +3566,29 @@ impl ChatState {
             })
             .map(|(room, _)| room.id)
             .collect();
+        changed |= !changed_room_ids.is_empty();
         for room_id in changed_room_ids {
             self.bump_room_version(room_id);
         }
-        self.lounge_room_id = snapshot.lounge_room_id;
-        self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
-        self.room_last_message_at = self.merge_room_last_message_at(snapshot.room_last_message_at);
-        self.active_polls = snapshot.active_polls;
+        if self.lounge_room_id != snapshot.lounge_room_id {
+            self.lounge_room_id = snapshot.lounge_room_id;
+            changed = true;
+        }
+        let merged_unread_counts = self.merge_unread_counts(snapshot.unread_counts);
+        if self.unread_counts != merged_unread_counts {
+            self.unread_counts = merged_unread_counts;
+            changed = true;
+        }
+        let merged_room_last_message_at =
+            self.merge_room_last_message_at(snapshot.room_last_message_at);
+        if self.room_last_message_at != merged_room_last_message_at {
+            self.room_last_message_at = merged_room_last_message_at;
+            changed = true;
+        }
+        if self.active_polls != snapshot.active_polls {
+            self.active_polls = snapshot.active_polls;
+            changed = true;
+        }
         context_changed |= extend_changed(&mut self.bonsai_glyphs, snapshot.bonsai_glyphs);
         context_changed |= extend_changed(&mut self.chat_badges, snapshot.chat_badges);
         context_changed |= extend_changed(
@@ -3570,7 +3603,10 @@ impl ChatState {
         if context_changed {
             self.context_epoch += 1;
         }
+        let selected_before = self.selected_room_id;
         self.sync_selection();
+        changed |= self.selected_room_id != selected_before;
+        changed || context_changed
     }
 
     fn drain_username_directory(&mut self) {
@@ -4483,20 +4519,22 @@ impl ChatState {
             .collect()
     }
 
-    fn note_activity_ticker(&mut self, entry: ActivityTickerEntry) {
-        note_ticker_entry(&mut self.activity_ticker, entry);
+    fn note_activity_ticker(&mut self, entry: ActivityTickerEntry) -> bool {
+        note_ticker_entry(&mut self.activity_ticker, entry)
     }
 
-    fn note_activity_ticker_from(&mut self, messages: &[ChatMessage]) {
+    fn note_activity_ticker_from(&mut self, messages: &[ChatMessage]) -> bool {
+        let mut changed = false;
         for message in messages {
             if let Some(text) = system_line_text_in(&self.usernames, message) {
-                self.note_activity_ticker(ActivityTickerEntry {
+                changed |= self.note_activity_ticker(ActivityTickerEntry {
                     id: message.id,
                     text,
                     at: message.created,
                 });
             }
         }
+        changed
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
@@ -4529,9 +4567,11 @@ const ACTIVITY_TICKER_CAP: usize = 10;
 
 /// Insert into the newest-first ticker queue, deduped by message id (tails
 /// and snapshots replay the same lines), capped at `ACTIVITY_TICKER_CAP`.
-fn note_ticker_entry(entries: &mut Vec<ActivityTickerEntry>, entry: ActivityTickerEntry) {
+/// Returns true when the entry actually landed in the ticker (a duplicate
+/// delivery leaves it untouched).
+fn note_ticker_entry(entries: &mut Vec<ActivityTickerEntry>, entry: ActivityTickerEntry) -> bool {
     if entries.iter().any(|existing| existing.id == entry.id) {
-        return;
+        return false;
     }
     let pos = entries
         .iter()
@@ -4539,6 +4579,7 @@ fn note_ticker_entry(entries: &mut Vec<ActivityTickerEntry>, entry: ActivityTick
         .unwrap_or(entries.len());
     entries.insert(pos, entry);
     entries.truncate(ACTIVITY_TICKER_CAP);
+    true
 }
 
 /// The #lounge system-feed check (author is the `system` bot AND the body

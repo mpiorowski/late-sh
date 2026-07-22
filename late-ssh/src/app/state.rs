@@ -23,8 +23,8 @@ use crate::{
     app::audio::{client_state::ClientAudioState, viz::Visualizer},
     app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
-        TerminalImageProtocol, TerminalImageRenderState, da1_probe, identity_is_kitty,
-        iterm2_capabilities_probe, kitty_cleanup_commands, protocol_from_device_attributes,
+        TerminalImageProtocol, TerminalImageRenderState, da1_probe, iterm2_capabilities_probe,
+        kitty_cleanup_commands, protocol_from_device_attributes,
         protocol_from_env_hint, protocol_from_term, protocol_from_terminal_features,
         protocol_from_xtversion, term_disables_terminal_images, terminal_image_cleanup_commands,
         terminal_string_terminator,
@@ -252,9 +252,6 @@ pub struct SessionConfig {
             std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
         >,
     >,
-    /// Process-global World Cup service handle (clone), used to subscribe to
-    /// the snapshot and to mint a viewer guard while on the screen.
-    pub worldcup_service: Option<crate::app::worldcup::svc::WorldCupService>,
     pub active_users: Option<ActiveUsers>,
     /// Process-global clubhouse presence (seats, walkers, emotes). `None`
     /// on headless/test paths, which keeps the room session-local.
@@ -355,16 +352,6 @@ pub struct App {
             std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
         >,
     >,
-    /// Live World Cup snapshot feed (process-global service, demand-gated).
-    pub(super) worldcup_rx: Option<
-        tokio::sync::watch::Receiver<std::sync::Arc<crate::app::worldcup::model::WorldCupSnapshot>>,
-    >,
-    /// Handle used to mint the viewer guard while on the World Cup screen.
-    pub(super) worldcup_service: Option<crate::app::worldcup::svc::WorldCupService>,
-    /// Present only while this session is on the World Cup screen; dropping it
-    /// releases the poll gate.
-    pub(crate) worldcup_viewer: Option<crate::app::worldcup::svc::WorldCupViewer>,
-    pub(crate) worldcup: crate::app::worldcup::state::State,
     /// Admin-gated clubhouse tavern (page `0`): avatar, crowd, animations.
     pub(crate) clubhouse: crate::app::clubhouse::state::State,
     /// Chips backend, kept for the clubhouse's on-the-house welcome pour.
@@ -409,6 +396,9 @@ pub struct App {
     pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) last_pet_strip_food_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) last_pet_strip_water_rect: std::cell::Cell<Option<Rect>>,
+    /// Wander travel width of the pet strip drawn last frame; `None` when the
+    /// strip was not drawn. Gates the strip animation's frame cost in tick.
+    pub(crate) last_pet_strip_travel: std::cell::Cell<Option<usize>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -613,12 +603,6 @@ pub struct App {
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
-    /// True when the client is kitty specifically. kitty desyncs its cursor from
-    /// ratatui's cell-width model on regional-indicator flags, which splits the
-    /// flags in the World Cup overview's rightmost column; that one column drops
-    /// flags for kitty. Seeded from TERM, refined by the XTVERSION reply.
-    pub(crate) terminal_is_kitty: bool,
-
     /// Desktop-notification domain: producers (chat, daily) push through
     /// cloned `notifier` handles; render drains `notify_outbox` into OSC
     /// bytes.
@@ -750,7 +734,6 @@ impl App {
             protocol_from_term(&config.term)
         };
         let inline_image_symbol_mode = InlineImageSymbolMode::from_identity(&config.term);
-        let terminal_is_kitty = identity_is_kitty(&config.term);
         let pending_terminal_commands = Vec::new();
         let (notifier, notify_outbox) = crate::app::notify::channel();
 
@@ -1043,13 +1026,6 @@ impl App {
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
             radio_meta_rx: config.radio_meta_rx,
-            worldcup_rx: config
-                .worldcup_service
-                .as_ref()
-                .map(|svc| svc.subscribe_state()),
-            worldcup_service: config.worldcup_service,
-            worldcup_viewer: None,
-            worldcup: crate::app::worldcup::state::State::default(),
             clubhouse: crate::app::clubhouse::state::State::new(
                 config.clubhouse_lobby.clone(),
                 config.user_id,
@@ -1077,6 +1053,7 @@ impl App {
             last_pet_strip_pet_rect: std::cell::Cell::new(None),
             last_pet_strip_food_rect: std::cell::Cell::new(None),
             last_pet_strip_water_rect: std::cell::Cell::new(None),
+            last_pet_strip_travel: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -1222,7 +1199,6 @@ impl App {
             terminal_images_disabled,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
-            terminal_is_kitty,
             notify_outbox,
             is_draining: config.is_draining,
             icon_picker_open: false,
@@ -1723,14 +1699,6 @@ impl App {
         if self.screen == Screen::Clubhouse {
             self.clubhouse.enter_screen();
         }
-        // Hold a viewer guard only while on the World Cup screen; this both
-        // wakes the demand-gated poller on entry and (by dropping the prior
-        // guard) releases it on exit.
-        self.worldcup_viewer = if self.screen == Screen::WorldCup {
-            self.worldcup_service.as_ref().map(|svc| svc.viewer())
-        } else {
-            None
-        };
         self.sync_visible_chat_room();
     }
 
@@ -1756,11 +1724,6 @@ impl App {
             "terminal xtversion reply"
         );
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_identity(value));
-        // The XTVERSION payload identifies the terminal precisely (kitty vs the
-        // rest of the kitty-graphics family), refining the TERM-based seed.
-        if identity_is_kitty(value) {
-            self.terminal_is_kitty = true;
-        }
         if self.terminal_images_disabled {
             return;
         }

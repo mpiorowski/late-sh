@@ -161,8 +161,6 @@ struct DrawContext<'a> {
     directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
-    worldcup_snapshot: Option<std::sync::Arc<crate::app::worldcup::model::WorldCupSnapshot>>,
-    worldcup_state: &'a crate::app::worldcup::state::State,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     /// Resolved 24h username-effect styles for clubhouse name labels.
@@ -174,15 +172,6 @@ struct DrawContext<'a> {
     clubhouse_graybeard_id: Option<uuid::Uuid>,
     /// The clubhouse composer footer; built only on that screen.
     clubhouse_composer: Option<chat::ui::ComposerBlockView<'a>>,
-    /// The account's flag-emoji tweak, shared with chat/shop: when set, flags
-    /// are replaced by text fallbacks for terminals that can't render them.
-    show_flag_fallback: bool,
-    /// Client is kitty specifically — it splits regional-indicator flags in the
-    /// World Cup overview's rightmost column (see `App::terminal_is_kitty`).
-    terminal_is_kitty: bool,
-    /// The account's raw timezone tweak. The World Cup screen (its only
-    /// consumer) parses it lazily so no work happens on other screens' frames.
-    worldcup_timezone: Option<&'a str>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
@@ -273,6 +262,7 @@ impl App {
         self.last_pet_strip_pet_rect.set(None);
         self.last_pet_strip_food_rect.set(None);
         self.last_pet_strip_water_rect.set(None);
+        self.last_pet_strip_travel.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -479,6 +469,7 @@ impl App {
                     pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
                     food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
                     water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
+                    travel_slot: Some(&self.last_pet_strip_travel),
                 }),
                 activity_ticker: self.chat.activity_ticker(),
                 messages: dashboard_messages,
@@ -956,17 +947,12 @@ impl App {
                         directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
-                        worldcup_snapshot: self.worldcup_rx.as_ref().map(|rx| rx.borrow().clone()),
-                        worldcup_state: &self.worldcup,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         clubhouse_name_styles: &self.name_styles,
                         clubhouse_lounge_messages,
                         clubhouse_graybeard_id: self.clubhouse_graybeard_id,
                         clubhouse_composer,
-                        show_flag_fallback: self.profile_state.profile().show_flag_fallback,
-                        terminal_is_kitty: self.terminal_is_kitty,
-                        worldcup_timezone: self.profile_state.profile().timezone.as_deref(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
@@ -1372,21 +1358,6 @@ impl App {
                     daily_completion: ctx.leaderboard.user_daily_statuses.get(&ctx.user_id),
                 },
             ),
-            Screen::WorldCup => {
-                let empty = crate::app::worldcup::model::WorldCupSnapshot::default();
-                let snapshot = ctx.worldcup_snapshot.as_deref().unwrap_or(&empty);
-                crate::app::worldcup::ui::draw(
-                    frame,
-                    content_area,
-                    crate::app::worldcup::ui::WorldCupView {
-                        snapshot,
-                        state: ctx.worldcup_state,
-                        show_flags: !ctx.show_flag_fallback,
-                        terminal_is_kitty: ctx.terminal_is_kitty,
-                        timezone: crate::app::profile::svc::parse_account_tz(ctx.worldcup_timezone),
-                    },
-                );
-            }
             Screen::Clubhouse => crate::app::clubhouse::ui::draw(
                 frame,
                 content_area,
@@ -1677,7 +1648,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Games, "3"),
         (Screen::Artboard, "4"),
         (Screen::Pinstar, "5"),
-        (Screen::WorldCup, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1724,7 +1694,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
-        Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
@@ -1844,30 +1813,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 "· {} inside · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
                 ctx.clubhouse_state.headcount()
             ),
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-    }
-
-    if screen == Screen::WorldCup {
-        spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
-        spans.push(Span::styled(
-            "Space",
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " bracket · ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-        spans.push(Span::styled(
-            "j/k",
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " scroll ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
