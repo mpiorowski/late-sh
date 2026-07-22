@@ -4,7 +4,7 @@
 
 {% block page %}
 <div class="max-w-2xl mx-auto space-y-8">
-    <div class="flex items-center justify-between border-b border-gray-700 pb-4">
+    <div class="flex items-center justify-between border-b border-gray-600 pb-4">
         <h1 class="text-3xl font-bold text-white">Dashboard</h1>
     </div>
 
@@ -14,7 +14,7 @@
     </div>
 
     <!-- Alpine.js Toggle Example -->
-    <div class="p-6 bg-gray-900 rounded-lg shadow-lg border border-gray-800" x-data="{ show: false }">
+    <div class="p-6 bg-gray-900 rounded-lg shadow-lg border border-gray-600" x-data="{ show: false }">
         <div class="flex items-center justify-between mb-4">
             <h2 class="text-xl font-semibold text-blue-400">Secret Message</h2>
             <button @click="show = !show"
@@ -28,7 +28,7 @@
         </div>
     </div>
     <!-- HTMX Polling Widget -->
-    <div class="p-6 bg-gray-900 rounded-lg shadow-lg border border-gray-800">
+    <div class="p-6 bg-gray-900 rounded-lg shadow-lg border border-gray-600">
         <h2 class="text-xl font-semibold mb-4 text-green-400">Live System Status</h2>
         <div hx-get="/dashboard/status" hx-trigger="every 2s" hx-swap="innerHTML">
             {% include "pages/dashboard/partial_status.html" %}
