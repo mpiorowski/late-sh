@@ -381,18 +381,14 @@ async fn run_render_loop(
     let mut world_deadline = Instant::now();
 
     loop {
-        let advance_world = match next_render_action(
-            world_deadline,
-            &signal,
-            &mut input_pending,
-            previous_render,
-        )
-        .await
-        {
-            RenderAction::AdvanceWorld => true,
-            RenderAction::Render => false,
-            RenderAction::Skip => continue,
-        };
+        let advance_world =
+            match next_render_action(world_deadline, &signal, &mut input_pending, previous_render)
+                .await
+            {
+                RenderAction::AdvanceWorld => true,
+                RenderAction::Render => false,
+                RenderAction::Skip => continue,
+            };
 
         match render_once(
             &app,

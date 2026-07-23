@@ -47,7 +47,6 @@ impl HouseTableClient {
         }
     }
 
-
     pub fn touch_activity(&self) {
         match self {
             Self::Poker(state) => state.touch_activity(),

@@ -562,7 +562,7 @@ struct MusicStageProps<'a> {
 }
 
 /// Music stage: a small visualizer strip pinned on top, then the fixed dock
-/// + fixed detail area. Rows 0-2 the visualizer (borderless bars, or an
+/// and fixed detail area. Rows 0-2 the visualizer (borderless bars, or an
 /// idle hint while nothing is paired), rows 3-4 volume, rows 5-10 a
 /// three-source dock in order radio → youtube → icecast (title bar +
 /// now-playing line per source; radio leads because it is the default
@@ -589,8 +589,7 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) 
     }
 
     let [viz_area, dock_area] =
-        Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)])
-            .areas(area);
+        Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
     props.visualizer.render_inline(frame, viz_area);
 
     let lines = music_stage_lines(dock_area.width, props);
