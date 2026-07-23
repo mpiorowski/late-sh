@@ -70,16 +70,27 @@ jobs:
         run: |
           docker run --rm nethack-build:ci /var/games/nethack/nethack --version
 
-      # Prove the A1 split actually compiled in: the writable prefixes must
-      # resolve to VAR_PLAYGROUND (string baked into the binary), and the install
-      # must have seeded save/ there. If either fails, persistence is silently
-      # broken (saves would fall back into the read-only HACKDIR image layer).
+      # Prove the A1 split actually compiled in and the install seeded save/.
+      # GCC lowers the constant-path copy into immediate stores, so `strings`
+      # cannot reliably find VAR_PLAYGROUND in the optimized binary. Instead,
+      # run the score reader as an unprivileged user with a temporary playground
+      # and verify that it reads record from there. If it falls back to HACKDIR,
+      # the temporary record's access time remains unchanged.
       - name: verify_var_playground_split
         run: |
-          docker run --rm nethack-build:ci sh -c '
-            set -e
-            test -d /var/games/nethack-var/save
-            strings /var/games/nethack/nethack | grep -qx /var/games/nethack-var
+          docker run --rm nethack-build:ci test -d /var/games/nethack-var/save
+          docker run --rm \
+            --user 65534:65534 \
+            --tmpfs /var/games/nethack-var:rw,mode=1777,strictatime \
+            nethack-build:ci sh -c '
+            set -eu
+            record=/var/games/nethack-var/record
+            : > "$record"
+            touch -a -d @1 "$record"
+            before=$(stat -c %X "$record")
+            /var/games/nethack/nethack -s >/dev/null
+            after=$(stat -c %X "$record")
+            test "$after" -gt "$before"
           '
 
   build_runtime_nethack:
