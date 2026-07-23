@@ -149,16 +149,16 @@ Consolidated from RENDER_COST.md (deleted). The canonical description of the gat
 ### What shipped
 
 - **Phase 0, per-frame constant factors (2026-07-22):** counter-validated chat row caches (`ChatRowsVersions`, see `late-ssh/src/app/chat/CONTEXT.md`), presence cached at 1 Hz, per-session `targeted_event_rx` for single-recipient chat events, 64 KB BufWriter frame path, run-length clubhouse spans, Arc-shared nonogram library, and the `OutputBudget` guard (32 MB unacked pause, 30 s disconnect).
-- **Phase 1, dirty gate (2026-07-22):** `App::tick() -> bool`; both loops (`render_once` in ssh.rs AND web_tunnel.rs, deliberate duplication: change both) compute `changed = signal.dirty.swap(false) | input drained | app.tick()` and skip `terminal.draw()` entirely when clean (ratatui's diff does not advance on skip, no forced repaint needed).
+- **Phase 1, dirty gate (2026-07-22):** `App::tick() -> bool`; `render_once` (ssh.rs) computes `changed = signal.dirty.swap(false) | input drained | app.tick()` and skips `terminal.draw()` entirely when clean (ratatui's diff does not advance on skip, no forced repaint needed).
 - **Phase 1 tightening + domain sweep (2026-07-22/23):** every domain state exposes `tick() -> bool` under the dirty contract ("rule of three", CONTEXT.md §2.6): chat snapshot drains report real change via full compares, modals are event-driven, house tables and door games report their watch peeks and go quiet between rounds, the ultimate cooldown became minute-granularity riding the per-minute global frame. The FFT audio visualizer was replaced by a stateless synthetic ambient equalizer (`viz::render_eq`), so no audio state drives rendering at all.
-- **Phase 2, adaptive world tick (2026-07-23):** the fixed 66 ms interval is gone from both loops. Each render pass returns `App::wake_hint() -> Duration` and the loop sleeps exactly that long unless input or a `RenderSignal` wake lands first. Tiers (`app/tick.rs` consts): `HOT_TICK` 66 ms (splash, 2 s post-input window, active ultimate effect, house tables, open arcade game, bonsai modals), `ANIM_HALF_TICK` 132 ms (Clubhouse, visible sidebar, pet), `ANIM_QUARTER_TICK` 264 ms (aquarium surfaces), `IDLE_TICK` 500 ms floor. Floor ticks only drain channels; worst-case latency for an unprompted event while idle is one floor interval. Enablers: `marquee_tick` is wall-clock-derived, every frame edge is a period-index compare, and bonsai passive growth was removed entirely (product decision) so no wall-time accumulator depends on tick cadence.
+- **Phase 2, adaptive world tick (2026-07-23):** the fixed 66 ms interval is gone. Each render pass returns `App::wake_hint() -> Duration` and the loop sleeps exactly that long unless input or a `RenderSignal` wake lands first. Tiers (`app/tick.rs` consts): `HOT_TICK` 66 ms (splash, 2 s post-input window, active ultimate effect, house tables, open arcade game, bonsai modals), `ANIM_HALF_TICK` 132 ms (Clubhouse, visible sidebar, pet), `ANIM_QUARTER_TICK` 264 ms (aquarium surfaces), `IDLE_TICK` 500 ms floor. Floor ticks only drain channels; worst-case latency for an unprompted event while idle is one floor interval. Enablers: `marquee_tick` is wall-clock-derived, every frame edge is a period-index compare, and bonsai passive growth was removed entirely (product decision) so no wall-time accumulator depends on tick cadence.
 
 Result: idle sessions cost 2 cheap clean ticks/sec and about 1 render/min. A sidebar-visible session holds ~7.5 fps (about 37 draws per 5 s) by product decision: the ambient eq is always on. The knob if that reads expensive in prod is moving the eq to the quarter edge, not reintroducing audio-state gating.
 
 ### Design rules (do not violate)
 
 - PROVE-CLEAN, NOT PROVE-DIRTY. Anything uncertain reports changed. A spurious frame costs nothing; a wrong "clean" freezes UI.
-- Both loops gate; web_tunnel.rs mirrors ssh.rs deliberately (duplication over abstraction): change both.
+- The gate lives in `render_once` in ssh.rs, the only render loop (the browser `/play` demo and its `web_tunnel.rs` mirror loop were removed entirely on 2026-07-23; the loops used to gate identically, change-both).
 - Peek receivers BEFORE draining (`has_changed()` on watches, `!is_empty()` on mpsc/broadcast). Exception: fixed-cadence publishers (chat snapshot, audio queue) report real change from the drain itself. A watch that is only `borrow()`ed at render must be marked seen (`borrow_and_update`) by whoever peeks it, or the peek latches dirty forever.
 - Nothing paints at full rate. The ambient eq, pet, bonsai sway, and clubhouse ambience share the half-rate edge (`anim_half`, ~7.5 fps); aquarium steps on the quarter edge (~3.8 fps); everything else is slow/static. Marquee moves 3 columns/sec in 1 s steps so speed costs no extra frames.
 - `is_multiple_of` on the tick counter is a bug pattern under sparse ticking; every edge compares its period index against the previous tick's.
@@ -168,7 +168,7 @@ Result: idle sessions cost 2 cheap clean ticks/sec and about 1 render/min. A sid
 
 - `late_ssh_renders_total{reason=input|tick}` vs `late_ssh_renders_skipped_clean_total` (metrics.rs, `RenderReason` closed enum) observe the skip ratio in prod.
 - Grafana: "Rendering" row in `monitoring/dashboards/observability.json` (render rate, clean-skip ratio, draws per session, stall guard).
-- Per-session debug stats: each loop logs drawn vs skipped_clean every 5 s at debug level; run with `RUST_LOG=late_ssh=debug` to feel the skip ratio locally.
+- Per-session debug stats: the render loop logs drawn vs skipped_clean every 5 s at debug level; run with `RUST_LOG=late_ssh=debug` to feel the skip ratio locally.
 
 ### Test gotchas (for anyone touching the gate)
 
