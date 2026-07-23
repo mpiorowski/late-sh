@@ -974,15 +974,25 @@ impl App {
         // it only costs frames while a surface that draws it is visible: the
         // right sidebar (viz and music-stage panels) or a bonsai modal
         // (beat-driven sway). Elapsed wall ticks scale the movement so the
-        // ambient cadence slows the frame rate, not the animation.
+        // ambient cadence slows the frame rate, not the animation. The
+        // sidebar bars report only on the ambient boundary edge (clubhouse
+        // pattern): without it the post-input hot window would repaint them
+        // at 15fps for 2s after every keystroke or mouse event. The settle
+        // snap still pays its frame immediately (animating() just flipped
+        // false), or bars would freeze slightly above zero until the next
+        // boundary. Bonsai sway keeps full rate.
         let viz_elapsed = (self.marquee_tick - prev_marquee_tick) as u32;
         let viz_ticked = if procedural {
             self.visualizer.tick_procedural(viz_elapsed)
         } else {
             self.visualizer.tick_idle(viz_elapsed)
         };
-        changed |=
-            viz_ticked && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
+        let viz_frame_due =
+            self.marquee_tick / 4 != prev_marquee_tick / 4 || !self.visualizer.animating();
+        changed |= viz_ticked
+            && ((sidebar_visible && viz_frame_due)
+                || self.show_bonsai_modal
+                || self.show_bonsai_v2_modal);
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per

@@ -75,8 +75,11 @@ CONTEXT.md §2.6 documents the gate.
   `sidebar_visible` computed once in tick, shared with the marquee block.
   Runs at AMBIENT cadence (~4fps) via wake_hint, not hot: decay and the
   procedural phase scale by elapsed wall ticks so the slower cadence
-  lowers the frame rate, not the animation speed. Bonsai modals are hot,
-  so beat sway keeps full rate there. `SessionMessage::Viz` drains are
+  lowers the frame rate, not the animation speed. Sidebar bar frames are
+  additionally gated on the /4 ambient boundary edge (clubhouse pattern),
+  so the post-input 2s hot window cannot raise their paint rate; the
+  settle snap reports immediately regardless. Bonsai modals are hot, so
+  beat sway keeps full rate there. `SessionMessage::Viz` drains are
   excluded from the generic changed check (like heartbeats): the viz gate
   reports visible change, so hidden-sidebar listeners pay no frames.
 - Pet strip: `PetState::tick() -> bool` (feedback expiry, roam end,
