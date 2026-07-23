@@ -27,12 +27,18 @@ use late_core::models::user::{
 // changes.
 const TIME_HEIGHT: u16 = 2;
 const RULE_HEIGHT: u16 = 1;
-const VISUALIZER_HEIGHT: u16 = 4;
-// Full music stage: volume rows (2) + three dock entries (title +
-// now-playing, 6) + labeled rule (1) + detail area (6) + keybind footer
-// (1). Constant for ALL active sources — chrome must not move between
-// states; `music_stage_chrome_rows_never_move` locks this in tests.
-const MUSIC_STAGE_HEIGHT: u16 = 16;
+// Visualizer strip pinned above the dock: a small always-on-top-of-audio
+// glance, not its own panel. `Visualizer::render_inline` adapts its idle
+// hint text to whatever height it's given, so this stays honest at 3 rows.
+const MUSIC_VIZ_HEIGHT: u16 = 3;
+// Dock + detail portion of the stage (unchanged by the visualizer merge):
+// volume rows (2) + three dock entries (title + now-playing, 6) + labeled
+// rule (1) + detail area (6) + keybind footer (1). Constant for ALL active
+// sources — chrome must not move between states;
+// `music_stage_chrome_rows_never_move` locks this in tests.
+const MUSIC_DOCK_HEIGHT: u16 = 16;
+// Full music stage: the visualizer strip on top of the dock + detail area.
+const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 // Detail area under the labeled rule: the active source's controls, padded
 // to exactly this many rows. Sized for radio (five station rows + the
 // Nightride attribution row).
@@ -206,15 +212,12 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         let body = inset(layout[i]);
         i += 1;
         match component {
-            RightSidebarComponent::Visualizer => {
-                // Visualizer: borderless inline render.
-                props.visualizer.render_inline(frame, body);
-            }
             RightSidebarComponent::Music => {
                 draw_music_stage(
                     frame,
                     body,
                     &MusicStageProps {
+                        visualizer: props.visualizer,
                         now_playing: props.now_playing,
                         paired_client: props.paired_client,
                         queue: props.queue_snapshot,
@@ -265,7 +268,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 /// (the tree renderer scales to its viewport).
 fn component_height(component: RightSidebarComponent) -> u16 {
     match component {
-        RightSidebarComponent::Visualizer => VISUALIZER_HEIGHT,
         RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
         RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
         RightSidebarComponent::Daily => DAILY_HEIGHT,
@@ -275,12 +277,11 @@ fn component_height(component: RightSidebarComponent) -> u16 {
 /// How eagerly a panel is dropped when the rail runs out of rows: higher
 /// drops first. Deliberately independent of display order — reordering the
 /// sidebar changes where panels sit, not which ones survive a short
-/// terminal. Ambience (visualizer, bonsai) goes first; the music stage is
-/// the last panel standing.
+/// terminal. Bonsai (ambience) goes first; the music stage, which now
+/// carries the visualizer strip too, is the last panel standing.
 fn shrink_priority(component: RightSidebarComponent) -> u8 {
     match component {
-        RightSidebarComponent::Visualizer => 4, // first to go
-        RightSidebarComponent::Bonsai => 3,
+        RightSidebarComponent::Bonsai => 3, // first to go
         RightSidebarComponent::Daily => 2,
         RightSidebarComponent::Music => 0, // last panel standing
     }
@@ -512,7 +513,6 @@ pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bo
 /// bodies free of title rows: the divider IS the title.
 fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
     match component {
-        RightSidebarComponent::Visualizer => "visualizer",
         RightSidebarComponent::Music => "music",
         RightSidebarComponent::Bonsai => "bonsai",
         RightSidebarComponent::Daily => "lobby",
@@ -549,6 +549,7 @@ fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
 /// Inputs for the music stage, bundled so the pure line builder is easy to
 /// drive from tests.
 struct MusicStageProps<'a> {
+    visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
     queue: &'a QueueSnapshot,
@@ -564,12 +565,14 @@ struct MusicStageProps<'a> {
     marquee_tick: usize,
 }
 
-/// Music stage: fixed dock + fixed detail area. Rows 0-1 volume, rows 2-7
-/// a three-source dock in order radio → youtube → icecast (title bar +
+/// Music stage: a small visualizer strip pinned on top, then the fixed dock
+/// + fixed detail area. Rows 0-2 the visualizer (borderless bars, or an
+/// idle hint while nothing is paired), rows 3-4 volume, rows 5-10 a
+/// three-source dock in order radio → youtube → icecast (title bar +
 /// now-playing line per source; radio leads because it is the default
-/// source for new users), row 8 a labeled rule naming the active source,
-/// rows 9-13 the active source's controls padded to a constant height,
-/// row 14 the keybind footer.
+/// source for new users), row 11 a labeled rule naming the active source,
+/// rows 12-16 the active source's controls padded to a constant height,
+/// row 17 the keybind footer.
 ///
 /// Two product rules (user requirements):
 /// - Every source ALWAYS shows its now-playing line, even when inactive.
@@ -589,13 +592,18 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) 
         return;
     }
 
-    let lines = music_stage_lines(area.width, props);
-    frame.render_widget(Paragraph::new(lines), area);
+    let [viz_area, dock_area] =
+        Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)])
+            .areas(area);
+    props.visualizer.render_inline(frame, viz_area);
+
+    let lines = music_stage_lines(dock_area.width, props);
+    frame.render_widget(Paragraph::new(lines), dock_area);
 }
 
 fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'static>> {
     let source = props.source;
-    let mut lines = Vec::with_capacity(MUSIC_STAGE_HEIGHT as usize);
+    let mut lines = Vec::with_capacity(MUSIC_DOCK_HEIGHT as usize);
     lines.push(volume_row_line(props.paired_client));
     lines.push(keybind_row_line(width, &[("m", "mute"), ("-=", "vol")]));
 
