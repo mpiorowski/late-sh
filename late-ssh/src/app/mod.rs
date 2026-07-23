@@ -43,7 +43,7 @@ mod smoke_test;
 pub mod state;
 #[cfg(test)]
 mod state_test;
-mod tick;
+pub mod tick;
 #[cfg(test)]
 mod tick_test;
 pub(crate) mod ultimates;

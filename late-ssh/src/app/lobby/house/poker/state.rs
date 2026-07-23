@@ -40,9 +40,9 @@ impl State {
         self.svc.room_id()
     }
 
-    /// Returns true when a snapshot landed. The action-clock countdown is
-    /// client-computed at draw and never re-pushed, so its 1Hz cadence is
-    /// paid by the caller via `has_action_deadline`.
+    /// Returns true when a snapshot landed. The action clock is covered by
+    /// the peek: the server republishes the snapshot every second while a
+    /// countdown runs (same shape as blackjack).
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
         if self.public_rx.has_changed().unwrap_or(false) {
@@ -58,11 +58,6 @@ impl State {
             changed = true;
         }
         changed
-    }
-
-    /// True while the table shows a counting-down action clock.
-    pub fn has_action_deadline(&self) -> bool {
-        self.public_snapshot.action_deadline.is_some()
     }
 
     pub fn public_snapshot(&self) -> &PokerPublicSnapshot {

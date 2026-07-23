@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-22 (World Cup screen removed entirely: the `app/worldcup` module, its FotMob poller/service, `Screen::WorldCup`, all wiring in input/render/tick/state, the kitty-flag-column detection it was the sole consumer of, and every doc/help/keybinding reference to it. Top-level tab cycle is now Clubhouse `0` through Directory `5`, six screens instead of seven. Render-cost phase-1 tightening: modals, chat snapshots, visualizer, pet strip, Artboard, and DailyMatch now report real change instead of blanket-dirtying the frame gate, see §2.6)
+- Last updated: 2026-07-23 (Render-cost phase 2: the fixed 66ms world tick is replaced by an adaptive deadline in both loops — `App::wake_hint()` returns 66ms hot / 266ms Clubhouse / 500ms idle floor, with a 2s post-input hot window; `marquee_tick` is now wall-clock-derived and edge checks use period-index compares, see §2.6. Bonsai passive growth removed entirely: growth comes from watering only, both classic and Dynamic)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -281,21 +281,31 @@ To maintain a buttery-smooth 15-60 FPS over SSH, the architecture strictly separ
 2. **The Initialization (`app/state.rs`)**
    Inside `App::new()`, these services are used to create the *UI States* (e.g., `ChatState` which owns the `news::State` and `notifications::State`). Each UI State stores its `user_id`, subscribes to service channels, and spawns a per-user background refresh task (aborted on `Drop`).
 3. **The Sync Loop (`app/tick.rs`)**
-   Every 66ms, `App::tick()` runs. It calls `tick()` on all UI states. This:
+   On each adaptive world tick (66ms hot to 500ms idle, see §2.6), `App::tick()` runs. It calls `tick()` on all UI states. This:
    - Drains the channels to instantly update local memory state (e.g., `Vec<Article>`). User-targeted events are filtered by `self.user_id`.
 4. **The Paint Job (`app/render.rs` -> `ui.rs`)**
    Immediately after the tick, `App::render()` runs. It passes the purely synchronous UI state directly to the draw functions. The UI just reads local memory and draws boxes. No `.await`, no freezing.
 5. **The User Action (`app/input.rs`)**
-   SSH keystrokes now first land in a per-session bounded queue (`INPUT_QUEUE_CAP = 256`, input dropped with a warning when full) owned by the render task (`late-ssh/src/ssh.rs`). Right before each render, the task drains queued bytes into `App::handle_input()`, then runs `tick()` / `render()`. That keeps the input handler off the app mutex entirely for ordinary keystrokes while preserving the same synchronous UI state model. When an action requires I/O (like hitting `Enter` to save), the input handler fires a fire-and-forget method on the Service. The Service spawns a Tokio task to do the DB/API work, pushes the result to the channel, and the UI catches it on the next 66ms tick.
+   SSH keystrokes now first land in a per-session bounded queue (`INPUT_QUEUE_CAP = 256`, input dropped with a warning when full) owned by the render task (`late-ssh/src/ssh.rs`). Right before each render, the task drains queued bytes into `App::handle_input()`, then runs `tick()` / `render()`. That keeps the input handler off the app mutex entirely for ordinary keystrokes while preserving the same synchronous UI state model. When an action requires I/O (like hitting `Enter` to save), the input handler fires a fire-and-forget method on the Service. The Service spawns a Tokio task to do the DB/API work, pushes the result to the channel, and the UI catches it on the next world tick (the post-input hot window keeps that at 66ms for 2s after any keystroke).
 
-### 2.6 Render loop timing (world tick + input-driven)
+### 2.6 Render loop timing (adaptive world tick + input-driven)
 
-Each SSH session spawns **one render task** (`late-ssh/src/ssh.rs`) with two independent trigger sources:
+Each SSH session spawns **one render task** (`late-ssh/src/ssh.rs`; web_tunnel.rs mirrors it deliberately — change both) with two independent trigger sources:
 
-- **World tick** — fires every `WORLD_TICK_INTERVAL` (66ms). Advances animations (`app.tick()`), renders, ships the frame. Ceiling cadence ≈ 15 FPS.
-- **Input-driven render** — fires within `MIN_RENDER_GAP` (15ms) of any keystroke or terminal resize. Renders *without* advancing world time, so typed characters echo at near-native latency instead of waiting up to 66ms for the next world tick.
+- **Adaptive world tick** — each render pass returns `App::wake_hint() -> Duration` (read under the app lock, after the draw) and the loop sleeps exactly that long unless input or a `RenderSignal` wake lands first. Three tiers (`app/tick.rs` consts): `HOT_TICK` 66ms while anything visible animates (splash, post-input 2s window, active ultimate effect, house tables, an open arcade game, pet, aquarium tray, bonsai modals, viz on a visible sidebar), `AMBIENT_TICK` 266ms on the Clubhouse, `IDLE_TICK` 500ms floor otherwise. Ticks at the floor only drain channels; an unprompted event (a chat message while idle) waits at most one floor interval. Advancing the world = `app.tick()`, render if dirty, ship the frame.
+- **Input-driven render** — fires within `MIN_RENDER_GAP` (15ms) of any keystroke or terminal resize. Renders *without* advancing world time, so typed characters echo at near-native latency. Door proxies push-wake the same path for remote output.
 
-**Dirty gate (render-cost phase 1).** `App::tick()` returns `changed: bool` accumulated from every drain and animation it runs (chat/tab/profile/daily peeks via `has_changed()`/`is_empty()`, compare-before-assign on presence and the sidebar clock, animation predicates for pet/aquarium/visualizer/marquee/screens, row-cache epoch compares at the end). `render_once` (ssh.rs and web_tunnel.rs) ORs that with the `RenderSignal` dirty flag and drained input; a clean pass skips `terminal.draw()` entirely — ratatui's diff state does not advance on a skip, so no forced repaint is needed on resume. The design rule is **prove-clean, not prove-dirty**: anything uncertain reports changed, since over-reporting degrades to pre-gate behavior while a wrong "clean" freezes UI. Idle sessions settle to ~1 frame/min (sidebar clock); marquees step once per `MARQUEE_STEP_TICKS` (~1s/column) and every marquee transition lands on a multiple of it so only those boundary ticks pay a frame. Metrics: `late_ssh_renders_total{reason=input|tick}` vs `late_ssh_renders_skipped_clean_total` show the skip ratio per node. The phase-1 tightening pass converted the coarse always-dirty spots to real signals: chat's fixed-cadence snapshot reports actual change from `drain_snapshot` (unread/rooms/polls/voice/reactions compares; the `model!` macro and chat-poll structs derive `PartialEq` for this), open modals are event-driven through their tick paths (settings/profile/hub-admin ticks return changed, audio's queue-snapshot peek covers the booth and sidebar stage; the lobby modal runs 1Hz for live occupancy, the ultimate modal 1Hz while a cooldown counts down, the profile modal stays hot only while its live aquarium shows fish), the visualizer only pays frames while the right sidebar or a bonsai modal is visible, the pet strip pays exactly on wander/blink/tail frame boundaries (`pet::ui::strip_frame_changed` against the `last_pet_strip_travel` slot recorded at draw), Artboard peeks its snapshot/event/archive channels, and DailyMatch runs 1Hz for its deadline clock. Coarse spots still left deliberately: Clubhouse (walkers animate; sub-rate is an open product question), HouseTable (the five game runtimes need per-game animating predicates), GreenDragon/Lateania (tavern chatter cadence), and the open image modal (its Sixel fetch is requested from inside render).
+Because ticks can be sparse, `marquee_tick` is derived from wall clock (elapsed/66ms) rather than incremented: phase consumers (marquee text, shimmer, blink) divide the counter and stay correct at any cadence, but **`is_multiple_of` on the counter is a bug pattern** — an edge must compare its period index against the previous tick's (`self.marquee_tick / N != prev / N`; tick() computes a shared `one_hz` edge this way).
+
+**Dirty gate (render-cost phase 1).** `App::tick()` returns `changed: bool` accumulated from every drain and animation it runs. `render_once` (ssh.rs and web_tunnel.rs) ORs that with the `RenderSignal` dirty flag and drained input; a clean pass skips `terminal.draw()` entirely — ratatui's diff state does not advance on a skip, so no forced repaint is needed on resume. Idle sessions settle to ~1 frame/min (sidebar clock). Metrics: `late_ssh_renders_total{reason=input|tick}` vs `late_ssh_renders_skipped_clean_total` show the skip ratio per node.
+
+**The dirty contract (rule of three).** Every domain state exposes `tick(&mut self) -> bool` answering one question: *did anything this session currently shows change?* Exactly three sources of `true`:
+
+1. **Channel-fed state reports its drain.** Peek before draining (`has_changed()` on watches, `!is_empty()` on mpsc/broadcast) or compare-before-assign; a landed drain = changed. A watch that is only `borrow()`ed at render must be marked seen (`borrow_and_update`) by whoever peeks it, or the peek latches dirty forever.
+2. **Animations report their frame boundary, only while visible.** The local clock is the source of change; wrap it in a boundary predicate (marquee step ticks, pet strip travel slots, viz settle epsilon), gated on the screen/panel actually showing it. Time-driven change that is *shared truth* (a server-side game loop: tron/ssnake/asterion, the blackjack dealer) does NOT belong here — it lives in the service as published snapshots, so consumers see it via rule 1 and it goes quiet when no round runs. Per-session decoration never goes through a channel.
+3. **Anything uncertain reports changed.** Prove-clean, not prove-dirty: over-reporting degrades to pre-gate behavior; a wrong "clean" freezes UI.
+
+A blanket `changed = true` or fixed cadence needs a written justification at its call site (current survivors, all in tick.rs: splash typing, pet roam overlay, lobby modal 1Hz occupancy, DailyMatch 1Hz deadline clock, clubhouse ~4fps ambience heartbeat). The full conversion history and per-domain details live in RENDER_COST.md.
 
 The select loop picks which branch to act on:
 
@@ -303,18 +313,18 @@ The select loop picks which branch to act on:
 flowchart TD
     INPUT["data() / window_change_request()<br/>(keystroke, resize)"] -->|"queue keystrokes or apply resize / set dirty=true"| SIGNAL
     SIGNAL["RenderSignal<br/>dirty: AtomicBool<br/>notify: tokio::Notify"] -->|"notify_one()<br/>(after mutex released)"| LOOP
-    WT["world_tick.tick()<br/>every 66ms"] --> LOOP
+    WT["sleep_until(world_deadline)<br/>66ms hot / 266ms clubhouse /<br/>500ms idle (App::wake_hint)"] --> LOOP
     LOOP{"biased select!"}
-    LOOP -->|"world tick fired"| ADVANCE["advance_world=true<br/>render"]
+    LOOP -->|"world deadline due"| ADVANCE["advance_world=true<br/>render"]
     LOOP -->|"input_pending &&<br/>gap elapsed"| RENDER["advance_world=false<br/>render"]
     LOOP -->|"notify && dirty"| ARM["input_pending=true<br/>loop"]
     LOOP -->|"notify && !dirty"| DROP["eat stale permit<br/>loop"]
-    ADVANCE --> CLEAR["clear dirty under mutex,<br/>app.tick() + app.render()"]
+    ADVANCE --> CLEAR["clear dirty under mutex,<br/>app.tick() + app.render(),<br/>world_deadline = now + wake_hint"]
     RENDER --> CLEAR
     CLEAR --> LOOP
 ```
 
-`biased` ordering ensures the world tick wins on ties so animations aren't starved under a keystroke flood. `next_render_action` is extracted as a standalone async fn so the decision logic is unit-testable without a full session.
+`biased` ordering ensures the world deadline wins on ties so animations aren't starved under a keystroke flood. `next_render_action` is extracted as a standalone async fn so the decision logic is unit-testable without a full session. An input render can pull the world deadline closer (the post-input hot window shrinks the hint) but never pushes it out; the budget-stall path re-arms the deadline at `HOT_TICK` so a past deadline cannot spin the loop.
 
 #### Timing example — typing burst
 
@@ -326,7 +336,7 @@ t=3+    select: sleep_until(0+15ms) armed, notify disabled
 t=8     keystroke → dirty=true (already), notify_one (permit stored, branch disabled)
 t=15    sleep_until fires → render covers BOTH keystrokes, dirty cleared
 t=15+   select: notify branch eats leftover permit → dirty=false → nothing
-t=66    world tick → render, animations advance
+t=66    world deadline due (hot: input opened the 2s window) → tick + render
 ```
 
 Two keystrokes → one render at t=15. No spurious trailing frame.
@@ -831,7 +841,7 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorite
 - **Game services publish Activity wins:** Arcade daily services and door games publish structured `ActivityEvent::game_won(...)` callouts; house tables publish sit-downs only (`ActivityKind::SatDown`, owner decision 2026-07-13). Arcade details live in `late-ssh/src/app/arcade/CONTEXT.md`.
 - **Bonsai death check runs on login:** `BonsaiService::ensure_tree()` checks `last_watered` against UTC today on every SSH session start. If 7+ days have passed, the tree is killed and a graveyard record is created. This means death is only detected when the user reconnects, not while offline.
 - **Bonsai daily care is UTC-based:** session startup ensures today's `bonsai_daily_care` row and applies unapplied penalties from prior care rows once. Missing water does not directly reduce growth, but 7+ dry days kills the tree. Missing the generated daily wrong-branch cuts costs 10 growth. The global `w` opens the care modal; watering now happens inside that modal.
-- **Bonsai passive growth is per-session:** The tick counter in `BonsaiState` grants 1 growth point every ~9000 ticks (~10 min at 15fps). If a user has multiple sessions, each grants growth independently. This is acceptable — it rewards being connected, not gaming the system.
+- **Bonsai growth comes from watering only:** passive time-based growth was removed (2026-07-23) from both classic bonsai and Dynamic Bonsai. `BonsaiState::tick()` only watches for in-session death; growth points come from daily watering (and its streak bonus), Dynamic Bonsai waves from watering and daily events.
 - **Chat username badge order:** Chat author labels render top-3 last-completed-UTC-month leaderboard award badges first as one bracketed group, then special allowlist badges (`mod`, `developer`, `artist` order), the bonsai stage glyph, equipped chat-shop badge, equipped flag, and finally the `/brb` moon when any active session for that user is away. Bonsai metadata loads each visible author's state and maps stages as Seed `·`, Sprout `⚘`, Sapling `🌱`, Young `🌲`, Mature `🌳`, Ancient `🌸`, Blossom `🌼`; Dead renders no glyph.
 - **Bonsai growth stages:** living stages use a simple 100-point ladder capped at 700 growth points: Seed 0-99, Sprout 100-199, Sapling 200-299, Young 300-399, Mature 400-499, Ancient 500-599, Blossom 600-700.
 - **Bonsai care modal owns pruning:** global `w` opens the care modal (`w care` is rendered on the Bonsai sidebar border). Inside the modal, `w` waters/replants, `p` hard-prunes the whole tree (-100 growth, rerolls seed, resets today's wrong-branch cuts), `hjkl`/arrows move a spatial pruning cursor, `x` cuts only when the cursor is on a generated wrong branch, `s` copies the ASCII snippet, and `?` opens the Bonsai help section. A wrong cut costs -10 growth immediately. Completing all daily wrong-branch cuts preserves the current shape; it no longer rerolls seed.

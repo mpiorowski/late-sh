@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC};
 use crate::app::activity::event::ActivityKind;
@@ -8,6 +8,19 @@ use crate::app::files::inline_image::InlineImageRenderSettings;
 use crate::app::pinstar::browser::BrowserActionResult;
 use crate::session::SessionMessage;
 use late_core::models::user::AudioSource;
+
+/// The hot world-tick cadence (the classic 15fps): animations that earn
+/// full rate run here.
+pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
+/// Clubhouse ambience cadence (~4fps).
+pub(crate) const AMBIENT_TICK: Duration = Duration::from_millis(266);
+/// Idle floor: nothing visible animates, ticks only drain service channels.
+/// Worst-case latency for an unprompted event (a chat message arriving
+/// while idle) is one floor interval; input and push wakes stay instant.
+pub(crate) const IDLE_TICK: Duration = Duration::from_millis(500);
+/// After any input, hold the hot cadence briefly so async responses to that
+/// input (menu DB loads, chat send echo) land at typing latency.
+const POST_INPUT_HOT_WINDOW: Duration = Duration::from_secs(2);
 
 impl App {
     /// Advance world time by one tick. Returns true when anything render-
@@ -27,7 +40,21 @@ impl App {
             changed = true;
         }
 
-        self.marquee_tick = self.marquee_tick.saturating_add(1);
+        // The counter is derived from wall time (one unit per 66ms) so
+        // animation phase stays correct however sparsely the adaptive loop
+        // ticks. Edge checks below compare period indexes against the
+        // previous tick's value instead of `is_multiple_of`, which would
+        // miss boundaries under sparse ticking.
+        let prev_marquee_tick = self.marquee_tick;
+        self.marquee_tick = (self.started_at.elapsed().as_millis() / 66) as usize;
+        // Shared second-boundary edge for every 1Hz consumer in this tick.
+        // None fires immediately so the first frames already have presence,
+        // directory, and clock state.
+        let one_hz = match self.last_one_hz_index {
+            None => true,
+            Some(prev) => self.marquee_tick / 15 != prev,
+        };
+        self.last_one_hz_index = Some(self.marquee_tick / 15);
 
         if self.show_splash {
             // The splash types one character per tick and self-expires.
@@ -55,7 +82,7 @@ impl App {
 
         self.sync_visible_chat_room();
         self.tick_clubhouse();
-        if self.screen == Screen::Clubhouse && self.marquee_tick.is_multiple_of(4) {
+        if self.screen == Screen::Clubhouse && self.marquee_tick / 4 != prev_marquee_tick / 4 {
             // Only cosmetic ambience animates on the tick counter (jukebox
             // EQ, emote arms, fire/candles/stars); walker positions are
             // input-driven and the dog step is wall-clock. A ~4fps
@@ -343,15 +370,11 @@ impl App {
         let house_changed = self.house.tick();
         if self.screen == crate::app::common::primitives::Screen::HouseTable {
             // The five runtimes report real change from their snapshot
-            // peeks (server loops go quiet between rounds); poker's
-            // draw-computed action clock pays a 1Hz cadence on top.
-            // Off-screen turn alerts ride the notify outbox.
+            // peeks: server loops go quiet between rounds, and every
+            // countdown (including poker's action clock) is republished
+            // server-side each second. Off-screen turn alerts ride the
+            // notify outbox.
             changed |= house_changed;
-            changed |= self
-                .house
-                .client()
-                .is_some_and(|c| c.has_draw_computed_clock())
-                && self.marquee_tick.is_multiple_of(15);
             self.sync_visible_chat_room();
             if let Some(chat_room_id) = self.house.chat_room_id()
                 && !self.house.chat_join_requested
@@ -746,9 +769,7 @@ impl App {
         // the same cadence: one Arc clone of the flair directory, resolved
         // into paintable styles (which is also what steps shimmer at 1 Hz)
         // and expired at read.
-        // Run once immediately (`marquee_tick == 1`) so the first frames of a
-        // session already have presence, directory, and clock state.
-        if self.marquee_tick.is_multiple_of(15) || self.marquee_tick == 1 {
+        if one_hz {
             let drunk_levels = self.clubhouse.drunk_levels();
             if self.drunk_levels != drunk_levels {
                 self.drunk_levels = drunk_levels;
@@ -885,14 +906,9 @@ impl App {
             }
         }
 
-        // Bonsai passive growth
+        // Bonsai growth comes from watering only; the tick just watches for
+        // death during a live session.
         changed |= self.bonsai_state.tick();
-        let bonsai_v2_active = self.bonsai_v2_activity_ticks_remaining > 0;
-        self.bonsai_v2_activity_ticks_remaining =
-            self.bonsai_v2_activity_ticks_remaining.saturating_sub(1);
-        if self.use_bonsai_v2() {
-            changed |= self.bonsai_v2_state.tick(bonsai_v2_active);
-        }
         // Pet: state edges (feedback expiry, roam end, day-rollover mood and
         // needs flips) always count; the wander/blink/tail animation only
         // pays frames on ticks where the drawn strip actually differs, and
@@ -951,17 +967,7 @@ impl App {
         let procedural = has_browser
             && (self.paired_browser_source == AudioSource::Youtube || browser_owns_icecast);
         self.visualizer.set_procedural_active(procedural);
-        let sidebar_visible = if self.show_settings {
-            crate::app::render::resolve_right_sidebar_enabled(
-                self.settings_modal_state.draft().right_sidebar_mode,
-                self.screen,
-            )
-        } else {
-            crate::app::render::resolve_right_sidebar_enabled(
-                self.profile_state.profile().right_sidebar_mode,
-                self.screen,
-            )
-        };
+        let sidebar_visible = self.right_sidebar_visible();
         // The visualizer state always advances so decay keeps settling, but
         // it only costs frames while a surface that draws it is visible: the
         // right sidebar (viz and music-stage panels) or a bonsai modal
@@ -978,7 +984,8 @@ impl App {
         // text overflows. The marquee moves at most once per
         // MARQUEE_STEP_TICKS and every transition lands on a multiple of it,
         // so only those boundary ticks need a frame.
-        if self.marquee_tick.is_multiple_of(crate::app::common::marquee::MARQUEE_STEP_TICKS)
+        if self.marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
+            != prev_marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
             && sidebar_visible
         {
             let selected_icecast_stream = self.selected_icecast_stream;
@@ -1038,7 +1045,7 @@ impl App {
         // fetch completion reports through poll_terminal_images above.
         self.chat
             .request_image_modal_terminal_image(self.terminal_image_protocol);
-        changed |= self.show_lobby_modal && self.marquee_tick.is_multiple_of(15);
+        changed |= self.show_lobby_modal && one_hz;
         let ultimate_cooldown_running = self.ultimate_state.has_cooldown_running();
         changed |= self.show_ultimate_modal
             && self.ultimate_cooldown_was_running
@@ -1048,7 +1055,7 @@ impl App {
 
         // Daily boards are event-driven (daily_tick, chat, input); the 1Hz
         // cadence keeps the move-deadline clock honest while on screen.
-        changed |= self.screen == Screen::DailyMatch && self.marquee_tick.is_multiple_of(15);
+        changed |= self.screen == Screen::DailyMatch && one_hz;
 
         // Outputs that only ship during a render: queued terminal commands,
         // a pending OSC 52 clipboard write, and desktop notifications.
@@ -1063,6 +1070,50 @@ impl App {
         changed |= self.screen != screen_before;
 
         changed
+    }
+
+    /// How long the render loop should sleep before the next world tick.
+    /// Three tiers, prove-clean's cadence twin: anything that might animate
+    /// soon returns the hot tick, since an over-eager wake costs a cheap
+    /// clean tick, never a frame. Input, resize, and push wakes
+    /// (RenderSignal) interrupt the sleep regardless.
+    pub fn wake_hint(&self) -> Duration {
+        let hot = self.show_splash
+            || self.last_input_at.elapsed() < POST_INPUT_HOT_WINDOW
+            || self.ultimate_state.has_active_effect()
+            || self.screen == Screen::HouseTable
+            || (self.screen == Screen::Arcade && self.is_playing_game)
+            || self.pet_state.roaming_active()
+            || self.last_pet_strip_travel.get().is_some()
+            || (self.show_aquarium_tray && self.shop_state.entitlements().has_aquarium())
+            || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
+            || self.show_bonsai_modal
+            || self.show_bonsai_v2_modal
+            || (self.visualizer.animating() && self.right_sidebar_visible());
+        if hot {
+            return HOT_TICK;
+        }
+        if self.screen == Screen::Clubhouse {
+            return AMBIENT_TICK;
+        }
+        IDLE_TICK
+    }
+
+    /// Whether the right sidebar draws this frame (the settings draft
+    /// previews the toggle live). Shared by the viz gate in tick() and the
+    /// wake cadence.
+    fn right_sidebar_visible(&self) -> bool {
+        if self.show_settings {
+            crate::app::render::resolve_right_sidebar_enabled(
+                self.settings_modal_state.draft().right_sidebar_mode,
+                self.screen,
+            )
+        } else {
+            crate::app::render::resolve_right_sidebar_enabled(
+                self.profile_state.profile().right_sidebar_mode,
+                self.screen,
+            )
+        }
     }
 
     fn push_viz_frame(&mut self, frame: late_core::audio::VizFrame) {

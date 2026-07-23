@@ -115,6 +115,13 @@ impl Visualizer {
         self.procedural_active = active;
     }
 
+    /// True while a tick could visibly move the bars: real frames are still
+    /// decaying toward settle, or the procedural wave is running. Drives the
+    /// render loop's wake cadence.
+    pub fn animating(&self) -> bool {
+        self.has_viz || self.procedural_active
+    }
+
     /// Returns true while the procedural wave is animating.
     pub fn tick_procedural(&mut self) -> bool {
         if !self.procedural_active {

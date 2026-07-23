@@ -7,10 +7,13 @@ fn marquee_returns_text_that_fits_unchanged() {
 
 #[test]
 fn marquee_holds_at_start_then_scrolls() {
-    // 8 chars in a 5-col window: travel 3, hold 45, step 15.
-    assert_eq!(marquee_text("abcdefgh", 5, 0), "abcde");
-    assert_eq!(marquee_text("abcdefgh", 5, 44), "abcde");
-    assert_eq!(marquee_text("abcdefgh", 5, 60), "bcdef");
+    // 12 chars in a 5-col window: travel 7, hold 45, step 15, 3 cols/step.
+    assert_eq!(marquee_text("abcdefghijkl", 5, 0), "abcde");
+    assert_eq!(marquee_text("abcdefghijkl", 5, 44), "abcde");
+    assert_eq!(marquee_text("abcdefghijkl", 5, 60), "defgh");
+    assert_eq!(marquee_text("abcdefghijkl", 5, 75), "ghijk");
+    // Offset clamps at travel, so the last step shows the tail exactly.
+    assert_eq!(marquee_text("abcdefghijkl", 5, 90), "hijkl");
 }
 
 #[test]

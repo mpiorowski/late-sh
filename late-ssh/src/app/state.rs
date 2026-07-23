@@ -86,8 +86,6 @@ pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
 pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 9;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
-const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
-
 /// Bounds for the aquarium simulation. The tray renders inside the chat
 /// column, so mirror the default Home layout: frame borders (2) plus the
 /// room rail and right sidebar (24 each).
@@ -310,6 +308,18 @@ pub struct App {
     /// Free-running frame counter (advances every world tick) used to animate
     /// the bumped-room marquee in the room rail.
     pub(crate) marquee_tick: usize,
+    /// Wall-clock origin for `marquee_tick`: the counter is derived as
+    /// elapsed/66ms so animation phase stays correct however sparsely the
+    /// adaptive loop ticks.
+    pub(crate) started_at: Instant,
+    /// Set on every handle_input byte; wake_hint holds the hot cadence for
+    /// a short window after input so request -> response interactions
+    /// (menu loads, chat send echo) land at typing latency.
+    pub(crate) last_input_at: Instant,
+    /// Second-boundary edge state for the shared 1Hz block in tick():
+    /// None = never fired (fire immediately so first frames have presence,
+    /// directory, and clock state).
+    pub(crate) last_one_hz_index: Option<usize>,
     pub(crate) splash_hint: String,
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
@@ -461,7 +471,6 @@ pub struct App {
     pub(crate) bonsai_v2_state: crate::app::bonsai_v2::state::BonsaiV2State,
     /// Recent input grants Dynamic Bonsai passive-growth credit for a short
     /// active window. Idle open sessions should not grow the tree.
-    pub(crate) bonsai_v2_activity_ticks_remaining: usize,
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
@@ -997,6 +1006,9 @@ impl App {
             show_splash: true,
             splash_ticks: 0,
             marquee_tick: 0,
+            started_at: Instant::now(),
+            last_input_at: Instant::now(),
+            last_one_hz_index: None,
             splash_hint,
             show_quit_confirm: false,
             show_help: false,
@@ -1117,7 +1129,6 @@ impl App {
             bonsai_state,
             bonsai_care_state,
             bonsai_v2_state,
-            bonsai_v2_activity_ticks_remaining: 0,
             pet_state,
             quest_state,
             shop_state,
@@ -1805,7 +1816,7 @@ impl App {
 
     pub fn handle_input(&mut self, data: &[u8]) {
         if !data.is_empty() {
-            self.bonsai_v2_activity_ticks_remaining = BONSAI_V2_ACTIVITY_WINDOW_TICKS;
+            self.last_input_at = Instant::now();
         }
         // While the proxied rebels game is running, every byte (keys + mouse)
         // goes straight to the remote; late.sh parses nothing. Exit is by
@@ -1900,15 +1911,14 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
     }
 
-    /// Advance the clubhouse animation clock every tick and, while the
-    /// screen is up, sync the shared lobby with the active-users map about
-    /// once a second and pull a fresh crowd snapshot every tick. Bots stay
-    /// out of the seat pool; the two staff bots (@bartender, @graybeard)
-    /// only toggle their fixed spots.
+    /// Sync the clubhouse animation clock to the wall-clock world tick and,
+    /// while the screen is up, sync the shared lobby with the active-users
+    /// map about once a second and pull a fresh crowd snapshot every tick.
+    /// Bots stay out of the seat pool; the two staff bots (@bartender,
+    /// @graybeard) only toggle their fixed spots.
     pub(crate) fn tick_clubhouse(&mut self) {
-        let on_screen = self.screen == Screen::Clubhouse;
-        self.clubhouse.tick(on_screen);
-        if !on_screen {
+        self.clubhouse.tick(self.marquee_tick as u64);
+        if self.screen != Screen::Clubhouse {
             return;
         }
 

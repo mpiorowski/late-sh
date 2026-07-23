@@ -121,7 +121,9 @@ impl UltimateState {
     }
 
     /// True while any spell still has cooldown time on the clock. The
-    /// ultimate modal's countdown label only needs frames while this holds.
+    /// ultimate modal's minute-granularity label rides the per-minute
+    /// global frame; tick edge-detects this flipping false to render the
+    /// ready state.
     pub(crate) fn has_cooldown_running(&self) -> bool {
         let now = Instant::now();
         self.cooldown_ready_at

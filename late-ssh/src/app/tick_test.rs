@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 use crate::app::state::App;
+use crate::app::tick::{HOT_TICK, IDLE_TICK};
 use crate::test_helpers::chat_compose_app;
 
 /// Mirror the render loop's frame path: a changed tick renders and drains
@@ -86,6 +87,61 @@ async fn idle_ticks_settle_clean_and_chat_send_marks_changed() {
         sleep(Duration::from_millis(5)).await;
     }
     assert!(woke, "chat send never produced a changed tick");
+
+    settle_clean(&mut app, 30).await;
+}
+
+/// The adaptive loop's cadence contract: a settled idle session on a
+/// static screen asks for the idle floor, and fresh input snaps it back to
+/// the hot tick (the post-input window that keeps request -> response
+/// interactions at typing latency).
+#[tokio::test]
+async fn wake_hint_idles_when_settled_and_heats_on_input() {
+    let (_test_db, mut app) = chat_compose_app("wake-hint").await;
+
+    settle_clean(&mut app, 30).await;
+
+    // Age the app past the post-input hot window.
+    app.last_input_at = Instant::now() - Duration::from_secs(10);
+    assert_eq!(app.wake_hint(), IDLE_TICK, "settled idle session");
+
+    app.handle_input(b"j");
+    assert_eq!(app.wake_hint(), HOT_TICK, "input opens the hot window");
+}
+
+/// The ultimate modal's cooldown label is minute-granularity and rides the
+/// per-minute global frame, so an open modal with a running cooldown
+/// settles clean (no 1Hz cadence), and the running -> ready flip pays
+/// exactly one one-shot frame.
+#[tokio::test]
+async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
+    let (_test_db, mut app) = chat_compose_app("tick-gate-ultimate").await;
+
+    settle_clean(&mut app, 30).await;
+
+    app.ultimate_state.set_cooldown(
+        crate::app::ultimates::UltimateKind::Wonderland.id(),
+        Duration::from_secs(600),
+    );
+    app.show_ultimate_modal = true;
+    drain_frame(&mut app);
+    settle_clean(&mut app, 30).await;
+
+    app.ultimate_state.set_cooldown(
+        crate::app::ultimates::UltimateKind::Wonderland.id(),
+        Duration::from_millis(50),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut woke = false;
+    while Instant::now() < deadline {
+        if app.tick() {
+            woke = true;
+            drain_frame(&mut app);
+            break;
+        }
+        sleep(Duration::from_millis(5)).await;
+    }
+    assert!(woke, "cooldown expiry never produced a changed tick");
 
     settle_clean(&mut app, 30).await;
 }

@@ -12,9 +12,6 @@ use super::{
 pub(crate) const STAGE_GROWTH_POINTS: i32 = 100;
 pub(crate) const WRONG_CUT_GROWTH_LOSS: i32 = 10;
 
-/// How many ticks between passive growth grants (1 point per ~10 minutes at 15fps)
-const GROWTH_TICK_INTERVAL: usize = 15 * 60 * 10; // 15fps * 600s = 9000 ticks
-
 pub struct BonsaiState {
     pub user_id: Uuid,
     pub svc: BonsaiService,
@@ -26,9 +23,6 @@ pub struct BonsaiState {
     pub is_alive: bool,
     pub age_days: i64,
     pub created_date: NaiveDate,
-
-    // Tick counter for passive growth
-    ticks_since_growth: usize,
 
     // Whether water was pressed this session (for UI feedback)
     pub watered_this_session: bool,
@@ -49,13 +43,13 @@ impl BonsaiState {
             is_alive: tree.is_alive,
             age_days,
             created_date,
-            ticks_since_growth: 0,
             watered_this_session: false,
         }
     }
 
-    /// Returns true when the tree visibly changed (death or a growth grant);
-    /// the passive tick counter alone is not render-visible.
+    /// Returns true when the tree visibly changed (death during a live
+    /// session). Growth comes from watering only; there is no passive
+    /// time-based growth.
     pub fn tick(&mut self) -> bool {
         if !self.is_alive {
             return false;
@@ -67,15 +61,6 @@ impl BonsaiState {
             self.is_alive = false;
             // Fire-and-forget: the next login will also detect this and record the graveyard entry
             return true;
-        }
-
-        self.ticks_since_growth += 1;
-        if self.ticks_since_growth >= GROWTH_TICK_INTERVAL {
-            self.ticks_since_growth = 0;
-            if self.add_growth_locally(1) > 0 {
-                self.svc.add_growth_task(self.user_id, 1);
-                return true;
-            }
         }
         false
     }

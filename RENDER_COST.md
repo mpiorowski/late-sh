@@ -21,8 +21,9 @@ between LLM sessions: read it fully before touching the render gate.
   forever (this is why artboard's archive view skips the snapshot peek).
 - Product decision: the only animations worth full rate are cats (pet), fish
   (aquarium), music (visualizer), bonsai. Everything else slow/static.
-  Marquee: 1 column/sec (`MARQUEE_STEP_TICKS = 15`, hold 45); every marquee
-  transition lands on a multiple of the step (tested).
+  Marquee: 3 columns/sec in 1s steps (`MARQUEE_STEP_TICKS = 15`,
+  `MARQUEE_STEP_COLUMNS = 3`, hold 45), so speed costs no extra frames;
+  every marquee transition lands on a multiple of the step (tested).
 - Metrics: `late_ssh_renders_total{reason=input|tick}` vs
   `late_ssh_renders_skipped_clean_total` (metrics.rs, `RenderReason` closed
   enum) observe the skip ratio in prod; they do not gate the work.
@@ -96,99 +97,109 @@ CONTEXT.md §2.6 documents the gate.
 - World Cup screen removed entirely (separate concurrent work), so its
   tightening item is moot.
 
-## PR2 — still open: domain-by-domain sweep
+### PR2 — domain sweep (2026-07-23, complete)
 
-No Grafana gating (user decision): work through the remaining domains one
-at a time, tightening each to real change signals. Per domain: read its
-CONTEXT.md, find every path that can dirty the frame, convert coarse spots,
-add the settle-style test, tick the box here.
+The dirty contract ("rule of three") is codified in CONTEXT.md §2.6;
+every domain state now exposes `tick() -> bool` under it.
 
-Scouted 2026-07-22 (5 read-only agents); findings below are the plan.
+- Lateania + Green Dragon: shared blanket split; both `State::tick() ->
+  bool`. Lateania reports its `MudSnapshot` peek plus join/reset
+  transitions; Green Dragon reports while any one-shot load rx is in
+  flight (`load_pending` OR over the 16 Option receivers + initial
+  character load). Both drain off-screen but only dirty on-screen.
+- House tables: all five game states return their watch-peek result
+  (`HouseTableClient::tick() -> bool`); blackjack also reports event
+  drains, asterion its FLASH_TTL expiry. Poker's action clock is now
+  server-republished each second (`schedule_action_timeout` wakes at 1s
+  steps, same shape as blackjack), so the watch peek covers every
+  countdown and no client-side clock cadence exists. Server loops going
+  quiet between rounds means an idle table settles clean.
+- Clubhouse: ambience heartbeat `marquee_tick % 4` (~4fps) while on
+  screen; walker positions are input-driven, dog step wall-clock, so
+  only cosmetic loops (jukebox EQ t/2 fastest) slowed. The clubhouse
+  `anim_tick` is synced to `marquee_tick` (wall clock), not incremented
+  per call: a per-call counter tied animation speed to the adaptive
+  cadence (walking held the hot window and sped the room up 4x).
+- Traffic: `tick() -> bool`, false while paused/non-playing (was the one
+  arcade holdout forcing frames while paused).
+- Heartbeat: a `SessionMessage::Heartbeat`-only drain no longer counts
+  as changed.
+- Ultimate modal: per-second countdown REMOVED (product decision):
+  `format_cooldown` is minute-granularity ("<1m" floor) riding the
+  per-minute global frame; the running -> ready flip pays one one-shot
+  frame via `ultimate_cooldown_was_running` edge detect. No 1Hz.
+- Chat image modal: Sixel fetch moved from render.rs into tick
+  (`request_image_modal_terminal_image` keys off the capacity recorded
+  by the input-forced draw that opened/resized the modal); the blanket
+  `changed |= image_modal.is_some()` is gone, completions report via
+  `poll_terminal_images`. NOTE for Phase 2: after the open frame records
+  capacity, the fetch fires on the NEXT tick; the event loop must
+  schedule one wake after a draw that records fresh modal capacity.
+- Audit verdicts kept: proxy doors (rebels/nethack/dcss/usurper/
+  dopewars) dirty solely via pending_terminal_commands (correct). The
+  now_playing/radio_meta peek (tick.rs) is safe only because render
+  unconditionally marks both seen (render.rs:374-384); keep pairing.
+- Tests: settle tests unchanged and green; new
+  `open_ultimate_modal_settles_clean_then_fires_once_on_ready`
+  (tick_test.rs), traffic pause gate (traffic/state_test.rs),
+  minute-granularity label pin (ultimates_test.rs).
 
-- [ ] Clubhouse (blanket at tick.rs:53-56): DECIDED, sub-rate it. Walker
-      positions are input-driven, dog step already wall-clock (600ms);
-      only cosmetic ambience loops on anim_tick (jukebox EQ t/2 fastest,
-      emote arms/arcade/neon t/4, fire/candles/stars t/6-t/10). Gate:
-      `anim_tick % 4 == 0` OR discrete signals (input handled, door
-      events, new bubble/banner lines, roster diff at ROSTER_REFRESH_TICKS).
-- [ ] House tables (blanket at tick.rs:336-339): all five runtimes already
-      peek watch channels with `has_changed()` in their state.rs tick();
-      server loops go quiet when idle (tron/ssnake self-terminate off
-      Running, asterion gates on hero_count>0, blackjack republishes 1s
-      countdowns + 900ms dealer sweep steps). Convert to per-game changed
-      = watch peek, plus TWO local additions: poker 1Hz while
-      `action_deadline.is_some()` (clock computed at draw, never
-      re-pushed; copy the tick.rs ultimate-modal 1Hz pattern) and
-      asterion FLASH_TTL (1500ms) expiry poll.
-- [ ] Lateania (shared blanket at tick.rs:358-361): fully snapshot-driven.
-      One `watch::Receiver<MudSnapshot>`; server publishes only on
-      mark_world_dirty, no client-side animation. `State::tick()`
-      (lateania/state.rs:122) already does has_changed/borrow_and_update,
-      just discards it: return bool (snapshot landed | join_pending
-      transition | reset_elsewhere).
-- [ ] Green Dragon (same shared blanket): NO chatter animation exists;
-      that suspicion was inherited from Lateania's comment, not verified.
-      All tick_* fns are one-shot watch drains created by menu opens;
-      only timer is a 4-min presence save (renders nothing). Return bool
-      from `State::tick()` = any drain landed.
-- [ ] Traffic arcade game: the one arcade holdout. tick.rs:305-309 forces
-      changed=true even while paused; `traffic/state.rs:468 tick()`
-      returns (). Convert to `-> bool` like tetris/snake.
-- [ ] Heartbeat nit: tick.rs:47-49 counts SessionMessage::Heartbeat
-      (no-op) as a change; exclude it from the emptiness check.
-- [ ] Chat image modal (blanket at tick.rs:1020, justified for now): Sixel
-      fetch runs inside render (render.rs:390) and needs
-      `image_modal_capacity` recorded by the PREVIOUS draw
-      (chat/ui.rs:1712 set_modal_capacity -> render.rs:1054 feedback ->
-      chat/state.rs:3009 consumer). Restructure: compute popup dims from
-      layout ahead of draw, move fetch into chat.tick(); only then
-      un-coarsen. The one substantial remaining task.
+## Phase 2 — adaptive world tick (2026-07-23, shipped)
 
-Audit: everything else non-excluded is already real signals or documented
-fixed cadences (lobby modal/ultimate/DailyMatch 1Hz, pet roam full-rate
-by design). Proxy doors (rebels/nethack/dcss/usurper/dopewars) dirty
-solely via pending_terminal_commands: correct, leave alone. The
-now_playing/radio_meta peek (tick.rs:992) is safe only because render
-unconditionally marks both seen (render.rs:374-384); keep that pairing.
+The fixed 66ms interval is gone from both loops. Each render pass returns
+`App::wake_hint() -> Duration` (computed under the app lock, after the
+draw, so it sees draw-recorded slots) and the loop sleeps exactly that
+long unless input or a RenderSignal wake lands first. Three tiers:
 
-## Phase 2 — event-driven loop (kill the 66ms tick), own PR
+- HOT_TICK 66ms: splash, post-input window (2s after any input, so menu
+  loads and chat send echo keep typing latency), active ultimate effect,
+  HouseTable screen, Arcade with a game open, pet roaming or strip drawn,
+  aquarium tray visible, profile-modal live reef, bonsai modals, viz
+  animating while the sidebar shows it.
+- AMBIENT_TICK 266ms: Clubhouse screen (matches its ~4fps ambience gate).
+- IDLE_TICK 500ms floor: everything else. Ticks only drain channels;
+  worst-case latency for an unprompted event (chat message while idle) is
+  one floor interval. Input/resize/door-proxy wakes remain instant.
 
-Loop shape: `select! { input, RenderSignal wake, per-session channels,
-sleep_until(next deadline) }` -> drain -> advance state by ELAPSED WALL TIME
--> render if dirty, coalesced to 100ms min-gap, defer-not-drop -> recompute
-deadline.
-- `App::next_frame_at() -> Option<Instant>`: min over VISIBLE deadlines:
-  marquee next boundary while scrolling (1s), shimmer 1s (only when flair
-  present), pet blink/wander boundaries, clock next-minute, splash,
-  ultimates expiry, aquarium 220ms while tray visible, viz while
-  has_viz/procedural, banner expiry. Static screens -> None -> 0fps idle.
-- Tick counters -> wall-clock: marquee_tick consumers (marquee_text,
-  shimmer_phase, splash_ticks, pet animation_ticks, bonsai
-  GROWTH_TICK_INTERVAL 9000 ticks ~= 10min, bonsai_v2
-  PASSIVE_GROWTH_ACTIVE_TICK_INTERVAL, blink tick%64). Keep per-session
-  bonsai growth semantics (CONTEXT §8.4).
-- Push wakes already exist: input, resize, all five door proxies call
-  `RenderSignal::wake()`. Chat has per-session targeted mpsc. Remaining
-  services need forwarder arms or ride deadlines.
-- The per-subsystem changed bools from PR1/PR2 are the dirty inputs; reuse
-  as-is.
-- Keep: OutputBudget guard, MIN_RENDER_GAP throttle, biased-equivalent
-  ordering (input flood must not starve deadline renders),
-  `HouseState::notify_turn_edges` off-screen behavior (runs every tick
-  today deliberately).
-- Rewrite ssh_internal_test.rs loop tests (stale_permit_does_not_arm_throttle
-  etc.) for the new select shape; keep the dirty/Notify two-primitive
-  invariant in CONTEXT §2.6; update §2.5/§2.6 diagrams; change ssh.rs AND
-  web_tunnel.rs.
-- Load governor: global watch<Duration> min-gap raised when node CPU high.
+Enablers shipped with it:
+- `marquee_tick` is derived from wall clock (elapsed/66ms), so phase
+  consumers (marquee_text, shimmer_phase, blink) stay correct under
+  sparse ticks; every `is_multiple_of` EDGE check became a
+  period-index-vs-previous-tick compare (shared `one_hz` edge in tick(),
+  clubhouse /4, marquee step). `is_multiple_of` on the tick counter is
+  now a bug pattern: it misses boundaries under sparse ticking.
+- Bonsai passive growth REMOVED entirely (product decision): classic
+  bonsai grows from watering only (tick keeps only the death check),
+  bonsai_v2 lost GrowthCause::Passive + the activity-window machinery.
+  This deleted the only wall-time accumulators that adaptive cadence
+  would have broken.
+- Budget-stall loop re-polls at HOT_TICK (a past deadline would spin);
+  dropped-frame repaint retry pinned to HOT_TICK.
+- Kept: OutputBudget guard, MIN_RENDER_GAP throttle, biased ordering
+  (world deadline wins ties), dirty/Notify two-primitive invariant,
+  `notify_turn_edges` running every tick (now at the session's cadence).
+- ssh_internal_test loop tests rewritten for the deadline signature;
+  `wake_hint_idles_when_settled_and_heats_on_input` pins the tier
+  contract.
 
-Expected: idle 0-1 fps worst case; mc/session from ~41 toward 5-15; ceiling
-~170 -> 400+.
+Result: idle sessions = 2 cheap clean ticks/sec, ~1 render/min. Renders
+were already gated by PR1/PR2; phase 2 removes the idle wakeup churn.
+
+### Phase 2 follow-ups (open, all optional tightening)
+
+- [ ] HouseTable hot tier is coarse (screen == HouseTable). Per-game
+      "round running" predicates (tron/ssnake phase, asterion hero_count,
+      blackjack phase, poker deadline) would let a quiet table idle.
+- [ ] Artboard screen rides the 500ms floor; remote strokes lag up to
+      0.5s. Bump to AMBIENT while on-screen if it feels laggy.
+- [ ] Push wakes for chat's targeted mpsc would cut the ≤500ms idle chat
+      latency to instant; needs the sender side to hold the RenderSignal.
+- [ ] Load governor (raise the floor when node CPU is high) not built.
 
 ## Working rules
 
 - No commits; user commits constantly (vanishing diff = they committed).
 - Another LLM may be editing this repo concurrently. If an unrelated file
   breaks the build, wait and retry, don't fix it.
-- Order: finish the PR2 domain sweep -> Phase 2 as its own PR. No Grafana
-  gating between steps.
+- Order: PR2 sweep is done. Next: Phase 2 as its own PR; sanity-check the
+  prod skip-ratio metrics after PR2 deploys before starting it.

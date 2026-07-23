@@ -47,19 +47,6 @@ impl HouseTableClient {
         }
     }
 
-    /// True while the table shows a client-computed counting-down clock
-    /// that the server never re-pushes; the caller pays it at 1Hz. Only
-    /// poker has one: blackjack's countdowns are server-republished each
-    /// second, the other three have no turn concept.
-    pub fn has_draw_computed_clock(&self) -> bool {
-        match self {
-            Self::Poker(state) => state.has_action_deadline(),
-            Self::Blackjack(_) => false,
-            Self::Asterion(_) => false,
-            Self::Tron(_) => false,
-            Self::Ssnake(_) => false,
-        }
-    }
 
     pub fn touch_activity(&self) {
         match self {
