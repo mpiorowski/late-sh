@@ -96,6 +96,11 @@ impl VoiceRuntimeState {
         }
     }
 
+    // Keep one async API across platforms even though only supported targets await room shutdown.
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "windows")),
+        allow(clippy::unused_async)
+    )]
     pub(super) async fn leave(&mut self) {
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         if let Some(media) = self.media.take() {
