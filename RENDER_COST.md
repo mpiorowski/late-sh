@@ -20,14 +20,14 @@ between LLM sessions: read it fully before touching the render gate.
   (`borrow_and_update`) by whoever peeks them, or the peek latches dirty
   forever (this is why artboard's archive view skips the snapshot peek).
 - Product decision (revised 2026-07-23): nothing paints at full rate.
-  The old FFT bar visualizer is replaced by a synthetic ambient wave
-  (`viz::render_wave`) that scrolls whenever the sidebar is visible; it,
+  The old FFT bar visualizer is replaced by a synthetic ambient equalizer
+  (`viz::render_eq`) that dances whenever the sidebar is visible; it,
   cats, bonsai sway, and clubhouse ambience all paint on the shared
   half-rate edge (`anim_half`, ~7.5fps); fish step on the quarter edge
   (`anim_quarter`, ~3.8fps); everything else is slow/static. Corollary: a
   sidebar-visible session never settles fully clean and never idles below
   ANIM_HALF_TICK; that steady ~37 draws/5s is the accepted price of the
-  always-on wave (knob if it reads expensive: move the wave to the
+  always-on eq (knob if it reads expensive: move the eq to the
   quarter edge, do not reintroduce audio-state gating).
   Marquee: 3 columns/sec in 1s steps (`MARQUEE_STEP_TICKS = 15`,
   `MARQUEE_STEP_COLUMNS = 3`, hold 45), so speed costs no extra frames;
@@ -81,13 +81,14 @@ CONTEXT.md §2.6 documents the gate.
   `ChatState::tick` uses it instead of the watch peek. Enabler: `model!`
   macro + chat-poll structs in late-core derive `PartialEq`.
   Test: `identical_snapshot_reapply_reports_clean` (state_internal_test.rs).
-- Visualizer replaced by the ambient wave (2026-07-23): the FFT bars, the
-  decay/procedural state machine, and the short-lived quantized paint
-  gate are all gone. `viz::render_wave(frame, area, wall_tick)` is a
-  stateless hand-drawn box-glyph wave tile rotated by `marquee_tick`
-  (offset = `wall_tick / 2 % WAVE_PERIOD_COLS`, one column per anim_half
-  edge; braille plotting was tried first and looked like scattered dots,
-  box-drawing matches the panel borders), so
+- Visualizer replaced by the ambient equalizer (2026-07-23): the FFT
+  bars, the decay/procedural state machine, and the short-lived quantized
+  paint gate are all gone. `viz::render_eq(frame, area, wall_tick, muted)`
+  is a stateless synthesized spectrum: per-bar sine stacks evaluated at
+  the paid frame (`wall_tick / 2`), sub-cell ▁..█ bars with trailing-max
+  peak caps, one step per anim_half edge (a scrolling box-glyph wave tile
+  was the interim look; braille plotting before that read as scattered
+  dots), so
   tick() has nothing to advance: `changed |= anim_half` while the sidebar
   or a bonsai modal is visible IS the whole gate. Bonsai sway (v1 canopy
   shift, v2 `apply_sway` line shift) runs off the same wall clock, small

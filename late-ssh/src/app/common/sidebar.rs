@@ -13,7 +13,7 @@ use crate::app::audio::{
     client_state::ClientAudioState,
     stations,
     svc::{QueueItemView, QueueSnapshot},
-    viz::render_wave,
+    viz::render_eq,
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai_v2::state::BonsaiV2State;
@@ -27,9 +27,10 @@ use late_core::models::user::{
 // changes.
 const TIME_HEIGHT: u16 = 2;
 const RULE_HEIGHT: u16 = 1;
-// Ambient wave strip pinned above the dock: a small always-on decorative
-// scroll (`viz::render_wave`), not its own panel and not tied to audio
-// state. The wave scales to whatever height it's given; the stage pins 3.
+// Ambient equalizer strip pinned above the dock: a small always-on
+// decorative band (`viz::render_eq`) synthesized from the wall tick, not
+// audio. Its one audio nod is the muted flatline. The band scales to
+// whatever height it's given; the stage pins 3.
 const MUSIC_VIZ_HEIGHT: u16 = 3;
 // Dock + detail portion of the stage (unchanged by the visualizer merge):
 // volume rows (2) + three dock entries (title + now-playing, 6) + labeled
@@ -275,7 +276,7 @@ fn component_height(component: RightSidebarComponent) -> u16 {
 /// drops first. Deliberately independent of display order — reordering the
 /// sidebar changes where panels sit, not which ones survive a short
 /// terminal. Bonsai (ambience) goes first; the music stage, which now
-/// carries the wave strip too, is the last panel standing.
+/// carries the eq strip too, is the last panel standing.
 fn shrink_priority(component: RightSidebarComponent) -> u8 {
     match component {
         RightSidebarComponent::Bonsai => 3, // first to go
@@ -557,14 +558,14 @@ struct MusicStageProps<'a> {
     marquee_tick: usize,
 }
 
-/// Music stage: a small ambient wave strip pinned on top, then the fixed
-/// dock and fixed detail area. Rows 0-2 the wave (borderless, always
-/// scrolling, no audio state), rows 3-4 volume, rows 5-10 a
+/// Music stage: a small ambient equalizer strip pinned on top, then the
+/// fixed dock and fixed detail area. Rows 0-2 the eq band (borderless,
+/// always dancing, no audio data), rows 3-4 volume, rows 5-10 a
 /// three-source dock in order radio → youtube → icecast (title bar +
 /// now-playing line per source; radio leads because it is the default
 /// source for new users), row 11 a labeled rule naming the active source,
-/// rows 12-16 the active source's controls padded to a constant height,
-/// row 17 the keybind footer.
+/// rows 12-17 the active source's controls padded to a constant height,
+/// row 18 the keybind footer.
 ///
 /// Two product rules (user requirements):
 /// - Every source ALWAYS shows its now-playing line, even when inactive.
@@ -587,7 +588,7 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) 
     let [viz_area, dock_area] =
         Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
     let muted = props.paired_client.is_some_and(|client| client.muted);
-    render_wave(frame, viz_area, props.marquee_tick, muted);
+    render_eq(frame, viz_area, props.marquee_tick, muted);
 
     let lines = music_stage_lines(dock_area.width, props);
     frame.render_widget(Paragraph::new(lines), dock_area);

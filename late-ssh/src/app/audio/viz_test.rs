@@ -1,18 +1,26 @@
 use super::*;
 use ratatui::{Terminal, backend::TestBackend};
 
-fn render_wave_state(wall_tick: usize, muted: bool) -> String {
-    let width = 24u16;
-    let height = 3u16;
-    let backend = TestBackend::new(width, height);
+const TEST_WIDTH: u16 = 24;
+const TEST_HEIGHT: u16 = 3;
+
+fn render_eq_state(wall_tick: usize, muted: bool) -> String {
+    let backend = TestBackend::new(TEST_WIDTH, TEST_HEIGHT);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
-        .draw(|frame| render_wave(frame, Rect::new(0, 0, width, height), wall_tick, muted))
+        .draw(|frame| {
+            render_eq(
+                frame,
+                Rect::new(0, 0, TEST_WIDTH, TEST_HEIGHT),
+                wall_tick,
+                muted,
+            )
+        })
         .expect("draw");
     let buffer = terminal.backend().buffer();
     let mut rendered = String::new();
-    for y in 0..height {
-        for x in 0..width {
+    for y in 0..TEST_HEIGHT {
+        for x in 0..TEST_WIDTH {
             rendered.push_str(buffer[(x, y)].symbol());
         }
         rendered.push('\n');
@@ -20,59 +28,91 @@ fn render_wave_state(wall_tick: usize, muted: bool) -> String {
     rendered
 }
 
-fn render_wave_at(wall_tick: usize) -> String {
-    render_wave_state(wall_tick, false)
+fn render_eq_at(wall_tick: usize) -> String {
+    render_eq_state(wall_tick, false)
 }
 
 #[test]
-fn wave_tile_rows_are_one_period_wide() {
-    // The tile is hand-drawn; a stray edit that changes a row's width
-    // would shear the scroll wrap.
-    for row in WAVE_TILE {
-        assert_eq!(row.chars().count(), WAVE_PERIOD_COLS);
+fn bar_levels_stay_inside_the_band() {
+    // The synthesized level must never leave 1..=MAX_LEVEL: zero would
+    // blank a bar (the band must always read as live), above MAX_LEVEL
+    // would overflow the row cell math.
+    for frame in 0..500 {
+        for bar in 0..12 {
+            let level = bar_level(bar, 12, frame);
+            assert!((1..=MAX_LEVEL).contains(&level), "bar {bar} frame {frame}");
+        }
     }
 }
 
 #[test]
-fn wave_renders_a_connected_box_line() {
-    let rendered = render_wave_at(0);
-    for glyph in ['╭', '╮', '╰', '╯', '─'] {
-        assert!(rendered.contains(glyph), "wave is missing '{glyph}'");
+fn caps_ride_at_or_above_their_bar() {
+    // The peak cap is a trailing max, so it can never sit below the live
+    // bar level.
+    for frame in 0..500 {
+        for bar in 0..12 {
+            assert!(cap_level(bar, 12, frame) >= bar_level(bar, 12, frame));
+        }
     }
 }
 
 #[test]
-fn wave_scrolls_with_the_wall_clock() {
-    // Two wall ticks apart crosses an anim_half edge, so the offset moved.
-    assert_ne!(render_wave_at(0), render_wave_at(2));
+fn left_bars_run_taller_than_right_bars() {
+    // The bass-heavy envelope: averaged over time, the leftmost bar
+    // outruns the rightmost, the way a real spectrum sits.
+    let average = |bar: usize| -> f64 {
+        (0..500).map(|f| bar_level(bar, 12, f) as f64).sum::<f64>() / 500.0
+    };
+    assert!(average(0) > average(11));
 }
 
 #[test]
-fn wave_is_deterministic_for_a_tick() {
+fn eq_renders_block_bars_with_gap_columns() {
+    let rendered = render_eq_at(0);
+    assert!(
+        BLOCKS[1..].iter().any(|glyph| rendered.contains(*glyph)),
+        "band is missing block glyphs"
+    );
+    // Every third column is a gap; the bottom row shows the rhythm most
+    // clearly since every bar has at least its base pixel there.
+    let bottom: Vec<char> = rendered.lines().last().expect("rows").chars().collect();
+    for col in 0..TEST_WIDTH as usize {
+        if col % BAR_STRIDE == BAR_STRIDE - 1 {
+            assert_eq!(bottom[col], ' ', "gap column {col} must stay blank");
+        } else {
+            assert_ne!(bottom[col], ' ', "bar column {col} must carry its base");
+        }
+    }
+}
+
+#[test]
+fn eq_dances_with_the_wall_clock() {
+    // Two wall ticks apart crosses an anim_half edge, so the bars moved.
+    assert_ne!(render_eq_at(0), render_eq_at(2));
+}
+
+#[test]
+fn eq_is_deterministic_for_a_tick() {
     // No hidden state: the wall tick alone decides the frame.
-    assert_eq!(render_wave_at(6), render_wave_at(6));
-}
-
-#[test]
-fn wave_wraps_cleanly_after_one_period() {
-    // One full period of scroll = WAVE_PERIOD_COLS steps at one step per
-    // two wall ticks.
-    assert_eq!(render_wave_at(0), render_wave_at(WAVE_PERIOD_COLS * 2));
+    assert_eq!(render_eq_at(6), render_eq_at(6));
 }
 
 #[test]
 fn sub_edge_ticks_render_identically() {
-    // Ticks inside the same anim_half period share an offset; the paint
-    // gate skips them, and even if painted they would be identical.
-    assert_eq!(render_wave_at(4), render_wave_at(5));
+    // Ticks inside the same anim_half period share a paid frame; the
+    // paint gate skips them, and even if painted they would be identical.
+    assert_eq!(render_eq_at(4), render_eq_at(5));
 }
 
 #[test]
-fn muted_client_flattens_the_wave_to_a_steady_line() {
-    // Mute is the oscilloscope at rest: a flat line that ignores the
-    // scroll offset entirely, so consecutive frames diff to nothing.
-    let rendered = render_wave_state(6, true);
-    assert!(rendered.contains("─".repeat(24).as_str()));
-    assert!(!rendered.contains('╭'), "muted wave must not show crests");
-    assert_eq!(render_wave_state(6, true), render_wave_state(20, true));
+fn muted_client_flattens_the_band_to_a_steady_line() {
+    // Mute is the meter at rest: a flat line that ignores the animation
+    // frame entirely, so consecutive frames diff to nothing.
+    let rendered = render_eq_state(6, true);
+    assert!(rendered.contains("─".repeat(TEST_WIDTH as usize).as_str()));
+    assert!(
+        BLOCKS[1..].iter().all(|glyph| !rendered.contains(*glyph)),
+        "muted band must not show bars"
+    );
+    assert_eq!(render_eq_state(6, true), render_eq_state(20, true));
 }
