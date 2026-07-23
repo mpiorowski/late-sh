@@ -338,6 +338,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /leave             leave the current room",
         "  /dm @user          open a direct message",
         "  /active            list active users",
+        "  /gift @user <n>    send chips, with an optional note after the amount",
         "  /friends           list friends",
         "  /friend [@user]    list friends, or mark a user as a friend",
         "  /unfriend [@user]  list friends, or remove a friend mark",

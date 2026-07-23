@@ -135,7 +135,6 @@ pub async fn run_api_server_with_listener(
         .route("/api/radio-meta", get(get_radio_meta))
         .route("/api/status", get(get_status))
         .route("/api/ws/pair", get(ws_handler))
-        .route("/api/ws/tunnel", get(crate::web_tunnel::ws_handler))
         .layer(cors)
         .layer(middleware::from_fn(http_telemetry_middleware))
         .with_state(state);

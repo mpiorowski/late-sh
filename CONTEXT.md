@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-23 (Render-cost phase 2: the fixed 66ms world tick is replaced by an adaptive deadline in both loops — `App::wake_hint()` returns 66ms hot / 266ms Clubhouse / 500ms idle floor, with a 2s post-input hot window; `marquee_tick` is now wall-clock-derived and edge checks use period-index compares, see §2.6. Bonsai passive growth removed entirely: growth comes from watering only, both classic and Dynamic)
+- Last updated: 2026-07-23 (removed the `/play` browser TUI demo, the `/dashboard` internal dashboard, and the `late-ssh` `/api/ws/tunnel` web-tunnel endpoint/demo-user machinery entirely; the render loop is single-path in `ssh.rs` again, no longer mirrored by `web_tunnel.rs`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -39,7 +39,7 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 |---|---|---|
 | `CONTEXT.md` | Any task in this repo; cross-domain behavior; global contracts. | Repo architecture, test policy, service contracts, data model, telemetry, runbook, global screens/keybindings, and high-risk invariants. |
 | `late-cli/CONTEXT.md` | The `late` companion binary, local audio playback, SSH launch behavior, token acquisition, pairing, installers, or CLI env/flags. | CLI architecture, native/OpenSSH/old SSH modes, identity generation, token handshake, audio decode/output/analyzer, paired-client WebSocket behavior, logging, scripts, release artifacts, and fragile CLI invariants. |
-| `late-web/CONTEXT.md` | Public web pages, browser pairing/play/gallery/profiles, web route tests, templates/assets, web config, or `/stream`. | Axum app shape, routes, Askama templates, static assets, browser WebSocket protocols, audio stream proxy, gallery/profile DB contracts, web telemetry, and web-specific test placement. |
+| `late-web/CONTEXT.md` | Public web pages, browser pairing/gallery/profiles, web route tests, templates/assets, web config, or `/stream`. | Axum app shape, routes, Askama templates, static assets, browser WebSocket protocols, audio stream proxy, gallery/profile DB contracts, web telemetry, and web-specific test placement. |
 | `late-ssh/src/app/audio/CONTEXT.md` | Icecast, now-playing, YouTube queue, Music Booth, visualizer, `/audio` commands, paired audio source switching, or browser/CLI audio arbitration. | AudioService state machine, queue persistence, server-owned playback timers, fallback behavior, pair-WS audio messages, source arbitration policy, skip-vote eligibility, and cross-crate audio touchpoints in CLI/Web. |
 | `late-ssh/src/app/voice/CONTEXT.md` | LiveKit voice rooms, TUI voice controls/status, CLI voice media, `/voice` browser listen-only, or pair-WS voice messages. | VoiceService token/snapshot ownership, LiveKit grants, pair-WS voice protocol, native CLI voice runtime, browser listen-only behavior, pruning/heartbeat invariants, and current voice UX gaps. |
 | `late-ssh/src/app/hub/CONTEXT.md` | `Ctrl+G` Hub, Leaderboard, Quests, Shop/marketplace, pet/aquarium unlocks, chip economy presentation, or events surface work. | Hub tab ownership, leaderboard refresh, reward/economy rules, daily/weekly quest service, marketplace and entitlement projection, aquarium tray behavior, and known gaps for future events/shop work. |
@@ -290,14 +290,14 @@ To maintain a buttery-smooth 15-60 FPS over SSH, the architecture strictly separ
 
 ### 2.6 Render loop timing (adaptive world tick + input-driven)
 
-Each SSH session spawns **one render task** (`late-ssh/src/ssh.rs`; web_tunnel.rs mirrors it deliberately — change both) with two independent trigger sources:
+Each SSH session spawns **one render task** (`late-ssh/src/ssh.rs`) with two independent trigger sources:
 
-- **Adaptive world tick** — each render pass returns `App::wake_hint() -> Duration` (read under the app lock, after the draw) and the loop sleeps exactly that long unless input or a `RenderSignal` wake lands first. Four tiers (`app/tick.rs` consts): `HOT_TICK` 66ms for full-rate surfaces (splash, post-input 2s window, active ultimate effect, house tables, an open arcade game, bonsai modals), `ANIM_HALF_TICK` 132ms for the Clubhouse, any visible right sidebar (the ambient wave), pet roaming, and the drawn pet strip, `ANIM_QUARTER_TICK` 264ms for the aquarium surfaces (tray + profile reef), `IDLE_TICK` 500ms floor otherwise. Frame edges are divisors of the one wall clock: the ambient music wave (`viz::render_wave`, a stateless box-glyph wave tile rotated by `marquee_tick`, no audio data), pet, bonsai sway, and clubhouse ambience paint on the `anim_half` /2 edge (~7.5fps); aquarium sim steps on the `anim_quarter` /4 edge (~3.8fps). A sidebar-visible session therefore never settles fully clean: the wave is always on by product decision. The pet's clocks are wall-synced (`PetState::tick(wall_tick)`), so its wake matches its paint edge; bonsai modals wake hot because the care watering animation still counts per tick call. Ticks at the floor only drain channels; an unprompted event (a chat message while idle) waits at most one floor interval. Advancing the world = `app.tick()`, render if dirty, ship the frame.
+- **Adaptive world tick** — each render pass returns `App::wake_hint() -> Duration` (read under the app lock, after the draw) and the loop sleeps exactly that long unless input or a `RenderSignal` wake lands first. Four tiers (`app/tick.rs` consts): `HOT_TICK` 66ms for full-rate surfaces (splash, post-input 2s window, active ultimate effect, house tables, an open arcade game, bonsai modals), `ANIM_HALF_TICK` 132ms for the Clubhouse, any visible right sidebar (the ambient wave), pet roaming, and the drawn pet strip, `ANIM_QUARTER_TICK` 264ms for the aquarium surfaces (tray + profile reef), `IDLE_TICK` 500ms floor otherwise. Frame edges are divisors of the one wall clock: the ambient music equalizer (`viz::render_eq`, a stateless synthesized spectrum driven by `marquee_tick`, no audio data), pet, bonsai sway, and clubhouse ambience paint on the `anim_half` /2 edge (~7.5fps); aquarium sim steps on the `anim_quarter` /4 edge (~3.8fps). A sidebar-visible session therefore never settles fully clean: the eq is always on by product decision. The pet's clocks are wall-synced (`PetState::tick(wall_tick)`), so its wake matches its paint edge; bonsai modals wake hot because the care watering animation still counts per tick call. Ticks at the floor only drain channels; an unprompted event (a chat message while idle) waits at most one floor interval. Advancing the world = `app.tick()`, render if dirty, ship the frame.
 - **Input-driven render** — fires within `MIN_RENDER_GAP` (15ms) of any keystroke or terminal resize. Renders *without* advancing world time, so typed characters echo at near-native latency. Door proxies push-wake the same path for remote output.
 
 Because ticks can be sparse, `marquee_tick` is derived from wall clock (elapsed/66ms) rather than incremented: phase consumers (marquee text, shimmer, blink) divide the counter and stay correct at any cadence, but **`is_multiple_of` on the counter is a bug pattern** — an edge must compare its period index against the previous tick's (`self.marquee_tick / N != prev / N`; tick() computes a shared `one_hz` edge this way). The same rule covers per-call accumulators: any animation clock that increments or decays per tick() call runs at the loop cadence instead of wall time (the clubhouse `anim_tick` is synced to `marquee_tick`; the ambient wave and both bonsai sways are stateless functions of `marquee_tick`, nothing to accumulate at all).
 
-**Dirty gate (render-cost phase 1).** `App::tick()` returns `changed: bool` accumulated from every drain and animation it runs. `render_once` (ssh.rs and web_tunnel.rs) ORs that with the `RenderSignal` dirty flag and drained input; a clean pass skips `terminal.draw()` entirely — ratatui's diff state does not advance on a skip, so no forced repaint is needed on resume. Idle sessions with the sidebar hidden settle to ~1 frame/min (sidebar clock); with it visible the ambient wave holds ~7.5fps by design. Metrics: `late_ssh_renders_total{reason=input|tick}` vs `late_ssh_renders_skipped_clean_total` show the skip ratio per node.
+**Dirty gate (render-cost phase 1).** `App::tick()` returns `changed: bool` accumulated from every drain and animation it runs. `render_once` (ssh.rs) ORs that with the `RenderSignal` dirty flag and drained input; a clean pass skips `terminal.draw()` entirely — ratatui's diff state does not advance on a skip, so no forced repaint is needed on resume. Idle sessions with the sidebar hidden settle to ~1 frame/min (sidebar clock); with it visible the ambient wave holds ~7.5fps by design. Metrics: `late_ssh_renders_total{reason=input|tick}` vs `late_ssh_renders_skipped_clean_total` show the skip ratio per node.
 
 **The dirty contract (rule of three).** Every domain state exposes `tick(&mut self) -> bool` answering one question: *did anything this session currently shows change?* Exactly three sources of `true`:
 
@@ -305,7 +305,7 @@ Because ticks can be sparse, `marquee_tick` is derived from wall clock (elapsed/
 2. **Animations report their frame boundary, only while visible.** The local clock is the source of change; wrap it in a boundary predicate (marquee step ticks, pet strip travel slots, the anim_half edge for the ambient wave), gated on the screen/panel actually showing it. Time-driven change that is *shared truth* (a server-side game loop: tron/ssnake/asterion, the blackjack dealer) does NOT belong here — it lives in the service as published snapshots, so consumers see it via rule 1 and it goes quiet when no round runs. Per-session decoration never goes through a channel.
 3. **Anything uncertain reports changed.** Prove-clean, not prove-dirty: over-reporting degrades to pre-gate behavior; a wrong "clean" freezes UI.
 
-A blanket `changed = true` or fixed cadence needs a written justification at its call site (current survivors, all in tick.rs: splash typing, lobby modal 1Hz occupancy, DailyMatch 1Hz deadline clock, the `anim_half` ~7.5fps edge shared by pet, roam overlay, bonsai sway, and clubhouse ambience, and the `anim_quarter` ~3.8fps edge for aquarium steps). The full conversion history and per-domain details live in RENDER_COST.md.
+A blanket `changed = true` or fixed cadence needs a written justification at its call site (current survivors, all in tick.rs: splash typing, lobby modal 1Hz occupancy, DailyMatch 1Hz deadline clock, the `anim_half` ~7.5fps edge shared by pet, roam overlay, bonsai sway, and clubhouse ambience, and the `anim_quarter` ~3.8fps edge for aquarium steps). The program summary, design rules, test gotchas, and open follow-ups live in SCALE.md (Render-Cost Program).
 
 The select loop picks which branch to act on:
 
@@ -313,7 +313,7 @@ The select loop picks which branch to act on:
 flowchart TD
     INPUT["data() / window_change_request()<br/>(keystroke, resize)"] -->|"queue keystrokes or apply resize / set dirty=true"| SIGNAL
     SIGNAL["RenderSignal<br/>dirty: AtomicBool<br/>notify: tokio::Notify"] -->|"notify_one()<br/>(after mutex released)"| LOOP
-    WT["sleep_until(world_deadline)<br/>66ms hot / 266ms clubhouse /<br/>500ms idle (App::wake_hint)"] --> LOOP
+    WT["sleep_until(world_deadline)<br/>66ms hot / 132ms half / 264ms quarter /<br/>500ms idle (App::wake_hint)"] --> LOOP
     LOOP{"biased select!"}
     LOOP -->|"world deadline due"| ADVANCE["advance_world=true<br/>render"]
     LOOP -->|"input_pending &&<br/>gap elapsed"| RENDER["advance_world=false<br/>render"]
@@ -507,7 +507,7 @@ late-sh/
 │   ├── src/
 │   │   ├── main.rs             # Starts SSH + API + background loops
 │   │   ├── ssh.rs              # russh server + render loop
-│   │   ├── api.rs              # /api/* + /api/ws/pair + /api/ws/tunnel
+│   │   ├── api.rs              # /api/* + /api/ws/pair
 │   │   ├── dartboard.rs        # Shared Artboard server/persistence wrapper; see app/artboard/CONTEXT.md
 │   │   ├── session.rs          # SessionRegistry + PairedClientRegistry
 │   │   ├── state.rs            # Shared app state, activity, presence
@@ -536,7 +536,7 @@ late-sh/
 │   │   ├── main.rs / lib.rs    # Web entrypoint + router
 │   │   ├── config.rs           # Web config
 │   │   ├── error.rs            # App error mapping
-│   │   └── pages/              # Connect/landing, chat, gallery, play, profiles, stream, dashboard
+│   │   └── pages/              # Connect/landing, gallery, profiles, stream
 │   └── static/                 # Tailwind output/source
 └── infra/
     ├── icecast/icecast.xml     # Icecast config
@@ -555,7 +555,6 @@ late-sh/
 - `GET /api/radio-meta` → `{ "<station>": { artist, title }, ... }` - live Nightride station metadata; empty map while the SSE feed is down
 - `GET /api/status` → `StatusResponse { online, message, version }`
 - `GET /api/ws/pair?token={token}` - WebSocket upgrade for paired browser/CLI control, browser player reports, and CLI visualizer frames
-- `GET /api/ws/tunnel?token={token}&cols={cols}&rows={rows}` - WebSocket upgrade for the browser xterm.js TUI demo used by late-web `/play`
 
 **WS payloads (client → server):**
 - `{ "event": "heartbeat" }`
@@ -570,12 +569,10 @@ late-sh/
 Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube/player state, and LiveKit voice control/state messages; detailed payload ownership lives in `late-ssh/src/app/audio/CONTEXT.md`, `late-ssh/src/app/voice/CONTEXT.md`, and `late-cli/CONTEXT.md`.
 
 **Web routes (late-web, port 3000):**
-- `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA, CLI install/build copy actions, and links to gallery/play/profiles
+- `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA, CLI install/build copy actions, and links to gallery/profiles
 - `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume/source control, now-playing/source banners, and YouTube player-state reports
 - `GET /status` - HTMX fragment: now-playing track + listener count for the landing footer. Polled every 5s.
-- `GET /dashboard`, `/dashboard/now-playing`, `/dashboard/status` - Internal/demo dashboard and HTMX partials
 - `GET /gallery?key=...` - Read-only Artboard snapshot gallery backed by saved DB snapshots
-- `GET /play`, `/play/listeners` - Browser xterm.js TUI demo through `late-ssh` `/api/ws/tunnel`
 - `GET /profiles`, `/profiles/{slug}` - Public work profile index/detail pages
 - `GET /stream` - `audio/mpeg` chill stream proxy to Icecast with bundled silence fallback
 - `GET /stream/{mount}` - `audio/mpeg` stream proxy for supported Icecast mounts (`chill`, `classical`)
@@ -860,7 +857,7 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorite
 
 Repo-level finding: input now lands in a per-session queue and the render loop wakes on input, so ordinary keystrokes no longer wait on the app mutex before being queued. Remaining broad risk is render cost under high fan-out because `render_once` still holds the app lock across synchronous `app.tick()` + `app.render()`.
 
-Phase 0 of the render-cost plan shipped (2026-07-22): Arc-shared nonogram library, 1s-cadence presence cache (`App.online_count` / `App.active_friend_names` in `tick.rs`), counter-based chat row cache validation (see `late-ssh/src/app/chat/CONTEXT.md`), point-to-point single-recipient chat events, batched terminal-backend writes (`frame_writer`, one `SharedBuffer` lock per ~64KB instead of per ANSI command), and run-length clubhouse spans. Next planned: a dirty gate to skip clean frames (phase 1), then replacing the global 66ms tick with deadline-based scheduling (phase 2).
+The full render-cost program shipped 2026-07-22/23: phase 0 per-frame constant factors (Arc-shared nonogram library, 1s-cadence presence cache, counter-based chat row cache validation, point-to-point single-recipient chat events, batched terminal-backend writes, run-length clubhouse spans), phase 1 dirty gate (clean frames skip `terminal.draw()` entirely), and phase 2 adaptive world tick (`App::wake_hint()` deadlines replace the fixed 66ms interval). The mechanism is documented in §2.6; the program summary, rules, and open follow-ups live in SCALE.md (Render-Cost Program).
 
 Chat-specific row-cache, snapshot, unread-count, and scoped-loading performance notes live in `late-ssh/src/app/chat/CONTEXT.md`. Crash/OOM incidents (as opposed to slowness) live in the Runbook incident log, §10.5.
 

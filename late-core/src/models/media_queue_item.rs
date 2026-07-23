@@ -64,6 +64,24 @@ impl MediaQueueItem {
         Self::get(client, id).await
     }
 
+    /// Whether this YouTube video is already queued or playing. The playlist
+    /// holds a track once (`idx_media_queue_active_track`); a finished track
+    /// leaves the active set and can be submitted again.
+    pub async fn youtube_is_active(client: &Client, external_id: &str) -> Result<bool> {
+        let row = client
+            .query_one(
+                "SELECT EXISTS (
+                    SELECT 1 FROM media_queue_items
+                    WHERE media_kind = 'youtube'
+                      AND external_id = $1
+                      AND status IN ('queued', 'playing')
+                 )",
+                &[&external_id],
+            )
+            .await?;
+        Ok(row.get(0))
+    }
+
     pub async fn list_snapshot(client: &Client, limit: i64) -> Result<Vec<(Self, i32)>> {
         let rows = client
             .query(
