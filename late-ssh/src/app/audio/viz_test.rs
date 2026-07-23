@@ -72,14 +72,14 @@ fn eq_renders_block_bars_with_gap_columns() {
         BLOCKS[1..].iter().any(|glyph| rendered.contains(*glyph)),
         "band is missing block glyphs"
     );
-    // Every third column is a gap; the bottom row shows the rhythm most
+    // Every other column is a gap; the bottom row shows the rhythm most
     // clearly since every bar has at least its base pixel there.
-    let bottom: Vec<char> = rendered.lines().last().expect("rows").chars().collect();
-    for col in 0..TEST_WIDTH as usize {
+    let bottom = rendered.lines().last().expect("rows");
+    for (col, glyph) in bottom.chars().enumerate() {
         if col % BAR_STRIDE == BAR_STRIDE - 1 {
-            assert_eq!(bottom[col], ' ', "gap column {col} must stay blank");
+            assert_eq!(glyph, ' ', "gap column {col} must stay blank");
         } else {
-            assert_ne!(bottom[col], ' ', "bar column {col} must carry its base");
+            assert_ne!(glyph, ' ', "bar column {col} must carry its base");
         }
     }
 }
