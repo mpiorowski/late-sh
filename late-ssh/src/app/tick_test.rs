@@ -213,7 +213,10 @@ async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
         }
         sleep(Duration::from_millis(5)).await;
     }
-    assert!(changed >= 2, "wave never paid an edge frame ({changed}/{total})");
+    assert!(
+        changed >= 2,
+        "wave never paid an edge frame ({changed}/{total})"
+    );
     assert!(
         changed < total / 2,
         "wave must skip between edges ({changed}/{total})"

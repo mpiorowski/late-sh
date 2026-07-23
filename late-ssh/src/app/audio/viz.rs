@@ -117,8 +117,8 @@ pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, muted: 
             } else {
                 let bar = col / BAR_STRIDE;
                 let fill = levels[bar].saturating_sub(floor).min(SUBCELLS);
-                let cap_here = caps[bar] > levels[bar]
-                    && (caps[bar] - 1) / SUBCELLS == cell_from_bottom;
+                let cap_here =
+                    caps[bar] > levels[bar] && (caps[bar] - 1) / SUBCELLS == cell_from_bottom;
                 if fill > 0 {
                     (BLOCKS[fill as usize], *row_style)
                 } else if cap_here {

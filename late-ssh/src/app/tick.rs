@@ -971,8 +971,8 @@ impl App {
         // so there is nothing to advance here — the anim_half edge itself is
         // the change, paid only while a surface showing them is visible (the
         // sidebar carries the wave and both bonsai panels; the modals sway).
-        changed |= anim_half
-            && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
+        changed |=
+            anim_half && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per

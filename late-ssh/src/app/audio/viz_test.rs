@@ -60,9 +60,8 @@ fn caps_ride_at_or_above_their_bar() {
 fn left_bars_run_taller_than_right_bars() {
     // The bass-heavy envelope: averaged over time, the leftmost bar
     // outruns the rightmost, the way a real spectrum sits.
-    let average = |bar: usize| -> f64 {
-        (0..500).map(|f| bar_level(bar, 12, f) as f64).sum::<f64>() / 500.0
-    };
+    let average =
+        |bar: usize| -> f64 { (0..500).map(|f| bar_level(bar, 12, f) as f64).sum::<f64>() / 500.0 };
     assert!(average(0) > average(11));
 }
 
