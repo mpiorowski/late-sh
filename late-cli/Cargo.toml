@@ -31,7 +31,6 @@ reqwest = { workspace = true, features = ["blocking"] }
 ringbuf.workspace = true
 russh.workspace = true
 rustls.workspace = true
-rustfft.workspace = true
 shlex.workspace = true
 symphonia = { workspace = true, features = ["mp3"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }

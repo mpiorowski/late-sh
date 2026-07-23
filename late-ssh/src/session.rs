@@ -15,7 +15,9 @@ use crate::authz::Permissions;
 //     → API/WS handler looks up token
 //       → SessionRegistry sends SessionMessage over mpsc
 //         → ssh.rs receives and forwards into App
-//           → App updates visualizer buffer used by TUI render
+//           → App drops Viz payloads (the sidebar wave is synthetic; the
+//             variant survives for old clients until the pipeline removal
+//             in VIZ_WAVE_BRIEF.md lands)
 
 #[derive(Debug, Clone)]
 pub enum SessionMessage {

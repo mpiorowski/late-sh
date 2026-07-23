@@ -1,10 +1,19 @@
 use std::time::{Duration, Instant};
 
+use late_core::models::user::RightSidebarMode;
 use tokio::time::sleep;
 
 use crate::app::state::App;
-use crate::app::tick::{HOT_TICK, IDLE_TICK};
+use crate::app::tick::{ANIM_HALF_TICK, HOT_TICK, IDLE_TICK};
 use crate::test_helpers::chat_compose_app;
+
+/// The ambient sidebar wave paints on anim_half edges whenever the right
+/// sidebar is visible, so a session showing it never settles by design.
+/// Settle-based tests turn the sidebar off to exercise the gate beneath;
+/// `sidebar_wave_holds_half_rate_and_paints_on_edges` covers the wave path.
+fn hide_sidebar(app: &mut App) {
+    app.profile_state.profile.right_sidebar_mode = RightSidebarMode::Off;
+}
 
 /// Mirror the render loop's frame path: a changed tick renders and drains
 /// the queued terminal commands, otherwise the queue keeps reporting a
@@ -72,6 +81,7 @@ async fn settle_clean(app: &mut App, consecutive: usize) {
 #[tokio::test]
 async fn idle_ticks_settle_clean_and_chat_send_marks_changed() {
     let (_test_db, mut app) = chat_compose_app("tick-gate").await;
+    hide_sidebar(&mut app);
 
     settle_clean(&mut app, 30).await;
 
@@ -98,6 +108,7 @@ async fn idle_ticks_settle_clean_and_chat_send_marks_changed() {
 #[tokio::test]
 async fn wake_hint_idles_when_settled_and_heats_on_input() {
     let (_test_db, mut app) = chat_compose_app("wake-hint").await;
+    hide_sidebar(&mut app);
 
     settle_clean(&mut app, 30).await;
 
@@ -116,6 +127,7 @@ async fn wake_hint_idles_when_settled_and_heats_on_input() {
 #[tokio::test]
 async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
     let (_test_db, mut app) = chat_compose_app("tick-gate-ultimate").await;
+    hide_sidebar(&mut app);
 
     settle_clean(&mut app, 30).await;
 
@@ -153,6 +165,7 @@ async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
 #[tokio::test]
 async fn open_settings_modal_settles_clean() {
     let (_test_db, mut app) = chat_compose_app("tick-gate-modal").await;
+    hide_sidebar(&mut app);
 
     settle_clean(&mut app, 30).await;
 
@@ -161,4 +174,48 @@ async fn open_settings_modal_settles_clean() {
     drain_frame(&mut app);
 
     settle_clean(&mut app, 30).await;
+}
+
+/// The always-on ambient wave: a session showing the sidebar never goes
+/// idle. It holds the half-rate wake tier, and ticks pay frames only on
+/// anim_half edges (~every 132ms), not on every wake.
+#[tokio::test]
+async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
+    let (_test_db, mut app) = chat_compose_app("wave-cadence").await;
+
+    // Flush startup churn (prefetches, splash, first clock render).
+    let warmup = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < warmup {
+        if app.tick() {
+            drain_frame(&mut app);
+        }
+        sleep(Duration::from_millis(5)).await;
+    }
+
+    // Age past the post-input window so the hot tier can't mask the wave's.
+    app.last_input_at = Instant::now() - Duration::from_secs(10);
+    assert_eq!(
+        app.wake_hint(),
+        ANIM_HALF_TICK,
+        "visible sidebar holds the half-rate tier for the wave"
+    );
+
+    // 500ms of dense ticks spans at least three anim_half edges; the wave
+    // must pay those frames and only those.
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let mut changed = 0usize;
+    let mut total = 0usize;
+    while Instant::now() < deadline {
+        total += 1;
+        if app.tick() {
+            changed += 1;
+            drain_frame(&mut app);
+        }
+        sleep(Duration::from_millis(5)).await;
+    }
+    assert!(changed >= 2, "wave never paid an edge frame ({changed}/{total})");
+    assert!(
+        changed < total / 2,
+        "wave must skip between edges ({changed}/{total})"
+    );
 }

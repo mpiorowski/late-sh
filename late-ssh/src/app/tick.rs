@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC};
 use crate::app::activity::event::ActivityKind;
@@ -7,7 +7,6 @@ use crate::app::common::theme;
 use crate::app::files::inline_image::InlineImageRenderSettings;
 use crate::app::pinstar::browser::BrowserActionResult;
 use crate::session::SessionMessage;
-use late_core::models::user::AudioSource;
 
 /// The hot world-tick cadence (the classic 15fps): animations that earn
 /// full rate run here.
@@ -83,9 +82,10 @@ impl App {
             }
         }
         // Heartbeats are a liveness no-op (matched below); a heartbeat-only
-        // drain must not pay a frame. Viz frames only move the visualizer,
-        // whose visible change is reported by its own gate further down, so
-        // a listener with every viz surface hidden pays nothing per frame.
+        // drain must not pay a frame. Viz frames are dropped outright: the
+        // wave is synthetic and the pipeline removal is in flight
+        // (VIZ_WAVE_BRIEF.md), the variant survives only so old CLIs still
+        // sending frames keep a working socket.
         if messages
             .iter()
             .any(|m| !matches!(m, SessionMessage::Heartbeat | SessionMessage::Viz(_)))
@@ -228,9 +228,7 @@ impl App {
         for msg in messages {
             match msg {
                 SessionMessage::Heartbeat => {}
-                SessionMessage::Viz(viz) => {
-                    self.push_viz_frame(viz);
-                }
+                SessionMessage::Viz(_) => {}
                 SessionMessage::ClipboardImage { data } => {
                     let Some(upload) = self.chat.take_pending_clipboard_image_upload() else {
                         tracing::warn!("ignoring unsolicited paired clipboard image");
@@ -967,45 +965,14 @@ impl App {
             }
         }
 
-        // Browser-audible audio is synthetic-only. If a CLI is paired and the
-        // user is in Icecast mode, the CLI owns Icecast and sends real
-        // VizFrames, so don't mask those with the browser's procedural path.
-        let has_browser = self
-            .paired_client_state()
-            .map(|state| state.client_kind == crate::app::audio::client_state::ClientKind::Browser)
-            .unwrap_or(false);
-        let browser_owns_icecast = self
-            .paired_client_registry
-            .as_ref()
-            .map(|registry| registry.web_icecast_enabled(&self.session_token))
-            .unwrap_or(false);
-        let procedural = has_browser
-            && (self.paired_browser_source == AudioSource::Youtube || browser_owns_icecast);
-        self.visualizer.set_procedural_active(procedural);
         let sidebar_visible = self.right_sidebar_visible();
-        // The visualizer state always advances so decay keeps settling, but
-        // it only costs frames while a surface that draws it is visible: the
-        // right sidebar (viz and music-stage panels) or a bonsai modal
-        // (beat-driven sway). Elapsed wall ticks scale the movement so the
-        // ambient cadence slows the frame rate, not the animation. The
-        // sidebar bars report only on the ambient boundary edge (clubhouse
-        // pattern): without it the post-input hot window would repaint them
-        // at 15fps for 2s after every keystroke or mouse event. The settle
-        // snap still pays its frame immediately (animating() just flipped
-        // false), or bars would freeze slightly above zero until the next
-        // boundary. Bonsai sway keeps full rate.
-        let viz_elapsed = (self.marquee_tick - prev_marquee_tick) as u32;
-        let viz_ticked = if procedural {
-            self.visualizer.tick_procedural(viz_elapsed)
-        } else {
-            self.visualizer.tick_idle(viz_elapsed)
-        };
-        // Sidebar bars pay full rate (music is the one animation worth
-        // 15fps, and its hot wake below matches); bonsai sway rides the
-        // half-rate edge.
-        changed |= viz_ticked
-            && (sidebar_visible
-                || ((self.show_bonsai_modal || self.show_bonsai_v2_modal) && anim_half));
+        // Ambient wave + bonsai sway: both are stateless, derived from the
+        // wall clock at draw time (viz::render_wave, the bonsai sway sines),
+        // so there is nothing to advance here — the anim_half edge itself is
+        // the change, paid only while a surface showing them is visible (the
+        // sidebar carries the wave and both bonsai panels; the modals sway).
+        changed |= anim_half
+            && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
@@ -1118,15 +1085,15 @@ impl App {
             || self.pet_state.roaming_active()
             || self.last_pet_strip_travel.get().is_some()
             || self.show_bonsai_modal
-            || self.show_bonsai_v2_modal
-            || (self.visualizer.animating() && self.right_sidebar_visible());
+            || self.show_bonsai_v2_modal;
         if hot {
             return HOT_TICK;
         }
         // Slower tiers match the frame edges their surfaces paint on. Pet
         // and bonsai paint on the half edge but stay hot above: their
         // steppers advance per tick and are tuned for the 66ms cadence.
-        if self.screen == Screen::Clubhouse {
+        // A visible sidebar always carries the ambient wave.
+        if self.screen == Screen::Clubhouse || self.right_sidebar_visible() {
             return ANIM_HALF_TICK;
         }
         if self.aquarium_tray_visible()
@@ -1176,15 +1143,6 @@ impl App {
                 self.profile_state.profile().right_sidebar_mode,
                 self.screen,
             )
-        }
-    }
-
-    fn push_viz_frame(&mut self, frame: late_core::audio::VizFrame) {
-        self.last_viz_frame_at = Some(Instant::now());
-        self.visualizer.update(&frame);
-        self.viz_frame_buffer.push_back(frame);
-        while self.viz_frame_buffer.len() > 75 {
-            self.viz_frame_buffer.pop_front();
         }
     }
 

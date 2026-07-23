@@ -19,10 +19,16 @@ between LLM sessions: read it fully before touching the render gate.
 - Watch receivers that are only `borrow()`ed at render must be marked seen
   (`borrow_and_update`) by whoever peeks them, or the peek latches dirty
   forever (this is why artboard's archive view skips the snapshot peek).
-- Product decision: music (visualizer) is the only animation worth full
-  rate (15fps). Cats, bonsai sway, and clubhouse ambience paint on the
-  shared half-rate edge (`anim_half`, ~7.5fps); fish step on the quarter
-  edge (`anim_quarter`, ~3.8fps); everything else is slow/static.
+- Product decision (revised 2026-07-23): nothing paints at full rate.
+  The old FFT bar visualizer is replaced by a synthetic ambient wave
+  (`viz::render_wave`) that scrolls whenever the sidebar is visible; it,
+  cats, bonsai sway, and clubhouse ambience all paint on the shared
+  half-rate edge (`anim_half`, ~7.5fps); fish step on the quarter edge
+  (`anim_quarter`, ~3.8fps); everything else is slow/static. Corollary: a
+  sidebar-visible session never settles fully clean and never idles below
+  ANIM_HALF_TICK; that steady ~37 draws/5s is the accepted price of the
+  always-on wave (knob if it reads expensive: move the wave to the
+  quarter edge, do not reintroduce audio-state gating).
   Marquee: 3 columns/sec in 1s steps (`MARQUEE_STEP_TICKS = 15`,
   `MARQUEE_STEP_COLUMNS = 3`, hold 45), so speed costs no extra frames;
   every marquee transition lands on a multiple of the step (tested).
@@ -58,7 +64,8 @@ single-recipient chat events. 64KB BufWriter frame path. OutputBudget guard
 frames. Per-subsystem changed signals: five tab states + chat + profile +
 daily + quest + shop + voice + sudoku + terminal images + bonsai/bonsai_v2 +
 aquarium (entitlement-gated, stepped on the half-rate edge) + viz settle
-(SETTLE_EPSILON). `Outbox::has_pending()` forces a frame for outbox/terminal
+(SETTLE_EPSILON; superseded 2026-07-23 by the stateless ambient wave).
+`Outbox::has_pending()` forces a frame for outbox/terminal
 commands/clipboard. Pinstar rx-transition-to-None pattern. End-of-tick
 composite: chat epochs, screen compare, banner-expiry one-shot,
 now_playing/radio_meta peeks. afk-set + username-directory ptr-compares in
@@ -74,16 +81,17 @@ CONTEXT.md §2.6 documents the gate.
   `ChatState::tick` uses it instead of the watch peek. Enabler: `model!`
   macro + chat-poll structs in late-core derive `PartialEq`.
   Test: `identical_snapshot_reapply_reports_clean` (state_internal_test.rs).
-- Visualizer: ticks every world tick (decay must settle) but only reports
-  changed while the right sidebar or a bonsai modal is visible.
-  `sidebar_visible` computed once in tick, shared with the marquee block.
-  Paints at full hot rate while the sidebar shows it (music is the one
-  animation worth 15fps; its presence returns HOT from wake_hint); decay
-  and the procedural phase scale by elapsed wall ticks so any cadence
-  keeps the animation wall-clock-true. Bonsai-modal sway paints on the
-  anim_half edge instead. `SessionMessage::Viz` drains are excluded from
-  the generic changed check (like heartbeats): the viz gate reports
-  visible change, so hidden-sidebar listeners pay no frames.
+- Visualizer replaced by the ambient wave (2026-07-23): the FFT bars, the
+  decay/procedural state machine, and the short-lived quantized paint
+  gate are all gone. `viz::render_wave(frame, area, wall_tick)` is a
+  stateless braille sine derived entirely from `marquee_tick` (offset =
+  `wall_tick / 2 % WAVE_LENGTH_DOTS`, one dot per anim_half edge), so
+  tick() has nothing to advance: `changed |= anim_half` while the sidebar
+  or a bonsai modal is visible IS the whole gate. Bonsai sway (v1 canopy
+  shift, v2 `apply_sway` line shift) runs off the same wall clock, small
+  constant amplitude, no longer beat-kicked. `SessionMessage::Viz` frames
+  are dropped on arrival (still drain-excluded); the WS/CLI/late-core
+  pipeline removal is scoped in VIZ_WAVE_BRIEF.md for a follow-up agent.
 - Pet strip: `PetState::tick() -> bool` (feedback expiry, roam end,
   day-rollover mood/needs flips via `last_visual` compare). Animation pays
   exactly on frame boundaries: `pet::ui::strip_frame_changed(mood, tick,
@@ -97,7 +105,7 @@ CONTEXT.md §2.6 documents the gate.
   booth modal + sidebar stage), bonsai care (`tick() -> bool` while watering
   animation plays). Dropped from the coarse list entirely: hub, poll, icon
   picker, room search (results ride chat events), booth, bonsai_v2 (growth
-  via bonsai_v2_state.tick, sway via viz gate).
+  via bonsai_v2_state.tick, sway wall-clock on the anim_half edge).
 - Scoped cadences kept: lobby modal 1Hz (live occupancy read at draw),
   ultimate modal 1Hz only while `has_cooldown_running()`, profile modal
   half-rate only while `aquarium_animating()` (reef steps via step_reef
@@ -166,10 +174,11 @@ long unless input or a RenderSignal wake lands first. Three tiers:
 - HOT_TICK 66ms: splash, post-input window (2s after any input, so menu
   loads and chat send echo keep typing latency), active ultimate effect,
   HouseTable screen, Arcade with a game open, pet roaming or strip drawn,
-  bonsai modals, viz animating on a visible sidebar.
-- ANIM_HALF_TICK 132ms: Clubhouse screen, painting on the /2 `anim_half`
-  edge (~7.5fps). Pet and bonsai paint on the same edge but wake hot:
-  their steppers advance per tick and are tuned for the 66ms cadence.
+  bonsai modals.
+- ANIM_HALF_TICK 132ms: Clubhouse screen or a visible right sidebar (the
+  ambient wave), painting on the /2 `anim_half` edge (~7.5fps). Pet and
+  bonsai paint on the same edge but wake hot: their steppers advance per
+  tick and are tuned for the 66ms cadence.
 - ANIM_QUARTER_TICK 264ms: aquarium tray + profile reef, stepping on the
   /4 `anim_quarter` edge (~3.8fps).
 - IDLE_TICK 500ms floor: everything else. Ticks only drain channels;
@@ -205,8 +214,9 @@ were already gated by PR1/PR2; phase 2 removes the idle wakeup churn.
 - One shared half-rate frame edge (`anim_half` = /2 of marquee_tick,
   steady ~7.5fps on any grid): pet strip, roam overlay, bonsai modal
   sway, clubhouse ambience (raised from 4fps), and both aquarium
-  surfaces paint on it. The viz went back to full hot rate (music is
-  the one animation worth 15fps).
+  surfaces paint on it. The viz first went back to full hot rate, then
+  (same day) was replaced by the stateless ambient wave riding this
+  same edge; nothing paints hot for music anymore.
 - The aquarium lost its private clock entirely ("two clocks through the
   app"): SIMULATION_STEP/last_step_at deleted, tick() = exactly one sim
   step, driven on the `anim_quarter` /4 edge (264ms, ~3.8fps, close to

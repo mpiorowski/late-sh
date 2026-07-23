@@ -46,11 +46,9 @@ fn stage_lines_with(
     selected_station: RadioStation,
 ) -> Vec<Line<'static>> {
     let queue = empty_queue();
-    let viz = Visualizer::new();
     music_stage_lines(
         21,
         &MusicStageProps {
-            visualizer: &viz,
             now_playing: None,
             paired_client: None,
             queue: &queue,
@@ -154,11 +152,9 @@ fn radio_selector_rows_mark_selected_station() {
 #[test]
 fn radio_dock_row_prefers_sse_metadata() {
     let queue = empty_queue();
-    let viz = Visualizer::new();
     let lines = music_stage_lines(
         21,
         &MusicStageProps {
-            visualizer: &viz,
             now_playing: None,
             paired_client: None,
             queue: &queue,

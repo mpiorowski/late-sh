@@ -4,10 +4,10 @@ use crossterm::{
     cursor,
     terminal::{self, ClearType},
 };
-use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame};
+use late_core::{MutexRecover, api_types::NowPlaying};
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     io::{self, Write},
     sync::{Arc, Mutex},
     time::Instant,
@@ -20,7 +20,7 @@ use late_core::models::profile::Profile;
 
 use crate::{
     app::activity::event::ActivityEvent,
-    app::audio::{client_state::ClientAudioState, viz::Visualizer},
+    app::audio::client_state::ClientAudioState,
     app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
         TerminalImageProtocol, TerminalImageRenderState, da1_probe, iterm2_capabilities_probe,
@@ -348,9 +348,6 @@ pub struct App {
     /// Terminal / rendering
     pub(super) terminal: Terminal<CrosstermBackend<io::BufWriter<SharedBuffer>>>,
     pub(super) shared: SharedBuffer,
-    pub(super) visualizer: Visualizer,
-    pub(super) viz_frame_buffer: VecDeque<VizFrame>,
-    pub(super) last_viz_frame_at: Option<Instant>,
 
     /// Session / connection
     pub(super) connect_url: String,
@@ -1032,9 +1029,6 @@ impl App {
             vt_input: crate::app::input::VtInputParser::default(),
             terminal,
             shared,
-            visualizer: Visualizer::new(),
-            viz_frame_buffer: VecDeque::new(),
-            last_viz_frame_at: None,
             connect_url: format!("{}/{}", config.web_url, config.session_token),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,

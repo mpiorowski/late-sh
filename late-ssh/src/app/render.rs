@@ -16,7 +16,7 @@ use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode};
 
 use super::{
     announcements, artboard,
-    audio::{client_state::ClientAudioState, viz::Visualizer},
+    audio::client_state::ClientAudioState,
     bonsai, chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
@@ -174,7 +174,6 @@ struct DrawContext<'a> {
     clubhouse_composer: Option<chat::ui::ComposerBlockView<'a>>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
-    visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
     sidebar_clock: &'a str,
@@ -386,7 +385,6 @@ impl App {
         let paired_cli_supports_voice = self.paired_cli_supports_voice();
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
-        let visualizer = &self.visualizer;
         // The username directory snapshot is refreshed on the ~1s tick
         // cadence (tick.rs), where its pointer-compare also bumps the row
         // cache epoch; renders read the stored Arc only.
@@ -953,7 +951,6 @@ impl App {
                         clubhouse_composer,
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
-                        visualizer,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
                         sidebar_clock: &sidebar_clock,
@@ -1393,13 +1390,11 @@ impl App {
                 sidebar_area,
                 &SidebarProps {
                     components: &ctx.right_sidebar_components,
-                    visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
                     bonsai: ctx.bonsai,
                     bonsai_v2: ctx.bonsai_v2,
                     use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),
-                    audio_beat: ctx.visualizer.beat(),
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
@@ -1505,17 +1500,12 @@ impl App {
                 inner,
                 ctx.bonsai,
                 ctx.bonsai_care_state,
-                ctx.visualizer.beat(),
+                ctx.marquee_tick,
             );
         }
 
         if ctx.show_bonsai_v2_modal {
-            crate::app::bonsai_v2::modal_ui::draw(
-                frame,
-                inner,
-                ctx.bonsai_v2,
-                ctx.visualizer.beat(),
-            );
+            crate::app::bonsai_v2::modal_ui::draw(frame, inner, ctx.bonsai_v2, ctx.marquee_tick);
         }
 
         if ctx.show_lobby_modal {

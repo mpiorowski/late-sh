@@ -1,353 +1,77 @@
 use crate::app::common::theme;
-use late_core::audio::VizFrame;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Paragraph,
 };
 
-const REAL_BAND_ATTACK: f32 = 0.62;
-const REAL_BAND_RELEASE: f32 = 0.28;
-const REAL_RMS_ATTACK: f32 = 0.5;
-const REAL_RMS_RELEASE: f32 = 0.22;
-const IDLE_BAND_DECAY: f32 = 0.94;
-/// Below this level no rendered bar shows any height, so decay counts as
-/// settled and the idle tick stops reporting change.
-const SETTLE_EPSILON: f32 = 0.004;
+/// One wavelength of the ambient wave in braille dot columns (2 dot
+/// columns per terminal cell, so 8 cells). The scroll offset wraps on
+/// this period, so a full cycle repeats every `2 * WAVE_LENGTH_DOTS`
+/// wall ticks.
+pub(crate) const WAVE_LENGTH_DOTS: usize = 16;
 
-pub struct Visualizer {
-    bands: [f32; 8],
-    rms: f32,
-    has_viz: bool,
-    // Beat detection (volume-independent rhythm tracking)
-    rms_avg: f32,
-    beat: f32,
-    // Procedural indicator (YouTube source — no real frequency data, cross-origin
-    // iframe). Slow breathing sine wave. Does NOT pretend to be audio-reactive;
-    // kept visually distinct (AMBER_DIM) so a glance separates it from real bars.
-    // See CONTEXT.md §10 / §18.
-    procedural_active: bool,
-    procedural_phase: f32,
-}
+/// Braille dot bits by (column 0-1, row 0-3) within one cell.
+const BRAILLE_DOT_BITS: [[u8; 4]; 2] = [
+    [0x01, 0x02, 0x04, 0x40],
+    [0x08, 0x10, 0x20, 0x80],
+];
 
-impl Default for Visualizer {
-    fn default() -> Self {
-        Self::new()
+/// Ambient music wave for the sidebar's music stage: a thin braille line
+/// scrolling left, always on while the stage is visible. Purely
+/// decorative — no audio data, no pairing state, no stored phase;
+/// everything derives from `wall_tick` (the app's marquee_tick), so the
+/// same tick renders the same frame at any loop cadence. The offset
+/// advances one dot column (half a cell) per anim_half `/2` edge, which
+/// is exactly the edge tick() pays a frame on.
+pub(crate) fn render_wave(frame: &mut Frame, area: Rect, wall_tick: usize) {
+    if area.height == 0 || area.width == 0 {
+        return;
     }
-}
+    let width = area.width as usize;
+    let height = area.height as usize;
+    let dot_rows = height * 4;
+    let dot_cols = width * 2;
+    let offset = (wall_tick / 2) % WAVE_LENGTH_DOTS;
+    let center = (dot_rows as f32 - 1.0) / 2.0;
+    // Primary sine plus a second harmonic so the line reads organic
+    // rather than textbook. Amplitudes are sized for the 3-row strip
+    // (12 dot rows) and scale with whatever height the stage gives us.
+    let swing_scale = dot_rows as f32 / 12.0;
 
-impl Visualizer {
-    pub fn new() -> Self {
-        Self {
-            bands: [0.0; 8],
-            rms: 0.0,
-            has_viz: false,
-            rms_avg: 0.0,
-            beat: 0.0,
-            procedural_active: false,
-            procedural_phase: 0.0,
-        }
-    }
-
-    pub fn update(&mut self, frame: &VizFrame) {
-        let had_viz = self.has_viz;
-        self.has_viz = true;
-        let target_rms = frame.rms.clamp(0.0, 1.0);
-        self.rms = if had_viz {
-            Self::smooth_value(self.rms, target_rms, REAL_RMS_ATTACK, REAL_RMS_RELEASE)
-        } else {
-            target_rms
+    let mut cells = vec![0u8; width * height];
+    let mut prev_y: Option<usize> = None;
+    for dx in 0..dot_cols {
+        let theta = (dx + offset) as f32 * (std::f32::consts::TAU / WAVE_LENGTH_DOTS as f32);
+        let swing = swing_scale * (3.2 * theta.sin() + 1.3 * (2.0 * theta + 1.0).sin());
+        let y = ((center - swing).round().max(0.0) as usize).min(dot_rows - 1);
+        // Fill the vertical span toward the previous sample so steep
+        // slopes stay a connected line instead of scattered dots.
+        let (lo, hi) = match prev_y {
+            Some(prev) if prev + 1 < y => (prev + 1, y),
+            Some(prev) if y + 1 < prev => (y, prev - 1),
+            _ => (y, y),
         };
-        for (i, band) in frame.bands.iter().enumerate() {
-            let target = band.clamp(0.0, 1.0);
-            self.bands[i] = if had_viz {
-                Self::smooth_value(self.bands[i], target, REAL_BAND_ATTACK, REAL_BAND_RELEASE)
-            } else {
-                target
-            };
+        for dy in lo..=hi {
+            cells[(dy / 4) * width + dx / 2] |= BRAILLE_DOT_BITS[dx % 2][dy % 4];
         }
-
-        // Beat detection: a relative spike above the running average triggers
-        // a beat regardless of absolute volume level.
-        self.beat *= 0.9;
-        if self.rms_avg > 0.001 && frame.rms / self.rms_avg > 1.3 {
-            self.beat = 1.0;
-        }
-        self.rms_avg = self.rms_avg * 0.95 + frame.rms * 0.05;
+        prev_y = Some(y);
     }
 
-    pub fn rms(&self) -> f32 {
-        self.rms
+    let style = Style::default().fg(theme::AMBER_DIM());
+    let mut lines = Vec::with_capacity(height);
+    for row in 0..height {
+        let text: String = (0..width)
+            .map(|col| {
+                char::from_u32(0x2800 + cells[row * width + col] as u32)
+                    .expect("braille codepoint")
+            })
+            .collect();
+        lines.push(Line::from(Span::styled(text, style)));
     }
-
-    /// Volume-independent beat intensity (0..1), decays after each detected beat.
-    pub fn beat(&self) -> f32 {
-        self.beat
-    }
-
-    /// Returns true while the decay is still visibly animating. `ticks` is
-    /// how many 66ms wall ticks elapsed since the previous world tick: the
-    /// adaptive loop ticks sparsely, so per-call decay would slow with the
-    /// cadence; scaling by elapsed ticks keeps the decay wall-clock-true.
-    /// Once every level falls below [`SETTLE_EPSILON`] the state snaps to
-    /// zero and stays settled (no further change) until the next real frame
-    /// arrives.
-    pub fn tick_idle(&mut self, ticks: u32) -> bool {
-        if !self.has_viz || ticks == 0 {
-            return false;
-        }
-        let ticks = ticks as i32;
-        self.rms = (self.rms * 0.96f32.powi(ticks)).max(0.0);
-        for band in &mut self.bands {
-            *band = (*band * IDLE_BAND_DECAY.powi(ticks)).max(0.0);
-        }
-        self.beat = (self.beat * 0.9f32.powi(ticks)).max(0.0);
-        let settled = self.rms < SETTLE_EPSILON
-            && self.beat < SETTLE_EPSILON
-            && self.bands.iter().all(|band| *band < SETTLE_EPSILON);
-        if settled {
-            self.rms = 0.0;
-            self.beat = 0.0;
-            self.bands = [0.0; 8];
-            self.has_viz = false;
-        }
-        true
-    }
-
-    pub fn set_procedural_active(&mut self, active: bool) {
-        self.procedural_active = active;
-    }
-
-    /// True while a tick could visibly move the bars: real frames are still
-    /// decaying toward settle, or the procedural wave is running. Drives the
-    /// render loop's wake cadence.
-    pub fn animating(&self) -> bool {
-        self.has_viz || self.procedural_active
-    }
-
-    /// Returns true while the procedural wave is animating. `ticks` scales
-    /// the phase step by elapsed 66ms wall ticks, same reasoning as
-    /// [`Self::tick_idle`].
-    pub fn tick_procedural(&mut self, ticks: u32) -> bool {
-        if !self.procedural_active || ticks == 0 {
-            return false;
-        }
-        self.procedural_phase =
-            (self.procedural_phase + 0.08 * ticks as f32) % (std::f32::consts::TAU * 1024.0);
-        true
-    }
-
-    fn procedural_bands(&self) -> [f32; 8] {
-        // Layered sines: a primary traveling wave, a faster shimmer offset
-        // per-band, and a slow global breath. The phases multiply (1.0, 1.7,
-        // 0.35) are deliberately incommensurate so the pattern doesn't repeat
-        // visibly inside a few seconds.
-        let mut out = [0.0f32; 8];
-        let breath = 0.05 * (self.procedural_phase * 0.35).sin();
-        for (i, slot) in out.iter_mut().enumerate() {
-            let p = self.procedural_phase + (i as f32) * 0.55;
-            let primary = 0.20 * p.sin();
-            let shimmer = 0.07 * (p * 1.7 + (i as f32) * 0.31).sin();
-            *slot = (0.5 + primary + shimmer + breath).clamp(0.05, 0.95);
-        }
-        out
-    }
-
-    fn vertical_block(fill: f32) -> &'static str {
-        // 9-step sub-cell vertical block: ' ' through '█' in 1/8 increments.
-        const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-        let idx = (fill.clamp(0.0, 1.0) * 8.0).round() as usize;
-        BLOCKS[idx.min(8)]
-    }
-
-    fn smooth_value(current: f32, target: f32, attack: f32, release: f32) -> f32 {
-        let factor = if target > current { attack } else { release };
-        (current + (target - current) * factor).clamp(0.0, 1.0)
-    }
-
-    /// Borderless visualizer for the merged shell. Renders bars only when
-    /// audio is paired; otherwise shows a "no audio" hint plus the guide
-    /// pairing hint. No block, no title — the rail's whitespace
-    /// owns the separation.
-    pub fn render_inline(&self, frame: &mut Frame, area: Rect) {
-        if area.height == 0 || area.width == 0 {
-            return;
-        }
-        if self.procedural_active {
-            let lines = self.build_procedural_lines(area);
-            frame.render_widget(Paragraph::new(lines), area);
-            return;
-        }
-        if !self.has_viz {
-            let faint = Style::default().fg(theme::TEXT_FAINT());
-            let amber_italic = Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::ITALIC);
-            let amber_key = Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD);
-
-            let mut lines: Vec<Line<'static>> = Vec::with_capacity(area.height as usize);
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("no audio paired", faint)));
-            lines.push(Line::from(vec![
-                Span::styled("? guide", amber_italic),
-                Span::styled(" pair", faint),
-            ]));
-            if area.height >= 5 {
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![
-                    Span::styled("v+x", amber_key),
-                    Span::styled(" source", faint),
-                ]));
-            }
-            frame.render_widget(Paragraph::new(lines), area);
-            return;
-        }
-        let lines = self.build_lines(area);
-        frame.render_widget(Paragraph::new(lines), area);
-    }
-
-    fn build_lines(&self, area: Rect) -> Vec<Line<'static>> {
-        let height = area.height as usize;
-        let width = area.width as usize;
-        if height == 0 || width == 0 {
-            return Vec::new();
-        }
-
-        // Thin bars with small gaps: n bars + (n-1) gaps = width
-        // So 2n - 1 = width, n = (width + 1) / 2
-        let band_count = width.div_ceil(2).max(1);
-        let gap = 1usize;
-
-        let mut bands = self.resample(&self.bands, band_count);
-        let len = bands.len();
-        for (i, band) in bands.iter_mut().enumerate() {
-            *band = Self::tilt(*band, i, len);
-        }
-
-        let mut lines = Vec::with_capacity(height);
-        for row in 0..height {
-            let cell_from_bottom = (height - row - 1) as f32;
-            let mut spans: Vec<Span> = Vec::with_capacity(band_count * 2);
-
-            for (i, &band) in bands.iter().enumerate().take(band_count) {
-                let band = band.clamp(0.0, 1.0);
-                let bar_height_cells = band * height as f32;
-                let fill = (bar_height_cells - cell_from_bottom).clamp(0.0, 1.0);
-
-                if fill <= 0.0 {
-                    spans.push(Span::raw(" "));
-                } else {
-                    spans.push(Span::styled(
-                        Self::vertical_block(fill),
-                        Self::real_bar_style(fill, band),
-                    ));
-                }
-                if gap > 0 && i + 1 < band_count {
-                    spans.push(Span::raw(" ".repeat(gap)));
-                }
-            }
-
-            lines.push(Line::from(spans));
-        }
-
-        lines
-    }
-
-    fn real_bar_style(fill: f32, band: f32) -> Style {
-        if band > 0.78 && fill > 0.5 {
-            Style::default().fg(theme::AMBER_GLOW())
-        } else if fill < 0.5 || band < 0.35 {
-            Style::default().fg(theme::AMBER_DIM())
-        } else {
-            Style::default().fg(theme::AMBER())
-        }
-    }
-
-    fn build_procedural_lines(&self, area: Rect) -> Vec<Line<'static>> {
-        let height = area.height as usize;
-        let width = area.width as usize;
-        if height == 0 || width == 0 {
-            return Vec::new();
-        }
-
-        let band_count = width.div_ceil(2).max(1);
-        let gap = 1usize;
-
-        // No tilt — the procedural pattern is decorative, not a frequency
-        // spectrum. Tilting it would lean the whole wave to one side and read
-        // as broken rather than stylized.
-        let source = self.procedural_bands();
-        let bands = self.resample(&source, band_count);
-        let style = Style::default().fg(theme::AMBER_DIM());
-
-        let mut lines = Vec::with_capacity(height);
-        for row in 0..height {
-            // Vertical cell index measured from the bottom (0 = bottom row).
-            let cell_from_bottom = (height - row - 1) as f32;
-            let mut spans: Vec<Span> = Vec::with_capacity(band_count * 2);
-
-            for (i, &band) in bands.iter().enumerate().take(band_count) {
-                let bar_height_cells = band.clamp(0.0, 1.0) * height as f32;
-                // How much of THIS cell is filled by the bar (0..1).
-                let fill = (bar_height_cells - cell_from_bottom).clamp(0.0, 1.0);
-
-                if fill <= 0.0 {
-                    spans.push(Span::raw(" "));
-                } else {
-                    spans.push(Span::styled(Self::vertical_block(fill), style));
-                }
-
-                if gap > 0 && i + 1 < band_count {
-                    spans.push(Span::raw(" ".repeat(gap)));
-                }
-            }
-
-            lines.push(Line::from(spans));
-        }
-
-        lines
-    }
-
-    fn resample(&self, input: &[f32], target: usize) -> Vec<f32> {
-        if input.is_empty() || target == 0 {
-            return Vec::new();
-        }
-        if target == input.len() {
-            return input.to_vec();
-        }
-        let max_index = (input.len() - 1) as f32;
-        let mut out = Vec::with_capacity(target);
-        for i in 0..target {
-            let t = if target == 1 {
-                0.0
-            } else {
-                i as f32 / (target - 1) as f32
-            };
-            let pos = t * max_index;
-            let left = pos.floor() as usize;
-            let right = pos.ceil() as usize;
-            if left == right {
-                out.push(input[left]);
-            } else {
-                let frac = pos - left as f32;
-                out.push(input[left] + (input[right] - input[left]) * frac);
-            }
-        }
-        out
-    }
-
-    fn tilt(value: f32, index: usize, count: usize) -> f32 {
-        if count <= 1 {
-            return value.clamp(0.0, 1.0);
-        }
-        let t = index as f32 / (count - 1) as f32;
-        let weight = 0.65 + 0.35 * t;
-        (value.clamp(0.0, 1.0) * weight).powf(1.1)
-    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 #[cfg(test)]

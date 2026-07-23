@@ -13,7 +13,7 @@ use crate::app::audio::{
     client_state::ClientAudioState,
     stations,
     svc::{QueueItemView, QueueSnapshot},
-    viz::Visualizer,
+    viz::render_wave,
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai_v2::state::BonsaiV2State;
@@ -27,9 +27,9 @@ use late_core::models::user::{
 // changes.
 const TIME_HEIGHT: u16 = 2;
 const RULE_HEIGHT: u16 = 1;
-// Visualizer strip pinned above the dock: a small always-on-top-of-audio
-// glance, not its own panel. `Visualizer::render_inline` adapts its idle
-// hint text to whatever height it's given, so this stays honest at 3 rows.
+// Ambient wave strip pinned above the dock: a small always-on decorative
+// scroll (`viz::render_wave`), not its own panel and not tied to audio
+// state. The wave scales to whatever height it's given; the stage pins 3.
 const MUSIC_VIZ_HEIGHT: u16 = 3;
 // Dock + detail portion of the stage (unchanged by the visualizer merge):
 // volume rows (2) + three dock entries (title + now-playing, 6) + labeled
@@ -37,7 +37,7 @@ const MUSIC_VIZ_HEIGHT: u16 = 3;
 // sources — chrome must not move between states;
 // `music_stage_chrome_rows_never_move` locks this in tests.
 const MUSIC_DOCK_HEIGHT: u16 = 16;
-// Full music stage: the visualizer strip on top of the dock + detail area.
+// Full music stage: the wave strip on top of the dock + detail area.
 const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 // Detail area under the labeled rule: the active source's controls, padded
 // to exactly this many rows. Sized for radio (five station rows + the
@@ -58,13 +58,11 @@ pub(crate) struct SidebarProps<'a> {
     /// Ordered panels with their on/off state. Render order is top to bottom;
     /// the clock is always pinned above this list.
     pub components: &'a [RightSidebarComponentSetting],
-    pub visualizer: &'a Visualizer,
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
     pub bonsai: &'a BonsaiState,
     pub bonsai_v2: &'a BonsaiV2State,
     pub use_bonsai_v2: bool,
-    pub audio_beat: f32,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
@@ -217,7 +215,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                     frame,
                     body,
                     &MusicStageProps {
-                        visualizer: props.visualizer,
                         now_playing: props.now_playing,
                         paired_client: props.paired_client,
                         queue: props.queue_snapshot,
@@ -238,14 +235,14 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                         frame,
                         body,
                         props.bonsai_v2,
-                        props.audio_beat,
+                        props.marquee_tick,
                     );
                 } else {
                     crate::app::bonsai::ui::draw_bonsai_inline(
                         frame,
                         body,
                         props.bonsai,
-                        props.audio_beat,
+                        props.marquee_tick,
                     );
                 }
             }
@@ -278,7 +275,7 @@ fn component_height(component: RightSidebarComponent) -> u16 {
 /// drops first. Deliberately independent of display order — reordering the
 /// sidebar changes where panels sit, not which ones survive a short
 /// terminal. Bonsai (ambience) goes first; the music stage, which now
-/// carries the visualizer strip too, is the last panel standing.
+/// carries the wave strip too, is the last panel standing.
 fn shrink_priority(component: RightSidebarComponent) -> u8 {
     match component {
         RightSidebarComponent::Bonsai => 3, // first to go
@@ -545,7 +542,6 @@ fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
 /// Inputs for the music stage, bundled so the pure line builder is easy to
 /// drive from tests.
 struct MusicStageProps<'a> {
-    visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
     queue: &'a QueueSnapshot,
@@ -561,9 +557,9 @@ struct MusicStageProps<'a> {
     marquee_tick: usize,
 }
 
-/// Music stage: a small visualizer strip pinned on top, then the fixed dock
-/// and fixed detail area. Rows 0-2 the visualizer (borderless bars, or an
-/// idle hint while nothing is paired), rows 3-4 volume, rows 5-10 a
+/// Music stage: a small ambient wave strip pinned on top, then the fixed
+/// dock and fixed detail area. Rows 0-2 the wave (borderless, always
+/// scrolling, no audio state), rows 3-4 volume, rows 5-10 a
 /// three-source dock in order radio → youtube → icecast (title bar +
 /// now-playing line per source; radio leads because it is the default
 /// source for new users), row 11 a labeled rule naming the active source,
@@ -590,7 +586,7 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) 
 
     let [viz_area, dock_area] =
         Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
-    props.visualizer.render_inline(frame, viz_area);
+    render_wave(frame, viz_area, props.marquee_tick);
 
     let lines = music_stage_lines(dock_area.width, props);
     frame.render_widget(Paragraph::new(lines), dock_area);
