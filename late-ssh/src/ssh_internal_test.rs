@@ -110,13 +110,8 @@ async fn throttle_fires_immediately_when_gap_elapsed() {
     let previous_render = Some(Instant::now() - Duration::from_secs(1));
 
     let start = Instant::now();
-    let action = next_render_action(
-        world_deadline,
-        &signal,
-        &mut input_pending,
-        previous_render,
-    )
-    .await;
+    let action =
+        next_render_action(world_deadline, &signal, &mut input_pending, previous_render).await;
     let elapsed = start.elapsed();
 
     assert_eq!(action, RenderAction::Render);
@@ -136,13 +131,8 @@ async fn throttle_waits_for_min_render_gap() {
     let previous_render = Some(Instant::now());
 
     let start = Instant::now();
-    let action = next_render_action(
-        world_deadline,
-        &signal,
-        &mut input_pending,
-        previous_render,
-    )
-    .await;
+    let action =
+        next_render_action(world_deadline, &signal, &mut input_pending, previous_render).await;
     let elapsed = start.elapsed();
 
     assert_eq!(action, RenderAction::Render);
@@ -180,13 +170,8 @@ async fn world_tick_wins_tie_with_throttle() {
     // Throttle is already satisfied too (previous render long ago).
     let previous_render = Some(Instant::now() - Duration::from_secs(1));
 
-    let action = next_render_action(
-        world_deadline,
-        &signal,
-        &mut input_pending,
-        previous_render,
-    )
-    .await;
+    let action =
+        next_render_action(world_deadline, &signal, &mut input_pending, previous_render).await;
 
     assert_eq!(
         action,
