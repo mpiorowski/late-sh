@@ -87,18 +87,23 @@ impl Visualizer {
         self.beat
     }
 
-    /// Returns true while the decay is still visibly animating. Once every
-    /// level falls below [`SETTLE_EPSILON`] the state snaps to zero and stays
-    /// settled (no further change) until the next real frame arrives.
-    pub fn tick_idle(&mut self) -> bool {
-        if !self.has_viz {
+    /// Returns true while the decay is still visibly animating. `ticks` is
+    /// how many 66ms wall ticks elapsed since the previous world tick: the
+    /// adaptive loop ticks sparsely, so per-call decay would slow with the
+    /// cadence; scaling by elapsed ticks keeps the decay wall-clock-true.
+    /// Once every level falls below [`SETTLE_EPSILON`] the state snaps to
+    /// zero and stays settled (no further change) until the next real frame
+    /// arrives.
+    pub fn tick_idle(&mut self, ticks: u32) -> bool {
+        if !self.has_viz || ticks == 0 {
             return false;
         }
-        self.rms = (self.rms * 0.96).max(0.0);
+        let ticks = ticks as i32;
+        self.rms = (self.rms * 0.96f32.powi(ticks)).max(0.0);
         for band in &mut self.bands {
-            *band = (*band * IDLE_BAND_DECAY).max(0.0);
+            *band = (*band * IDLE_BAND_DECAY.powi(ticks)).max(0.0);
         }
-        self.beat = (self.beat * 0.9).max(0.0);
+        self.beat = (self.beat * 0.9f32.powi(ticks)).max(0.0);
         let settled = self.rms < SETTLE_EPSILON
             && self.beat < SETTLE_EPSILON
             && self.bands.iter().all(|band| *band < SETTLE_EPSILON);
@@ -122,15 +127,15 @@ impl Visualizer {
         self.has_viz || self.procedural_active
     }
 
-    /// Returns true while the procedural wave is animating.
-    pub fn tick_procedural(&mut self) -> bool {
-        if !self.procedural_active {
+    /// Returns true while the procedural wave is animating. `ticks` scales
+    /// the phase step by elapsed 66ms wall ticks, same reasoning as
+    /// [`Self::tick_idle`].
+    pub fn tick_procedural(&mut self, ticks: u32) -> bool {
+        if !self.procedural_active || ticks == 0 {
             return false;
         }
-        self.procedural_phase += 0.08;
-        if self.procedural_phase > std::f32::consts::TAU * 1024.0 {
-            self.procedural_phase -= std::f32::consts::TAU * 1024.0;
-        }
+        self.procedural_phase =
+            (self.procedural_phase + 0.08 * ticks as f32) % (std::f32::consts::TAU * 1024.0);
         true
     }
 

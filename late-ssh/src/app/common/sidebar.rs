@@ -496,17 +496,13 @@ pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bo
     }
     // Queue detail rows (current + up next) render only for the youtube source.
     inputs.source == AudioSource::Youtube
-        && queue
-            .current
-            .iter()
-            .chain(queue.queue.iter())
-            .any(|item| {
-                let title = item
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| format!("yt:{}", item.video_id));
-                marquee_scrolls(&title, MARQUEE_QUEUE_RAIL_MIN)
-            })
+        && queue.current.iter().chain(queue.queue.iter()).any(|item| {
+            let title = item
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("yt:{}", item.video_id));
+            marquee_scrolls(&title, MARQUEE_QUEUE_RAIL_MIN)
+        })
 }
 
 /// Section name rendered into each panel's separator rule. Keeps panel

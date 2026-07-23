@@ -12,7 +12,7 @@ use late_core::models::user::AudioSource;
 /// The hot world-tick cadence (the classic 15fps): animations that earn
 /// full rate run here.
 pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
-/// Clubhouse ambience cadence (~4fps).
+/// Ambience cadence (~4fps): the Clubhouse screen and the audio visualizer.
 pub(crate) const AMBIENT_TICK: Duration = Duration::from_millis(266);
 /// Idle floor: nothing visible animates, ticks only drain service channels.
 /// Worst-case latency for an unprompted event (a chat message arriving
@@ -72,10 +72,12 @@ impl App {
             }
         }
         // Heartbeats are a liveness no-op (matched below); a heartbeat-only
-        // drain must not pay a frame.
+        // drain must not pay a frame. Viz frames only move the visualizer,
+        // whose visible change is reported by its own gate further down, so
+        // a listener with every viz surface hidden pays nothing per frame.
         if messages
             .iter()
-            .any(|m| !matches!(m, SessionMessage::Heartbeat))
+            .any(|m| !matches!(m, SessionMessage::Heartbeat | SessionMessage::Viz(_)))
         {
             changed = true;
         }
@@ -971,11 +973,13 @@ impl App {
         // The visualizer state always advances so decay keeps settling, but
         // it only costs frames while a surface that draws it is visible: the
         // right sidebar (viz and music-stage panels) or a bonsai modal
-        // (beat-driven sway).
+        // (beat-driven sway). Elapsed wall ticks scale the movement so the
+        // ambient cadence slows the frame rate, not the animation.
+        let viz_elapsed = (self.marquee_tick - prev_marquee_tick) as u32;
         let viz_ticked = if procedural {
-            self.visualizer.tick_procedural()
+            self.visualizer.tick_procedural(viz_elapsed)
         } else {
-            self.visualizer.tick_idle()
+            self.visualizer.tick_idle(viz_elapsed)
         };
         changed |=
             viz_ticked && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
@@ -989,11 +993,10 @@ impl App {
             && sidebar_visible
         {
             let selected_icecast_stream = self.selected_icecast_stream;
-            let icecast_now_playing = self.now_playing_rx.as_ref().and_then(|rx| {
-                rx.borrow()
-                    .get(selected_icecast_stream.as_str())
-                    .cloned()
-            });
+            let icecast_now_playing = self
+                .now_playing_rx
+                .as_ref()
+                .and_then(|rx| rx.borrow().get(selected_icecast_stream.as_str()).cloned());
             let selected_radio_station = self.selected_radio_station;
             let radio_now_playing = self.radio_meta_rx.as_ref().and_then(|rx| {
                 rx.borrow()
@@ -1023,7 +1026,11 @@ impl App {
             .is_some_and(|rx| rx.has_changed().unwrap_or(false));
 
         // Expired banners need one final frame to clear, then stay quiet.
-        if self.banner.as_ref().is_some_and(|banner| !banner.is_active()) {
+        if self
+            .banner
+            .as_ref()
+            .is_some_and(|banner| !banner.is_active())
+        {
             self.banner = None;
             changed = true;
         }
@@ -1088,12 +1095,16 @@ impl App {
             || (self.show_aquarium_tray && self.shop_state.entitlements().has_aquarium())
             || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
             || self.show_bonsai_modal
-            || self.show_bonsai_v2_modal
-            || (self.visualizer.animating() && self.right_sidebar_visible());
+            || self.show_bonsai_v2_modal;
         if hot {
             return HOT_TICK;
         }
-        if self.screen == Screen::Clubhouse {
+        // The audio visualizer runs at the ambient cadence (~4fps): full
+        // rate is reserved for the bonsai modals' beat sway above; the
+        // sidebar bars are ambience. Same tier as clubhouse ambience.
+        if self.screen == Screen::Clubhouse
+            || (self.visualizer.animating() && self.right_sidebar_visible())
+        {
             return AMBIENT_TICK;
         }
         IDLE_TICK

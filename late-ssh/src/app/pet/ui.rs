@@ -69,9 +69,7 @@ pub fn draw_pet_strip(frame: &mut Frame, area: Rect, view: &PetStripView<'_>) {
         slot.set(pet_rect);
     }
     if let Some(slot) = view.travel_slot {
-        slot.set(Some(
-            (wander_zone.width as usize).saturating_sub(PET_WIDTH),
-        ));
+        slot.set(Some((wander_zone.width as usize).saturating_sub(PET_WIDTH)));
     }
 
     // Only nag about an empty pantry on a day the pet can still eat. Once fed,

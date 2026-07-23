@@ -24,10 +24,9 @@ use crate::{
     app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
         TerminalImageProtocol, TerminalImageRenderState, da1_probe, iterm2_capabilities_probe,
-        kitty_cleanup_commands, protocol_from_device_attributes,
-        protocol_from_env_hint, protocol_from_term, protocol_from_terminal_features,
-        protocol_from_xtversion, term_disables_terminal_images, terminal_image_cleanup_commands,
-        terminal_string_terminator,
+        kitty_cleanup_commands, protocol_from_device_attributes, protocol_from_env_hint,
+        protocol_from_term, protocol_from_terminal_features, protocol_from_xtversion,
+        term_disables_terminal_images, terminal_image_cleanup_commands, terminal_string_terminator,
     },
     app::{
         chat,

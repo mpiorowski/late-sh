@@ -70,9 +70,15 @@ CONTEXT.md §2.6 documents the gate.
   `ChatState::tick` uses it instead of the watch peek. Enabler: `model!`
   macro + chat-poll structs in late-core derive `PartialEq`.
   Test: `identical_snapshot_reapply_reports_clean` (state_internal_test.rs).
-- Visualizer: still ticks every frame (decay must settle) but only reports
+- Visualizer: ticks every world tick (decay must settle) but only reports
   changed while the right sidebar or a bonsai modal is visible.
   `sidebar_visible` computed once in tick, shared with the marquee block.
+  Runs at AMBIENT cadence (~4fps) via wake_hint, not hot: decay and the
+  procedural phase scale by elapsed wall ticks so the slower cadence
+  lowers the frame rate, not the animation speed. Bonsai modals are hot,
+  so beat sway keeps full rate there. `SessionMessage::Viz` drains are
+  excluded from the generic changed check (like heartbeats): the viz gate
+  reports visible change, so hidden-sidebar listeners pay no frames.
 - Pet strip: `PetState::tick() -> bool` (feedback expiry, roam end,
   day-rollover mood/needs flips via `last_visual` compare). Animation pays
   exactly on frame boundaries: `pet::ui::strip_frame_changed(mood, tick,
@@ -154,9 +160,11 @@ long unless input or a RenderSignal wake lands first. Three tiers:
 - HOT_TICK 66ms: splash, post-input window (2s after any input, so menu
   loads and chat send echo keep typing latency), active ultimate effect,
   HouseTable screen, Arcade with a game open, pet roaming or strip drawn,
-  aquarium tray visible, profile-modal live reef, bonsai modals, viz
-  animating while the sidebar shows it.
-- AMBIENT_TICK 266ms: Clubhouse screen (matches its ~4fps ambience gate).
+  aquarium tray visible, profile-modal live reef, bonsai modals.
+- AMBIENT_TICK 266ms: Clubhouse screen (matches its ~4fps ambience gate)
+  and the audio visualizer while animating on a visible sidebar (product
+  decision 2026-07-23: viz demoted from hot; bars are ambience, full rate
+  is reserved for the bonsai modals' beat sway).
 - IDLE_TICK 500ms floor: everything else. Ticks only drain channels;
   worst-case latency for an unprompted event (chat message while idle) is
   one floor interval. Input/resize/door-proxy wakes remain instant.

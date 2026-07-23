@@ -408,8 +408,7 @@ impl State {
     pub fn tick(&mut self) -> ShowcaseTick {
         // Peek before draining: anything queued may change the rendered tab
         // (badge counts, showcase list), so it counts as changed.
-        let changed =
-            self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
         ShowcaseTick {
             banner: self.drain_events(),

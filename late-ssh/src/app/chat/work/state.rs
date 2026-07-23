@@ -464,8 +464,7 @@ impl State {
     pub fn tick(&mut self) -> WorkTick {
         // Peek before draining: anything queued may change the rendered tab
         // (badge counts, work profile list), so it counts as changed.
-        let changed =
-            self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
         WorkTick {
             banner: self.drain_events(),

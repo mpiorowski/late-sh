@@ -141,8 +141,7 @@ impl ProfileState {
     pub fn tick(&mut self) -> ProfileTick {
         // Peek before draining: anything queued may change render-visible
         // state, so it counts as changed.
-        let changed =
-            self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
         ProfileTick {
             banner: self.drain_events(),

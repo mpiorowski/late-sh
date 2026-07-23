@@ -109,7 +109,7 @@ fn tick_idle_decays_rms() {
     viz.has_viz = true;
     viz.rms = 1.0;
     viz.bands = [1.0; 8];
-    viz.tick_idle();
+    viz.tick_idle(1);
     assert!(viz.rms < 1.0);
     assert!(viz.rms > 0.0);
     assert!(viz.bands.iter().all(|band| *band < 1.0 && *band > 0.0));
@@ -119,7 +119,7 @@ fn tick_idle_decays_rms() {
 fn tick_idle_no_op_without_viz() {
     let mut viz = Visualizer::new();
     viz.rms = 1.0;
-    viz.tick_idle();
+    viz.tick_idle(1);
     assert_eq!(viz.rms, 1.0); // unchanged because has_viz is false
 }
 
@@ -128,14 +128,61 @@ fn tick_procedural_advances_phase_when_active() {
     let mut viz = Visualizer::new();
     viz.set_procedural_active(true);
     let before = viz.procedural_phase;
-    viz.tick_procedural();
+    viz.tick_procedural(1);
     assert!(viz.procedural_phase > before);
 }
 
 #[test]
 fn tick_procedural_no_op_when_inactive() {
     let mut viz = Visualizer::new();
-    viz.tick_procedural();
+    viz.tick_procedural(1);
+    assert_eq!(viz.procedural_phase, 0.0);
+}
+
+#[test]
+fn ticks_scale_movement_to_wall_time() {
+    // The adaptive loop ticks sparsely; one sparse tick covering N wall
+    // ticks must move exactly as far as N dense ticks, or animation speed
+    // would follow the cadence.
+    let frame = VizFrame {
+        bands: [1.0; 8],
+        rms: 1.0,
+        track_pos_ms: 0,
+    };
+    let mut dense = Visualizer::new();
+    dense.update(&frame);
+    for _ in 0..4 {
+        dense.tick_idle(1);
+    }
+    let mut sparse = Visualizer::new();
+    sparse.update(&frame);
+    sparse.tick_idle(4);
+    assert!((dense.rms - sparse.rms).abs() < 0.0001);
+    assert!((dense.bands[0] - sparse.bands[0]).abs() < 0.0001);
+
+    let mut proc_dense = Visualizer::new();
+    proc_dense.set_procedural_active(true);
+    for _ in 0..4 {
+        proc_dense.tick_procedural(1);
+    }
+    let mut proc_sparse = Visualizer::new();
+    proc_sparse.set_procedural_active(true);
+    proc_sparse.tick_procedural(4);
+    assert!((proc_dense.procedural_phase - proc_sparse.procedural_phase).abs() < 0.0001);
+}
+
+#[test]
+fn zero_elapsed_ticks_move_nothing_and_report_clean() {
+    let mut viz = Visualizer::new();
+    viz.update(&VizFrame {
+        bands: [1.0; 8],
+        rms: 1.0,
+        track_pos_ms: 0,
+    });
+    assert!(!viz.tick_idle(0));
+    assert_eq!(viz.rms, 1.0);
+    viz.set_procedural_active(true);
+    assert!(!viz.tick_procedural(0));
     assert_eq!(viz.procedural_phase, 0.0);
 }
 
@@ -154,7 +201,7 @@ fn procedural_bands_animate_with_phase() {
     viz.set_procedural_active(true);
     // Several ticks should produce a different shape.
     for _ in 0..10 {
-        viz.tick_procedural();
+        viz.tick_procedural(1);
     }
     let later = viz.procedural_bands();
     assert!(
@@ -195,7 +242,7 @@ fn render_inline_uses_procedural_path_when_active() {
     let mut viz = Visualizer::new();
     viz.set_procedural_active(true);
     // Advance once so at least one band sits above the midline.
-    viz.tick_procedural();
+    viz.tick_procedural(1);
 
     terminal
         .draw(|frame| viz.render_inline(frame, Rect::new(0, 0, width, height)))
@@ -273,24 +320,24 @@ fn idle_decay_settles_and_stops_reporting_change() {
     let mut viz = Visualizer::new();
 
     // Untouched visualizer: nothing to decay, nothing to repaint.
-    assert!(!viz.tick_idle());
+    assert!(!viz.tick_idle(1));
 
     viz.update(&late_core::audio::VizFrame {
         bands: [1.0; 8],
         rms: 1.0,
         track_pos_ms: 0,
     });
-    assert!(viz.tick_idle(), "fresh energy must animate the decay");
+    assert!(viz.tick_idle(1), "fresh energy must animate the decay");
 
     // Decay runs out within a bounded number of ticks and then goes quiet.
     let mut settled_at = None;
     for tick in 0..500 {
-        if !viz.tick_idle() {
+        if !viz.tick_idle(1) {
             settled_at = Some(tick);
             break;
         }
     }
     assert!(settled_at.is_some(), "idle decay never settled");
-    assert!(!viz.tick_idle(), "settled visualizer must stay quiet");
+    assert!(!viz.tick_idle(1), "settled visualizer must stay quiet");
     assert_eq!(viz.rms(), 0.0);
 }
