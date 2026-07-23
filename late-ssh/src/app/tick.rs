@@ -978,15 +978,16 @@ impl App {
         // text overflows. The marquee moves at most once per
         // MARQUEE_STEP_TICKS and every transition lands on a multiple of it,
         // so only those boundary ticks need a frame.
-        if self.marquee_tick.is_multiple_of(crate::app::common::marquee::MARQUEE_STEP_TICKS)
+        if self
+            .marquee_tick
+            .is_multiple_of(crate::app::common::marquee::MARQUEE_STEP_TICKS)
             && sidebar_visible
         {
             let selected_icecast_stream = self.selected_icecast_stream;
-            let icecast_now_playing = self.now_playing_rx.as_ref().and_then(|rx| {
-                rx.borrow()
-                    .get(selected_icecast_stream.as_str())
-                    .cloned()
-            });
+            let icecast_now_playing = self
+                .now_playing_rx
+                .as_ref()
+                .and_then(|rx| rx.borrow().get(selected_icecast_stream.as_str()).cloned());
             let selected_radio_station = self.selected_radio_station;
             let radio_now_playing = self.radio_meta_rx.as_ref().and_then(|rx| {
                 rx.borrow()
@@ -1016,7 +1017,11 @@ impl App {
             .is_some_and(|rx| rx.has_changed().unwrap_or(false));
 
         // Expired banners need one final frame to clear, then stay quiet.
-        if self.banner.as_ref().is_some_and(|banner| !banner.is_active()) {
+        if self
+            .banner
+            .as_ref()
+            .is_some_and(|banner| !banner.is_active())
+        {
             self.banner = None;
             changed = true;
         }

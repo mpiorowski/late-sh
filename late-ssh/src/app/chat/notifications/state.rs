@@ -88,8 +88,7 @@ impl State {
     pub fn tick(&mut self) -> NotificationsTick {
         // Peek before draining: anything queued may change the rendered tab
         // (badge counts, mention list), so it counts as changed.
-        let changed =
-            self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
         NotificationsTick {
             banner: self.drain_events(),

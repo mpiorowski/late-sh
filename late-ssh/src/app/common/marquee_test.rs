@@ -21,7 +21,10 @@ fn marquee_transitions_land_on_step_boundaries() {
     for tick in 1..400 {
         let current = marquee_text("abcdefgh", 5, tick);
         if !tick.is_multiple_of(MARQUEE_STEP_TICKS) {
-            assert_eq!(current, previous, "window moved off-boundary at tick {tick}");
+            assert_eq!(
+                current, previous,
+                "window moved off-boundary at tick {tick}"
+            );
         }
         previous = current;
     }

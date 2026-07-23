@@ -2686,7 +2686,6 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
     // history lives on Home), so it resolves to None like everything else.
     if let Some(room_id) = embedded_chat_room_id(app, screen) {
         chat::input::handle_scroll_in_room(app, room_id, delta);
-        return;
     }
 }
 
