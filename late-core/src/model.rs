@@ -10,7 +10,7 @@ macro_rules! model {
               $(pub $data_field:ident : $data_type:ty),* $(,)?
           }
       ) => {
-          #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+          #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
           pub struct $name {
               pub id: uuid::Uuid,
               pub created: chrono::DateTime<chrono::Utc>,

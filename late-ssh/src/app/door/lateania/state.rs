@@ -119,9 +119,13 @@ impl State {
         state
     }
 
-    pub fn tick(&mut self) {
+    /// Returns true when the visible state moved: a world snapshot landed,
+    /// a remote reset kicked this session, or the pending join resolved.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+            changed = true;
         }
         let reset_version = self
             .snapshot
@@ -134,11 +138,13 @@ impl State {
             self.joined = false;
             self.join_pending = false;
             self.reset_elsewhere = true;
-            return;
+            return true;
         }
-        if self.snapshot.players.contains_key(&self.user_id) {
+        if self.snapshot.players.contains_key(&self.user_id) && self.join_pending {
             self.join_pending = false;
+            changed = true;
         }
+        changed
     }
 
     pub fn touch_activity(&mut self) {

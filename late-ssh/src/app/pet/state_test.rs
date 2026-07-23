@@ -187,3 +187,31 @@ fn care_score_weights_food_more_than_water() {
         45
     );
 }
+
+#[tokio::test]
+async fn sparse_ticks_expire_feedback_on_the_wall_clock() {
+    use crate::test_helpers::new_test_db;
+    use late_core::test_utils::create_test_user;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "cat-wall-tick").await;
+    let svc = super::super::svc::PetService::new(test_db.db.clone());
+    let cat = svc.ensure_cat(user.id).await.expect("ensure cat");
+    let mut state = PetState::new(user.id, svc, cat);
+
+    state.tick(10);
+    state.set_feedback("fed");
+
+    // The adaptive loop ticks sparsely: one call covering the whole
+    // feedback window must expire it, same wall time as dense ticking.
+    assert!(
+        state.tick(10 + FEEDBACK_TICKS),
+        "feedback expiry must report changed"
+    );
+    assert!(state.action_feedback.is_none());
+    assert_eq!(
+        state.animation_ticks(),
+        10 + FEEDBACK_TICKS,
+        "animation clock syncs to the wall tick, not the call count"
+    );
+}

@@ -4,10 +4,10 @@ use crossterm::{
     cursor,
     terminal::{self, ClearType},
 };
-use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame};
+use late_core::{MutexRecover, api_types::NowPlaying};
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     io::{self, Write},
     sync::{Arc, Mutex},
     time::Instant,
@@ -20,14 +20,13 @@ use late_core::models::profile::Profile;
 
 use crate::{
     app::activity::event::ActivityEvent,
-    app::audio::{client_state::ClientAudioState, viz::Visualizer},
+    app::audio::client_state::ClientAudioState,
     app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
-        TerminalImageProtocol, TerminalImageRenderState, da1_probe, identity_is_kitty,
-        iterm2_capabilities_probe, kitty_cleanup_commands, protocol_from_device_attributes,
-        protocol_from_env_hint, protocol_from_term, protocol_from_terminal_features,
-        protocol_from_xtversion, term_disables_terminal_images, terminal_image_cleanup_commands,
-        terminal_string_terminator,
+        TerminalImageProtocol, TerminalImageRenderState, da1_probe, iterm2_capabilities_probe,
+        kitty_cleanup_commands, protocol_from_device_attributes, protocol_from_env_hint,
+        protocol_from_term, protocol_from_terminal_features, protocol_from_xtversion,
+        term_disables_terminal_images, terminal_image_cleanup_commands, terminal_string_terminator,
     },
     app::{
         chat,
@@ -85,8 +84,6 @@ pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
 pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
 pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 9;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
-
-const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
 
 /// Bounds for the aquarium simulation. The tray renders inside the chat
 /// column, so mirror the default Home layout: frame borders (2) plus the
@@ -252,9 +249,6 @@ pub struct SessionConfig {
             std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
         >,
     >,
-    /// Process-global World Cup service handle (clone), used to subscribe to
-    /// the snapshot and to mint a viewer guard while on the screen.
-    pub worldcup_service: Option<crate::app::worldcup::svc::WorldCupService>,
     pub active_users: Option<ActiveUsers>,
     /// Process-global clubhouse presence (seats, walkers, emotes). `None`
     /// on headless/test paths, which keeps the room session-local.
@@ -313,6 +307,18 @@ pub struct App {
     /// Free-running frame counter (advances every world tick) used to animate
     /// the bumped-room marquee in the room rail.
     pub(crate) marquee_tick: usize,
+    /// Wall-clock origin for `marquee_tick`: the counter is derived as
+    /// elapsed/66ms so animation phase stays correct however sparsely the
+    /// adaptive loop ticks.
+    pub(crate) started_at: Instant,
+    /// Set on every handle_input byte; wake_hint holds the hot cadence for
+    /// a short window after input so request -> response interactions
+    /// (menu loads, chat send echo) land at typing latency.
+    pub(crate) last_input_at: Instant,
+    /// Second-boundary edge state for the shared 1Hz block in tick():
+    /// None = never fired (fire immediately so first frames have presence,
+    /// directory, and clock state).
+    pub(crate) last_one_hz_index: Option<usize>,
     pub(crate) splash_hint: String,
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
@@ -326,6 +332,10 @@ pub struct App {
     pub(crate) show_bonsai_v2_modal: bool,
     pub(crate) show_lobby_modal: bool,
     pub(crate) show_ultimate_modal: bool,
+    /// Edge detector for the cooldown label's ready flip: the countdown is
+    /// minute-granularity (rides the per-minute global frame), so only the
+    /// running -> ready transition needs its own one-shot frame.
+    pub(crate) ultimate_cooldown_was_running: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
@@ -338,9 +348,6 @@ pub struct App {
     /// Terminal / rendering
     pub(super) terminal: Terminal<CrosstermBackend<io::BufWriter<SharedBuffer>>>,
     pub(super) shared: SharedBuffer,
-    pub(super) visualizer: Visualizer,
-    pub(super) viz_frame_buffer: VecDeque<VizFrame>,
-    pub(super) last_viz_frame_at: Option<Instant>,
 
     /// Session / connection
     pub(super) connect_url: String,
@@ -355,16 +362,6 @@ pub struct App {
             std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
         >,
     >,
-    /// Live World Cup snapshot feed (process-global service, demand-gated).
-    pub(super) worldcup_rx: Option<
-        tokio::sync::watch::Receiver<std::sync::Arc<crate::app::worldcup::model::WorldCupSnapshot>>,
-    >,
-    /// Handle used to mint the viewer guard while on the World Cup screen.
-    pub(super) worldcup_service: Option<crate::app::worldcup::svc::WorldCupService>,
-    /// Present only while this session is on the World Cup screen; dropping it
-    /// releases the poll gate.
-    pub(crate) worldcup_viewer: Option<crate::app::worldcup::svc::WorldCupViewer>,
-    pub(crate) worldcup: crate::app::worldcup::state::State,
     /// Admin-gated clubhouse tavern (page `0`): avatar, crowd, animations.
     pub(crate) clubhouse: crate::app::clubhouse::state::State,
     /// Chips backend, kept for the clubhouse's on-the-house welcome pour.
@@ -385,6 +382,9 @@ pub struct App {
     /// shared `active_users` map every frame.
     pub(crate) online_count: usize,
     pub(crate) active_friend_names: Vec<String>,
+    /// Last rendered sidebar clock text, compared on the ~1s tick so minute
+    /// rollovers count as a render-visible change.
+    pub(super) last_sidebar_clock: String,
     /// App-owned author-context epoch for the chat row caches: bumps when
     /// AFK, drunk levels, name styles, or the username directory change.
     /// Pairs with `ChatState::context_epoch` in `ChatRowsVersions`.
@@ -406,6 +406,9 @@ pub struct App {
     pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) last_pet_strip_food_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) last_pet_strip_water_rect: std::cell::Cell<Option<Rect>>,
+    /// Wander travel width of the pet strip drawn last frame; `None` when the
+    /// strip was not drawn. Gates the strip animation's frame cost in tick.
+    pub(crate) last_pet_strip_travel: std::cell::Cell<Option<usize>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -464,7 +467,6 @@ pub struct App {
     pub(crate) bonsai_v2_state: crate::app::bonsai_v2::state::BonsaiV2State,
     /// Recent input grants Dynamic Bonsai passive-growth credit for a short
     /// active window. Idle open sessions should not grow the tree.
-    pub(crate) bonsai_v2_activity_ticks_remaining: usize,
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
@@ -610,12 +612,6 @@ pub struct App {
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
-    /// True when the client is kitty specifically. kitty desyncs its cursor from
-    /// ratatui's cell-width model on regional-indicator flags, which splits the
-    /// flags in the World Cup overview's rightmost column; that one column drops
-    /// flags for kitty. Seeded from TERM, refined by the XTVERSION reply.
-    pub(crate) terminal_is_kitty: bool,
-
     /// Desktop-notification domain: producers (chat, daily) push through
     /// cloned `notifier` handles; render drains `notify_outbox` into OSC
     /// bytes.
@@ -747,7 +743,6 @@ impl App {
             protocol_from_term(&config.term)
         };
         let inline_image_symbol_mode = InlineImageSymbolMode::from_identity(&config.term);
-        let terminal_is_kitty = identity_is_kitty(&config.term);
         let pending_terminal_commands = Vec::new();
         let (notifier, notify_outbox) = crate::app::notify::channel();
 
@@ -1007,6 +1002,9 @@ impl App {
             show_splash: true,
             splash_ticks: 0,
             marquee_tick: 0,
+            started_at: Instant::now(),
+            last_input_at: Instant::now(),
+            last_one_hz_index: None,
             splash_hint,
             show_quit_confirm: false,
             show_help: false,
@@ -1020,6 +1018,7 @@ impl App {
             show_bonsai_v2_modal: false,
             show_lobby_modal: false,
             show_ultimate_modal: false,
+            ultimate_cooldown_was_running: false,
             login_announcements: config.initial_announcements,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),
@@ -1030,9 +1029,6 @@ impl App {
             vt_input: crate::app::input::VtInputParser::default(),
             terminal,
             shared,
-            visualizer: Visualizer::new(),
-            viz_frame_buffer: VecDeque::new(),
-            last_viz_frame_at: None,
             connect_url: format!("{}/{}", config.web_url, config.session_token),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,
@@ -1040,13 +1036,6 @@ impl App {
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
             radio_meta_rx: config.radio_meta_rx,
-            worldcup_rx: config
-                .worldcup_service
-                .as_ref()
-                .map(|svc| svc.subscribe_state()),
-            worldcup_service: config.worldcup_service,
-            worldcup_viewer: None,
-            worldcup: crate::app::worldcup::state::State::default(),
             clubhouse: crate::app::clubhouse::state::State::new(
                 config.clubhouse_lobby.clone(),
                 config.user_id,
@@ -1063,6 +1052,7 @@ impl App {
                 .map(crate::state::online_human_count)
                 .unwrap_or(0),
             active_friend_names: Vec::new(),
+            last_sidebar_clock: String::new(),
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
@@ -1073,6 +1063,7 @@ impl App {
             last_pet_strip_pet_rect: std::cell::Cell::new(None),
             last_pet_strip_food_rect: std::cell::Cell::new(None),
             last_pet_strip_water_rect: std::cell::Cell::new(None),
+            last_pet_strip_travel: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -1131,7 +1122,6 @@ impl App {
             bonsai_state,
             bonsai_care_state,
             bonsai_v2_state,
-            bonsai_v2_activity_ticks_remaining: 0,
             pet_state,
             quest_state,
             shop_state,
@@ -1218,7 +1208,6 @@ impl App {
             terminal_images_disabled,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
-            terminal_is_kitty,
             notify_outbox,
             is_draining: config.is_draining,
             icon_picker_open: false,
@@ -1719,14 +1708,6 @@ impl App {
         if self.screen == Screen::Clubhouse {
             self.clubhouse.enter_screen();
         }
-        // Hold a viewer guard only while on the World Cup screen; this both
-        // wakes the demand-gated poller on entry and (by dropping the prior
-        // guard) releases it on exit.
-        self.worldcup_viewer = if self.screen == Screen::WorldCup {
-            self.worldcup_service.as_ref().map(|svc| svc.viewer())
-        } else {
-            None
-        };
         self.sync_visible_chat_room();
     }
 
@@ -1752,11 +1733,6 @@ impl App {
             "terminal xtversion reply"
         );
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_identity(value));
-        // The XTVERSION payload identifies the terminal precisely (kitty vs the
-        // rest of the kitty-graphics family), refining the TERM-based seed.
-        if identity_is_kitty(value) {
-            self.terminal_is_kitty = true;
-        }
         if self.terminal_images_disabled {
             return;
         }
@@ -1833,7 +1809,7 @@ impl App {
 
     pub fn handle_input(&mut self, data: &[u8]) {
         if !data.is_empty() {
-            self.bonsai_v2_activity_ticks_remaining = BONSAI_V2_ACTIVITY_WINDOW_TICKS;
+            self.last_input_at = Instant::now();
         }
         // While the proxied rebels game is running, every byte (keys + mouse)
         // goes straight to the remote; late.sh parses nothing. Exit is by
@@ -1928,15 +1904,14 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
     }
 
-    /// Advance the clubhouse animation clock every tick and, while the
-    /// screen is up, sync the shared lobby with the active-users map about
-    /// once a second and pull a fresh crowd snapshot every tick. Bots stay
-    /// out of the seat pool; the two staff bots (@bartender, @graybeard)
-    /// only toggle their fixed spots.
+    /// Sync the clubhouse animation clock to the wall-clock world tick and,
+    /// while the screen is up, sync the shared lobby with the active-users
+    /// map about once a second and pull a fresh crowd snapshot every tick.
+    /// Bots stay out of the seat pool; the two staff bots (@bartender,
+    /// @graybeard) only toggle their fixed spots.
     pub(crate) fn tick_clubhouse(&mut self) {
-        let on_screen = self.screen == Screen::Clubhouse;
-        self.clubhouse.tick(on_screen);
-        if !on_screen {
+        self.clubhouse.tick(self.marquee_tick as u64);
+        if self.screen != Screen::Clubhouse {
             return;
         }
 
@@ -2214,10 +2189,15 @@ impl App {
         });
     }
 
-    pub(crate) fn drain_voice_join_results(&mut self) {
+    /// Returns true when any join result was drained (banner or voice state
+    /// change), so the tick can report the frame as changed.
+    pub(crate) fn drain_voice_join_results(&mut self) -> bool {
+        let mut changed = false;
         while let Ok(result) = self.voice_join_rx.try_recv() {
             self.handle_voice_join_result(result);
+            changed = true;
         }
+        changed
     }
 
     fn handle_voice_join_result(&mut self, result: VoiceJoinTaskResult) {

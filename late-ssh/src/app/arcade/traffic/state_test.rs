@@ -43,3 +43,15 @@ fn cannot_drive_above_lane_max_for_long() {
     let lane = s.current_lane_cfg().unwrap();
     assert!(s.player_speed_kmh <= lane.own_max_speed + 1.0);
 }
+
+#[test]
+fn tick_reports_changed_only_while_driving() {
+    let mut s = State::new();
+    assert!(!s.tick(), "the track picker is static");
+    s.start_track(DEFAULT_TRACK);
+    assert!(s.tick(), "an active run advances the world");
+    s.toggle_pause();
+    assert!(!s.tick(), "a paused run is static");
+    s.toggle_pause();
+    assert!(s.tick(), "resuming advances the world again");
+}

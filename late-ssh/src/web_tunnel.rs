@@ -27,7 +27,7 @@ use std::{
 };
 use tokio::{
     sync::{Mutex as TokioMutex, OwnedSemaphorePermit, mpsc},
-    time::{MissedTickBehavior, timeout},
+    time::timeout,
 };
 
 use crate::{
@@ -43,7 +43,6 @@ use crate::{
 const INPUT_QUEUE_CAP: usize = 256;
 const WS_OUT_BUFFER: usize = 8;
 const WEB_TUNNEL_WS_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
-const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
 const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
 
@@ -374,24 +373,27 @@ async fn run_render_loop(
     frame_drop_log_every: u64,
     signal: Arc<RenderSignal>,
 ) {
-    let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
-    world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut previous_render: Option<Instant> = None;
     let mut input_pending = false;
+    // Local skip-ratio feel, mirroring ssh.rs: drawn vs skipped-clean
+    // passes, debug-logged every 5s (RUST_LOG=late_ssh=debug).
+    let mut stats_drawn: u64 = 0;
+    let mut stats_skipped: u64 = 0;
+    let mut stats_since = Instant::now();
+    // Adaptive world tick, mirroring ssh.rs: each pass reports how soon the
+    // next tick is needed (`App::wake_hint`); the first deadline is
+    // immediate so the session paints without waiting a tick.
+    let mut world_deadline = Instant::now();
 
     loop {
-        let advance_world = match next_render_action(
-            &mut world_tick,
-            &signal,
-            &mut input_pending,
-            previous_render,
-        )
-        .await
-        {
-            RenderAction::AdvanceWorld => true,
-            RenderAction::Render => false,
-            RenderAction::Skip => continue,
-        };
+        let advance_world =
+            match next_render_action(world_deadline, &signal, &mut input_pending, previous_render)
+                .await
+            {
+                RenderAction::AdvanceWorld => true,
+                RenderAction::Render => false,
+                RenderAction::Skip => continue,
+            };
 
         match render_once(
             &app,
@@ -403,11 +405,33 @@ async fn run_render_loop(
         )
         .await
         {
-            Ok(should_quit) => {
+            Ok(outcome) => {
                 previous_render = Some(Instant::now());
-                if should_quit {
+                if outcome.drew {
+                    stats_drawn += 1;
+                } else {
+                    stats_skipped += 1;
+                }
+                if stats_since.elapsed() >= Duration::from_secs(5) {
+                    tracing::debug!(
+                        drawn = stats_drawn,
+                        skipped_clean = stats_skipped,
+                        "render stats, last 5s"
+                    );
+                    stats_drawn = 0;
+                    stats_skipped = 0;
+                    stats_since = Instant::now();
+                }
+                if outcome.should_quit {
                     clean_disconnect(&out_tx).await;
                     break;
+                }
+                if advance_world {
+                    world_deadline = Instant::now() + outcome.wake_hint;
+                } else {
+                    // An input render can shrink the cadence (post-input hot
+                    // window) but never delays a world tick already due.
+                    world_deadline = world_deadline.min(Instant::now() + outcome.wake_hint);
                 }
             }
             Err(err) => {
@@ -430,14 +454,14 @@ enum RenderAction {
 }
 
 async fn next_render_action(
-    world_tick: &mut tokio::time::Interval,
+    world_deadline: Instant,
     signal: &RenderSignal,
     input_pending: &mut bool,
     previous_render: Option<Instant>,
 ) -> RenderAction {
     tokio::select! {
         biased;
-        _ = world_tick.tick() => {
+        _ = tokio::time::sleep_until(world_deadline.into()) => {
             *input_pending = false;
             RenderAction::AdvanceWorld
         }
@@ -459,6 +483,25 @@ async fn next_render_action(
     }
 }
 
+/// Mirror of ssh.rs `RenderOutcome`: quit flag, how soon the next world
+/// tick is needed, and whether the pass drew (feeds the debug stats line).
+struct RenderOutcome {
+    should_quit: bool,
+    wake_hint: Duration,
+    drew: bool,
+}
+
+impl RenderOutcome {
+    fn quit() -> Self {
+        Self {
+            should_quit: true,
+            // Unused: the loop breaks on quit.
+            wake_hint: crate::app::tick::IDLE_TICK,
+            drew: false,
+        }
+    }
+}
+
 async fn render_once(
     app: &Arc<TokioMutex<App>>,
     input_rx: &mut mpsc::Receiver<InputEvent>,
@@ -466,14 +509,18 @@ async fn render_once(
     frame_drop_log_every: u64,
     advance_world: bool,
     signal: &RenderSignal,
-) -> Result<bool> {
-    let (frame, terminal_commands) = {
+) -> Result<RenderOutcome> {
+    let (frame, terminal_commands, wake_hint) = {
         let mut app = app.lock().await;
         if !app.running {
-            return Ok(true);
+            return Ok(RenderOutcome::quit());
         }
-        signal.dirty.store(false, Ordering::Release);
+        // Same dirty gate as the SSH loop in ssh.rs: remember whether the
+        // signal was set, drain input, tick, and skip the draw when nothing
+        // render-visible changed.
+        let mut changed = signal.dirty.swap(false, Ordering::AcqRel);
         while let Ok(event) = input_rx.try_recv() {
+            changed = true;
             match event {
                 InputEvent::Bytes(data) => app.handle_input(&data),
                 InputEvent::Resize { cols, rows } => {
@@ -483,15 +530,29 @@ async fn render_once(
                 }
             }
             if !app.running {
-                return Ok(true);
+                return Ok(RenderOutcome::quit());
             }
         }
         if advance_world {
-            app.tick();
+            changed |= app.tick();
         }
+        if !changed {
+            metrics::record_render_skipped_clean();
+            return Ok(RenderOutcome {
+                should_quit: false,
+                wake_hint: app.wake_hint(),
+                drew: false,
+            });
+        }
+        metrics::record_render(if advance_world {
+            metrics::RenderReason::WorldTick
+        } else {
+            metrics::RenderReason::Input
+        });
         let frame = app.render().context("rendering frame")?;
         let terminal_commands = std::mem::take(&mut app.pending_terminal_commands);
-        (frame, terminal_commands)
+        let wake_hint = app.wake_hint();
+        (frame, terminal_commands, wake_hint)
     };
 
     if !send_frame(out_tx, frame).await? {
@@ -512,7 +573,11 @@ async fn render_once(
         }
     }
 
-    Ok(false)
+    Ok(RenderOutcome {
+        should_quit: false,
+        wake_hint,
+        drew: true,
+    })
 }
 
 async fn send_frame(out_tx: &mpsc::Sender<Message>, frame: Vec<u8>) -> Result<bool> {

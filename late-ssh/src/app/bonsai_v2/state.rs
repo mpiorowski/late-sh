@@ -10,8 +10,6 @@ use uuid::Uuid;
 
 use crate::app::bonsai::svc::BonsaiService;
 
-/// One passive growth wave per ~6 hours of active time.
-const PASSIVE_GROWTH_ACTIVE_TICK_INTERVAL: usize = 15 * 60 * 60 * 6;
 const MAX_BRANCHES: usize = 96;
 const MAX_GROWTH_WAVE_TIPS: usize = 6;
 const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
@@ -194,7 +192,6 @@ pub(crate) struct BonsaiV2State {
     pub mode: BonsaiV2Mode,
     pub message: Option<String>,
     state_revision: i64,
-    ticks_since_growth: usize,
 }
 
 impl BonsaiV2State {
@@ -226,7 +223,6 @@ impl BonsaiV2State {
             mode: BonsaiV2Mode::from_str(&tree.mode),
             message: None,
             state_revision: tree.state_revision,
-            ticks_since_growth: 0,
         };
         state.ensure_selection();
         let elapsed_changed = state.apply_elapsed_days(today);
@@ -268,7 +264,6 @@ impl BonsaiV2State {
             mode: BonsaiV2Mode::from_str(&tree.mode),
             message: None,
             state_revision: tree.state_revision,
-            ticks_since_growth: 0,
         };
         state.ensure_selection();
         // In-memory catch-up only; intentionally no `persist()` so a viewer
@@ -297,23 +292,6 @@ impl BonsaiV2State {
             mode: BonsaiV2Mode::Inspect,
             message: Some("Dynamic Bonsai is not persisted yet".to_string()),
             state_revision: 0,
-            ticks_since_growth: 0,
-        }
-    }
-
-    pub(crate) fn tick(&mut self, active: bool) {
-        if !self.is_alive || !active {
-            return;
-        }
-        self.ticks_since_growth += 1;
-        if self.ticks_since_growth < PASSIVE_GROWTH_ACTIVE_TICK_INTERVAL {
-            return;
-        }
-        self.ticks_since_growth = 0;
-        if self.vigor >= 50 {
-            self.grow_once(GrowthCause::Passive);
-            self.message = Some("A tip crept outward".to_string());
-            self.persist();
         }
     }
 
@@ -746,7 +724,6 @@ fn simulated_age_days(planted_at: DateTime<Utc>, last_simulated_date: NaiveDate)
 enum GrowthCause {
     Daily,
     DryDay,
-    Passive,
     Water,
 }
 
@@ -1176,7 +1153,6 @@ fn growth_wave_budget(
     let base: usize = match cause {
         GrowthCause::Water => 4,
         GrowthCause::Daily => 3,
-        GrowthCause::Passive => 2,
         GrowthCause::DryDay if water_stress >= 60 => 3,
         GrowthCause::DryDay => 2,
     };
@@ -1261,7 +1237,7 @@ fn growth_step(branch: &Branch) -> (i16, i16) {
 fn side_shoot_threshold(cause: GrowthCause, _tip: &Branch, vigor: i32, water_stress: i32) -> u64 {
     let base = match cause {
         GrowthCause::Water => 6,
-        GrowthCause::Daily | GrowthCause::Passive => 4,
+        GrowthCause::Daily => 4,
         GrowthCause::DryDay => 24,
     };
     let vigor_bonus = if water_stress <= 35 {

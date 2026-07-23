@@ -19,11 +19,11 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::{sync::broadcast, time::interval};
+use tokio::time::interval;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
-use super::{audio::VizSample, clipboard, voice::VoiceRuntimeState};
+use super::{clipboard, voice::VoiceRuntimeState};
 
 pub(super) struct PairClientInfo {
     pub(super) ssh_mode: &'static str,
@@ -613,11 +613,10 @@ impl Drop for WebviewPlaybackController {
     }
 }
 
-pub(super) async fn run_viz_ws(
+pub(super) async fn run_pair_ws(
     api_base_url: &str,
     token: &str,
     client: &PairClientInfo,
-    frames: &mut broadcast::Receiver<VizSample>,
     playback: &PlaybackState<'_>,
     webview: &mut WebviewPlaybackController,
     voice: &mut VoiceRuntimeState,
@@ -641,22 +640,6 @@ pub(super) async fn run_viz_ws(
 
     loop {
         tokio::select! {
-            recv = frames.recv() => {
-                let frame = match recv {
-                    Ok(frame) => frame,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                };
-                let position_ms =
-                    playback_position_ms(playback.played_samples, playback.sample_rate);
-                let payload = json!({
-                    "event": "viz",
-                    "position_ms": position_ms,
-                    "bands": frame.bands,
-                    "rms": frame.rms,
-                });
-                ws.send(Message::Text(payload.to_string().into())).await?;
-            }
             _ = heartbeat.tick() => {
                 if voice.joined && voice.media_disconnected() {
                     warn!("voice media disconnected; leaving voice state");

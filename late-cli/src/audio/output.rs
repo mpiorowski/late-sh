@@ -7,19 +7,16 @@ use std::sync::{
 
 use ringbuf::{
     HeapCons, HeapProd,
-    traits::{Consumer, Observer, Producer},
+    traits::{Consumer, Observer},
 };
 
 use super::{AudioBackendProfile, AudioSpec};
 
 pub(super) type PlaybackQueue = HeapProd<f32>;
 pub(super) type PlaybackQueueReader = HeapCons<f32>;
-pub(super) type PlayedRing = HeapCons<f32>;
-pub(super) type PlayedRingWriter = HeapProd<f32>;
 
 struct PlaybackOutputState {
     queue: PlaybackQueueReader,
-    played_ring: PlayedRingWriter,
     played_samples: Arc<AtomicU64>,
     source_channels: usize,
     muted: Arc<AtomicBool>,
@@ -43,7 +40,6 @@ pub(super) struct BuiltOutputStream {
 pub(super) fn build_output_stream(
     spec: AudioSpec,
     queue: PlaybackQueueReader,
-    played_ring: PlayedRingWriter,
     played_samples: Arc<AtomicU64>,
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
@@ -78,7 +74,6 @@ pub(super) fn build_output_stream(
     };
     let mut output_state = PlaybackOutputState {
         queue,
-        played_ring,
         played_samples,
         source_channels: spec.channels,
         muted,
@@ -260,9 +255,6 @@ where
         }
 
         if had_frame {
-            let analyzer_sample = mix_for_analyzer(&state.source_frame);
-            let analyzer_sample = if muted { 0.0 } else { analyzer_sample * volume };
-            let _ = state.played_ring.try_push(analyzer_sample);
             state.played_samples.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -350,14 +342,14 @@ fn map_output_sample(source_frame: &[f32], output_idx: usize, output_channels: u
         (2, 1) => (source_frame[0] + source_frame[1]) * 0.5,
         (2, _) => source_frame[output_idx % 2],
         (src, n) if src == n => source_frame[output_idx],
-        (_, 1) => mix_for_analyzer(source_frame),
+        (_, 1) => downmix_to_mono(source_frame),
         (src, _) if src > output_channels => source_frame[output_idx],
         (src, _) if output_idx < src => source_frame[output_idx],
         _ => *source_frame.last().unwrap_or(&0.0),
     }
 }
 
-fn mix_for_analyzer(source_frame: &[f32]) -> f32 {
+fn downmix_to_mono(source_frame: &[f32]) -> f32 {
     if source_frame.is_empty() {
         return 0.0;
     }
