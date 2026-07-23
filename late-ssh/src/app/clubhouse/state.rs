@@ -69,10 +69,19 @@ pub struct DoorEvent {
     pub until_tick: u64,
 }
 
+/// Where a banner line's text comes from. `Lounge` lines are his real #lounge
+/// messages, resolved against the tail at draw time; `Local` lines are client
+/// side only (the tutorial welcome), so nobody else in the tavern sees them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BannerLine {
+    Lounge(Uuid),
+    Local(String),
+}
+
 /// The bartender line currently pinned in the banner.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct BannerEntry {
-    message_id: Uuid,
+    line: BannerLine,
     shown_tick: u64,
 }
 
@@ -122,7 +131,7 @@ pub struct State {
     /// the ids waiting their turn, and the newest `created` already taken
     /// from the tail (so each line enqueues exactly once).
     banner_current: Option<BannerEntry>,
-    banner_queue: VecDeque<Uuid>,
+    banner_queue: VecDeque<BannerLine>,
     banner_watermark: Option<chrono::DateTime<chrono::Utc>>,
     /// Clickable avatar/label boxes from the last render, for opening
     /// profiles on click. Interior-mutable so `ui::draw` can publish it
@@ -283,7 +292,7 @@ impl State {
             if age_ms > BANNER_ENQUEUE_MAX_AGE_MS {
                 continue;
             }
-            self.banner_queue.push_back(message.id);
+            self.banner_queue.push_back(BannerLine::Lounge(message.id));
         }
         while self.banner_queue.len() > BANNER_QUEUE_MAX {
             self.banner_queue.pop_front();
@@ -298,16 +307,26 @@ impl State {
             }
         };
         if advance {
-            self.banner_current = self.banner_queue.pop_front().map(|message_id| BannerEntry {
-                message_id,
+            self.banner_current = self.banner_queue.pop_front().map(|line| BannerEntry {
+                line,
                 shown_tick: self.anim_tick,
             });
         }
     }
 
+    /// Pin a client-side line in the bartender banner, ahead of whatever is
+    /// queued: the tutorial welcome is the reason the walker is standing at the
+    /// bar, so it must not wait behind another patron's answer.
+    pub fn show_local_bartender_line(&mut self, line: String) {
+        self.banner_current = Some(BannerEntry {
+            line: BannerLine::Local(line),
+            shown_tick: self.anim_tick,
+        });
+    }
+
     /// The bartender line the banner should render right now.
-    pub fn bartender_banner_message_id(&self) -> Option<Uuid> {
-        self.banner_current.map(|e| e.message_id)
+    pub fn bartender_banner_line(&self) -> Option<&BannerLine> {
+        self.banner_current.as_ref().map(|e| &e.line)
     }
 
     fn push_door_event(&mut self, username: String, arrived: bool) {

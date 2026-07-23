@@ -11,7 +11,7 @@ fn sample_library() -> Library {
     ];
     let (row_clues, col_clues) = derive_clues(&solution);
     Library {
-        packs: vec![NonogramPack {
+        packs: Arc::new(vec![NonogramPack {
             size_key: "5x5".to_string(),
             width: 5,
             height: 5,
@@ -26,7 +26,7 @@ fn sample_library() -> Library {
                 source: Some("test".to_string()),
                 seed: Some(1),
             }],
-        }],
+        }]),
     }
 }
 

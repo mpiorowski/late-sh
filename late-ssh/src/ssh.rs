@@ -60,6 +60,54 @@ const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
 /// per-session render rate so that keystroke floods or other signal sources
 /// can't drive renders faster than this.
 const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
+/// Max bytes handed to russh without the client returning window credit
+/// before the session counts as stalled and rendering pauses. Must sit well
+/// above a normal SSH channel window (~2 MB) plus a burst of full-repaint
+/// frames, or healthy-but-bursty sessions would false-positive.
+const OUTPUT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+/// How long a session may stay over [`OUTPUT_BUDGET_BYTES`] before we
+/// disconnect it instead of waiting for SSH keepalive to reap it.
+const OUTPUT_STALL_DISCONNECT: Duration = Duration::from_secs(30);
+
+/// Tracks bytes handed to russh for the app channel versus window credit the
+/// client sends back. russh queues writes beyond the client's SSH channel
+/// window in an uncapped internal buffer, so a client that stops reading
+/// turns the render loop into an unbounded memory sink unless we stop
+/// feeding it (2026-07-22 OOM, CONTEXT.md §10.5).
+struct OutputBudget {
+    /// Bytes sent since the last proof that russh's pending queue was empty.
+    outstanding: AtomicU64,
+}
+
+impl OutputBudget {
+    fn new() -> Self {
+        Self {
+            outstanding: AtomicU64::new(0),
+        }
+    }
+
+    fn record_sent(&self, bytes: usize) {
+        self.outstanding.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    /// Feed from `Handler::window_adjusted`. russh flushes its pending queue
+    /// before invoking the handler and only reports `new_size > 0` when that
+    /// queue fully drained, so a positive window proves the backlog is empty.
+    /// A zero window means the client granted credit but the backlog remains.
+    fn on_window_adjusted(&self, new_size: u32) {
+        if new_size > 0 {
+            self.outstanding.store(0, Ordering::Relaxed);
+        }
+    }
+
+    fn outstanding(&self) -> u64 {
+        self.outstanding.load(Ordering::Relaxed)
+    }
+
+    fn over_budget(&self) -> bool {
+        self.outstanding() > OUTPUT_BUDGET_BYTES
+    }
+}
 
 #[derive(Clone)]
 struct Server {
@@ -91,6 +139,7 @@ struct ClientHandler {
     /// Signaled by input/resize paths to request an immediate (world-stateless)
     /// render, so typed characters echo without waiting for the next world tick.
     render_signal: Option<Arc<RenderSignal>>,
+    output_budget: Arc<OutputBudget>,
     input_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
     input_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     cli_mode: bool,
@@ -300,6 +349,7 @@ impl Server {
             app_channel_id: None,
             app: None,
             render_signal: None,
+            output_budget: Arc::new(OutputBudget::new()),
             input_tx: None,
             input_rx: None,
             cli_mode: false,
@@ -942,7 +992,6 @@ impl russh::server::Handler for ClientHandler {
             radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
             worldcup_service: Some(self.state.worldcup_service.clone()),
             active_users: Some(self.state.active_users.clone()),
-            ai_service: Some(self.state.ai_service.clone()),
             clubhouse_lobby: Some(self.state.clubhouse_lobby.clone()),
             clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
                 &user.settings,
@@ -1109,19 +1158,26 @@ impl russh::server::Handler for ClientHandler {
             let _ = timeout(Duration::from_millis(50), handle.data(channel_id, init)).await;
 
             let app = Arc::clone(app);
-            let frame_drop_log_every = self.state.config.frame_drop_log_every;
             let signal = Arc::new(RenderSignal::new());
             self.render_signal = Some(Arc::clone(&signal));
+            let ctx = RenderContext {
+                handle,
+                channel_id,
+                frame_drop_log_every: self.state.config.frame_drop_log_every,
+                signal: Arc::clone(&signal),
+                budget: Arc::clone(&self.output_budget),
+            };
             app.lock().await.set_repaint_signal(Arc::clone(&signal));
             tokio::spawn(async move {
                 let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
                 world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
                 let mut previous_render: Option<Instant> = None;
                 let mut input_pending = false;
+                let mut stalled_since: Option<Instant> = None;
                 loop {
                     let advance_world = match next_render_action(
                         &mut world_tick,
-                        &signal,
+                        &ctx.signal,
                         &mut input_pending,
                         previous_render,
                     )
@@ -1131,38 +1187,79 @@ impl russh::server::Handler for ClientHandler {
                         RenderAction::Render => false,
                         RenderAction::Skip => continue,
                     };
-                    match render_once(
-                        &app,
-                        &mut input_rx,
-                        &handle,
-                        channel_id,
-                        frame_drop_log_every,
-                        advance_world,
-                        &signal,
-                    )
-                    .await
-                    {
+                    // Output-budget guard: while the client sits on more
+                    // unacked bytes than the budget, rendering pauses
+                    // entirely. Ratatui's diff state does not advance during
+                    // the pause, so resuming needs no forced repaint.
+                    if ctx.budget.over_budget() {
+                        let since = match stalled_since {
+                            Some(since) => since,
+                            None => {
+                                let now = Instant::now();
+                                stalled_since = Some(now);
+                                tracing::warn!(
+                                    outstanding = ctx.budget.outstanding(),
+                                    "pausing renders, ssh output backlog over budget"
+                                );
+                                now
+                            }
+                        };
+                        metrics::record_render_stall_skip();
+                        if since.elapsed() >= OUTPUT_STALL_DISCONNECT {
+                            tracing::warn!(
+                                outstanding = ctx.budget.outstanding(),
+                                stalled_secs = since.elapsed().as_secs(),
+                                "disconnecting session, ssh output stalled past budget"
+                            );
+                            metrics::record_render_stall_disconnect();
+                            let _ = ctx.handle.eof(ctx.channel_id).await;
+                            let _ = ctx.handle.close(ctx.channel_id).await;
+                            break;
+                        }
+                        continue;
+                    }
+                    if let Some(since) = stalled_since.take() {
+                        tracing::info!(
+                            stalled_ms = since.elapsed().as_millis() as u64,
+                            "ssh output backlog cleared, resuming renders"
+                        );
+                    }
+                    match render_once(&app, &mut input_rx, &ctx, advance_world).await {
                         Ok(should_quit) => {
                             previous_render = Some(Instant::now());
                             if should_quit {
                                 tracing::debug!("app requested quit, closing connection");
-                                clean_disconnect(&handle, channel_id).await;
+                                clean_disconnect(&ctx.handle, ctx.channel_id).await;
                                 break;
                             }
                         }
                         Err(err) => {
                             tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
                             let exit = App::leave_alt_screen();
-                            let _ =
-                                timeout(Duration::from_millis(50), handle.data(channel_id, exit))
-                                    .await;
-                            let _ = handle.eof(channel_id).await;
-                            let _ = handle.close(channel_id).await;
+                            let _ = timeout(
+                                Duration::from_millis(50),
+                                ctx.handle.data(ctx.channel_id, exit),
+                            )
+                            .await;
+                            let _ = ctx.handle.eof(ctx.channel_id).await;
+                            let _ = ctx.handle.close(ctx.channel_id).await;
                             break;
                         }
                     }
                 }
             });
+        }
+        Ok(())
+    }
+
+    async fn window_adjusted(
+        &mut self,
+        channel: ChannelId,
+        new_size: u32,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if self.app_channel_id == Some(channel) {
+            self.output_budget.on_window_adjusted(new_size);
         }
         Ok(())
     }
@@ -1334,14 +1431,21 @@ async fn next_render_action(
     }
 }
 
+/// Everything about a session's output channel that stays fixed for the
+/// lifetime of its render loop.
+struct RenderContext {
+    handle: russh::server::Handle,
+    channel_id: ChannelId,
+    frame_drop_log_every: u64,
+    signal: Arc<RenderSignal>,
+    budget: Arc<OutputBudget>,
+}
+
 async fn render_once(
     app: &Arc<TokioMutex<crate::app::state::App>>,
     input_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
-    handle: &russh::server::Handle,
-    channel_id: ChannelId,
-    frame_drop_log_every: u64,
+    ctx: &RenderContext,
     advance_world: bool,
-    signal: &RenderSignal,
 ) -> anyhow::Result<bool> {
     let (frame, terminal_commands) = {
         let mut app = app.lock().await;
@@ -1351,7 +1455,7 @@ async fn render_once(
         // Clear `dirty` before draining the queued input so any input arriving
         // during this render flips it back to `true` and schedules another
         // pass instead of being erased by this batch.
-        signal.dirty.store(false, Ordering::Release);
+        ctx.signal.dirty.store(false, Ordering::Release);
         while let Ok(data) = input_rx.try_recv() {
             app.handle_input(&data);
             if !app.running {
@@ -1366,9 +1470,17 @@ async fn render_once(
         (frame, terminal_commands)
     };
 
-    let frame_sent = match timeout(Duration::from_millis(50), handle.data(channel_id, frame)).await
+    let frame_len = frame.len();
+    let frame_sent = match timeout(
+        Duration::from_millis(50),
+        ctx.handle.data(ctx.channel_id, frame),
+    )
+    .await
     {
-        Ok(Ok(())) => true,
+        Ok(Ok(())) => {
+            ctx.budget.record_sent(frame_len);
+            true
+        }
         Ok(Err(err)) => {
             return Err(anyhow::anyhow!(
                 "render_once: handle send failed: {:?}",
@@ -1378,7 +1490,7 @@ async fn render_once(
         Err(_) => {
             let drops = FRAME_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             metrics::record_render_frame_drop();
-            if drops.is_multiple_of(frame_drop_log_every) {
+            if drops.is_multiple_of(ctx.frame_drop_log_every) {
                 tracing::debug!(drops, "frame drops (handle busy)");
             }
             false
@@ -1389,16 +1501,25 @@ async fn render_once(
         // `app.render()` already advanced ratatui's diff buffers. If the SSH
         // write is dropped, force the next successful frame to repaint from a
         // blank previous buffer so old terminal cells cannot leak through.
+        // Deliberately no notify here: the repaint rides the next world tick
+        // (15 fps) instead of re-arming the input path at up to 66 full
+        // repaints per second against a handle that is already busy.
         let mut app = app.lock().await;
         app.force_full_repaint();
-        if !signal.dirty.swap(true, Ordering::AcqRel) {
-            signal.notify.notify_one();
-        }
+        ctx.signal.dirty.store(true, Ordering::Release);
     }
 
     for command in terminal_commands {
-        match timeout(Duration::from_millis(50), handle.data(channel_id, command)).await {
-            Ok(Ok(())) => {}
+        let command_len = command.len();
+        match timeout(
+            Duration::from_millis(50),
+            ctx.handle.data(ctx.channel_id, command),
+        )
+        .await
+        {
+            Ok(Ok(())) => {
+                ctx.budget.record_sent(command_len);
+            }
             Ok(Err(err)) => {
                 return Err(anyhow::anyhow!(
                     "render_once: terminal command send failed: {:?}",
@@ -1408,7 +1529,7 @@ async fn render_once(
             Err(_) => {
                 let drops = FRAME_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                 metrics::record_render_frame_drop();
-                if drops.is_multiple_of(frame_drop_log_every) {
+                if drops.is_multiple_of(ctx.frame_drop_log_every) {
                     tracing::debug!(drops, "frame drops (handle busy)");
                 }
             }

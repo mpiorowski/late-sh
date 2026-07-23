@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
 
 use crate::app::audio::client_state::{ClientAudioState, ClientKind, ClientSshMode};
@@ -78,6 +78,15 @@ pub enum PairControlMessage {
     },
 }
 
+/// Capacity of each paired client's outbound control queue. Control messages
+/// are small state replays; a client that stops reading gets newest-dropped
+/// behavior instead of an unbounded queue and re-syncs on reconnect.
+pub const PAIR_CONTROL_QUEUE_CAP: usize = 64;
+/// Max concurrent paired sockets per session token. A legitimate pairing is a
+/// browser plus a CLI plus a spare tab or two; anything past this is a leak
+/// or an amplifier (one free SSH token used to be an unbounded socket mint).
+pub const MAX_PAIRED_CLIENTS_PER_TOKEN: usize = 8;
+
 #[derive(Clone)]
 pub struct PairedClientRegistry {
     clients: Arc<Mutex<HashMap<String, Vec<PairControlEntry>>>>,
@@ -96,7 +105,7 @@ pub struct PairedClientRegistry {
 #[derive(Clone)]
 struct PairControlEntry {
     registration_id: u64,
-    tx: UnboundedSender<PairControlMessage>,
+    tx: Sender<PairControlMessage>,
     state: ClientAudioState,
     usage_total_recorded: bool,
     user_id: Uuid,
@@ -124,16 +133,27 @@ impl PairedClientRegistry {
         }
     }
 
+    /// Returns `None` when the token already holds
+    /// [`MAX_PAIRED_CLIENTS_PER_TOKEN`] live entries; the caller must close
+    /// the socket instead of pairing it.
     pub fn register(
         &self,
         token: String,
-        tx: UnboundedSender<PairControlMessage>,
+        tx: Sender<PairControlMessage>,
         user_id: Uuid,
         audio_source: AudioSource,
-    ) -> u64 {
+    ) -> Option<u64> {
         let registration_id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let mut clients = self.clients.lock_recover();
         let entries = clients.entry(token.clone()).or_default();
+        if entries.len() >= MAX_PAIRED_CLIENTS_PER_TOKEN {
+            tracing::warn!(
+                token_hint = %token_hint(&token),
+                entries = entries.len(),
+                "rejecting paired client: token at capacity"
+            );
+            return None;
+        }
         tracing::info!(
             token_hint = %token_hint(&token),
             registration_id,
@@ -150,7 +170,7 @@ impl PairedClientRegistry {
             icecast_stream: IcecastStream::default(),
             radio_station: RadioStation::default(),
         });
-        registration_id
+        Some(registration_id)
     }
 
     /// Remove the matching entry. The API disconnect path replays playback
@@ -248,13 +268,15 @@ impl PairedClientRegistry {
 
         let mut delivered = 0;
         for (tx, msg) in targets {
-            if tx.send(msg).is_ok() {
-                delivered += 1;
-            } else {
-                tracing::warn!(
-                    token_hint = %token_hint(token),
-                    "failed to replay paired playback source"
-                );
+            match tx.try_send(msg) {
+                Ok(()) => delivered += 1,
+                Err(err) => {
+                    tracing::warn!(
+                        token_hint = %token_hint(token),
+                        error = %try_send_reason(&err),
+                        "failed to replay paired playback source"
+                    );
+                }
             }
         }
         delivered > 0
@@ -267,7 +289,7 @@ impl PairedClientRegistry {
     where
         F: FnMut(&ClientAudioState) -> bool,
     {
-        let targets: Vec<UnboundedSender<PairControlMessage>> = {
+        let targets: Vec<Sender<PairControlMessage>> = {
             let clients = self.clients.lock_recover();
             clients
                 .get(token)
@@ -287,13 +309,15 @@ impl PairedClientRegistry {
 
         let mut delivered = 0;
         for tx in targets {
-            if tx.send(msg.clone()).is_ok() {
-                delivered += 1;
-            } else {
-                tracing::warn!(
-                    token_hint = %token_hint(token),
-                    "failed to send paired client control message"
-                );
+            match tx.try_send(msg.clone()) {
+                Ok(()) => delivered += 1,
+                Err(err) => {
+                    tracing::warn!(
+                        token_hint = %token_hint(token),
+                        error = %try_send_reason(&err),
+                        "failed to send paired client control message"
+                    );
+                }
             }
         }
         delivered
@@ -409,12 +433,10 @@ impl PairedClientRegistry {
             .next_clipboard_request_id
             .fetch_add(1, Ordering::Relaxed)
             + 1;
-        if tx
-            .send(PairControlMessage::RequestClipboardImage { request_id })
-            .is_err()
-        {
+        if let Err(err) = tx.try_send(PairControlMessage::RequestClipboardImage { request_id }) {
             tracing::warn!(
                 token_hint = %token_hint(token),
+                error = %try_send_reason(&err),
                 "failed to send paired clipboard image request"
             );
             return false;
@@ -481,8 +503,11 @@ impl PairedClientRegistry {
         }
 
         for (tx, msg) in targets {
-            if tx.send(msg).is_err() {
-                tracing::warn!("failed to push SetPlaybackSource after audio source change");
+            if let Err(err) = tx.try_send(msg) {
+                tracing::warn!(
+                    error = %try_send_reason(&err),
+                    "failed to push SetPlaybackSource after audio source change"
+                );
             }
         }
     }
@@ -545,8 +570,11 @@ impl PairedClientRegistry {
         }
 
         for (tx, msg) in targets {
-            if tx.send(msg).is_err() {
-                tracing::warn!("failed to push SetPlaybackSource after stream choice change");
+            if let Err(err) = tx.try_send(msg) {
+                tracing::warn!(
+                    error = %try_send_reason(&err),
+                    "failed to push SetPlaybackSource after stream choice change"
+                );
             }
         }
     }
@@ -576,7 +604,7 @@ fn playback_target(
     icecast_base_url: &str,
     web_icecast_enabled: bool,
     embedded_webview_enabled: bool,
-) -> (UnboundedSender<PairControlMessage>, PairControlMessage) {
+) -> (Sender<PairControlMessage>, PairControlMessage) {
     (
         entry.tx.clone(),
         playback_message(
@@ -606,6 +634,15 @@ pub fn playback_message(
         station: selection.map(|selection| selection.station.to_string()),
         web_icecast_enabled,
         embedded_webview_enabled,
+    }
+}
+
+fn try_send_reason(
+    err: &tokio::sync::mpsc::error::TrySendError<PairControlMessage>,
+) -> &'static str {
+    match err {
+        tokio::sync::mpsc::error::TrySendError::Full(_) => "queue full",
+        tokio::sync::mpsc::error::TrySendError::Closed(_) => "receiver closed",
     }
 }
 

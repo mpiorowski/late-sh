@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use late_core::MutexRecover;
 use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
@@ -407,6 +406,18 @@ impl App {
             .username_directory
             .as_ref()
             .map(crate::usernames::snapshot);
+        // The directory swaps its Arc on every real change, so pointer
+        // equality is the change signal for the row cache epoch.
+        let directory_changed = match (&username_directory_snapshot, &self.last_username_directory)
+        {
+            (Some(current), Some(previous)) => !Arc::ptr_eq(current, previous),
+            (None, None) => false,
+            _ => true,
+        };
+        if directory_changed {
+            self.last_username_directory = username_directory_snapshot.clone();
+            self.chat_ctx_epoch += 1;
+        }
         let render_usernames = crate::usernames::UsernameLookup::new(
             self.chat.usernames(),
             username_directory_snapshot.as_deref(),
@@ -418,22 +429,14 @@ impl App {
         let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
         let voice_snapshot = self.voice.snapshot();
-        // Count humans only: the always-on bots (@bartender, @graybeard,
-        // @bot) register with no fingerprint and are excluded from the
-        // clubhouse headcount, so exclude them here too or the two
-        // "people online" numbers disagree.
-        let online_count = self
-            .active_users
-            .as_ref()
-            .map(|active_users| {
-                active_users
-                    .lock_recover()
-                    .values()
-                    .filter(|user| user.fingerprint.is_some())
-                    .count()
-            })
-            .unwrap_or(0);
-        self.afk_user_ids = crate::state::afk_users_snapshot(&self.afk_users);
+        // Presence values are recomputed on the ~1s tick cadence
+        // (`tick.rs`), not per frame; reads here are owned-memory only.
+        let online_count = self.online_count;
+        let afk_user_ids = crate::state::afk_users_snapshot(&self.afk_users);
+        if !Arc::ptr_eq(&afk_user_ids, &self.afk_user_ids) {
+            self.afk_user_ids = afk_user_ids;
+            self.chat_ctx_epoch += 1;
+        }
         let image_modal = self
             .chat
             .image_modal()
@@ -451,7 +454,7 @@ impl App {
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
-        let active_friend_names = self.chat.active_friend_names();
+        let active_friend_names = &self.active_friend_names;
         let dashboard_selected_news_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
@@ -502,6 +505,14 @@ impl App {
                 overlay: self.chat.overlay(),
                 image_modal,
                 rows_cache: &mut self.dashboard_chat_rows_cache,
+                rows_versions: chat::ui::ChatRowsVersions {
+                    room_id: shell_active_room,
+                    room_version: shell_active_room
+                        .map(|room_id| self.chat.room_version(room_id))
+                        .unwrap_or(0),
+                    chat_ctx_epoch: self.chat.context_epoch(),
+                    app_ctx_epoch: self.chat_ctx_epoch,
+                },
                 usernames: chat_usernames,
                 countries: chat_countries,
                 friend_user_ids: self.chat.friend_user_ids(),
@@ -633,6 +644,9 @@ impl App {
             discover_selected: self.chat.discover_selected,
             discover_view,
             rows_cache: &mut self.active_room_rows_cache,
+            room_versions: self.chat.room_versions(),
+            chat_ctx_epoch: self.chat.context_epoch(),
+            app_ctx_epoch: self.chat_ctx_epoch,
             chat_rooms: self.chat.rooms.as_slice(),
             overlay: self.chat.overlay(),
             image_modal,
@@ -708,6 +722,12 @@ impl App {
                     overlay: self.chat.overlay(),
                     image_modal,
                     rows_cache: &mut self.daily_chat_rows_cache,
+                    rows_versions: chat::ui::ChatRowsVersions {
+                        room_id: Some(chat_room_id),
+                        room_version: self.chat.room_version(chat_room_id),
+                        chat_ctx_epoch: self.chat.context_epoch(),
+                        app_ctx_epoch: self.chat_ctx_epoch,
+                    },
                     usernames: chat_usernames,
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
@@ -761,6 +781,12 @@ impl App {
                     overlay: self.chat.overlay(),
                     image_modal,
                     rows_cache: &mut self.house_chat_rows_cache,
+                    rows_versions: chat::ui::ChatRowsVersions {
+                        room_id: Some(chat_room_id),
+                        room_version: self.chat.room_version(chat_room_id),
+                        chat_ctx_epoch: self.chat.context_epoch(),
+                        app_ctx_epoch: self.chat_ctx_epoch,
+                    },
                     usernames: chat_usernames,
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
@@ -1032,7 +1058,7 @@ impl App {
                         radio_now_playing: radio_now_playing.as_deref(),
                         afk: self.afk.as_deref(),
                         online_count,
-                        active_friend_names: &active_friend_names,
+                        active_friend_names,
                         marquee_tick: self.marquee_tick,
                         chat_state: &self.chat,
                         user_id: self.user_id,

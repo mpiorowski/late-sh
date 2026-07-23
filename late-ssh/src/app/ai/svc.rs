@@ -248,8 +248,13 @@ impl AiService {
     /// answer from their own prompt rather than the live web. The cap is
     /// generous so a thinking model's reasoning tokens don't crowd out the
     /// (small) JSON payload.
+    ///
+    /// `model` is explicit rather than defaulting to `self.model`: callers on
+    /// this path (e.g. the bartender's order flow) may need a different model
+    /// tier than the configured chat/news model.
     pub async fn generate_json(
         &self,
+        model: &str,
         system_prompt: &str,
         prompt: &str,
         schema: serde_json::Value,
@@ -261,7 +266,7 @@ impl AiService {
         let api_key = self.api_key.as_ref().context("missing api key")?;
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, api_key
+            model, api_key
         );
 
         let req = GeminiRequest {

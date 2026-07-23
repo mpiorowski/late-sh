@@ -1,6 +1,7 @@
 //! The "ghost" bots: always-on chat characters (@bot, @graybeard,
 //! @bartender) plus their init, mention responders, and the clubhouse
-//! tutorial's @bartender welcome. Each bot registers with `fingerprint: None`
+//! tutorial's scripted @bartender welcome. Each bot registers with
+//! `fingerprint: None`
 //! so it stays out of the human headcount (`active_users` / clubhouse lobby).
 //!
 //! ## AI call policy: grounded vs cheap
@@ -25,9 +26,7 @@
 //!   latency), cheap. The output cap carries enough headroom for a thinking
 //!   model's reasoning tokens so the visible line isn't sheared off mid-thought.
 //!   Use for pure in-character banter that never needs a lookup: **@graybeard
-//!   mentions** and the **@bartender tutorial greeting**. The greeting in
-//!   particular MUST use this: paired with the grounded path it timed out
-//!   every time and only the scripted fallback ever showed.
+//!   mentions**.
 //!
 //! When adding a bot line, default to `generate_short_reply` and only reach
 //! for `generate_reply` if the character genuinely answers factual questions.
@@ -134,16 +133,15 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply n
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
 const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
 const BARTENDER_USERNAME: &str = "bartender";
-const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(5);
-/// Cap on the tutorial greeting generation before the scripted line goes out
-/// instead. The greeting uses `generate_short_reply` (ungrounded, small output
-/// cap), which returns in ~1-2s, so this only needs to bound a slow or hung
-/// call. The old 6s budget paired with a grounded call timed out every time
-/// and the newcomer only ever saw the fallback.
-const BARTENDER_GREETING_TIMEOUT: Duration = Duration::from_secs(10);
+const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(30);
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
+/// Hardcoded rather than sourced from `AiConfig::model`: the bartender's order
+/// decision is a small ungrounded/schema-enforced JSON call, so it runs on
+/// flash instead of the pro model configured for @bot/news. Revisit once this
+/// needs to be configurable per-bot.
+const BARTENDER_MODEL: &str = "gemini-3.6-flash";
 /// Cap on the grounded JSON order call; on timeout the mention is dropped
-/// (never charged) and the 25s cooldown lets the patron re-ask.
+/// (never charged) and the cooldown lets the patron re-ask.
 const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(60);
 /// Scripted line for the rare race where the model priced a pour against a
 /// balance that was spent before the debit landed. No charge happens.
@@ -224,18 +222,6 @@ impl GhostService {
             });
         }
 
-        if self.ai_service.is_enabled() {
-            let svc = self.clone();
-            let mention_shutdown = shutdown.clone();
-            let mention_bot = bot_user.clone();
-            tokio::spawn(async move {
-                svc.run_bot_mention_task(mention_bot, mention_shutdown)
-                    .await;
-            });
-        } else {
-            tracing::info!("@bot responder disabled because AI service is not configured");
-        }
-
         // Initialize graybeard — the burned-out dev who haunts #lounge
         if self.ai_service.is_enabled() {
             match self.ensure_graybeard_user().await {
@@ -257,9 +243,11 @@ impl GhostService {
         // clubhouse furniture (fixed spot behind the bar, tutorial greeting,
         // speech bubbles), so he boots even without AI; only the mention
         // responder needs the AI service.
+        let mut bartender_id = None;
         match self.ensure_bartender_user().await {
             Ok(bartender) => {
                 self.set_always_on(&bartender);
+                bartender_id = Some(bartender.id);
                 if self.ai_service.is_enabled() {
                     let svc = self.clone();
                     let bt_shutdown = shutdown.clone();
@@ -275,6 +263,21 @@ impl GhostService {
             Err(err) => {
                 tracing::error!(error = ?err, "ghost service failed to initialize @bartender user");
             }
+        }
+
+        // Started last, once the bartender's id is known: he points patrons at
+        // @bot on purpose ("go ask @bot, he knows all of that"), and that
+        // hand-off must not pull @bot into the room to answer him.
+        if self.ai_service.is_enabled() {
+            let svc = self.clone();
+            let mention_shutdown = shutdown.clone();
+            let mention_bot = bot_user.clone();
+            tokio::spawn(async move {
+                svc.run_bot_mention_task(mention_bot, bartender_id, mention_shutdown)
+                    .await;
+            });
+        } else {
+            tracing::info!("@bot responder disabled because AI service is not configured");
         }
 
         tracing::info!("ghost service started (bot + graybeard + bartender always-on)");
@@ -305,9 +308,14 @@ impl GhostService {
             .send(ActivityEvent::joined(bot.id, bot.username.clone()));
     }
 
+    /// `bartender_id` is the one author @bot stays silent for: the bartender's
+    /// persona sends deeper questions to @bot by name, so his lines would
+    /// otherwise read as mentions and the two would answer each other in front
+    /// of the room. `None` only when the bartender user failed to initialize.
     async fn run_bot_mention_task(
         self,
         bot: BotUser,
+        bartender_id: Option<Uuid>,
         shutdown: late_core::shutdown::CancellationToken,
     ) {
         let mut events = self.chat_service.subscribe_events();
@@ -323,7 +331,7 @@ impl GhostService {
                 recv_result = events.recv() => {
                     match recv_result {
                         Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
-                            if message.user_id == bot.id {
+                            if message.user_id == bot.id || Some(message.user_id) == bartender_id {
                                 continue;
                             }
                             if !should_handle_bot_mention_event(
@@ -767,6 +775,7 @@ impl GhostService {
         let reply = match tokio::time::timeout(
             BARTENDER_ORDER_TIMEOUT,
             self.ai_service.generate_json(
+                BARTENDER_MODEL,
                 &system_prompt,
                 &history_with_prompt,
                 bartender_order_schema(),
@@ -1053,110 +1062,30 @@ impl GhostService {
     }
 }
 
-/// Angles the welcome can take, one picked at random per visit so the greeting
-/// never reads the same twice.
-const GREETING_BEATS: [&str; 8] = [
-    "open with a wry line about how late it is",
-    "ask what they're building or what dragged them in tonight",
-    "make them feel like the newest regular the room's been waiting on",
-    "keep it to one warm, quiet line and let them settle",
-    "riff gently on the rain-outside, jukebox-humming mood",
-    "greet them like you've somehow been expecting them",
-    "note the good seat they just took, and pour before they ask",
-    "lead with a small dry joke, then the drink",
+/// The welcome pool, one line picked per visit so the tutorial does not read
+/// the same twice. Scripted on purpose (see [`bartender_tutorial_greeting`]):
+/// the line is comped-drink flavor, not a conversation, and it must be on
+/// screen the instant the newcomer reaches the bar.
+const GREETINGS: [&str; 8] = [
+    "Well, look who found the bar. First round's on the house, settle in.",
+    "New face at this hour. Pull up a stool; the first pour's on me.",
+    "Evening. You took the good seat. First one's always the house's treat.",
+    "There you are. Let me slide you something on the house, catch your breath.",
+    "Late enough that the good stuff is open. This one's on me.",
+    "Been expecting you, somehow. Here, on the house, no tab yet.",
+    "Rain outside, jukebox humming, and your first drink already poured. Free of charge.",
+    "One comped pour for the newest regular. Don't get used to it.",
 ];
 
-/// Flavor directions for the comped pour, so the on-the-house drink varies
-/// instead of always landing on the same house special.
-const GREETING_POURS: [&str; 8] = [
-    "cold and hoppy",
-    "a warming top-shelf nightcap",
-    "an easy, low-proof cooler",
-    "coffee-forward and dark",
-    "a stiff, stirred classic",
-    "bright and citrusy, served short",
-    "smooth and a little sweet",
-    "something odd off the back shelf",
-];
-
-/// Scripted welcomes for AI-less installs, errors, and slow generations. Still
-/// a small pool so even the fallback has some variety.
-const GREETING_FALLBACKS: [&str; 4] = [
-    "well, look who found the bar. first round's on the house, settle in.",
-    "new face at this hour. pull up a stool; the first pour's on me.",
-    "evening. you took the good seat. first one's always the house's treat.",
-    "there you are. let me slide you something on the house, catch your breath.",
-];
-
-/// The clubhouse tutorial's one-shot bartender welcome: one AI-flavored line in
-/// his voice, comping the newcomer's first drink. A random angle and pour are
-/// seeded in per call (see [`GREETING_BEATS`] / [`GREETING_POURS`]) so no two
-/// welcomes read alike, backed by [`GREETING_FALLBACKS`] when the AI is off,
-/// erroring, or slow. It stays pure flavor now: the "press i to talk" mechanic
-/// is taught by the BarLesson popup that follows.
-pub async fn bartender_tutorial_greeting(ai: Option<&AiService>, username: &str) -> String {
+/// The clubhouse tutorial's one-shot bartender welcome, comping the newcomer's
+/// first drink. Scripted and local: it is drawn straight into the walker's own
+/// bartender banner and never posted to #lounge, so the room is not made to
+/// watch every first-timer get their free pour, and the line lands the instant
+/// they reach the bar instead of waiting on a model. It stays pure flavor: the
+/// "press i to talk" mechanic is taught by the BarLesson popup that follows.
+pub fn bartender_tutorial_greeting(username: &str) -> String {
     let mut rng = TinyRng::seeded();
-    let fallback = format!(
-        "@{username} {}",
-        GREETING_FALLBACKS[rng.next_usize(GREETING_FALLBACKS.len())]
-    );
-    let Some(ai) = ai.filter(|ai| ai.is_enabled()) else {
-        return fallback;
-    };
-
-    // A fresh angle and pour each visit so the welcome stays interesting.
-    let beat = GREETING_BEATS[rng.next_usize(GREETING_BEATS.len())];
-    let pour = GREETING_POURS[rng.next_usize(GREETING_POURS.len())];
-
-    let system_prompt = format!(
-        "Your username is: {username}\n\n\
-        {persona}\n\n\
-        A brand-new patron just walked up to your bar for the very first time, mid house tour. \
-        Welcome them in and slide their first drink across the counter, on the house.\n\
-        Angle for this one: {beat}.\n\
-        Make the comped pour {pour} — give it a fresh terminal-flavored name; do NOT default to a Bash Old Fashioned.\n\
-        Keep it to 1-2 short lines, all in your voice. No markdown. No emoji.\n\
-        Do not explain the controls or how to chat; just be the bartender.\n\
-        NEVER prefix your message with your own username, and do not wrap it in quotes.\n\
-        Do NOT output SKIP. Output only the message text.",
-        username = BARTENDER_USERNAME,
-        persona = BARTENDER_PERSONA,
-    );
-    let prompt = format!(
-        "The new patron's handle is @{username}. Pour the welcome — {beat}, and make it {pour}."
-    );
-
-    let reply = match tokio::time::timeout(
-        BARTENDER_GREETING_TIMEOUT,
-        ai.generate_short_reply(&system_prompt, &prompt),
-    )
-    .await
-    {
-        Ok(Ok(Some(reply))) => reply,
-        Ok(Ok(None)) => return fallback,
-        Ok(Err(e)) => {
-            tracing::warn!(error = ?e, "bartender tutorial greeting generation failed");
-            return fallback;
-        }
-        Err(_) => {
-            tracing::warn!("bartender tutorial greeting generation timed out");
-            return fallback;
-        }
-    };
-    let Some(safe) = sanitize_generated_reply_with_line_limit(&reply, Some(BARTENDER_USERNAME), 2)
-    else {
-        return fallback;
-    };
-    // The greeting doubles as the newcomer's first mention notification.
-    let target = format!("@{username}");
-    if safe
-        .to_ascii_lowercase()
-        .starts_with(&target.to_ascii_lowercase())
-    {
-        safe
-    } else {
-        format!("{target} {safe}")
-    }
+    format!("@{username} {}", GREETINGS[rng.next_usize(GREETINGS.len())])
 }
 
 /// What the bartender decided to do with a mention, after server-side

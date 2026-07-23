@@ -27,7 +27,7 @@ use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
 
 use super::lobby::{Emote, Placement};
 use super::map;
-use super::state::{ClubhouseHit, State, Tutorial};
+use super::state::{BannerLine, ClubhouseHit, State, Tutorial};
 
 const LABEL_MAX: usize = 10;
 const FIRE_CHARS: [char; 6] = ['(', ')', '~', '^', '*', '\''];
@@ -122,12 +122,30 @@ fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
         lines.push(Line::default());
     }
     for row in cells.iter().skip(cam_y).take(vh.saturating_sub(pad_y)) {
-        let mut spans: Vec<Span> = Vec::with_capacity(vw);
+        let mut spans: Vec<Span> = Vec::new();
         if pad_x > 0 {
             spans.push(Span::raw(" ".repeat(pad_x)));
         }
+        // Batch runs of same-styled cells into one span per run instead of
+        // one heap string per cell; room floors are long same-style runs.
+        let mut run = String::new();
+        let mut run_style: Option<Style> = None;
         for &(ch, style) in row.iter().skip(cam_x).take(vw.saturating_sub(pad_x)) {
-            spans.push(Span::styled(ch.to_string(), style));
+            match run_style {
+                Some(current) if current == style => run.push(ch),
+                Some(current) => {
+                    spans.push(Span::styled(std::mem::take(&mut run), current));
+                    run.push(ch);
+                    run_style = Some(style);
+                }
+                None => {
+                    run.push(ch);
+                    run_style = Some(style);
+                }
+            }
+        }
+        if let Some(style) = run_style {
+            spans.push(Span::styled(run, style));
         }
         lines.push(Line::from(spans));
     }
@@ -722,10 +740,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
     let own_id = state.own_user_id();
     for who in state.snapshot.people.iter().filter(|p| p.user_id != own_id) {
         let style = Style::default().fg(occupant_color(who.user_id));
-        let mut label_style = Style::default().fg(theme::TEXT_DIM());
-        if let Some(bg) = theme::DRUNK_LABEL_BG(who.drunk_level) {
-            label_style = label_style.bg(bg);
-        }
+        let label_style = Style::default().fg(theme::TEXT_DIM());
         let (anchor, (x0, y0, x1, y1)) = draw_presence(
             cells,
             who.placement,
@@ -767,16 +782,9 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
     let own_style = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
-    let mut own_label_style = Style::default()
+    let own_label_style = Style::default()
         .fg(theme::TEXT_BRIGHT())
         .add_modifier(Modifier::BOLD);
-    if let Some(bg) = state
-        .snapshot
-        .find(own_id)
-        .and_then(|p| theme::DRUNK_LABEL_BG(p.drunk_level))
-    {
-        own_label_style = own_label_style.bg(bg);
-    }
     let own_placement = state
         .snapshot
         .find(own_id)
@@ -1133,16 +1141,20 @@ fn draw_overlays(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
 /// for how long, is the banner queue's call (`State::update_bartender_banner`):
 /// a burst of answers plays one at a time instead of overwriting itself.
 fn draw_bartender_banner(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
-    let Some(message_id) = view.state.bartender_banner_message_id() else {
-        return;
-    };
-    let Some(message) = view.lounge_messages.iter().find(|m| m.id == message_id) else {
-        return;
+    let body = match view.state.bartender_banner_line() {
+        None => return,
+        Some(BannerLine::Local(line)) => line.as_str(),
+        Some(BannerLine::Lounge(message_id)) => {
+            let Some(message) = view.lounge_messages.iter().find(|m| m.id == *message_id) else {
+                return;
+            };
+            message.body.as_str()
+        }
     };
     // Roomy on purpose: his replies are up to three sanitized lines of real
     // directions, and the banner is the only place they render.
     let width_budget = usize::from(inner.width.saturating_sub(6)).min(56);
-    let (lines, _) = wrap_bubble(bubble_text(&message.body), width_budget.max(16), 8);
+    let (lines, _) = wrap_bubble(bubble_text(body), width_budget.max(16), 8);
     if lines.is_empty() {
         return;
     }

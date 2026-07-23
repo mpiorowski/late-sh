@@ -200,3 +200,33 @@ async fn world_tick_wins_tie_with_throttle() {
     );
     assert!(!input_pending);
 }
+
+#[test]
+fn output_budget_accumulates_until_over_budget() {
+    let budget = OutputBudget::new();
+    assert!(!budget.over_budget());
+    budget.record_sent(OUTPUT_BUDGET_BYTES as usize);
+    assert!(!budget.over_budget(), "budget boundary itself is not over");
+    budget.record_sent(1);
+    assert!(budget.over_budget());
+    assert_eq!(budget.outstanding(), OUTPUT_BUDGET_BYTES + 1);
+}
+
+#[test]
+fn output_budget_zero_window_adjust_keeps_backlog() {
+    let budget = OutputBudget::new();
+    budget.record_sent((OUTPUT_BUDGET_BYTES + 1) as usize);
+    // A zero window means russh still holds pending data: the client granted
+    // credit but the backlog was not drained, so the session stays stalled.
+    budget.on_window_adjusted(0);
+    assert!(budget.over_budget());
+}
+
+#[test]
+fn output_budget_positive_window_adjust_clears_backlog() {
+    let budget = OutputBudget::new();
+    budget.record_sent((OUTPUT_BUDGET_BYTES + 1) as usize);
+    budget.on_window_adjusted(1);
+    assert!(!budget.over_budget());
+    assert_eq!(budget.outstanding(), 0);
+}
