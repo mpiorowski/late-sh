@@ -84,8 +84,10 @@ CONTEXT.md §2.6 documents the gate.
 - Visualizer replaced by the ambient wave (2026-07-23): the FFT bars, the
   decay/procedural state machine, and the short-lived quantized paint
   gate are all gone. `viz::render_wave(frame, area, wall_tick)` is a
-  stateless braille sine derived entirely from `marquee_tick` (offset =
-  `wall_tick / 2 % WAVE_LENGTH_DOTS`, one dot per anim_half edge), so
+  stateless hand-drawn box-glyph wave tile rotated by `marquee_tick`
+  (offset = `wall_tick / 2 % WAVE_PERIOD_COLS`, one column per anim_half
+  edge; braille plotting was tried first and looked like scattered dots,
+  box-drawing matches the panel borders), so
   tick() has nothing to advance: `changed |= anim_half` while the sidebar
   or a bonsai modal is visible IS the whole gate. Bonsai sway (v1 canopy
   shift, v2 `apply_sway` line shift) runs off the same wall clock, small
@@ -97,7 +99,10 @@ CONTEXT.md §2.6 documents the gate.
   exactly on frame boundaries: `pet::ui::strip_frame_changed(mood, tick,
   travel)` vs the `last_pet_strip_travel` Cell slot recorded at draw (same
   pattern as the click-target rect slots; slot reset each render, None =
-  strip not drawn = no frames). Roaming overlay stays full-rate. Sad parked
+  strip not drawn = no frames). Roaming overlay rides the anim_half edge
+  (lowered from full rate 2026-07-23 after the wall-clock audit:
+  `PetState::tick(wall_tick)` syncs animation_ticks to marquee_tick and
+  scales the feedback countdown by elapsed ticks). Sad parked
   pet = fully static. Tests: pet/ui_test.rs.
 - Modals now event-driven via their tick paths: settings (`SettingsTick`),
   profile modal (`tick() -> bool`), hub admin (`AdminTick.changed`), audio
@@ -173,12 +178,13 @@ long unless input or a RenderSignal wake lands first. Three tiers:
 
 - HOT_TICK 66ms: splash, post-input window (2s after any input, so menu
   loads and chat send echo keep typing latency), active ultimate effect,
-  HouseTable screen, Arcade with a game open, pet roaming or strip drawn,
-  bonsai modals.
-- ANIM_HALF_TICK 132ms: Clubhouse screen or a visible right sidebar (the
-  ambient wave), painting on the /2 `anim_half` edge (~7.5fps). Pet and
-  bonsai paint on the same edge but wake hot: their steppers advance per
-  tick and are tuned for the 66ms cadence.
+  HouseTable screen, Arcade with a game open, bonsai modals (the care
+  watering animation still counts per tick call).
+- ANIM_HALF_TICK 132ms: Clubhouse screen, a visible right sidebar (the
+  ambient wave), pet roaming, or the pet strip drawn, all painting on the
+  /2 `anim_half` edge (~7.5fps). The pet's clocks are wall-synced
+  (`PetState::tick(wall_tick)`, 2026-07-23), so its wake matches its
+  paint edge.
 - ANIM_QUARTER_TICK 264ms: aquarium tray + profile reef, stepping on the
   /4 `anim_quarter` edge (~3.8fps).
 - IDLE_TICK 500ms floor: everything else. Ticks only drain channels;

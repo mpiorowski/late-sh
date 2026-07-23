@@ -586,7 +586,8 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) 
 
     let [viz_area, dock_area] =
         Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
-    render_wave(frame, viz_area, props.marquee_tick);
+    let muted = props.paired_client.is_some_and(|client| client.muted);
+    render_wave(frame, viz_area, props.marquee_tick, muted);
 
     let lines = music_stage_lines(dock_area.width, props);
     frame.render_widget(Paragraph::new(lines), dock_area);

@@ -927,7 +927,7 @@ impl App {
         // rewritten every render). Every transition into visibility (screen
         // switch, settings, entitlements, roam end) dirties a frame through
         // its own path, which re-records the slot.
-        changed |= self.pet_state.tick();
+        changed |= self.pet_state.tick(self.marquee_tick);
         if self.pet_state.roaming_active() {
             // The full-screen stroll overlay animates continuously.
             changed |= anim_half;
@@ -1082,18 +1082,21 @@ impl App {
             || self.ultimate_state.has_active_effect()
             || self.screen == Screen::HouseTable
             || (self.screen == Screen::Arcade && self.is_playing_game)
-            || self.pet_state.roaming_active()
-            || self.last_pet_strip_travel.get().is_some()
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal;
         if hot {
             return HOT_TICK;
         }
-        // Slower tiers match the frame edges their surfaces paint on. Pet
-        // and bonsai paint on the half edge but stay hot above: their
-        // steppers advance per tick and are tuned for the 66ms cadence.
-        // A visible sidebar always carries the ambient wave.
-        if self.screen == Screen::Clubhouse || self.right_sidebar_visible() {
+        // Slower tiers match the frame edges their surfaces paint on. The
+        // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
+        // so roaming and the strip ride the half tier they paint on. Bonsai
+        // modals stay hot: the care watering animation still counts per
+        // tick call. A visible sidebar always carries the ambient wave.
+        if self.screen == Screen::Clubhouse
+            || self.right_sidebar_visible()
+            || self.pet_state.roaming_active()
+            || self.last_pet_strip_travel.get().is_some()
+        {
             return ANIM_HALF_TICK;
         }
         if self.aquarium_tray_visible()

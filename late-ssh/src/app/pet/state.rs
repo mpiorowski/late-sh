@@ -180,12 +180,17 @@ impl PetState {
     /// frame even when the animation predicate is quiet: feedback expiry, a
     /// roam ending, and mood/needs flips at the UTC day rollover. Pure
     /// animation cadence is the strip's business (`ui::strip_frame_changed`).
-    pub fn tick(&mut self) -> bool {
+    /// `wall_tick` is the app's shared 66ms wall clock (marquee_tick): the
+    /// adaptive loop ticks sparsely, so a per-call counter would slow the
+    /// animation with the cadence; syncing to the wall clock keeps every
+    /// speed true at any wake tier.
+    pub fn tick(&mut self, wall_tick: usize) -> bool {
         let mut changed = false;
-        self.animation_ticks = self.animation_ticks.wrapping_add(1);
+        let elapsed = wall_tick.saturating_sub(self.animation_ticks);
+        self.animation_ticks = wall_tick;
 
         if self.action_feedback.is_some() {
-            self.feedback_ticks = self.feedback_ticks.saturating_sub(1);
+            self.feedback_ticks = self.feedback_ticks.saturating_sub(elapsed);
             if self.feedback_ticks == 0 {
                 self.action_feedback = None;
                 changed = true;
