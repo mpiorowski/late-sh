@@ -428,6 +428,26 @@ impl ProfileService {
         );
     }
 
+    /// Fire-and-forget: persist the home dock layout (column widths + panel
+    /// placement) so it survives reconnects. A failure only logs — the layout
+    /// would simply start from the default next session.
+    pub fn set_home_dock_layout(&self, user_id: Uuid, layout: serde_json::Value) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_home_dock_layout(&client, user_id, &layout).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist home dock layout");
+                }
+            }
+            .instrument(info_span!("profile.home_dock_layout_task", user_id = %user_id)),
+        );
+    }
+
     pub fn delete_account(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(

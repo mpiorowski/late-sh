@@ -263,6 +263,9 @@ pub struct SessionConfig {
     pub clubhouse_tutorial_done: bool,
     /// Whether the aquarium tray was open when the user last toggled it.
     pub show_aquarium_tray: bool,
+    /// The user's saved home dock layout as an opaque JSON blob, or `None` to
+    /// start from the default. Parsed by `DockLayout::from_value`.
+    pub home_dock_layout: Option<serde_json::Value>,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     /// Live 24h username effects, shared process-wide (snapshot-swap; see
@@ -406,6 +409,17 @@ pub struct App {
     pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) last_pet_strip_food_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) last_pet_strip_water_rect: std::cell::Cell<Option<Rect>>,
+    /// Dockable home layout: the column widths the home screen renders from.
+    /// Defaults to today's fixed layout, so rendering is unchanged until the
+    /// user drags a divider. Session-only for now (not yet persisted).
+    pub(crate) dock_layout: crate::app::common::dock::DockLayout,
+    /// The column divider currently being drag-resized, if any.
+    pub(crate) dock_resize: Option<crate::app::common::dock::Divider>,
+    /// Home column rects from the last frame, for divider hit-testing. Reset
+    /// each frame; only set on the Dashboard where the dock layout drives them.
+    pub(crate) last_dock_rail_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_dock_center_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_dock_sidebar_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -1073,6 +1087,15 @@ impl App {
             last_pet_strip_pet_rect: std::cell::Cell::new(None),
             last_pet_strip_food_rect: std::cell::Cell::new(None),
             last_pet_strip_water_rect: std::cell::Cell::new(None),
+            dock_layout: config
+                .home_dock_layout
+                .as_ref()
+                .map(crate::app::common::dock::DockLayout::from_value)
+                .unwrap_or_default(),
+            dock_resize: None,
+            last_dock_rail_rect: std::cell::Cell::new(None),
+            last_dock_center_rect: std::cell::Cell::new(None),
+            last_dock_sidebar_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -1998,6 +2021,14 @@ impl App {
         self.profile_state
             .service()
             .set_show_aquarium_tray(self.user_id, self.show_aquarium_tray);
+    }
+
+    /// Persist the current home dock layout (fire-and-forget) so a resized or
+    /// re-docked home survives reconnects.
+    pub(crate) fn persist_dock_layout(&self) {
+        self.profile_state
+            .service()
+            .set_home_dock_layout(self.user_id, self.dock_layout.to_value());
     }
 
     /// Open the profile modal for a user, closing the sheet modal that shares

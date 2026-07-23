@@ -200,6 +200,14 @@ struct DrawContext<'a> {
     /// else the saved profile). Order is render order, top to bottom.
     right_sidebar_components: Vec<RightSidebarComponentSetting>,
     show_room_list_sidebar: bool,
+    /// Home column widths from the dockable layout. Default to today's fixed
+    /// 24/24, so the home render is byte-identical until a divider is dragged.
+    dock_left_width: u16,
+    dock_right_width: u16,
+    /// Slots to record the home column rects each frame for divider hit-testing.
+    dock_rail_rect_slot: &'a std::cell::Cell<Option<Rect>>,
+    dock_center_rect_slot: &'a std::cell::Cell<Option<Rect>>,
+    dock_sidebar_rect_slot: &'a std::cell::Cell<Option<Rect>>,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
@@ -273,6 +281,9 @@ impl App {
         self.last_pet_strip_pet_rect.set(None);
         self.last_pet_strip_food_rect.set(None);
         self.last_pet_strip_water_rect.set(None);
+        self.last_dock_rail_rect.set(None);
+        self.last_dock_center_rect.set(None);
+        self.last_dock_sidebar_rect.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -999,6 +1010,11 @@ impl App {
                         show_right_sidebar,
                         right_sidebar_components,
                         show_room_list_sidebar,
+                        dock_left_width: self.dock_layout.left_width,
+                        dock_right_width: self.dock_layout.right_width,
+                        dock_rail_rect_slot: &self.last_dock_rail_rect,
+                        dock_center_rect_slot: &self.last_dock_center_rect,
+                        dock_sidebar_rect_slot: &self.last_dock_sidebar_rect,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
@@ -1224,8 +1240,16 @@ impl App {
         let mut aquarium_tray_area = None;
 
         let (content_area, sidebar_area) = if ctx.show_right_sidebar {
+            // Clamp against the live width so a layout persisted on a wider
+            // terminal can never squeeze the centre away. On a normal width the
+            // default 24 clamps to 24, unchanged from the old fixed size.
+            let sidebar_width = crate::app::common::dock::DockLayout::clamp_width(
+                inner.width,
+                ctx.dock_right_width,
+            );
             let main_layout =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(sidebar_width)])
+                    .split(inner);
             (main_layout[0], Some(main_layout[1]))
         } else {
             (inner, None)
@@ -1233,17 +1257,24 @@ impl App {
         let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         match screen {
             Screen::Dashboard => {
-                const HOME_RAIL_WIDTH: u16 = 24;
                 let (rail_area, center_area) = if ctx.show_room_list_sidebar {
-                    let split = Layout::horizontal([
-                        Constraint::Length(HOME_RAIL_WIDTH),
-                        Constraint::Fill(1),
-                    ])
-                    .split(content_area);
+                    let rail_width = crate::app::common::dock::DockLayout::clamp_width(
+                        content_area.width,
+                        ctx.dock_left_width,
+                    );
+                    let split =
+                        Layout::horizontal([Constraint::Length(rail_width), Constraint::Fill(1)])
+                            .split(content_area);
                     (Some(split[0]), split[1])
                 } else {
                     (None, content_area)
                 };
+                // Record the home column rects (full-height, before the aquarium
+                // tray carves the centre's top) so the mouse path can hit-test
+                // the column dividers for drag-resize.
+                ctx.dock_rail_rect_slot.set(rail_area);
+                ctx.dock_center_rect_slot.set(Some(center_area));
+                ctx.dock_sidebar_rect_slot.set(sidebar_area);
                 let center_area = if aquarium_tray_enabled && ctx.home_selected {
                     let (tray, rest) = crate::app::hub::aquarium::ui::carve_top_tray(center_area);
                     aquarium_tray_area = tray;

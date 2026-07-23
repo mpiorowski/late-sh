@@ -269,6 +269,7 @@ const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
 const SHOW_AQUARIUM_TRAY_KEY: &str = "show_aquarium_tray";
 const SHOW_PET_STRIP_KEY: &str = "show_pet_strip";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
+const HOME_DOCK_LAYOUT_KEY: &str = "home_dock_layout";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LAND_ON_HOME_KEY: &str = "land_on_home";
@@ -719,6 +720,29 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&SHOW_AQUARIUM_TRAY_KEY, &shown, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Persist the user's home dock layout (column widths + panel placement) so
+    /// it survives reconnects. The `layout` is an opaque JSON object built by
+    /// the SSH client; here we merge it under one settings key.
+    pub async fn set_home_dock_layout(
+        client: &Client,
+        user_id: Uuid,
+        layout: &Value,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&HOME_DOCK_LAYOUT_KEY, &layout, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1215,6 +1239,17 @@ pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
         .get(SHOW_ROOM_LIST_SIDEBAR_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// The user's saved home dock layout, as an opaque JSON object. The shape is
+/// owned by the SSH client (`DockLayout`), which parses it back; here we only
+/// store and return the blob. `None` (or a non-object) means "use the default
+/// layout".
+pub fn extract_home_dock_layout(settings: &Value) -> Option<Value> {
+    settings
+        .get(HOME_DOCK_LAYOUT_KEY)
+        .filter(|v| v.is_object())
+        .cloned()
 }
 
 /// Tweak: when true, pressing Enter in the chat composer sends the message

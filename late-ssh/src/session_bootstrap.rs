@@ -450,6 +450,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             &user.settings,
         ),
         show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
+        home_dock_layout: late_core::models::user::extract_home_dock_layout(&user.settings),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),

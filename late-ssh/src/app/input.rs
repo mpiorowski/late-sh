@@ -1043,6 +1043,9 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
+            if handle_dock_drag(app, ctx.screen, mouse) {
+                return;
+            }
             if handle_mouse_click(app, ctx.screen, mouse) {
                 return;
             }
@@ -2844,6 +2847,74 @@ fn handle_pet_strip_click(app: &mut App, x: u16, y: u16) -> bool {
         && rect_contains(rect, x, y)
     {
         pet_feed_globally(app);
+        return true;
+    }
+    false
+}
+
+/// Drag a home column divider to resize it (the dockable-panel drag path).
+/// Left-press on a column border starts a resize; subsequent Drag events widen
+/// or narrow that column live; Up ends it. Only active on the Dashboard, where
+/// the dock layout drives the column widths. Returns true when consumed, so the
+/// event doesn't fall through to the click/scroll handlers.
+fn handle_dock_drag(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
+    use crate::app::common::dock::{Divider, DockFrame, Hit};
+
+    // A resize in progress owns every Drag/Up until the button is released,
+    // wherever the pointer roams. Otherwise only a fresh left-press interests us.
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {}
+        MouseEventKind::Drag if app.dock_resize.is_some() => {}
+        MouseEventKind::Up if app.dock_resize.is_some() => {
+            app.dock_resize = None;
+            // The resize settled: persist the new layout so it survives reconnects.
+            app.persist_dock_layout();
+            return true;
+        }
+        _ => return false,
+    }
+    if screen != Screen::Dashboard {
+        return false;
+    }
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+
+    let rail = app.last_dock_rail_rect.get();
+    let sidebar = app.last_dock_sidebar_rect.get();
+    let Some(center) = app.last_dock_center_rect.get() else {
+        return false;
+    };
+    // The full home band: from the left rail (or centre) to the sidebar's right
+    // edge (or centre). It bounds the clamp and maps a pointer x → column width.
+    let left_edge = rail.map(|r| r.x).unwrap_or(center.x);
+    let right_edge = sidebar.map(|r| r.right()).unwrap_or_else(|| center.right());
+    let total = right_edge.saturating_sub(left_edge);
+    if total == 0 {
+        return false;
+    }
+
+    if mouse.kind == MouseEventKind::Down {
+        let frame = DockFrame {
+            left: rail,
+            center,
+            right: sidebar,
+            panels: Vec::new(),
+        };
+        if let Some(Hit::Divider(divider)) = app.dock_layout.hit(&frame, x, y) {
+            app.dock_resize = Some(divider);
+            return true;
+        }
+        return false;
+    }
+
+    // Drag: resize the held divider to follow the pointer (clamped in `resize`).
+    if let Some(divider) = app.dock_resize {
+        let new_width = match divider {
+            Divider::Left => x.saturating_sub(left_edge),
+            Divider::Right => right_edge.saturating_sub(x),
+        };
+        app.dock_layout.resize(divider, new_width, total);
         return true;
     }
     false
