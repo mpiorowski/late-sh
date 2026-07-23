@@ -93,7 +93,6 @@ LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (us
 LATE_SSH_INTERNAL_URL ?= http://service-ssh:$(LATE_API_PORT) # Internal SSH API URL (used by web server)
 LATE_SSH_PUBLIC_URL ?= localhost:$(LATE_API_PORT)           # Public SSH API URL (used by browser for WS)
 LATE_AUDIO_URL ?= http://icecast:8000                       # Upstream audio URL used by late-web /stream proxy
-LATE_WEB_TUNNEL_TOKEN ?= dev-web-tunnel                     # Local-only shared token for /play web terminal
 LATE_YOUTUBE_API_KEY ?=
 
 # --- AI (Gemini - used for @bot and @graybeard chat + URL extraction) ---
@@ -192,7 +191,6 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
 	@echo "LATE_SSH_PUBLIC_URL=$(LATE_SSH_PUBLIC_URL)" >> .env
 	@echo "LATE_AUDIO_URL=$(LATE_AUDIO_URL)" >> .env
-	@echo "LATE_WEB_TUNNEL_TOKEN=$(LATE_WEB_TUNNEL_TOKEN)" >> .env
 	@echo "LATE_YOUTUBE_API_KEY=$(LATE_YOUTUBE_API_KEY)" >> .env
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env

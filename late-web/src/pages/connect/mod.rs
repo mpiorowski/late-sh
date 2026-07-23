@@ -12,12 +12,6 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/{token}", get(token_handler))
 }
 
-impl Page {
-    fn active_page(&self) -> &str {
-        "connect"
-    }
-}
-
 #[derive(Template)]
 #[template(path = "pages/connect/page.html")]
 struct Page {

@@ -83,8 +83,8 @@ impl App {
         }
         // Heartbeats are a liveness no-op (matched below); a heartbeat-only
         // drain must not pay a frame. Viz frames are dropped outright: the
-        // wave is synthetic and the pipeline removal is in flight
-        // (VIZ_WAVE_BRIEF.md), the variant survives only so old CLIs still
+        // eq is synthetic and the pipeline removal is a tracked follow-up
+        // (SCALE.md), the variant survives only so old CLIs still
         // sending frames keep a working socket.
         if messages
             .iter()
