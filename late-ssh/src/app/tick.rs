@@ -12,8 +12,12 @@ use late_core::models::user::AudioSource;
 /// The hot world-tick cadence (the classic 15fps): animations that earn
 /// full rate run here.
 pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
-/// Ambience cadence (~4fps): the Clubhouse screen and the audio visualizer.
-pub(crate) const AMBIENT_TICK: Duration = Duration::from_millis(266);
+/// Half-rate cadence (~7.5fps): Clubhouse ambience, riding the shared
+/// `anim_half` /2 edge in tick().
+pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
+/// Quarter-rate cadence (~3.8fps): the aquarium surfaces (tray +
+/// profile-modal reef), stepping on the `anim_quarter` /4 edge in tick().
+pub(crate) const ANIM_QUARTER_TICK: Duration = Duration::from_millis(264);
 /// Idle floor: nothing visible animates, ticks only drain service channels.
 /// Worst-case latency for an unprompted event (a chat message arriving
 /// while idle) is one floor interval; input and push wakes stay instant.
@@ -55,6 +59,13 @@ impl App {
             Some(prev) => self.marquee_tick / 15 != prev,
         };
         self.last_one_hz_index = Some(self.marquee_tick / 15);
+        // Shared animation frame edges, both divisors of the one wall
+        // clock. Half (132ms, ~7.5fps): pet, bonsai sway, clubhouse
+        // ambience. Quarter (264ms, ~3.8fps): aquarium simulation steps,
+        // whose per-step cell movement is tuned for roughly this pace.
+        // State still advances per tick, so animation speed is unaffected.
+        let anim_half = self.marquee_tick / 2 != prev_marquee_tick / 2;
+        let anim_quarter = self.marquee_tick / 4 != prev_marquee_tick / 4;
 
         if self.show_splash {
             // The splash types one character per tick and self-expires.
@@ -84,13 +95,13 @@ impl App {
 
         self.sync_visible_chat_room();
         self.tick_clubhouse();
-        if self.screen == Screen::Clubhouse && self.marquee_tick / 4 != prev_marquee_tick / 4 {
+        if self.screen == Screen::Clubhouse && anim_half {
             // Only cosmetic ambience animates on the tick counter (jukebox
             // EQ, emote arms, fire/candles/stars); walker positions are
-            // input-driven and the dog step is wall-clock. A ~4fps
-            // heartbeat keeps the ambience moving at a quarter of the
-            // cost, and every discrete change (input, chat bubbles, door
-            // events) still lands within 266ms of its tick.
+            // input-driven and the dog step is wall-clock. The ~7.5fps
+            // heartbeat keeps the ambience moving at half the hot cost, and
+            // every discrete change (input, chat bubbles, door events)
+            // still lands within 132ms of its tick.
             changed = true;
         }
 
@@ -921,19 +932,21 @@ impl App {
         changed |= self.pet_state.tick();
         if self.pet_state.roaming_active() {
             // The full-screen stroll overlay animates continuously.
-            changed = true;
+            changed |= anim_half;
         } else if let Some(travel) = self.last_pet_strip_travel.get() {
-            changed |= crate::app::pet::ui::strip_frame_changed(
-                self.pet_state.mood(),
-                self.pet_state.animation_ticks(),
-                travel,
-            );
+            changed |= anim_half
+                && crate::app::pet::ui::strip_frame_changed(
+                    self.pet_state.mood(),
+                    self.pet_state.animation_ticks(),
+                    travel,
+                );
         }
-        // Mirror the render condition (render.rs `aquarium_tray_enabled`):
-        // the tray setting defaults on for everyone, but only aquarium owners
-        // ever see it, so only their sessions pay simulation frames.
-        if self.show_aquarium_tray && self.shop_state.entitlements().has_aquarium() {
-            changed |= self.aquarium_state.tick();
+        // The aquarium has no clock of its own: one step per quarter edge,
+        // and only while the tray is actually on screen (the sim pauses
+        // off-screen; the screen switch back forces its catch-up frame).
+        if anim_quarter && self.aquarium_tray_visible() {
+            self.aquarium_state.tick();
+            changed = true;
         }
         if self.show_bonsai_modal {
             changed |= self.bonsai_care_state.tick();
@@ -987,12 +1000,12 @@ impl App {
         } else {
             self.visualizer.tick_idle(viz_elapsed)
         };
-        let viz_frame_due =
-            self.marquee_tick / 4 != prev_marquee_tick / 4 || !self.visualizer.animating();
+        // Sidebar bars pay full rate (music is the one animation worth
+        // 15fps, and its hot wake below matches); bonsai sway rides the
+        // half-rate edge.
         changed |= viz_ticked
-            && ((sidebar_visible && viz_frame_due)
-                || self.show_bonsai_modal
-                || self.show_bonsai_v2_modal);
+            && (sidebar_visible
+                || ((self.show_bonsai_modal || self.show_bonsai_v2_modal) && anim_half));
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
@@ -1054,8 +1067,8 @@ impl App {
         // - The ultimate modal's cooldown label is minute-granularity and
         //   rides the per-minute global frame; only the running -> ready
         //   flip pays a one-shot frame here.
-        // - The profile modal ticks a live aquarium during draw whenever the
-        //   viewed profile owns fish.
+        // - The profile modal's live reef steps here on the half-rate edge
+        //   (step_reef); draw only paints it.
         // The image modal's Sixel fetch keys off the capacity recorded by
         // the draw that opened or resized the modal (both input-forced
         // frames), so requesting here needs no frames of its own; the
@@ -1068,7 +1081,9 @@ impl App {
             && self.ultimate_cooldown_was_running
             && !ultimate_cooldown_running;
         self.ultimate_cooldown_was_running = ultimate_cooldown_running;
-        changed |= self.show_profile_modal && self.profile_modal_state.aquarium_animating();
+        if self.show_profile_modal && anim_quarter {
+            changed |= self.profile_modal_state.step_reef();
+        }
 
         // Daily boards are event-driven (daily_tick, chat, input); the 1Hz
         // cadence keeps the move-deadline clock honest while on screen.
@@ -1102,22 +1117,49 @@ impl App {
             || (self.screen == Screen::Arcade && self.is_playing_game)
             || self.pet_state.roaming_active()
             || self.last_pet_strip_travel.get().is_some()
-            || (self.show_aquarium_tray && self.shop_state.entitlements().has_aquarium())
-            || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
             || self.show_bonsai_modal
-            || self.show_bonsai_v2_modal;
+            || self.show_bonsai_v2_modal
+            || (self.visualizer.animating() && self.right_sidebar_visible());
         if hot {
             return HOT_TICK;
         }
-        // The audio visualizer runs at the ambient cadence (~4fps): full
-        // rate is reserved for the bonsai modals' beat sway above; the
-        // sidebar bars are ambience. Same tier as clubhouse ambience.
-        if self.screen == Screen::Clubhouse
-            || (self.visualizer.animating() && self.right_sidebar_visible())
+        // Slower tiers match the frame edges their surfaces paint on. Pet
+        // and bonsai paint on the half edge but stay hot above: their
+        // steppers advance per tick and are tuned for the 66ms cadence.
+        if self.screen == Screen::Clubhouse {
+            return ANIM_HALF_TICK;
+        }
+        if self.aquarium_tray_visible()
+            || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
         {
-            return AMBIENT_TICK;
+            return ANIM_QUARTER_TICK;
         }
         IDLE_TICK
+    }
+
+    /// Whether the aquarium tray is actually on screen: entitled, enabled,
+    /// and sitting on the Dashboard Lounge home view. Mirrors render.rs
+    /// (`aquarium_tray_enabled && home_selected`); shared by the tray's
+    /// step gate in tick() and the wake cadence, so an aquarium owner
+    /// browsing other screens pays no fish frames.
+    fn aquarium_tray_visible(&self) -> bool {
+        if !self.show_aquarium_tray || !self.shop_state.entitlements().has_aquarium() {
+            return false;
+        }
+        if self.screen != Screen::Dashboard {
+            return false;
+        }
+        let synthetic_selected = self.chat.feeds_selected
+            || self.chat.news_selected
+            || self.chat.notifications_selected
+            || self.chat.discover_selected
+            || self.chat.showcase_selected
+            || self.chat.work_selected;
+        crate::app::render::dashboard_home_selected(
+            self.chat.lounge_room_id(),
+            self.chat.selected_room_id,
+            synthetic_selected,
+        )
     }
 
     /// Whether the right sidebar draws this frame (the settings draft

@@ -375,6 +375,11 @@ async fn run_render_loop(
 ) {
     let mut previous_render: Option<Instant> = None;
     let mut input_pending = false;
+    // Local skip-ratio feel, mirroring ssh.rs: drawn vs skipped-clean
+    // passes, debug-logged every 5s (RUST_LOG=late_ssh=debug).
+    let mut stats_drawn: u64 = 0;
+    let mut stats_skipped: u64 = 0;
+    let mut stats_since = Instant::now();
     // Adaptive world tick, mirroring ssh.rs: each pass reports how soon the
     // next tick is needed (`App::wake_hint`); the first deadline is
     // immediate so the session paints without waiting a tick.
@@ -406,6 +411,21 @@ async fn run_render_loop(
         {
             Ok(outcome) => {
                 previous_render = Some(Instant::now());
+                if outcome.drew {
+                    stats_drawn += 1;
+                } else {
+                    stats_skipped += 1;
+                }
+                if stats_since.elapsed() >= Duration::from_secs(5) {
+                    tracing::debug!(
+                        drawn = stats_drawn,
+                        skipped_clean = stats_skipped,
+                        "render stats, last 5s"
+                    );
+                    stats_drawn = 0;
+                    stats_skipped = 0;
+                    stats_since = Instant::now();
+                }
                 if outcome.should_quit {
                     clean_disconnect(&out_tx).await;
                     break;
@@ -467,11 +487,12 @@ async fn next_render_action(
     }
 }
 
-/// Mirror of ssh.rs `RenderOutcome`: quit flag plus how soon the next
-/// world tick is needed.
+/// Mirror of ssh.rs `RenderOutcome`: quit flag, how soon the next world
+/// tick is needed, and whether the pass drew (feeds the debug stats line).
 struct RenderOutcome {
     should_quit: bool,
     wake_hint: Duration,
+    drew: bool,
 }
 
 impl RenderOutcome {
@@ -480,6 +501,7 @@ impl RenderOutcome {
             should_quit: true,
             // Unused: the loop breaks on quit.
             wake_hint: crate::app::tick::IDLE_TICK,
+            drew: false,
         }
     }
 }
@@ -523,6 +545,7 @@ async fn render_once(
             return Ok(RenderOutcome {
                 should_quit: false,
                 wake_hint: app.wake_hint(),
+                drew: false,
             });
         }
         metrics::record_render(if advance_world {
@@ -557,6 +580,7 @@ async fn render_once(
     Ok(RenderOutcome {
         should_quit: false,
         wake_hint,
+        drew: true,
     })
 }
 

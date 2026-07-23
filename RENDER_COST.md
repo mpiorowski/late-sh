@@ -19,14 +19,18 @@ between LLM sessions: read it fully before touching the render gate.
 - Watch receivers that are only `borrow()`ed at render must be marked seen
   (`borrow_and_update`) by whoever peeks them, or the peek latches dirty
   forever (this is why artboard's archive view skips the snapshot peek).
-- Product decision: the only animations worth full rate are cats (pet), fish
-  (aquarium), music (visualizer), bonsai. Everything else slow/static.
+- Product decision: music (visualizer) is the only animation worth full
+  rate (15fps). Cats, bonsai sway, and clubhouse ambience paint on the
+  shared half-rate edge (`anim_half`, ~7.5fps); fish step on the quarter
+  edge (`anim_quarter`, ~3.8fps); everything else is slow/static.
   Marquee: 3 columns/sec in 1s steps (`MARQUEE_STEP_TICKS = 15`,
   `MARQUEE_STEP_COLUMNS = 3`, hold 45), so speed costs no extra frames;
   every marquee transition lands on a multiple of the step (tested).
 - Metrics: `late_ssh_renders_total{reason=input|tick}` vs
   `late_ssh_renders_skipped_clean_total` (metrics.rs, `RenderReason` closed
   enum) observe the skip ratio in prod; they do not gate the work.
+  Grafana: "Rendering" row in monitoring/dashboards/observability.json
+  (render rate, clean-skip ratio, draws per session, stall guard).
 
 ## Test gotchas
 
@@ -53,7 +57,7 @@ single-recipient chat events. 64KB BufWriter frame path. OutputBudget guard
 `App::tick() -> bool` (late-ssh/src/app/tick.rs); both loops skip clean
 frames. Per-subsystem changed signals: five tab states + chat + profile +
 daily + quest + shop + voice + sudoku + terminal images + bonsai/bonsai_v2 +
-aquarium (entitlement-gated, 220ms self-throttle) + viz settle
+aquarium (entitlement-gated, stepped on the half-rate edge) + viz settle
 (SETTLE_EPSILON). `Outbox::has_pending()` forces a frame for outbox/terminal
 commands/clipboard. Pinstar rx-transition-to-None pattern. End-of-tick
 composite: chat epochs, screen compare, banner-expiry one-shot,
@@ -73,15 +77,13 @@ CONTEXT.md §2.6 documents the gate.
 - Visualizer: ticks every world tick (decay must settle) but only reports
   changed while the right sidebar or a bonsai modal is visible.
   `sidebar_visible` computed once in tick, shared with the marquee block.
-  Runs at AMBIENT cadence (~4fps) via wake_hint, not hot: decay and the
-  procedural phase scale by elapsed wall ticks so the slower cadence
-  lowers the frame rate, not the animation speed. Sidebar bar frames are
-  additionally gated on the /4 ambient boundary edge (clubhouse pattern),
-  so the post-input 2s hot window cannot raise their paint rate; the
-  settle snap reports immediately regardless. Bonsai modals are hot, so
-  beat sway keeps full rate there. `SessionMessage::Viz` drains are
-  excluded from the generic changed check (like heartbeats): the viz gate
-  reports visible change, so hidden-sidebar listeners pay no frames.
+  Paints at full hot rate while the sidebar shows it (music is the one
+  animation worth 15fps; its presence returns HOT from wake_hint); decay
+  and the procedural phase scale by elapsed wall ticks so any cadence
+  keeps the animation wall-clock-true. Bonsai-modal sway paints on the
+  anim_half edge instead. `SessionMessage::Viz` drains are excluded from
+  the generic changed check (like heartbeats): the viz gate reports
+  visible change, so hidden-sidebar listeners pay no frames.
 - Pet strip: `PetState::tick() -> bool` (feedback expiry, roam end,
   day-rollover mood/needs flips via `last_visual` compare). Animation pays
   exactly on frame boundaries: `pet::ui::strip_frame_changed(mood, tick,
@@ -97,8 +99,9 @@ CONTEXT.md §2.6 documents the gate.
   picker, room search (results ride chat events), booth, bonsai_v2 (growth
   via bonsai_v2_state.tick, sway via viz gate).
 - Scoped cadences kept: lobby modal 1Hz (live occupancy read at draw),
-  ultimate modal 1Hz only while `has_cooldown_running()`, profile modal hot
-  only while `aquarium_animating()` (live reef ticks during draw),
+  ultimate modal 1Hz only while `has_cooldown_running()`, profile modal
+  half-rate only while `aquarium_animating()` (reef steps via step_reef
+  in App::tick; draw only paints),
   DailyMatch screen 1Hz (deadline clock; board is otherwise event-driven).
 - Artboard: `DartboardState::tick() -> bool` (snapshot watch + event_rx +
   archive loader peeks; archive view deliberately excludes the latched
@@ -123,7 +126,7 @@ every domain state now exposes `tick() -> bool` under it.
   steps, same shape as blackjack), so the watch peek covers every
   countdown and no client-side clock cadence exists. Server loops going
   quiet between rounds means an idle table settles clean.
-- Clubhouse: ambience heartbeat `marquee_tick % 4` (~4fps) while on
+- Clubhouse: ambience heartbeat on the anim_half edge (~7.5fps) while on
   screen; walker positions are input-driven, dog step wall-clock, so
   only cosmetic loops (jukebox EQ t/2 fastest) slowed. The clubhouse
   `anim_tick` is synced to `marquee_tick` (wall clock), not incremented
@@ -163,11 +166,12 @@ long unless input or a RenderSignal wake lands first. Three tiers:
 - HOT_TICK 66ms: splash, post-input window (2s after any input, so menu
   loads and chat send echo keep typing latency), active ultimate effect,
   HouseTable screen, Arcade with a game open, pet roaming or strip drawn,
-  aquarium tray visible, profile-modal live reef, bonsai modals.
-- AMBIENT_TICK 266ms: Clubhouse screen (matches its ~4fps ambience gate)
-  and the audio visualizer while animating on a visible sidebar (product
-  decision 2026-07-23: viz demoted from hot; bars are ambience, full rate
-  is reserved for the bonsai modals' beat sway).
+  bonsai modals, viz animating on a visible sidebar.
+- ANIM_HALF_TICK 132ms: Clubhouse screen, painting on the /2 `anim_half`
+  edge (~7.5fps). Pet and bonsai paint on the same edge but wake hot:
+  their steppers advance per tick and are tuned for the 66ms cadence.
+- ANIM_QUARTER_TICK 264ms: aquarium tray + profile reef, stepping on the
+  /4 `anim_quarter` edge (~3.8fps).
 - IDLE_TICK 500ms floor: everything else. Ticks only drain channels;
   worst-case latency for an unprompted event (chat message while idle) is
   one floor interval. Input/resize/door-proxy wakes remain instant.
@@ -195,6 +199,29 @@ Enablers shipped with it:
 
 Result: idle sessions = 2 cheap clean ticks/sec, ~1 render/min. Renders
 were already gated by PR1/PR2; phase 2 removes the idle wakeup churn.
+
+### Experiment in flight (2026-07-23)
+
+- One shared half-rate frame edge (`anim_half` = /2 of marquee_tick,
+  steady ~7.5fps on any grid): pet strip, roam overlay, bonsai modal
+  sway, clubhouse ambience (raised from 4fps), and both aquarium
+  surfaces paint on it. The viz went back to full hot rate (music is
+  the one animation worth 15fps).
+- The aquarium lost its private clock entirely ("two clocks through the
+  app"): SIMULATION_STEP/last_step_at deleted, tick() = exactly one sim
+  step, driven on the `anim_quarter` /4 edge (264ms, ~3.8fps, close to
+  the old 220ms feel; 132ms made the fish visibly too fast) - tray in
+  App::tick, profile reef via step_reef in App::tick, draw no longer
+  ticks it.
+- Wake tiers are now HOT 66ms / ANIM_HALF_TICK 132ms (Clubhouse) /
+  ANIM_QUARTER_TICK 264ms (aquarium surfaces) / IDLE 500ms. All frame
+  edges divide the one wall clock. Pet + bonsai wake hot (their
+  per-call steppers are tuned for 66ms) but paint on the half edge.
+- Per-session debug stats: each loop logs drawn vs skipped_clean every
+  5s at debug level ("render stats, last 5s"); run with
+  RUST_LOG=late_ssh=debug to feel the skip ratio locally.
+- Revert: drop the anim_half/anim_quarter gates in tick.rs, restore the
+  aquarium 220ms self-throttle + draw-time reef tick.
 
 ### Phase 2 follow-ups (open, all optional tightening)
 

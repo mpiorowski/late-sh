@@ -68,7 +68,7 @@ fn room_list_sidebar_enabled(
     }
 }
 
-fn dashboard_home_selected(
+pub(crate) fn dashboard_home_selected(
     lounge_room_id: Option<uuid::Uuid>,
     selected_room_id: Option<uuid::Uuid>,
     synthetic_selected: bool,

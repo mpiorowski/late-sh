@@ -15,7 +15,6 @@ use super::{
     world::{ReefWorld, WorldBounds, load_world_layer},
 };
 
-const SIMULATION_STEP: Duration = Duration::from_millis(220);
 const FEED_EFFECT_DURATION: Duration = Duration::from_secs(8);
 const HUNGRY_MOTION_DIVISOR: u64 = 4;
 
@@ -26,7 +25,6 @@ pub(crate) struct AquariumState {
     pub(crate) show_background: bool,
     pub(crate) show_creature_names: bool,
     pub(crate) mode: RuntimeMode,
-    last_step_at: Instant,
     feed_started_at: Option<Instant>,
     hungry: bool,
 }
@@ -143,7 +141,6 @@ impl AquariumState {
             show_background: false,
             show_creature_names: false,
             mode,
-            last_step_at: Instant::now(),
             feed_started_at: None,
             hungry: false,
         };
@@ -239,23 +236,17 @@ impl AquariumState {
         current == desired
     }
 
-    /// Returns true when a simulation step ran (the tray visibly moved); the
-    /// 220ms self-throttle makes most world ticks report no change.
-    pub(crate) fn tick(&mut self) -> bool {
+    /// Advance the simulation exactly one step: the aquarium keeps no clock
+    /// of its own. The caller (App::tick on its half-rate edge) owns the
+    /// cadence, so one call = one step = one visibly moved frame.
+    pub(crate) fn tick(&mut self) {
         let now = Instant::now();
-        let mut changed = false;
         if self
             .feed_started_at
             .is_some_and(|started| now.saturating_duration_since(started) >= FEED_EFFECT_DURATION)
         {
             self.feed_started_at = None;
-            changed = true;
         }
-        if now.saturating_duration_since(self.last_step_at) < SIMULATION_STEP {
-            return changed;
-        }
-
-        self.last_step_at = now;
         self.tick = self.tick.wrapping_add(1);
         let mut rng = rand::thread_rng();
         match &mut self.mode {
@@ -295,7 +286,6 @@ impl AquariumState {
                 &mut rng,
             ),
         }
-        true
     }
 
     pub(crate) fn handle_resize(&mut self, width: u16, height: u16) {

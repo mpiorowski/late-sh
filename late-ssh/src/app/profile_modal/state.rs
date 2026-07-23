@@ -268,6 +268,20 @@ impl ProfileModalState {
         &self.aquarium
     }
 
+    /// Advance the open modal's live reef one animation step. App::tick
+    /// drives this on its half-rate edge; draw only paints. False while no
+    /// reef is built yet (it is built lazily by the first draw, which the
+    /// modal-opening input frame forces).
+    pub(crate) fn step_reef(&mut self) -> bool {
+        match self.aquarium.get_mut() {
+            Some(aquarium) => {
+                aquarium.tick();
+                true
+            }
+            None => false,
+        }
+    }
+
     pub(crate) fn aquarium_area(&self) -> &Cell<Rect> {
         &self.aquarium_area
     }

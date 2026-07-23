@@ -523,7 +523,6 @@ fn draw_aquarium_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     }
 
     if let Some(aquarium) = slot.as_mut() {
-        aquarium.tick();
         aquarium_ui::draw(frame, area, aquarium);
     } else {
         render_centered_dim(frame, area, "aquarium unavailable");
