@@ -1828,3 +1828,167 @@ fn parse_brb_rejects_non_command() {
     assert_eq!(parse_brb_command("hello /brb"), None);
     assert_eq!(parse_brb_command(""), None);
 }
+
+#[test]
+fn set_context_value_reports_only_real_changes() {
+    let user_id = Uuid::from_u128(1);
+    let mut map = HashMap::new();
+
+    // Insert, same-value no-op, change, blank clears, clear of absent key.
+    assert!(set_context_value(&mut map, user_id, Some("mod")));
+    assert!(!set_context_value(&mut map, user_id, Some("mod")));
+    assert!(set_context_value(&mut map, user_id, Some("artist")));
+    assert!(set_context_value(&mut map, user_id, Some("  ")));
+    assert!(map.is_empty());
+    assert!(!set_context_value(&mut map, user_id, None));
+}
+
+#[test]
+fn extend_changed_reports_only_real_changes() {
+    let a = Uuid::from_u128(1);
+    let b = Uuid::from_u128(2);
+    let mut map = HashMap::from([(a, "alice".to_string())]);
+
+    // Identical merge is a no-op; a new key or changed value reports true.
+    assert!(!extend_changed(
+        &mut map,
+        HashMap::from([(a, "alice".to_string())])
+    ));
+    assert!(extend_changed(
+        &mut map,
+        HashMap::from([(b, "bob".to_string())])
+    ));
+    assert!(extend_changed(
+        &mut map,
+        HashMap::from([(a, "alicia".to_string())])
+    ));
+    assert_eq!(map.get(&a).map(String::as_str), Some("alicia"));
+}
+
+/// A ChatState wired to a real DB with inert side services, for exercising
+/// the row-cache counter contract directly.
+fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) -> ChatState {
+    let db = test_db.db.clone();
+    let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
+    let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
+    let ai = crate::app::ai::svc::AiService::new(false, None, "test".to_string());
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let (notifier, _outbox) = crate::app::notify::channel();
+    ChatState::new(
+        ChatServices {
+            chat,
+            notifications,
+            articles,
+            feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+            showcases: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
+            work: crate::app::chat::work::svc::WorkService::new(db),
+        },
+        user_id,
+        crate::authz::Permissions::new(false, false),
+        None,
+        notifier,
+    )
+}
+
+async fn refresh_and_drain(state: &mut ChatState) {
+    crate::test_helpers::wait_until(
+        || async { state.snapshot_rx.has_changed().unwrap_or(false) },
+        "chat snapshot refresh",
+    )
+    .await;
+    state.drain_snapshot();
+}
+
+#[tokio::test]
+async fn identical_snapshot_reapply_keeps_row_cache_counters_stable() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "counter_user").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "counter_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join user");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "first".to_string(),
+        },
+    )
+    .await
+    .expect("first message");
+
+    let mut state = counter_test_state(&test_db, user.id);
+    refresh_and_drain(&mut state).await;
+    assert!(!state.rooms.is_empty(), "initial snapshot loads rooms");
+    let epoch = state.context_epoch();
+    let version = state.room_version(lounge.id);
+
+    // Snapshots arrive on a fixed cadence whether or not anything changed;
+    // an identical reapply must not move any counter, or every session
+    // rebuilds its row caches every 10 seconds for nothing.
+    state.refresh_tx.send(()).expect("force refresh");
+    refresh_and_drain(&mut state).await;
+    assert_eq!(state.context_epoch(), epoch);
+    assert_eq!(state.room_version(lounge.id), version);
+}
+
+#[tokio::test]
+async fn push_message_bumps_only_its_room_version() {
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "bump_user").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let other = ChatRoom::get_or_create_public_room(&client, "bump-other")
+        .await
+        .expect("other room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge");
+    ChatRoomMember::join(&client, other.id, user.id)
+        .await
+        .expect("join other");
+
+    let mut state = counter_test_state(&test_db, user.id);
+    refresh_and_drain(&mut state).await;
+    let lounge_version = state.room_version(lounge.id);
+    let other_version = state.room_version(other.id);
+
+    let message = late_core::models::chat_message::ChatMessage {
+        id: Uuid::now_v7(),
+        created: Utc::now(),
+        updated: Utc::now(),
+        pinned: false,
+        reply_to_message_id: None,
+        reply_to_user_id: None,
+        room_id: lounge.id,
+        user_id: user.id,
+        body: "hello".to_string(),
+    };
+    state.push_message(message.clone());
+    assert_eq!(state.room_version(lounge.id), lounge_version + 1);
+    assert_eq!(state.room_version(other.id), other_version);
+
+    // Duplicate delivery dedups by id and must not invalidate the cache.
+    state.push_message(message.clone());
+    assert_eq!(state.room_version(lounge.id), lounge_version + 1);
+
+    // An edit replaces in place and must repaint.
+    let mut edited = message;
+    edited.body = "hello, edited".to_string();
+    edited.updated = Utc::now();
+    state.replace_message(edited);
+    assert_eq!(state.room_version(lounge.id), lounge_version + 2);
+}

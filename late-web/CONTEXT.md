@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: public web frontend for late.sh
 - Primary audience: LLM agents working on `late-web`, human contributors
-- Last updated: 2026-06-17
+- Last updated: 2026-07-22 (landing page contrast pass, source-repo link, companion-CLI explainer)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -98,7 +98,9 @@ Important route details:
 - `src/pages/layout.html` extends `app.html` with the centered default page layout.
 - Full-screen experiences such as `/play` and `/gallery` extend `app.html` directly.
 - HTMX partial templates live beside their page owner, currently `dashboard/partial_now_playing.html`, `dashboard/partial_status.html`, and `home/status.html`. The connect page has no HTMX partial; its source banner and now-playing state are client-side from pair WS messages.
-- Tailwind source is `static/input.css`; compiled output is committed as `static/style.css`.
+- Tailwind source is `static/input.css`; compiled output is committed as `static/style.css`. Rebuild with `npm run tailwind:build` after any class change, or the new classes are missing at runtime.
+- Contrast floor: every real text color on the dark shell must clear 4.5:1. In practice that means `text-gray-400` or lighter (`gray-300`/`gray-200` for body copy) and `text-green-400` for accents; `text-gray-500` is reserved for decorative glyphs (`#`, `·`, `├─`). Gallery/play use hand-written CSS, where `#9ca3af` is the dim-text floor.
+- The landing page must keep a visible link to the source repo and an explanation of what the optional `late` companion CLI does next to the piped-install commands. Both exist because a `curl | bash` with no repo link reads as a dark pattern.
 - npm scripts in `late-web/package.json`:
   - `npm run tailwind:watch`
   - `npm run tailwind:build`

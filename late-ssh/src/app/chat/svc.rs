@@ -493,6 +493,11 @@ fn service_sentence_case(text: &str) -> String {
 struct ChatRefreshSession {
     user_id: Uuid,
     snapshot_tx: watch::Sender<ChatSnapshot>,
+    /// Point-to-point delivery for single-recipient events (tail loads,
+    /// search results, discover lists). These carry full message payloads;
+    /// sending them over the global broadcast would clone them into every
+    /// connected session only to be filtered out by all but one.
+    event_tx: mpsc::UnboundedSender<ChatEvent>,
 }
 
 struct ChatRefreshSessionGuard {
@@ -1297,6 +1302,7 @@ impl ChatService {
         room_rx: watch::Receiver<Option<Uuid>>,
     ) -> (
         watch::Receiver<ChatSnapshot>,
+        mpsc::UnboundedReceiver<ChatEvent>,
         mpsc::UnboundedSender<()>,
         tokio::task::AbortHandle,
     ) {
@@ -1304,6 +1310,7 @@ impl ChatService {
 
         let session_id = Uuid::now_v7();
         let (snapshot_tx, snapshot_rx) = watch::channel(ChatSnapshot::default());
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (force_refresh_tx, mut force_refresh_rx) = mpsc::unbounded_channel();
         let initial_room_id = *room_rx.borrow();
         self.refresh_sessions.lock_recover().insert(
@@ -1311,6 +1318,7 @@ impl ChatService {
             ChatRefreshSession {
                 user_id,
                 snapshot_tx,
+                event_tx,
             },
         );
         let _ = self.refresh_signal_tx.send(session_id);
@@ -1348,7 +1356,33 @@ impl ChatService {
             }
             .instrument(info_span!("chat.refresh_registration", user_id = %user_id, session_id = %session_id)),
         );
-        (snapshot_rx, force_refresh_tx, handle.abort_handle())
+        (
+            snapshot_rx,
+            event_rx,
+            force_refresh_tx,
+            handle.abort_handle(),
+        )
+    }
+
+    /// Deliver a single-recipient event to every registered session of
+    /// `user_id` (a user can hold several SSH sessions). Events for users
+    /// with no live session are dropped, same as an unobserved broadcast.
+    fn send_user_event(&self, user_id: Uuid, event: ChatEvent) {
+        let sessions: Vec<mpsc::UnboundedSender<ChatEvent>> = self
+            .refresh_sessions
+            .lock_recover()
+            .values()
+            .filter(|session| session.user_id == user_id)
+            .map(|session| session.event_tx.clone())
+            .collect();
+        // Common case is one session; move the payload instead of cloning it.
+        if sessions.len() == 1 {
+            let _ = sessions[0].send(event);
+            return;
+        }
+        for session in &sessions {
+            let _ = session.send(event.clone());
+        }
     }
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id))]
@@ -1441,11 +1475,14 @@ impl ChatService {
         let messages =
             ChatMessage::list_after(&client, room_id, after_created, after_id, DELTA_LIMIT).await?;
         if !messages.is_empty() {
-            let _ = self.evt_tx.send(ChatEvent::DeltaSynced {
+            self.send_user_event(
                 user_id,
-                room_id,
-                messages,
-            });
+                ChatEvent::DeltaSynced {
+                    user_id,
+                    room_id,
+                    messages,
+                },
+            );
         }
         Ok(())
     }
@@ -1498,17 +1535,20 @@ impl ChatService {
             ChatMessageReaction::list_summaries_for_messages(&client, &message_ids).await?;
         let author_metadata = Self::load_chat_author_metadata(&client, &author_ids).await?;
 
-        let _ = self.evt_tx.send(ChatEvent::RoomTailLoaded {
+        self.send_user_event(
             user_id,
-            room_id,
-            last_read_at,
-            messages,
-            message_reactions,
-            usernames: author_metadata.usernames,
-            bonsai_glyphs: author_metadata.bonsai_glyphs,
-            chat_badges: author_metadata.chat_badges,
-            profile_award_badges: author_metadata.profile_award_badges,
-        });
+            ChatEvent::RoomTailLoaded {
+                user_id,
+                room_id,
+                last_read_at,
+                messages,
+                message_reactions,
+                usernames: author_metadata.usernames,
+                bonsai_glyphs: author_metadata.bonsai_glyphs,
+                chat_badges: author_metadata.chat_badges,
+                profile_award_badges: author_metadata.profile_award_badges,
+            },
+        );
         Ok(())
     }
 
@@ -1517,9 +1557,10 @@ impl ChatService {
         tokio::spawn(
             async move {
                 if let Err(e) = service.load_room_tail(user_id, room_id).await {
-                    let _ = service
-                        .evt_tx
-                        .send(ChatEvent::RoomTailLoadFailed { user_id, room_id });
+                    service.send_user_event(
+                        user_id,
+                        ChatEvent::RoomTailLoadFailed { user_id, room_id },
+                    );
                     late_core::error_span!(
                         "chat_load_room_tail_failed",
                         error = ?e,
@@ -1613,21 +1654,27 @@ impl ChatService {
                 .await;
                 match result {
                     Ok((before, after, usernames)) => {
-                        let _ = service.evt_tx.send(ChatEvent::MessageContextLoaded {
+                        service.send_user_event(
                             user_id,
-                            request_id,
-                            message_id,
-                            before,
-                            after,
-                            usernames,
-                        });
+                            ChatEvent::MessageContextLoaded {
+                                user_id,
+                                request_id,
+                                message_id,
+                                before,
+                                after,
+                                usernames,
+                            },
+                        );
                     }
                     Err(e) => {
-                        let _ = service.evt_tx.send(ChatEvent::MessageContextFailed {
+                        service.send_user_event(
                             user_id,
-                            request_id,
-                            message_id,
-                        });
+                            ChatEvent::MessageContextFailed {
+                                user_id,
+                                request_id,
+                                message_id,
+                            },
+                        );
                         late_core::error_span!(
                             "chat_message_context_failed",
                             error = ?e,
@@ -1666,26 +1713,35 @@ impl ChatService {
                 .await;
                 match result {
                     Ok(Some((message, usernames))) => {
-                        let _ = service.evt_tx.send(ChatEvent::MessageSearchLoaded {
+                        service.send_user_event(
                             user_id,
-                            request_id,
-                            messages: vec![message],
-                            usernames,
-                        });
+                            ChatEvent::MessageSearchLoaded {
+                                user_id,
+                                request_id,
+                                messages: vec![message],
+                                usernames,
+                            },
+                        );
                     }
                     Ok(None) => {
-                        let _ = service.evt_tx.send(ChatEvent::MessageSearchFailed {
+                        service.send_user_event(
                             user_id,
-                            request_id,
-                            message: "message is no longer available".to_string(),
-                        });
+                            ChatEvent::MessageSearchFailed {
+                                user_id,
+                                request_id,
+                                message: "message is no longer available".to_string(),
+                            },
+                        );
                     }
                     Err(e) => {
-                        let _ = service.evt_tx.send(ChatEvent::MessageSearchFailed {
+                        service.send_user_event(
                             user_id,
-                            request_id,
-                            message: "preview failed, try again".to_string(),
-                        });
+                            ChatEvent::MessageSearchFailed {
+                                user_id,
+                                request_id,
+                                message: "preview failed, try again".to_string(),
+                            },
+                        );
                         late_core::error_span!(
                             "chat_message_preview_failed",
                             error = ?e,
@@ -1721,19 +1777,25 @@ impl ChatService {
                     .await
                 {
                     Ok((messages, usernames)) => {
-                        let _ = service.evt_tx.send(ChatEvent::MessageSearchLoaded {
+                        service.send_user_event(
                             user_id,
-                            request_id,
-                            messages,
-                            usernames,
-                        });
+                            ChatEvent::MessageSearchLoaded {
+                                user_id,
+                                request_id,
+                                messages,
+                                usernames,
+                            },
+                        );
                     }
                     Err(e) => {
-                        let _ = service.evt_tx.send(ChatEvent::MessageSearchFailed {
+                        service.send_user_event(
                             user_id,
-                            request_id,
-                            message: "search failed, try again".to_string(),
-                        });
+                            ChatEvent::MessageSearchFailed {
+                                user_id,
+                                request_id,
+                                message: "search failed, try again".to_string(),
+                            },
+                        );
                         late_core::error_span!(
                             "chat_search_messages_failed",
                             error = ?e,
@@ -1824,15 +1886,19 @@ impl ChatService {
             async move {
                 match service.list_discover_rooms(user_id).await {
                     Ok(rooms) => {
-                        let _ = service
-                            .evt_tx
-                            .send(ChatEvent::DiscoverRoomsLoaded { user_id, rooms });
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::DiscoverRoomsLoaded { user_id, rooms },
+                        );
                     }
                     Err(e) => {
-                        let _ = service.evt_tx.send(ChatEvent::DiscoverRoomsFailed {
+                        service.send_user_event(
                             user_id,
-                            message: "Could not load public rooms.".to_string(),
-                        });
+                            ChatEvent::DiscoverRoomsFailed {
+                                user_id,
+                                message: "Could not load public rooms.".to_string(),
+                            },
+                        );
                         late_core::error_span!(
                             "chat_discover_rooms_failed",
                             error = ?e,

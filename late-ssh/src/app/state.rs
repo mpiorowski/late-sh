@@ -127,6 +127,15 @@ impl Write for SharedBuffer {
     }
 }
 
+/// Terminal backend writer: batches ratatui's many small per-cell writes in
+/// a local buffer so `SharedBuffer`'s mutex is taken a handful of times per
+/// frame instead of once per ANSI command. ratatui flushes the backend at
+/// the end of every `draw`, so the buffer is empty between frames and
+/// `SharedBuffer::take()` never races unflushed frame bytes.
+fn frame_writer(shared: &SharedBuffer) -> io::BufWriter<SharedBuffer> {
+    io::BufWriter::with_capacity(64 * 1024, shared.clone())
+}
+
 // Passed to App::new() to configure the app on startup
 pub struct SessionConfig {
     /// Terminal / layout
@@ -247,9 +256,6 @@ pub struct SessionConfig {
     /// the snapshot and to mint a viewer guard while on the screen.
     pub worldcup_service: Option<crate::app::worldcup::svc::WorldCupService>,
     pub active_users: Option<ActiveUsers>,
-    /// AI text generation (the clubhouse tutorial's bartender greeting).
-    /// `None` on headless/test paths; the greeting falls back to a script.
-    pub ai_service: Option<crate::app::ai::svc::AiService>,
     /// Process-global clubhouse presence (seats, walkers, emotes). `None`
     /// on headless/test paths, which keeps the room session-local.
     pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
@@ -330,7 +336,7 @@ pub struct App {
     pub(crate) vt_input: crate::app::input::VtInputParser,
 
     /// Terminal / rendering
-    pub(super) terminal: Terminal<CrosstermBackend<SharedBuffer>>,
+    pub(super) terminal: Terminal<CrosstermBackend<io::BufWriter<SharedBuffer>>>,
     pub(super) shared: SharedBuffer,
     pub(super) visualizer: Visualizer,
     pub(super) viz_frame_buffer: VecDeque<VizFrame>,
@@ -374,8 +380,20 @@ pub struct App {
     /// about once a second (which also steps shimmer); renderers read this
     /// owned map, never the directory mutex.
     pub(crate) name_styles: HashMap<Uuid, crate::app::common::username_effect::NameStyle>,
+    /// Human headcount and connected-friend names, recomputed on the same
+    /// ~1s cadence; renderers read these owned values instead of locking the
+    /// shared `active_users` map every frame.
+    pub(crate) online_count: usize,
+    pub(crate) active_friend_names: Vec<String>,
+    /// App-owned author-context epoch for the chat row caches: bumps when
+    /// AFK, drunk levels, name styles, or the username directory change.
+    /// Pairs with `ChatState::context_epoch` in `ChatRowsVersions`.
+    pub(crate) chat_ctx_epoch: u64,
+    /// Last username-directory snapshot, kept for the pointer-equality change
+    /// check that feeds `chat_ctx_epoch` (the directory swaps its `Arc` on
+    /// every real change).
+    pub(super) last_username_directory: Option<Arc<HashMap<Uuid, String>>>,
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
-    pub(super) ai_service: Option<crate::app::ai::svc::AiService>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -718,7 +736,7 @@ impl App {
         tracing::debug!(cols, rows, "initializing app");
 
         let shared = SharedBuffer::default();
-        let backend = CrosstermBackend::new(shared.clone());
+        let backend = CrosstermBackend::new(frame_writer(&shared));
         let viewport = Viewport::Fixed(Rect::new(0, 0, cols, rows));
         let terminal = Terminal::with_options(backend, TerminalOptions { viewport })
             .context("failed to create terminal backend")?;
@@ -1040,8 +1058,14 @@ impl App {
             clubhouse_graybeard_id: None,
             drunk_levels: HashMap::new(),
             name_styles: HashMap::new(),
+            online_count: active_users
+                .as_ref()
+                .map(crate::state::online_human_count)
+                .unwrap_or(0),
+            active_friend_names: Vec::new(),
+            chat_ctx_epoch: 0,
+            last_username_directory: None,
             flair_directory: config.flair_directory,
-            ai_service: config.ai_service.clone(),
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
@@ -1800,7 +1824,7 @@ impl App {
         // with a `Viewport::Fixed` is pure state construction and never
         // touches the backend, and `force_full_repaint` supplies the client
         // clear + full redraw that `Terminal::resize` used to perform.
-        let backend = CrosstermBackend::new(self.shared.clone());
+        let backend = CrosstermBackend::new(frame_writer(&self.shared));
         let viewport = Viewport::Fixed(Rect::new(0, 0, cols, rows));
         self.terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
         self.force_full_repaint();
@@ -1986,30 +2010,25 @@ impl App {
         self.show_profile_modal = true;
     }
 
-    /// The tutorial's @bartender welcome: a real #lounge message, so the
-    /// newcomer's first bartender line demonstrates the room being live.
-    /// AI-generated in his voice when the AI service is up, with a scripted
-    /// fallback (see `ghost::bartender_tutorial_greeting`).
-    pub(crate) fn send_clubhouse_bartender_greeting(&self) {
-        let Some(bartender_id) = self.clubhouse_bartender_id else {
-            return;
-        };
-        let Some(lounge_id) = self.chat.lounge_room_id() else {
-            return;
-        };
+    /// The tutorial's @bartender welcome: a scripted line pinned in the
+    /// newcomer's own bartender banner (see `ghost::bartender_tutorial_greeting`).
+    /// It stays on this client, so #lounge is not made to watch every
+    /// first-timer collect their comped pour.
+    pub(crate) fn show_clubhouse_bartender_welcome(&mut self) {
         // Reaching the bar is the tutorial's finish line: the welcome round is
         // on the house, so lock the walkthrough in as done and comp the pour.
         self.persist_clubhouse_tutorial_done();
         let username = self.profile_state.profile().username.clone();
-        let chat_service = self.chat.service.clone();
-        let ai_service = self.ai_service.clone();
+        self.clubhouse.show_local_bartender_line(
+            crate::app::ai::ghost::bartender_tutorial_greeting(&username),
+        );
+
         let chip_service = self.chip_service.clone();
         let lobby = self.clubhouse.lobby_handle();
         let target = self.user_id;
         tokio::spawn(async move {
-            // Comp the welcome drink first so the newcomer is already glowing
-            // when the bartender's line lands. A failed comp is non-fatal: the
-            // greeting still goes out, just without the buzz.
+            // The line is already on screen; the buzz catches up. A failed comp
+            // is non-fatal, it just costs the newcomer their first drink.
             match chip_service
                 .grant_free_drink(target, late_core::models::drinks::WELCOME_DRINK_POINTS)
                 .await
@@ -2023,10 +2042,6 @@ impl App {
                     tracing::warn!(error = ?err, user_id = %target, "welcome drink comp failed");
                 }
             }
-            let body =
-                crate::app::ai::ghost::bartender_tutorial_greeting(ai_service.as_ref(), &username)
-                    .await;
-            chat_service.send_bot_reply_task(bartender_id, lounge_id, body, Some(target));
         });
     }
 

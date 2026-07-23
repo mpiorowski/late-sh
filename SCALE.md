@@ -1,8 +1,8 @@
 # late.sh Scale Notes
 
-Last updated: 2026-06-04
+Last updated: 2026-07-22 (post-OOM investigation: per-session render cost measured, output-budget guard shipped, memory limit 8 GiB, adaptive-render design drafted)
 
-This document records the current production capacity posture, what was discovered during the HN-spike investigation, the DB query findings, and the roadmap toward roughly 1000 concurrent users.
+This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, and the roadmap toward roughly 1000 concurrent users.
 
 ## Current Infra Status
 
@@ -10,7 +10,7 @@ Cluster shape:
 
 - Single RKE2 node: `server-1`
 - Node capacity observed: 8 CPU, about 15.6 GiB memory
-- Node usage during investigation: about 39% CPU, 44% memory
+- Node usage at about 80 concurrent sessions (2026-07-22): about 77% CPU, 43% memory
 - All core app workloads currently run on the single node
 
 Application deployments:
@@ -19,7 +19,7 @@ Application deployments:
   - SSH TUI server and HTTP API
   - Ports: 2222 SSH, 4000 API
   - Current Terraform/live CPU limit: 8 CPU
-  - Current Terraform/live memory limit: 4 GiB
+  - Current Terraform/live memory limit: 8 GiB, request 2 GiB (raised from 4 GiB / 512 MiB during the 2026-07-22 OOM incident)
   - Current Terraform/live `LATE_MAX_CONNS_GLOBAL`: 1000
   - `termination_grace_period_seconds`: 21600, so old pods can linger for up to 6 hours while sessions drain
 - `service-web`: 1 replica
@@ -63,6 +63,12 @@ Applied in Terraform and live Kubernetes:
 
 Operational note: changing the CNPG memory limit briefly removed the `postgres-rw` endpoint while the primary restarted. It recovered and reported healthy with 2 ready instances.
 
+Applied 2026-07-22 (OOM incident):
+
+- Raised `service-ssh` memory limit from `4Gi` to `8Gi` and request from `512Mi` to `2Gi`, first via in-place pod resize (Kubernetes 1.34 `kubectl patch --subresource resize`, zero restart, zero dropped sessions), then persisted in Terraform
+- Shipped the SSH output-budget guard and pair-WS hardening (see Pain Point 1 and CONTEXT.md §10.5)
+- In-place resize caveat: it patches only the running pod; the Deployment template must come from Terraform or the next rollout reverts the limit
+
 ## Biggest Pain Points
 
 ### 1. Render/tick CPU is the primary 1000-user blocker
@@ -73,12 +79,17 @@ The SSH render loop and browser tunnel world tick run every 66 ms, roughly 15 FP
 
 This is likely the true baseline killer for "1000 connected and mostly idle" users.
 
+Measured 2026-07-22 during the HN surge: about 59 millicores per session at the 15 FPS floor (4.7 cores for 80 sessions), which saturates the 8-core node at roughly 100-110 concurrent sessions. The June estimate held; this is now a measured ceiling, not a prediction.
+
+The render loop is also the memory failure mode, not just CPU. The 2026-07-22 OOM (full writeup in CONTEXT.md §10.5) was frames rendered at 15-66 FPS into russh's uncapped per-channel output queue for clients that had stopped reading: the send timeout only observes russh's event queue, not delivery, so a stalled client silently pinned 1.4+ GiB until keepalive reaped it. Shipped fix: a per-session `OutputBudget` in `late-ssh/src/ssh.rs` tracks bytes handed to russh versus window credit returned by `Handler::window_adjusted`; over 32 MB outstanding the render loop pauses, and 30 s of sustained stall disconnects the session. Metrics: `late_ssh_render_stall_{skips,disconnects}_total`.
+
 Pain multipliers:
 
 - Large terminals. Logs showed clients with PTYs as large as about 283x72.
 - Animated/live panels: visualizer, clocks, aquarium, splash, timers, games, and other tick-driven UI.
 - Browser tunnel sessions also render at the same world tick.
 - Every hot chat event can wake many users and trigger rendering.
+- Per-frame constant factors found in the 2026-07-22 audit: the Clubhouse renderer heap-allocates one `String` per visible map cell per frame (about 9,200 tiny allocations per frame on the landing screen where idle users sit), and every render of every session locks and iterates the global `active_users` map for the online count. Both are cheap targeted fixes.
 
 ### 2. `service-ssh` cannot safely scale horizontally yet
 
@@ -93,6 +104,8 @@ Current `service-ssh` has in-memory ownership for:
 - activity fanout
 
 Scaling `service-ssh` to multiple replicas without routing browser pair WebSockets to the owning pod will break pairing. If SSH lands on pod A and `/api/ws/pair` lands on pod B, pod B does not know that token/session.
+
+The pair-WS surface itself was hardened 2026-07-22 (per-token cap of 8 sockets, per-IP concurrent-socket cap, bounded control queues with drop-on-full), so it is no longer a memory amplifier, but none of that changes the ownership problem above.
 
 For horizontal scaling, one SSH session must stay on the same pod for its lifetime. That does not mean one pod per user. It means each pod owns many sessions, and pair traffic routes to the session owner.
 
@@ -111,6 +124,8 @@ Per-user connect/snapshot work includes:
 - room/game data
 
 The app is not continuously polling the DB for chat messages; chat message flow is event-driven. But connect storms and room switches still hit DB-heavy paths.
+
+2026-07-22 bootstrap audit specifics (none was the OOM cause, all are burst multipliers): the 15-20 query bootstrap fan-out per new session has no concurrency limiter (only chat reads share an 8-permit semaphore); the nonogram library (about 1-3 MB) is deep-cloned per session instead of Arc-shared; aquarium creature/world assets are re-parsed from KDL on every session start; and `next_available_username` + `User::create` race under same-name connect storms, rejecting auth with no backoff (the `idx_users_username_lower` error loop seen in prod logs).
 
 ### 4. Audio capacity is still single-pod
 
@@ -247,6 +262,8 @@ LLM agents must not run the full Rust test/lint gates in this repo; the human ow
 
 ### Enable `pg_stat_statements`
 
+Done: `pg_stat_statements` is preloaded and installed in prod (used during the 2026-07-22 investigation; query recipes live in CONTEXT.md §10.2.2). The original plan is kept below for reference.
+
 Apply the prepared CNPG Postgres settings:
 
 - `pg_stat_statements.max = "10000"`
@@ -276,6 +293,22 @@ Goal:
 - lower visualizer/sidebar animation frequency under load
 
 This is probably the highest-impact path toward 1000 connected users.
+
+Design (drafted 2026-07-22): deadline-driven rendering instead of a fixed tick. The key realization is that the refresh rate is not one global number; it is the minimum of the next moments anything visible actually changes. Two mechanisms, one of which already exists:
+
+- Push for unpredictable changes. Input, resize, chat events, and pair-WS viz frames already wake the render loop through `RenderSignal` (dirty + notify). Nothing new needed; typing latency stays at the existing 15 ms input path.
+- Pull for predictable changes. Each animated subsystem exposes a pure `next_frame_at() -> Option<Instant>` getter: the clock answers "next second boundary", bonsai sway "+500 ms", aquarium "+250 ms", a static screen `None`. No channels, no tasks per animation. After each render the loop asks every visible subsystem, takes the minimum, and replaces the fixed 66 ms interval with `sleep_until(min_deadline)` in the same `select!`.
+
+A session's render rate then automatically equals the rate of the fastest thing visible on its screen: full-screen game 15 FPS, idle chat with a clock 1 FPS. Animations keep their native cadence; nothing is dragged up to a global floor.
+
+Layered on top:
+
+- Idle demotion: no input for a few minutes (AFK tracking exists) clamps all animation deadlines to at least 500 ms; the first keystroke restores full cadence instantly via the notify path.
+- Load governor (cheap immediate lever, an afternoon of work): a global session-count atomic stretches `WORLD_TICK_INTERVAL` 66 -> 100 -> 133 ms under load, degrading smoothness gracefully instead of saturating the node.
+- Visualizer policy: it is already event-fed from the pair WS, so render it on frame arrival; sessions with no paired client should not animate it, and the procedural fallback can run at 4 FPS.
+- Constant-factor fixes from the 2026-07-22 audit (Clubhouse per-cell `String` allocations, per-render `active_users` lock) make each remaining frame several times cheaper on the landing screen.
+
+Rough impact: mostly-idle sessions drop from 15 renders/s to 1-2 and each render gets cheaper, which is the order-of-magnitude that turns "100 users = 92% of the node" into "1000 users = a few sharded pods".
 
 ### Cap render dimensions
 
@@ -316,7 +349,7 @@ Suggested shape:
 - PgBouncer: DB connection smoothing
 - Postgres: durable state
 - Audio: dedicated scalable streaming path, not one small Icecast pod on the app node
-- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency
+- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists as of 2026-07-22: `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
 
 The goal is not "1000 pods". The goal is "N SSH pods, each owning a shard of sessions".
 
@@ -353,22 +386,21 @@ Stop conditions:
 
 ## Current Go/No-Go For HN
 
-Current state is safer than before the investigation:
+Updated 2026-07-22, after an actual HN front-page surge (peak about 100 sessions):
 
-- SSH cap is explicitly 1000
-- service-ssh has more CPU headroom
-- Postgres has more memory headroom
-- Icecast can accept 300 clients
-- web stream proxy no longer loops through public audio ingress
-- two major chat snapshot queries were optimized in source; deploy required before production uses them
+What held:
 
-Residual risk remains:
+- SSH cap 1000, chat query rewrites live, Postgres a non-factor (about 200 millicores at 80 TUI sessions)
+- Memory: OOM root cause found (stalled-client output buffering in russh's uncapped queue) and guarded in code; limit raised to 8 GiB; pair-WS surface capped and bounded
+- `pg_stat_statements` and traces available for live diagnosis
+
+Residual risk:
 
 - single-node cluster
 - single `service-ssh` pod for real session ownership
-- render loop still likely dominates at high concurrency
-- no `pg_stat_statements` yet
+- CPU is the measured ceiling: about 59 millicores per session means the 8-core node saturates around 100-110 concurrent sessions; past that, renders and DB tasks degrade gracefully rather than crash
 - no PgBouncer yet
 - no horizontal `service-ssh` sharding yet
+- no adaptive rendering yet (design drafted above)
 
-For a post that may bring about 100 active users, this is much better. For 1000 active terminal users, the required next projects are adaptive rendering and shardable `service-ssh`.
+For posts that bring about 100 active users, current state survives, proven in production. For 1000 active terminal users, the required next projects remain adaptive rendering and shardable `service-ssh`, in that order: adaptive rendering multiplies per-node capacity before sharding multiplies nodes.

@@ -1,6 +1,7 @@
 use super::*;
 use crate::app::common::composer::build_composer_rows;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
+use ratatui::style::Color;
 
 fn lines_to_strings(lines: &[Line]) -> Vec<String> {
     lines
@@ -277,7 +278,6 @@ fn wrap_message_empty_body() {
 fn wrap_message_author_tint_splits_only_the_username() {
     let tint = AuthorTint {
         range: (4, 9), // "alice" inside "★ alice 🌱" ("★" is 3 bytes)
-        bg: Some(Color::Rgb(10, 20, 30)),
         word: None,
         name_style: None,
     };
@@ -296,9 +296,6 @@ fn wrap_message_author_tint_splits_only_the_username() {
     let header = &lines[0];
     assert_eq!(header.spans.len(), 5);
     assert_eq!(header.spans[2].content.as_ref(), "alice");
-    assert_eq!(header.spans[2].style.bg, Some(Color::Rgb(10, 20, 30)));
-    assert_eq!(header.spans[1].style.bg, None);
-    assert_eq!(header.spans[3].style.bg, None);
     // Text is identical to the untinted render.
     let untinted = wrap_message_to_lines(
         "hello",
@@ -318,7 +315,6 @@ fn wrap_message_author_tint_splits_only_the_username() {
 fn wrap_message_author_tint_ignores_bad_ranges() {
     let tint = AuthorTint {
         range: (0, 99),
-        bg: Some(Color::Rgb(10, 20, 30)),
         word: None,
         name_style: None,
     };
@@ -334,14 +330,12 @@ fn wrap_message_author_tint_ignores_bad_ranges() {
         false,
     );
     assert_eq!(lines[0].spans.len(), 3);
-    assert_eq!(lines[0].spans[1].style.bg, None);
 }
 
 #[test]
-fn wrap_message_name_style_paints_per_char_over_drunk_bg() {
+fn wrap_message_name_style_paints_per_char_over_author_style() {
     let tint = AuthorTint {
         range: (0, 5),
-        bg: Some(Color::Rgb(10, 20, 30)),
         word: None,
         name_style: Some(NameStyle::Solid(Color::Rgb(255, 200, 80))),
     };
@@ -368,9 +362,8 @@ fn wrap_message_name_style_paints_per_char_over_drunk_bg() {
         .collect();
     assert_eq!(name, "alice");
     for span in &header.spans[1..6] {
-        // Effect fg wins over the author fg; drunk bg and BOLD survive.
+        // Effect fg wins over the author fg; BOLD survives.
         assert_eq!(span.style.fg, Some(Color::Rgb(255, 200, 80)));
-        assert_eq!(span.style.bg, Some(Color::Rgb(10, 20, 30)));
         assert!(span.style.add_modifier.contains(Modifier::BOLD));
     }
 }
@@ -379,7 +372,6 @@ fn wrap_message_name_style_paints_per_char_over_drunk_bg() {
 fn wrap_message_prints_drunk_word_between_name_and_stamp() {
     let tint = AuthorTint {
         range: (0, 5),
-        bg: Some(Color::Rgb(10, 20, 30)),
         word: Some("wasted"),
         name_style: None,
     };
@@ -409,10 +401,9 @@ fn wrap_message_prints_drunk_word_between_name_and_stamp() {
 
 #[test]
 fn wrap_message_omits_drunk_word_when_absent() {
-    // The glow can be present with no word (light buzz): header stays lean.
+    // A name_style-only tint with no drunk word: header stays lean.
     let tint = AuthorTint {
         range: (0, 5),
-        bg: Some(Color::Rgb(10, 20, 30)),
         word: None,
         name_style: None,
     };

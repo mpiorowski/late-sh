@@ -543,7 +543,7 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
     .expect("language message");
 
     let (_room_tx, room_rx) = tokio::sync::watch::channel(Some(lang_room.id));
-    let (mut state_rx, _refresh_tx, refresh_task) =
+    let (mut state_rx, _event_rx, _refresh_tx, refresh_task) =
         service.start_user_refresh_task(target_user.id, room_rx);
 
     timeout(Duration::from_secs(2), state_rx.changed())
@@ -634,7 +634,7 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
     .expect("lounge message");
 
     let (_room_tx, room_rx) = tokio::sync::watch::channel(None);
-    let (mut state_rx, _refresh_tx, refresh_task) =
+    let (mut state_rx, _event_rx, _refresh_tx, refresh_task) =
         service.start_user_refresh_task(target_user.id, room_rx);
 
     timeout(Duration::from_secs(2), state_rx.changed())
@@ -672,7 +672,6 @@ async fn room_tail_task_loads_favorite_room_history() {
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut events = service.subscribe_events();
     let client = test_db.db.get().await.expect("db client");
 
     let target_user = create_test_user(&test_db.db, "favorite_target").await;
@@ -744,6 +743,9 @@ async fn room_tail_task_loads_favorite_room_history() {
     .await
     .expect("update favorites");
 
+    let (_room_tx, room_rx) = tokio::sync::watch::channel(None);
+    let (_snapshot_rx, mut events, _refresh_tx, refresh_task) =
+        service.start_user_refresh_task(target_user.id, room_rx);
     service.load_room_tail_task(target_user.id, favorite_room.id);
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -772,6 +774,7 @@ async fn room_tail_task_loads_favorite_room_history() {
         }
         other => panic!("expected RoomTailLoaded, got {other:?}"),
     }
+    refresh_task.abort();
 }
 
 #[tokio::test]
@@ -801,7 +804,7 @@ async fn publishes_snapshot_with_persisted_ignored_user_ids() {
         .expect("persist ignored user id");
 
     let (_room_tx, room_rx) = tokio::sync::watch::channel(Some(lounge_room.id));
-    let (mut state_rx, _refresh_tx, refresh_task) =
+    let (mut state_rx, _event_rx, _refresh_tx, refresh_task) =
         service.start_user_refresh_task(target_user.id, room_rx);
 
     timeout(Duration::from_secs(2), state_rx.changed())
@@ -873,7 +876,9 @@ async fn discover_task_lists_public_rooms_user_has_not_joined() {
     .await
     .expect("joined message");
 
-    let mut events = service.subscribe_events();
+    let (_room_tx, room_rx) = tokio::sync::watch::channel(None);
+    let (_snapshot_rx, mut events, _refresh_tx, refresh_task) =
+        service.start_user_refresh_task(target_user.id, room_rx);
     service.list_discover_rooms_task(target_user.id);
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -891,6 +896,7 @@ async fn discover_task_lists_public_rooms_user_has_not_joined() {
         }
         other => panic!("expected DiscoverRoomsLoaded, got {other:?}"),
     }
+    refresh_task.abort();
 }
 
 #[tokio::test]
@@ -949,9 +955,9 @@ async fn shared_service_refresh_tasks_publish_per_session_snapshots() {
 
     let (room_a_tx, room_a_rx) = tokio::sync::watch::channel(Some(room_a.id));
     let (_room_b_tx, room_b_rx) = tokio::sync::watch::channel(Some(room_b.id));
-    let (mut snapshot_a_rx, refresh_a, task_a) =
+    let (mut snapshot_a_rx, _event_a_rx, refresh_a, task_a) =
         service.start_user_refresh_task(user_a.id, room_a_rx);
-    let (mut snapshot_b_rx, _refresh_b, task_b) =
+    let (mut snapshot_b_rx, _event_b_rx, _refresh_b, task_b) =
         service.start_user_refresh_task(user_b.id, room_b_rx);
 
     timeout(Duration::from_secs(2), snapshot_a_rx.changed())
@@ -3503,7 +3509,6 @@ async fn message_search_respects_membership_scope_and_exclusions() {
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut events = service.subscribe_events();
     let client = test_db.db.get().await.expect("db client");
 
     let searcher = create_test_user(&test_db.db, "search_searcher").await;
@@ -3559,6 +3564,9 @@ async fn message_search_respects_membership_scope_and_exclusions() {
         .expect("create message");
     }
 
+    let (_room_tx, room_rx) = tokio::sync::watch::channel(None);
+    let (_snapshot_rx, mut events, _refresh_tx, refresh_task) =
+        service.start_user_refresh_task(searcher.id, room_rx);
     let request_id = Uuid::now_v7();
     service.search_messages_task(
         searcher.id,
@@ -3590,6 +3598,7 @@ async fn message_search_respects_membership_scope_and_exclusions() {
         }
         other => panic!("unexpected search event: {other:?}"),
     }
+    refresh_task.abort();
 }
 
 #[tokio::test]
@@ -3599,7 +3608,6 @@ async fn message_search_scopes_to_room_and_escapes_like_metacharacters() {
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut events = service.subscribe_events();
     let client = test_db.db.get().await.expect("db client");
 
     let searcher = create_test_user(&test_db.db, "scoped_searcher").await;
@@ -3633,6 +3641,9 @@ async fn message_search_scopes_to_room_and_escapes_like_metacharacters() {
         .expect("create message");
     }
 
+    let (_room_tx, room_rx) = tokio::sync::watch::channel(None);
+    let (_snapshot_rx, mut events, _refresh_tx, refresh_task) =
+        service.start_user_refresh_task(searcher.id, room_rx);
     let request_id = Uuid::now_v7();
     service.search_messages_task(
         searcher.id,
@@ -3657,6 +3668,7 @@ async fn message_search_scopes_to_room_and_escapes_like_metacharacters() {
         }
         other => panic!("unexpected search event: {other:?}"),
     }
+    refresh_task.abort();
 }
 
 #[tokio::test]

@@ -233,6 +233,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
+        pair_ws_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
         clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby::with_seed(7),
         afk_users,
@@ -471,7 +472,6 @@ fn make_app_with_chat_service_and_permissions(
         artboard_banned: false,
         artboard_ban_expires_at: None,
         active_users: None,
-        ai_service: None,
         clubhouse_lobby: None,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
@@ -497,18 +497,17 @@ pub fn make_app_with_paired_client(
     db: Db,
     user_id: Uuid,
     session_token: &str,
-) -> (
-    App,
-    tokio::sync::mpsc::UnboundedReceiver<PairControlMessage>,
-) {
+) -> (App, tokio::sync::mpsc::Receiver<PairControlMessage>) {
     let registry = PairedClientRegistry::new("https://audio.late.sh");
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    registry.register(
-        session_token.to_string(),
-        tx,
-        uuid::Uuid::now_v7(),
-        late_core::models::user::AudioSource::default(),
-    );
+    let (tx, rx) = tokio::sync::mpsc::channel(crate::paired_clients::PAIR_CONTROL_QUEUE_CAP);
+    registry
+        .register(
+            session_token.to_string(),
+            tx,
+            uuid::Uuid::now_v7(),
+            late_core::models::user::AudioSource::default(),
+        )
+        .expect("paired register");
     let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
@@ -647,7 +646,6 @@ pub fn make_app_with_paired_client(
         artboard_banned: false,
         artboard_ban_expires_at: None,
         active_users: None,
-        ai_service: None,
         clubhouse_lobby: None,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,

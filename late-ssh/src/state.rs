@@ -71,6 +71,17 @@ pub fn new_afk_users() -> AfkUsers {
     Arc::new(Mutex::new(Arc::new(HashSet::new())))
 }
 
+/// Connected humans only: the always-on bots (@bartender, @graybeard, @bot)
+/// register with no fingerprint and are excluded, matching the clubhouse
+/// headcount.
+pub fn online_human_count(active_users: &ActiveUsers) -> usize {
+    active_users
+        .lock_recover()
+        .values()
+        .filter(|user| user.fingerprint.is_some())
+        .count()
+}
+
 pub fn afk_users_snapshot(afk_users: &AfkUsers) -> Arc<HashSet<Uuid>> {
     Arc::clone(&afk_users.lock_recover())
 }
@@ -80,6 +91,10 @@ pub fn set_afk_user(afk_users: &AfkUsers, user_id: Uuid, is_afk: bool) {
     if guard.contains(&user_id) == is_afk {
         return;
     }
+    // Readers retain their snapshot Arc (`App.afk_user_ids`), so `make_mut`
+    // always clones and swaps the pointer. The render loop's Arc::ptr_eq
+    // change check (chat row cache epoch) depends on that: never mutate the
+    // set in place.
     let users = Arc::make_mut(&mut *guard);
     if is_afk {
         users.insert(user_id);
@@ -129,6 +144,9 @@ pub struct State {
     pub ultimate_service: crate::app::UltimateService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    /// Concurrent `/api/ws/pair` sockets per IP. Separate from `conn_counts`
+    /// so pair-socket floods and SSH connections cap independently.
+    pub pair_ws_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
     /// Process-global clubhouse presence: who sits where, who is walking.
     pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,

@@ -769,18 +769,18 @@
 
     <div class="mb-10">
         <h1 class="text-2xl text-green-500 tracking-tight">late.sh</h1>
-        <p class="text-gray-600 mt-1 text-sm">audio link</p>
+        <p class="text-gray-400 mt-1 text-sm">audio link</p>
     </div>
 
     <div class="mb-8 text-sm" x-cloak>
         <template x-if="status === 'connecting'">
-            <div class="flex items-center gap-2.5 text-yellow-600">
+            <div class="flex items-center gap-2.5 text-yellow-400">
                 <span class="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
                 connecting to terminal...
             </div>
         </template>
         <template x-if="status === 'ready'">
-            <div class="flex items-center gap-2.5 text-green-600">
+            <div class="flex items-center gap-2.5 text-green-400">
                 <span class="inline-block w-1.5 h-1.5 rounded-full bg-current"></span>
                 linked to your terminal
             </div>
@@ -798,26 +798,26 @@
             </div>
         </template>
         <template x-if="status === 'disconnected'">
-            <div class="flex items-center gap-2.5 text-gray-600">
+            <div class="flex items-center gap-2.5 text-gray-400">
                 <span class="inline-block w-1.5 h-1.5 rounded-full bg-current"></span>
                 disconnected
             </div>
         </template>
     </div>
 
-    <div class="mb-8 border-l-2 border-gray-800 pl-4 text-xs space-y-1" x-cloak>
+    <div class="mb-8 border-l-2 border-gray-600 pl-4 text-xs space-y-1" x-cloak>
         <div>
-            <span class="text-gray-600 inline-block w-16">source</span>
-            <span class="text-green-600" x-text="sourceBannerText()"></span>
+            <span class="text-gray-400 inline-block w-16">source</span>
+            <span class="text-green-400" x-text="sourceBannerText()"></span>
         </div>
         <div>
-            <span class="text-gray-600 inline-block w-16">playing</span>
-            <span class="text-gray-400" x-text="nowPlayingText()"></span>
+            <span class="text-gray-400 inline-block w-16">playing</span>
+            <span class="text-gray-200" x-text="nowPlayingText()"></span>
         </div>
         <div x-show="audioMode === 'radio'">
-            <span class="text-gray-600 inline-block w-16"></span>
+            <span class="text-gray-400 inline-block w-16"></span>
             <a href="https://nightride.fm" target="_blank" rel="noopener"
-                class="text-gray-600 hover:text-green-600 transition-colors">via nightride.fm</a>
+                class="text-gray-400 hover:text-green-400 transition-colors">via nightride.fm</a>
         </div>
     </div>
 
@@ -830,57 +830,57 @@
             x-show="!(isStreamElementMode() && !webIcecastEnabled) && status !== 'playing' && (status === 'ready' || status === 'disconnected' || status === 'buffering' || autoplayBlocked)"
             :disabled="status === 'buffering' && !autoplayBlocked"
             class="w-full text-left border px-4 py-3 text-sm transition-colors duration-200" :class="(status === 'buffering' && !autoplayBlocked)
-                    ? 'border-gray-800 text-gray-600 cursor-wait'
-                    : 'border-gray-700 hover:border-green-900 text-gray-300 hover:text-green-500 bg-gray-900/40'"
+                    ? 'border-gray-600 text-gray-400 cursor-wait'
+                    : 'border-gray-600 hover:border-green-700 text-gray-300 hover:text-green-500 bg-gray-900/40'"
             x-text="autoplayBlocked ? '[ tap to play ]' : (status === 'buffering' ? '[ buffering... ]' : '[ start audio ]')">
         </button>
 
         <button @click="disconnect" x-show="status === 'playing'"
-            class="w-full text-left border border-gray-800 hover:border-gray-600 px-4 py-3 text-sm text-gray-600 hover:text-gray-400 transition-colors duration-200">
+            class="w-full text-left border border-gray-600 hover:border-gray-600 px-4 py-3 text-sm text-gray-400 hover:text-gray-200 transition-colors duration-200">
             [ disconnect ]
         </button>
     </div>
 
-    <div x-cloak x-show="status === 'playing'" class="mt-8 text-xs text-gray-700">
+    <div x-cloak x-show="status === 'playing'" class="mt-8 text-xs text-gray-400">
         keep this tab open in the background<br>
         control volume from your terminal or OS
     </div>
 
-    <div class="mt-14 border-t border-gray-800 pt-5">
+    <div class="mt-14 border-t border-gray-600 pt-5">
         <button @click="copy('curl -fsSL https://cli.late.sh/install.sh | bash')"
-            class="group w-full text-left px-4 py-3 transition-colors duration-200 border border-gray-800 hover:border-green-950 bg-gray-900/20">
+            class="group w-full text-left px-4 py-3 transition-colors duration-200 border border-gray-600 hover:border-green-700 bg-gray-900/20">
             <div class="flex items-center justify-between gap-4">
-                <span class="text-xs text-gray-400 min-w-0 truncate">
-                    <span class="text-gray-600">$ </span>
+                <span class="text-xs text-gray-200 min-w-0 truncate">
+                    <span class="text-gray-400">$ </span>
                     <span class="text-gray-300">curl -fsSL https://cli.late.sh/install.sh | bash</span>
                 </span>
                 <span class="shrink-0 text-right text-xs">
                     <span x-cloak x-show="copied !== 'curl -fsSL https://cli.late.sh/install.sh | bash'"
-                        class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
+                        class="text-gray-400 group-hover:text-gray-200 transition-colors">copy</span>
                     <span x-cloak x-show="copied === 'curl -fsSL https://cli.late.sh/install.sh | bash'"
-                        class="text-green-600">copied</span>
+                        class="text-green-400">copied</span>
                 </span>
             </div>
-            <div class="mt-2 text-xs text-gray-600">
+            <div class="mt-2 text-xs text-gray-400">
                 skip the browser on macOS, Linux, or Termux
             </div>
         </button>
 
         <button @click="copy('irm https://cli.late.sh/install.ps1 | iex')"
-            class="group w-full text-left mt-3 px-4 py-3 transition-colors duration-200 border border-gray-800 hover:border-green-950 bg-gray-900/20">
+            class="group w-full text-left mt-3 px-4 py-3 transition-colors duration-200 border border-gray-600 hover:border-green-700 bg-gray-900/20">
             <div class="flex items-center justify-between gap-4">
-                <span class="text-xs text-gray-400 min-w-0 truncate">
-                    <span class="text-gray-600">PS&gt; </span>
+                <span class="text-xs text-gray-200 min-w-0 truncate">
+                    <span class="text-gray-400">PS&gt; </span>
                     <span class="text-gray-300">irm https://cli.late.sh/install.ps1 | iex</span>
                 </span>
                 <span class="shrink-0 text-right text-xs">
                     <span x-cloak x-show="copied !== 'irm https://cli.late.sh/install.ps1 | iex'"
-                        class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
+                        class="text-gray-400 group-hover:text-gray-200 transition-colors">copy</span>
                     <span x-cloak x-show="copied === 'irm https://cli.late.sh/install.ps1 | iex'"
-                        class="text-green-600">copied</span>
+                        class="text-green-400">copied</span>
                 </span>
             </div>
-            <div class="mt-2 text-xs text-gray-600">
+            <div class="mt-2 text-xs text-gray-400">
                 skip the browser on Windows PowerShell
             </div>
         </button>

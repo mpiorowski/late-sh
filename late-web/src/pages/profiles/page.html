@@ -129,12 +129,12 @@
 <div class="max-w-2xl mx-auto pt-8 sm:pt-14 pb-20" x-data="{ copied: null, copy(text){ navigator.clipboard.writeText(text); this.copied = text; setTimeout(()=>this.copied=null, 2000); } }">
 
     <!-- ─── breadcrumb ─── -->
-    <div class="stagger stagger-1 mb-10 text-xs text-gray-600">
-        <a href="/" class="hover:text-gray-400 transition-colors">late.sh</a>
-        <span class="text-gray-700 mx-2">/</span>
-        <a href="/profiles" class="text-gray-500 hover:text-gray-300 transition-colors">profiles</a>
-        <span class="text-gray-700 mx-2">/</span>
-        <span class="text-gray-400">{{ slug }}</span>
+    <div class="stagger stagger-1 mb-10 text-xs text-gray-400">
+        <a href="/" class="hover:text-gray-200 transition-colors">late.sh</a>
+        <span class="text-gray-500 mx-2">/</span>
+        <a href="/profiles" class="text-gray-300 hover:text-gray-300 transition-colors">profiles</a>
+        <span class="text-gray-500 mx-2">/</span>
+        <span class="text-gray-200">{{ slug }}</span>
     </div>
 
     <!-- ─── hero ─── -->
@@ -149,17 +149,17 @@
         <h1 class="text-2xl sm:text-3xl text-gray-100 leading-snug tracking-tight">{{ headline }}</h1>
     </div>
 
-    <div class="stagger stagger-3 mb-10 text-sm text-gray-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+    <div class="stagger stagger-3 mb-10 text-sm text-gray-300 flex flex-wrap items-center gap-x-3 gap-y-1">
         <span class="text-green-500">@{{ username }}</span>
-        <span class="text-gray-700">·</span>
+        <span class="text-gray-500">·</span>
         <span>{{ work_type }}</span>
-        <span class="text-gray-700">·</span>
+        <span class="text-gray-500">·</span>
         <span>{{ location }}</span>
     </div>
 
     <!-- ─── summary ─── -->
     {% if summary_paragraphs.is_empty() %}{% else %}
-    <div class="stagger stagger-3 mb-10 border-l-2 border-gray-800 pl-4 text-gray-300 text-sm leading-relaxed space-y-3">
+    <div class="stagger stagger-3 mb-10 border-l-2 border-gray-600 pl-4 text-gray-300 text-sm leading-relaxed space-y-3">
         {% for p in summary_paragraphs %}
         <p>{{ p }}</p>
         {% endfor %}
@@ -169,10 +169,10 @@
     <!-- ─── skills ─── -->
     {% if skills.is_empty() %}{% else %}
     <div class="stagger stagger-4 mb-10">
-        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> skills</div>
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> skills</div>
         <div class="flex flex-wrap gap-x-3 gap-y-2 text-sm">
             {% for skill in skills %}
-            <span class="text-green-600">#{{ skill }}</span>
+            <span class="text-green-400">#{{ skill }}</span>
             {% endfor %}
         </div>
     </div>
@@ -181,23 +181,23 @@
     <!-- ─── contact ─── -->
     {% if show_contact %}
     <div class="stagger stagger-4 mb-10">
-        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> contact</div>
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> contact</div>
         <div class="space-y-2">
             {% for c in contacts %}
             {% if c.href.is_empty() %}
-            <div class="border border-gray-800 px-4 py-3 bg-gray-900/20">
+            <div class="border border-gray-600 px-4 py-3 bg-gray-900/20">
                 <div class="flex items-center justify-between gap-4">
                     <span class="text-sm text-gray-300 min-w-0 break-words">
-                        <span class="text-gray-600">→ </span>{{ c.value }}
+                        <span class="text-gray-400">→ </span>{{ c.value }}
                     </span>
                 </div>
             </div>
             {% else %}
             <a href="{{ c.href }}"
-               class="group block w-full text-left border border-gray-800 hover:border-green-900 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
+               class="group block w-full text-left border border-gray-600 hover:border-green-700 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
                 <div class="flex items-center justify-between gap-4">
                     <span class="text-sm text-gray-300 group-hover:text-green-400 transition-colors min-w-0 break-words">
-                        <span class="text-gray-600">→ </span>{{ c.value }}
+                        <span class="text-gray-400">→ </span>{{ c.value }}
                     </span>
                 </div>
             </a>
@@ -210,16 +210,16 @@
     <!-- ─── links ─── -->
     {% if links.is_empty() %}{% else %}
     <div class="stagger stagger-4 mb-12">
-        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> links</div>
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> links</div>
         <div class="space-y-2">
             {% for link in links %}
             <a href="{{ link }}" target="_blank" rel="noopener noreferrer"
-               class="group block w-full text-left border border-gray-800 hover:border-green-900 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
+               class="group block w-full text-left border border-gray-600 hover:border-green-700 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
                 <div class="flex items-center justify-between gap-4">
                     <span class="text-sm text-gray-300 group-hover:text-green-400 transition-colors min-w-0 truncate">
-                        <span class="text-gray-600">→ </span>{{ link }}
+                        <span class="text-gray-400">→ </span>{{ link }}
                     </span>
-                    <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">open ↗</span>
+                    <span class="shrink-0 text-xs text-gray-400 group-hover:text-green-400 transition-colors">open ↗</span>
                 </div>
             </a>
             {% endfor %}
@@ -230,8 +230,8 @@
     <!-- ─── bio ─── -->
     {% if show_bio %}
     <div class="stagger stagger-5 mb-12">
-        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> bio</div>
-        <div class="bio-prose border-l-2 border-gray-800 pl-4 text-sm leading-relaxed">
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> bio</div>
+        <div class="bio-prose border-l-2 border-gray-600 pl-4 text-sm leading-relaxed">
             {{ bio_html|safe }}
         </div>
     </div>
@@ -240,31 +240,31 @@
     <!-- ─── late.fetch ─── -->
     {% if show_late_fetch %}
     <div class="stagger stagger-5 mb-12">
-        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> late.fetch</div>
-        <div class="border border-gray-800 bg-gray-900/30 p-5 text-xs leading-relaxed">
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> late.fetch</div>
+        <div class="border border-gray-600 bg-gray-900/30 p-5 text-xs leading-relaxed">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
                 <div class="flex items-baseline gap-2">
-                    <span class="text-gray-600 w-20 shrink-0">created</span>
+                    <span class="text-gray-400 w-20 shrink-0">created</span>
                     <span class="text-gray-300">{{ fetch_created }}</span>
                 </div>
                 <div class="flex items-baseline gap-2">
-                    <span class="text-gray-600 w-20 shrink-0">theme</span>
+                    <span class="text-gray-400 w-20 shrink-0">theme</span>
                     <span class="text-gray-300">{{ fetch_theme }}</span>
                 </div>
                 <div class="flex items-baseline gap-2">
-                    <span class="text-gray-600 w-20 shrink-0">ide</span>
+                    <span class="text-gray-400 w-20 shrink-0">ide</span>
                     <span class="text-gray-300">{{ fetch_ide }}</span>
                 </div>
                 <div class="flex items-baseline gap-2">
-                    <span class="text-gray-600 w-20 shrink-0">terminal</span>
+                    <span class="text-gray-400 w-20 shrink-0">terminal</span>
                     <span class="text-gray-300">{{ fetch_terminal }}</span>
                 </div>
                 <div class="flex items-baseline gap-2">
-                    <span class="text-gray-600 w-20 shrink-0">os</span>
+                    <span class="text-gray-400 w-20 shrink-0">os</span>
                     <span class="text-gray-300">{{ fetch_os }}</span>
                 </div>
                 <div class="flex items-baseline gap-2 min-w-0">
-                    <span class="text-gray-600 w-20 shrink-0">langs</span>
+                    <span class="text-gray-400 w-20 shrink-0">langs</span>
                     <span class="text-gray-300 min-w-0 break-words">
                         {% if fetch_langs.is_empty() %}—{% else %}{{ fetch_langs|join(" · ") }}{% endif %}
                     </span>
@@ -277,25 +277,25 @@
     <!-- ─── showcases ─── -->
     {% if show_showcases %}
     <div class="stagger stagger-6 mb-12">
-        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> showcase</div>
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> showcase</div>
         <div class="space-y-3">
             {% for s in showcases %}
             <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer"
-               class="group block w-full text-left border border-gray-800 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
+               class="group block w-full text-left border border-gray-600 hover:border-green-700 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
                 <div class="flex items-center justify-between gap-4 mb-1">
                     <span class="text-base text-gray-100 group-hover:text-green-400 transition-colors min-w-0 truncate">{{ s.title }}</span>
-                    <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">visit ↗</span>
+                    <span class="shrink-0 text-xs text-gray-400 group-hover:text-green-400 transition-colors">visit ↗</span>
                 </div>
-                <div class="text-xs text-gray-600 truncate mb-2">{{ s.url }}</div>
+                <div class="text-xs text-gray-400 truncate mb-2">{{ s.url }}</div>
                 {% if s.description_paragraphs.is_empty() %}{% else %}
-                <div class="text-xs text-gray-500 leading-relaxed space-y-1.5 mb-2">
+                <div class="text-xs text-gray-300 leading-relaxed space-y-1.5 mb-2">
                     {% for p in s.description_paragraphs %}
                     <p>{{ p }}</p>
                     {% endfor %}
                 </div>
                 {% endif %}
                 {% if s.tags.is_empty() %}{% else %}
-                <div class="flex flex-wrap gap-x-2.5 gap-y-1 text-[0.7rem] text-gray-700">
+                <div class="flex flex-wrap gap-x-2.5 gap-y-1 text-[0.7rem] text-gray-400">
                     {% for tag in s.tags %}
                     <span>#{{ tag }}</span>
                     {% endfor %}
@@ -308,33 +308,33 @@
     {% endif %}
 
     <!-- ─── share / footer ─── -->
-    <div class="stagger stagger-7 mt-20 border-t border-gray-800 pt-5">
+    <div class="stagger stagger-7 mt-20 border-t border-gray-600 pt-5">
         <button type="button"
             @click="copy(window.location.href)"
-            class="group w-full text-left border border-gray-800 hover:border-green-950 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
+            class="group w-full text-left border border-gray-600 hover:border-green-700 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
             <div class="flex items-center justify-between gap-4">
-                <span class="text-xs text-gray-400 min-w-0 truncate">
-                    <span class="text-gray-600">$ </span>
+                <span class="text-xs text-gray-200 min-w-0 truncate">
+                    <span class="text-gray-400">$ </span>
                     <span class="text-gray-300">share /profiles/{{ slug }}</span>
                 </span>
                 <span class="shrink-0 text-right text-xs">
-                    <span x-cloak x-show="!copied" class="text-gray-700 group-hover:text-gray-500 transition-colors">copy link</span>
-                    <span x-cloak x-show="copied" class="text-green-600">copied</span>
+                    <span x-cloak x-show="!copied" class="text-gray-400 group-hover:text-gray-200 transition-colors">copy link</span>
+                    <span x-cloak x-show="copied" class="text-green-400">copied</span>
                 </span>
             </div>
         </button>
     </div>
 
-    <div class="stagger stagger-7 mt-8 flex items-center justify-between text-[0.7rem] text-gray-700">
+    <div class="stagger stagger-7 mt-8 flex items-center justify-between text-[0.7rem] text-gray-400">
         <span>posted {{ created }}{% if updated != created %} · updated {{ updated }}{% endif %}</span>
         {% if show_contact %}
         <span>
-            reach out via <span class="text-gray-500">{{ contact }}</span>
+            reach out via <span class="text-gray-300">{{ contact }}</span>
         </span>
         {% else %}
         <span>
             reach out via
-            <a href="/" class="text-gray-500 hover:text-green-500 transition-colors">ssh late.sh</a>
+            <a href="/" class="text-gray-300 hover:text-green-500 transition-colors">ssh late.sh</a>
         </span>
         {% endif %}
     </div>

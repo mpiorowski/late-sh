@@ -1,14 +1,14 @@
 <div class="space-y-4 animate-pulse-fast" id="system-status-widget">
     <div class="flex justify-between items-center mb-2">
-        <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">System Metrics</h3>
-        <span class="text-xs text-gray-500">{{ timestamp }}</span>
+        <h3 class="text-sm font-semibold text-gray-200 uppercase tracking-wider">System Metrics</h3>
+        <span class="text-xs text-gray-300">{{ timestamp }}</span>
     </div>
 
     <div class="grid grid-cols-2 gap-3">
         <!-- CPU Usage -->
-        <div class="bg-gray-800 p-3 rounded border border-gray-700">
+        <div class="bg-gray-800 p-3 rounded border border-gray-600">
             <div class="flex justify-between items-end mb-1">
-                <span class="text-gray-400 text-xs">CPU</span>
+                <span class="text-gray-200 text-xs">CPU</span>
                 <span class="font-mono text-blue-400">{{ cpu_usage }}%</span>
             </div>
             <div class="w-full bg-gray-700 rounded-full h-1.5">
@@ -18,9 +18,9 @@
         </div>
 
         <!-- Memory Usage -->
-        <div class="bg-gray-800 p-3 rounded border border-gray-700">
+        <div class="bg-gray-800 p-3 rounded border border-gray-600">
             <div class="flex justify-between items-end mb-1">
-                <span class="text-gray-400 text-xs">MEM</span>
+                <span class="text-gray-200 text-xs">MEM</span>
                 <span class="font-mono text-purple-400">{{ mem_usage }}%</span>
             </div>
             <div class="w-full bg-gray-700 rounded-full h-1.5">
@@ -30,7 +30,7 @@
         </div>
     </div>
 
-    <div class="text-xs text-center text-gray-600 mt-2">
+    <div class="text-xs text-center text-gray-400 mt-2">
         Auto-updating via HTMX
     </div>
 </div>

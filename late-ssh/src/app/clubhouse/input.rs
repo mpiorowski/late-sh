@@ -118,7 +118,7 @@ fn handle_walk(app: &mut App, event: &ParsedInput) -> bool {
     app.music_prefix_armed = false;
     app.clubhouse.walk(dx, dy);
     if app.clubhouse.tutorial_reached_bar() {
-        app.send_clubhouse_bartender_greeting();
+        app.show_clubhouse_bartender_welcome();
     }
     true
 }
