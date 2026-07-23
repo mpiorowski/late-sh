@@ -20,17 +20,10 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
-    use super::{ActivityGame, RenderReason};
+    use super::ActivityGame;
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
-    }
-
-    fn render_reason_label(reason: RenderReason) -> &'static str {
-        match reason {
-            RenderReason::Input => "input",
-            RenderReason::WorldTick => "tick",
-        }
     }
 
     fn game_label(game: ActivityGame) -> &'static str {
