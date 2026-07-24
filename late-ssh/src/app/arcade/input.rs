@@ -261,9 +261,8 @@ fn arcade_content_area(app: &App) -> Rect {
 
 fn right_sidebar_visible(app: &App) -> bool {
     if app.show_settings {
-        let draft = app.settings_modal_state.draft();
         return crate::app::render::resolve_right_sidebar_enabled(
-            draft.right_sidebar_mode,
+            app.settings_modal_state.device_rails().1,
             Screen::Arcade,
             app.size.0,
         );

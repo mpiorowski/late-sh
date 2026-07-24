@@ -349,21 +349,16 @@ impl App {
         // the account default). `Auto` resolves against the live width, so a
         // rotate or a window drag reflows on the next frame.
         let (session_room_list_mode, session_right_sidebar_mode) = self.rail_modes();
+        let (draft_room_list_mode, draft_right_sidebar_mode) =
+            self.settings_modal_state.device_rails();
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
-            resolve_right_sidebar_enabled(
-                self.settings_modal_state.draft().right_sidebar_mode,
-                self.screen,
-                self.size.0,
-            ),
+            resolve_right_sidebar_enabled(draft_right_sidebar_mode, self.screen, self.size.0),
             resolve_right_sidebar_enabled(session_right_sidebar_mode, self.screen, self.size.0),
         );
         let show_room_list_sidebar = room_list_sidebar_enabled(
             self.show_settings,
-            resolve_room_list_enabled(
-                self.settings_modal_state.draft().room_list_mode,
-                self.size.0,
-            ),
+            resolve_room_list_enabled(draft_room_list_mode, self.size.0),
             resolve_room_list_enabled(session_room_list_mode, self.size.0),
         );
         // Live-preview the component list from the draft while the settings

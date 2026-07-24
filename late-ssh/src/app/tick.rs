@@ -1151,7 +1151,7 @@ impl App {
     /// wake cadence.
     fn right_sidebar_visible(&self) -> bool {
         let mode = if self.show_settings {
-            self.settings_modal_state.draft().right_sidebar_mode
+            self.settings_modal_state.device_rails().1
         } else {
             self.rail_modes().1
         };

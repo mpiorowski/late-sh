@@ -621,9 +621,18 @@ overwrite its own layout on every reconnect.
   the settings draft all go through it, so they cannot disagree.
 - **Write path:** `\` (cycles this device through both / room-list hidden /
   sidebar hidden / both hidden / `auto`) and the two `Ctrl+O` Appearance rows.
-  Both land on the key; the `Ctrl+O` rows additionally keep the account default in
-  step, so a brand-new key inherits the user's latest look. Keyless sessions
-  (ghost bots, tests) apply the change for the session and persist nothing.
+  Both land on the key and **never** on the account. The account values are only
+  the seed a key with no stored layout inherits, so the rails UI does not write
+  them at all. Keyless sessions (ghost bots, tests) apply the change for the
+  session and persist nothing.
+- **Why the modal keeps them out of its draft:** `SettingsModalState::draft` is
+  what `save()` writes to the account, and `save()` fires from every tweak and
+  field edit in the modal. Device rails therefore live in a separate
+  `device_rails` field (`settings_modal_state.device_rails()`), read by the two
+  rail rows' value spans and by the render/tick preview. Holding them in the draft
+  republished one device's layout as the account default on any unrelated settings
+  edit, which every unconfigured key then inherited; regression-tested by
+  `unrelated_settings_edits_do_not_republish_this_device_rails`.
 - **`auto`:** resolved against the live terminal width every frame
   (`AUTO_ROOM_LIST_MIN_COLS` 96, `AUTO_RIGHT_SIDEBAR_MIN_COLS` 72 in
   `app/render.rs`), so rotating a phone or dragging a window reflows on the next

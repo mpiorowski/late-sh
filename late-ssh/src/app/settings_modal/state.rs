@@ -440,6 +440,12 @@ pub(crate) struct SettingsModalState {
     feed_service: FeedService,
     user_id: Uuid,
     draft: Profile,
+    /// The two rail rows, held apart from `draft` on purpose. They belong to
+    /// this device (this SSH key), and `draft` is what `save()` writes to the
+    /// account: keeping them in `draft` would republish one device's layout as
+    /// the account default on any unrelated settings edit, and every key that
+    /// never stored a layout of its own would inherit it.
+    device_rails: (RoomListMode, RightSidebarMode),
     selected_tab: Tab,
     row_index: usize,
     account_row_index: usize,
@@ -497,6 +503,7 @@ impl SettingsModalState {
             feed_service,
             user_id,
             draft: Profile::default(),
+            device_rails: (RoomListMode::On, RightSidebarMode::On),
             selected_tab: Tab::Settings,
             row_index: 0,
             account_row_index: 0,
@@ -531,6 +538,14 @@ impl SettingsModalState {
         }
     }
 
+    /// The rail modes the two Appearance rows are editing: this device's, not
+    /// the account's. Read by their value spans and by the render/tick preview
+    /// while the modal is open; `App::sync_device_rails_from_settings` picks them
+    /// up and persists them onto the SSH key.
+    pub(crate) fn device_rails(&self) -> (RoomListMode, RightSidebarMode) {
+        self.device_rails
+    }
+
     pub(crate) fn gem(&self) -> &GemState {
         &self.gem
     }
@@ -539,20 +554,18 @@ impl SettingsModalState {
         &mut self.gem
     }
 
-    /// Load the draft from the account profile, then overlay the rail modes
-    /// this session is actually rendering with (`App::rail_modes`): the two rail
-    /// rows are per device, so showing the account default here would misreport
-    /// what the user is looking at.
+    /// Load the draft from the account profile, and take the rail modes this
+    /// session is actually rendering with (`App::rail_modes`) separately: the two
+    /// rail rows are per device, so showing the account default would misreport
+    /// what the user is looking at, and writing it back would leak this device's
+    /// layout onto every other one.
     pub(crate) fn open_from_profile(
         &mut self,
         profile: &Profile,
         device_rails: (RoomListMode, RightSidebarMode),
     ) {
         self.draft = profile.clone();
-        self.draft.room_list_mode = device_rails.0;
-        self.draft.show_room_list_sidebar = device_rails.0 != RoomListMode::Off;
-        self.draft.right_sidebar_mode = device_rails.1;
-        self.draft.show_right_sidebar = device_rails.1 != RightSidebarMode::Off;
+        self.device_rails = device_rails;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.account_row_index = 0;
@@ -769,13 +782,10 @@ impl SettingsModalState {
                 return;
             }
             TweakRow::RightSidebar => {
-                self.draft.right_sidebar_mode = self.draft.right_sidebar_mode.cycle(true);
-                self.draft.show_right_sidebar =
-                    self.draft.right_sidebar_mode != RightSidebarMode::Off;
+                self.device_rails.1 = self.device_rails.1.cycle(true);
             }
             TweakRow::RoomListSidebar => {
-                self.draft.room_list_mode = self.draft.room_list_mode.cycle(true);
-                self.draft.show_room_list_sidebar = self.draft.room_list_mode != RoomListMode::Off;
+                self.device_rails.0 = self.device_rails.0.cycle(true);
             }
             TweakRow::PetStrip => {
                 self.draft.show_pet_strip ^= true;

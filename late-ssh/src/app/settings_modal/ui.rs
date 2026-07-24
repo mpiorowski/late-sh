@@ -720,7 +720,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             TweakRow::RightSidebar,
             width,
             "Right sidebar",
-            right_sidebar_mode_span(state.draft().right_sidebar_mode),
+            right_sidebar_mode_span(state.device_rails().1),
         )),
         sections[3],
     );
@@ -730,7 +730,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             TweakRow::RoomListSidebar,
             width,
             "Room list",
-            room_list_mode_span(state.draft().room_list_mode),
+            room_list_mode_span(state.device_rails().0),
         )),
         sections[4],
     );

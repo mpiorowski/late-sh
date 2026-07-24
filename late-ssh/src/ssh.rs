@@ -862,32 +862,13 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        // This device's stored home rail layout, keyed by the SSH key that
-        // authenticated. `None` (no key, no row, nothing stored, or a failed
-        // read) simply follows the account default.
         let key_fingerprint = self.auth_fingerprint.clone();
-        let key_layout = match (&key_fingerprint, self.state.db.get().await) {
-            (Some(fingerprint), Ok(client)) => {
-                match late_core::models::user_ssh_key::UserSshKey::layout_for(
-                    &client,
-                    user_id,
-                    fingerprint,
-                )
-                .await
-                {
-                    Ok(layout) => layout,
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "failed to load device rail layout");
-                        None
-                    }
-                }
-            }
-            (Some(_), Err(e)) => {
-                tracing::warn!(error = ?e, "failed to get db client for device rail layout");
-                None
-            }
-            (None, _) => None,
-        };
+        let key_layout = crate::session_bootstrap::load_device_rails(
+            &self.state,
+            user_id,
+            key_fingerprint.as_deref(),
+        )
+        .await;
         let initial_announcements = match self.state.db.get().await {
             Ok(client) => {
                 match crate::app::announcements::load_login_announcements(&client, user_id).await {

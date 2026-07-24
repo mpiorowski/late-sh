@@ -1053,8 +1053,9 @@ fn settings_help_lines() -> Vec<String> {
         "                            auto hides a rail on terminals too narrow to carry it, so one"
             .to_string(),
         "                            account works on both a desktop and a phone".to_string(),
-        "                            both rows apply to this device (this SSH key); `\\` cycles them too"
+        "                            both rows apply to this device (this SSH key) only, never the"
             .to_string(),
+        "                            account default; `\\` on Home cycles the same two".to_string(),
         "    Pet companion strip     show/hide the pet strip above the Lounge chat composer (pet owners only)"
             .to_string(),
         "  Compose".to_string(),

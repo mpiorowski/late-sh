@@ -4,7 +4,10 @@ use crate::authz::Permissions;
 use crate::test_helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
     make_app_with_permissions, new_test_db, render_plain, wait_for_render_contains, wait_until,
+    with_session_key,
 };
+use late_core::models::user::{RightSidebarMode, RoomListMode};
+use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_message_reaction::ChatMessageReaction,
@@ -1307,5 +1310,142 @@ async fn backslash_cycles_rails_for_this_device_only_and_auto_follows_width() {
     assert_eq!(
         profile.room_list_mode,
         late_core::models::user::RoomListMode::On
+    );
+}
+
+#[tokio::test]
+async fn unrelated_settings_edits_do_not_republish_this_device_rails() {
+    // Regression: the rail rows are per device, but `save()` writes the whole
+    // draft to the account and fires from every tweak. If the device layout
+    // lived in that draft, changing the theme on a phone would push the phone's
+    // rails onto the account, and every key with no layout of its own (the
+    // desktop) would inherit them.
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "rails-leak-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "rails-leak-flow-it");
+    wait_for_render_contains(&mut app, "sort/fold").await;
+
+    // Hide the room rail on this device only.
+    app.handle_input(b"\\");
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("sort/fold"),
+        "expected the rail hidden for this device; frame={frame:?}"
+    );
+
+    // Now touch something unrelated: Ctrl+O, Tab to the Tweaks tab, and flip
+    // the first row (Background color). The save banner marks the write landing.
+    app.handle_input(b"\x0f");
+    // Wait for the draft to hydrate from the profile snapshot before moving:
+    // that hydration resets the modal to its first tab (`open_from_profile`).
+    wait_for_render_contains(&mut app, "rails-leak-it").await;
+    app.handle_input(b"\t\t\t");
+    wait_for_render_contains(&mut app, "Background color").await;
+    // Enter toggles the selected row (Background color, the first one), which
+    // runs the same `save()` every other settings edit runs.
+    app.handle_input(b"\r");
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                let stored = User::get(&client, user.id)
+                    .await
+                    .expect("load user")
+                    .expect("user exists");
+                !late_core::models::user::extract_enable_background_color(&stored.settings)
+            }
+        },
+        "background color tweak to persist",
+    )
+    .await;
+
+    // That write landed, so if the device rails were riding along they would be
+    // in it. The account default still has both rails on: only this device changed.
+    let stored = User::get(&client, user.id)
+        .await
+        .expect("load user")
+        .expect("user exists");
+    assert_eq!(
+        late_core::models::user::extract_room_list_mode(&stored.settings),
+        late_core::models::user::RoomListMode::On,
+        "an unrelated tweak must not republish this device's rails"
+    );
+    assert!(
+        late_core::models::user::extract_show_room_list_sidebar(&stored.settings),
+        "the legacy mirror must stay in step with the account default"
+    );
+
+    // And the device's own choice survived the settings round trip.
+    app.handle_input(b"\x1b");
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("sort/fold"),
+        "expected the device rail to stay hidden; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn cycling_rails_persists_onto_the_authenticating_key() {
+    // End-to-end for the write path: keystroke -> App -> ProfileService -> the
+    // `user_ssh_keys` row for the key this session authenticated with, and not
+    // onto the account's other keys.
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "rails-key-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    // Two devices on one account, as `auth_publickey` would have recorded them.
+    UserSshKey::ensure(&client, user.id, "SHA256:phone")
+        .await
+        .expect("phone key");
+    UserSshKey::ensure(&client, user.id, "SHA256:desktop")
+        .await
+        .expect("desktop key");
+
+    let mut app = with_session_key(
+        make_app(test_db.db.clone(), user.id, "rails-key-flow-it"),
+        "SHA256:phone",
+    );
+    wait_for_render_contains(&mut app, "sort/fold").await;
+    app.handle_input(b"\\");
+
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+                    .await
+                    .expect("phone layout")
+                    == Some(KeyLayout {
+                        room_list_mode: RoomListMode::Off,
+                        right_sidebar_mode: RightSidebarMode::On,
+                    })
+            }
+        },
+        "the cycled layout to reach this device's key",
+    )
+    .await;
+
+    assert_eq!(
+        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+            .await
+            .expect("desktop layout"),
+        None,
+        "the account's other device must keep following the account default"
     );
 }

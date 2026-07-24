@@ -730,10 +730,9 @@ impl App {
     /// layout. A no-op when they already match, so unrelated tweaks in the same
     /// modal do not write to the key.
     pub(crate) fn sync_device_rails_from_settings(&mut self) {
-        let draft = self.settings_modal_state.draft();
-        let drafted = (draft.room_list_mode, draft.right_sidebar_mode);
-        if drafted != self.rail_modes() {
-            self.set_device_rails(drafted);
+        let edited = self.settings_modal_state.device_rails();
+        if edited != self.rail_modes() {
+            self.set_device_rails(edited);
         }
     }
 

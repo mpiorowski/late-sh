@@ -679,6 +679,15 @@ pub fn make_app_with_paired_client(
     (app, rx)
 }
 
+/// Give a test app a device identity: the SSH key a real session would have
+/// authenticated with. Without it an app is keyless, so per-device settings
+/// apply for the session but persist nowhere. The caller must have created the
+/// matching `user_ssh_keys` row (as `auth_publickey` does) for writes to land.
+pub fn with_session_key(mut app: App, fingerprint: &str) -> App {
+    app.key_fingerprint = Some(fingerprint.to_string());
+    app
+}
+
 pub async fn wait_until<F, Fut>(mut predicate: F, label: &str)
 where
     F: FnMut() -> Fut,
