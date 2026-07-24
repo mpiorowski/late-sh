@@ -114,8 +114,9 @@ fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    let device_rails = app.rail_modes();
     app.settings_modal_state
-        .open_from_profile(app.profile_state.profile());
+        .open_from_profile(app.profile_state.profile(), device_rails);
     app.show_settings = true;
 }
 

@@ -12,7 +12,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use late_core::models::leaderboard::LeaderboardData;
-use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode};
+use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode, RoomListMode};
 
 use super::{
     announcements, artboard,
@@ -30,6 +30,15 @@ use super::{
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
+/// Narrowest terminal that still carries a rail set to `Auto`. Home is three
+/// columns and each rail costs 24 of them, so these decide when a rail folds
+/// away instead of squeezing the chat: at 96 the chat keeps 48 columns with both
+/// rails up, and at 72 it keeps 48 with the sidebar alone. Below that the chat
+/// takes the whole width. Phone-sized sessions (Termux is commonly 40-55
+/// columns) therefore land on chat-only without the user configuring anything.
+pub(crate) const AUTO_ROOM_LIST_MIN_COLS: u16 = 96;
+pub(crate) const AUTO_RIGHT_SIDEBAR_MIN_COLS: u16 = 72;
+
 fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
     if show_settings {
         draft_enabled
@@ -42,10 +51,15 @@ fn right_sidebar_allowed_on_screen(screen: Screen) -> bool {
     matches!(screen, Screen::Dashboard | Screen::Arcade)
 }
 
-/// Resolve whether the right sidebar should render on `screen` given a profile
-/// (or draft) sidebar mode. The sidebar only shows on Home and the Arcade;
-/// which panels appear is governed by the component list.
-pub(crate) fn resolve_right_sidebar_enabled(mode: RightSidebarMode, screen: Screen) -> bool {
+/// Resolve whether the right sidebar should render on `screen`, given the mode
+/// this session ended up with (see `App::rail_modes`) and the live terminal
+/// width. The sidebar only shows on Home and the Arcade; which panels appear is
+/// governed by the component list.
+pub(crate) fn resolve_right_sidebar_enabled(
+    mode: RightSidebarMode,
+    screen: Screen,
+    cols: u16,
+) -> bool {
     if !right_sidebar_allowed_on_screen(screen) {
         return false;
     }
@@ -53,6 +67,17 @@ pub(crate) fn resolve_right_sidebar_enabled(mode: RightSidebarMode, screen: Scre
     match mode {
         RightSidebarMode::On => true,
         RightSidebarMode::Off => false,
+        RightSidebarMode::Auto => cols >= AUTO_RIGHT_SIDEBAR_MIN_COLS,
+    }
+}
+
+/// Resolve whether the Home room-list rail should render, from the mode this
+/// session ended up with and the live terminal width.
+pub(crate) fn resolve_room_list_enabled(mode: RoomListMode, cols: u16) -> bool {
+    match mode {
+        RoomListMode::On => true,
+        RoomListMode::Off => false,
+        RoomListMode::Auto => cols >= AUTO_ROOM_LIST_MIN_COLS,
     }
 }
 
@@ -319,21 +344,27 @@ impl App {
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let login_announcements_visible = self.login_announcements_visible();
+        // Rail visibility: the settings draft previews live while its modal is
+        // open, otherwise the session's modes (this device's stored layout, else
+        // the account default). `Auto` resolves against the live width, so a
+        // rotate or a window drag reflows on the next frame.
+        let (session_room_list_mode, session_right_sidebar_mode) = self.rail_modes();
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
             resolve_right_sidebar_enabled(
                 self.settings_modal_state.draft().right_sidebar_mode,
                 self.screen,
+                self.size.0,
             ),
-            resolve_right_sidebar_enabled(
-                self.profile_state.profile().right_sidebar_mode,
-                self.screen,
-            ),
+            resolve_right_sidebar_enabled(session_right_sidebar_mode, self.screen, self.size.0),
         );
         let show_room_list_sidebar = room_list_sidebar_enabled(
             self.show_settings,
-            self.settings_modal_state.draft().show_room_list_sidebar,
-            self.profile_state.profile().show_room_list_sidebar,
+            resolve_room_list_enabled(
+                self.settings_modal_state.draft().room_list_mode,
+                self.size.0,
+            ),
+            resolve_room_list_enabled(session_room_list_mode, self.size.0),
         );
         // Live-preview the component list from the draft while the settings
         // modal is open; otherwise use the saved profile.

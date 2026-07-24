@@ -265,11 +265,16 @@ fn right_sidebar_visible(app: &App) -> bool {
         return crate::app::render::resolve_right_sidebar_enabled(
             draft.right_sidebar_mode,
             Screen::Arcade,
+            app.size.0,
         );
     }
 
-    let profile = app.profile_state.profile();
-    crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, Screen::Arcade)
+    let (_, right_sidebar_mode) = app.rail_modes();
+    crate::app::render::resolve_right_sidebar_enabled(
+        right_sidebar_mode,
+        Screen::Arcade,
+        app.size.0,
+    )
 }
 
 #[cfg(test)]

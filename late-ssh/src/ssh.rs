@@ -117,6 +117,10 @@ struct ClientHandler {
     state: State,
     user: Option<User>,
     is_new_user: bool,
+    /// Fingerprint of the key this connection authenticated with. Per-device
+    /// settings key off it, so it must be the key actually used rather than
+    /// `users.fingerprint` (which is only the account's first key).
+    auth_fingerprint: Option<String>,
 
     /// Connection metadata
     transport_peer_addr: Option<std::net::SocketAddr>,
@@ -335,6 +339,7 @@ impl Server {
             state: self.state.clone(),
             user: None,
             is_new_user: false,
+            auth_fingerprint: None,
             activity_feed_rx: None,
             transport_peer_addr,
             peer_addr: effective_peer_addr,
@@ -664,6 +669,7 @@ impl russh::server::Handler for ClientHandler {
         );
 
         self.user = Some(user);
+        self.auth_fingerprint = Some(fingerprint);
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
         let _ = self
             .state
@@ -856,6 +862,32 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
+        // This device's stored home rail layout, keyed by the SSH key that
+        // authenticated. `None` (no key, no row, nothing stored, or a failed
+        // read) simply follows the account default.
+        let key_fingerprint = self.auth_fingerprint.clone();
+        let key_layout = match (&key_fingerprint, self.state.db.get().await) {
+            (Some(fingerprint), Ok(client)) => {
+                match late_core::models::user_ssh_key::UserSshKey::layout_for(
+                    &client,
+                    user_id,
+                    fingerprint,
+                )
+                .await
+                {
+                    Ok(layout) => layout,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "failed to load device rail layout");
+                        None
+                    }
+                }
+            }
+            (Some(_), Err(e)) => {
+                tracing::warn!(error = ?e, "failed to get db client for device rail layout");
+                None
+            }
+            (None, _) => None,
+        };
         let initial_announcements = match self.state.db.get().await {
             Ok(client) => {
                 match crate::app::announcements::load_login_announcements(&client, user_id).await {
@@ -989,6 +1021,8 @@ impl russh::server::Handler for ClientHandler {
                 &user.settings,
             ),
             show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
+            key_fingerprint,
+            key_layout,
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
@@ -1638,7 +1672,10 @@ async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
             if let Err(e) = User::update_last_seen(&mut row.clone(), &client).await {
                 tracing::warn!(error = ?e, "failed to update last_seen for user");
             }
-            if let Err(e) = User::ensure_ssh_key(&client, row.id, fingerprint).await {
+            if let Err(e) =
+                late_core::models::user_ssh_key::UserSshKey::ensure(&client, row.id, fingerprint)
+                    .await
+            {
                 tracing::warn!(error = ?e, "failed to ensure ssh key for user");
             }
             (row, false)
@@ -1676,7 +1713,8 @@ async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
             let user = created.ok_or_else(|| {
                 anyhow::anyhow!("could not allocate a unique username after retries")
             })?;
-            User::ensure_ssh_key(&client, user.id, fingerprint).await?;
+            late_core::models::user_ssh_key::UserSshKey::ensure(&client, user.id, fingerprint)
+                .await?;
             match state.chat_service.auto_join_public_rooms(user.id).await {
                 Ok(joined) => {
                     tracing::debug!(

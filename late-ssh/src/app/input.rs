@@ -4,6 +4,8 @@ use super::{
     room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
 };
+use late_core::models::user::{RightSidebarMode, RoomListMode};
+
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
@@ -3193,7 +3195,8 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
 }
 
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
-    if !app.profile_state.profile().show_room_list_sidebar {
+    let (room_list_mode, _) = app.rail_modes();
+    if !crate::app::render::resolve_room_list_enabled(room_list_mode, app.size.0) {
         return None;
     }
     const HOME_RAIL_WIDTH: u16 = 24;
@@ -3235,8 +3238,9 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
 fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    let profile = app.profile_state.profile();
-    if crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, app.screen) {
+    let (_, right_sidebar_mode) = app.rail_modes();
+    if crate::app::render::resolve_right_sidebar_enabled(right_sidebar_mode, app.screen, app.size.0)
+    {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
     } else {
         inner
@@ -3477,8 +3481,9 @@ fn open_settings_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
+    let device_rails = app.rail_modes();
     app.settings_modal_state
-        .open_from_profile(app.profile_state.profile());
+        .open_from_profile(app.profile_state.profile(), device_rails);
     app.show_settings = true;
 }
 
@@ -3870,11 +3875,22 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
         {
-            let label = match app.profile_state.cycle_sidebars() {
-                (true, true) => "Sidebars: both shown",
-                (false, true) => "Sidebars: room list hidden",
-                (true, false) => "Sidebars: info panel hidden",
-                (false, false) => "Sidebars: both hidden",
+            // Per device: this writes the layout onto the SSH key the session
+            // authenticated with, so cycling on a phone leaves the desktop's
+            // layout alone. The banner says so, since the same account can now
+            // legitimately look different in two places.
+            let label = match app.cycle_device_rails() {
+                (RoomListMode::Auto, _) | (_, RightSidebarMode::Auto) => {
+                    "Sidebars: auto for this terminal size (this device)"
+                }
+                (RoomListMode::On, RightSidebarMode::On) => "Sidebars: both shown (this device)",
+                (RoomListMode::Off, RightSidebarMode::On) => {
+                    "Sidebars: room list hidden (this device)"
+                }
+                (RoomListMode::On, RightSidebarMode::Off) => {
+                    "Sidebars: info panel hidden (this device)"
+                }
+                (RoomListMode::Off, RightSidebarMode::Off) => "Sidebars: both hidden (this device)",
             };
             app.banner = Some(crate::app::common::primitives::Banner::success(label));
             true

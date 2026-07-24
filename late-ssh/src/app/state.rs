@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::profile::Profile;
+use late_core::models::user::{RightSidebarMode, RoomListMode};
+use late_core::models::user_ssh_key::KeyLayout;
 
 use crate::{
     app::activity::event::ActivityEvent,
@@ -84,6 +86,19 @@ pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
 pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
 pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 9;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
+
+/// Rail modes in force: this device's stored layout when its key has one, else
+/// the account default. Free-standing so `App::new` can seed the settings draft
+/// with it before the `App` itself exists.
+fn device_rails_or_profile(
+    device_rails: Option<KeyLayout>,
+    profile: &Profile,
+) -> (RoomListMode, RightSidebarMode) {
+    match device_rails {
+        Some(layout) => (layout.room_list_mode, layout.right_sidebar_mode),
+        None => (profile.room_list_mode, profile.right_sidebar_mode),
+    }
+}
 
 /// Bounds for the aquarium simulation. The tray renders inside the chat
 /// column, so mirror the default Home layout: frame borders (2) plus the
@@ -262,6 +277,14 @@ pub struct SessionConfig {
     pub clubhouse_tutorial_done: bool,
     /// Whether the aquarium tray was open when the user last toggled it.
     pub show_aquarium_tray: bool,
+    /// Fingerprint of the SSH key this session authenticated with: the only
+    /// device identity late.sh has, and what per-device settings key off.
+    /// `None` for sessions with no key of their own (ghost bots, tests), which
+    /// then simply follow the account default and persist nothing.
+    pub key_fingerprint: Option<String>,
+    /// This device's stored home rail layout, or `None` when the key has never
+    /// been configured and should follow the account default.
+    pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     /// Live 24h username effects, shared process-wide (snapshot-swap; see
@@ -459,6 +482,14 @@ pub struct App {
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
+    /// Home rail layout for *this device*: the layout stored on the SSH key
+    /// this session authenticated with, or `None` to follow the live account
+    /// profile. `\` and the two Ctrl+O rail rows write it, so a phone and a
+    /// desktop on one linked account stop overwriting each other. Read through
+    /// [`App::rail_modes`]; render resolves `Auto` against terminal width.
+    pub(crate) device_rails: Option<late_core::models::user_ssh_key::KeyLayout>,
+    /// The key `device_rails` persists to; `None` for keyless sessions.
+    pub(crate) key_fingerprint: Option<String>,
     pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
     pub(crate) settings_modal_state: settings_modal::state::SettingsModalState,
     pub(crate) sheet_modal_state: sheet_modal::state::SheetModalState,
@@ -663,6 +694,60 @@ impl App {
 
     pub(crate) fn use_bonsai_v2(&self) -> bool {
         self.shop_state.dynamic_bonsai_enabled()
+    }
+
+    /// The rail modes this session renders from: this device's stored layout if
+    /// its key has one, else the live account profile. The single read path for
+    /// rail visibility, so render, input, and the settings modal can never
+    /// disagree about which layout is in force.
+    pub(crate) fn rail_modes(&self) -> (RoomListMode, RightSidebarMode) {
+        device_rails_or_profile(self.device_rails, self.profile_state.profile())
+    }
+
+    /// Cycle this device through the rail layouts: both rails, room list
+    /// hidden, sidebar hidden, both hidden, then `Auto` (terminal width
+    /// decides). Persists onto the SSH key, never onto the account, so the
+    /// other device's layout is untouched. Returns the new modes for the banner.
+    pub(crate) fn cycle_device_rails(&mut self) -> (RoomListMode, RightSidebarMode) {
+        const CYCLE: [(RoomListMode, RightSidebarMode); 5] = [
+            (RoomListMode::On, RightSidebarMode::On),
+            (RoomListMode::Off, RightSidebarMode::On),
+            (RoomListMode::On, RightSidebarMode::Off),
+            (RoomListMode::Off, RightSidebarMode::Off),
+            (RoomListMode::Auto, RightSidebarMode::Auto),
+        ];
+        let current = self.rail_modes();
+        let idx = CYCLE
+            .iter()
+            .position(|modes| *modes == current)
+            .unwrap_or(0);
+        let next = CYCLE[(idx + 1) % CYCLE.len()];
+        self.set_device_rails(next);
+        next
+    }
+
+    /// Adopt the two rail rows from the settings-modal draft as this device's
+    /// layout. A no-op when they already match, so unrelated tweaks in the same
+    /// modal do not write to the key.
+    pub(crate) fn sync_device_rails_from_settings(&mut self) {
+        let draft = self.settings_modal_state.draft();
+        let drafted = (draft.room_list_mode, draft.right_sidebar_mode);
+        if drafted != self.rail_modes() {
+            self.set_device_rails(drafted);
+        }
+    }
+
+    fn set_device_rails(&mut self, modes: (RoomListMode, RightSidebarMode)) {
+        let layout = KeyLayout {
+            room_list_mode: modes.0,
+            right_sidebar_mode: modes.1,
+        };
+        self.device_rails = Some(layout);
+        // Keyless sessions (ghost bots, tests) have no device to remember: the
+        // layout still applies for the rest of the session, it just isn't saved.
+        if let Some(fingerprint) = self.key_fingerprint.clone() {
+            self.profile_state.set_device_rails(fingerprint, layout);
+        }
     }
 
     pub fn skip_splash_for_tests(&mut self) {
@@ -997,7 +1082,11 @@ impl App {
             config.feed_service.clone(),
             config.user_id,
         );
-        settings_modal_state.open_from_profile(&initial_profile);
+        let device_rails = config.key_layout;
+        settings_modal_state.open_from_profile(
+            &initial_profile,
+            device_rails_or_profile(device_rails, &initial_profile),
+        );
         // Everyone lands in the clubhouse by default: the tavern is the front
         // door of late.sh (and the first-visit tutorial starts there). The
         // "Land on Home page" tweak sends returning users straight to the
@@ -1126,6 +1215,8 @@ impl App {
                 config.user_id,
                 config.initial_theme_id,
             ),
+            device_rails,
+            key_fingerprint: config.key_fingerprint,
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),
                 config.showcase_service.clone(),

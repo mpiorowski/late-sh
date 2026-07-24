@@ -1236,3 +1236,76 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     wait_for_render_contains(&mut app, "character sheet").await;
     wait_for_render_contains(&mut app, "sheet-modal-it").await;
 }
+
+#[tokio::test]
+async fn backslash_cycles_rails_for_this_device_only_and_auto_follows_width() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "rails-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "rails-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+    // Both rails up to start with: the room rail's footer hints and the
+    // sidebar's music panel are both on screen. (The sidebar's pinned presence
+    // row sits under the banner popup, so the panel header is the stable
+    // marker once a banner is showing.)
+    wait_for_render_contains(&mut app, "sort/fold").await;
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("music"), "sidebar missing; frame={frame:?}");
+
+    // First press hides the room rail, and says which scope it changed.
+    app.handle_input(b"\\");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("room list hidden (this device)"),
+        "expected a per-device banner; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("sort/fold"),
+        "expected the room rail to be hidden; frame={frame:?}"
+    );
+
+    // Three more presses reach Auto, which at 100 columns keeps both rails.
+    app.handle_input(b"\\\\\\");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("auto for this terminal size"),
+        "expected the auto step in the cycle; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("sort/fold") && frame.contains("music"),
+        "a 100-column terminal should keep both rails on auto; frame={frame:?}"
+    );
+
+    // A phone-sized terminal folds both rails away without touching settings,
+    // and widening brings them back: auto reads the live width every frame.
+    app.resize(50, 32).expect("resize narrow");
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("sort/fold") && !frame.contains("music"),
+        "auto should fold both rails on a narrow terminal; frame={frame:?}"
+    );
+    app.resize(100, 32).expect("resize wide");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("sort/fold"),
+        "auto should restore the rails when the terminal grows; frame={frame:?}"
+    );
+
+    // The account default is untouched throughout: the layout belongs to the
+    // device, so the user's other machine keeps its own rails.
+    let profile = app.profile_state.profile();
+    assert!(
+        profile.show_room_list_sidebar,
+        "cycling rails must not rewrite the account default"
+    );
+    assert_eq!(
+        profile.room_list_mode,
+        late_core::models::user::RoomListMode::On
+    );
+}

@@ -6,15 +6,15 @@ use uuid::Uuid;
 
 use super::chips::INITIAL_CHIP_BALANCE;
 use super::user::{
-    RightSidebarComponentSetting, RightSidebarMode, User, extract_bio, extract_birthday,
-    extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
-    extract_keep_composer_focused, extract_land_on_home, extract_langs, extract_notify_bell,
-    extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
-    extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_flag_fallback,
-    extract_show_pet_strip, extract_show_right_sidebar, extract_show_room_list_sidebar,
-    extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
-    extract_theme_id, extract_timezone, normalize_right_sidebar_components,
-    normalize_text_brightness_adjustment,
+    RightSidebarComponentSetting, RightSidebarMode, RoomListMode, User, extract_bio,
+    extract_birthday, extract_country, extract_enable_background_color, extract_favorite_room_ids,
+    extract_ide, extract_keep_composer_focused, extract_land_on_home, extract_langs,
+    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
+    extract_os, extract_right_sidebar_components, extract_right_sidebar_mode,
+    extract_room_list_mode, extract_show_flag_fallback, extract_show_pet_strip,
+    extract_show_right_sidebar, extract_show_room_list_sidebar, extract_start_with_music_muted,
+    extract_terminal, extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
+    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -41,7 +41,10 @@ pub struct Profile {
     /// Ordered list of sidebar panels with their on/off state. List order is
     /// the render order (top to bottom); the clock is pinned above it.
     pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
+    /// Legacy mirror of `room_list_mode`, kept in sync on write so an older
+    /// binary rolled back onto new data still shows the right rail.
     pub show_room_list_sidebar: bool,
+    pub room_list_mode: RoomListMode,
     /// Tweak: pressing Enter in the chat composer sends without closing it.
     /// While on, the Alt+S shortcut becomes a no-op.
     pub keep_composer_focused: bool,
@@ -90,6 +93,7 @@ impl Default for Profile {
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: super::user::default_right_sidebar_components(),
             show_room_list_sidebar: true,
+            room_list_mode: RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
             land_on_home: false,
@@ -122,6 +126,7 @@ pub struct ProfileParams {
     pub right_sidebar_mode: RightSidebarMode,
     pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
     pub show_room_list_sidebar: bool,
+    pub room_list_mode: RoomListMode,
     pub keep_composer_focused: bool,
     pub start_with_music_muted: bool,
     pub land_on_home: bool,
@@ -186,7 +191,7 @@ impl Profile {
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
     /// enable_background_color/text_brightness_adjustment/
     /// show_right_sidebar/right_sidebar_mode/right_sidebar_components/
-    /// show_room_list_sidebar/keep_composer_focused/
+    /// show_room_list_sidebar/room_list_mode/keep_composer_focused/
     /// start_with_music_muted/show_flag_fallback into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
     /// unrelated keys (ignored_user_ids) are preserved.
@@ -272,20 +277,21 @@ impl Profile {
                          'right_sidebar_mode', $13::text,
                          'right_sidebar_components', $14::jsonb,
                          'show_room_list_sidebar', $15::bool,
-                         'favorite_room_ids', $16::jsonb,
-                         'ide', $17::text,
-                         'terminal', $18::text,
-                         'os', $19::text,
-                         'langs', $20::jsonb,
-                         'birthday', $21::text,
-                         'keep_composer_focused', $22::bool,
-                         'start_with_music_muted', $23::bool,
-                         'show_flag_fallback', $24::bool,
-                         'land_on_home', $25::bool,
-                         'show_pet_strip', $26::bool
+                         'room_list_mode', $16::text,
+                         'favorite_room_ids', $17::jsonb,
+                         'ide', $18::text,
+                         'terminal', $19::text,
+                         'os', $20::text,
+                         'langs', $21::jsonb,
+                         'birthday', $22::text,
+                         'keep_composer_focused', $23::bool,
+                         'start_with_music_muted', $24::bool,
+                         'show_flag_fallback', $25::bool,
+                         'land_on_home', $26::bool,
+                         'show_pet_strip', $27::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $27
+                 WHERE id = $28
                  RETURNING *",
                 &[
                     &params.username,
@@ -303,6 +309,7 @@ impl Profile {
                     &params.right_sidebar_mode.as_str(),
                     &right_sidebar_components_json,
                     &params.show_room_list_sidebar,
+                    &params.room_list_mode.as_str(),
                     &favorite_room_ids_json,
                     &ide,
                     &terminal,
@@ -344,6 +351,7 @@ impl Profile {
             right_sidebar_mode: extract_right_sidebar_mode(&user.settings),
             right_sidebar_components: extract_right_sidebar_components(&user.settings),
             show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
+            room_list_mode: extract_room_list_mode(&user.settings),
             keep_composer_focused: extract_keep_composer_focused(&user.settings),
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
             land_on_home: extract_land_on_home(&user.settings),

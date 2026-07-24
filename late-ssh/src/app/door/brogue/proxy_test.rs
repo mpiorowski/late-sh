@@ -21,7 +21,11 @@ fn cell_char(parser: &vt100::Parser, row: u16, col: u16) -> String {
 fn vt100_drops_hvp_without_normalizer() {
     let parser = parse(b"\x1b[3;5fX");
     assert_eq!(cell_char(&parser, 2, 4), "", "vt100 grew HVP support");
-    assert_eq!(cell_char(&parser, 0, 0), "X", "X prints at the unmoved cursor");
+    assert_eq!(
+        cell_char(&parser, 0, 0),
+        "X",
+        "X prints at the unmoved cursor"
+    );
 }
 
 #[test]

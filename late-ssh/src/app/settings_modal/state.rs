@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::rss_feed::RssFeed;
 use late_core::models::user::{
-    RightSidebarComponentSetting, RightSidebarMode, normalize_text_brightness_adjustment,
-    sanitize_username_input,
+    RightSidebarComponentSetting, RightSidebarMode, RoomListMode,
+    normalize_text_brightness_adjustment, sanitize_username_input,
 };
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -539,8 +539,20 @@ impl SettingsModalState {
         &mut self.gem
     }
 
-    pub(crate) fn open_from_profile(&mut self, profile: &Profile) {
+    /// Load the draft from the account profile, then overlay the rail modes
+    /// this session is actually rendering with (`App::rail_modes`): the two rail
+    /// rows are per device, so showing the account default here would misreport
+    /// what the user is looking at.
+    pub(crate) fn open_from_profile(
+        &mut self,
+        profile: &Profile,
+        device_rails: (RoomListMode, RightSidebarMode),
+    ) {
         self.draft = profile.clone();
+        self.draft.room_list_mode = device_rails.0;
+        self.draft.show_room_list_sidebar = device_rails.0 != RoomListMode::Off;
+        self.draft.right_sidebar_mode = device_rails.1;
+        self.draft.show_right_sidebar = device_rails.1 != RightSidebarMode::Off;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.account_row_index = 0;
@@ -762,7 +774,8 @@ impl SettingsModalState {
                     self.draft.right_sidebar_mode != RightSidebarMode::Off;
             }
             TweakRow::RoomListSidebar => {
-                self.draft.show_room_list_sidebar ^= true;
+                self.draft.room_list_mode = self.draft.room_list_mode.cycle(true);
+                self.draft.show_room_list_sidebar = self.draft.room_list_mode != RoomListMode::Off;
             }
             TweakRow::PetStrip => {
                 self.draft.show_pet_strip ^= true;
@@ -1901,6 +1914,7 @@ impl SettingsModalState {
                 right_sidebar_mode: self.draft.right_sidebar_mode,
                 right_sidebar_components: self.draft.right_sidebar_components.clone(),
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
+                room_list_mode: self.draft.room_list_mode,
                 keep_composer_focused: self.draft.keep_composer_focused,
                 start_with_music_muted: self.draft.start_with_music_muted,
                 land_on_home: self.draft.land_on_home,

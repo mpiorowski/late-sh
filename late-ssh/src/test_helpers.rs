@@ -476,6 +476,10 @@ fn make_app_with_chat_service_and_permissions(
         clubhouse_lobby: None,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
+        // No SSH key: test apps follow the account default and persist no
+        // per-device layout, which is also what ghost bot sessions do.
+        key_fingerprint: None,
+        key_layout: None,
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
@@ -653,6 +657,10 @@ pub fn make_app_with_paired_client(
         clubhouse_lobby: None,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
+        // No SSH key: test apps follow the account default and persist no
+        // per-device layout, which is also what ghost bot sessions do.
+        key_fingerprint: None,
+        key_layout: None,
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,

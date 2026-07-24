@@ -19,6 +19,9 @@ pub struct SessionBootstrapInputs {
     pub session_token: String,
     pub session_rx: Option<mpsc::Receiver<SessionMessage>>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    /// Fingerprint of the SSH key this session authenticated with, for
+    /// per-device settings. `None` for sessions without a key of their own.
+    pub key_fingerprint: Option<String>,
 }
 
 pub struct ArcadeSessionPreloads {
@@ -235,6 +238,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_rx,
         activity_feed_rx,
+        key_fingerprint,
     } = inputs;
 
     let user_id = user.id;
@@ -345,10 +349,36 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         }
     };
 
+    // This device's stored rail layout; `None` follows the account default.
+    let key_layout = match (&key_fingerprint, state.db.get().await) {
+        (Some(fingerprint), Ok(client)) => {
+            match late_core::models::user_ssh_key::UserSshKey::layout_for(
+                &client,
+                user_id,
+                fingerprint,
+            )
+            .await
+            {
+                Ok(layout) => layout,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load device rail layout");
+                    None
+                }
+            }
+        }
+        (Some(_), Err(e)) => {
+            tracing::warn!(error = ?e, "failed to get db client for device rail layout");
+            None
+        }
+        (None, _) => None,
+    };
+
     SessionConfig {
         cols,
         rows,
         term,
+        key_fingerprint,
+        key_layout,
         audio_service: state.audio_service.clone(),
         voice_service: state.voice_service.clone(),
         chat_service: state.chat_service.clone(),

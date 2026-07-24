@@ -1,0 +1,168 @@
+use crate::models::user::{RightSidebarMode, RoomListMode};
+use crate::models::user_ssh_key::{KeyLayout, UserSshKey, extract_key_layout};
+use crate::test_utils::{create_test_user, test_db};
+use serde_json::json;
+
+fn phone_layout() -> KeyLayout {
+    KeyLayout {
+        room_list_mode: RoomListMode::Off,
+        right_sidebar_mode: RightSidebarMode::Auto,
+    }
+}
+
+#[test]
+fn stored_layout_round_trips_and_partial_blobs_inherit() {
+    let layout = phone_layout();
+    assert_eq!(extract_key_layout(&layout.to_value()), Some(layout));
+
+    // Nothing stored, or only half a pair, means "follow the account default".
+    assert_eq!(extract_key_layout(&json!({})), None);
+    assert_eq!(extract_key_layout(&json!({"room_list_mode": "off"})), None);
+    assert_eq!(
+        extract_key_layout(&json!({"room_list_mode": "off", "right_sidebar_mode": "sideways"})),
+        None
+    );
+}
+
+#[tokio::test]
+async fn ensure_creates_the_key_then_repoints_it_on_reconnect() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let desktop = create_test_user(&test_db.db, "keyowner").await;
+    let other = create_test_user(&test_db.db, "keyother").await;
+
+    UserSshKey::ensure(&client, desktop.id, "SHA256:phone")
+        .await
+        .expect("first sight");
+    let key = UserSshKey::find_by_fingerprint(&client, desktop.id, "SHA256:phone")
+        .await
+        .expect("load key")
+        .expect("key exists");
+    assert_eq!(key.user_id, desktop.id);
+    assert!(key.label.is_none(), "unlabelled until the user names it");
+
+    // Re-ensuring under another account moves the key rather than duplicating it.
+    UserSshKey::ensure(&client, other.id, "SHA256:phone")
+        .await
+        .expect("repoint");
+    assert!(
+        UserSshKey::find_by_fingerprint(&client, desktop.id, "SHA256:phone")
+            .await
+            .expect("load key")
+            .is_none(),
+        "old owner no longer sees the key"
+    );
+    assert_eq!(
+        UserSshKey::list_by_user_id(&client, other.id)
+            .await
+            .expect("list keys")
+            .len(),
+        1,
+        "one row, not two"
+    );
+}
+
+#[tokio::test]
+async fn layout_is_per_key_and_scoped_to_its_owner() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "keylayout").await;
+    let stranger = create_test_user(&test_db.db, "keystranger").await;
+
+    UserSshKey::ensure(&client, user.id, "SHA256:phone")
+        .await
+        .expect("phone key");
+    UserSshKey::ensure(&client, user.id, "SHA256:desktop")
+        .await
+        .expect("desktop key");
+
+    // A key with nothing stored inherits the account default.
+    assert_eq!(
+        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+            .await
+            .expect("desktop layout"),
+        None
+    );
+
+    UserSshKey::set_layout(&client, user.id, "SHA256:phone", phone_layout())
+        .await
+        .expect("store phone layout");
+    assert_eq!(
+        UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+            .await
+            .expect("phone layout"),
+        Some(phone_layout()),
+        "the phone keeps its own layout"
+    );
+    assert_eq!(
+        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+            .await
+            .expect("desktop layout"),
+        None,
+        "and does not touch the desktop's"
+    );
+
+    // Another account cannot write onto this key even knowing its fingerprint.
+    let denied = UserSshKey::set_layout(
+        &client,
+        stranger.id,
+        "SHA256:phone",
+        KeyLayout {
+            room_list_mode: RoomListMode::On,
+            right_sidebar_mode: RightSidebarMode::On,
+        },
+    )
+    .await;
+    assert!(denied.is_err(), "cross-account write is refused");
+    assert_eq!(
+        UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+            .await
+            .expect("phone layout"),
+        Some(phone_layout()),
+        "the owner's layout survives"
+    );
+}
+
+#[tokio::test]
+async fn linking_accounts_moves_keys_and_keeps_their_layouts() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let kept = create_test_user(&test_db.db, "keykept").await;
+    let abandoned = create_test_user(&test_db.db, "keymerged").await;
+
+    UserSshKey::ensure(&client, kept.id, "SHA256:desktop")
+        .await
+        .expect("desktop key");
+    UserSshKey::ensure(&client, abandoned.id, "SHA256:phone")
+        .await
+        .expect("phone key");
+    UserSshKey::set_layout(&client, abandoned.id, "SHA256:phone", phone_layout())
+        .await
+        .expect("store phone layout");
+
+    // Linking runs the move inside its own transaction, like `account_link`,
+    // which hands the model a `tokio_postgres` transaction rather than a
+    // pooled one.
+    let inner: &mut tokio_postgres::Client = &mut client;
+    let tx = inner.transaction().await.expect("transaction");
+    UserSshKey::move_to_user(&tx, abandoned.id, kept.id)
+        .await
+        .expect("move keys");
+    tx.commit().await.expect("commit");
+
+    assert_eq!(
+        UserSshKey::list_by_user_id(&client, kept.id)
+            .await
+            .expect("list keys")
+            .len(),
+        2,
+        "both devices now belong to the kept account"
+    );
+    assert_eq!(
+        UserSshKey::layout_for(&client, kept.id, "SHA256:phone")
+            .await
+            .expect("phone layout"),
+        Some(phone_layout()),
+        "the phone's layout survives the link"
+    );
+}
