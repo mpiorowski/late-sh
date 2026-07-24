@@ -136,7 +136,8 @@ make check
 ```
 
 - `make check` intentionally formats/checks only first-party workspace packages (`late-cli`, `late-core`, `late-ssh`, `late-web`, `late-webview`). Do not replace it with `cargo fmt --all`: Cargo's `--all` also formats local path dependencies, including vendored crates like `vendor/irc-proto`, whose upstream style is not rustfmt-clean in this repo.
-- `make check` and `make checkci` start a dedicated Compose Postgres project from `docker-compose.check.yml` (`CHECK_INSTANCE ?= late-check`, `CHECK_PG_HOST_PORT ?= 55433`) and tear it down with volumes. They must not start, stop, or reuse the app `postgres` service from `docker-compose.yml`.
+- `make check` is the full pre-merge sweep: `cargo fmt --check` (first-party packages only, to skip vendored path deps) plus `cargo clippy` and `cargo nextest` over the whole workspace with `--features otel`. It is the only gate that compiles the otel telemetry/metrics code, since CI skips otel to stay cheap; otel breakage surfaces here or at the release Docker build, never in prod.
+- `make check` starts a dedicated Compose Postgres project from `docker-compose.check.yml` (`CHECK_INSTANCE ?= late-check`, `CHECK_PG_HOST_PORT ?= 55433`) and tears it down with volumes. It must not start, stop, or reuse the app `postgres` service from `docker-compose.yml`.
 
 ### Known environment caveats
 
