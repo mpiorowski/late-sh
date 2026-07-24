@@ -1,23 +1,30 @@
 name: dopewars
 
 # Dedicated CI/CD for the dopewars door, responsible only for the from-source
-# binary and its standalone SSH host (late-dopewars, twin of late-nethack):
-#   - build_validate: compile the dopewars-build stage and prove the binary
+# binary image (docker/doors/dopewars.Dockerfile):
+#   - build_validate: compile the door Dockerfile and prove the binary
 #     works and isn't setgid (a setgid binary silently refuses the per-session
 #     `-f` score path). Runs on changes to the build and weekly, to catch
 #     upstream / checksum breakage early (the build fetches a pinned tarball
 #     from SourceForge over the network).
-#   - build_runtime_dopewars: build the runtime-dopewars target (the
-#     late-dopewars host image) to catch breakage in that stage on Dockerfile
-#     PRs. Nothing else builds runtime-dopewars on PR.
+#   - push_image: on push to main, publish the image the root Dockerfile pins
+#     as its dopewars-build stage (ghcr door-dopewars, tag from DOOR_IMAGE_TAG).
 #   - verify_deployed: manual, per-environment. Confirms the live late-dopewars
 #     deployment is rolled out and the door is enabled. There's no PVC/save
 #     state to seed or check.
+#
+# The late-dopewars host image (runtime-dopewars) builds from the root
+# Dockerfile in deploy_dopewars.yml; it is not built here.
 
 on:
   pull_request:
     paths:
-      - Dockerfile
+      - docker/doors/dopewars.Dockerfile
+      - .github/workflows/dopewars.yml
+  push:
+    branches: [main]
+    paths:
+      - docker/doors/dopewars.Dockerfile
       - .github/workflows/dopewars.yml
   schedule:
     - cron: "0 6 * * 2" # Tuesdays 06:00 UTC (staggered a day after nethack's)
@@ -44,6 +51,11 @@ concurrency:
 permissions:
   contents: read
 
+# The published door image tag. Must match the pin in the root Dockerfile's
+# dopewars-build stage; bump both together on any recipe change.
+env:
+  DOOR_IMAGE_TAG: 1.6.2-r1
+
 jobs:
   build_validate:
     name: build_validate_dopewars_stage
@@ -56,15 +68,14 @@ jobs:
       - name: setup_docker_buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build only the dopewars-build stage and load it locally so we can run
+      # Build the door Dockerfile and load it locally so we can run
       # the binary. The stage itself already asserts the binary lands at
       # /dopewars; we re-prove it runs and re-check the setgid invariant here.
       - name: build_dopewars_stage
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile
-          target: dopewars-build
+          file: docker/doors/dopewars.Dockerfile
           platforms: linux/amd64
           push: false
           load: true
@@ -91,10 +102,20 @@ jobs:
             echo "mode $mode OK (not setgid)"
           '
 
-  build_runtime_dopewars:
-    name: build_runtime_dopewars_image
+  push_image:
+    name: push_door_dopewars_image
+    needs: build_validate
+    # push: keep the published image in sync with main. workflow_dispatch: the
+    # manual bootstrap/re-push lever (first publication happens from the branch
+    # that introduces the door Dockerfile, before the root Dockerfile pin can
+    # resolve). Scheduled runs never push: the weekly drift check must not
+    # silently mutate a pinned tag.
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: checkout
         uses: actions/checkout@v5
@@ -102,19 +123,24 @@ jobs:
       - name: setup_docker_buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build the runtime-dopewars target (the late-dopewars host image) to
-      # catch breakage in that stage on Dockerfile PRs. We only prove it builds;
-      # it is not pushed here (deploy_dopewars.yml builds and pushes the
-      # released image).
-      - name: build_runtime_dopewars_target
+      - name: login_to_ghcr
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish the image the root Dockerfile pins as its dopewars-build stage.
+      # The tag is stable per recipe revision, so re-pushing it on an unrelated
+      # main push is a layer-cached no-op.
+      - name: push_door_image
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile
-          target: runtime-dopewars
+          file: docker/doors/dopewars.Dockerfile
           platforms: linux/amd64
-          push: false
-          tags: late-dopewars:ci
+          push: true
+          tags: ghcr.io/${{ github.repository }}/door-dopewars:${{ env.DOOR_IMAGE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

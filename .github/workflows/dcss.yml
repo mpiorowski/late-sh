@@ -1,21 +1,28 @@
 name: dcss
 
 # Dedicated CI/CD for the DCSS door, responsible only for the from-source
-# binary and its standalone SSH host (late-dcss, twin of late-nethack):
-#   - build_validate: compile the dcss-build stage and prove the crawl binary
+# binary image (docker/doors/dcss.Dockerfile):
+#   - build_validate: compile the door Dockerfile and prove the crawl binary
 #     runs (--version resolves the baked DATADIR and version info). Runs on
 #     changes to the build and weekly, to catch upstream / checksum breakage
 #     early (the build fetches a pinned tarball from GitHub over the network).
-#   - build_runtime_dcss: build the runtime-dcss target (the late-dcss host
-#     image) to catch breakage in that stage on Dockerfile PRs. Nothing else
-#     builds runtime-dcss on PR.
+#   - push_image: on push to main, publish the image the root Dockerfile pins
+#     as its dcss-build stage (ghcr door-dcss, tag from DOOR_IMAGE_TAG).
 #   - verify_deployed: manual, per-environment. Confirms the live late-dcss
 #     deployment is rolled out and the door is enabled on service-ssh.
+#
+# The late-dcss host image (runtime-dcss) builds from the root Dockerfile in
+# deploy_dcss.yml; it is not built here.
 
 on:
   pull_request:
     paths:
-      - Dockerfile
+      - docker/doors/dcss.Dockerfile
+      - .github/workflows/dcss.yml
+  push:
+    branches: [main]
+    paths:
+      - docker/doors/dcss.Dockerfile
       - .github/workflows/dcss.yml
   schedule:
     - cron: "0 6 * * 3" # Wednesdays 06:00 UTC (staggered a day after dopewars')
@@ -42,6 +49,11 @@ concurrency:
 permissions:
   contents: read
 
+# The published door image tag. Must match the pin in the root Dockerfile's
+# dcss-build stage; bump both together on any recipe change.
+env:
+  DOOR_IMAGE_TAG: 0.34.1-r1
+
 jobs:
   build_validate:
     name: build_validate_dcss_stage
@@ -54,15 +66,14 @@ jobs:
       - name: setup_docker_buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build only the dcss-build stage and load it locally so we can run the
+      # Build the door Dockerfile and load it locally so we can run the
       # binary. The stage itself already asserts the binary and data tree land
       # under /opt/dcss; we re-prove the binary actually runs here.
       - name: build_dcss_stage
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile
-          target: dcss-build
+          file: docker/doors/dcss.Dockerfile
           platforms: linux/amd64
           push: false
           load: true
@@ -74,10 +85,20 @@ jobs:
         run: |
           docker run --rm dcss-build:ci /opt/dcss/bin/crawl -version
 
-  build_runtime_dcss:
-    name: build_runtime_dcss_image
+  push_image:
+    name: push_door_dcss_image
+    needs: build_validate
+    # push: keep the published image in sync with main. workflow_dispatch: the
+    # manual bootstrap/re-push lever (first publication happens from the branch
+    # that introduces the door Dockerfile, before the root Dockerfile pin can
+    # resolve). Scheduled runs never push: the weekly drift check must not
+    # silently mutate a pinned tag.
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: checkout
         uses: actions/checkout@v5
@@ -85,18 +106,24 @@ jobs:
       - name: setup_docker_buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build the runtime-dcss target (the late-dcss host image) to catch
-      # breakage in that stage on Dockerfile PRs. We only prove it builds; it is
-      # not pushed here (deploy_dcss.yml builds and pushes the released image).
-      - name: build_runtime_dcss_target
+      - name: login_to_ghcr
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish the image the root Dockerfile pins as its dcss-build stage.
+      # The tag is stable per recipe revision, so re-pushing it on an unrelated
+      # main push is a layer-cached no-op.
+      - name: push_door_image
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile
-          target: runtime-dcss
+          file: docker/doors/dcss.Dockerfile
           platforms: linux/amd64
-          push: false
-          tags: late-dcss:ci
+          push: true
+          tags: ghcr.io/${{ github.repository }}/door-dcss:${{ env.DOOR_IMAGE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

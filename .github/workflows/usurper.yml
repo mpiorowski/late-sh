@@ -1,22 +1,30 @@
 name: usurper
 
 # Dedicated CI/CD for the Usurper door, responsible only for the from-source
-# binaries and their standalone SSH host (late-usurper, twin of late-dcss):
-#   - build_validate: compile the usurper-build stage (Free Pascal build of
+# binary image (docker/doors/usurper.Dockerfile):
+#   - build_validate: compile the door Dockerfile (Free Pascal build of
 #     USURPER.EXE + EDITOR.EXE plus the scripted EDITOR reset that generates
 #     the seed world data) and prove the artifacts landed. Runs on changes to
 #     the build and weekly, to catch upstream / checksum breakage early (the
 #     build fetches a pinned tarball from GitHub over the network).
-#   - build_runtime_usurper: build the runtime-usurper target (the late-usurper
-#     host image) to catch breakage in that stage on Dockerfile PRs. Nothing
-#     else builds runtime-usurper on PR.
+#   - push_image: on push to main, publish the image the root Dockerfile pins
+#     as its usurper-build stage (ghcr door-usurper, tag from DOOR_IMAGE_TAG).
 #   - verify_deployed: manual, per-environment. Confirms the live late-usurper
 #     deployment is rolled out and the door is enabled on service-ssh.
+#
+# The late-usurper host image (runtime-usurper) builds from the root Dockerfile
+# in deploy_usurper.yml; it is not built here.
 
 on:
   pull_request:
     paths:
-      - Dockerfile
+      - docker/doors/usurper.Dockerfile
+      - scripts/usurper_seed_data.py
+      - .github/workflows/usurper.yml
+  push:
+    branches: [main]
+    paths:
+      - docker/doors/usurper.Dockerfile
       - scripts/usurper_seed_data.py
       - .github/workflows/usurper.yml
   schedule:
@@ -44,6 +52,11 @@ concurrency:
 permissions:
   contents: read
 
+# The published door image tag. Must match the pin in the root Dockerfile's
+# usurper-build stage; bump both together on any recipe change.
+env:
+  DOOR_IMAGE_TAG: 0.25-r1
+
 jobs:
   build_validate:
     name: build_validate_usurper_stage
@@ -56,15 +69,14 @@ jobs:
       - name: setup_docker_buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build only the usurper-build stage and load it locally so we can probe
+      # Build the door Dockerfile and load it locally so we can probe
       # the artifacts. The stage itself already asserts the binaries and the
       # generated seed world files fail-closed; we re-prove them here.
       - name: build_usurper_stage
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile
-          target: usurper-build
+          file: docker/doors/usurper.Dockerfile
           platforms: linux/amd64
           push: false
           load: true
@@ -83,10 +95,20 @@ jobs:
             test -s /opt/usurper/seed/TEXT/MAINMENU.ANS &&
             test -s /opt/usurper/seed/COPYING'
 
-  build_runtime_usurper:
-    name: build_runtime_usurper_image
+  push_image:
+    name: push_door_usurper_image
+    needs: build_validate
+    # push: keep the published image in sync with main. workflow_dispatch: the
+    # manual bootstrap/re-push lever (first publication happens from the branch
+    # that introduces the door Dockerfile, before the root Dockerfile pin can
+    # resolve). Scheduled runs never push: the weekly drift check must not
+    # silently mutate a pinned tag.
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: checkout
         uses: actions/checkout@v5
@@ -94,19 +116,24 @@ jobs:
       - name: setup_docker_buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build the runtime-usurper target (the late-usurper host image) to catch
-      # breakage in that stage on Dockerfile PRs. We only prove it builds; it is
-      # not pushed here (deploy_usurper.yml builds and pushes the released
-      # image).
-      - name: build_runtime_usurper_target
+      - name: login_to_ghcr
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish the image the root Dockerfile pins as its usurper-build stage.
+      # The tag is stable per recipe revision, so re-pushing it on an unrelated
+      # main push is a layer-cached no-op.
+      - name: push_door_image
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile
-          target: runtime-usurper
+          file: docker/doors/usurper.Dockerfile
           platforms: linux/amd64
-          push: false
-          tags: late-usurper:ci
+          push: true
+          tags: ghcr.io/${{ github.repository }}/door-usurper:${{ env.DOOR_IMAGE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

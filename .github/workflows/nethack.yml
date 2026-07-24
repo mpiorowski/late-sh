@@ -1,21 +1,31 @@
 name: nethack
 
 # Dedicated CI/CD for the NetHack door, responsible only for the from-source
-# binary and its persistent save playground:
-#   - build_validate: compile the nethack-build stage and prove the binary works
+# binary image (docker/doors/nethack.Dockerfile):
+#   - build_validate: compile the door Dockerfile and prove the binary works
 #     and that the writable state is split out of HACKDIR (VAR_PLAYGROUND). Runs
 #     on changes to the build and weekly, to catch upstream / Lua / checksum
 #     breakage early (the build fetches Lua over the network).
+#   - push_image: on push to main, publish the image the root Dockerfile pins
+#     as its nethack-build stage (ghcr door-nethack, tag from DOOR_IMAGE_TAG).
 #   - deploy_seed: manual, per-environment. Verifies the live service-ssh pod has
 #     the nethack-save PVC mounted, writable, with save/ present and the door
 #     enabled. The initContainer seeds on every rollout; this re-checks (and
 #     re-seeds idempotently) without running Terraform. Full infra applies stay
 #     in deploy_infra.yml.
+#
+# The late-nethack host image (runtime-nethack) builds from the root Dockerfile
+# in deploy_nethack.yml; it is not built here.
 
 on:
   pull_request:
     paths:
-      - Dockerfile
+      - docker/doors/nethack.Dockerfile
+      - .github/workflows/nethack.yml
+  push:
+    branches: [main]
+    paths:
+      - docker/doors/nethack.Dockerfile
       - .github/workflows/nethack.yml
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
@@ -42,6 +52,11 @@ concurrency:
 permissions:
   contents: read
 
+# The published door image tag. Must match the pin in the root Dockerfile's
+# nethack-build stage; bump both together on any recipe change.
+env:
+  DOOR_IMAGE_TAG: 5.0.0-r1
+
 jobs:
   build_validate:
     name: build_validate_nethack_stage
@@ -54,15 +69,14 @@ jobs:
       - name: setup_docker_buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build only the nethack-build stage and load it locally so we can run the
+      # Build the door Dockerfile and load it locally so we can run the
       # binary. The stage itself already asserts the binary lands in HACKDIR and
       # that save/ was seeded under VAR_PLAYGROUND; we re-prove both at runtime.
       - name: build_nethack_stage
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile
-          target: nethack-build
+          file: docker/doors/nethack.Dockerfile
           platforms: linux/amd64
           push: false
           load: true
@@ -97,10 +111,20 @@ jobs:
             test "$after" -gt "$before"
           '
 
-  build_runtime_nethack:
-    name: build_runtime_nethack_image
+  push_image:
+    name: push_door_nethack_image
+    needs: build_validate
+    # push: keep the published image in sync with main. workflow_dispatch: the
+    # manual bootstrap/re-push lever (first publication happens from the branch
+    # that introduces the door Dockerfile, before the root Dockerfile pin can
+    # resolve). Scheduled runs never push: the weekly drift check must not
+    # silently mutate a pinned tag.
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: checkout
         uses: actions/checkout@v5
@@ -108,18 +132,24 @@ jobs:
       - name: setup_docker_buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build the runtime-nethack target (the late-nethack host image) to catch
-      # breakage in that stage on Dockerfile PRs. We only prove it builds; it is
-      # not pushed here (deploy_nethack.yml builds and pushes the released image).
-      - name: build_runtime_nethack_target
+      - name: login_to_ghcr
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish the image the root Dockerfile pins as its nethack-build stage.
+      # The tag is stable per recipe revision, so re-pushing it on an unrelated
+      # main push is a layer-cached no-op.
+      - name: push_door_image
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile
-          target: runtime-nethack
+          file: docker/doors/nethack.Dockerfile
           platforms: linux/amd64
-          push: false
-          tags: late-nethack:ci
+          push: true
+          tags: ghcr.io/${{ github.repository }}/door-nethack:${{ env.DOOR_IMAGE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
