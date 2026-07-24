@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/lobby` — the single front door for multiplayer play: the `Ctrl+Q` modal, the backtick workspace cycle, and the two game domains it fronts (`daily/` async correspondence matches, `house/` live fixed tables).
-- Last updated: 2026-07-15 (backtick cycle gained a third leg: unfinished Arcade daily puzzles after seated house tables, via `arcade/workspace.rs::ArcadeStop`)
+- Last updated: 2026-07-24 (modal list scrolling: the cursor rides the middle of the window (`visible_window_start`) instead of being pinned to the last visible row, so rows stay visible below it, the mouse wheel moves the selection, and the cursor wraps at both ends via `wrap_index`)
 - Parent context: root `CONTEXT.md`. Sub-domain contexts: `daily/CONTEXT.md`, `house/CONTEXT.md` — this file owns only what spans both.
 - Status: Active
 
@@ -21,9 +21,9 @@ Entry points:
 | File | Responsibility |
 |---|---|
 | `mod.rs` | Declarations only. |
-| `state.rs` | `LobbyState` (`App::lobby`): modal cursor + claim-confirm + unseen-challenge glow, and `LobbyEntry<'_>` — the modal's row enum over both domains. Entries are computed views: `entry_at`/`selected_entry` walk `DailyState`'s snapshot lists plus `HouseTable::ALL`. `sync(&DailyState)` runs every tick (idempotent) to pick up glow edges and clamp the cursor/claim against the moving snapshot. |
-| `modal_input.rs` | Modal key routing: `j`/`k` move, Enter open/claim (confirm second-press), `c`/`C` challenge draft (draft state lives in `DailyState.challenge_draft` — it posts daily challenges), `x` cancel/dismiss, Esc peel (draft step → pending claim → close + mark seen). |
-| `modal_ui.rs` | Modal renderer: near-fullscreen list with section rules, claim-confirm status line, footer keys, the challenge-draft overlay. |
+| `state.rs` | `LobbyState` (`App::lobby`): modal cursor + claim-confirm + unseen-challenge glow, and `LobbyEntry<'_>` — the modal's row enum over both domains. Entries are computed views: `entry_at`/`selected_entry` walk `DailyState`'s snapshot lists plus `HouseTable::ALL`. `sync(&DailyState)` runs every tick (idempotent) to pick up glow edges and clamp the cursor/claim against the moving snapshot. `move_selection` wraps at both ends through the pure `wrap_index` (unit-tested): the list is one flat index space, so wrapping backwards off the top lands on the last house table. |
+| `modal_input.rs` | Modal key routing: `j`/`k` and the mouse wheel move (the modal owns input, so the wheel never reaches the global scroll fallback), Enter open/claim (confirm second-press), `c`/`C` challenge draft (draft state lives in `DailyState.challenge_draft` — it posts daily challenges), `x` cancel/dismiss, Esc peel (draft step → pending claim → close + mark seen). |
+| `modal_ui.rs` | Modal renderer: near-fullscreen list with section rules, claim-confirm status line, footer keys, the challenge-draft overlay. When the list overflows, `visible_window_start` centers the selected line in the window (clamped to the first/last page) so there is always list visible below the cursor. |
 | `workspace.rs` | The backtick cycle (`GameWorkspace`, `cycle_game_workspace`, pure `next_workspace` + its unit tests). Consumes `arcade/workspace.rs` for the Arcade-daily leg; hopping out of an Arcade stop clears `is_playing_game` (boards save move-by-move, nothing else to close). |
 | `daily/` | Correspondence domain: roster, service, board screens, panel. See `daily/CONTEXT.md`. |
 | `house/` | Fixed house tables: roster, singleton registry, five runtimes, table screen. See `house/CONTEXT.md`. |

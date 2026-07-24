@@ -481,14 +481,9 @@ fn draw_bonsai_panel(frame: &mut Frame, area: Rect, state: &ProfileModalState, s
                 .last_watered
                 .map(|last| (Utc::now().date_naive() - last).num_days() >= 2)
                 .unwrap_or(age_days >= 2);
-        let lines = render_tree_art_lines(
-            stage,
-            tree.seed,
-            wilting,
-            tree_area.width as usize,
-            0.0,
-            None,
-        );
+        // Wall tick 0: the profile preview stays still (sin(0) sway).
+        let lines =
+            render_tree_art_lines(stage, tree.seed, wilting, tree_area.width as usize, 0, None);
         bottom_align(frame, tree_area, lines);
         if let Some(caption_area) = caption_area {
             render_caption(
@@ -523,7 +518,6 @@ fn draw_aquarium_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     }
 
     if let Some(aquarium) = slot.as_mut() {
-        aquarium.tick();
         aquarium_ui::draw(frame, area, aquarium);
     } else {
         render_centered_dim(frame, area, "aquarium unavailable");

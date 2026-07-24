@@ -345,7 +345,11 @@ impl State {
         self.balance = balance;
     }
 
-    pub fn tick(&mut self) {
+    /// Returns true when a snapshot landed or an event applied. Dealer
+    /// sweeps and the 1s betting/action countdowns are server-published
+    /// through the snapshot watch, so the peek alone covers them.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             let previous_phase = self.snapshot.phase;
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
@@ -354,19 +358,25 @@ impl State {
             } else if self.snapshot.phase != Phase::Settling {
                 self.settling_seen_at = None;
             }
+            changed = true;
         }
 
         loop {
             match self.event_rx.try_recv() {
-                Ok(event) => self.apply_event(event),
+                Ok(event) => {
+                    self.apply_event(event);
+                    changed = true;
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Closed) => break,
                 Err(TryRecvError::Lagged(skipped)) => {
                     self.private_notice =
                         Some(format!("Blackjack updates lagged ({skipped} dropped)."));
+                    changed = true;
                 }
             }
         }
+        changed
     }
 
     pub fn move_chip_selection(&mut self, delta: isize) {

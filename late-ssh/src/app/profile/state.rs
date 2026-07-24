@@ -6,6 +6,14 @@ use uuid::Uuid;
 use super::svc::{ProfileEvent, ProfileService, ProfileSnapshot};
 use crate::app::common::{primitives::Banner, theme};
 
+/// Outcome of one profile tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed render-visible state (theme, sidebar
+/// layout, favorites).
+pub struct ProfileTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct ProfileState {
     profile_service: ProfileService,
     user_id: Uuid,
@@ -130,9 +138,15 @@ impl ProfileState {
     }
 
     // Tick
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> ProfileTick {
+        // Peek before draining: anything queued may change render-visible
+        // state, so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
-        self.drain_events()
+        ProfileTick {
+            banner: self.drain_events(),
+            changed,
+        }
     }
 
     fn drain_snapshot(&mut self) {

@@ -83,8 +83,8 @@ Session state:
 - Global `Ctrl+B` no longer opens this modal.
 - Classic Bonsai remains present for all users. When both relevant trees are alive, watering either unlocked Bonsai variant mirrors the care action to the other tree for existing daily chip/water compatibility. If either tree is dead, the first `w` respawns the dead tree and returns; watering happens on a later `w`.
 - Decision: neither tree freezes. Both run their life/death clocks on real calendar dates regardless of which variant is equipped. A freeze model (rebase the inactive tree's clock on re-equip plus skip its death check while inactive) was considered and deferred.
-  - Classic is always loaded, and `bonsai_state.tick()` runs unconditionally in `App::tick()`, so it keeps passive-growing in-session and its 7-dry-day death is checked live and at login.
-  - Dynamic is loaded at every login whenever the user OWNS it (`has_dynamic_bonsai()` = owns, gated in `session_bootstrap.rs`, not equip). `BonsaiV2State::new` runs `apply_elapsed_days`, which applies dry-day decay and death on real dates even when classic is the active tree. Only the in-session passive-growth `bonsai_v2_state.tick(active)` call is gated by `use_bonsai_v2()` and recent input activity; the death clock still catches up at the next login.
+  - Classic is always loaded, and `bonsai_state.tick()` runs unconditionally in `App::tick()`, so its 7-dry-day death is checked live and at login. (Passive in-session growth was removed 2026-07-23: growth comes from watering only.)
+  - Dynamic is loaded at every login whenever the user OWNS it (`has_dynamic_bonsai()` = owns, gated in `session_bootstrap.rs`, not equip). `BonsaiV2State::new` runs `apply_elapsed_days`, which applies dry-day decay and death on real dates even when classic is the active tree; the death clock still catches up at the next login. Dynamic has no in-session tick at all since passive growth was removed.
 - The watering bridge is bidirectional after Dynamic Bonsai is owned. Watering Dynamic also waters classic; watering classic waters Dynamic only after the `dynamic_bonsai` entitlement exists, so new users cannot create or care for a Dynamic tree before unlocking it.
 - Admin sessions can temporarily repeat-water Dynamic Bonsai from the modal for preview/growth testing. Extra admin Dynamic waters grant the same +200 chip test bonus when the normal daily chip reward would not run; classic Bonsai growth remains daily-gated.
 
@@ -160,8 +160,7 @@ Main state values:
 
 Growth paths:
 - Daily catch-up happens in `BonsaiV2State::new` via `apply_elapsed_days(today)`.
-- Passive growth happens in `tick(active)` only while Dynamic Bonsai is selected, recent user input keeps the session active, enough active ticks have accumulated, and vigor is high enough.
-- Watering grants vigor, reduces stress, and triggers extra growth attempts.
+- Watering grants vigor, reduces stress, and triggers extra growth attempts. There is no passive in-session growth (removed 2026-07-23).
 - Dry elapsed days increase stress, reduce vigor, and can create wild growth or deadwood.
 - Each growth event is a small wave, not a single tip: split-marked tips resolve first, then the selected tip, then a deterministic random spread of other live tips. Water/high vigor grows the broadest wave; stress can narrow it.
 
@@ -169,10 +168,6 @@ Per-day rates (`simulate_day`):
 - Dry day: `water_stress += 11` (clamp 0..120), `vigor -= 7` (floor 0).
 - Watered day: `water_stress -= 4` (floor 0), `vigor += 2` (cap 100).
 - Watering action (`water_inner`): `water_stress -= 35` (floor 0), `vigor += 18` (cap 100), plus a growth wave.
-
-Passive growth rate:
-- User input grants a short active window. Idle open sessions do not count.
-- The passive interval is `15 * 60 * 60 * 6` active ticks, so a continuously active session gets about 2-4 passive growth waves per real day.
 
 Current death model:
 - If `water_stress >= 100` and `vigor == 0`, Dynamic Bonsai marks the tree dead and weak tips become deadwood.

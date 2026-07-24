@@ -8,6 +8,13 @@ use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot}
 
 use super::svc::ArticleService;
 
+/// Outcome of one tab tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed the rendered tab (badge counts, article list).
+pub struct NewsTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct State {
     article_service: ArticleService,
     user_id: Uuid,
@@ -321,9 +328,15 @@ impl State {
         self.current_task = Some(self.article_service.process_url(self.user_id, url.trim()));
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> NewsTick {
+        // Peek before draining: anything queued may change the rendered tab
+        // (badge counts, article list), so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
-        self.drain_events()
+        NewsTick {
+            banner: self.drain_events(),
+            changed,
+        }
     }
 
     fn drain_snapshot(&mut self) {

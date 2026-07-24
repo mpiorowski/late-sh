@@ -5,9 +5,6 @@ pub mod ascii;
 #[cfg(test)]
 mod ascii_test;
 pub mod audio;
-pub mod audio_config;
-#[cfg(test)]
-mod audio_config_test;
 pub mod db;
 #[cfg(test)]
 mod db_test;
