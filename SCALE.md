@@ -1,6 +1,6 @@
 # late.sh Scale Notes
 
-Last updated: 2026-07-23 (render-cost program shipped end to end and consolidated here; RENDER_COST.md deleted. Next infra step: add a second cluster node and move everything except `service-ssh` off `server-1`)
+Last updated: 2026-07-24 (render-cost win measured in prod at ~26 mcores/session; sessions-per-node ceiling re-derived to ~260-300. Per-pod telemetry identity (`service.instance.id`) added in infra so otel series stop clobbering across replicas. Next infra step: add a second cluster node and move everything except `service-ssh` off `server-1`)
 
 This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
 
@@ -84,7 +84,14 @@ The render-cost program (see its own section below) removed both the fixed tick 
 
 The memory failure mode is also closed: the 2026-07-22 OOM (full writeup in CONTEXT.md §10.5) was frames rendered into russh's uncapped per-channel output queue for clients that had stopped reading. Shipped fix: a per-session `OutputBudget` in `late-ssh/src/ssh.rs`; over 32 MB outstanding the render loop pauses, and 30 s of sustained stall disconnects the session. Metrics: `late_ssh_render_stall_{skips,disconnects}_total`.
 
-Still open here: the new per-session cost has not been measured under real load. After the deploy, read the Grafana Rendering row (skip ratio, draws per session) plus per-session millicores, and re-derive the sessions-per-node ceiling. The old 59 mcores/session number is obsolete but nothing replaces it yet.
+Measured in prod 2026-07-24 (v0.41.0, single `service-ssh` pod, 60 live sessions):
+
+- CPU about 1591 millicores, so about **26.5 millicores/session** (down from the pre-program 59 floor; a 32h A/B against a still-draining v0.40.7 pod read 47 mcores/session for the old code on the same node at the same time).
+- Memory about 1085 MiB, so about **18 MiB/session**.
+- Render loop: about 5.3 draws/session/sec, **~20% clean-skip ratio**. Sessions sit in the `ANIM_HALF_TICK` (~7.5 fps) tier, not the 500 ms idle floor, because almost everyone keeps the right sidebar visible and the ambient eq paints there. The documented "1 render/min idle" case is real but rare in the wild.
+- Stall guard never fired (`late_ssh_render_stall_*` has no series); 0 frame drops on this pod.
+
+Re-derived ceiling: at ~26.5 mcores/session, `service-ssh` reaches about **260 sessions on the current shared node and about 300 on a dedicated 8-core node** (memory ceiling is ~450/pod, so it stays CPU-bound). Old ceiling was 100-110. The named knob if the eq reads expensive: move it to the quarter edge (~3.8 fps), which roughly doubles the ceiling again, not reintroducing audio-state gating.
 
 ### 2. `service-ssh` cannot safely scale horizontally yet
 
@@ -262,11 +269,7 @@ Plan sketch:
 
 ### 2. Verify the render-cost win in prod
 
-After the phase 2 deploy, under real load:
-
-- skip ratio and draws/session from the Grafana Rendering row
-- per-session millicores (replaces the obsolete 59 mcores/session baseline)
-- re-derive the sessions-per-node ceiling; this decides how many SSH pods the 1000-user shape actually needs
+Done 2026-07-24 (numbers in Pain Point 1): ~26.5 mcores/session, ~20% clean-skip ratio, ~5.3 draws/session/sec, stall guard never fired. Re-derived ceiling ~260-300 sessions/node, up from 100-110. This decides the 1000-user shape needs roughly 4 SSH pods, not a large fleet. Remaining watch item: re-read under a genuine 100+ concurrent surge (this reading was 60 sessions) and after the eq-to-quarter-edge knob if it ever ships.
 
 ### 3. `pg_stat_statements` tracking
 
@@ -308,6 +311,7 @@ Suggested shape:
 - Postgres: durable state
 - Audio: dedicated scalable streaming path, not one small Icecast pod on the app node
 - Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists: the Rendering row (renders, clean skips, draws/session, stall guard), `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
+- Per-pod telemetry identity (prerequisite for the above once replicas > 1): each app pod now sets `OTEL_RESOURCE_ATTRIBUTES=service.instance.id=$(POD_NAME)` (downward-API pod name) in Terraform (`infra/service-ssh.tf`, `infra/service-web.tf`). The SDK's env resource detector picks it up and the collector's `resource_to_telemetry_conversion` turns it into a `service_instance_id`/`instance` metric label. Before this, every pod exported an identical otel series (e.g. `late_ssh_sessions_active`) and they clobbered each other on scrape (the 32h A/B window showed the gauge alternating between the two pods' values). Query per pod with `... by (instance)`.
 
 The goal is not "1000 pods". The goal is "N SSH pods, each owning a shard of sessions".
 
