@@ -129,3 +129,72 @@ fn equipped_inventory_tags_show_the_slot() {
     assert_eq!(inventory_item_tag(true, Some("chest")), " [worn chest]");
     assert_eq!(inventory_item_tag(false, Some("ring")), " (ring)");
 }
+
+use super::recent_log_tail;
+use super::super::svc::{LogKind, LogLine, empty_player_view};
+
+fn line_text(line: &Line) -> String {
+    line.spans.iter().map(|span| span.content.as_ref()).collect()
+}
+
+fn log_view(entries: &[&str]) -> super::PlayerView {
+    let mut view = empty_player_view();
+    view.log = entries
+        .iter()
+        .map(|text| LogLine {
+            text: (*text).to_string(),
+            kind: LogKind::Normal,
+        })
+        .collect();
+    view
+}
+
+#[test]
+fn recent_log_reads_oldest_top_newest_bottom() {
+    // view.log is chronological (oldest first). The feed must render the same
+    // way: oldest at the top, newest resting on the bottom row, like any MUD
+    // scrollback. This is the exact regression fix/mud-log-order corrects.
+    let view = log_view(&["first", "second", "third"]);
+    // Wide enough that nothing wraps, tall enough that all three fit.
+    let rendered: Vec<String> = recent_log_tail(&view, 40, 8)
+        .iter()
+        .map(line_text)
+        .collect();
+
+    let index_of = |needle: &str| {
+        rendered
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} missing from {rendered:?}"))
+    };
+    assert!(index_of("first") < index_of("second"));
+    assert!(index_of("second") < index_of("third"));
+    assert!(
+        rendered.last().is_some_and(|line| line.contains("third")),
+        "newest event must rest on the bottom row, got {rendered:?}"
+    );
+}
+
+#[test]
+fn recent_log_trims_oldest_when_it_overflows_height() {
+    // Five events into a window that only fits two under the "Recent" header:
+    // the two newest survive, in order, and the three oldest fall off the top.
+    let view = log_view(&["e1", "e2", "e3", "e4", "e5"]);
+    let rendered: Vec<String> = recent_log_tail(&view, 40, 3)
+        .iter()
+        .map(line_text)
+        .collect();
+    let joined = rendered.join("\n");
+
+    for dropped in ["e1", "e2", "e3"] {
+        assert!(
+            !joined.contains(dropped),
+            "oldest event {dropped:?} should have been trimmed, got {rendered:?}"
+        );
+    }
+    assert!(joined.contains("e4") && joined.contains("e5"));
+    assert!(
+        rendered.last().is_some_and(|line| line.contains("e5")),
+        "newest event must rest on the bottom row, got {rendered:?}"
+    );
+}

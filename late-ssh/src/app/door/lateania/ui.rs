@@ -2533,7 +2533,11 @@ fn recent_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'
         return Vec::new();
     }
 
-    let mut events = collapsed_recent_log_lines(view, width);
+    let entries = collapsed_recent_entries(view);
+    let mut events: Vec<Line<'static>> = entries
+        .iter()
+        .flat_map(|(kind, text)| wrapped_log_line(*kind, text, width))
+        .collect();
     if events.is_empty() {
         events.push(Line::from(Span::styled(
             "  no recent events",
@@ -2541,15 +2545,26 @@ fn recent_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'
         )));
     }
 
+    // Keep the most recent events that fit, trimming the oldest off the top so
+    // the newest line rests at the bottom - a normal MUD feed reads top to
+    // bottom, oldest to newest.
     let event_h = height.saturating_sub(1);
+    let start = events.len().saturating_sub(event_h);
+    let events = events.split_off(start);
+
     let mut lines = vec![section("Recent")];
-    lines.extend(events.into_iter().take(event_h));
+    lines.extend(events);
     lines.truncate(height);
     lines
 }
 
-fn collapsed_recent_log_lines(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+/// Recent non-room log entries, consecutive duplicates collapsed to "text (xN)",
+/// returned oldest-first. Collapsing walks the log newest-first so a run of
+/// repeats folds into a single entry; the list is then flipped back into
+/// chronological order for a top-to-bottom MUD feed. Wrapping is left to the
+/// caller so multi-line entries never get their wrapped rows reversed.
+fn collapsed_recent_entries(view: &PlayerView) -> Vec<(LogKind, String)> {
+    let mut entries = Vec::new();
     let mut iter = view
         .log
         .iter()
@@ -2569,9 +2584,10 @@ fn collapsed_recent_log_lines(view: &PlayerView, width: usize) -> Vec<Line<'stat
         } else {
             line.text.clone()
         };
-        lines.extend(wrapped_log_line(line.kind, &text, width));
+        entries.push((line.kind, text));
     }
-    lines
+    entries.reverse();
+    entries
 }
 
 fn truncate_lines(mut lines: Vec<Line<'static>>, height: u16) -> Vec<Line<'static>> {
