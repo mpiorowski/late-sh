@@ -5,16 +5,18 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::chips::INITIAL_CHIP_BALANCE;
+use super::language;
 use super::user::{
     RightSidebarComponentSetting, RightSidebarMode, RoomListMode, User, extract_bio,
     extract_birthday, extract_country, extract_enable_background_color, extract_favorite_room_ids,
     extract_ide, extract_keep_composer_focused, extract_land_on_home, extract_langs,
-    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_os, extract_right_sidebar_components, extract_right_sidebar_mode,
-    extract_room_list_mode, extract_show_flag_fallback, extract_show_pet_strip,
-    extract_show_right_sidebar, extract_show_room_list_sidebar, extract_start_with_music_muted,
-    extract_terminal, extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
-    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
+    extract_language, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
+    extract_notify_kinds, extract_os, extract_right_sidebar_components,
+    extract_right_sidebar_mode, extract_room_list_mode, extract_show_flag_fallback,
+    extract_show_pet_strip, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
+    extract_theme_id, extract_timezone, normalize_right_sidebar_components,
+    normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -34,6 +36,9 @@ pub struct Profile {
     /// One of `"both"`, `"osc777"`, `"osc9"`. `None` falls back to `"both"`.
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
+    /// UI language id (`"en"`, `"zh-hans"`), normalized on write. `None`
+    /// means unset; renderers fall back to the default language.
+    pub language: Option<String>,
     pub enable_background_color: bool,
     pub text_brightness_adjustment: i32,
     pub show_right_sidebar: bool,
@@ -87,6 +92,7 @@ impl Default for Profile {
             notify_cooldown_mins: 0,
             notify_format: None,
             theme_id: None,
+            language: None,
             enable_background_color: true,
             text_brightness_adjustment: 0,
             show_right_sidebar: true,
@@ -120,6 +126,7 @@ pub struct ProfileParams {
     pub notify_cooldown_mins: i32,
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
+    pub language: Option<String>,
     pub enable_background_color: bool,
     pub text_brightness_adjustment: i32,
     pub show_right_sidebar: bool,
@@ -249,6 +256,14 @@ impl Profile {
             .map(ToString::to_string)
             .or_else(|| extract_theme_id(&current_user.settings))
             .unwrap_or_else(|| "contrast".to_string());
+        let language = params
+            .language
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| language::normalize_id(value).to_string())
+            .or_else(|| extract_language(&current_user.settings))
+            .unwrap_or_else(|| language::DEFAULT_ID.to_string());
         let notify_format = params
             .notify_format
             .as_deref()
@@ -288,10 +303,11 @@ impl Profile {
                          'start_with_music_muted', $24::bool,
                          'show_flag_fallback', $25::bool,
                          'land_on_home', $26::bool,
-                         'show_pet_strip', $27::bool
+                         'show_pet_strip', $27::bool,
+                         'language', $28::text
                      ),
                      updated = current_timestamp
-                 WHERE id = $28
+                 WHERE id = $29
                  RETURNING *",
                 &[
                     &params.username,
@@ -321,6 +337,7 @@ impl Profile {
                     &params.show_flag_fallback,
                     &params.land_on_home,
                     &params.show_pet_strip,
+                    &language,
                     &user_id,
                 ],
             )
@@ -345,6 +362,7 @@ impl Profile {
             notify_cooldown_mins: extract_notify_cooldown_mins(&user.settings),
             notify_format: extract_notify_format(&user.settings),
             theme_id: extract_theme_id(&user.settings),
+            language: extract_language(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
             text_brightness_adjustment: extract_text_brightness_adjustment(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),

@@ -474,6 +474,7 @@ async fn profile_username_change_projects_to_live_irc_session() {
             notify_cooldown_mins: 0,
             notify_format: None,
             theme_id: None,
+            language: None,
             enable_background_color: false,
             text_brightness_adjustment: 0,
             show_right_sidebar: true,

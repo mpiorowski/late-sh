@@ -3646,6 +3646,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-rustls",
  "tokio-util",
+ "toml",
  "tower-http",
  "tracing",
  "tracing-opentelemetry",

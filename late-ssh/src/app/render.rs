@@ -19,6 +19,7 @@ use super::{
     audio::client_state::ClientAudioState,
     bonsai, chat,
     common::{
+        i18n,
         primitives::{Banner, BannerKind, Screen, draw_banner},
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
@@ -310,6 +311,18 @@ impl App {
             self.profile_state.theme_id().to_string()
         };
         theme::set_current_by_id(&active_theme_id);
+        // Set the session's render language the same way: preview the
+        // settings-modal draft live while open, else the saved profile value.
+        let active_language_id = if self.show_settings {
+            self.settings_modal_state
+                .draft()
+                .language
+                .clone()
+                .unwrap_or_else(|| self.profile_state.language_id().to_string())
+        } else {
+            self.profile_state.language_id().to_string()
+        };
+        i18n::set_current_by_id(&active_language_id);
         let text_brightness_adjustment = if self.show_settings {
             self.settings_modal_state.draft().text_brightness_adjustment
         } else {

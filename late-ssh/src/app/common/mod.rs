@@ -1,4 +1,5 @@
 pub mod composer;
+pub mod i18n;
 pub mod markdown;
 pub(crate) mod marquee;
 pub(crate) mod mentions;
@@ -15,6 +16,9 @@ pub mod username_effect;
 
 #[cfg(test)]
 mod composer_test;
+
+#[cfg(test)]
+mod i18n_test;
 
 #[cfg(test)]
 mod markdown_test;

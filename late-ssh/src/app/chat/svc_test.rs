@@ -725,6 +725,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             notify_cooldown_mins: 0,
             notify_format: None,
             theme_id: Some("late".to_string()),
+            language: None,
             enable_background_color: false,
             text_brightness_adjustment: 0,
             show_right_sidebar: true,

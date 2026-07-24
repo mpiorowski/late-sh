@@ -4,7 +4,7 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use super::svc::{ProfileEvent, ProfileService, ProfileSnapshot};
-use crate::app::common::{primitives::Banner, theme};
+use crate::app::common::{i18n, primitives::Banner, theme};
 
 /// Outcome of one profile tick: the banner to surface plus whether a drained
 /// snapshot or event may have changed render-visible state (theme, sidebar
@@ -61,6 +61,10 @@ impl ProfileState {
             .theme_id
             .as_deref()
             .unwrap_or_else(|| theme::normalize_id(""))
+    }
+
+    pub fn language_id(&self) -> &str {
+        self.profile.language.as_deref().unwrap_or(i18n::DEFAULT_ID)
     }
 
     pub fn toggle_favorite_room(&mut self, room_id: Uuid) -> bool {
@@ -203,6 +207,13 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
                 .theme_id
                 .clone()
                 .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
+        ),
+        language: Some(
+            profile
+                .language
+                .as_deref()
+                .unwrap_or(i18n::DEFAULT_ID)
+                .to_string(),
         ),
         enable_background_color: profile.enable_background_color,
         text_brightness_adjustment: profile.text_brightness_adjustment,

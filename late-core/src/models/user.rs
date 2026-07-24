@@ -306,6 +306,7 @@ pub fn normalize_right_sidebar_components(
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
+const LANGUAGE_KEY: &str = "language";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
 const ICECAST_STREAM_KEY: &str = "icecast_stream";
 const RADIO_STATION_KEY: &str = "radio_station";
@@ -1079,6 +1080,18 @@ pub fn extract_theme_id(settings: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+/// Stored UI language id (e.g. `"en"`, `"zh-hans"`), normalized via
+/// [`crate::models::language::normalize_id`] so aliases like `"zh-CN"` collapse
+/// to `"zh-hans"`. `None` only when the setting is absent or empty.
+pub fn extract_language(settings: &Value) -> Option<String> {
+    settings
+        .get(LANGUAGE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| super::language::normalize_id(value).to_string())
 }
 
 pub fn extract_audio_source(settings: &Value) -> AudioSource {

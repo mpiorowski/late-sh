@@ -1,0 +1,39 @@
+# English - the source language and always-present fallback.
+# Every key passed to tr()/trf() must exist here; other locales fall back to
+# this file for missing keys. Add sections as `[section]` and keys as
+# `name = "value"`; nested sections become dotted keys (`section.name`).
+# Placeholders are written `{name}` and filled by trf("key", &[("name", v)]).
+
+[settings]
+username = "Username"
+country = "Country"
+timezone = "Timezone"
+birthday = "Birthday"
+theme = "Theme"
+language = "Language"
+ide = "IDE"
+terminal = "Terminal"
+os = "OS"
+# Probe key used by i18n unit tests to verify en-fallback for missing zh keys.
+only_in_english = "English-only value"
+
+[settings.identity]
+heading = "Identity"
+
+[settings.late_fetch]
+heading = "late.fetch"
+
+[settings.appearance]
+heading = "Appearance"
+
+[settings.notifications]
+heading = "Notifications"
+dms = "DMs"
+mentions = "Mentions"
+game_events = "Game events"
+bell = "Bell"
+cooldown = "Cooldown"
+format = "Format"
+
+[lobby]
+chips = "{n} chips"

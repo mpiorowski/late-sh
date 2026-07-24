@@ -13,7 +13,7 @@ use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use crate::app::common::theme;
+use crate::app::common::{i18n, theme};
 use crate::app::profile::svc::{IrcTokenStatus, ProfileEvent, ProfileService};
 use crate::app::{
     chat::feeds::svc::{FeedEvent, FeedService, FeedSnapshot},
@@ -48,6 +48,7 @@ pub(crate) enum Row {
     Os,
     Langs,
     Theme,
+    Language,
     Country,
     Timezone,
     DirectMessages,
@@ -59,12 +60,13 @@ pub(crate) enum Row {
 }
 
 impl Row {
-    pub(crate) const ALL: [Row; 15] = [
+    pub(crate) const ALL: [Row; 16] = [
         Row::Username,
         Row::Country,
         Row::Timezone,
         Row::Birthday,
         Row::Theme,
+        Row::Language,
         Row::Ide,
         Row::Terminal,
         Row::Os,
@@ -1861,6 +1863,11 @@ impl SettingsModalState {
                 self.sync_theme_index_to_draft();
                 true
             }
+            Row::Language => {
+                let current = self.draft.language.as_deref().unwrap_or(i18n::DEFAULT_ID);
+                self.draft.language = Some(i18n::cycle_id(current, forward).to_string());
+                true
+            }
             Row::DirectMessages => {
                 toggle_kind(&mut self.draft.notify_kinds, "dms");
                 true
@@ -1917,6 +1924,13 @@ impl SettingsModalState {
                         .theme_id
                         .clone()
                         .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
+                ),
+                language: Some(
+                    self.draft
+                        .language
+                        .as_deref()
+                        .unwrap_or(i18n::DEFAULT_ID)
+                        .to_string(),
                 ),
                 enable_background_color: self.draft.enable_background_color,
                 text_brightness_adjustment: self.draft.text_brightness_adjustment,

@@ -1,0 +1,36 @@
+# 简体中文 (Simplified Chinese). Missing keys fall back to English (en.toml).
+# 翻译约定:保持简洁;占位符用 {name};标点用中文全角(。,!?:)。
+# 仅翻译 TUI 外壳文本;游戏内叙事文本(lateania/dcss/usurper 等)不翻译。
+# settings.only_in_english 故意留空,用于验证回退机制。
+
+[settings]
+username = "用户名"
+country = "国家/地区"
+timezone = "时区"
+birthday = "生日"
+theme = "主题"
+language = "语言"
+ide = "IDE"
+terminal = "终端"
+os = "操作系统"
+
+[settings.identity]
+heading = "身份"
+
+[settings.late_fetch]
+heading = "late.fetch"
+
+[settings.appearance]
+heading = "外观"
+
+[settings.notifications]
+heading = "通知"
+dms = "私信"
+mentions = "提及"
+game_events = "游戏事件"
+bell = "提示铃"
+cooldown = "冷却"
+format = "格式"
+
+[lobby]
+chips = "{n} 筹码"
