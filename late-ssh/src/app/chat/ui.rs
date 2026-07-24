@@ -3824,6 +3824,85 @@ fn dm_display_label(
 /// Center pane for the merged Home/Chat shell. The room rail is rendered by
 /// the outer shell, so this draws only the selected room/feed content plus the
 /// relevant composer or hint row.
+/// Pin a room's info (name + "about") to the top of the message area and return
+/// the area left for messages. Rooms with no title or about (the lounge, DMs,
+/// game rooms) are left untouched. A room with rules gets a "· /rules" hint.
+fn draw_room_info_header(frame: &mut Frame, area: Rect, room: &ChatRoom) -> Rect {
+    let clean = |s: &Option<String>| {
+        s.as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    };
+    let title = clean(&room.title);
+    let about = clean(&room.about);
+    let has_rules = clean(&room.rules).is_some();
+
+    if title.is_none() && about.is_none() {
+        return area;
+    }
+    if area.height < 3 {
+        return area;
+    }
+
+    let width = area.width.max(1) as usize;
+    let name = title
+        .or_else(|| room.slug.as_ref().map(|s| format!("#{s}")))
+        .unwrap_or_default();
+
+    let mut name_spans = vec![Span::styled(
+        truncate_to_width(&name, width),
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    )];
+    if has_rules {
+        let hint = "  · /rules";
+        if name.chars().count() + hint.chars().count() <= width {
+            name_spans.push(Span::styled(hint, Style::default().fg(theme::TEXT_FAINT())));
+        }
+    }
+
+    let mut lines: Vec<Line> = vec![Line::from(name_spans)];
+    if let Some(about) = about {
+        lines.push(Line::from(Span::styled(
+            truncate_to_width(&about, width),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        "─".repeat(width),
+        Style::default().fg(theme::BORDER_DIM()),
+    )));
+
+    let header_height = (lines.len() as u16).min(area.height.saturating_sub(1));
+    let header_rect = Rect {
+        height: header_height,
+        ..area
+    };
+    frame.render_widget(Paragraph::new(lines), header_rect);
+
+    Rect {
+        y: area.y + header_height,
+        height: area.height.saturating_sub(header_height),
+        ..area
+    }
+}
+
+/// Clip a string to at most `width` display columns (char-based approximation).
+fn truncate_to_width(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let take = width.saturating_sub(1);
+    let mut out: String = text.chars().take(take).collect();
+    out.push('…');
+    out
+}
+
 pub fn draw_chat_center(
     frame: &mut Frame,
     area: Rect,
@@ -3914,6 +3993,14 @@ fn draw_selected_content(
                 height: messages_area.height.saturating_sub(strip_height),
                 ..messages_area
             }
+        } else {
+            messages_area
+        };
+
+        // A user-created room shows its name and "about" pinned at the very top;
+        // rooms without info (the lounge, DMs) render unchanged.
+        let messages_area = if let Some((room, _)) = selected_room {
+            draw_room_info_header(frame, messages_area, room)
         } else {
             messages_area
         };

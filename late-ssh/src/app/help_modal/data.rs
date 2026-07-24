@@ -334,6 +334,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
         "  /private #room     create a private room",
+        "  /roominfo          edit this room's name, about & rules (owner)",
+        "  /rules             show this room's rules",
         "  /invite @user      add a user to the current room",
         "  /leave             leave the current room",
         "  /dm @user          open a direct message",

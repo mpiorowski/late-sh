@@ -23,8 +23,8 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
     },
-    dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_search_modal,
-    settings_modal, sheet_modal,
+    dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_info_modal,
+    room_search_modal, settings_modal, sheet_modal,
     state::App,
 };
 use crate::app::door::game::DoorGame;
@@ -223,6 +223,8 @@ struct DrawContext<'a> {
     pair_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    room_info_modal_open: bool,
+    room_info_modal_state: &'a room_info_modal::state::RoomInfoModalState,
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
@@ -1002,6 +1004,8 @@ impl App {
                         pair_url: &self.connect_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
+                        room_info_modal_open: self.room_info_modal_state.is_open(),
+                        room_info_modal_state: &self.room_info_modal_state,
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
@@ -1581,6 +1585,10 @@ impl App {
                 ctx.chat_state,
                 ctx.user_id,
             );
+        }
+
+        if ctx.room_info_modal_open {
+            room_info_modal::ui::draw(frame, inner, ctx.room_info_modal_state);
         }
 
         if ctx.booth_modal_open {

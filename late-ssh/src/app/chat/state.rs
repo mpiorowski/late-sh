@@ -167,6 +167,23 @@ impl PendingClipboardImageUpload {
     }
 }
 
+/// A pending request to open the room-info form, carried until the app-level
+/// input loop opens the modal. `Create` comes from `/public`/`/private`, `Edit`
+/// from `/roominfo` on a room the user owns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RoomInfoRequest {
+    Create {
+        is_private: bool,
+        slug: String,
+    },
+    Edit {
+        room_id: Uuid,
+        title: Option<String>,
+        about: Option<String>,
+        rules: Option<String>,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
@@ -510,6 +527,7 @@ pub struct ChatState {
     /// `App::notify_outbox`.
     notifier: Notifier,
     requested_help_topic: Option<HelpTopic>,
+    requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
@@ -698,6 +716,7 @@ impl ChatState {
             favorite_room_ids: Vec::new(),
             notifier,
             requested_help_topic: None,
+            requested_room_info_modal: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
@@ -969,6 +988,10 @@ impl ChatState {
 
     pub fn take_requested_settings_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_settings_modal)
+    }
+
+    pub fn take_requested_room_info_modal(&mut self) -> Option<RoomInfoRequest> {
+        self.requested_room_info_modal.take()
     }
 
     pub fn take_requested_mod_modal(&mut self) -> bool {
@@ -2390,9 +2413,11 @@ impl ChatState {
                 return Some(user_created_channel_name_length_error());
             }
             self.clear_composer_after_submit();
-            self.service
-                .open_public_room_task(self.user_id, room.to_string());
-            return Some(Banner::success(&format!("Opening public #{room}...")));
+            self.requested_room_info_modal = Some(RoomInfoRequest::Create {
+                is_private: false,
+                slug: room.to_string(),
+            });
+            return None;
         }
 
         if let Some(room) = parse_room_command(&body, "/private") {
@@ -2400,9 +2425,50 @@ impl ChatState {
                 return Some(user_created_channel_name_length_error());
             }
             self.clear_composer_after_submit();
-            self.service
-                .create_private_room_task(self.user_id, room.to_string());
-            return Some(Banner::success(&format!("Creating private #{room}...")));
+            self.requested_room_info_modal = Some(RoomInfoRequest::Create {
+                is_private: true,
+                slug: room.to_string(),
+            });
+            return None;
+        }
+
+        if is_room_info_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.selected_room_id else {
+                return Some(Banner::error("Select a room first"));
+            };
+            let Some(room) = self.room_by_id(room_id) else {
+                return Some(Banner::error("No room selected"));
+            };
+            if !is_chat_list_room(room) {
+                return Some(Banner::error("This room's info can't be edited"));
+            }
+            if let Some(owner) = room.created_by
+                && owner != self.user_id
+            {
+                return Some(Banner::error("Only the room's owner can edit its info"));
+            }
+            self.requested_room_info_modal = Some(RoomInfoRequest::Edit {
+                room_id,
+                title: room.title.clone(),
+                about: room.about.clone(),
+                rules: room.rules.clone(),
+            });
+            return None;
+        }
+
+        if body.trim() == "/rules" {
+            self.clear_composer_after_submit();
+            let rules = self
+                .selected_room_id
+                .and_then(|room_id| self.room_by_id(room_id))
+                .and_then(|room| room.rules.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            return Some(match rules {
+                Some(rules) => Banner::info(&format!("Rules: {rules}")),
+                None => Banner::info("No rules set for this room"),
+            });
         }
 
         if let Some(target) = parse_user_command(&body, "/invite") {
@@ -5094,6 +5160,11 @@ fn format_member_overlay_lines(
 /// Parse `/leave` from the composer text.
 fn parse_leave_command(input: &str) -> bool {
     input.trim() == "/leave"
+}
+
+/// `/roominfo` (or `/roomedit`) opens the room-info form for the current room.
+fn is_room_info_command(input: &str) -> bool {
+    matches!(input.trim(), "/roominfo" | "/roomedit")
 }
 
 /// Parse `/public <slug>` or `/private <slug>` style commands.

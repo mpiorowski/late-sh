@@ -19,7 +19,20 @@ crate::model! {
         pub language_code: Option<String>,
         pub dm_user_a: Option<Uuid>,
         pub dm_user_b: Option<Uuid>,
+        // Friendly display name for a user-created room; falls back to the slug.
+        pub title: Option<String>,
+        // Short "what this room is about" blurb shown in the room header.
+        pub about: Option<String>,
+        // The room's general rules, shown on request.
+        pub rules: Option<String>,
+        // Who opened a user-created room; only they (or a mod) may edit its info.
+        pub created_by: Option<Uuid>,
     }
+}
+
+/// Trim a room-info field and treat an empty result as "unset" (NULL).
+fn clean_info(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
 }
 
 impl ChatRoom {
@@ -238,6 +251,47 @@ impl ChatRoom {
             Some(row) => Ok(Self::from(row)),
             None => bail!("private room #{slug} already exists"),
         }
+    }
+
+    /// Record who opened a user-created room, but only if it has no creator yet.
+    /// Returns true when this call claimed it. Idempotent: a second caller (e.g.
+    /// someone re-joining a `/public` room) never steals ownership.
+    pub async fn claim_creator(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<bool> {
+        let updated = client
+            .execute(
+                "UPDATE chat_rooms SET created_by = $2
+                 WHERE id = $1 AND created_by IS NULL",
+                &[&room_id, &user_id],
+            )
+            .await?;
+        Ok(updated > 0)
+    }
+
+    /// Set the room's display name, "about" blurb, and rules. Empty strings are
+    /// stored as NULL so a cleared field reads as "unset" rather than blank.
+    /// Ownership is enforced by the caller (service layer).
+    pub async fn set_info(
+        client: &Client,
+        room_id: Uuid,
+        title: Option<&str>,
+        about: Option<&str>,
+        rules: Option<&str>,
+    ) -> Result<Self> {
+        let row = client
+            .query_one(
+                "UPDATE chat_rooms
+                    SET title = $2, about = $3, rules = $4, updated = current_timestamp
+                  WHERE id = $1
+                 RETURNING *",
+                &[
+                    &room_id,
+                    &clean_info(title),
+                    &clean_info(about),
+                    &clean_info(rules),
+                ],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
     pub async fn get_or_create_room(client: &Client, slug: &str) -> Result<Self> {

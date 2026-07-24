@@ -3506,6 +3506,144 @@ impl ChatService {
         Ok(room.id)
     }
 
+    /// Create (or open) a room and record its name/about/rules in one go, from
+    /// the room-info form. Reuses the plain create paths so voice channels and
+    /// membership are set up identically, then claims creator and stores info.
+    pub fn create_room_with_info_task(
+        &self,
+        user_id: Uuid,
+        is_private: bool,
+        slug: String,
+        title: String,
+        about: Option<String>,
+        rules: Option<String>,
+    ) {
+        let service = self.clone();
+        let span =
+            info_span!("chat.create_room_with_info", user_id = %user_id, slug = %slug, is_private);
+        tokio::spawn(
+            async move {
+                let result = service
+                    .create_room_with_info(
+                        user_id,
+                        is_private,
+                        &slug,
+                        &title,
+                        about.as_deref(),
+                        rules.as_deref(),
+                    )
+                    .await;
+                match result {
+                    Ok(room_id) => {
+                        let evt = if is_private {
+                            ChatEvent::RoomCreated {
+                                user_id,
+                                room_id,
+                                slug,
+                            }
+                        } else {
+                            ChatEvent::RoomJoined {
+                                user_id,
+                                room_id,
+                                slug,
+                            }
+                        };
+                        let _ = service.evt_tx.send(evt);
+                    }
+                    Err(e) => {
+                        let evt = if is_private {
+                            ChatEvent::RoomCreateFailed {
+                                user_id,
+                                message: e.to_string(),
+                            }
+                        } else {
+                            ChatEvent::RoomFailed {
+                                user_id,
+                                message: e.to_string(),
+                            }
+                        };
+                        let _ = service.evt_tx.send(evt);
+                    }
+                }
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn create_room_with_info(
+        &self,
+        user_id: Uuid,
+        is_private: bool,
+        slug: &str,
+        title: &str,
+        about: Option<&str>,
+        rules: Option<&str>,
+    ) -> Result<Uuid> {
+        let room_id = if is_private {
+            self.create_private_room(user_id, slug).await?
+        } else {
+            self.open_public_room(user_id, slug).await?
+        };
+        let client = self.db.get().await?;
+        ChatRoom::claim_creator(&client, room_id, user_id).await?;
+        ChatRoom::set_info(&client, room_id, Some(title), about, rules).await?;
+        Ok(room_id)
+    }
+
+    /// Update a room's info from the `/roominfo` edit form. Only the room's
+    /// creator may edit; a room with no recorded creator is claimed by the
+    /// first editor.
+    pub fn set_room_info_task(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        title: String,
+        about: Option<String>,
+        rules: Option<String>,
+    ) {
+        let service = self.clone();
+        let span = info_span!("chat.set_room_info", user_id = %user_id, room_id = %room_id);
+        tokio::spawn(
+            async move {
+                if let Err(e) = service
+                    .set_room_info(user_id, room_id, &title, about.as_deref(), rules.as_deref())
+                    .await
+                {
+                    let _ = service.evt_tx.send(ChatEvent::RoomFailed {
+                        user_id,
+                        message: e.to_string(),
+                    });
+                }
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn set_room_info(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        title: &str,
+        about: Option<&str>,
+        rules: Option<&str>,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let room = ChatRoom::get(&client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
+        match room.created_by {
+            Some(owner) if owner != user_id => {
+                anyhow::bail!("Only the room's owner can edit its info");
+            }
+            None => {
+                ChatRoom::claim_creator(&client, room_id, user_id).await?;
+            }
+            _ => {}
+        }
+        ChatRoom::set_info(&client, room_id, Some(title), about, rules).await?;
+        Ok(())
+    }
+
     pub fn leave_room_task(&self, user_id: Uuid, room_id: Uuid, slug: String) {
         let service = self.clone();
         let span = info_span!("chat.leave_room_task", user_id = %user_id, slug = %slug);
