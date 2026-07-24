@@ -164,7 +164,12 @@ async fn ensure_system_user(db: &Db, username_directory: &UsernameDirectory) -> 
     let user =
         if let Some(existing) = User::find_by_fingerprint(&client, SYSTEM_FINGERPRINT).await? {
             User::update_settings(&client, existing.id, &settings).await?;
-            User::ensure_ssh_key(&client, existing.id, SYSTEM_FINGERPRINT).await?;
+            late_core::models::user_ssh_key::UserSshKey::ensure(
+                &client,
+                existing.id,
+                SYSTEM_FINGERPRINT,
+            )
+            .await?;
             existing
         } else {
             let created = User::create(
@@ -176,7 +181,12 @@ async fn ensure_system_user(db: &Db, username_directory: &UsernameDirectory) -> 
                 },
             )
             .await?;
-            User::ensure_ssh_key(&client, created.id, SYSTEM_FINGERPRINT).await?;
+            late_core::models::user_ssh_key::UserSshKey::ensure(
+                &client,
+                created.id,
+                SYSTEM_FINGERPRINT,
+            )
+            .await?;
             created
         };
 

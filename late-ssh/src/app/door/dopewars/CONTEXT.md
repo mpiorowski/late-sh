@@ -133,7 +133,7 @@ Input capture contract (client side):
 - `LATE_DOPEWARS_SECRET` (required), `LATE_DOPEWARS_BIN` (default `/usr/games/dopewars`), `LATE_DOPEWARS_SCORE_FILE` (default `/var/lib/late-dopewars/dopewars.sco`, the one shared high-score file on the PVC), `LATE_DOPEWARS_LISTEN_ADDR` (default `0.0.0.0`), `LATE_DOPEWARS_PORT` (default `2324`), `LATE_DOPEWARS_IDLE_TIMEOUT`.
 
 ### Binary sourcing — **built from verified upstream source, dopewars 1.6.2**
-- Compiled in the Dockerfile `dopewars-build` stage (terminal-only: `--disable-gui-client --disable-gui-server --enable-curses-client`). The stage downloads the pinned 1.6.2 SourceForge tarball, verifies SHA-256 (`sha256sum -c`, fail-closed), builds, and copies the binary to `/dopewars`. Version/URL/checksum are `ARG`s.
+- Compiled in the `dopewars-build` stage (`docker/doors/dopewars.Dockerfile`, published as the ghcr `door-dopewars` image the root Dockerfile pins) (terminal-only: `--disable-gui-client --disable-gui-server --enable-curses-client`). The stage downloads the pinned 1.6.2 SourceForge tarball, verifies SHA-256 (`sha256sum -c`, fail-closed), builds, and copies the binary to `/dopewars`. Version/URL/checksum are `ARG`s.
 - **Build quirk (`make LIBS="-lncursesw"`):** dopewars' release Makefile drops `$(CURSES_LIBS)` from `dopewars_LDADD` when the GTK client is disabled, so the link fails with undefined `initscr`/`newterm`/… The curses lib is injected via the trailing `$(LIBS)` on the link line. Keep this on any version bump.
 - The binary is **self-contained** (drug/location data compiled in) and **not setgid** (so the `-f` is honored). Runtime deps: `libglib2.0-0` + `libncursesw6` (+ `libcurl4`, pulled in by the optional metaserver client).
 
@@ -147,7 +147,7 @@ Input capture contract (client side):
 - `infra/secrets.tf`: `dopewars-identity-secret` (random 64-char), injected into **both** service-ssh and late-dopewars so they derive the same key.
 - `infra/service-ssh.tf` now only injects the client env (`LATE_DOPEWARS_HOST/PORT/SECRET`), not the binary path.
 - `replicas` must stay 1 (one RWO volume holds the shared score file; assumes the single-node `local-path` cluster).
-- CI: `.github/workflows/deploy_dopewars.yml` builds the `runtime-dopewars` image and applies (the bootstrap path). `deploy.yml`/`deploy_web.yml`/`deploy_infra.yml` each read the live `late-dopewars` image tag (plain `kubectl get`, no fallback) and pass it through `terraform.yml`'s required `dopewars_image_tag`. `dopewars.yml` build-validates the `dopewars-build` + `runtime-dopewars` stages. **First rollout is `deploy_dopewars.yml`** (it builds the image); a normal deploy first would fail the image lookup. License/source obligations tracked in `NOTICE` (GPLv2).
+- CI: `.github/workflows/deploy_dopewars.yml` builds the `runtime-dopewars` image and applies (the bootstrap path). `deploy.yml`/`deploy_web.yml`/`deploy_infra.yml` each read the live `late-dopewars` image tag (plain `kubectl get`, no fallback) and pass it through `terraform.yml`'s required `dopewars_image_tag`. `dopewars.yml` build-validates `docker/doors/dopewars.Dockerfile` and publishes the pinned `door-dopewars` image on main pushes. **First rollout is `deploy_dopewars.yml`** (it builds the image); a normal deploy first would fail the image lookup. License/source obligations tracked in `NOTICE` (GPLv2).
 
 ---
 

@@ -16,6 +16,7 @@ pub struct HubView {
     pub rebels_enabled: bool,
     pub nethack_enabled: bool,
     pub dcss_enabled: bool,
+    pub brogue_enabled: bool,
     pub usurper_enabled: bool,
     pub dopewars_enabled: bool,
     /// Players currently in the Lateania world, shown on its landing card.
@@ -65,6 +66,9 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
         }
         HubGame::Dcss => {
             crate::app::door::dcss::render::draw_landing(frame, layout[3], view.dcss_enabled);
+        }
+        HubGame::Brogue => {
+            crate::app::door::brogue::render::draw_landing(frame, layout[3], view.brogue_enabled);
         }
         HubGame::Usurper => {
             crate::app::door::usurper::render::draw_landing(frame, layout[3], view.usurper_enabled);

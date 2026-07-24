@@ -176,6 +176,30 @@ resource "kubernetes_secret_v1" "dcss_identity_secret" {
 }
 
 # =============================================================================
+# Brogue Door Identity Seed
+# =============================================================================
+# Shared secret authorizing late-ssh -> late-brogue. The same value is injected
+# into BOTH the service-ssh client (LATE_BROGUE_SECRET) and the late-brogue
+# host pod, which each derive the same ed25519 key from it (see late-brogue).
+
+resource "random_password" "brogue_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "brogue_identity_secret" {
+  metadata {
+    name = "brogue-identity-secret"
+  }
+
+  data = {
+    secret = random_password.brogue_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Usurper Door Identity Seed
 # =============================================================================
 # Shared secret authorizing late-ssh -> late-usurper. The same value is

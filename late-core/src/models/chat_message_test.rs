@@ -1,7 +1,7 @@
 use crate::{
     models::{
         chat_message::{ChatMessage, ChatMessageParams, escape_like_pattern},
-        chat_message_reaction::ChatMessageReaction,
+        chat_message_reaction::{ChatMessageReaction, ChatMessageReactionAction},
         chat_room::ChatRoom,
         user::{User, UserParams},
     },
@@ -166,19 +166,47 @@ async fn chat_message_reactions_toggle_and_summarize() {
     .await
     .unwrap();
 
-    ChatMessageReaction::toggle(&client, message.id, author.id, "👍")
+    let author_react = ChatMessageReaction::toggle(&client, message.id, author.id, "👍")
         .await
         .unwrap();
-    ChatMessageReaction::toggle(&client, message.id, viewer.id, "😂")
+    assert_eq!(author_react.action, ChatMessageReactionAction::React);
+    assert_eq!(author_react.previous_icon, None);
+    let viewer_react = ChatMessageReaction::toggle(&client, message.id, viewer.id, "😂")
         .await
         .unwrap();
-    ChatMessageReaction::toggle(&client, message.id, viewer.id, "😂")
-        .await
-        .unwrap();
+    assert_eq!(viewer_react.action, ChatMessageReactionAction::React);
     let kaomoji = "(╯`Д´)╯︵ ┻━┻";
-    ChatMessageReaction::toggle(&client, message.id, viewer.id, kaomoji)
+    let viewer_replace = ChatMessageReaction::toggle(&client, message.id, viewer.id, kaomoji)
         .await
         .unwrap();
+    assert_eq!(viewer_replace.action, ChatMessageReactionAction::Replace);
+    assert_eq!(viewer_replace.previous_icon.as_deref(), Some("😂"));
+    let viewer_unreact = ChatMessageReaction::toggle(&client, message.id, viewer.id, kaomoji)
+        .await
+        .unwrap();
+    assert_eq!(viewer_unreact.action, ChatMessageReactionAction::Unreact);
+    assert_eq!(viewer_unreact.previous_icon.as_deref(), Some(kaomoji));
+    let viewer_react = ChatMessageReaction::toggle(&client, message.id, viewer.id, kaomoji)
+        .await
+        .unwrap();
+    assert_eq!(viewer_react.action, ChatMessageReactionAction::React);
+    assert_eq!(
+        ChatMessageReaction::unreact_matching(&client, message.id, viewer.id, "👍")
+            .await
+            .unwrap(),
+        None
+    );
+    let viewer_unreact =
+        ChatMessageReaction::unreact_matching(&client, message.id, viewer.id, kaomoji)
+            .await
+            .unwrap()
+            .expect("matching unreact should remove reaction");
+    assert_eq!(viewer_unreact.action, ChatMessageReactionAction::Unreact);
+    assert_eq!(viewer_unreact.icon, kaomoji);
+    let viewer_react = ChatMessageReaction::toggle(&client, message.id, viewer.id, kaomoji)
+        .await
+        .unwrap();
+    assert_eq!(viewer_react.action, ChatMessageReactionAction::React);
 
     let summaries = ChatMessageReaction::list_summaries_for_messages(&client, &[message.id])
         .await

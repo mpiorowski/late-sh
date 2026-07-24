@@ -39,6 +39,7 @@ fn spawn_and_standing_spots_are_walkable() {
     for &(x, y) in DOG_WAYPOINTS {
         assert!(walkable(x, y), "dog waypoint ({x}, {y}) is blocked");
     }
+    assert!(walkable(BOT_SPOT.0, BOT_SPOT.1), "bot spot is blocked");
 }
 
 #[test]

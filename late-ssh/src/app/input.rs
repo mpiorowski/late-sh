@@ -4,6 +4,8 @@ use super::{
     room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
 };
+use late_core::models::user::{RightSidebarMode, RoomListMode};
+
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
@@ -1460,6 +1462,18 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
                 state.connect();
             }
         }
+        HubGame::Brogue => {
+            if !app.brogue_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Brogue is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Brogue);
+            if let Some(state) = app.brogue_state.as_mut() {
+                state.connect();
+            }
+        }
         HubGame::Usurper => {
             if !app.usurper_enabled {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
@@ -1567,6 +1581,28 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if let Some(b) = launcher_key_byte(event) {
             app.enter_dcss();
             if let Some(state) = app.dcss_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Brogue {
+        // Same as DCSS above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .brogue_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_brogue();
+            if let Some(state) = app.brogue_state.as_mut()
                 && state.launcher_key(b)
             {
                 return true;
@@ -3164,7 +3200,8 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
 }
 
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
-    if !app.profile_state.profile().show_room_list_sidebar {
+    let (room_list_mode, _) = app.rail_modes();
+    if !crate::app::render::resolve_room_list_enabled(room_list_mode, app.size.0) {
         return None;
     }
     const HOME_RAIL_WIDTH: u16 = 24;
@@ -3206,8 +3243,9 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
 fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    let profile = app.profile_state.profile();
-    if crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, app.screen) {
+    let (_, right_sidebar_mode) = app.rail_modes();
+    if crate::app::render::resolve_right_sidebar_enabled(right_sidebar_mode, app.screen, app.size.0)
+    {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
     } else {
         inner
@@ -3245,6 +3283,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Launcher ignores them.
         Screen::Nethack => false,
         Screen::Dcss => false,
+        Screen::Brogue => false,
         Screen::Usurper => false,
         Screen::Dopewars => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
@@ -3281,6 +3320,17 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
     if ctx.screen == Screen::Dcss
         && let Some(state) = app.dcss_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Brogue
+        && let Some(state) = app.brogue_state.as_mut()
         && state.name_modal_visible()
     {
         if byte == 0x1B {
@@ -3436,8 +3486,9 @@ fn open_settings_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
+    let device_rails = app.rail_modes();
     app.settings_modal_state
-        .open_from_profile(app.profile_state.profile());
+        .open_from_profile(app.profile_state.profile(), device_rails);
     app.show_settings = true;
 }
 
@@ -3829,11 +3880,22 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
         {
-            let label = match app.profile_state.cycle_sidebars() {
-                (true, true) => "Sidebars: both shown",
-                (false, true) => "Sidebars: room list hidden",
-                (true, false) => "Sidebars: info panel hidden",
-                (false, false) => "Sidebars: both hidden",
+            // Per device: this writes the layout onto the SSH key the session
+            // authenticated with, so cycling on a phone leaves the desktop's
+            // layout alone. The banner says so, since the same account can now
+            // legitimately look different in two places.
+            let label = match app.cycle_device_rails() {
+                (RoomListMode::Auto, _) | (_, RightSidebarMode::Auto) => {
+                    "Sidebars: auto for this terminal size (this device)"
+                }
+                (RoomListMode::On, RightSidebarMode::On) => "Sidebars: both shown (this device)",
+                (RoomListMode::Off, RightSidebarMode::On) => {
+                    "Sidebars: room list hidden (this device)"
+                }
+                (RoomListMode::On, RightSidebarMode::Off) => {
+                    "Sidebars: info panel hidden (this device)"
+                }
+                (RoomListMode::Off, RightSidebarMode::Off) => "Sidebars: both hidden (this device)",
             };
             app.banner = Some(crate::app::common::primitives::Banner::success(label));
             true
@@ -3937,6 +3999,11 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Dcss => {
             // Same as Nethack: Launcher Enter is handled in
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
+        Screen::Brogue => {
+            // Same as DCSS: Launcher keys are handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }

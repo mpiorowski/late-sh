@@ -1,6 +1,6 @@
 //! Message construction helpers for server-originated IRC lines.
 
-use irc_proto::{Command, Message, Prefix, Response};
+use irc_proto::{Command, Message, Prefix, Response, message::Tag};
 
 /// Name this server identifies as in prefixes and numerics.
 pub const SERVER_NAME: &str = "irc.late.sh";
@@ -39,6 +39,14 @@ pub fn user_prefix(nick: &str) -> Prefix {
 pub fn from_user(nick: &str, command: Command) -> Message {
     Message {
         tags: None,
+        prefix: Some(user_prefix(nick)),
+        command,
+    }
+}
+
+pub fn from_user_with_tags(nick: &str, command: Command, tags: Vec<Tag>) -> Message {
+    Message {
+        tags: (!tags.is_empty()).then_some(tags),
         prefix: Some(user_prefix(nick)),
         command,
     }

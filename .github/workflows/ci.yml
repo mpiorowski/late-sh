@@ -17,6 +17,37 @@ on:
 permissions:
   contents: read
 
+# CI speed layout:
+# - fmt runs first as a cheap gate. clippy and test share ONE job so the
+#   dependency crates compile once and are reused for both (clippy then test
+#   against a single target dir). Splitting them into parallel jobs would
+#   double the dependency build, which is the long pole and the billed cost.
+# - No otel here on purpose. clippy and test both run WITHOUT --features otel,
+#   so CI never compiles the heavy otel subtree (opentelemetry / otlp / tonic /
+#   prost / hyper) and both steps share one non-otel dep set. The otel config
+#   (what prod ships) is compiled and linted by `make check` before merge, and
+#   the release Dockerfile builds --features otel, so otel breakage cannot
+#   reach prod; it surfaces at `make check` / release-build time, not per-PR.
+# - Rust dependency artifacts are cached (Swatinem/rust-cache). The action
+#   prunes workspace crates before saving and keys on rustc version + lockfile
+#   hash, so first-party code is always compiled fresh; a stale-but-compatible
+#   cache can only cost a dependency rebuild, never wrong artifacts. It also
+#   sets CARGO_INCREMENTAL=0.
+# - Caches are saved only on main pushes (save-if below; main.yml keeps them
+#   warm). PR runs restore, never save.
+# - The job is named "clippy + test" so the branch ruleset's required check
+#   "ci / clippy + test" is satisfied directly (context is "<caller job> /
+#   <this job>" = "ci / clippy + test"); fmt provides "ci / rustfmt".
+# - To purge all Rust caches: bump CACHE_PREFIX below (any new value starts a
+#   fresh cache namespace; old entries age out via LRU), or delete entries
+#   directly with `gh cache list` / `gh cache delete`, or in the repo UI under
+#   Actions -> Management -> Caches.
+env:
+  CACHE_PREFIX: rust-v1
+  # No full debuginfo in CI: faster compiles and links, far smaller caches.
+  # line-tables-only keeps file:line in test-failure backtraces.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
 jobs:
   fmt:
     name: rustfmt
@@ -37,36 +68,51 @@ jobs:
     needs: [fmt]
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - name: checkout
         uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_ref || github.ref }}
+      # Plain `docker run` instead of a job-level service so we can pass server
+      # flags: durability off (test databases are disposable) and
+      # max_connections sized for nextest --test-threads 8 with
+      # TEST_DB_POOL_SIZE=8 per test database. Started first so postgres boots
+      # while the toolchain and build deps install.
+      - name: start_postgres
+        run: |
+          docker run -d --name ci-postgres \
+            -e POSTGRES_USER=test \
+            -e POSTGRES_PASSWORD=test \
+            -e POSTGRES_DB=postgres \
+            -p 5432:5432 \
+            postgres:18-alpine \
+            postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c max_connections=200
       - name: install_linux_build_dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev pkg-config mold
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libwebkit2gtk-4.1-dev pkg-config mold
       - name: restore_rust_cache
         uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: ${{ env.CACHE_PREFIX }}
           shared-key: ci-rust
-          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: install_clippy
         run: rustup component add clippy
+      - name: install_nextest
+        uses: taiki-e/install-action@nextest
+      - name: wait_for_postgres
+        run: |
+          for _ in $(seq 1 60); do
+            if docker exec ci-postgres pg_isready -U test -d postgres >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "postgres never became ready" >&2
+          docker logs ci-postgres >&2
+          exit 1
       - name: cargo_clippy
         env:
           CARGO_PACKAGE: ${{ inputs.package }}
@@ -76,9 +122,7 @@ jobs:
             package_args=(-p "$CARGO_PACKAGE")
           fi
 
-          cargo clippy "${package_args[@]}" --all-targets --features otel -- -D warnings
-      - name: install_nextest
-        uses: taiki-e/install-action@nextest
+          cargo clippy "${package_args[@]}" --all-targets -- -D warnings
       - name: cargo_test
         env:
           TEST_DATABASE_URL: "host=127.0.0.1 port=5432 user=test password=test dbname=postgres"
@@ -89,4 +133,7 @@ jobs:
             package_args=(-p "$CARGO_PACKAGE")
           fi
 
-          cargo nextest run "${package_args[@]}" --all-targets
+          cargo nextest run "${package_args[@]}" --all-targets --test-threads 8
+      - name: dump_postgres_logs
+        if: failure()
+        run: docker logs ci-postgres

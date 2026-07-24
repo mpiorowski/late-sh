@@ -28,6 +28,7 @@ fn door_games_are_outside_the_tab_cycle_and_fall_back_to_the_hub() {
         Screen::Rebels,
         Screen::Nethack,
         Screen::Dcss,
+        Screen::Brogue,
         Screen::Dopewars,
         Screen::Usurper,
         Screen::GreenDragon,

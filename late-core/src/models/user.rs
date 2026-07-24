@@ -123,10 +123,16 @@ pub const USERNAME_MAX_LEN: usize = 32;
 /// Master on/off for the global right sidebar. The sidebar only appears on the
 /// first three top-level screens (Home, Arcade, Rooms); which panels show and
 /// in what order is governed by the component list, not by this mode.
+///
+/// `Auto` hands the decision to the terminal: the sidebar shows only when the
+/// session is wide enough to spare the columns, so one account works on both a
+/// phone and a desktop. The width thresholds live in `late-ssh`'s render layer,
+/// which is the only place that knows the live terminal size.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarMode {
     On,
     Off,
+    Auto,
 }
 
 impl RightSidebarMode {
@@ -134,13 +140,61 @@ impl RightSidebarMode {
         match self {
             Self::On => "on",
             Self::Off => "off",
+            Self::Auto => "auto",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "on" => Some(Self::On),
+            "off" => Some(Self::Off),
+            "auto" => Some(Self::Auto),
+            _ => None,
         }
     }
 
     pub fn cycle(self, _forward: bool) -> Self {
         match self {
             Self::On => Self::Off,
-            Self::Off => Self::On,
+            Self::Off => Self::Auto,
+            Self::Auto => Self::On,
+        }
+    }
+}
+
+/// Master on/off for the Home room-list rail, the left column. Mirrors
+/// [`RightSidebarMode`], including `Auto`: the rail folds away on terminals too
+/// narrow to carry three columns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RoomListMode {
+    On,
+    Off,
+    Auto,
+}
+
+impl RoomListMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Auto => "auto",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "on" => Some(Self::On),
+            "off" => Some(Self::Off),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+
+    pub fn cycle(self, _forward: bool) -> Self {
+        match self {
+            Self::On => Self::Off,
+            Self::Off => Self::Auto,
+            Self::Auto => Self::On,
         }
     }
 }
@@ -267,6 +321,7 @@ const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
 const SHOW_AQUARIUM_TRAY_KEY: &str = "show_aquarium_tray";
 const SHOW_PET_STRIP_KEY: &str = "show_pet_strip";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
+const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LAND_ON_HOME_KEY: &str = "land_on_home";
@@ -306,36 +361,6 @@ impl User {
         Ok(row.map(Self::from))
     }
 
-    pub async fn ensure_ssh_key(
-        client: &impl GenericClient,
-        user_id: Uuid,
-        fingerprint: &str,
-    ) -> Result<()> {
-        client
-            .execute(
-                "INSERT INTO user_ssh_keys (user_id, fingerprint)
-                 VALUES ($1, $2)
-                 ON CONFLICT (fingerprint) DO UPDATE
-                 SET user_id = EXCLUDED.user_id,
-                     last_seen = current_timestamp,
-                     updated = current_timestamp",
-                &[&user_id, &fingerprint],
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn touch_ssh_key(client: &Client, fingerprint: &str) -> Result<()> {
-        client
-            .execute(
-                "UPDATE user_ssh_keys
-                 SET last_seen = current_timestamp, updated = current_timestamp
-                 WHERE fingerprint = $1",
-                &[&fingerprint],
-            )
-            .await?;
-        Ok(())
-    }
     pub async fn update_last_seen(&mut self, client: &Client) -> Result<()> {
         self.last_seen = Utc::now();
         client
@@ -1167,6 +1192,7 @@ pub fn extract_right_sidebar_mode(settings: &Value) -> RightSidebarMode {
         .map(str::trim)
     {
         Some("off") => RightSidebarMode::Off,
+        Some("auto") => RightSidebarMode::Auto,
         // Legacy per-screen `"custom"` collapses to On now that visibility is
         // governed by the global component list.
         Some("on" | "custom") => RightSidebarMode::On,
@@ -1213,6 +1239,24 @@ pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
         .get(SHOW_ROOM_LIST_SIDEBAR_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// The account default for the room-list rail. Mirrors
+/// `extract_right_sidebar_mode`, including its legacy bool fallback: accounts
+/// that predate the mode key only stored `show_room_list_sidebar`, and the bool
+/// is still written alongside the mode so a rollback keeps working.
+pub fn extract_room_list_mode(settings: &Value) -> RoomListMode {
+    match settings
+        .get(ROOM_LIST_MODE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some("off") => RoomListMode::Off,
+        Some("auto") => RoomListMode::Auto,
+        Some("on") => RoomListMode::On,
+        _ if extract_show_room_list_sidebar(settings) => RoomListMode::On,
+        _ => RoomListMode::Off,
+    }
 }
 
 /// Tweak: when true, pressing Enter in the chat composer sends the message

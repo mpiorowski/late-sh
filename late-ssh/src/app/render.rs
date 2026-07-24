@@ -12,7 +12,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use late_core::models::leaderboard::LeaderboardData;
-use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode};
+use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode, RoomListMode};
 
 use super::{
     announcements, artboard,
@@ -30,6 +30,15 @@ use super::{
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
+/// Narrowest terminal that still carries a rail set to `Auto`. Home is three
+/// columns and each rail costs 24 of them, so these decide when a rail folds
+/// away instead of squeezing the chat: at 96 the chat keeps 48 columns with both
+/// rails up, and at 72 it keeps 48 with the sidebar alone. Below that the chat
+/// takes the whole width. Phone-sized sessions (Termux is commonly 40-55
+/// columns) therefore land on chat-only without the user configuring anything.
+pub(crate) const AUTO_ROOM_LIST_MIN_COLS: u16 = 96;
+pub(crate) const AUTO_RIGHT_SIDEBAR_MIN_COLS: u16 = 72;
+
 fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
     if show_settings {
         draft_enabled
@@ -42,10 +51,15 @@ fn right_sidebar_allowed_on_screen(screen: Screen) -> bool {
     matches!(screen, Screen::Dashboard | Screen::Arcade)
 }
 
-/// Resolve whether the right sidebar should render on `screen` given a profile
-/// (or draft) sidebar mode. The sidebar only shows on Home and the Arcade;
-/// which panels appear is governed by the component list.
-pub(crate) fn resolve_right_sidebar_enabled(mode: RightSidebarMode, screen: Screen) -> bool {
+/// Resolve whether the right sidebar should render on `screen`, given the mode
+/// this session ended up with (see `App::rail_modes`) and the live terminal
+/// width. The sidebar only shows on Home and the Arcade; which panels appear is
+/// governed by the component list.
+pub(crate) fn resolve_right_sidebar_enabled(
+    mode: RightSidebarMode,
+    screen: Screen,
+    cols: u16,
+) -> bool {
     if !right_sidebar_allowed_on_screen(screen) {
         return false;
     }
@@ -53,6 +67,17 @@ pub(crate) fn resolve_right_sidebar_enabled(mode: RightSidebarMode, screen: Scre
     match mode {
         RightSidebarMode::On => true,
         RightSidebarMode::Off => false,
+        RightSidebarMode::Auto => cols >= AUTO_RIGHT_SIDEBAR_MIN_COLS,
+    }
+}
+
+/// Resolve whether the Home room-list rail should render, from the mode this
+/// session ended up with and the live terminal width.
+pub(crate) fn resolve_room_list_enabled(mode: RoomListMode, cols: u16) -> bool {
+    match mode {
+        RoomListMode::On => true,
+        RoomListMode::Off => false,
+        RoomListMode::Auto => cols >= AUTO_ROOM_LIST_MIN_COLS,
     }
 }
 
@@ -131,6 +156,7 @@ struct DrawContext<'a> {
     rebels_enabled: bool,
     nethack_enabled: bool,
     dcss_enabled: bool,
+    brogue_enabled: bool,
     usurper_enabled: bool,
     dopewars_enabled: bool,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
@@ -140,6 +166,7 @@ struct DrawContext<'a> {
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
     dcss_state: Option<&'a mut crate::app::door::dcss::state::State>,
+    brogue_state: Option<&'a mut crate::app::door::brogue::state::State>,
     usurper_state: Option<&'a mut crate::app::door::usurper::state::State>,
     dopewars_state: Option<&'a mut crate::app::door::dopewars::state::State>,
     /// Detected terminal-image protocol for the current session.
@@ -170,6 +197,7 @@ struct DrawContext<'a> {
     clubhouse_lounge_messages: &'a [late_core::models::chat_message::ChatMessage],
     /// Staff bot ids so their #lounge lines bubble over their sprites.
     clubhouse_graybeard_id: Option<uuid::Uuid>,
+    clubhouse_bot_id: Option<uuid::Uuid>,
     /// The clubhouse composer footer; built only on that screen.
     clubhouse_composer: Option<chat::ui::ComposerBlockView<'a>>,
     artboard_interacting: bool,
@@ -318,21 +346,22 @@ impl App {
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let login_announcements_visible = self.login_announcements_visible();
+        // Rail visibility: the settings draft previews live while its modal is
+        // open, otherwise the session's modes (this device's stored layout, else
+        // the account default). `Auto` resolves against the live width, so a
+        // rotate or a window drag reflows on the next frame.
+        let (session_room_list_mode, session_right_sidebar_mode) = self.rail_modes();
+        let (draft_room_list_mode, draft_right_sidebar_mode) =
+            self.settings_modal_state.device_rails();
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
-            resolve_right_sidebar_enabled(
-                self.settings_modal_state.draft().right_sidebar_mode,
-                self.screen,
-            ),
-            resolve_right_sidebar_enabled(
-                self.profile_state.profile().right_sidebar_mode,
-                self.screen,
-            ),
+            resolve_right_sidebar_enabled(draft_right_sidebar_mode, self.screen, self.size.0),
+            resolve_right_sidebar_enabled(session_right_sidebar_mode, self.screen, self.size.0),
         );
         let show_room_list_sidebar = room_list_sidebar_enabled(
             self.show_settings,
-            self.settings_modal_state.draft().show_room_list_sidebar,
-            self.profile_state.profile().show_room_list_sidebar,
+            resolve_room_list_enabled(draft_room_list_mode, self.size.0),
+            resolve_room_list_enabled(session_room_list_mode, self.size.0),
         );
         // Live-preview the component list from the draft while the settings
         // modal is open; otherwise use the saved profile.
@@ -891,6 +920,7 @@ impl App {
         let mut rebels_state_taken = self.rebels_state.take();
         let mut nethack_state_taken = self.nethack_state.take();
         let mut dcss_state_taken = self.dcss_state.take();
+        let mut brogue_state_taken = self.brogue_state.take();
         let mut usurper_state_taken = self.usurper_state.take();
         let mut dopewars_state_taken = self.dopewars_state.take();
 
@@ -919,6 +949,7 @@ impl App {
                         rebels_enabled: self.rebels_enabled,
                         nethack_enabled: self.nethack_enabled,
                         dcss_enabled: self.dcss_enabled,
+                        brogue_enabled: self.brogue_enabled,
                         usurper_enabled: self.usurper_enabled,
                         dopewars_enabled: self.dopewars_enabled,
                         lateania_state: self.lateania_state.as_ref(),
@@ -927,6 +958,7 @@ impl App {
                         rebels_state: rebels_state_taken.as_mut(),
                         nethack_state: nethack_state_taken.as_mut(),
                         dcss_state: dcss_state_taken.as_mut(),
+                        brogue_state: brogue_state_taken.as_mut(),
                         usurper_state: usurper_state_taken.as_mut(),
                         dopewars_state: dopewars_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
@@ -950,6 +982,7 @@ impl App {
                         clubhouse_name_styles: &self.name_styles,
                         clubhouse_lounge_messages,
                         clubhouse_graybeard_id: self.clubhouse_graybeard_id,
+                        clubhouse_bot_id: self.clubhouse_bot_id,
                         clubhouse_composer,
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
@@ -1046,6 +1079,7 @@ impl App {
         self.rebels_state = rebels_state_taken;
         self.nethack_state = nethack_state_taken;
         self.dcss_state = dcss_state_taken;
+        self.brogue_state = brogue_state_taken;
         self.usurper_state = usurper_state_taken;
         self.dopewars_state = dopewars_state_taken;
         draw_result?;
@@ -1250,6 +1284,7 @@ impl App {
                         rebels_enabled: ctx.rebels_enabled,
                         nethack_enabled: ctx.nethack_enabled,
                         dcss_enabled: ctx.dcss_enabled,
+                        brogue_enabled: ctx.brogue_enabled,
                         usurper_enabled: ctx.usurper_enabled,
                         dopewars_enabled: ctx.dopewars_enabled,
                         lateania_online: ctx.lateania_online,
@@ -1300,6 +1335,13 @@ impl App {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(content_area);
                     crate::app::door::dcss::render::draw_page(frame, content_area, state);
+                }
+            }
+            Screen::Brogue => {
+                if let Some(state) = ctx.brogue_state.as_deref_mut() {
+                    // Size the child PTY to the exact widget area before blitting.
+                    state.set_viewport(content_area);
+                    crate::app::door::brogue::render::draw_page(frame, content_area, state);
                 }
             }
             Screen::Usurper => {
@@ -1367,6 +1409,7 @@ impl App {
                     now_playing: ctx.now_playing,
                     lounge_messages: ctx.clubhouse_lounge_messages,
                     graybeard_user_id: ctx.clubhouse_graybeard_id,
+                    bot_user_id: ctx.clubhouse_bot_id,
                     composer: ctx.clubhouse_composer.take(),
                 },
             ),
@@ -1540,6 +1583,17 @@ impl App {
                 state.entry_input(),
             );
         }
+        if screen == Screen::Brogue
+            && let Some(state) = ctx.brogue_state.as_deref()
+            && state.name_modal_visible()
+        {
+            crate::app::door::landing::draw_name_modal(
+                frame,
+                inner,
+                state.handle_status(),
+                state.entry_input(),
+            );
+        }
         if screen == Screen::Usurper
             && let Some(state) = ctx.usurper_state.as_deref()
             && state.name_modal_visible()
@@ -1660,6 +1714,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                         | Screen::Rebels
                         | Screen::Nethack
                         | Screen::Dcss
+                        | Screen::Brogue
                         | Screen::Usurper
                         | Screen::Dopewars
                         | Screen::GreenDragon
@@ -1684,6 +1739,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
         Screen::Dcss => "DCSS",
+        Screen::Brogue => "Brogue",
         Screen::Usurper => "Usurper",
         Screen::Dopewars => "dopewars",
         Screen::GreenDragon => "Green Dragon",
@@ -1752,6 +1808,26 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         if in_game {
             spans.push(Span::styled(
                 "· ? help · S save · Ctrl-Q abandon ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
+    if screen == Screen::Brogue {
+        spans.push(Span::styled(
+            "by tmewett/BrogueCE ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        // While a game is live, surface the leave/help keys in the chrome (it
+        // sits outside the game grid, so it never covers glyphs). Players who
+        // skipped the launcher otherwise mash Esc trying to get out.
+        let in_game = ctx
+            .brogue_state
+            .as_deref()
+            .is_some_and(|state| state.is_running());
+        if in_game {
+            spans.push(Span::styled(
+                "\u{b7} ? help \u{b7} S save \u{b7} Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }

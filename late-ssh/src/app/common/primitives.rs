@@ -64,6 +64,7 @@ pub enum Screen {
     Rebels,
     Nethack,
     Dcss,
+    Brogue,
     Dopewars,
     Usurper,
     GreenDragon,
@@ -97,6 +98,7 @@ impl Screen {
             | Screen::Rebels
             | Screen::Nethack
             | Screen::Dcss
+            | Screen::Brogue
             | Screen::Dopewars
             | Screen::Usurper
             | Screen::GreenDragon => Screen::Games,
@@ -117,6 +119,7 @@ impl Screen {
             | Screen::Rebels
             | Screen::Nethack
             | Screen::Dcss
+            | Screen::Brogue
             | Screen::Dopewars
             | Screen::Usurper
             | Screen::GreenDragon => Screen::Games,
@@ -141,6 +144,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
         Screen::Dcss => "DCSS",
+        Screen::Brogue => "Brogue",
         Screen::Dopewars => "dopewars",
         Screen::Usurper => "Usurper",
         Screen::GreenDragon => "Green Dragon",
