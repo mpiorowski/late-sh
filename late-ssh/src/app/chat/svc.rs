@@ -17,7 +17,8 @@ use late_core::{
         character_sheet::{CharacterSheet, CharacterSheetParams},
         chat_message::{ChatMessage, ChatMessageParams},
         chat_message_reaction::{
-            ChatMessageReaction, ChatMessageReactionOwners, ChatMessageReactionSummary,
+            ChatMessageReaction, ChatMessageReactionAction, ChatMessageReactionOwners,
+            ChatMessageReactionSummary,
         },
         chat_poll::{self, ActiveChatPoll, CreateChatPoll},
         chat_room::ChatRoom,
@@ -530,6 +531,34 @@ pub struct ChatSnapshot {
 }
 
 #[derive(Clone, Debug)]
+pub struct ChatReactionDelta {
+    pub room_id: Uuid,
+    pub message_id: Uuid,
+    pub actor_user_id: Uuid,
+    pub icon: String,
+    pub action: ChatReactionAction,
+    pub previous_icon: Option<String>,
+    pub target_user_ids: Option<Vec<Uuid>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatReactionAction {
+    React,
+    Unreact,
+    Replace,
+}
+
+impl From<ChatMessageReactionAction> for ChatReactionAction {
+    fn from(action: ChatMessageReactionAction) -> Self {
+        match action {
+            ChatMessageReactionAction::React => Self::React,
+            ChatMessageReactionAction::Unreact => Self::Unreact,
+            ChatMessageReactionAction::Replace => Self::Replace,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum ChatEvent {
     MessageCreated {
         message: ChatMessage,
@@ -600,6 +629,7 @@ pub enum ChatEvent {
         reactions: Vec<ChatMessageReactionSummary>,
         target_user_ids: Option<Vec<Uuid>>,
     },
+    MessageReactionDelta(ChatReactionDelta),
     SendSucceeded {
         user_id: Uuid,
         request_id: Uuid,
@@ -2677,7 +2707,7 @@ impl ChatService {
     }
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, icon = %icon))]
-    async fn toggle_message_reaction(
+    pub async fn toggle_message_reaction(
         &self,
         user_id: Uuid,
         message_id: Uuid,
@@ -2692,18 +2722,67 @@ impl ChatService {
             anyhow::bail!("user is not a member of room");
         }
 
-        ChatMessageReaction::toggle(&client, message_id, user_id, icon).await?;
-        let reactions = ChatMessageReaction::list_summaries_for_messages(&client, &[message_id])
+        let delta = ChatMessageReaction::toggle(&client, message_id, user_id, icon).await?;
+        self.emit_message_reaction_events(&client, &message, user_id, delta)
+            .await?;
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, icon = %icon))]
+    pub async fn unreact_message_reaction(
+        &self,
+        user_id: Uuid,
+        message_id: Uuid,
+        icon: &str,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let message = ChatMessage::get(&client, message_id)
             .await?
-            .remove(&message_id)
+            .ok_or_else(|| anyhow::anyhow!("message not found"))?;
+        let is_member = ChatRoomMember::is_member(&client, message.room_id, user_id).await?;
+        if !is_member {
+            anyhow::bail!("user is not a member of room");
+        }
+
+        if let Some(delta) =
+            ChatMessageReaction::unreact_matching(&client, message_id, user_id, icon).await?
+        {
+            self.emit_message_reaction_events(&client, &message, user_id, delta)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn emit_message_reaction_events(
+        &self,
+        client: &tokio_postgres::Client,
+        message: &ChatMessage,
+        user_id: Uuid,
+        delta: late_core::models::chat_message_reaction::ChatMessageReactionToggle,
+    ) -> Result<()> {
+        let reactions = ChatMessageReaction::list_summaries_for_messages(client, &[message.id])
+            .await?
+            .remove(&message.id)
             .unwrap_or_default();
-        let target_user_ids = ChatRoom::get_target_user_ids(&client, message.room_id).await?;
+        let target_user_ids = ChatRoom::get_target_user_ids(client, message.room_id).await?;
+        let delta_target_user_ids = target_user_ids.clone();
         let _ = self.evt_tx.send(ChatEvent::MessageReactionsUpdated {
             room_id: message.room_id,
-            message_id,
+            message_id: message.id,
             reactions,
             target_user_ids,
         });
+        let _ = self
+            .evt_tx
+            .send(ChatEvent::MessageReactionDelta(ChatReactionDelta {
+                room_id: message.room_id,
+                message_id: message.id,
+                actor_user_id: user_id,
+                icon: delta.icon,
+                action: delta.action.into(),
+                previous_icon: delta.previous_icon,
+                target_user_ids: delta_target_user_ids,
+            }));
         Ok(())
     }
 

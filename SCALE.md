@@ -131,7 +131,7 @@ The app is not continuously polling the DB for chat messages; chat message flow 
 
 - The 15-20 query bootstrap fan-out per new session has no concurrency limiter (only chat reads share an 8-permit semaphore). Still open.
 - Aquarium creature/world assets are re-parsed from KDL on every session start. Still open.
-- `next_available_username` + `User::create` race under same-name connect storms, rejecting auth with no backoff (the `idx_users_username_lower` error loop seen in prod logs). Still open.
+- `next_available_username` + `User::create` race under same-name connect storms, rejecting auth with no backoff (the `idx_users_username_lower` error loop seen in prod logs). FIXED: new users get a randomly generated curated username (no longer derived from the SSH login name), and `ensure_user` retries on the `idx_users_username_lower` unique violation (bounded to 5 attempts, then auth is rejected instead of spinning). Follow-up: `next_generated_username` scans all usernames (`SELECT username FROM users`) per new signup and per retry; fine at current scale but O(users) per signup during a new-user surge. Cheaper shape is a single indexed probe against `idx_users_username_lower` first, full scan only on the rare collision.
 - The nonogram library deep-clone per session (about 1-3 MB) is FIXED: Arc-shared since render-cost phase 0.
 
 ### 4. Audio capacity is still single-pod
