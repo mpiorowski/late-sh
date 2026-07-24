@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
-use super::clear_canvas_black;
+use super::{clear_canvas_black, clear_letterbox, grid_rect};
 
 fn buf_with_bg(area: Rect, bg: Color) -> Buffer {
     let mut buf = Buffer::empty(area);

@@ -139,6 +139,78 @@ impl Drop for BrogueProcess {
     }
 }
 
+/// Rewrite CSI HVP (`ESC [ Pl ; Pc f`) into CUP (`ESC [ Pl ; Pc H`) so the
+/// vt100 parser honors it. brogue's truecolor renderer (`buffer_render_24bit`
+/// in term.c, selected by the COLORTERM the host exports) positions the cursor
+/// exclusively with the `f` final byte, which the vt100 crate does not
+/// implement: every move is silently dropped and the frame smears sequentially
+/// across the grid. HVP and CUP are semantically identical, so the rewrite is
+/// lossless. Stateful because an escape sequence can be split across SSH data
+/// chunks; an unterminated candidate tail is carried into the next call.
+struct HvpNormalizer {
+    carry: Vec<u8>,
+}
+
+/// A real HVP is `ESC [` + short numeric params + `f`; anything longer than
+/// this is not one, so flush it verbatim instead of buffering unbounded.
+const HVP_CARRY_MAX: usize = 16;
+
+impl HvpNormalizer {
+    fn new() -> Self {
+        Self { carry: Vec::new() }
+    }
+
+    fn feed(&mut self, data: &[u8]) -> Vec<u8> {
+        let mut input = std::mem::take(&mut self.carry);
+        input.extend_from_slice(data);
+
+        let mut out = Vec::with_capacity(input.len());
+        let mut i = 0;
+        while i < input.len() {
+            if input[i] != 0x1b {
+                out.push(input[i]);
+                i += 1;
+                continue;
+            }
+            // Candidate CSI: ESC [ digits/; ... final. Walk to the final byte.
+            let seq_start = i;
+            let mut j = i + 1;
+            if j >= input.len() {
+                self.carry = input[seq_start..].to_vec();
+                break;
+            }
+            if input[j] != b'[' {
+                out.push(input[i]);
+                i += 1;
+                continue;
+            }
+            j += 1;
+            while j < input.len() && (input[j].is_ascii_digit() || input[j] == b';') {
+                j += 1;
+            }
+            if j >= input.len() {
+                // Unterminated numeric CSI at the chunk edge: hold it back if
+                // it could still become an HVP, else flush verbatim.
+                let tail = &input[seq_start..];
+                if tail.len() <= HVP_CARRY_MAX {
+                    self.carry = tail.to_vec();
+                } else {
+                    out.extend_from_slice(tail);
+                }
+                break;
+            }
+            if input[j] == b'f' && j - seq_start <= HVP_CARRY_MAX {
+                out.extend_from_slice(&input[seq_start..j]);
+                out.push(b'H');
+            } else {
+                out.extend_from_slice(&input[seq_start..=j]);
+            }
+            i = j + 1;
+        }
+        out
+    }
+}
+
 async fn run_bridge(
     cfg: ProcessConfig,
     mut cmd_rx: mpsc::Receiver<OutboundCommand>,
@@ -191,6 +263,7 @@ async fn run_bridge(
 
     *status.lock().expect("status mutex") = ProxyStatus::Running;
 
+    let mut norm = HvpNormalizer::new();
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => {
@@ -212,7 +285,8 @@ async fn run_bridge(
                 let Some(msg) = msg else { break };
                 match msg {
                     ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
-                        parser.lock().expect("parser mutex").process(&data);
+                        let bytes = norm.feed(&data);
+                        parser.lock().expect("parser mutex").process(&bytes);
                         if let Some(sig) = &cfg.repaint {
                             sig.wake();
                         }
@@ -230,3 +304,7 @@ async fn run_bridge(
         .await;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "proxy_test.rs"]
+mod proxy_test;
