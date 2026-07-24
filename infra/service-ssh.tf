@@ -287,6 +287,31 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # Brogue is served by the late-brogue host pod (service-brogue.tf);
+          # late-ssh connects to it over SSH. HOST/PORT target that Service and
+          # SECRET (shared with the host) authorizes the connection.
+          env {
+            name  = "LATE_BROGUE_ENABLED"
+            value = local.brogue_enabled
+          }
+          env {
+            name  = "LATE_BROGUE_HOST"
+            value = local.brogue_service_host
+          }
+          env {
+            name  = "LATE_BROGUE_PORT"
+            value = local.brogue_port
+          }
+          env {
+            name = "LATE_BROGUE_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.brogue_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
           # Usurper is served by the late-usurper host pod (service-usurper.tf);
           # late-ssh connects to it over SSH. HOST/PORT target that Service and
           # SECRET (shared with the host) authorizes the connection.

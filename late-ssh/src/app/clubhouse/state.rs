@@ -117,6 +117,7 @@ pub struct State {
     username: String,
     pub graybeard_online: bool,
     pub bartender_online: bool,
+    pub bot_online: bool,
     last_roster_tick: u64,
     force_roster_refresh: bool,
     /// Roster ids from the last refresh, for arrival/departure diffs.
@@ -155,6 +156,7 @@ impl State {
             username,
             graybeard_online: false,
             bartender_online: false,
+            bot_online: false,
             last_roster_tick: 0,
             force_roster_refresh: false,
             seen: HashSet::new(),

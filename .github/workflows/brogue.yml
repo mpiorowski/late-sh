@@ -1,0 +1,137 @@
+name: brogue
+
+# Dedicated CI/CD for the Brogue door, responsible only for the from-source
+# binary and its standalone SSH host (late-brogue, twin of late-dcss):
+#   - build_validate: compile the brogue-build stage and prove the binary runs
+#     (--version resolves the baked version info; the stage itself asserts the
+#     hangup-save patch applied). Runs on changes to the build and weekly, to
+#     catch upstream / checksum breakage early (the build fetches a pinned
+#     tarball from GitHub over the network).
+#   - build_runtime_brogue: build the runtime-brogue target (the late-brogue
+#     host image) to catch breakage in that stage on Dockerfile PRs. Nothing
+#     else builds runtime-brogue on PR.
+#   - verify_deployed: manual, per-environment. Confirms the live late-brogue
+#     deployment is rolled out and the door is enabled on service-ssh.
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - scripts/brogue_hangup_save.patch
+      - .github/workflows/brogue.yml
+  schedule:
+    - cron: "0 6 * * 5" # Fridays 06:00 UTC (staggered a day after usurper's)
+  workflow_dispatch:
+    inputs:
+      run_verify_deployed:
+        description: "Also verify the door is enabled on the live pod after building"
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: "Target environment for verify_deployed"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build_validate:
+    name: build_validate_brogue_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build only the brogue-build stage and load it locally so we can run the
+      # binary. The stage itself already asserts the patch applied and the
+      # version string; we re-prove the binary actually runs here.
+      - name: build_brogue_stage
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: brogue-build
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: brogue-build:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: smoke_test_binary
+        run: |
+          docker run --rm brogue-build:ci /opt/brogue/brogue --version
+
+  build_runtime_brogue:
+    name: build_runtime_brogue_image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build the runtime-brogue target (the late-brogue host image) to catch
+      # breakage in that stage on Dockerfile PRs. We only prove it builds; it
+      # is not pushed here (deploy_brogue.yml builds and pushes the released
+      # image).
+      - name: build_runtime_brogue_target
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime-brogue
+          platforms: linux/amd64
+          push: false
+          tags: late-brogue:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  verify_deployed:
+    name: verify_deployed
+    needs: build_validate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_verify_deployed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment/late-brogue -n default --timeout=180s
+
+      - name: verify_door_enabled
+        run: |
+          # LATE_BROGUE_ENABLED is a CLIENT flag: it lives on service-ssh
+          # (which reaches the host over SSH), NOT on the late-brogue host pod.
+          # Read it there, mirroring dcss.yml.
+          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
+          echo "service-ssh pod: ${POD}"
+          enabled=$(kubectl exec "${POD}" -- printenv LATE_BROGUE_ENABLED || true)
+          echo "LATE_BROGUE_ENABLED=${enabled}"
+          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) echo "door enabled" ;;
+            *) echo "::warning::Brogue door is not enabled (LATE_BROGUE_ENABLED=${enabled})" ;;
+          esac

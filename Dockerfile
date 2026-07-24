@@ -326,6 +326,61 @@ RUN mkdir -p ${USURPER_PREFIX}/bin ${USURPER_PREFIX}/seed \
     && test -s ${USURPER_PREFIX}/seed/DATA/TNAMES.DAT
 
 # ==============================================================================
+# Stage 0e: Brogue CE - Build the door game binary from verified upstream source
+# ==============================================================================
+# Brogue CE runs in its own SSH host (late-brogue); this stage builds the
+# curses-only binary (TERMINAL=YES GRAPHICS=NO: no SDL, no tiles; RELEASE=YES
+# drops the "-dev" version suffix, which brogue bakes into save filenames and
+# save compatibility). The tarball SHA-256 is verified BEFORE the build
+# (downloaded + hashed 2026-07-21 from the GitHub tag archive); `sha256sum -c`
+# fails the build closed on any mismatch.
+#
+# One source patch (scripts/brogue_hangup_save.patch): upstream's curses build
+# dies unsaved on SIGHUP (only the SDL window-close path auto-saves), so the
+# patch installs a hangup handler running the same quitImmediately save path.
+# The late-brogue host relies on it for teardown saves; the grep asserts it
+# landed, fail-closed. Re-verify the patch on Brogue CE version bumps.
+#
+# The terminal build reads no data files (DATADIR only matters for tiles), and
+# opens every player file relative to its working directory; the host gives
+# each player their own cwd under LATE_BROGUE_DATA_DIR.
+FROM debian:${DEBIAN_VERSION}-slim AS brogue-build
+
+ARG BROGUE_VERSION=1.15.1
+ARG BROGUE_TARBALL=BrogueCE-1.15.1.tar.gz
+ARG BROGUE_URL=https://github.com/tmewett/BrogueCE/archive/refs/tags/v1.15.1.tar.gz
+ARG BROGUE_SHA256=2abc186c5327342cb9ad7e45d41096ab10797d5ba76dcac843824ac2a0bfb3ac
+
+# diffutils: the Makefile uses cmp to keep generated headers fresh. patch:
+# applies the hangup-save patch. libncurses-dev: the terminal build links
+# plain -lncurses (the display is pure ASCII, no wide-char calls).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    build-essential \
+    diffutils \
+    patch \
+    libncurses-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY scripts/brogue_hangup_save.patch /build/brogue_hangup_save.patch
+RUN curl -fsSL -o "${BROGUE_TARBALL}" "${BROGUE_URL}" \
+    && echo "${BROGUE_SHA256}  ${BROGUE_TARBALL}" | sha256sum -c - \
+    && tar -xzf "${BROGUE_TARBALL}" \
+    && rm "${BROGUE_TARBALL}"
+
+WORKDIR /build/BrogueCE-${BROGUE_VERSION}
+RUN patch -p1 < /build/brogue_hangup_save.patch \
+    && grep -q handleHangup src/platform/curses-platform.c \
+    && make -j"$(nproc)" bin/brogue TERMINAL=YES GRAPHICS=NO RELEASE=YES \
+    && test -x bin/brogue \
+    && ./bin/brogue --version | grep -qx "Brogue version: CE ${BROGUE_VERSION}" \
+    && mkdir -p /opt/brogue \
+    && cp bin/brogue /opt/brogue/brogue
+
+
+# ==============================================================================
 # Stage 0: Base - Common system dependencies
 # ==============================================================================
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS base
@@ -344,6 +399,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     libncursesw6 \
+    libncurses6 \
     libglib2.0-0 \
     libcurl4 \
     liblua5.4-0 \
@@ -351,6 +407,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack \
     && mkdir -p /var/lib/late-dcss && chmod 0777 /var/lib/late-dcss \
+    && mkdir -p /var/lib/late-brogue && chmod 0777 /var/lib/late-brogue \
     && mkdir -p /var/lib/late-usurper && chmod 0777 /var/lib/late-usurper
 
 # NetHack door game: the from-source binary lives inside its read-only playground
@@ -405,6 +462,7 @@ COPY late-web/Cargo.toml late-web/Cargo.toml
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
 COPY late-dcss/Cargo.toml late-dcss/Cargo.toml
+COPY late-brogue/Cargo.toml late-brogue/Cargo.toml
 COPY late-dopewars/Cargo.toml late-dopewars/Cargo.toml
 COPY late-usurper/Cargo.toml late-usurper/Cargo.toml
 COPY late-webview/Cargo.toml late-webview/Cargo.toml
@@ -414,13 +472,14 @@ COPY vendor vendor
 # built in these images (CLI-only YouTube helper), but it is a workspace member
 # and a late-cli path dependency, so its manifest and target stubs must exist
 # for `cargo metadata` to resolve the workspace.
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-nethack/src late-dcss/src late-dopewars/src late-usurper/src late-webview/src && \
+RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-webview/src && \
     echo "fn main() {}" > late-core/src/lib.rs && \
     echo "fn main() {}" > late-ssh/src/main.rs && \
     echo "fn main() {}" > late-web/src/main.rs && \
     echo "fn main() {}" > late-cli/src/main.rs && \
     echo "fn main() {}" > late-nethack/src/main.rs && \
     echo "fn main() {}" > late-dcss/src/main.rs && \
+    echo "fn main() {}" > late-brogue/src/main.rs && \
     echo "fn main() {}" > late-dopewars/src/main.rs && \
     echo "fn main() {}" > late-usurper/src/main.rs && \
     echo "" > late-webview/src/lib.rs && \
@@ -439,7 +498,7 @@ COPY vendor vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
-    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-nethack -p late-dcss -p late-dopewars -p late-usurper
+    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-nethack -p late-dcss -p late-brogue -p late-dopewars -p late-usurper
 
 # Copy actual source code
 COPY Cargo.toml Cargo.lock ./
@@ -448,6 +507,7 @@ COPY late-ssh late-ssh
 COPY late-web late-web
 COPY late-nethack late-nethack
 COPY late-dcss late-dcss
+COPY late-brogue late-brogue
 COPY late-dopewars late-dopewars
 COPY late-usurper late-usurper
 COPY vendor vendor
@@ -465,11 +525,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     cargo build --release --features otel -p late-ssh -p late-web && \
-    cargo build --release -p late-nethack -p late-dcss -p late-dopewars -p late-usurper && \
+    cargo build --release -p late-nethack -p late-dcss -p late-brogue -p late-dopewars -p late-usurper && \
     cp /app/target/release/late-ssh /app/late-ssh-bin && \
     cp /app/target/release/late-web /app/late-web-bin && \
     cp /app/target/release/late-nethack /app/late-nethack-bin && \
     cp /app/target/release/late-dcss /app/late-dcss-bin && \
+    cp /app/target/release/late-brogue /app/late-brogue-bin && \
     cp /app/target/release/late-dopewars /app/late-dopewars-bin && \
     cp /app/target/release/late-usurper /app/late-usurper-bin
 
@@ -518,6 +579,15 @@ CMD ["cargo", "watch", "-w", "late-dcss", "-x", "run -p late-dcss"]
 FROM dev-base AS dev-usurper
 COPY --from=usurper-build /opt/usurper /opt/usurper
 CMD ["cargo", "watch", "-w", "late-usurper", "-x", "run -p late-usurper"]
+
+# Brogue host: serves the game over SSH (see late-brogue). This is the only dev
+# target that needs the from-source curses binary; keeping the copy here (plus
+# the /usr/games/brogue symlink for the default LATE_BROGUE_BIN) prevents every
+# other Compose service from carrying it.
+FROM dev-base AS dev-brogue
+COPY --from=brogue-build /opt/brogue /opt/brogue
+RUN mkdir -p /usr/games && ln -sf /opt/brogue/brogue /usr/games/brogue
+CMD ["cargo", "watch", "-w", "late-brogue", "-x", "run -p late-brogue"]
 
 # ==============================================================================
 # Stage 4a: Runtime base - Common runtime setup
@@ -681,3 +751,33 @@ USER late
 EXPOSE 2326
 
 CMD ["/app/late-usurper"]
+
+# ==============================================================================
+# Stage 4h: Runtime Brogue - the late-brogue host (game served over SSH)
+# ==============================================================================
+# Owns everything the game needs: the from-source curses-only brogue binary
+# (/opt/brogue, hangup-save patch applied), its runtime lib, and the writable
+# playground (/var/lib/late-brogue; backed by a PVC in prod so the per-player
+# save directories under players/ survive restarts). LATE_BROGUE_BIN defaults
+# to /usr/games/brogue, LATE_BROGUE_DATA_DIR to that playground path.
+FROM runtime-base AS runtime-brogue
+USER root
+# libncurses6: brogue's terminal build links plain -lncurses (pure-ASCII
+# display, no wide-char calls). ncurses-term: the EXTENDED terminfo DB
+# (alacritty, rxvt, st, etc.) so clients on those terminals get native
+# terminfo rather than the xterm-256color fallback; terminals that ship their
+# own terminfo (ghostty/kitty/wezterm) are covered by the host's TERM fallback
+# in late-brogue (effective_term).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libncurses6 \
+    ncurses-term \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/late-brogue && chown late:late /var/lib/late-brogue
+COPY --from=brogue-build /opt/brogue /opt/brogue
+RUN mkdir -p /usr/games && ln -sf /opt/brogue/brogue /usr/games/brogue
+COPY --from=builder /app/late-brogue-bin /app/late-brogue
+USER late
+
+EXPOSE 2327
+
+CMD ["/app/late-brogue"]

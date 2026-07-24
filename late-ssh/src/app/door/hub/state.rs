@@ -11,6 +11,7 @@ pub enum HubGame {
     Rebels,
     Nethack,
     Dcss,
+    Brogue,
     Usurper,
     GreenDragon,
     Dopewars,
@@ -18,10 +19,11 @@ pub enum HubGame {
 
 impl HubGame {
     /// Selector order, left to right.
-    pub const ALL: [HubGame; 7] = [
+    pub const ALL: [HubGame; 8] = [
         HubGame::Lateania,
         HubGame::Nethack,
         HubGame::Dcss,
+        HubGame::Brogue,
         HubGame::Usurper,
         HubGame::GreenDragon,
         HubGame::Rebels,
@@ -34,6 +36,7 @@ impl HubGame {
             HubGame::Rebels => "Rebels",
             HubGame::Nethack => "NetHack",
             HubGame::Dcss => "DCSS",
+            HubGame::Brogue => "Brogue",
             HubGame::Usurper => "Usurper",
             HubGame::GreenDragon => "Green Dragon",
             HubGame::Dopewars => "dopewars",
