@@ -372,7 +372,7 @@ fn wrap_message_name_style_paints_per_char_over_author_style() {
 fn wrap_message_prints_drunk_word_between_name_and_stamp() {
     let tint = AuthorTint {
         range: (0, 5),
-        word: Some("wasted"),
+        word: Some(("wasted", Color::Rgb(120, 40, 35))),
         name_style: None,
     };
     let lines = wrap_message_to_lines(
@@ -390,6 +390,8 @@ fn wrap_message_prints_drunk_word_between_name_and_stamp() {
     let header = &lines[0];
     assert_eq!(header.spans.len(), 4);
     assert_eq!(header.spans[2].content.as_ref(), " (wasted)");
+    // The level's hue carries the state; italic keeps it an aside.
+    assert_eq!(header.spans[2].style.fg, Some(Color::Rgb(120, 40, 35)));
     assert!(
         header.spans[2]
             .style

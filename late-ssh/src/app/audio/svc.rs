@@ -504,6 +504,9 @@ impl AudioService {
                     anyhow::bail!("submission rate limit exceeded");
                 }
             }
+            if MediaQueueItem::youtube_is_active(&client, &video.video_id).await? {
+                anyhow::bail!("track is already in the queue");
+            }
 
             MediaQueueItem::insert_youtube(
                 &client,
@@ -835,6 +838,9 @@ impl AudioService {
             let history = MediaHistoryItem::find_by_id(&client, history_item_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("history item not found"))?;
+            if MediaQueueItem::youtube_is_active(&client, &history.external_id).await? {
+                anyhow::bail!("track is already in the queue");
+            }
             MediaQueueItem::insert_youtube(
                 &client,
                 user_id,
@@ -2010,6 +2016,8 @@ fn booth_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
         "Banned from submitting audio".to_string()
+    } else if is_duplicate_track_error(&text) {
+        "Already in the queue".to_string()
     } else if text.contains("invalid url")
         || (text.contains("youtube") && text.contains("not found"))
     {
@@ -2075,6 +2083,8 @@ fn booth_history_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
         "Banned from audio history actions".to_string()
+    } else if is_duplicate_track_error(&text) {
+        "Already in the queue".to_string()
     } else if text.contains("rate limit") || text.contains("submission rate limit") {
         "Slow down - too many submissions".to_string()
     } else if text.contains("history item not found") {
@@ -2095,10 +2105,19 @@ fn booth_history_delete_error_message(err: &anyhow::Error) -> String {
     }
 }
 
+/// The queue holds a track once. The app-level guard produces the message;
+/// a submission that loses the race to `idx_media_queue_active_track` gets
+/// the same banner from the constraint violation.
+fn is_duplicate_track_error(text: &str) -> bool {
+    text.contains("already in the queue") || text.contains("idx_media_queue_active_track")
+}
+
 fn trusted_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
         "Banned from submitting audio".to_string()
+    } else if is_duplicate_track_error(&text) {
+        "Already in the queue".to_string()
     } else if text.contains("invalid url")
         || text.contains("unsupported youtube url")
         || text.contains("invalid youtube video id")

@@ -99,6 +99,7 @@ fn chat_guide_lists_user_facing_slash_commands() {
         "/coffee",
         "/friend [@user]",
         "/friends",
+        "/gift @user",
         "/icons",
         "/petname [name]",
         "/poll",

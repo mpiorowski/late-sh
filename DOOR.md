@@ -254,14 +254,20 @@ fighting is a mechanic, not a door; The Pit stays red and stays unhosted.
    Dragon door: an in-process Rust remake of LoGD with per-user persistent
    characters (pattern 1, Lateania-style). See
    `late-ssh/src/app/door/greendragon/CONTEXT.md`.
-5. **Brogue CE** - **next up (decided 2026-07-21).** The one-more-game
-   marketing beat before the Green Dragon push: NetHack/DCSS host shape
-   reused almost verbatim (new host crate + image + screen), short gorgeous
-   interruptible runs that fit the ambient format, and the best screenshots a
-   terminal can produce. Caveats for the build: per-user save/highscore dir
-   handling like the other hosts, and no machine-readable milestone files
-   (unlike DCSS), so v1 ships without awards, like dopewars did. Museum wing
-   (Rogue/Hack/Umoria) was considered for the same slot and passed on.
+5. **Brogue CE** - **done, built 2026-07-21 (prod deploy pending).**
+   Standalone-SSH-host pattern like DCSS (`late-brogue` host crate + the
+   `door/brogue` client), from-source CE 1.15.1 curses-only build. Identity
+   is a per-player cwd under the playground (brogue opens saves/recordings/
+   high scores relative to its working directory; no name flag), keyed by the
+   shared arcade handle. One source patch (`scripts/brogue_hangup_save.patch`)
+   adds the SIGHUP save-and-exit the curses build lacks upstream, so
+   disconnects and rollouts keep runs; verified by hand against a PTY. v1
+   ships without awards as planned (a future pipe can read the per-player
+   run-history files host-side). AGPL-3.0 note: we run a patched build, so
+   the pinned tarball + patch + Dockerfile recipe must stay public (NOTICE).
+   First rollout must be `deploy_brogue.yml` (it builds the image). See
+   `late-ssh/src/app/door/brogue/CONTEXT.md`. Museum wing (Rogue/Hack/
+   Umoria) was considered for the same slot and passed on.
 6. **TradeWars via twclone** - **parked until it can be a season.** Protocol
    spike done 2026-07-20 (see deep dive): verdict green on the tech
    (structured-data protocol end to end, Postgres coexists on our instance,

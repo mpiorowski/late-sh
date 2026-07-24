@@ -43,10 +43,11 @@ mod smoke_test;
 pub mod state;
 #[cfg(test)]
 mod state_test;
-mod tick;
+pub mod tick;
+#[cfg(test)]
+mod tick_test;
 pub(crate) mod ultimates;
 pub mod voice;
-pub mod worldcup;
 
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;

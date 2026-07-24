@@ -28,6 +28,10 @@ pub struct PetStripView<'a> {
     pub pet_rect_slot: Option<&'a Cell<Option<Rect>>>,
     pub food_bowl_rect_slot: Option<&'a Cell<Option<Rect>>>,
     pub water_bowl_rect_slot: Option<&'a Cell<Option<Rect>>>,
+    /// Receives the wander travel width actually drawn this frame, so the
+    /// tick-side animation predicate (`strip_frame_changed`) can evaluate the
+    /// same frame math the next draw will use.
+    pub travel_slot: Option<&'a Cell<Option<usize>>>,
 }
 
 const BOWL_WIDTH: u16 = 9;
@@ -63,6 +67,9 @@ pub fn draw_pet_strip(frame: &mut Frame, area: Rect, view: &PetStripView<'_>) {
     let pet_rect = draw_wandering_pet(frame, wander_zone, state);
     if let Some(slot) = view.pet_rect_slot {
         slot.set(pet_rect);
+    }
+    if let Some(slot) = view.travel_slot {
+        slot.set(Some((wander_zone.width as usize).saturating_sub(PET_WIDTH)));
     }
 
     // Only nag about an empty pantry on a day the pet can still eat. Once fed,
@@ -257,6 +264,27 @@ pub fn draw_roaming_pet(frame: &mut Frame, area: Rect, state: &PetState) {
 /// Body width including the tail column, used to keep the wander on-screen.
 const PET_WIDTH: usize = 8;
 
+/// True when the strip art drawn at `tick` differs from the art at
+/// `tick - 1` for the given mood and wander travel: a wander step, a blink
+/// edge, or a tail flick edge. This is the exact inverse of the frame math in
+/// `draw_wandering_pet`/`tail`, so the render gate only pays frames on ticks
+/// where the strip actually moves; a parked (sad) pet is fully static.
+pub fn strip_frame_changed(mood: PetMood, tick: usize, travel: usize) -> bool {
+    let activity = pet_activity(mood);
+    if activity == 0 {
+        return false;
+    }
+    let prev = tick.wrapping_sub(1);
+    if wander_x(tick, activity, travel) != wander_x(prev, activity, travel) {
+        return true;
+    }
+    let blink = |t: usize| t % 64 < 3;
+    if blink(tick) != blink(prev) {
+        return true;
+    }
+    tail(activity, tick) != tail(activity, prev)
+}
+
 /// Pseudo-random horizontal wander across the strip. The pet picks a fresh
 /// column each leg and strolls to it, so legs land anywhere edge-to-edge;
 /// livelier moods change their mind sooner. A still (sad) pet parks mid-zone.
@@ -360,3 +388,7 @@ fn mood_color(mood: PetMood) -> Color {
         PetMood::Sad => theme::TEXT_DIM(),
     }
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

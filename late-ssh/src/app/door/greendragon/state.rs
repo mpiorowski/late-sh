@@ -639,8 +639,29 @@ impl State {
     }
 
     /// Drain pending async loads (the initial character, a news page). Called
-    /// every app tick.
-    pub fn tick(&mut self) {
+    /// every app tick. Returns true while any load is in flight: a pending
+    /// receiver can land its result on any tick, so the whole (short) flight
+    /// reports changed rather than threading a bool through every drain.
+    /// Everything else here is input-driven; the presence heartbeat only
+    /// writes storage.
+    pub fn tick(&mut self) -> bool {
+        let load_pending = self.character.is_none()
+            || self.news_rx.is_some()
+            || self.fivesix_pot_rx.is_some()
+            || self.fivesix_rx.is_some()
+            || self.commentary_rx.is_some()
+            || self.roster_rx.is_some()
+            || self.pvp_engage_rx.is_some()
+            || self.pvp_settle_rx.is_some()
+            || self.bounty_board_rx.is_some()
+            || self.bounty_place_rx.is_some()
+            || self.transfer_rx.is_some()
+            || self.haunt_rx.is_some()
+            || self.intel_rx.is_some()
+            || self.clan_rx.is_some()
+            || self.clan_list_rx.is_some()
+            || self.clan_found_rx.is_some()
+            || self.clan_op_rx.is_some();
         self.tick_news();
         self.tick_tavern();
         self.tick_commentary();
@@ -659,7 +680,7 @@ impl State {
             if self.last_save.elapsed().as_secs() > HEARTBEAT_SECS {
                 self.save();
             }
-            return;
+            return load_pending;
         }
         // Clone the loaded character out and drop the watch borrow before
         // touching `self` again.
@@ -704,6 +725,7 @@ impl State {
                 self.save();
             }
         }
+        load_pending
     }
 
     // --- getters for the UI -------------------------------------------------

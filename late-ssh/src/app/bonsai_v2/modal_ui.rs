@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::app::{
     bonsai_v2::{
-        render::render_tree_lines,
+        render::{apply_sway, render_tree_lines},
         state::{BonsaiV2State, branch_label},
     },
     common::theme,
@@ -17,7 +17,7 @@ use crate::app::{
 const MODAL_WIDTH: u16 = 88;
 const MODAL_HEIGHT: u16 = 32;
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, _beat: f32) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_tick: usize) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
@@ -40,13 +40,14 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, _beat: 
     ])
     .split(inner);
 
-    draw_tree(frame, layout[0], state);
+    draw_tree(frame, layout[0], state, wall_tick);
     draw_status(frame, layout[1], state);
     draw_footer(frame, layout[2]);
 }
 
-fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
+fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_tick: usize) {
     let mut tree_lines = render_tree_lines(state, area.width as usize, area.height as usize, true);
+    apply_sway(&mut tree_lines, wall_tick);
     let top_pad = area.height.saturating_sub(tree_lines.len() as u16) as usize;
     let mut lines = Vec::with_capacity(top_pad + tree_lines.len());
     for _ in 0..top_pad {

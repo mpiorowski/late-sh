@@ -133,7 +133,7 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply n
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
 const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
 const BARTENDER_USERNAME: &str = "bartender";
-const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(30);
+const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(15);
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
 /// Hardcoded rather than sourced from `AiConfig::model`: the bartender's order
 /// decision is a small ungrounded/schema-enforced JSON call, so it runs on

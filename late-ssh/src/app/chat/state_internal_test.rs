@@ -1943,6 +1943,79 @@ async fn identical_snapshot_reapply_keeps_row_cache_counters_stable() {
 }
 
 #[tokio::test]
+async fn identical_snapshot_reapply_reports_clean() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "clean_user").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "clean_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join user");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "first".to_string(),
+        },
+    )
+    .await
+    .expect("first message");
+
+    let mut state = counter_test_state(&test_db, user.id);
+    crate::test_helpers::wait_until(
+        || async { state.snapshot_rx.has_changed().unwrap_or(false) },
+        "initial chat snapshot",
+    )
+    .await;
+    assert!(state.drain_snapshot(), "first snapshot populates state");
+    assert!(!state.rooms.is_empty(), "initial snapshot loads rooms");
+
+    // An unchanged snapshot re-publish must not cost a frame: the fixed
+    // 10s refresh cadence would otherwise dirty every idle session.
+    state.refresh_tx.send(()).expect("force refresh");
+    crate::test_helpers::wait_until(
+        || async { state.snapshot_rx.has_changed().unwrap_or(false) },
+        "identical chat snapshot refresh",
+    )
+    .await;
+    assert!(
+        !state.drain_snapshot(),
+        "identical snapshot reapply reports clean"
+    );
+
+    // A snapshot carrying a new message must still dirty the frame.
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "second".to_string(),
+        },
+    )
+    .await
+    .expect("second message");
+    state.refresh_tx.send(()).expect("force refresh");
+    crate::test_helpers::wait_until(
+        || async { state.snapshot_rx.has_changed().unwrap_or(false) },
+        "chat snapshot with new message",
+    )
+    .await;
+    assert!(
+        state.drain_snapshot(),
+        "snapshot with a new message reports changed"
+    );
+}
+
+#[tokio::test]
 async fn push_message_bumps_only_its_room_version() {
     use late_core::models::chat_room::ChatRoom;
     use late_core::models::chat_room_member::ChatRoomMember;

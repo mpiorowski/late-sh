@@ -1,11 +1,105 @@
 //! Pure room↔channel projection helpers (no I/O).
 
+use irc_proto::message::Tag;
 use late_core::models::chat_room::ChatRoom;
+use uuid::Uuid;
 
 /// Max bytes of message body per PRIVMSG line. Conservative: leaves room for
 /// `:nick!nick@late.sh PRIVMSG #channel :` plus CRLF inside the 512-byte
 /// line limit.
 pub const PRIVMSG_CHUNK_BYTES: usize = 400;
+
+pub fn msgid(message_id: Uuid) -> String {
+    message_id.to_string()
+}
+
+pub fn server_time(created: chrono::DateTime<chrono::Utc>) -> String {
+    created.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReplyTagError {
+    MissingValue,
+    MalformedValue,
+    ConflictingValues,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReactionTagAction {
+    React,
+    Unreact,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionTag {
+    pub reply_to_message_id: Uuid,
+    pub action: ReactionTagAction,
+    pub icon: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReactionTagError {
+    MissingReply,
+    InvalidReply(ReplyTagError),
+    MissingReaction,
+    ConflictingReactions,
+    MissingValue,
+}
+
+pub fn reply_tag(tags: Option<&[Tag]>) -> Result<Option<Uuid>, ReplyTagError> {
+    let Some(tags) = tags else {
+        return Ok(None);
+    };
+    let mut reply_to = None;
+    for tag in tags
+        .iter()
+        .filter(|tag| matches!(tag.0.as_str(), "+reply" | "+draft/reply"))
+    {
+        let value = tag.1.as_deref().ok_or(ReplyTagError::MissingValue)?;
+        let id = Uuid::parse_str(value).map_err(|_| ReplyTagError::MalformedValue)?;
+        match reply_to {
+            Some(existing) if existing != id => return Err(ReplyTagError::ConflictingValues),
+            Some(_) => {}
+            None => reply_to = Some(id),
+        }
+    }
+    Ok(reply_to)
+}
+
+pub fn reaction_tag(tags: Option<&[Tag]>) -> Result<Option<ReactionTag>, ReactionTagError> {
+    let Some(tags) = tags else {
+        return Ok(None);
+    };
+
+    let mut reaction = None;
+    for tag in tags {
+        let action = match tag.0.as_str() {
+            "+draft/react" => ReactionTagAction::React,
+            "+draft/unreact" => ReactionTagAction::Unreact,
+            _ => continue,
+        };
+        let value = tag.1.as_deref().ok_or(ReactionTagError::MissingValue)?;
+        if reaction.is_some() {
+            return Err(ReactionTagError::ConflictingReactions);
+        }
+        reaction = Some((action, value.to_string()));
+    }
+
+    let Some((action, icon)) = reaction else {
+        return Ok(None);
+    };
+    let Some(reply_to_message_id) =
+        reply_tag(Some(tags)).map_err(ReactionTagError::InvalidReply)?
+    else {
+        return Err(ReactionTagError::MissingReply);
+    };
+
+    Ok(Some(ReactionTag {
+        reply_to_message_id,
+        action,
+        icon,
+    }))
+}
 
 /// IRC-visible nick for a canonical late.sh username.
 ///

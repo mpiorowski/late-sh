@@ -16,7 +16,7 @@ use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode};
 
 use super::{
     announcements, artboard,
-    audio::{client_state::ClientAudioState, viz::Visualizer},
+    audio::client_state::ClientAudioState,
     bonsai, chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
@@ -68,7 +68,7 @@ fn room_list_sidebar_enabled(
     }
 }
 
-fn dashboard_home_selected(
+pub(crate) fn dashboard_home_selected(
     lounge_room_id: Option<uuid::Uuid>,
     selected_room_id: Option<uuid::Uuid>,
     synthetic_selected: bool,
@@ -131,6 +131,7 @@ struct DrawContext<'a> {
     rebels_enabled: bool,
     nethack_enabled: bool,
     dcss_enabled: bool,
+    brogue_enabled: bool,
     usurper_enabled: bool,
     dopewars_enabled: bool,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
@@ -140,6 +141,7 @@ struct DrawContext<'a> {
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
     dcss_state: Option<&'a mut crate::app::door::dcss::state::State>,
+    brogue_state: Option<&'a mut crate::app::door::brogue::state::State>,
     usurper_state: Option<&'a mut crate::app::door::usurper::state::State>,
     dopewars_state: Option<&'a mut crate::app::door::dopewars::state::State>,
     /// Detected terminal-image protocol for the current session.
@@ -161,8 +163,6 @@ struct DrawContext<'a> {
     directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
-    worldcup_snapshot: Option<std::sync::Arc<crate::app::worldcup::model::WorldCupSnapshot>>,
-    worldcup_state: &'a crate::app::worldcup::state::State,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     /// Resolved 24h username-effect styles for clubhouse name labels.
@@ -172,20 +172,11 @@ struct DrawContext<'a> {
     clubhouse_lounge_messages: &'a [late_core::models::chat_message::ChatMessage],
     /// Staff bot ids so their #lounge lines bubble over their sprites.
     clubhouse_graybeard_id: Option<uuid::Uuid>,
+    clubhouse_bot_id: Option<uuid::Uuid>,
     /// The clubhouse composer footer; built only on that screen.
     clubhouse_composer: Option<chat::ui::ComposerBlockView<'a>>,
-    /// The account's flag-emoji tweak, shared with chat/shop: when set, flags
-    /// are replaced by text fallbacks for terminals that can't render them.
-    show_flag_fallback: bool,
-    /// Client is kitty specifically — it splits regional-indicator flags in the
-    /// World Cup overview's rightmost column (see `App::terminal_is_kitty`).
-    terminal_is_kitty: bool,
-    /// The account's raw timezone tweak. The World Cup screen (its only
-    /// consumer) parses it lazily so no work happens on other screens' frames.
-    worldcup_timezone: Option<&'a str>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
-    visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
     sidebar_clock: &'a str,
@@ -281,6 +272,7 @@ impl App {
         self.last_pet_strip_pet_rect.set(None);
         self.last_pet_strip_food_rect.set(None);
         self.last_pet_strip_water_rect.set(None);
+        self.last_pet_strip_travel.set(None);
         self.last_dock_rail_rect.set(None);
         self.last_dock_center_rect.set(None);
         self.last_dock_sidebar_rect.set(None);
@@ -407,25 +399,10 @@ impl App {
         let paired_cli_supports_voice = self.paired_cli_supports_voice();
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
-        let visualizer = &self.visualizer;
-        self.chat
-            .request_image_modal_terminal_image(self.terminal_image_protocol);
-        let username_directory_snapshot = self
-            .username_directory
-            .as_ref()
-            .map(crate::usernames::snapshot);
-        // The directory swaps its Arc on every real change, so pointer
-        // equality is the change signal for the row cache epoch.
-        let directory_changed = match (&username_directory_snapshot, &self.last_username_directory)
-        {
-            (Some(current), Some(previous)) => !Arc::ptr_eq(current, previous),
-            (None, None) => false,
-            _ => true,
-        };
-        if directory_changed {
-            self.last_username_directory = username_directory_snapshot.clone();
-            self.chat_ctx_epoch += 1;
-        }
+        // The username directory snapshot is refreshed on the ~1s tick
+        // cadence (tick.rs), where its pointer-compare also bumps the row
+        // cache epoch; renders read the stored Arc only.
+        let username_directory_snapshot = self.last_username_directory.clone();
         let render_usernames = crate::usernames::UsernameLookup::new(
             self.chat.usernames(),
             username_directory_snapshot.as_deref(),
@@ -440,11 +417,6 @@ impl App {
         // Presence values are recomputed on the ~1s tick cadence
         // (`tick.rs`), not per frame; reads here are owned-memory only.
         let online_count = self.online_count;
-        let afk_user_ids = crate::state::afk_users_snapshot(&self.afk_users);
-        if !Arc::ptr_eq(&afk_user_ids, &self.afk_user_ids) {
-            self.afk_user_ids = afk_user_ids;
-            self.chat_ctx_epoch += 1;
-        }
         let image_modal = self
             .chat
             .image_modal()
@@ -507,6 +479,7 @@ impl App {
                     pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
                     food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
                     water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
+                    travel_slot: Some(&self.last_pet_strip_travel),
                 }),
                 activity_ticker: self.chat.activity_ticker(),
                 messages: dashboard_messages,
@@ -930,6 +903,7 @@ impl App {
         let mut rebels_state_taken = self.rebels_state.take();
         let mut nethack_state_taken = self.nethack_state.take();
         let mut dcss_state_taken = self.dcss_state.take();
+        let mut brogue_state_taken = self.brogue_state.take();
         let mut usurper_state_taken = self.usurper_state.take();
         let mut dopewars_state_taken = self.dopewars_state.take();
 
@@ -958,6 +932,7 @@ impl App {
                         rebels_enabled: self.rebels_enabled,
                         nethack_enabled: self.nethack_enabled,
                         dcss_enabled: self.dcss_enabled,
+                        brogue_enabled: self.brogue_enabled,
                         usurper_enabled: self.usurper_enabled,
                         dopewars_enabled: self.dopewars_enabled,
                         lateania_state: self.lateania_state.as_ref(),
@@ -966,6 +941,7 @@ impl App {
                         rebels_state: rebels_state_taken.as_mut(),
                         nethack_state: nethack_state_taken.as_mut(),
                         dcss_state: dcss_state_taken.as_mut(),
+                        brogue_state: brogue_state_taken.as_mut(),
                         usurper_state: usurper_state_taken.as_mut(),
                         dopewars_state: dopewars_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
@@ -984,20 +960,15 @@ impl App {
                         directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
-                        worldcup_snapshot: self.worldcup_rx.as_ref().map(|rx| rx.borrow().clone()),
-                        worldcup_state: &self.worldcup,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         clubhouse_name_styles: &self.name_styles,
                         clubhouse_lounge_messages,
                         clubhouse_graybeard_id: self.clubhouse_graybeard_id,
+                        clubhouse_bot_id: self.clubhouse_bot_id,
                         clubhouse_composer,
-                        show_flag_fallback: self.profile_state.profile().show_flag_fallback,
-                        terminal_is_kitty: self.terminal_is_kitty,
-                        worldcup_timezone: self.profile_state.profile().timezone.as_deref(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
-                        visualizer,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
                         sidebar_clock: &sidebar_clock,
@@ -1094,6 +1065,7 @@ impl App {
         self.rebels_state = rebels_state_taken;
         self.nethack_state = nethack_state_taken;
         self.dcss_state = dcss_state_taken;
+        self.brogue_state = brogue_state_taken;
         self.usurper_state = usurper_state_taken;
         self.dopewars_state = dopewars_state_taken;
         draw_result?;
@@ -1313,6 +1285,7 @@ impl App {
                         rebels_enabled: ctx.rebels_enabled,
                         nethack_enabled: ctx.nethack_enabled,
                         dcss_enabled: ctx.dcss_enabled,
+                        brogue_enabled: ctx.brogue_enabled,
                         usurper_enabled: ctx.usurper_enabled,
                         dopewars_enabled: ctx.dopewars_enabled,
                         lateania_online: ctx.lateania_online,
@@ -1363,6 +1336,13 @@ impl App {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(content_area);
                     crate::app::door::dcss::render::draw_page(frame, content_area, state);
+                }
+            }
+            Screen::Brogue => {
+                if let Some(state) = ctx.brogue_state.as_deref_mut() {
+                    // Size the child PTY to the exact widget area before blitting.
+                    state.set_viewport(content_area);
+                    crate::app::door::brogue::render::draw_page(frame, content_area, state);
                 }
             }
             Screen::Usurper => {
@@ -1420,21 +1400,6 @@ impl App {
                     daily_completion: ctx.leaderboard.user_daily_statuses.get(&ctx.user_id),
                 },
             ),
-            Screen::WorldCup => {
-                let empty = crate::app::worldcup::model::WorldCupSnapshot::default();
-                let snapshot = ctx.worldcup_snapshot.as_deref().unwrap_or(&empty);
-                crate::app::worldcup::ui::draw(
-                    frame,
-                    content_area,
-                    crate::app::worldcup::ui::WorldCupView {
-                        snapshot,
-                        state: ctx.worldcup_state,
-                        show_flags: !ctx.show_flag_fallback,
-                        terminal_is_kitty: ctx.terminal_is_kitty,
-                        timezone: crate::app::profile::svc::parse_account_tz(ctx.worldcup_timezone),
-                    },
-                );
-            }
             Screen::Clubhouse => crate::app::clubhouse::ui::draw(
                 frame,
                 content_area,
@@ -1445,6 +1410,7 @@ impl App {
                     now_playing: ctx.now_playing,
                     lounge_messages: ctx.clubhouse_lounge_messages,
                     graybeard_user_id: ctx.clubhouse_graybeard_id,
+                    bot_user_id: ctx.clubhouse_bot_id,
                     composer: ctx.clubhouse_composer.take(),
                 },
             ),
@@ -1472,13 +1438,11 @@ impl App {
                 sidebar_area,
                 &SidebarProps {
                     components: &ctx.right_sidebar_components,
-                    visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
                     bonsai: ctx.bonsai,
                     bonsai_v2: ctx.bonsai_v2,
                     use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),
-                    audio_beat: ctx.visualizer.beat(),
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
@@ -1584,17 +1548,12 @@ impl App {
                 inner,
                 ctx.bonsai,
                 ctx.bonsai_care_state,
-                ctx.visualizer.beat(),
+                ctx.marquee_tick,
             );
         }
 
         if ctx.show_bonsai_v2_modal {
-            crate::app::bonsai_v2::modal_ui::draw(
-                frame,
-                inner,
-                ctx.bonsai_v2,
-                ctx.visualizer.beat(),
-            );
+            crate::app::bonsai_v2::modal_ui::draw(frame, inner, ctx.bonsai_v2, ctx.marquee_tick);
         }
 
         if ctx.show_lobby_modal {
@@ -1616,6 +1575,17 @@ impl App {
         }
         if screen == Screen::Dcss
             && let Some(state) = ctx.dcss_state.as_deref()
+            && state.name_modal_visible()
+        {
+            crate::app::door::landing::draw_name_modal(
+                frame,
+                inner,
+                state.handle_status(),
+                state.entry_input(),
+            );
+        }
+        if screen == Screen::Brogue
+            && let Some(state) = ctx.brogue_state.as_deref()
             && state.name_modal_visible()
         {
             crate::app::door::landing::draw_name_modal(
@@ -1725,7 +1695,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Games, "3"),
         (Screen::Artboard, "4"),
         (Screen::Pinstar, "5"),
-        (Screen::WorldCup, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1742,6 +1711,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                         | Screen::Rebels
                         | Screen::Nethack
                         | Screen::Dcss
+                        | Screen::Brogue
                         | Screen::Usurper
                         | Screen::Dopewars
                         | Screen::GreenDragon
@@ -1766,13 +1736,13 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
         Screen::Dcss => "DCSS",
+        Screen::Brogue => "Brogue",
         Screen::Usurper => "Usurper",
         Screen::Dopewars => "dopewars",
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
-        Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
@@ -1840,6 +1810,26 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         }
     }
 
+    if screen == Screen::Brogue {
+        spans.push(Span::styled(
+            "by tmewett/BrogueCE ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        // While a game is live, surface the leave/help keys in the chrome (it
+        // sits outside the game grid, so it never covers glyphs). Players who
+        // skipped the launcher otherwise mash Esc trying to get out.
+        let in_game = ctx
+            .brogue_state
+            .as_deref()
+            .is_some_and(|state| state.is_running());
+        if in_game {
+            spans.push(Span::styled(
+                "\u{b7} ? help \u{b7} S save \u{b7} Q abandon ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
     if screen == Screen::Usurper {
         spans.push(Span::styled(
             "by usurper.info ",
@@ -1892,30 +1882,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 "· {} inside · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
                 ctx.clubhouse_state.headcount()
             ),
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-    }
-
-    if screen == Screen::WorldCup {
-        spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
-        spans.push(Span::styled(
-            "Space",
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " bracket · ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-        spans.push(Span::styled(
-            "j/k",
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " scroll ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }

@@ -14,12 +14,6 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/status", get(status_handler))
 }
 
-impl Home {
-    fn active_page(&self) -> &str {
-        "/"
-    }
-}
-
 #[derive(Template)]
 #[template(path = "pages/home/page.html")]
 struct Home;

@@ -68,3 +68,11 @@ fn item(sku: &str, item_kind: &str, owned: bool) -> ShopCatalogItem {
         username_effect_variant: None,
     }
 }
+
+#[test]
+fn cooldown_label_is_minute_granularity() {
+    use std::time::Duration;
+    assert_eq!(format_cooldown(Duration::from_secs(30)), "<1m");
+    assert_eq!(format_cooldown(Duration::from_secs(90)), "1m");
+    assert_eq!(format_cooldown(Duration::from_secs(3660)), "1h 1m");
+}

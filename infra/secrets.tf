@@ -83,27 +83,6 @@ resource "kubernetes_secret_v1" "youtube_credentials" {
 }
 
 # =============================================================================
-# Web Terminal Tunnel Token
-# =============================================================================
-
-resource "random_password" "web_tunnel_token" {
-  length  = 32
-  special = false
-}
-
-resource "kubernetes_secret_v1" "web_tunnel_token" {
-  metadata {
-    name = "web-tunnel-token"
-  }
-
-  data = {
-    token = random_password.web_tunnel_token.result
-  }
-
-  type = "Opaque"
-}
-
-# =============================================================================
 # Rebels in the Sky Identity Seed
 # =============================================================================
 
@@ -191,6 +170,30 @@ resource "kubernetes_secret_v1" "dcss_identity_secret" {
 
   data = {
     secret = random_password.dcss_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
+# Brogue Door Identity Seed
+# =============================================================================
+# Shared secret authorizing late-ssh -> late-brogue. The same value is injected
+# into BOTH the service-ssh client (LATE_BROGUE_SECRET) and the late-brogue
+# host pod, which each derive the same ed25519 key from it (see late-brogue).
+
+resource "random_password" "brogue_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "brogue_identity_secret" {
+  metadata {
+    name = "brogue-identity-secret"
+  }
+
+  data = {
+    secret = random_password.brogue_identity_secret.result
   }
 
   type = "Opaque"

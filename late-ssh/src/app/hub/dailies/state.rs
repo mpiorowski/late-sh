@@ -14,6 +14,7 @@ pub(crate) struct QuestState {
 
 pub(crate) struct QuestTick {
     pub banner: Option<Banner>,
+    pub snapshot_changed: bool,
 }
 
 impl QuestState {
@@ -64,7 +65,10 @@ impl QuestState {
             }
         }
 
-        QuestTick { banner }
+        QuestTick {
+            banner,
+            snapshot_changed,
+        }
     }
 
     pub(crate) fn snapshot(&self) -> &QuestSnapshot {

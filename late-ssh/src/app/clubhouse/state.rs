@@ -117,6 +117,7 @@ pub struct State {
     username: String,
     pub graybeard_online: bool,
     pub bartender_online: bool,
+    pub bot_online: bool,
     last_roster_tick: u64,
     force_roster_refresh: bool,
     /// Roster ids from the last refresh, for arrival/departure diffs.
@@ -155,6 +156,7 @@ impl State {
             username,
             graybeard_online: false,
             bartender_online: false,
+            bot_online: false,
             last_roster_tick: 0,
             force_roster_refresh: false,
             seen: HashSet::new(),
@@ -172,10 +174,14 @@ impl State {
         }
     }
 
-    /// Advance the animation clock and expire door ambience. Called every
-    /// world tick.
-    pub fn tick(&mut self, _on_screen: bool) {
-        self.anim_tick = self.anim_tick.wrapping_add(1);
+    /// Sync the animation clock to the wall-clock world tick (66ms units,
+    /// `App::marquee_tick`) and expire door ambience. Called every world
+    /// tick. The clock must come from wall time, not a per-call increment:
+    /// the adaptive loop ticks sparsely, so counting calls would tie
+    /// animation speed to the tick cadence (walking held the hot cadence
+    /// and visibly sped the room up 4x).
+    pub fn tick(&mut self, wall_tick: u64) {
+        self.anim_tick = wall_tick;
         let now = self.anim_tick;
         self.door_events.retain(|e| e.until_tick > now);
     }

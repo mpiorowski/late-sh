@@ -68,9 +68,14 @@ impl State {
         self.user_id
     }
 
-    pub fn tick(&mut self) {
+    /// Returns true when a snapshot landed or the power-up flash expired.
+    /// The maze itself is server-published (25ms loop, gated on a hero
+    /// being in play), so the peeks cover all movement.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
         if self.public_rx.has_changed().unwrap_or(false) {
             self.public = self.public_rx.borrow_and_update().clone();
+            changed = true;
         }
         if self.private_rx.has_changed().unwrap_or(false) {
             let next = self.private_rx.borrow_and_update().clone();
@@ -82,12 +87,15 @@ impl State {
                 Some(view) => img_to_lines(&view.image, Some(&view.overrides), view.background),
                 None => Vec::new(),
             };
+            changed = true;
         }
         if let Some((_, at)) = self.flash
             && at.elapsed() >= FLASH_TTL
         {
             self.flash = None;
+            changed = true;
         }
+        changed
     }
 
     pub fn lines(&self) -> &[Line<'static>] {

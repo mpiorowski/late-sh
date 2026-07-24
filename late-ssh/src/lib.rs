@@ -22,4 +22,3 @@ pub(crate) mod terminal_size;
 #[cfg(test)]
 pub mod test_helpers;
 pub mod usernames;
-pub mod web_tunnel;

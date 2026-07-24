@@ -429,6 +429,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         dcss_host: state.config.dcss_host.clone(),
         dcss_port: state.config.dcss_port,
         dcss_secret: state.config.dcss_secret.clone(),
+        brogue_enabled: state.config.brogue_enabled,
+        brogue_host: state.config.brogue_host.clone(),
+        brogue_port: state.config.brogue_port,
+        brogue_secret: state.config.brogue_secret.clone(),
         usurper_enabled: state.config.usurper_enabled,
         usurper_host: state.config.usurper_host.clone(),
         usurper_port: state.config.usurper_port,
@@ -443,7 +447,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
         radio_meta_rx: Some(state.radio_meta_rx.clone()),
-        worldcup_service: Some(state.worldcup_service.clone()),
         active_users: Some(state.active_users.clone()),
         clubhouse_lobby: Some(state.clubhouse_lobby.clone()),
         clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(

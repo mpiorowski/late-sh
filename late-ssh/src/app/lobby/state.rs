@@ -130,13 +130,7 @@ impl LobbyState {
     }
 
     pub fn move_selection(&mut self, daily: &DailyState, delta: isize) {
-        let count = self.entry_count(daily);
-        if count == 0 {
-            self.selected = 0;
-            return;
-        }
-        let next = self.selected as isize + delta;
-        self.selected = next.clamp(0, count as isize - 1) as usize;
+        self.selected = wrap_index(self.selected, delta, self.entry_count(daily));
         self.confirm_claim = None;
     }
 
@@ -157,3 +151,19 @@ impl LobbyState {
         }
     }
 }
+
+/// Cursor arithmetic for the modal list. Moves wrap in both directions: `k`
+/// on the first row lands on the last, `j` on the last returns to the first.
+/// The list is one flat index space over all five sections, so wrapping
+/// backwards from the top always reaches the house-table block (the only
+/// section that is never empty). An empty list pins at 0.
+fn wrap_index(selected: usize, delta: isize, count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    (selected as isize + delta).rem_euclid(count as isize) as usize
+}
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod state_test;

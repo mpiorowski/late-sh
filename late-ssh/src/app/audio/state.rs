@@ -5,6 +5,13 @@ use uuid::Uuid;
 use super::svc::{AudioEvent, AudioService, QueueSnapshot};
 use crate::app::common::primitives::Banner;
 
+pub struct AudioTick {
+    pub banner: Option<Banner>,
+    /// True when the shared queue snapshot moved this tick: the booth modal
+    /// and the sidebar music stage draw straight from it.
+    pub changed: bool,
+}
+
 pub struct AudioState {
     pub(crate) service: AudioService,
     user_id: Uuid,
@@ -115,7 +122,13 @@ impl AudioState {
             .persist_radio_station_task(self.user_id, station);
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> AudioTick {
+        // Mark the queue snapshot seen so the peek only fires once per
+        // publish; renders keep reading it through `queue_snapshot()`.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false);
+        if changed {
+            let _ = self.snapshot_rx.borrow_and_update();
+        }
         let mut banner = None;
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
@@ -226,6 +239,6 @@ impl AudioState {
                 _ => {}
             }
         }
-        banner
+        AudioTick { banner, changed }
     }
 }

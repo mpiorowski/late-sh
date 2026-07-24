@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, procedural browser-pair visualizer fallback, and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-07-21 (Booth History dropped community votes: `media_history_votes` is gone (migration `122`), history lists and prunes by `last_played_at DESC` so the now-playing track sits at the top, and the History pane lost its `+/-/0` keys)
+- Last updated: 2026-07-23 (a track sits in the playlist once: `idx_media_queue_active_track` (migration `123`) makes a second `queued`/`playing` row for the same video impossible, and every submit path checks first so the user gets an "Already in the queue" banner instead of a constraint error)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -63,7 +63,8 @@ Cross-crate touchpoints:
   `048_create_media_sources.sql`,
   `049_create_media_queue_votes.sql`,
   `073_create_media_history.sql`,
-  `122_drop_media_history_votes.sql`.
+  `122_drop_media_history_votes.sql`,
+  `123_media_queue_unique_active_track.sql`.
 - `late-core/src/audio.rs` — `VizFrame { bands[8], rms, track_pos_ms }` shared between server and CLI.
 - `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::SetPlaybackSource`, source/surface policy.
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
@@ -177,6 +178,7 @@ Routed by report `state` field:
 6. **Sequence monotonicity.** `state.sequence` is bumped before every `QueueUpdate` so clients can drop stale ones.
 7. **Banners are user-scoped.** `AudioEvent` carries `user_id` and `AudioState::tick` filters on it; one user's submission failure does not leak to others.
 8. **DB beats memory on drift.** Any zero-row terminal transition (`mark_played` / `mark_skipped`) or singleton conflict routes through reconcile. Reconcile never blindly clears `current_item_id` while DB still has a `playing` row.
+9. **One active row per track.** The partial unique index `idx_media_queue_active_track` on `(media_kind, external_id) WHERE status IN ('queued','playing')` holds the playlist to one copy of a video. Every insert path (`submit_video` for booth + `/audio`, `requeue_history_item`) checks `MediaQueueItem::youtube_is_active` first and bails with `"track is already in the queue"`, so the user sees "Already in the queue" rather than a raw constraint error; a submission that loses the race gets the same banner from the violation text. A finished track (`played`/`skipped`/`failed`) leaves the active set and can be submitted or requeued again.
 
 ---
 

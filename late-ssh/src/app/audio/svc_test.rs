@@ -124,6 +124,48 @@ async fn force_skip_stale_memory_does_not_mutate_already_played_row() {
     assert_eq!(current.id, second_id);
 }
 
+/// The playlist holds a track once, whether it is the one playing or one
+/// waiting in line.
+#[tokio::test]
+async fn submitting_a_track_already_in_the_queue_is_rejected() {
+    let test = test_db().await;
+    let user = create_test_user(&test.db, "audio_submit_duplicate").await;
+    let service = AudioService::new(
+        test.db.clone(),
+        None,
+        PairedClientRegistry::new("https://audio.late.sh"),
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+    );
+
+    // First submission starts playing, second waits in the queue.
+    service
+        .submit_validated_video(user.id, test_video("eeeeeeeeeee", "now playing"))
+        .await
+        .expect("queue first");
+    service
+        .submit_validated_video(user.id, test_video("fffffffffff", "up next"))
+        .await
+        .expect("queue second");
+
+    let playing_again = service
+        .submit_validated_video(user.id, test_video("eeeeeeeeeee", "now playing"))
+        .await
+        .expect_err("the playing track must not queue again");
+    assert!(format!("{playing_again:#}").contains("already in the queue"));
+
+    let queued_again = service
+        .submit_validated_video(user.id, test_video("fffffffffff", "up next"))
+        .await
+        .expect_err("a queued track must not queue twice");
+    assert!(format!("{queued_again:#}").contains("already in the queue"));
+
+    let client = test.db.get().await.expect("db client");
+    let snapshot = MediaQueueItem::list_snapshot(&client, 10)
+        .await
+        .expect("snapshot");
+    assert_eq!(snapshot.len(), 2);
+}
+
 fn test_video(video_id: &str, title: &str) -> YoutubeVideo {
     YoutubeVideo {
         video_id: video_id.to_string(),

@@ -54,6 +54,13 @@ impl ComposerField {
     }
 }
 
+/// Outcome of one tab tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed the rendered tab (badge counts, showcase list).
+pub struct ShowcaseTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct State {
     service: ShowcaseService,
     user_id: Uuid,
@@ -398,9 +405,15 @@ impl State {
         self.selected_url().map(|url| url.trim().to_string())
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> ShowcaseTick {
+        // Peek before draining: anything queued may change the rendered tab
+        // (badge counts, showcase list), so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
-        self.drain_events()
+        ShowcaseTick {
+            banner: self.drain_events(),
+            changed,
+        }
     }
 
     fn drain_snapshot(&mut self) {

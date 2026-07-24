@@ -429,6 +429,12 @@ impl LinkAccountDialogState {
     }
 }
 
+pub(crate) struct SettingsTick {
+    pub banner: Option<Banner>,
+    /// True when this tick drained any async result into the open modal.
+    pub changed: bool,
+}
+
 pub(crate) struct SettingsModalState {
     profile_service: ProfileService,
     feed_service: FeedService,
@@ -555,13 +561,19 @@ impl SettingsModalState {
         self.feed_service.list_task(self.user_id);
     }
 
-    pub(crate) fn tick(&mut self) -> Option<Banner> {
+    pub(crate) fn tick(&mut self) -> SettingsTick {
+        // Peek before draining: async results (feed list refresh, account
+        // link steps) mutate the open modal without necessarily raising a
+        // banner.
+        let changed = self.feed_snapshot_rx.has_changed().unwrap_or(false)
+            || !self.feed_event_rx.is_empty()
+            || !self.profile_event_rx.is_empty();
         self.drain_feed_snapshot();
         let mut banner = self.drain_profile_events();
         if let Some(feed_banner) = self.drain_feed_events() {
             banner = Some(feed_banner);
         }
-        banner
+        SettingsTick { banner, changed }
     }
 
     pub(crate) fn selected_tab(&self) -> Tab {

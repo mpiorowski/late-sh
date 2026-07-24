@@ -14,10 +14,14 @@ impl VoiceState {
         Self { rx, snapshot }
     }
 
-    pub fn tick(&mut self) {
+    /// Returns true when the snapshot was replaced this tick.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
         while self.rx.has_changed().unwrap_or(false) {
             self.snapshot = self.rx.borrow_and_update().clone();
+            changed = true;
         }
+        changed
     }
 
     pub fn snapshot(&self) -> &VoiceSnapshot {

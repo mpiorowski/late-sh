@@ -1,6 +1,6 @@
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::chat::notifications::svc::NotificationService;
-use crate::app::chat::svc::{ChatEvent, ChatService};
+use crate::app::chat::svc::{ChatEvent, ChatReactionAction, ChatService};
 use crate::authz::Permissions;
 use crate::dartboard;
 use crate::moderation::command::ServerUserAction;
@@ -272,6 +272,26 @@ async fn emits_message_reactions_updated_when_member_reacts() {
             assert_eq!(reactions[0].count, 1);
         }
         _ => panic!("expected message reactions updated event"),
+    }
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::MessageReactionDelta(delta) => {
+            assert_eq!(delta.room_id, room.id);
+            assert_eq!(delta.message_id, message.id);
+            assert_eq!(delta.actor_user_id, reactor.id);
+            assert_eq!(delta.icon, "👀");
+            assert_eq!(delta.action, ChatReactionAction::React);
+            assert_eq!(delta.previous_icon, None);
+            assert_eq!(
+                delta.target_user_ids, None,
+                "public room deltas broadcast; sessions filter by membership"
+            );
+        }
+        _ => panic!("expected message reaction delta event"),
     }
 }
 

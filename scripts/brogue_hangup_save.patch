@@ -1,0 +1,39 @@
+Save-and-exit on SIGHUP/SIGTERM for the Brogue CE curses build (late.sh door
+hosting; applied by the Dockerfile brogue-build stage, re-verify on CE bumps).
+
+Upstream only auto-saves an interrupted game in the SDL platform (window-close
+calls quitImmediately); the curses build dies unsaved on a hangup, so an SSH
+disconnect or a host rollout would lose the run. This installs a hangup handler
+that runs the same quitImmediately save path (flush the recording, write the
+suspend .broguesave) and exits. quitImmediately is prompt- and UI-free, so it
+is safe enough to run from a terminating signal handler; the dgamelaunch
+NetHack servers have relied on the same save-on-SIGHUP shape for decades.
+
+--- a/src/platform/curses-platform.c
++++ b/src/platform/curses-platform.c
+@@ -2,12 +2,25 @@
+ #include <string.h>
+ #include <stdint.h>
+ #include <signal.h>
++#include <unistd.h>
+ #include <sys/time.h>
+ #include "platform.h"
+ #include "term.h"
+
++// late.sh: on hangup (SSH disconnect) or SIGTERM (host shutdown), save the
++// game in progress exactly like the SDL platform's window-close path, so the
++// run resumes next launch instead of being lost. quitImmediately never
++// prompts or draws; _exit skips curses teardown (the terminal is gone).
++static void handleHangup(int sig) {
++    (void)sig;
++    quitImmediately();
++    _exit(EXIT_STATUS_SUCCESS);
++}
++
+ static void gameLoop() {
+     signal(SIGINT, SIG_DFL); // keep SDL from overriding the default ^C handler when it's linked
++    signal(SIGHUP, handleHangup);
++    signal(SIGTERM, handleHangup);
+
+     if (!Term.start()) {
+         return;
