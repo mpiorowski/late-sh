@@ -1669,8 +1669,9 @@ async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
                     Err(error) => return Err(error),
                 }
             }
-            let user = created
-                .ok_or_else(|| anyhow::anyhow!("could not allocate a unique username after retries"))?;
+            let user = created.ok_or_else(|| {
+                anyhow::anyhow!("could not allocate a unique username after retries")
+            })?;
             User::ensure_ssh_key(&client, user.id, fingerprint).await?;
             match state.chat_service.auto_join_public_rooms(user.id).await {
                 Ok(joined) => {

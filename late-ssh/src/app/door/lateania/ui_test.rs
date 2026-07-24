@@ -130,11 +130,14 @@ fn equipped_inventory_tags_show_the_slot() {
     assert_eq!(inventory_item_tag(false, Some("ring")), " (ring)");
 }
 
-use super::recent_log_tail;
 use super::super::svc::{LogKind, LogLine, empty_player_view};
+use super::recent_log_tail;
 
 fn line_text(line: &Line) -> String {
-    line.spans.iter().map(|span| span.content.as_ref()).collect()
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 fn log_view(entries: &[&str]) -> super::PlayerView {
