@@ -12,13 +12,6 @@ pub struct AiConfig {
     pub model: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct WebTunnelConfig {
-    pub token: String,
-    pub username: String,
-    pub fingerprint: String,
-}
-
 /// Embedded ircd settings; see devdocs/FRD-IRCD.md. All env vars are optional
 /// so environments without `LATE_IRC_*` settings are unaffected until the
 /// listener is explicitly enabled. The root Makefile opts local dev in.
@@ -70,7 +63,6 @@ pub struct Config {
     pub ssh_proxy_trusted_cidrs: Vec<IpNet>,
     pub ws_pair_max_attempts_per_ip: usize,
     pub ws_pair_rate_limit_window_secs: u64,
-    pub web_tunnel: WebTunnelConfig,
     pub ai: AiConfig,
     pub youtube_api_key: Option<String>,
     pub voice: VoiceConfig,
@@ -220,11 +212,6 @@ impl Config {
             "voice: LiveKit RTC status"
         );
         tracing::info!(
-            username = %self.web_tunnel.username,
-            token_len = self.web_tunnel.token.len(),
-            "web-tunnel: browser TUI display route"
-        );
-        tracing::info!(
             enabled = self.irc.enabled,
             port = self.irc.port,
             tls = self.irc.tls_cert_path.is_some(),
@@ -295,10 +282,6 @@ impl Config {
             dbname: required("LATE_DB_NAME")?,
             max_pool_size: required_parse("LATE_DB_POOL_SIZE")?,
         };
-        let web_tunnel_token = required("LATE_WEB_TUNNEL_TOKEN")?;
-        if web_tunnel_token.trim().is_empty() {
-            anyhow::bail!("LATE_WEB_TUNNEL_TOKEN must not be empty");
-        }
         let voice = if optional_bool("LATE_VOICE_ENABLED", false)? {
             VoiceConfig::enabled(
                 required("LATE_LIVEKIT_URL")?,
@@ -389,13 +372,6 @@ impl Config {
                 .collect::<anyhow::Result<Vec<_>>>()?,
             ws_pair_max_attempts_per_ip: required_parse("LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP")?,
             ws_pair_rate_limit_window_secs: required_parse("LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS")?,
-            web_tunnel: WebTunnelConfig {
-                token: web_tunnel_token,
-                username: optional("LATE_WEB_TUNNEL_USERNAME")
-                    .unwrap_or_else(|| "web-demo".to_string()),
-                fingerprint: optional("LATE_WEB_TUNNEL_FINGERPRINT")
-                    .unwrap_or_else(|| "web-tunnel-demo".to_string()),
-            },
             ai: AiConfig {
                 enabled: ai_enabled,
                 api_key: ai_api_key,

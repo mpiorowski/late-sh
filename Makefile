@@ -97,7 +97,6 @@ LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (us
 LATE_SSH_INTERNAL_URL ?= http://service-ssh:$(LATE_API_PORT) # Internal SSH API URL (used by web server)
 LATE_SSH_PUBLIC_URL ?= localhost:$(LATE_API_PORT)           # Public SSH API URL (used by browser for WS)
 LATE_AUDIO_URL ?= http://icecast:8000                       # Upstream audio URL used by late-web /stream proxy
-LATE_WEB_TUNNEL_TOKEN ?= dev-web-tunnel                     # Local-only shared token for /play web terminal
 LATE_YOUTUBE_API_KEY ?=
 
 # --- AI (Gemini - used for @bot and @graybeard chat + URL extraction) ---
@@ -200,7 +199,6 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
 	@echo "LATE_SSH_PUBLIC_URL=$(LATE_SSH_PUBLIC_URL)" >> .env
 	@echo "LATE_AUDIO_URL=$(LATE_AUDIO_URL)" >> .env
-	@echo "LATE_WEB_TUNNEL_TOKEN=$(LATE_WEB_TUNNEL_TOKEN)" >> .env
 	@echo "LATE_YOUTUBE_API_KEY=$(LATE_YOUTUBE_API_KEY)" >> .env
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env
@@ -277,23 +275,21 @@ test-llm: .env
 	$(CHECK_DB_START); \
 	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q -p MemoryHigh=$(TEST_LLM_MEM_HIGH) -p MemoryMax=$(TEST_LLM_MEM_MAX) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS)
 
+# Full pre-merge sweep, and the only place the otel feature is exercised:
+# clippy + tests run the whole workspace WITH --features otel, so the real
+# telemetry/metrics code (the config prod ships) is compiled and linted here.
+# CI deliberately skips otel to stay cheap (see .github/workflows/ci.yml), so
+# this is where otel breakage is caught before release. fmt stays scoped to
+# first-party packages: `cargo fmt --all` also reaches vendored path deps like
+# vendor/irc-proto, whose upstream style is not rustfmt-clean here.
 .PHONY: check
 check: .env
 	@set -e; \
 	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
 	$(CHECK_DB_START); \
 	cargo fmt $(CHECK_PACKAGES) -- --check; \
-	$(CHECK_CARGO_ENV) cargo clippy -j $(CHECK_BUILD_JOBS) $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) $(CHECK_PACKAGES) --all-targets --no-fail-fast --failure-output final
-
-.PHONY: checkci
-checkci: .env
-	@set -e; \
-	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
-	$(CHECK_DB_START); \
-	cargo fmt --all -- --check; \
-	$(CHECK_CARGO_ENV) cargo clippy --workspace --all-targets --features otel -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --workspace --all-targets --failure-output final
+	$(CHECK_CARGO_ENV) cargo clippy -j $(CHECK_BUILD_JOBS) --workspace --all-targets --features otel -- -D warnings; \
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --workspace --all-targets --no-fail-fast --failure-output final
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build

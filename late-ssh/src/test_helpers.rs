@@ -28,7 +28,7 @@ use crate::app::state::{App, SessionConfig};
 use crate::app::voice::svc::{VoiceConfig, VoiceService};
 use crate::app::{LeaderboardService, QuestService, ShopService};
 use crate::authz::Permissions;
-use crate::config::{AiConfig, Config, WebTunnelConfig};
+use crate::config::{AiConfig, Config};
 use crate::paired_clients::{PairControlMessage, PairedClientRegistry};
 use crate::session::SessionRegistry;
 use crate::state::State;
@@ -137,11 +137,6 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ssh_proxy_trusted_cidrs: vec![],
         ws_pair_max_attempts_per_ip: 30,
         ws_pair_rate_limit_window_secs: 60,
-        web_tunnel: WebTunnelConfig {
-            token: "test-web-tunnel-token".to_string(),
-            username: "web-demo".to_string(),
-            fingerprint: "web-tunnel-demo".to_string(),
-        },
         ai: AiConfig {
             enabled: false,
             api_key: None,
@@ -299,7 +294,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ultimate_service,
         now_playing_rx,
         radio_meta_rx,
-        worldcup_service: crate::app::worldcup::svc::WorldCupService::new(),
         activity_feed: activity_tx,
         session_registry,
         irc_registry,
@@ -474,7 +468,6 @@ fn make_app_with_chat_service_and_permissions(
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
-        worldcup_service: None,
         user_id,
         permissions,
         artboard_banned: false,
@@ -652,7 +645,6 @@ pub fn make_app_with_paired_client(
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
-        worldcup_service: None,
         user_id,
         permissions: Permissions::default(),
         artboard_banned: false,

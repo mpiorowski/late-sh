@@ -4,7 +4,7 @@ use getrandom::SysRng;
 use russh::keys::signature::rand_core::UnwrapErr;
 use russh::{
     ChannelMsg, client,
-    keys::{PrivateKey, PrivateKeyWithHashAlg},
+    keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg},
 };
 use std::sync::Arc;
 use std::time::Instant;
@@ -56,6 +56,66 @@ impl client::Handler for TestClient {
     ) -> Result<bool, Self::Error> {
         Ok(true)
     }
+}
+
+#[tokio::test]
+async fn new_account_uses_generated_name_instead_of_ssh_login() {
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    let ssh_login = "private-local-login";
+    let key = Arc::new(
+        PrivateKey::random(
+            &mut UnwrapErr(SysRng),
+            russh::keys::ssh_key::Algorithm::Ed25519,
+        )
+        .expect("generate client key"),
+    );
+    let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+    let mut client = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .expect("connect client");
+    let auth = client
+        .authenticate_publickey(
+            ssh_login,
+            PrivateKeyWithHashAlg::new(
+                key,
+                client
+                    .best_supported_rsa_hash()
+                    .await
+                    .expect("rsa hash")
+                    .flatten(),
+            ),
+        )
+        .await
+        .expect("authenticate")
+        .success();
+    assert!(auth, "public-key auth should succeed");
+
+    let db_client = test_db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::find_by_fingerprint(&db_client, &fingerprint)
+        .await
+        .expect("user lookup")
+        .expect("new account");
+    assert_ne!(user.username, ssh_login);
+    assert!(
+        crate::usernames::is_curated_base_username(&user.username),
+        "new account should use a curated modifier+noun name, got {}",
+        user.username
+    );
+
+    client
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect client");
+    handle.abort();
 }
 
 #[tokio::test]

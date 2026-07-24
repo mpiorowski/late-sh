@@ -111,6 +111,8 @@ services:
       - cargo-target:/app/target
 
   service-usurper:
+    # Upstream Usurper contains Intel assembly and only builds for x86-64.
+    platform: linux/amd64
     build:
       context: .
       target: dev-usurper
@@ -123,7 +125,7 @@ services:
       - .:/app
       - cargo-registry:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git
-      - cargo-target:/app/target
+      - cargo-target-amd64:/app/target
 
   service-brogue:
     build:
@@ -194,3 +196,4 @@ volumes:
   cargo-registry:
   cargo-git:
   cargo-target:
+  cargo-target-amd64:

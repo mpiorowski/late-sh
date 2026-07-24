@@ -48,6 +48,10 @@ Try the live service:
 ssh late.sh
 ```
 
+The SSH login name is discarded rather than used as a public handle. On the
+first connection, a new account receives a random modifier-and-noun username;
+the username can still be changed later in Settings.
+
 Run it yourself (requires Docker):
 
 ```bash
@@ -119,23 +123,20 @@ Use `mise install` to get the expected Rust toolchain, `mold` linker, and
 
 ## Verification
 
-Run the fast local gate while iterating:
+Run the local gate before opening a PR:
 
 ```bash
 make check
 ```
 
-This runs `cargo fmt --check`, `cargo clippy`, and `cargo nextest`.
+This runs `cargo fmt --check`, then `cargo clippy` and `cargo nextest` across the
+whole workspace with `--features otel`. It is the full pre-merge sweep and the
+only place the otel (telemetry) build is exercised, since CI skips otel to stay
+fast; otel breakage is caught here or at the release build, never in prod.
 The local check starts a dedicated Compose Postgres project (`late-check`) on
 port `55433` and points DB-backed tests at it via `TEST_DATABASE_URL`.
 Override `CHECK_INSTANCE` or `CHECK_PG_HOST_PORT` if you need a parallel check
 database.
-
-Run the broader PR-style gate before opening a PR:
-
-```bash
-make checkci
-```
 
 ## Contributing
 

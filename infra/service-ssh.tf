@@ -110,6 +110,23 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
             value = "http://otel-collector.monitoring.svc.cluster.local:4317"
           }
+          # Per-pod telemetry identity: without service.instance.id every pod
+          # exports the same otel series and they clobber each other on scrape
+          # (fatal once service-ssh runs multiple replicas). $(POD_NAME) is the
+          # downward-API pod name; the SDK's env resource detector reads
+          # OTEL_RESOURCE_ATTRIBUTES, the collector turns it into a metric label.
+          env {
+            name = "POD_NAME"
+            value_from {
+              field_ref {
+                field_path = "metadata.name"
+              }
+            }
+          }
+          env {
+            name  = "OTEL_RESOURCE_ATTRIBUTES"
+            value = "service.instance.id=$(POD_NAME)"
+          }
           env {
             name  = "LATE_SSH_PORT"
             value = "2222"
@@ -170,15 +187,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           env {
             name  = "LATE_ALLOWED_ORIGINS"
             value = "https://${var.DOMAIN}"
-          }
-          env {
-            name = "LATE_WEB_TUNNEL_TOKEN"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret_v1.web_tunnel_token.metadata[0].name
-                key  = "token"
-              }
-            }
           }
 
           # --- Door games ---

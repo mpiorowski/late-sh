@@ -36,7 +36,12 @@ enum CellKind {
     Pot,
 }
 
-pub(crate) fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiV2State, _beat: f32) {
+pub(crate) fn draw_bonsai_inline(
+    frame: &mut Frame,
+    area: Rect,
+    state: &BonsaiV2State,
+    wall_tick: usize,
+) {
     if area.height < 3 || area.width < 10 {
         return;
     }
@@ -44,6 +49,7 @@ pub(crate) fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiV2
     let footer_height = 1usize;
     let tree_height = (area.height as usize).saturating_sub(footer_height);
     let mut lines = render_preview_lines(state, area.width as usize, tree_height);
+    apply_sway(&mut lines, wall_tick);
 
     while lines.len() < tree_height {
         lines.insert(0, Line::from(""));
@@ -83,6 +89,32 @@ pub(crate) fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiV2
     lines.push(Line::from(footer).centered());
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Small idle sway off the shared wall tick: shift the upper lines
+/// horizontally by up to one column, fading to none at the pot. Applied
+/// to finished lines, so any selection highlighting embedded in them
+/// moves with the art. A left shift trims one leading blank; a line with
+/// no leading blank (tree at the edge) just skips that step. A wall_tick
+/// of 0 (static previews) lands on sin(0) and never moves.
+pub(crate) fn apply_sway(lines: &mut [Line<'static>], wall_tick: usize) {
+    let count = lines.len();
+    if count < 2 {
+        return;
+    }
+    let sway_base = (wall_tick as f64 * 0.132).sin(); // ~3s period at 66ms ticks
+    for (i, line) in lines.iter_mut().enumerate() {
+        let line_factor = 1.0 - (i as f64 / (count - 1) as f64);
+        let offset = (sway_base * line_factor).round() as i32;
+        if offset > 0 {
+            line.spans.insert(0, Span::raw(" "));
+        } else if offset < 0
+            && let Some(first) = line.spans.first_mut()
+            && let Some(rest) = first.content.strip_prefix(' ')
+        {
+            first.content = rest.to_string().into();
+        }
+    }
 }
 
 pub(crate) fn render_preview_lines(

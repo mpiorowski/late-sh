@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, time::SystemTime};
+use std::collections::BTreeSet;
 
 use chrono::{Datelike, Utc};
 use ratatui::{
@@ -28,7 +28,7 @@ pub(crate) struct TreeOverlay<'a> {
 /// Borderless bonsai render for the merged shell. Drops the outer block and
 /// "Bonsai (Xd)" title; the rail's whitespace separates it from neighbors.
 /// A single dim line at the bottom shows age + care hint.
-pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32) {
+pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
     if area.height < 3 || area.width < 10 {
         return;
     }
@@ -52,7 +52,7 @@ pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, be
         state.seed,
         wilting,
         area.width as usize,
-        beat,
+        wall_tick,
         None,
     ));
     while lines.len() < tree_space {
@@ -86,7 +86,7 @@ pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, be
 }
 
 /// Render the bonsai widget for the sidebar. Takes a fixed area.
-pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32) {
+pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
     let title = if state.is_alive {
         format!(" Bonsai ({}d) ", state.age_days)
     } else {
@@ -136,7 +136,7 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         state.seed,
         wilting,
         inner.width as usize,
-        beat,
+        wall_tick,
         None,
     ));
 
@@ -155,7 +155,7 @@ pub(crate) fn render_tree_art_lines(
     seed: i64,
     wilting: bool,
     width: usize,
-    beat: f32,
+    wall_tick: usize,
     overlay: Option<TreeOverlay<'_>>,
 ) -> Vec<Line<'static>> {
     let tree_art = tree_ascii(stage, seed, wilting);
@@ -170,17 +170,14 @@ pub(crate) fn render_tree_art_lines(
         theme::AMBER()
     };
 
-    // Sway: slow sine oscillation kicked by detected beats, canopy lines only
+    // Sway: small idle sine off the shared wall tick, canopy lines only.
+    // A wall_tick of 0 (static previews) lands on sin(0) and never moves.
     let has_canopy = matches!(
         stage,
         Stage::Young | Stage::Mature | Stage::Ancient | Stage::Blossom
     );
-    let sway_time = SystemTime::UNIX_EPOCH
-        .elapsed()
-        .unwrap_or_default()
-        .as_secs_f64();
-    let sway_base = (sway_time * 2.0).sin(); // ~3s period
-    let sway_amplitude = beat.clamp(0.0, 1.0) as f64 * 1.5;
+    let sway_base = (wall_tick as f64 * 0.132).sin(); // ~3s period at 66ms ticks
+    let sway_amplitude = 1.0;
     let w = width;
 
     // Count canopy lines (contain @, #, or *) for per-line falloff

@@ -34,7 +34,10 @@ impl HouseTableClient {
         }
     }
 
-    pub fn tick(&mut self) {
+    /// True when this tick moved visible state (snapshot landed, event
+    /// applied, flash expired). The games' server loops go quiet when no
+    /// round runs, so an idle table settles clean.
+    pub fn tick(&mut self) -> bool {
         match self {
             Self::Poker(state) => state.tick(),
             Self::Blackjack(state) => state.tick(),
@@ -277,11 +280,16 @@ impl HouseState {
         self.chat_join_requested = false;
     }
 
-    pub fn tick(&mut self) {
+    /// Returns true when the open client's visible state moved.
+    /// `notify_turn_edges` runs regardless: its notifications ride the
+    /// notify outbox, which forces frames on its own.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
         if let Some(client) = self.client.as_mut() {
-            client.tick();
+            changed = client.tick();
         }
         self.notify_turn_edges();
+        changed
     }
 
     /// One desktop notification per table that just became this user's turn,

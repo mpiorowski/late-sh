@@ -1,0 +1,19 @@
+name: main
+
+# Post-merge CI on main. Runs the same gate as pr.yml, and it is the only
+# place the Rust dependency caches are saved (see save-if in ci.yml) —
+# caches saved on main are readable by every PR, while caches saved on a PR
+# branch are visible only to that branch.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci
+    uses: ./.github/workflows/ci.yml
