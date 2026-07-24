@@ -148,25 +148,36 @@ impl ProfileModalState {
         self.snapshot_rx = None;
     }
 
-    pub(crate) fn tick(&mut self) {
+    /// Returns true when this tick drained a snapshot into the open modal.
+    pub(crate) fn tick(&mut self) -> bool {
+        let mut changed = false;
         if let Ok(true) = self.showcase_snapshot_rx.has_changed() {
             self.showcases = self.showcase_snapshot_rx.borrow_and_update().items.clone();
+            changed = true;
         }
 
         let Some(rx) = &mut self.snapshot_rx else {
-            return;
+            return changed;
         };
 
         match rx.has_changed() {
             Ok(true) => {
                 let snapshot = rx.borrow_and_update().clone();
                 self.apply_snapshot(snapshot);
+                changed = true;
             }
             Ok(false) => {}
             Err(e) => {
                 tracing::error!(%e, "failed to receive profile modal snapshot");
             }
         }
+        changed
+    }
+
+    /// True while the modal draws a live aquarium (the viewed profile owns
+    /// fish): the reef ticks during draw, so it needs frames while visible.
+    pub(crate) fn aquarium_animating(&self) -> bool {
+        !self.aquarium_fish.is_empty()
     }
 
     fn apply_snapshot(&mut self, snapshot: ProfileSnapshot) {
@@ -255,6 +266,20 @@ impl ProfileModalState {
 
     pub(crate) fn aquarium_cell(&self) -> &RefCell<Option<AquariumState>> {
         &self.aquarium
+    }
+
+    /// Advance the open modal's live reef one animation step. App::tick
+    /// drives this on its half-rate edge; draw only paints. False while no
+    /// reef is built yet (it is built lazily by the first draw, which the
+    /// modal-opening input frame forces).
+    pub(crate) fn step_reef(&mut self) -> bool {
+        match self.aquarium.get_mut() {
+            Some(aquarium) => {
+                aquarium.tick();
+                true
+            }
+            None => false,
+        }
     }
 
     pub(crate) fn aquarium_area(&self) -> &Cell<Rect> {

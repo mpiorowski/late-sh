@@ -69,7 +69,6 @@ pub enum Screen {
     GreenDragon,
     Artboard,
     Pinstar,
-    WorldCup,
     Clubhouse,
     /// Full-screen daily-match board. Entered only from the Daily Games
     /// modal, absent from the Tab cycle; Esc returns to the modal.
@@ -82,7 +81,7 @@ pub enum Screen {
 
 impl Screen {
     /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
-    /// through World Cup (`6`). The door games (Lateania, Rebels, Nethack,
+    /// through Directory (`5`). The door games (Lateania, Rebels, Nethack,
     /// Green Dragon) are reached through the Games hub, not the tab bar, so
     /// they are absent from the cycle; if one is somehow current,
     /// `next`/`prev` fall back to the hub that owns them.
@@ -93,8 +92,7 @@ impl Screen {
             Screen::Arcade => Screen::Games,
             Screen::Games => Screen::Artboard,
             Screen::Artboard => Screen::Pinstar,
-            Screen::Pinstar => Screen::WorldCup,
-            Screen::WorldCup => Screen::Clubhouse,
+            Screen::Pinstar => Screen::Clubhouse,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -109,13 +107,12 @@ impl Screen {
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Clubhouse => Screen::WorldCup,
+            Screen::Clubhouse => Screen::Pinstar,
             Screen::Dashboard => Screen::Clubhouse,
             Screen::Arcade => Screen::Dashboard,
             Screen::Games => Screen::Arcade,
             Screen::Artboard => Screen::Games,
             Screen::Pinstar => Screen::Artboard,
-            Screen::WorldCup => Screen::Pinstar,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -150,7 +147,6 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Arcade => "Arcade",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
-        Screen::WorldCup => "World Cup",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",

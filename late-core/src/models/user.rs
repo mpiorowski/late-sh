@@ -147,13 +147,14 @@ impl RightSidebarMode {
 
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
-pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 4;
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 3;
 
 /// A right-sidebar panel the user can reorder and toggle. The clock is not
-/// listed here — it is always pinned at the top of the sidebar.
+/// listed here — it is always pinned at the top of the sidebar. The
+/// visualizer is not a panel of its own: it renders inline at the top of
+/// `Music`, see `common/sidebar.rs`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarComponent {
-    Visualizer,
     Music,
     Bonsai,
     Daily,
@@ -162,15 +163,14 @@ pub enum RightSidebarComponent {
 impl RightSidebarComponent {
     /// Default order, top to bottom. Used when a user has no stored list and
     /// to backfill any panels missing from a stored list. Space cuts by
-    /// shrink priority (the visualizer goes first); Bonsai is the one
-    /// flexible panel and absorbs leftover rows. Stale stored keys (e.g. the
-    /// retired "activity" panel) are dropped on read by `from_key`.
+    /// shrink priority; Bonsai is the one flexible panel and absorbs leftover
+    /// rows. Stale stored keys (e.g. the retired "activity" and "visualizer"
+    /// panels) are dropped on read by `from_key`.
     pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
-        [Self::Daily, Self::Visualizer, Self::Music, Self::Bonsai];
+        [Self::Daily, Self::Music, Self::Bonsai];
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Visualizer => "visualizer",
             Self::Music => "music",
             Self::Bonsai => "bonsai",
             Self::Daily => "daily",
@@ -179,7 +179,6 @@ impl RightSidebarComponent {
 
     pub fn from_key(key: &str) -> Option<Self> {
         match key.trim() {
-            "visualizer" => Some(Self::Visualizer),
             "music" => Some(Self::Music),
             "bonsai" => Some(Self::Bonsai),
             "daily" => Some(Self::Daily),
@@ -189,7 +188,6 @@ impl RightSidebarComponent {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Visualizer => "Visualizer",
             Self::Music => "Audio playback",
             Self::Bonsai => "Bonsai",
             Self::Daily => "Lobby",

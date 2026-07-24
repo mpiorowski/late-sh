@@ -122,6 +122,9 @@ pub struct PetState {
     feedback_ticks: usize,
     animation_ticks: usize,
     roam_until: Option<DateTime<Utc>>,
+    /// Mood and needs as of the previous tick, so the day-rollover flips
+    /// (bowl colors, mood art) report as render-visible changes.
+    last_visual: Option<(PetMood, PetNeeds)>,
 }
 
 const FEEDBACK_TICKS: usize = 15 * 2;
@@ -143,6 +146,7 @@ impl PetState {
             feedback_ticks: 0,
             animation_ticks: 0,
             roam_until: None,
+            last_visual: None,
         }
     }
 
@@ -172,13 +176,24 @@ impl PetState {
         self.svc.set_species_task(self.user_id, species);
     }
 
-    pub fn tick(&mut self) {
-        self.animation_ticks = self.animation_ticks.wrapping_add(1);
+    /// Advance the pet's clocks. Returns true on state edges that need a
+    /// frame even when the animation predicate is quiet: feedback expiry, a
+    /// roam ending, and mood/needs flips at the UTC day rollover. Pure
+    /// animation cadence is the strip's business (`ui::strip_frame_changed`).
+    /// `wall_tick` is the app's shared 66ms wall clock (marquee_tick): the
+    /// adaptive loop ticks sparsely, so a per-call counter would slow the
+    /// animation with the cadence; syncing to the wall clock keeps every
+    /// speed true at any wake tier.
+    pub fn tick(&mut self, wall_tick: usize) -> bool {
+        let mut changed = false;
+        let elapsed = wall_tick.saturating_sub(self.animation_ticks);
+        self.animation_ticks = wall_tick;
 
         if self.action_feedback.is_some() {
-            self.feedback_ticks = self.feedback_ticks.saturating_sub(1);
+            self.feedback_ticks = self.feedback_ticks.saturating_sub(elapsed);
             if self.feedback_ticks == 0 {
                 self.action_feedback = None;
+                changed = true;
             }
         }
         if self
@@ -186,7 +201,14 @@ impl PetState {
             .is_some_and(|roam_until| roam_until <= Utc::now())
         {
             self.roam_until = None;
+            changed = true;
         }
+        let visual = (self.mood(), self.needs());
+        if self.last_visual != Some(visual) {
+            self.last_visual = Some(visual);
+            changed = true;
+        }
+        changed
     }
 
     pub fn mood(&self) -> PetMood {

@@ -74,6 +74,13 @@ impl ComposerField {
     }
 }
 
+/// Outcome of one tab tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed the rendered tab (badge counts, work profile list).
+pub struct WorkTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct State {
     service: WorkService,
     user_id: Uuid,
@@ -454,9 +461,15 @@ impl State {
         Some(profile_url(base_url, &item.profile.slug))
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> WorkTick {
+        // Peek before draining: anything queued may change the rendered tab
+        // (badge counts, work profile list), so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
-        self.drain_events()
+        WorkTick {
+            banner: self.drain_events(),
+            changed,
+        }
     }
 
     fn drain_snapshot(&mut self) {

@@ -193,6 +193,9 @@ fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+/// Minute granularity all the way down: the label rides the free
+/// per-minute global frame instead of paying a 1Hz cadence for a
+/// seconds countdown (the ready flip renders via a one-shot in tick).
 pub(crate) fn format_cooldown(duration: Duration) -> String {
     let secs = duration.as_secs();
     let hours = secs / 3600;
@@ -202,7 +205,7 @@ pub(crate) fn format_cooldown(duration: Duration) -> String {
     } else if mins > 0 {
         format!("{mins}m")
     } else {
-        format!("{}s", secs.max(1))
+        "<1m".to_string()
     }
 }
 

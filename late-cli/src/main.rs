@@ -25,7 +25,7 @@ use identity::ensure_client_identity_at;
 use raw_mode::{RawModeGuard, enable_ansi_output_if_tty};
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
 use ws::{
-    PairClientInfo, PlaybackState, WebviewPlaybackController, client_platform_label, run_viz_ws,
+    PairClientInfo, PlaybackState, WebviewPlaybackController, client_platform_label, run_pair_ws,
 };
 
 #[tokio::main]
@@ -291,7 +291,6 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let icecast_stream_url = audio.icecast_stream_url.clone();
     // Copy scalar state before entering the long-lived pair loop.
     let sample_rate = audio.sample_rate;
-    let mut frames = audio.analyzer_tx.subscribe();
     let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
     let mut voice = voice::VoiceRuntimeState::default();
 
@@ -311,11 +310,10 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let mut retries = 0;
     const MAX_RETRIES: usize = 10;
     loop {
-        if let Err(err) = run_viz_ws(
+        if let Err(err) = run_pair_ws(
             &api_base_url,
             &token,
             &client,
-            &mut frames,
             &playback,
             &mut webview,
             &mut voice,

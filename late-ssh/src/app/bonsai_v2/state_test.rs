@@ -24,7 +24,6 @@ fn state_for_graph(graph: BonsaiGraph, selected_branch_id: Option<i32>) -> Bonsa
         mode: BonsaiV2Mode::Inspect,
         message: None,
         state_revision: 0,
-        ticks_since_growth: 0,
     }
 }
 
@@ -340,7 +339,7 @@ fn growth_wave_prioritizes_pending_split_tips() {
         0,
         20,
         20,
-        GrowthCause::Passive,
+        GrowthCause::Daily,
         Some(preferred_tip_id),
     );
 
