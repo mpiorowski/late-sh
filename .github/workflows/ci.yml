@@ -18,8 +18,16 @@ permissions:
   contents: read
 
 # CI speed layout:
-# - fmt, clippy, and test run as parallel jobs: wall time is the slowest job,
-#   not the sum.
+# - fmt runs first as a cheap gate. clippy and test share ONE job so the
+#   dependency crates compile once and are reused for both (clippy then test
+#   against a single target dir). Splitting them into parallel jobs would
+#   double the dependency build, which is the long pole and the billed cost.
+# - No otel here on purpose. clippy and test both run WITHOUT --features otel,
+#   so CI never compiles the heavy otel subtree (opentelemetry / otlp / tonic /
+#   prost / hyper) and both steps share one non-otel dep set. The otel config
+#   (what prod ships) is compiled and linted by `make check` before merge, and
+#   the release Dockerfile builds --features otel, so otel breakage cannot
+#   reach prod; it surfaces at `make check` / release-build time, not per-PR.
 # - Rust dependency artifacts are cached (Swatinem/rust-cache). The action
 #   prunes workspace crates before saving and keys on rustc version + lockfile
 #   hash, so first-party code is always compiled fresh; a stale-but-compatible
@@ -27,9 +35,9 @@ permissions:
 #   sets CARGO_INCREMENTAL=0.
 # - Caches are saved only on main pushes (save-if below; main.yml keeps them
 #   warm). PR runs restore, never save.
-# - `clippy + test` is a tiny aggregator job (see its comment) that reproduces
-#   the branch-protection-required status-check name now that clippy and test
-#   run as separate parallel jobs.
+# - The job is named "clippy + test" so the branch ruleset's required check
+#   "ci / clippy + test" is satisfied directly (context is "<caller job> /
+#   <this job>" = "ci / clippy + test"); fmt provides "ci / rustfmt".
 # - To purge all Rust caches: bump CACHE_PREFIX below (any new value starts a
 #   fresh cache namespace; old entries age out via LRU), or delete entries
 #   directly with `gh cache list` / `gh cache delete`, or in the repo UI under
@@ -55,41 +63,9 @@ jobs:
       - name: cargo_fmt_check
         run: cargo fmt --all -- --check
 
-  clippy:
-    name: clippy
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - name: checkout
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.source_ref || github.ref }}
-      - name: install_linux_build_dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev libwebkit2gtk-4.1-dev pkg-config mold
-      - name: restore_rust_cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: ${{ env.CACHE_PREFIX }}
-          shared-key: ci-clippy
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: install_clippy
-        run: rustup component add clippy
-      - name: cargo_clippy
-        env:
-          CARGO_PACKAGE: ${{ inputs.package }}
-        run: |
-          package_args=(--workspace)
-          if [ -n "$CARGO_PACKAGE" ]; then
-            package_args=(-p "$CARGO_PACKAGE")
-          fi
-
-          cargo clippy "${package_args[@]}" --all-targets --features otel -- -D warnings
-
-  test:
-    name: test
+  clippy-test:
+    name: clippy + test
+    needs: [fmt]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -120,8 +96,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ env.CACHE_PREFIX }}
-          shared-key: ci-test
+          shared-key: ci-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: install_clippy
+        run: rustup component add clippy
       - name: install_nextest
         uses: taiki-e/install-action@nextest
       - name: wait_for_postgres
@@ -135,6 +113,16 @@ jobs:
           echo "postgres never became ready" >&2
           docker logs ci-postgres >&2
           exit 1
+      - name: cargo_clippy
+        env:
+          CARGO_PACKAGE: ${{ inputs.package }}
+        run: |
+          package_args=(--workspace)
+          if [ -n "$CARGO_PACKAGE" ]; then
+            package_args=(-p "$CARGO_PACKAGE")
+          fi
+
+          cargo clippy "${package_args[@]}" --all-targets -- -D warnings
       - name: cargo_test
         env:
           TEST_DATABASE_URL: "host=127.0.0.1 port=5432 user=test password=test dbname=postgres"
@@ -149,32 +137,3 @@ jobs:
       - name: dump_postgres_logs
         if: failure()
         run: docker logs ci-postgres
-
-  # Branch protection requires a status check named "ci / clippy + test" — the
-  # name of the old single job that has since been split into the parallel
-  # `clippy` and `test` jobs above. This aggregator reproduces that exact check
-  # context (the check name is "<caller job> / <this job's name>" = "ci /
-  # clippy + test"), so the required check is satisfied without editing branch
-  # protection. It is a thin serial tail: it waits for both jobs and fails
-  # unless both succeeded. `if: always()` + the explicit result check are load-
-  # bearing — without them a failed upstream job would leave this gate skipped,
-  # which a required check can misreport as passing.
-  clippy_and_test:
-    name: clippy + test
-    needs: [clippy, test]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: require_success
-        env:
-          CLIPPY_RESULT: ${{ needs.clippy.result }}
-          TEST_RESULT: ${{ needs.test.result }}
-        run: |
-          echo "clippy=$CLIPPY_RESULT test=$TEST_RESULT"
-          if [ "$CLIPPY_RESULT" = "success" ] && [ "$TEST_RESULT" = "success" ]; then
-            echo "both required jobs succeeded"
-          else
-            echo "clippy + test gate failed: clippy=$CLIPPY_RESULT test=$TEST_RESULT" >&2
-            exit 1
-          fi

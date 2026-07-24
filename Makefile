@@ -267,23 +267,21 @@ test-llm: .env
 	$(CHECK_DB_START); \
 	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q -p MemoryHigh=$(TEST_LLM_MEM_HIGH) -p MemoryMax=$(TEST_LLM_MEM_MAX) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS)
 
+# Full pre-merge sweep, and the only place the otel feature is exercised:
+# clippy + tests run the whole workspace WITH --features otel, so the real
+# telemetry/metrics code (the config prod ships) is compiled and linted here.
+# CI deliberately skips otel to stay cheap (see .github/workflows/ci.yml), so
+# this is where otel breakage is caught before release. fmt stays scoped to
+# first-party packages: `cargo fmt --all` also reaches vendored path deps like
+# vendor/irc-proto, whose upstream style is not rustfmt-clean here.
 .PHONY: check
 check: .env
 	@set -e; \
 	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
 	$(CHECK_DB_START); \
 	cargo fmt $(CHECK_PACKAGES) -- --check; \
-	$(CHECK_CARGO_ENV) cargo clippy -j $(CHECK_BUILD_JOBS) $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) $(CHECK_PACKAGES) --all-targets --no-fail-fast --failure-output final
-
-.PHONY: checkci
-checkci: .env
-	@set -e; \
-	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
-	$(CHECK_DB_START); \
-	cargo fmt --all -- --check; \
-	$(CHECK_CARGO_ENV) cargo clippy --workspace --all-targets --features otel -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --workspace --all-targets --failure-output final
+	$(CHECK_CARGO_ENV) cargo clippy -j $(CHECK_BUILD_JOBS) --workspace --all-targets --features otel -- -D warnings; \
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --workspace --all-targets --no-fail-fast --failure-output final
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build
