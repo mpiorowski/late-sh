@@ -28,3 +28,6 @@ pub fn derive_client_key(secret: &str) -> PrivateKey {
 // they drift, the client derives a different key and the host rejects every
 // connection, so the contract is pinned by the known-answer test in
 // identity_test.rs, which must match the identical KAT in late-ssh.
+
+#[cfg(test)]
+mod identity_test;

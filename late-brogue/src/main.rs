@@ -8,8 +8,6 @@
 mod config;
 mod host;
 mod identity;
-#[cfg(test)]
-mod identity_test;
 mod playname;
 mod server;
 
