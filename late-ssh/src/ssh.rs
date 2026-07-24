@@ -1640,7 +1640,14 @@ async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
             (row, false)
         }
         None => {
-            let user = loop {
+            // Bounded retry: next_generated_username draws from a 213k-combination
+            // space against a fresh occupied snapshot, so a unique violation means
+            // a concurrent signup claimed the name between select and insert. A
+            // few attempts converge; if they somehow do not, reject auth rather
+            // than spin the loop against the DB on the auth hot path.
+            const MAX_USERNAME_ATTEMPTS: usize = 5;
+            let mut created = None;
+            for _ in 0..MAX_USERNAME_ATTEMPTS {
                 let username = usernames::next_generated_username(&client).await?;
                 match User::create(
                     &client,
@@ -1652,13 +1659,18 @@ async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
                 )
                 .await
                 {
-                    Ok(user) => break user,
+                    Ok(user) => {
+                        created = Some(user);
+                        break;
+                    }
                     Err(error) if is_username_unique_violation(&error) => {
                         tracing::debug!("generated username was claimed concurrently; retrying");
                     }
                     Err(error) => return Err(error),
                 }
-            };
+            }
+            let user = created
+                .ok_or_else(|| anyhow::anyhow!("could not allocate a unique username after retries"))?;
             User::ensure_ssh_key(&client, user.id, fingerprint).await?;
             match state.chat_service.auto_join_public_rooms(user.id).await {
                 Ok(joined) => {
