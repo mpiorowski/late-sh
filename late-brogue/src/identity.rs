@@ -30,4 +30,5 @@ pub fn derive_client_key(secret: &str) -> PrivateKey {
 // identity_test.rs, which must match the identical KAT in late-ssh.
 
 #[cfg(test)]
+#[path = "identity_test.rs"]
 mod identity_test;
