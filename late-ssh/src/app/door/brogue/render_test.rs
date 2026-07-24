@@ -27,6 +27,18 @@ fn keys_out_color_cube_black_background() {
     assert_eq!(buf[(1, 0)].style().bg, Some(Color::Reset));
 }
 
+/// ncurses clears the screen at startup with SGR 40 (ANSI black) active, and
+/// vt100 erases with current attributes, so unrepainted cells carry
+/// `Indexed(0)`. Terminal themes often tint palette slot 0 blue-gray; keyed
+/// out, those cells show the terminal default like the rest of the canvas.
+#[test]
+fn keys_out_ansi_black_background() {
+    let area = Rect::new(0, 0, 2, 1);
+    let mut buf = buf_with_bg(area, Color::Indexed(0));
+    clear_canvas_black(&mut buf, area);
+    assert_eq!(buf[(1, 0)].style().bg, Some(Color::Reset));
+}
+
 #[test]
 fn keeps_non_black_backgrounds_and_foregrounds() {
     let area = Rect::new(0, 0, 3, 1);

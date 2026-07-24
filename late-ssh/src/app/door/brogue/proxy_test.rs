@@ -1,4 +1,4 @@
-use super::HvpNormalizer;
+use super::{HonorResize, HvpNormalizer};
 
 fn parse(bytes: &[u8]) -> vt100::Parser {
     let mut parser = vt100::Parser::new(10, 20, 0);
@@ -64,4 +64,21 @@ fn overlong_numeric_csi_flushes_verbatim() {
     // Longer than any real HVP: not rewritten, not swallowed.
     let input: &[u8] = b"\x1b[123456789;123456789;12f";
     assert_eq!(norm.feed(input), input);
+}
+
+/// brogue announces its fixed grid with `ESC[8;34;100t` at startup; the
+/// HonorResize callback must shrink the parser to it (vt100's default
+/// callbacks drop the request), so the renderer sees the game's real geometry.
+#[test]
+fn resize_request_shrinks_parser_to_game_grid() {
+    let mut parser = vt100::Parser::new_with_callbacks(55, 190, 0, HonorResize);
+    parser.process(b"\x1b[8;34;100t");
+    assert_eq!(parser.screen().size(), (34, 100));
+}
+
+#[test]
+fn zero_resize_request_clamps_to_one() {
+    let mut parser = vt100::Parser::new_with_callbacks(55, 190, 0, HonorResize);
+    parser.process(b"\x1b[8;0;0t");
+    assert_eq!(parser.screen().size(), (1, 1));
 }

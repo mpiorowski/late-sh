@@ -49,8 +49,22 @@ enum OutboundCommand {
 pub struct BrogueProcess {
     cmd_tx: mpsc::Sender<OutboundCommand>,
     task: JoinHandle<()>,
-    parser: Arc<Mutex<vt100::Parser>>,
+    parser: Arc<Mutex<vt100::Parser<HonorResize>>>,
     status: Arc<Mutex<ProxyStatus>>,
+}
+
+/// vt100's default callbacks ignore the terminal-resize request (`ESC [ 8 ;
+/// rows ; cols t`). brogue emits exactly one at startup (term.c's
+/// `term_set_size`) announcing its fixed 100x34 grid; honoring it shrinks the
+/// parser to the game's real geometry, so the blit stops copying the cells
+/// ncurses' startup clear painted outside it and the renderer can center the
+/// grid. Clamped to >=1 like `resize`: a 0-sized vt100 grid is invalid.
+struct HonorResize;
+
+impl vt100::Callbacks for HonorResize {
+    fn resize(&mut self, screen: &mut vt100::Screen, (rows, cols): (u16, u16)) {
+        screen.set_size(rows.max(1), cols.max(1));
+    }
 }
 
 pub struct ProcessConfig {
@@ -74,7 +88,12 @@ pub struct ProcessConfig {
 impl BrogueProcess {
     pub fn spawn(cfg: ProcessConfig) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCommand>(256);
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(cfg.rows, cfg.cols, 0)));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new_with_callbacks(
+            cfg.rows,
+            cfg.cols,
+            0,
+            HonorResize,
+        )));
         let status = Arc::new(Mutex::new(ProxyStatus::Connecting));
 
         let task_parser = parser.clone();
@@ -214,7 +233,7 @@ impl HvpNormalizer {
 async fn run_bridge(
     cfg: ProcessConfig,
     mut cmd_rx: mpsc::Receiver<OutboundCommand>,
-    parser: Arc<Mutex<vt100::Parser>>,
+    parser: Arc<Mutex<vt100::Parser<HonorResize>>>,
     status: Arc<Mutex<ProxyStatus>>,
 ) -> Result<()> {
     let config = Arc::new(Config {
