@@ -48,6 +48,10 @@ Try the live service:
 ssh late.sh
 ```
 
+The SSH login name is discarded rather than used as a public handle. On the
+first connection, a new account receives a random modifier-and-noun username;
+the username can still be changed later in Settings.
+
 Run it yourself (requires Docker):
 
 ```bash

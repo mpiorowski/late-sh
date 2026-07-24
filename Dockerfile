@@ -285,10 +285,12 @@ RUN curl -fsSL -o usurper.tar.gz "${USURPER_URL}" \
     && rm usurper.tar.gz
 
 WORKDIR /build/usurper
-# The fpc invocation is upstream build.ps1's, retargeted natively (-Tlinux
-# -Px86_64): TP compatibility mode (-Mtp), C-style operators + goto + inlining
-# (-Scgi), O3, stripped + smartlinked. Separate obj dirs per program: the two
-# share COMMON units compiled with different include paths.
+# The fpc invocation is upstream build.ps1's, retargeted to Linux x86-64
+# (-Tlinux -Px86_64). The source contains Intel assembly, so local Compose pins
+# only service-usurper to linux/amd64. TP compatibility mode (-Mtp), C-style
+# operators + goto + inlining (-Scgi), O3, stripped + smartlinked. Separate obj
+# dirs per program: the two share COMMON units compiled with different include
+# paths.
 RUN mkdir -p obj-usurper obj-editor bin \
     && fpc -B -Tlinux -Px86_64 -Mtp -Scgi -CX -O3 -Xs -XX -l -vewnibq \
         -FiSOURCE/USURPER -FiSOURCE/COMMON -Fiobj-usurper \
@@ -377,13 +379,6 @@ COPY --from=dopewars-build /dopewars /usr/games/dopewars
 # defaults to /usr/games/crawl.
 COPY --from=dcss-build /opt/dcss /opt/dcss
 RUN ln -sf /opt/dcss/bin/crawl /usr/games/crawl
-
-# Usurper door game: served over SSH by the late-usurper host (see late-ssh
-# usurper proxy). The from-source binaries + seed game tree live here so
-# dev-usurper (which derives from `base`) can run it; prod ships them in
-# runtime-usurper. The binary is statically linked (Free Pascal), no extra
-# runtime libs. LATE_USURPER_BIN defaults to /opt/usurper/bin/USURPER.EXE.
-COPY --from=usurper-build /opt/usurper /opt/usurper
 
 # Configure cargo to use mold linker
 RUN echo '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n\n[target.aarch64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]' >> /usr/local/cargo/config.toml
@@ -517,10 +512,11 @@ CMD ["cargo", "watch", "-w", "late-dopewars", "-x", "run -p late-dopewars"]
 FROM dev-base AS dev-dcss
 CMD ["cargo", "watch", "-w", "late-dcss", "-x", "run -p late-dcss"]
 
-# Usurper host: serves the game over SSH (see late-usurper). dev-base derives
-# from `base`, which already has the from-source binaries + seed game tree, so
-# the default LATE_USURPER_BIN/SEED_DIR (/opt/usurper/...) resolve here.
+# Usurper host: serves the game over SSH (see late-usurper). This is the only dev
+# target that needs the x86-64 upstream binaries + seed game tree; keeping the
+# copy here prevents every other Compose service from building Usurper.
 FROM dev-base AS dev-usurper
+COPY --from=usurper-build /opt/usurper /opt/usurper
 CMD ["cargo", "watch", "-w", "late-usurper", "-x", "run -p late-usurper"]
 
 # ==============================================================================

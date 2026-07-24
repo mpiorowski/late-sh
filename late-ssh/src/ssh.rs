@@ -36,6 +36,7 @@ use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
 use crate::terminal_size::clamp_terminal_size;
+use crate::usernames;
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 const PROXY_V1_MAX_LEN: usize = 108;
@@ -548,20 +549,19 @@ impl russh::server::Handler for ClientHandler {
         Ok(Some(AUTH_SETUP_BANNER.to_string()))
     }
 
-    #[tracing::instrument(skip(self, key), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
+    #[tracing::instrument(skip(self, _user, key), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
     async fn auth_publickey(
         &mut self,
-        user: &str,
+        _user: &str,
         key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
-        let login_username = user;
-        tracing::debug!(user, "public key auth accepted");
+        tracing::debug!("public key auth accepted");
         if self.over_limit {
-            tracing::debug!(user, "connection over limit, rejecting auth");
+            tracing::debug!("connection over limit, rejecting auth");
             return Ok(reject_publickey_only());
         }
         if !self.state.config.open_access {
-            tracing::debug!(user, "open access disabled, rejecting public key auth");
+            tracing::debug!("open access disabled, rejecting public key auth");
             return Ok(reject_publickey_only());
         }
         let fingerprint = key.fingerprint(keys::HashAlg::Sha256).to_string();
@@ -613,14 +613,13 @@ impl russh::server::Handler for ClientHandler {
             }
         }
         drop(client);
-        let (user, is_new_user) =
-            match crate::ssh::ensure_user(&self.state, login_username, &fingerprint).await {
-                Ok(pair) => pair,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to ensure user, rejecting auth");
-                    return Ok(reject_publickey_only());
-                }
-            };
+        let (user, is_new_user) = match crate::ssh::ensure_user(&self.state, &fingerprint).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to ensure user, rejecting auth");
+                return Ok(reject_publickey_only());
+            }
+        };
         self.is_new_user = is_new_user;
         if !self.active_user_incremented {
             let mut active_users = self.state.active_users.lock_recover();
@@ -673,23 +672,20 @@ impl russh::server::Handler for ClientHandler {
         Ok(Auth::Accept)
     }
 
-    #[tracing::instrument(skip(self, _response), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
+    #[tracing::instrument(skip(self, _user, _response), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
     async fn auth_keyboard_interactive(
         &mut self,
-        user: &str,
+        _user: &str,
         _submethods: &str,
         _response: Option<russh::server::Response<'_>>,
     ) -> Result<Auth, Self::Error> {
-        tracing::debug!(
-            user,
-            "keyboard-interactive auth rejected: public key auth is required"
-        );
+        tracing::debug!("keyboard-interactive auth rejected: public key auth is required");
         Ok(reject_publickey_only())
     }
 
-    #[tracing::instrument(skip(self, _password), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
-    async fn auth_password(&mut self, user: &str, _password: &str) -> Result<Auth, Self::Error> {
-        tracing::debug!(user, "password auth rejected: public key auth is required");
+    #[tracing::instrument(skip(self, _user, _password), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
+    async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<Auth, Self::Error> {
+        tracing::debug!("password auth rejected: public key auth is required");
         Ok(reject_publickey_only())
     }
 
@@ -1629,8 +1625,8 @@ async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId)
 
 // Updated helper to take State
 /// Returns `(user, is_new)` — `is_new` is true when the user was just created.
-async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result<(User, bool)> {
-    tracing::debug!(username, fingerprint, "ensuring user exists");
+async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
+    tracing::debug!(fingerprint, "ensuring user exists");
     let client = state.db.get().await?;
     let row = User::find_by_fingerprint(&client, fingerprint).await?;
     let (user, is_new_user) = match row {
@@ -1644,16 +1640,37 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
             (row, false)
         }
         None => {
-            let username = User::next_available_username(&client, username).await?;
-            let user = User::create(
-                &client,
-                UserParams {
-                    fingerprint: fingerprint.to_string(),
-                    username,
-                    settings: json!({}),
-                },
-            )
-            .await?;
+            // Bounded retry: next_generated_username draws from a 213k-combination
+            // space against a fresh occupied snapshot, so a unique violation means
+            // a concurrent signup claimed the name between select and insert. A
+            // few attempts converge; if they somehow do not, reject auth rather
+            // than spin the loop against the DB on the auth hot path.
+            const MAX_USERNAME_ATTEMPTS: usize = 5;
+            let mut created = None;
+            for _ in 0..MAX_USERNAME_ATTEMPTS {
+                let username = usernames::next_generated_username(&client).await?;
+                match User::create(
+                    &client,
+                    UserParams {
+                        fingerprint: fingerprint.to_string(),
+                        username,
+                        settings: json!({}),
+                    },
+                )
+                .await
+                {
+                    Ok(user) => {
+                        created = Some(user);
+                        break;
+                    }
+                    Err(error) if is_username_unique_violation(&error) => {
+                        tracing::debug!("generated username was claimed concurrently; retrying");
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            let user = created
+                .ok_or_else(|| anyhow::anyhow!("could not allocate a unique username after retries"))?;
             User::ensure_ssh_key(&client, user.id, fingerprint).await?;
             match state.chat_service.auto_join_public_rooms(user.id).await {
                 Ok(joined) => {
@@ -1683,6 +1700,18 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
     };
 
     Ok((user, is_new_user))
+}
+
+fn is_username_unique_violation(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .and_then(tokio_postgres::Error::as_db_error)
+            .is_some_and(|db_error| {
+                db_error.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION
+                    && db_error.constraint() == Some("idx_users_username_lower")
+            })
+    })
 }
 
 async fn has_active_server_ban_before_user_lookup(
