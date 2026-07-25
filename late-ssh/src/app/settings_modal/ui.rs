@@ -6,6 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+use late_core::models::language;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 
 use crate::app::common::{i18n, markdown::render_body_to_lines, theme};
@@ -27,7 +28,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Settings ")
+        .title(i18n::tr("settings.title.modal"))
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -118,12 +119,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
         (Tab::Bio, true) => {
             spans.extend([
                 Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" save & preview  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.save_preview")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Alt+Enter/Ctrl+J", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" newline  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.newline")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(
-                    " save & switch tabs",
+                    format!(" {}", i18n::tr("settings.footer.save_switch_tabs")),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
             ]);
@@ -131,75 +132,75 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
         (Tab::Bio, false) => {
             spans.extend([
                 Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" edit  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.edit")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.switch_tabs")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}", i18n::tr("settings.footer.close")), Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
         (Tab::Settings, _) => {
             spans.extend([
                 Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.navigate")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" cycle  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.cycle")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" edit/apply  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.edit_apply")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.switch_tabs")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}", i18n::tr("settings.footer.close")), Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
         (Tab::Themes, _) => {
             spans.extend([
                 Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" preview  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.preview")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close/open  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.close_open")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.switch_tabs")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}", i18n::tr("settings.footer.close")), Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
         (Tab::Tweaks, _) => {
             spans.extend([
                 Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.navigate")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("←→ ↵", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.toggle")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.switch_tabs")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}", i18n::tr("settings.footer.close")), Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
         (Tab::Account, _) => {
             spans.extend([
                 Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.choose")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" open  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.open_action")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.switch_tabs")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}", i18n::tr("settings.footer.close")), Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
         (Tab::Feeds, _) => {
             spans.extend([
                 Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.navigate")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("↵/a", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" add  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.add")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("d", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" remove  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.remove")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("r", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" refresh  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}  ", i18n::tr("settings.footer.refresh")), Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!(" {}", i18n::tr("settings.footer.close")), Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
     }
@@ -216,7 +217,7 @@ fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     .split(area);
 
     frame.render_widget(
-        Paragraph::new(section_heading("Theme browser")),
+        Paragraph::new(section_heading(i18n::tr("settings.theme_browser.heading"))),
         sections[0],
     );
 
@@ -441,7 +442,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                     )
                 }
             } else if state.draft().username.is_empty() {
-                value_span("not set", theme::TEXT_FAINT())
+                value_span(i18n::tr("settings.value.not_set"), theme::TEXT_FAINT())
             } else {
                 value_span(state.draft().username.clone(), theme::TEXT_BRIGHT())
             },
@@ -463,13 +464,13 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Timezone,
             width,
-            "Timezone",
+            i18n::tr("settings.timezone"),
             value_with_picker_hint(
                 state
                     .draft()
                     .timezone
                     .clone()
-                    .unwrap_or_else(|| "not set".to_string()),
+                    .unwrap_or_else(|| i18n::tr("settings.value.not_set").to_string()),
             ),
         )),
         sections[3],
@@ -479,7 +480,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Birthday,
             width,
-            "Birthday",
+            i18n::tr("settings.birthday"),
             system_field_value(state, Row::Birthday, state.draft().birthday.clone()),
         )),
         sections[4],
@@ -512,12 +513,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             width,
             i18n::tr("settings.language"),
             value_span(
-                i18n::label_for_id(
+                language::label_for_id(
                     state
                         .draft()
                         .language
                         .as_deref()
-                        .unwrap_or(i18n::DEFAULT_ID),
+                        .unwrap_or(language::DEFAULT_ID),
                 )
                 .to_string(),
                 theme::TEXT_BRIGHT(),
@@ -535,7 +536,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Ide,
             width,
-            "IDE",
+            i18n::tr("settings.ide"),
             system_field_value(state, Row::Ide, state.draft().ide.clone()),
         )),
         sections[9],
@@ -545,7 +546,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Terminal,
             width,
-            "Terminal",
+            i18n::tr("settings.terminal"),
             system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
         )),
         sections[10],
@@ -555,7 +556,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Os,
             width,
-            "OS",
+            i18n::tr("settings.os"),
             system_field_value(state, Row::Os, state.draft().os.clone()),
         )),
         sections[11],
@@ -565,7 +566,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Langs,
             width,
-            "Langs",
+            i18n::tr("settings.langs"),
             system_field_value(
                 state,
                 Row::Langs,
@@ -594,7 +595,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Mentions,
             width,
-            "@mentions",
+            i18n::tr("settings.mentions"),
             toggle_span(has_kind(state, "mentions")),
         )),
         sections[16],
@@ -604,7 +605,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::GameEvents,
             width,
-            "Game events",
+            i18n::tr("settings.game_events"),
             toggle_span(has_kind(state, "game_events")),
         )),
         sections[17],
@@ -614,7 +615,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Bell,
             width,
-            "Bell",
+            i18n::tr("settings.bell"),
             toggle_span(state.draft().notify_bell),
         )),
         sections[18],
@@ -624,7 +625,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Cooldown,
             width,
-            "Cooldown",
+            i18n::tr("settings.cooldown"),
             if state.draft().notify_cooldown_mins == 0 {
                 value_span("off", theme::TEXT_FAINT())
             } else {
@@ -641,7 +642,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::NotifyFormat,
             width,
-            "Format",
+            i18n::tr("settings.format"),
             value_span(
                 notify_format_label(state.draft().notify_format.as_deref()),
                 theme::TEXT_BRIGHT(),
@@ -664,10 +665,10 @@ fn shortcuts_hint_line(width: usize) -> Line<'static> {
 
     let leading = "   ";
     let key1 = "?";
-    let text1 = "  Guide";
+    let text1 = format!("  {}", i18n::tr("settings.shortcuts_hint.guide"));
     let separator = "      ";
     let key2 = "Ctrl+O";
-    let text2 = "  reopen settings anywhere";
+    let text2 = format!("  {}", i18n::tr("settings.shortcuts_hint.reopen"));
 
     let used = leading.chars().count()
         + key1.chars().count()
@@ -721,13 +722,13 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 
     let width = area.width as usize;
 
-    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[0]);
+    frame.render_widget(Paragraph::new(section_heading(i18n::tr("settings.appearance.heading"))), sections[0]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
             TweakRow::BackgroundColor,
             width,
-            "Background color",
+            i18n::tr("settings.tweaks.background_color"),
             toggle_span(state.draft().enable_background_color),
         )),
         sections[1],
@@ -737,7 +738,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             state,
             TweakRow::TextBrightness,
             width,
-            "Text Brightness",
+            i18n::tr("settings.tweaks.text_brightness"),
             text_brightness_span(state.draft().text_brightness_adjustment),
         )),
         sections[2],
@@ -747,7 +748,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             state,
             TweakRow::RightSidebar,
             width,
-            "Right sidebar",
+            i18n::tr("settings.tweaks.right_sidebar"),
             right_sidebar_mode_span(state.device_rails().1),
         )),
         sections[3],
@@ -757,7 +758,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             state,
             TweakRow::RoomListSidebar,
             width,
-            "Room list",
+            i18n::tr("settings.tweaks.room_list"),
             room_list_mode_span(state.device_rails().0),
         )),
         sections[4],
@@ -767,55 +768,55 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             state,
             TweakRow::PetStrip,
             width,
-            "Pet companion strip",
+            i18n::tr("settings.tweaks.pet_strip"),
             toggle_span(state.draft().show_pet_strip),
         )),
         sections[5],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[7]);
+    frame.render_widget(Paragraph::new(section_heading(i18n::tr("settings.compose.heading"))), sections[7]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
             TweakRow::ComposerKeepFocused,
             width,
-            "Send and keep open on Enter",
+            i18n::tr("settings.tweaks.keep_composer_focused"),
             toggle_span(state.draft().keep_composer_focused),
         )),
         sections[8],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Music")), sections[10]);
+    frame.render_widget(Paragraph::new(section_heading(i18n::tr("settings.music.heading"))), sections[10]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
             TweakRow::StartWithMusicMuted,
             width,
-            "Start app with music muted",
+            i18n::tr("settings.tweaks.start_music_muted"),
             toggle_span(state.draft().start_with_music_muted),
         )),
         sections[11],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Display")), sections[13]);
+    frame.render_widget(Paragraph::new(section_heading(i18n::tr("settings.display.heading"))), sections[13]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
             TweakRow::FlagFallback,
             width,
-            "Chat flag text fallback",
+            i18n::tr("settings.tweaks.flag_fallback"),
             toggle_span(state.draft().show_flag_fallback),
         )),
         sections[14],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[16]);
+    frame.render_widget(Paragraph::new(section_heading(i18n::tr("settings.startup.heading"))), sections[16]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
             TweakRow::LandOnHome,
             width,
-            "Land on Home page",
+            i18n::tr("settings.tweaks.land_on_home"),
             toggle_span(state.draft().land_on_home),
         )),
         sections[17],
@@ -915,7 +916,7 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     ])
     .split(area);
 
-    frame.render_widget(Paragraph::new(section_heading("Account")), sections[0]);
+    frame.render_widget(Paragraph::new(section_heading(i18n::tr("settings.account.heading"))), sections[0]);
 
     let width = area.width as usize;
     frame.render_widget(
@@ -923,7 +924,7 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             state,
             AccountRow::LinkAccounts,
             width,
-            "Link Accounts",
+            i18n::tr("settings.account.link_accounts"),
             false,
         )),
         sections[2],
@@ -932,7 +933,7 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Paragraph::new(Line::from(vec![
             Span::raw("   "),
             Span::styled(
-                "Move this SSH key onto another late.sh account. No data is merged.",
+                i18n::tr("settings.account.link_desc"),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ])),
@@ -943,7 +944,7 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             state,
             AccountRow::IrcToken,
             width,
-            "IRC access token",
+            i18n::tr("settings.account.irc_token"),
             false,
         )),
         sections[5],
@@ -952,7 +953,7 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Paragraph::new(Line::from(vec![
             Span::raw("   "),
             Span::styled(
-                "Create, reset, or revoke the token used by IRC clients.",
+                i18n::tr("settings.account.irc_desc"),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ])),
@@ -963,7 +964,7 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             state,
             AccountRow::DeleteAccount,
             width,
-            "Delete Account",
+            i18n::tr("settings.account.delete_account"),
             true,
         )),
         sections[8],
@@ -972,7 +973,7 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Paragraph::new(Line::from(vec![
             Span::raw("   "),
             Span::styled(
-                "Delete your own account (cannot be undone!)",
+                i18n::tr("settings.account.delete_desc"),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ])),
@@ -1046,7 +1047,7 @@ fn draw_feeds_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Paragraph::new(Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                "RSS/Atom entries stay private until you share them from Chat > rss.",
+                i18n::tr("settings.feeds.hint"),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ])),
@@ -1077,7 +1078,7 @@ fn draw_feeds_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 fn feed_display_title(feed: &late_core::models::rss_feed::RssFeed) -> String {
     let title = feed.title.trim();
     if title.is_empty() {
-        "untitled RSS".to_string()
+        i18n::tr("settings.feeds.untitled").to_string()
     } else {
         title.to_string()
     }
@@ -1130,7 +1131,7 @@ fn feed_row_line(
     let prefix = format!(" {marker} ");
     let title_text = format!("{title:<28}  ");
     let status_text = error
-        .map(|err| format!("  error: {err}"))
+        .map(|err| format!("{}{err}", i18n::tr("settings.feeds.error_prefix")))
         .unwrap_or_default();
     let used = prefix.chars().count()
         + title_text.chars().count()
@@ -1185,7 +1186,7 @@ fn feed_add_line(
         )
     } else if active {
         (
-            "+ Add RSS…".to_string(),
+            i18n::tr("settings.feeds.add").to_string(),
             Style::default()
                 .fg(theme::AMBER_GLOW())
                 .bg(theme::BG_SELECTION())
@@ -1193,7 +1194,7 @@ fn feed_add_line(
         )
     } else {
         (
-            "+ Add RSS…".to_string(),
+            i18n::tr("settings.feeds.add").to_string(),
             Style::default().fg(theme::AMBER_DIM()),
         )
     };
@@ -1416,9 +1417,9 @@ fn draw_grand_gem(frame: &mut Frame, area: Rect, gem: &GemState) {
 
 fn notify_format_label(format: Option<&str>) -> &'static str {
     match format.unwrap_or("both") {
-        "osc777" => "OSC 777",
-        "osc9" => "OSC 9",
-        _ => "both (OSC 777 + OSC 9)",
+        "osc777" => i18n::tr("settings.notify_format.osc777"),
+        "osc9" => i18n::tr("settings.notify_format.osc9"),
+        _ => i18n::tr("settings.notify_format.both"),
     }
 }
 
@@ -1448,7 +1449,7 @@ fn draw_bio_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
                 header_style_count
             },
         ),
-        Span::styled("   chars", header_style_dim),
+        Span::styled(format!(" {}   ", i18n::tr("settings.bio.chars")), header_style_dim),
     ]);
     frame.render_widget(Paragraph::new(header), sections[0]);
 
@@ -1464,7 +1465,7 @@ fn draw_bio_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let draft_text = state.draft().bio.as_str();
     if draft_text.trim().is_empty() {
         let hint = Line::from(vec![Span::styled(
-            "Press ↵ to write your bio. Markdown is supported.",
+            i18n::tr("settings.bio.hint"),
             Style::default().fg(theme::TEXT_DIM()),
         )]);
         frame.render_widget(Paragraph::new(hint).wrap(Wrap { trim: false }), padded);
@@ -1486,9 +1487,9 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(Clear, popup);
 
     let title = match state.picker().kind {
-        Some(PickerKind::Country) => " Pick Country ",
-        Some(PickerKind::Timezone) => " Pick Timezone ",
-        None => " Picker ",
+        Some(PickerKind::Country) => i18n::tr("settings.picker.country"),
+        Some(PickerKind::Timezone) => i18n::tr("settings.picker.timezone"),
+        None => i18n::tr("settings.picker.default"),
     };
     let block = Block::default()
         .title(title)
@@ -1512,11 +1513,11 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 
     let search = Line::from(vec![
         Span::raw(" "),
-        Span::styled("search ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(i18n::tr("settings.picker.search"), Style::default().fg(theme::TEXT_DIM())),
         Span::styled("› ", Style::default().fg(theme::AMBER_GLOW())),
         Span::styled(
             if state.picker().query.is_empty() {
-                "type to filter".to_string()
+                i18n::tr("settings.picker.type_to_filter").to_string()
             } else {
                 state.picker().query.clone()
             },
@@ -1567,7 +1568,7 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     }
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
-            "  no results",
+            format!("  {}", i18n::tr("settings.picker.no_results")),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
@@ -1576,9 +1577,9 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let footer = Line::from(vec![
         Span::raw("  "),
         Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" pick  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(format!(" {}  ", i18n::tr("settings.footer.pick")), Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(format!(" {}", i18n::tr("settings.footer.cancel")), Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[3]);
 }
@@ -1591,7 +1592,7 @@ fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &S
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Sidebar panels ")
+        .title(i18n::tr("settings.sidebar_panels.title"))
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -1617,7 +1618,7 @@ fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &S
         Paragraph::new(Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                "Clock is always shown on top.",
+                i18n::tr("settings.sidebar_panels.clock_hint"),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ])),
@@ -1652,11 +1653,11 @@ fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &S
     let footer_top = Line::from(vec![
         Span::raw(" "),
         Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" select  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(format!(" {}  ", i18n::tr("settings.footer.select")), Style::default().fg(theme::TEXT_DIM())),
         Span::styled("[ ]", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" reorder  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(format!(" {}  ", i18n::tr("settings.footer.reorder")), Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" toggle", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(format!(" {}", i18n::tr("settings.footer.toggle")), Style::default().fg(theme::TEXT_DIM())),
     ]);
     let footer_bottom = Line::from(vec![
         Span::raw(" "),
@@ -2025,18 +2026,18 @@ fn draw_link_account_footer(frame: &mut Frame, area: Rect, state: &SettingsModal
             Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
             Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" generate/check  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!(" {}  ", i18n::tr("settings.footer.generate_check")), Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!(" {}", i18n::tr("settings.footer.cancel")), Style::default().fg(theme::TEXT_DIM())),
         ]),
         LinkAccountStep::Confirm => Line::from(vec![
             Span::raw(" "),
             Span::styled("↑← / ↓→", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" choose main  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!(" {}  ", i18n::tr("settings.footer.choose_main")), Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" link  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!(" {}  ", i18n::tr("settings.footer.link")), Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!(" {}", i18n::tr("settings.footer.cancel")), Style::default().fg(theme::TEXT_DIM())),
         ]),
         LinkAccountStep::Pending => Line::from(vec![
             Span::raw(" "),
@@ -2243,12 +2244,12 @@ fn draw_irc_token_footer(frame: &mut Frame, area: Rect, reveal: bool, pending: b
         Line::from(vec![
             Span::raw(" "),
             Span::styled("Enter/Space/Esc", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" hide token", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!(" {}", i18n::tr("settings.footer.hide_token")), Style::default().fg(theme::TEXT_DIM())),
         ])
     } else if pending {
         Line::from(vec![
             Span::raw(" "),
-            Span::styled("Working...", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(i18n::tr("settings.footer.working"), Style::default().fg(theme::AMBER_DIM())),
         ])
     } else {
         Line::from(vec![
@@ -2256,9 +2257,9 @@ fn draw_irc_token_footer(frame: &mut Frame, area: Rect, reveal: bool, pending: b
             Span::styled("↑↓←→ j/k", Style::default().fg(theme::AMBER_DIM())),
             Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Enter/Space", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" activate  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!(" {}  ", i18n::tr("settings.footer.activate")), Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!(" {}", i18n::tr("settings.footer.cancel")), Style::default().fg(theme::TEXT_DIM())),
         ])
     };
     frame.render_widget(Paragraph::new(footer), area);
@@ -2428,9 +2429,9 @@ fn draw_delete_account_dialog(frame: &mut Frame, area: Rect, state: &SettingsMod
     let footer = Line::from(vec![
         Span::raw(" "),
         Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" delete  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(format!(" {}  ", i18n::tr("settings.footer.delete")), Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(format!(" {}", i18n::tr("settings.footer.cancel")), Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[7]);
 }
@@ -2483,9 +2484,9 @@ fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String
             .filter(|value| !value.is_empty())
         {
             Some(value) => value_span(value.to_string(), theme::TEXT_BRIGHT()),
-            None if row == Row::Birthday => value_span("MM-DD", theme::TEXT_FAINT()),
-            None if row == Row::Langs => value_span("comma sep…", theme::TEXT_FAINT()),
-            None => value_span("not set", theme::TEXT_FAINT()),
+            None if row == Row::Birthday => value_span(i18n::tr("settings.value.mm_dd"), theme::TEXT_FAINT()),
+            None if row == Row::Langs => value_span(i18n::tr("settings.value.comma_sep"), theme::TEXT_FAINT()),
+            None => value_span(i18n::tr("settings.value.not_set"), theme::TEXT_FAINT()),
         }
     }
 }
@@ -2501,14 +2502,14 @@ fn format_lang_tags(langs: &[String]) -> String {
 fn toggle_span(enabled: bool) -> ValueSpan {
     if enabled {
         ValueSpan {
-            text: "● on".to_string(),
+            text: i18n::tr("settings.value.on").to_string(),
             style: Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
         }
     } else {
         ValueSpan {
-            text: "○ off".to_string(),
+            text: i18n::tr("settings.value.off").to_string(),
             style: Style::default().fg(theme::TEXT_FAINT()),
         }
     }
@@ -2518,13 +2519,13 @@ fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
     match mode {
         RightSidebarMode::On => ValueSpan {
             // The trailing affordance hints that Enter opens the panel editor.
-            text: "● on  ⏎ panels".to_string(),
+            text: i18n::tr("settings.value.on_panels").to_string(),
             style: Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
         },
         RightSidebarMode::Off => ValueSpan {
-            text: "○ off".to_string(),
+            text: i18n::tr("settings.value.off").to_string(),
             style: Style::default().fg(theme::TEXT_FAINT()),
         },
         RightSidebarMode::Auto => ValueSpan {
@@ -2557,19 +2558,16 @@ fn room_list_mode_span(mode: RoomListMode) -> ValueSpan {
 
 fn text_brightness_span(adjustment: i32) -> ValueSpan {
     let adjustment = adjustment.clamp(-5, 5);
-    let text = match adjustment {
-        -5 => "-5 darker",
-        -4 => "-4 darker",
-        -3 => "-3 darker",
-        -2 => "-2 darker",
-        -1 => "-1 darker",
-        0 => "neutral",
-        1 => "+1 lighter",
-        2 => "+2 lighter",
-        3 => "+3 lighter",
-        4 => "+4 lighter",
-        5 => "+5 lighter",
-        _ => unreachable!(),
+    let text = if adjustment == 0 {
+        i18n::tr("settings.value.text_brightness.neutral").to_string()
+    } else {
+        let n = adjustment.abs().to_string();
+        let key = if adjustment < 0 {
+            "settings.value.text_brightness.darker"
+        } else {
+            "settings.value.text_brightness.lighter"
+        };
+        i18n::trf(key, &[("n", &n)])
     };
     let color = if adjustment > 0 {
         theme::TEXT_BRIGHT()

@@ -22,15 +22,6 @@ thread_local! {
     static CURRENT_LOCALE: Cell<Language> = const { Cell::new(Language::En) };
 }
 
-/// Default language id, re-exported so callers need only `i18n::`.
-pub use late_core::models::language::DEFAULT_ID;
-
-/// Normalize a stored/raw language string to a supported id. Delegates to
-/// `late_core` so the DB boundary and the renderer agree on aliases.
-pub fn normalize_id(id: &str) -> &'static str {
-    language::normalize_id(id)
-}
-
 /// Set the active language for the current thread/session. Call at the top of
 /// `App::render` (mirrors `theme::set_current_by_id`).
 pub fn set_current_by_id(id: &str) {
@@ -40,16 +31,6 @@ pub fn set_current_by_id(id: &str) {
 /// The active language id for the current thread/session.
 pub fn current_id() -> &'static str {
     CURRENT_LOCALE.with(|current| current.get().id())
-}
-
-/// Cycle forward/backward through supported languages (settings picker).
-pub fn cycle_id(current_id: &str, forward: bool) -> &'static str {
-    language::cycle_id(current_id, forward)
-}
-
-/// Human-readable label for a stored id (falls back to the default label).
-pub fn label_for_id(id: &str) -> &'static str {
-    language::label_for_id(id)
 }
 
 /// Translate a key for the current language. Falls back to English, then to

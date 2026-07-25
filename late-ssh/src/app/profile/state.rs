@@ -1,3 +1,4 @@
+use late_core::models::language;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::user_ssh_key::KeyLayout;
 use tokio::sync::{broadcast, watch};
@@ -64,7 +65,7 @@ impl ProfileState {
     }
 
     pub fn language_id(&self) -> &str {
-        self.profile.language.as_deref().unwrap_or(i18n::DEFAULT_ID)
+        self.profile.language.as_deref().unwrap_or(language::DEFAULT_ID)
     }
 
     pub fn toggle_favorite_room(&mut self, room_id: Uuid) -> bool {
@@ -167,7 +168,7 @@ impl ProfileState {
             match self.event_rx.try_recv() {
                 Ok(event) => match event {
                     ProfileEvent::Saved { user_id } if self.user_id == user_id => {
-                        banner = Some(Banner::success("Profile saved!"));
+                        banner = Some(Banner::success(i18n::tr("profile.saved")));
                     }
                     ProfileEvent::Error { user_id, message } if self.user_id == user_id => {
                         banner = Some(Banner::error(&message));
@@ -212,7 +213,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
             profile
                 .language
                 .as_deref()
-                .unwrap_or(i18n::DEFAULT_ID)
+                .unwrap_or(language::DEFAULT_ID)
                 .to_string(),
         ),
         enable_background_color: profile.enable_background_color,

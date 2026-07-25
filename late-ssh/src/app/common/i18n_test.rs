@@ -1,4 +1,5 @@
 use super::i18n::*;
+use late_core::models::language;
 
 #[test]
 fn tr_returns_english_for_default_locale() {
@@ -68,13 +69,13 @@ fn thread_local_locale_is_independent_across_threads() {
 
 #[test]
 fn cycle_id_wraps_through_options() {
-    assert_eq!(cycle_id("en", true), "zh-hans");
-    assert_eq!(cycle_id("zh-hans", true), "en");
-    assert_eq!(cycle_id("en", false), "zh-hans");
+    assert_eq!(language::cycle_id("en", true), "zh-hans");
+    assert_eq!(language::cycle_id("zh-hans", true), "en");
+    assert_eq!(language::cycle_id("en", false), "zh-hans");
 }
 
 #[test]
 fn label_for_id_returns_display_label() {
-    assert_eq!(label_for_id("en"), "English");
-    assert_eq!(label_for_id("zh-hans"), "中文(简体)");
+    assert_eq!(language::label_for_id("en"), "English");
+    assert_eq!(language::label_for_id("zh-hans"), "中文(简体)");
 }

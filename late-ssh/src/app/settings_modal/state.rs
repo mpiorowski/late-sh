@@ -1,6 +1,7 @@
 use std::cell::Cell;
 
 use chrono::{DateTime, Utc};
+use late_core::models::language;
 use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::rss_feed::RssFeed;
 use late_core::models::user::{
@@ -210,12 +211,12 @@ impl Tab {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Tab::Settings => "Settings",
-            Tab::Tweaks => "Tweaks",
-            Tab::Bio => "Bio",
-            Tab::Themes => "Themes",
-            Tab::Account => "Account",
-            Tab::Feeds => "RSS",
+            Tab::Settings => i18n::tr("settings.tab.settings"),
+            Tab::Tweaks => i18n::tr("settings.tab.tweaks"),
+            Tab::Bio => i18n::tr("settings.tab.bio"),
+            Tab::Themes => i18n::tr("settings.tab.themes"),
+            Tab::Account => i18n::tr("settings.tab.account"),
+            Tab::Feeds => i18n::tr("settings.tab.rss"),
         }
     }
 }
@@ -1864,8 +1865,8 @@ impl SettingsModalState {
                 true
             }
             Row::Language => {
-                let current = self.draft.language.as_deref().unwrap_or(i18n::DEFAULT_ID);
-                self.draft.language = Some(i18n::cycle_id(current, forward).to_string());
+                let current = self.draft.language.as_deref().unwrap_or(language::DEFAULT_ID);
+                self.draft.language = Some(language::cycle_id(current, forward).to_string());
                 true
             }
             Row::DirectMessages => {
@@ -1929,7 +1930,7 @@ impl SettingsModalState {
                     self.draft
                         .language
                         .as_deref()
-                        .unwrap_or(i18n::DEFAULT_ID)
+                        .unwrap_or(language::DEFAULT_ID)
                         .to_string(),
                 ),
                 enable_background_color: self.draft.enable_background_color,
