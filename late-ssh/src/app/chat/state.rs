@@ -431,7 +431,6 @@ pub struct ChatState {
     /// actually changes.
     context_epoch: u64,
     pub(crate) active_polls: HashMap<Uuid, ActiveChatPoll>,
-    pinned_messages: Vec<ChatMessage>,
     lounge_room_id: Option<Uuid>,
     /// Recent #lounge system-feed lines (see `activity/lounge.rs`), newest
     /// first, capped at `ACTIVITY_TICKER_CAP`. System messages are diverted
@@ -448,8 +447,6 @@ pub struct ChatState {
     /// session's view of who currently holds each private room.
     room_owner_ids: HashMap<Uuid, Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
-    pinned_rx: watch::Receiver<Vec<ChatMessage>>,
-    pinned_tx: watch::Sender<Vec<ChatMessage>>,
     overlay: Option<Overlay>,
     news_modal: Option<NewsModalState>,
     image_modal: Option<ImageModalState>,
@@ -642,8 +639,6 @@ impl ChatState {
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
-        let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
-        service.load_pinned_messages_task(pinned_tx.clone());
         let (room_tx, room_rx) = watch::channel(None);
         let (snapshot_rx, targeted_event_rx, refresh_tx, bg_task) =
             service.start_user_refresh_task(user_id, room_rx);
@@ -665,7 +660,6 @@ impl ChatState {
             room_versions: HashMap::new(),
             context_epoch: 0,
             active_polls: HashMap::new(),
-            pinned_messages: Vec::new(),
             lounge_room_id: None,
             activity_ticker: Vec::new(),
             usernames: HashMap::new(),
@@ -674,8 +668,6 @@ impl ChatState {
             friend_user_ids: HashSet::new(),
             room_owner_ids: HashMap::new(),
             username_rx,
-            pinned_rx,
-            pinned_tx,
             overlay: None,
             news_modal: None,
             image_modal: None,
@@ -828,11 +820,6 @@ impl ChatState {
         if let Some(room_id) = self.selected_room_id {
             self.request_room_tail(room_id);
         }
-    }
-
-    pub fn request_pinned_messages(&self) {
-        self.service
-            .load_pinned_messages_task(self.pinned_tx.clone());
     }
 
     pub fn request_room_tail(&mut self, room_id: Uuid) {
@@ -1580,21 +1567,6 @@ impl ChatState {
         None
     }
 
-    pub fn toggle_pin_selected_message_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
-        let message = self.selected_message_in_room(room_id)?;
-        if !self.is_admin {
-            return Some(Banner::error("Admin only: pin messages"));
-        }
-        self.service
-            .toggle_message_pin_task(message.id, self.is_admin, self.pinned_tx.clone());
-        let label = if message.pinned {
-            "Unpinning message..."
-        } else {
-            "Pinning message..."
-        };
-        Some(Banner::success(label))
-    }
-
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {
         self.rooms
             .iter()
@@ -1641,7 +1613,7 @@ impl ChatState {
         }
     }
 
-    fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
+    pub(crate) fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
         self.rooms
             .iter()
             .find(|(room, _)| room.id == room_id)
@@ -3276,13 +3248,11 @@ impl ChatState {
         // arrive on a fixed cadence whether or not anything changed, so
         // drain_snapshot reports real change itself instead of being peeked.
         let changed = self.username_rx.has_changed().unwrap_or(false)
-            || self.pinned_rx.has_changed().unwrap_or(false)
             || !self.targeted_event_rx.is_empty()
             || !self.event_rx.is_empty()
             || !self.moderation_event_rx.is_empty();
         self.drain_username_directory();
         let changed = self.drain_snapshot() || changed;
-        self.drain_pinned_messages();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_tick = self.feeds.tick();
@@ -3518,10 +3488,6 @@ impl ChatState {
             .find(|(room, _)| room.id == room_id)
             .map(|(_, msgs)| msgs.as_slice())
             .unwrap_or(&[])
-    }
-
-    pub fn pinned_messages(&self) -> &[ChatMessage] {
-        &self.pinned_messages
     }
 
     /// Recent #lounge system-feed lines for the activity ticker row,
@@ -3796,13 +3762,6 @@ impl ChatState {
             return;
         }
         self.all_usernames = self.username_rx.borrow_and_update().clone();
-    }
-
-    fn drain_pinned_messages(&mut self) {
-        if !self.pinned_rx.has_changed().unwrap_or(false) {
-            return;
-        }
-        self.pinned_messages = self.pinned_rx.borrow_and_update().clone();
     }
 
     fn drain_events(&mut self) -> Option<Banner> {

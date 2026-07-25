@@ -23,7 +23,7 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
     },
-    dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_info_modal,
+    help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_info_modal,
     room_search_modal, settings_modal, sheet_modal,
     state::App,
 };
@@ -141,7 +141,7 @@ fn push_quit_confirm_sayonara_placement(
 }
 
 struct DrawContext<'a> {
-    dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
+    dashboard_view: chat::ui::DashboardChatView<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
@@ -448,6 +448,7 @@ impl App {
                 }),
                 terminal_image_protocol: self.terminal_image_protocol,
             });
+        let dashboard_room = shell_active_room.and_then(|room_id| self.chat.room_by_id(room_id));
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -487,68 +488,66 @@ impl App {
                         })
                     })
             });
-        let dashboard_view = dashboard::ui::DashboardRenderInput {
-            pinned_messages: self.chat.pinned_messages(),
-            chat_view: chat::ui::DashboardChatView {
-                pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetStripView {
-                    state: &self.pet_state,
-                    pet_food_quantity: self.shop_state.pet_food_quantity(),
-                    pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
-                    food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
-                    water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
-                    travel_slot: Some(&self.last_pet_strip_travel),
-                }),
-                activity_ticker: self.chat.activity_ticker(),
-                messages: dashboard_messages,
-                overlay: self.chat.overlay(),
-                image_modal,
-                rows_cache: &mut self.dashboard_chat_rows_cache,
-                rows_versions: chat::ui::ChatRowsVersions {
-                    room_id: shell_active_room,
-                    room_version: shell_active_room
-                        .map(|room_id| self.chat.room_version(room_id))
-                        .unwrap_or(0),
-                    chat_ctx_epoch: self.chat.context_epoch(),
-                    app_ctx_epoch: self.chat_ctx_epoch,
-                },
-                usernames: chat_usernames,
-                countries: chat_countries,
-                friend_user_ids: self.chat.friend_user_ids(),
-                afk_user_ids: self.afk_user_ids.as_ref(),
-                message_reactions,
-                unread_marker: shell_active_room
-                    .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
-                    .flatten(),
-                current_user_id: self.user_id,
-                voice_channel_id: dashboard_voice_channel_id,
-                voice_snapshot,
-                voice_paired_cli_supports_voice: paired_cli_supports_voice,
-                show_flag_fallback: self.profile_state.profile().show_flag_fallback,
-                selected_message_id: self.chat.selected_message_id,
-                selected_image_message: dashboard_selected_image_message,
-                selected_news_message: dashboard_selected_news_message,
-                highlighted_message_id: self.chat.highlighted_message_id,
-                reaction_picker_active: self.chat.is_reaction_leader_active(),
-                composer: self.chat.composer(),
-                composing: self.chat.composing,
-                mention_matches: &self.chat.mention_ac.matches,
-                mention_selected: self.chat.mention_ac.selected,
-                mention_active: self.chat.mention_ac.active,
-                reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
-                is_editing: self.chat.edited_message_id.is_some(),
-                bonsai_glyphs,
-                chat_badges,
-                profile_award_badges,
-                drunk_levels: &self.drunk_levels,
-                name_styles: &self.name_styles,
-                active_room_effects: dashboard_room_effects,
-                active_poll: dashboard_active_poll,
-                inline_images: &self.chat.inline_image_cache,
-                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
-                composer_rect_slot: Some(&self.chat.last_composer_rect),
-                composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
-                chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+        let dashboard_view = chat::ui::DashboardChatView {
+            pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetStripView {
+                state: &self.pet_state,
+                pet_food_quantity: self.shop_state.pet_food_quantity(),
+                pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
+                food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
+                water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
+                travel_slot: Some(&self.last_pet_strip_travel),
+            }),
+            activity_ticker: self.chat.activity_ticker(),
+            room: dashboard_room,
+            messages: dashboard_messages,
+            overlay: self.chat.overlay(),
+            image_modal,
+            rows_cache: &mut self.dashboard_chat_rows_cache,
+            rows_versions: chat::ui::ChatRowsVersions {
+                room_id: shell_active_room,
+                room_version: shell_active_room
+                    .map(|room_id| self.chat.room_version(room_id))
+                    .unwrap_or(0),
+                chat_ctx_epoch: self.chat.context_epoch(),
+                app_ctx_epoch: self.chat_ctx_epoch,
             },
+            usernames: chat_usernames,
+            countries: chat_countries,
+            friend_user_ids: self.chat.friend_user_ids(),
+            afk_user_ids: self.afk_user_ids.as_ref(),
+            message_reactions,
+            unread_marker: shell_active_room
+                .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
+                .flatten(),
+            current_user_id: self.user_id,
+            voice_channel_id: dashboard_voice_channel_id,
+            voice_snapshot,
+            voice_paired_cli_supports_voice: paired_cli_supports_voice,
+            show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+            selected_message_id: self.chat.selected_message_id,
+            selected_image_message: dashboard_selected_image_message,
+            selected_news_message: dashboard_selected_news_message,
+            highlighted_message_id: self.chat.highlighted_message_id,
+            reaction_picker_active: self.chat.is_reaction_leader_active(),
+            composer: self.chat.composer(),
+            composing: self.chat.composing,
+            mention_matches: &self.chat.mention_ac.matches,
+            mention_selected: self.chat.mention_ac.selected,
+            mention_active: self.chat.mention_ac.active,
+            reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+            is_editing: self.chat.edited_message_id.is_some(),
+            bonsai_glyphs,
+            chat_badges,
+            profile_award_badges,
+            drunk_levels: &self.drunk_levels,
+            name_styles: &self.name_styles,
+            active_room_effects: dashboard_room_effects,
+            active_poll: dashboard_active_poll,
+            inline_images: &self.chat.inline_image_cache,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+            composer_rect_slot: Some(&self.chat.last_composer_rect),
+            composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+            chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
@@ -1259,7 +1258,7 @@ impl App {
                 }
 
                 if ctx.home_selected {
-                    dashboard::ui::draw_dashboard(
+                    chat::ui::draw_dashboard_chat_card(
                         frame,
                         center_area,
                         ctx.dashboard_view,

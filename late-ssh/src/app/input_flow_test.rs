@@ -1451,6 +1451,27 @@ async fn cycling_rails_persists_onto_the_authenticating_key() {
 }
 
 #[tokio::test]
+async fn the_lounge_renders_its_own_topic_header() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "lounge-topic-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    ChatRoom::set_topic_and_rules(&client, lounge.id, Some("tonight: the rooms upgrade"), None)
+        .await
+        .expect("set lounge topic");
+
+    // The Lounge is the one room drawn by `draw_dashboard_chat_card` instead of
+    // `draw_chat_center`, so its header needs its own coverage.
+    let mut app = make_app(test_db.db.clone(), viewer.id, "lounge-topic-flow-it");
+    wait_for_render_contains(&mut app, "tonight: the rooms upgrade").await;
+}
+
+#[tokio::test]
 async fn rules_command_shows_every_line_in_an_overlay() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "rules-flow-viewer").await;
