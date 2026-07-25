@@ -3914,3 +3914,86 @@ async fn wait_for_message_containing(
     }
     panic!("no message containing {needle:?} landed in the room");
 }
+
+/// `/kick` in a private room: its owner may remove a regular member, a plain
+/// member may not, and staff are out of reach. The work happens through the
+/// moderation service, so membership, audit trail and session effects are the
+/// same as a mod kick.
+#[tokio::test]
+async fn private_room_owner_can_kick_regulars_but_not_staff() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let owner = create_test_user(&test_db.db, "kick_owner").await;
+    let guest = create_test_user(&test_db.db, "kick_guest").await;
+    let staff = create_test_user(&test_db.db, "kick_staff").await;
+    User::set_moderator(&client, staff.id, true)
+        .await
+        .expect("promote staff");
+
+    let room = ChatRoom::create_private_room(&client, "study", owner.id)
+        .await
+        .expect("create private room");
+    for member in [owner.id, guest.id, staff.id] {
+        ChatRoomMember::join(&client, room.id, member)
+            .await
+            .expect("join room");
+    }
+
+    let regular = Permissions::new(false, false);
+
+    // A member who does not own the room cannot throw anyone out.
+    service.kick_from_room_task(
+        guest.id,
+        regular,
+        "study".to_string(),
+        "kick_owner".to_string(),
+    );
+    sleep(Duration::from_millis(300)).await;
+    assert!(
+        is_member(&test_db.db, room.id, owner.id).await,
+        "a non-owner must not be able to kick"
+    );
+
+    // The owner cannot reach staff either: ownership carries no rank.
+    service.kick_from_room_task(
+        owner.id,
+        regular,
+        "study".to_string(),
+        "kick_staff".to_string(),
+    );
+    sleep(Duration::from_millis(300)).await;
+    assert!(
+        is_member(&test_db.db, room.id, staff.id).await,
+        "an owner must not be able to kick a moderator"
+    );
+
+    // But the owner does keep the door.
+    service.kick_from_room_task(
+        owner.id,
+        regular,
+        "study".to_string(),
+        "kick_guest".to_string(),
+    );
+    for _ in 0..50 {
+        if !is_member(&test_db.db, room.id, guest.id).await {
+            break;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !is_member(&test_db.db, room.id, guest.id).await,
+        "the owner may remove a regular member"
+    );
+}
+
+async fn is_member(db: &late_core::db::Db, room_id: Uuid, user_id: Uuid) -> bool {
+    let client = db.get().await.expect("db client");
+    ChatRoomMember::is_member(&client, room_id, user_id)
+        .await
+        .expect("membership check")
+}

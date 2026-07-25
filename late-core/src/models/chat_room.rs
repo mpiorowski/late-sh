@@ -524,6 +524,7 @@ impl ChatRoom {
             .query(
                 "SELECT r.id,
                         r.slug,
+                        r.topic,
                         COALESCE(m.member_count, 0)::bigint AS member_count,
                         COALESCE(msg.message_count, 0)::bigint AS message_count,
                         msg.last_message_at
@@ -558,6 +559,7 @@ impl ChatRoom {
                 slug.map(|slug| DiscoverPublicTopicRoom {
                     room_id: row.get("id"),
                     slug,
+                    topic: row.get("topic"),
                     member_count: row.get("member_count"),
                     message_count: row.get("message_count"),
                     last_message_at: row.get("last_message_at"),
@@ -789,6 +791,9 @@ impl ChatRoom {
 pub struct DiscoverPublicTopicRoom {
     pub room_id: Uuid,
     pub slug: String,
+    /// What the room is about, when a mod has set it. This is the one line
+    /// someone reads before deciding whether to join.
+    pub topic: Option<String>,
     pub member_count: i64,
     pub message_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,

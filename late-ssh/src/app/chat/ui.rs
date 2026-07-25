@@ -1010,7 +1010,7 @@ fn pad_left_to_width(text: &str, width: usize) -> String {
     }
 }
 
-fn truncate_cells(text: &str, max_width: usize) -> String {
+pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(text) <= max_width {
         return text.to_string();
     }

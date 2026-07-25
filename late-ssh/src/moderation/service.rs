@@ -691,6 +691,30 @@ impl ModerationService {
         )])
     }
 
+    /// Kick a user out of one room, from the `/kick` chat command. Same path,
+    /// same authorization and same audit trail as the mod surface's room kick;
+    /// only the way it was asked for differs.
+    pub(crate) async fn kick_from_room(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        slug: String,
+        username: String,
+    ) -> Result<Vec<String>> {
+        self.room_action(
+            actor_user_id,
+            permissions,
+            RoomModRequest {
+                action: RoomModAction::Kick,
+                slug,
+                username,
+                duration: None,
+                reason: String::new(),
+            },
+        )
+        .await
+    }
+
     async fn room_action(
         &self,
         actor_user_id: Uuid,
@@ -706,6 +730,19 @@ impl ModerationService {
             RoomModAction::Kick => Caps::KICK_FROM_ROOM,
             RoomModAction::Ban => Caps::BAN_FROM_ROOM,
             RoomModAction::Unban => Caps::UNBAN_FROM_ROOM,
+        };
+        // A private room's owner keeps its door. Resolved here, the one place
+        // room actions are authorized, so `/kick` from chat and the mod surface
+        // answer to exactly the same rule.
+        let permissions = match ChatRoom::owner_id(&client, room.id).await? {
+            Some(owner)
+                if owner == actor_user_id
+                    && room.kind == "topic"
+                    && room.visibility == "private" =>
+            {
+                permissions.as_room_owner()
+            }
+            _ => permissions,
         };
         ensure_can(permissions, cap, target_tier)?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());

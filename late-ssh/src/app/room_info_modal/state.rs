@@ -1,6 +1,7 @@
-use ratatui::style::Style;
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use uuid::Uuid;
+
+use crate::app::common::composer::{new_themed_textarea, set_themed_textarea_cursor_visible};
 
 /// Field length caps. The topic is one line (it also becomes the IRC topic,
 /// which tops out at 300); rules get more room.
@@ -40,23 +41,25 @@ pub(crate) enum Mode {
     Edit { room_id: Uuid },
 }
 
-fn field_input() -> TextArea<'static> {
-    let mut ta = TextArea::default();
-    ta.set_cursor_line_style(Style::default());
-    ta.set_wrap_mode(WrapMode::None);
-    ta
+/// The topic is one line; the rules are a short block, so they wrap and take
+/// Alt+Enter for a new line (the bio convention).
+fn topic_input() -> TextArea<'static> {
+    new_themed_textarea("what this room is about", WrapMode::None, false)
 }
 
-fn seed(text: Option<&str>) -> TextArea<'static> {
-    let mut ta = field_input();
+fn rules_input() -> TextArea<'static> {
+    new_themed_textarea(
+        "the general rules (Alt+Enter for a new line)",
+        WrapMode::Word,
+        false,
+    )
+}
+
+fn seed(mut ta: TextArea<'static>, text: Option<&str>) -> TextArea<'static> {
     if let Some(text) = text.map(str::trim).filter(|s| !s.is_empty()) {
         ta.insert_str(text);
     }
     ta
-}
-
-fn line_text(ta: &TextArea<'static>) -> String {
-    ta.lines().join(" ")
 }
 
 /// The room-info form. Default is closed.
@@ -114,8 +117,8 @@ impl RoomInfoModalState {
         self.room_label = format!("#{slug}");
         self.mode = Some(Mode::Create { slug });
         self.owner_label = "you".to_string();
-        self.topic = field_input();
-        self.rules = field_input();
+        self.topic = topic_input();
+        self.rules = rules_input();
         self.reset_focus();
         self.open = true;
     }
@@ -132,8 +135,8 @@ impl RoomInfoModalState {
         self.mode = Some(Mode::Edit { room_id });
         self.room_label = room_label;
         self.owner_label = owner_label;
-        self.topic = seed(topic);
-        self.rules = seed(rules);
+        self.topic = seed(topic_input(), topic);
+        self.rules = seed(rules_input(), rules);
         self.reset_focus();
         self.open = true;
     }
@@ -141,6 +144,16 @@ impl RoomInfoModalState {
     fn reset_focus(&mut self) {
         self.focus = Field::Topic;
         self.topic.move_cursor(CursorMove::End);
+        self.rules.move_cursor(CursorMove::End);
+        self.sync_cursors();
+    }
+
+    /// Only the focused field shows a cursor, so the form reads like the other
+    /// multi-field modals.
+    fn sync_cursors(&mut self) {
+        let focus = self.focus;
+        set_themed_textarea_cursor_visible(&mut self.topic, focus == Field::Topic);
+        set_themed_textarea_cursor_visible(&mut self.rules, focus == Field::Rules);
     }
 
     pub(crate) fn close(&mut self) {
@@ -148,22 +161,28 @@ impl RoomInfoModalState {
         self.mode = None;
         self.room_label = String::new();
         self.owner_label = String::new();
-        self.topic = field_input();
-        self.rules = field_input();
+        self.topic = topic_input();
+        self.rules = rules_input();
         self.focus = Field::Topic;
     }
 
     /// Two fields, so next and previous are the same move.
     pub(crate) fn toggle_focus(&mut self) {
         self.focus = self.focus.other();
+        self.sync_cursors();
     }
 
     /// The trimmed values, empty when unset. Both fields are optional: a room
     /// with neither simply has no info, which is how every room starts.
     pub(crate) fn values(&self) -> (String, String) {
         (
-            line_text(&self.topic).trim().to_string(),
-            line_text(&self.rules).trim().to_string(),
+            self.topic.lines().join(" ").trim().to_string(),
+            self.rules.lines().join("\n").trim().to_string(),
         )
+    }
+
+    /// Characters used in a field, matching the accounting the caps use.
+    pub(crate) fn used(&self, field: Field) -> usize {
+        crate::app::common::textarea_input::char_count(self.field(field))
     }
 }

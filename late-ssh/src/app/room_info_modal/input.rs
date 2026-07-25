@@ -1,36 +1,40 @@
-use super::state::Mode;
-use crate::app::common::textarea_input::{EditOutcome, handle_single_line_edit};
+use super::state::{Field, Mode};
+use crate::app::common::textarea_input::{
+    EditOutcome, handle_multiline_edit, handle_single_line_edit,
+};
 use crate::app::input::ParsedInput;
 use crate::app::state::App;
 
-/// Route a key event to the open room-info form. Editing keys go to the focused
-/// field through the shared textarea helper; Tab and the arrows move between the
-/// two fields.
+/// Route a key event to the open room-info form. Tab moves between the two
+/// fields; everything else goes to the focused field through the shared
+/// textarea helpers. Up/down only move fields from the one-line topic, since in
+/// the rules block they move the cursor.
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
-    match event {
-        ParsedInput::Byte(b'\t') | ParsedInput::BackTab => {
-            app.room_info_modal_state.toggle_focus();
-            return;
-        }
-        ParsedInput::Arrow(b'A') | ParsedInput::Arrow(b'B') => {
-            app.room_info_modal_state.toggle_focus();
-            return;
-        }
-        _ => {}
+    if matches!(event, ParsedInput::Byte(b'\t') | ParsedInput::BackTab) {
+        app.room_info_modal_state.toggle_focus();
+        return;
     }
 
     let focus = app.room_info_modal_state.focus();
     let max = focus.max_len();
-    let outcome = handle_single_line_edit(app.room_info_modal_state.field_mut(focus), &event, max);
+    let field = app.room_info_modal_state.field_mut(focus);
+    let outcome = match focus {
+        Field::Topic => handle_single_line_edit(field, &event, max),
+        Field::Rules => handle_multiline_edit(field, &event, max),
+    };
     match outcome {
         EditOutcome::Handled => {}
         EditOutcome::Submit => submit(app),
         EditOutcome::Cancel => app.room_info_modal_state.close(),
-        EditOutcome::Ignored => {}
+        EditOutcome::Ignored => {
+            if matches!(event, ParsedInput::Arrow(b'A') | ParsedInput::Arrow(b'B')) {
+                app.room_info_modal_state.toggle_focus();
+            }
+        }
     }
 }
 
-/// Close the form on Esc from anywhere in the app-level escape dispatch.
+/// Close the form on Esc from the app-level escape dispatch.
 pub(crate) fn handle_escape(app: &mut App) {
     app.room_info_modal_state.close();
 }

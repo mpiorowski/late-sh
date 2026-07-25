@@ -2537,6 +2537,30 @@ impl ChatState {
             });
         }
 
+        // Kicking answers to the room, not the composer: a private room's owner
+        // may remove a regular from it, staff may remove anyone anywhere, and
+        // the service decides which of those applies.
+        if let Some(target) = parse_user_command(&body, "/kick") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let Some(target) = target else {
+                return Some(Banner::error("Usage: /kick @user"));
+            };
+            let Some(slug) = self.room_slug(room_id) else {
+                return Some(Banner::error("This room has no members to kick"));
+            };
+            self.service.kick_from_room_task(
+                self.user_id,
+                self.permissions,
+                slug,
+                target.to_string(),
+            );
+            return Some(Banner::success(&format!("Kicking @{target}...")));
+        }
+
         if let Some(target) = parse_user_command(&body, "/invite") {
             let room_id = self.room_membership_command_target();
             self.clear_composer_after_submit();
@@ -4340,6 +4364,19 @@ impl ChatState {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::InviteFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
+                ChatEvent::KickSucceeded {
+                    user_id,
+                    room_slug,
+                    username,
+                } if self.user_id == user_id => {
+                    self.request_list();
+                    banner = Some(Banner::success(&format!(
+                        "Kicked @{username} from #{room_slug}"
+                    )));
+                }
+                ChatEvent::KickFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::ModCommandOutput {

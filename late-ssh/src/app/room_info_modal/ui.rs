@@ -13,7 +13,7 @@ use crate::app::common::theme;
 /// convention: one bordered box per field, label and character count in its
 /// title, focus carried by the border.
 pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &RoomInfoModalState) {
-    let popup = centered_rect(area, 64, 12);
+    let popup = centered_rect(area, 64, 14);
     frame.render_widget(Clear, popup);
 
     let creating = matches!(state.mode(), Some(Mode::Create { .. }));
@@ -38,7 +38,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &RoomInfoModalState) {
     let rows = Layout::vertical([
         Constraint::Length(1), // owner + keys
         Constraint::Length(3), // topic
-        Constraint::Length(3), // rules
+        Constraint::Length(7), // rules
     ])
     .split(inner);
 
@@ -82,11 +82,7 @@ fn draw_field(
     } else {
         theme::BORDER()
     };
-    let title = format!(
-        " {label} {}/{} ",
-        input.lines().join(" ").chars().count(),
-        field.max_len()
-    );
+    let title = format!(" {label} {}/{} ", state.used(field), field.max_len());
     let block = Block::default()
         .title(Span::styled(
             title,

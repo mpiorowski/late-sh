@@ -166,6 +166,8 @@ pub struct ChatService {
 pub struct DiscoverRoomItem {
     pub room_id: Uuid,
     pub slug: String,
+    /// The room's topic, shown under its name in the discover list.
+    pub topic: Option<String>,
     pub member_count: i64,
     pub message_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,
@@ -779,6 +781,15 @@ pub enum ChatEvent {
         room_slug: String,
         username: String,
     },
+    KickSucceeded {
+        user_id: Uuid,
+        room_slug: String,
+        username: String,
+    },
+    KickFailed {
+        user_id: Uuid,
+        message: String,
+    },
     IgnoreFailed {
         user_id: Uuid,
         message: String,
@@ -1228,6 +1239,7 @@ impl ChatService {
             .map(|row| DiscoverRoomItem {
                 room_id: row.room_id,
                 slug: row.slug,
+                topic: row.topic,
                 member_count: row.member_count,
                 message_count: row.message_count,
                 last_message_at: row.last_message_at,
@@ -3963,6 +3975,52 @@ impl ChatService {
                         username,
                     },
                     Err(e) => ChatEvent::InviteFailed {
+                        user_id,
+                        message: e.to_string(),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    /// Remove a user from a room via `/kick`. The work is the moderation
+    /// service's room kick, so ownership, staff rank, the audit log and the
+    /// target's live session all behave exactly as they do from the mod
+    /// surface.
+    pub fn kick_from_room_task(
+        &self,
+        user_id: Uuid,
+        permissions: Permissions,
+        room_slug: String,
+        target_username: String,
+    ) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.kick_from_room_task",
+            user_id = %user_id,
+            room_slug = %room_slug,
+            target = %target_username
+        );
+        tokio::spawn(
+            async move {
+                let moderation = service.moderation_service();
+                let event = match moderation
+                    .kick_from_room(
+                        user_id,
+                        permissions,
+                        room_slug.clone(),
+                        target_username.clone(),
+                    )
+                    .await
+                {
+                    Ok(_) => ChatEvent::KickSucceeded {
+                        user_id,
+                        room_slug,
+                        username: target_username,
+                    },
+                    Err(e) => ChatEvent::KickFailed {
                         user_id,
                         message: e.to_string(),
                     },

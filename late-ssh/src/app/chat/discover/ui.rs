@@ -94,7 +94,7 @@ fn draw_room_list(frame: &mut Frame, area: Rect, view: &DiscoverListView<'_>) {
             Color::Reset
         };
 
-        let lines = room_lines(item, selected);
+        let lines = room_lines(item, selected, row_area.width);
         let p = Paragraph::new(lines).style(Style::default().bg(bg_color));
         frame.render_widget(p, row_area);
     }
@@ -172,9 +172,10 @@ fn draw_preview(frame: &mut Frame, area: Rect, item: &DiscoverRoomItem) {
     frame.render_widget(p, inner);
 }
 
-/// The two rows for one room: the `#slug` name on top, its stats underneath.
-/// The second row is indented to align under the name past the marker.
-fn room_lines(item: &DiscoverRoomItem, selected: bool) -> Vec<Line<'static>> {
+/// The two rows for one room: the `#slug` name plus what it is about on top,
+/// its stats underneath. The second row is indented to align under the name
+/// past the marker.
+fn room_lines(item: &DiscoverRoomItem, selected: bool, width: u16) -> Vec<Line<'static>> {
     let activity = item
         .last_message_at
         .map(format_relative_time)
@@ -192,15 +193,38 @@ fn room_lines(item: &DiscoverRoomItem, selected: bool) -> Vec<Line<'static>> {
 
     let marker = if selected { "› " } else { "  " };
 
-    let name_line = Line::from(vec![
+    let name = format!("#{}", item.slug);
+    let mut name_spans = vec![
         Span::styled(marker, Style::default().fg(theme::AMBER())),
         Span::styled(
-            format!("#{}", item.slug),
+            name.clone(),
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         ),
-    ]);
+    ];
+    // The topic sits next to the name, the moment someone is deciding whether
+    // this room is for them. Rooms without one look exactly as before.
+    if let Some(topic) = item
+        .topic
+        .as_deref()
+        .map(str::trim)
+        .filter(|topic| !topic.is_empty())
+    {
+        let used = marker.len() + name.chars().count() + 3;
+        let room = (width as usize).saturating_sub(used);
+        if room >= 8 {
+            name_spans.push(Span::styled(
+                "  ·  ".to_string(),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ));
+            name_spans.push(Span::styled(
+                crate::app::chat::ui::truncate_cells(topic, room),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+    let name_line = Line::from(name_spans);
 
     let stats_line = Line::from(vec![
         Span::raw("  "),

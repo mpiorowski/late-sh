@@ -337,6 +337,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /roominfo          set this room's topic & rules (owner, or a mod)",
         "  /rules             show this room's rules",
         "  /invite @user      add a user to the current room",
+        "  /kick @user        remove a user from your private room (or a mod)",
         "  /leave             leave the current room",
         "  /dm @user          open a direct message",
         "  /active            list active users",
@@ -1335,6 +1336,10 @@ Plain stream, no pairing:
   mpv https://late.sh/stream
 
 Direct stream playback is Icecast only. Pair the CLI or browser for source switching, mute/volume keys, visualizer sync, or the shared YouTube queue.
+
+No sound from the paired CLI on Linux?
+  The CLI plays audio through ALSA. On a PipeWire system with no ALSA compatibility layer, it finds no output device.
+  Install pipewire-alsa (Arch: pacman -S pipewire-alsa, Debian/Ubuntu: apt install pipewire-alsa) and reconnect.
 
 Global keys (work anywhere)
   ?                open this guide, including Pair and terminal-specific tabs
