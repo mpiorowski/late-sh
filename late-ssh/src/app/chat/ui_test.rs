@@ -1600,48 +1600,82 @@ fn row_text(buf: &ratatui::buffer::Buffer, y: u16, width: u16) -> String {
 }
 
 #[test]
-fn room_topic_line_takes_one_row_and_hints_at_the_rules() {
+fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
     let room = room_with_info(Some("We read sci-fi"), Some("Be kind"));
     let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("term");
     let area = Rect::new(0, 0, 40, 20);
     let mut remaining = area;
     terminal
-        .draw(|f| remaining = super::draw_room_topic_line(f, area, &room))
+        .draw(|f| {
+            remaining = super::draw_room_header(
+                f,
+                area,
+                super::RoomHeader {
+                    voice: None,
+                    topic: super::room_topic(&room),
+                    has_rules: super::room_has_rules(&room),
+                },
+            )
+        })
         .unwrap();
 
-    assert_eq!(remaining.y, 1, "the topic costs exactly one row");
+    assert_eq!(remaining.y, 1, "topic alone costs one row");
     assert_eq!(remaining.height, 19);
 
     let row = row_text(terminal.backend().buffer(), 0, 40);
-    assert!(row.contains("We read sci-fi"));
-    assert!(row.contains("/rules"));
+    assert!(
+        row.starts_with("We read sci-fi"),
+        "topic reads from the left"
+    );
+    assert!(
+        row.trim_end().ends_with("/rules"),
+        "the hint is flushed right: {row}"
+    );
 }
 
 #[test]
-fn room_topic_line_is_absent_without_a_topic() {
+fn room_header_is_absent_without_a_topic_or_voice() {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
     let room = room_with_info(None, Some("Be kind"));
     let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("term");
     let area = Rect::new(0, 0, 40, 20);
     let mut remaining = area;
     terminal
-        .draw(|f| remaining = super::draw_room_topic_line(f, area, &room))
+        .draw(|f| {
+            remaining = super::draw_room_header(
+                f,
+                area,
+                super::RoomHeader {
+                    voice: None,
+                    topic: super::room_topic(&room),
+                    has_rules: super::room_has_rules(&room),
+                },
+            )
+        })
         .unwrap();
-    assert_eq!(remaining, area, "no topic, no row taken");
+    assert_eq!(remaining, area, "nothing to show, no rows taken");
 }
 
 #[test]
-fn room_topic_line_omits_the_hint_when_there_are_no_rules() {
+fn room_header_omits_the_hint_when_there_are_no_rules() {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
     let room = room_with_info(Some("A cozy corner"), None);
     let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("term");
     let area = Rect::new(0, 0, 40, 20);
-    let mut remaining = area;
     terminal
-        .draw(|f| remaining = super::draw_room_topic_line(f, area, &room))
+        .draw(|f| {
+            super::draw_room_header(
+                f,
+                area,
+                super::RoomHeader {
+                    voice: None,
+                    topic: super::room_topic(&room),
+                    has_rules: super::room_has_rules(&room),
+                },
+            );
+        })
         .unwrap();
-    assert_eq!(remaining.y, 1);
     let row = row_text(terminal.backend().buffer(), 0, 40);
     assert!(row.contains("A cozy corner"));
     assert!(!row.contains("/rules"));

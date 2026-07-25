@@ -3,17 +3,21 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 
 use super::state::{Field, Mode, RoomInfoModalState};
-use crate::app::common::theme;
+use crate::app::common::{primitives::row_with_hint, theme};
 
-/// Draw the room-info form centred over `area`. Follows the poll modal's field
-/// convention: one bordered box per field, label and character count in its
-/// title, focus carried by the border.
+/// The gutter the focus bar lives in, left of every field's text.
+const GUTTER: u16 = 2;
+
+/// Draw the room-info form centred over `area`. Only the modal itself is
+/// framed: the fields are borderless, each a label row with its character count
+/// flushed right over the text, and focus is carried by an accent bar in the
+/// gutter plus the label going bright. Two fields, one thin rule between them.
 pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &RoomInfoModalState) {
-    let popup = centered_rect(area, 64, 14);
+    let popup = centered_rect(area, 66, 17);
     frame.render_widget(Clear, popup);
 
     let creating = matches!(state.mode(), Some(Mode::Create { .. }));
@@ -31,43 +35,71 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &RoomInfoModalState) {
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()))
+        // Room to breathe: a column either side and a blank row above and below,
+        // so nothing is pressed against the frame.
+        .padding(Padding::new(2, 2, 1, 1))
         .style(Style::default().bg(theme::BG_CANVAS()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
     let rows = Layout::vertical([
-        Constraint::Length(1), // owner + keys
-        Constraint::Length(3), // topic
-        Constraint::Length(7), // rules
+        Constraint::Length(1), // owner
+        Constraint::Length(1), // spacer
+        Constraint::Length(2), // topic: label + one line
+        Constraint::Length(1), // spacer
+        Constraint::Length(1), // rule between the two fields
+        Constraint::Length(1), // spacer
+        Constraint::Length(4), // rules: label + three lines
+        Constraint::Min(1),    // spacer
+        Constraint::Length(1), // keys
     ])
     .split(inner);
 
-    let submit = if creating {
-        "Enter create"
-    } else {
-        "Enter save"
-    };
+    // Who holds the room sits on its own row: ownership can move on its own
+    // when a creator leaves, so this is where that becomes visible.
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("Owner ", Style::default().fg(theme::TEXT_DIM())),
+        line_on_canvas(vec![
+            Span::styled("Owner  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 state.owner_label().to_string(),
                 Style::default().fg(theme::AMBER()),
             ),
-            Span::styled("  ·  ", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(submit, Style::default().fg(theme::SUCCESS())),
-            Span::styled("  Tab field  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("Esc", Style::default().fg(theme::ERROR())),
-            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
-        ]))
-        .style(Style::default().bg(theme::BG_CANVAS())),
-        rows[0],
+        ]),
+        indent(rows[0]),
     );
 
-    draw_field(frame, rows[1], state, Field::Topic, "What it is about");
-    draw_field(frame, rows[2], state, Field::Rules, "Rules");
+    draw_field(frame, rows[2], state, Field::Topic, "What it is about");
+
+    frame.render_widget(
+        line_on_canvas(vec![Span::styled(
+            "\u{2500}".repeat(rows[4].width as usize),
+            Style::default().fg(theme::BORDER_DIM()),
+        )]),
+        rows[4],
+    );
+
+    draw_field(frame, rows[6], state, Field::Rules, "Rules");
+
+    let submit = if creating { "create" } else { "save" };
+    frame.render_widget(
+        line_on_canvas(vec![
+            Span::styled("Enter", Style::default().fg(theme::SUCCESS())),
+            Span::styled(
+                format!(" {submit}   "),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled("Tab", Style::default().fg(theme::AMBER())),
+            Span::styled(" field   ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc", Style::default().fg(theme::ERROR())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        indent(rows[8]),
+    );
 }
 
+/// One field: its label with the character count flushed right, then the text
+/// itself. The focused field is marked by an accent bar in the gutter and a
+/// bright label, so nothing shifts when focus moves.
 fn draw_field(
     frame: &mut Frame,
     area: Rect,
@@ -76,34 +108,57 @@ fn draw_field(
     label: &str,
 ) {
     let focused = state.focus() == field;
-    let input = state.field(field);
-    let border = if focused {
-        theme::BORDER_ACTIVE()
+    let [label_row, text_rows] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    let [gutter, text] =
+        Layout::horizontal([Constraint::Length(GUTTER), Constraint::Min(1)]).areas(text_rows);
+
+    let label_style = if focused {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD)
     } else {
-        theme::BORDER()
+        Style::default().fg(theme::TEXT_DIM())
     };
-    let title = format!(" {label} {}/{} ", state.used(field), field.max_len());
-    let block = Block::default()
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(if focused {
-                    theme::TEXT_BRIGHT()
-                } else {
-                    theme::TEXT_DIM()
-                })
-                .add_modifier(if focused {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
+    frame.render_widget(
+        Paragraph::new(row_with_hint(
+            vec![Span::styled(label.to_string(), label_style)],
+            vec![Span::styled(
+                format!("{}/{}", state.used(field), field.max_len()),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )],
+            label_row.width.saturating_sub(GUTTER) as usize,
         ))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border))
-        .style(Style::default().bg(theme::BG_CANVAS()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(input, inner);
+        .style(Style::default().bg(theme::BG_CANVAS())),
+        indent(label_row),
+    );
+
+    let bar_style = if focused {
+        Style::default().fg(theme::BORDER_ACTIVE())
+    } else {
+        Style::default().fg(theme::BORDER_DIM())
+    };
+    let bars: Vec<Line> = (0..gutter.height)
+        .map(|_| Line::from(Span::styled("\u{258f}", bar_style)))
+        .collect();
+    frame.render_widget(
+        Paragraph::new(bars).style(Style::default().bg(theme::BG_CANVAS())),
+        gutter,
+    );
+    frame.render_widget(state.field(field), text);
+}
+
+/// Align a full-width row with the field text, past the focus gutter.
+fn indent(area: Rect) -> Rect {
+    Rect {
+        x: area.x + GUTTER,
+        width: area.width.saturating_sub(GUTTER),
+        ..area
+    }
+}
+
+fn line_on_canvas(spans: Vec<Span<'static>>) -> Paragraph<'static> {
+    Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG_CANVAS()))
 }
 
 /// A centred rectangle of the given size, clamped to `area`.

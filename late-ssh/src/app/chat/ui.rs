@@ -20,6 +20,7 @@ use uuid::Uuid;
 use crate::app::common::{
     composer::composer_line_count,
     overlay::{Overlay, draw_overlay},
+    primitives::row_with_hint,
     theme,
     username_effect::NameStyle,
 };
@@ -3824,49 +3825,92 @@ fn dm_display_label(
 /// Center pane for the merged Home/Chat shell. The room rail is rendered by
 /// the outer shell, so this draws only the selected room/feed content plus the
 /// relevant composer or hint row.
-/// Pin a room's topic to one line above its messages and return the area left
-/// for the messages. Rooms with no topic (most of them) are left untouched, and
-/// a room with rules gets a `/rules` hint on the same line. One row, because
-/// every row spent here is a row of chat nobody sees.
-fn draw_room_topic_line(frame: &mut Frame, area: Rect, room: &ChatRoom) -> Rect {
-    let topic = room
-        .topic
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty());
-    let Some(topic) = topic else {
-        return area;
-    };
-    if area.height < 3 {
+/// The header block above a room's messages: the voice row (when the room has a
+/// voice channel), a divider, then the topic row. Each row pairs live state on
+/// the left with the keys or commands that act on it flushed to the right edge,
+/// so the eye finds status in one column and actions in another.
+struct RoomHeader<'a> {
+    voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
+    topic: Option<&'a str>,
+    has_rules: bool,
+}
+
+impl RoomHeader<'_> {
+    /// Rows this header wants: the voice row, the divider between voice and
+    /// topic, and the topic row. The divider only earns its row when there is
+    /// something on both sides of it.
+    fn height(&self) -> u16 {
+        let voice = u16::from(self.voice.is_some());
+        let topic = u16::from(self.topic.is_some());
+        let divider = u16::from(self.voice.is_some() && self.topic.is_some());
+        voice + divider + topic
+    }
+}
+
+/// Draw the header and return the area left for messages. A room with neither
+/// voice nor a topic (most of them) is left untouched, and the header yields
+/// entirely rather than squeeze the message area below one row.
+fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Rect {
+    let height = header.height();
+    if height == 0 || area.height <= height {
         return area;
     }
-
     let width = area.width.max(1) as usize;
-    let has_rules = room
-        .rules
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|r| !r.is_empty());
-    let hint = if has_rules { "  /rules" } else { "" };
-    let topic_width = width.saturating_sub(UnicodeWidthStr::width(hint));
 
-    let mut spans = vec![Span::styled(
-        truncate_cells(topic, topic_width),
-        Style::default().fg(theme::TEXT_DIM()),
-    )];
-    if has_rules {
-        spans.push(Span::styled(hint, Style::default().fg(theme::TEXT_FAINT())));
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(voice) = &header.voice {
+        lines.push(crate::app::voice::ui::voice_strip_line(voice, width));
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)),
-        Rect { height: 1, ..area },
-    );
+    if header.voice.is_some() && header.topic.is_some() {
+        lines.push(Line::from(Span::styled(
+            "\u{2500}".repeat(width),
+            Style::default().fg(theme::BORDER_DIM()),
+        )));
+    }
+    if let Some(topic) = header.topic {
+        let hint = if header.has_rules {
+            vec![Span::styled(
+                "/rules",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )]
+        } else {
+            Vec::new()
+        };
+        // The topic is clipped to whatever the hint leaves, so a long topic
+        // never pushes `/rules` off the row.
+        let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { 0 });
+        lines.push(row_with_hint(
+            vec![Span::styled(
+                truncate_cells(topic, room_for_topic),
+                Style::default().fg(theme::TEXT_DIM()),
+            )],
+            hint,
+            width,
+        ));
+    }
 
+    frame.render_widget(Paragraph::new(lines), Rect { height, ..area });
     Rect {
-        y: area.y + 1,
-        height: area.height.saturating_sub(1),
+        y: area.y + height,
+        height: area.height.saturating_sub(height),
         ..area
     }
+}
+
+/// The room's topic, when it has a non-blank one.
+fn room_topic(room: &ChatRoom) -> Option<&str> {
+    room.topic
+        .as_deref()
+        .map(str::trim)
+        .filter(|topic| !topic.is_empty())
+}
+
+/// Whether the room has rules worth pointing at with `/rules`.
+fn room_has_rules(room: &ChatRoom) -> bool {
+    room.rules
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|rules| !rules.is_empty())
 }
 
 pub fn draw_chat_center(
@@ -3937,36 +3981,26 @@ fn draw_selected_content(
                     .find(|(room, _)| is_chat_list_room(room))
             });
 
-        // A voice channel shows a compact voice strip pinned at the very top;
-        // text-only rooms render unchanged with the messages at full height.
-        let messages_area = if let Some((room, _)) = selected_room
-            && let Some(channel) = view.voice_channels_by_room_id.get(&room.id)
-        {
-            let voice_view = crate::app::voice::ui::VoiceRoomView {
-                snapshot: view.voice_snapshot,
-                room_id: channel.id,
-                current_user_id,
-                paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
-            };
-            let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
-            let strip = Rect {
-                height: strip_height,
-                ..messages_area
-            };
-            crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
-            Rect {
-                y: messages_area.y + strip_height,
-                height: messages_area.height.saturating_sub(strip_height),
-                ..messages_area
-            }
-        } else {
-            messages_area
-        };
-
-        // A room with a topic shows it on one line above its messages; rooms
-        // without one (the lounge, DMs) render unchanged.
+        // Voice state and the room's topic share one header block above the
+        // messages; a text-only room without a topic renders unchanged.
         let messages_area = if let Some((room, _)) = selected_room {
-            draw_room_topic_line(frame, messages_area, room)
+            let voice = view.voice_channels_by_room_id.get(&room.id).map(|channel| {
+                crate::app::voice::ui::VoiceRoomView {
+                    snapshot: view.voice_snapshot,
+                    room_id: channel.id,
+                    current_user_id,
+                    paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+                }
+            });
+            draw_room_header(
+                frame,
+                messages_area,
+                RoomHeader {
+                    voice,
+                    topic: room_topic(room),
+                    has_rules: room_has_rules(room),
+                },
+            )
         } else {
             messages_area
         };

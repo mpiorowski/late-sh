@@ -78,3 +78,47 @@ fn global_voice_badge_uses_current_room_and_status() {
     let badge = global_voice_badge(&snapshot, user_id, |_| Some("#lounge".to_string()));
     assert_eq!(badge.as_deref(), Some(" mic #lounge [muted] "));
 }
+
+#[test]
+fn voice_row_is_one_line_with_the_keys_flushed_right() {
+    let room_id = Uuid::from_u128(42);
+    let snapshot = VoiceSnapshot {
+        enabled: true,
+        livekit_url: Some("wss://voice.example".to_string()),
+        rooms: std::collections::HashMap::new(),
+    };
+    let view = VoiceRoomView {
+        snapshot: &snapshot,
+        room_id,
+        current_user_id: Uuid::from_u128(7),
+        paired_cli_supports_voice: true,
+    };
+
+    let line = voice_strip_line(&view, 70);
+    let rendered: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(
+        rendered.starts_with("No one is in voice yet."),
+        "who is here reads from the left: {rendered}"
+    );
+    assert!(
+        rendered.trim_end().ends_with("/voice"),
+        "the keys sit at the right edge: {rendered}"
+    );
+    assert_eq!(
+        unicode_width::UnicodeWidthStr::width(rendered.as_str()),
+        70,
+        "the row fills the width exactly, so the hint lands on the edge"
+    );
+
+    // Too narrow for both: the status wins and the hint drops rather than wrap.
+    let narrow: String = voice_strip_line(&view, 30)
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(narrow, "No one is in voice yet.");
+}

@@ -3621,8 +3621,9 @@ impl ChatService {
             system_user_id,
             room_id,
             format!(
-                "Welcome to #{slug}. Say what this room is about and what its rules are, \
-                 and a moderator will set them on the room."
+                "Welcome to #{slug}. Say here what this room is about and what its rules \
+                 should be, then message a moderator (ask in #help) and they will set them \
+                 on the room."
             ),
         )
         .await?;
@@ -3631,7 +3632,7 @@ impl ChatService {
             self.send_system_message(
                 system_user_id,
                 moderators.id,
-                format!("{creator} opened #{slug}. It has no topic or rules yet."),
+                format!("{creator} opened #{slug}. Set its topic and rules with /roominfo."),
             )
             .await?;
         }

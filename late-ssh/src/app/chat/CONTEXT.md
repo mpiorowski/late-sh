@@ -126,7 +126,7 @@ Room model:
 - `lounge` must have slug `lounge`, is public, auto-join, and permanent.
 - `language` rooms are public, opt-in, unique by `language_code`, with slug `lang-{code}`.
 - `topic` rooms are unique by `(visibility, slug)`.
-- `chat_rooms.topic` / `rules` are the room's "about" info, both nullable (NULL = unset; blanks are stored as NULL by `ChatRoom::set_topic_and_rules`). `topic` is projected as the IRC topic and shown in the Discover list and on one dim line above the room's messages; `rules` are read on request with `/rules`.
+- `chat_rooms.topic` / `rules` are the room's "about" info, both nullable (NULL = unset; blanks are stored as NULL by `ChatRoom::set_topic_and_rules`). `topic` is projected as the IRC topic, shown in the Discover list, and shown in the room header; `rules` are read on request with `/rules`.
 - `chat_rooms.created_by` is who opened the room, written by the create paths only and never back-filled (NULL for system rooms, DMs, and everything predating migration 125). Ownership in force is **derived**, not stored: `ChatRoom::owner_id` / `owner_ids_for_rooms` return the creator while they are still a member, else the earliest remaining member (ties by user id), so a creator who leaves hands the room on with no write. Only private `topic` rooms are owned; the chat snapshot carries `room_owner_ids` for them alone.
 - `game` rooms require `game_kind + slug`, are unique by `(game_kind, slug)`, and DB constraints require `auto_join = false`. Two flavors: permanent public house-table rooms (slugs `poker`/`blackjack`/`maze`/`tron`, seeded at startup by `HouseTableRegistry::ensure_chat_rooms`), and private two-player daily match chats (slug `daily-{match_id}`, created in the daily claim transaction with both memberships — see `late-ssh/src/app/lobby/daily/CONTEXT.md`). `ChatService::join_game_room` joins public game rooms freely but rejects non-members for private ones (`this match chat is players only`); daily players are already members, so their "join" is only the idempotent re-join that triggers the list/tail refresh chain.
 - DMs canonicalize endpoint UUIDs by text order and are unique by `(dm_user_a, dm_user_b)`.
@@ -458,6 +458,10 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - `start_loading()` clears stale rows until results arrive; empty loaded state is distinct from loading.
 - Enter joins the selected public room.
 - Rooms render two rows each (`ITEM_HEIGHT = 2` in `discover/ui.rs`): `#slug` plus the room's topic when a mod has set one, then member/message counts and last activity.
+
+### Room Header
+
+`ui.rs::draw_room_header` owns everything between the room rail and the messages, and returns the area left for messages. Up to three rows, each one pairing live state on the left with the keys or commands that act on it flushed right (`primitives::row_with_hint`): the voice row (`voice::ui::voice_strip_line`, present only for voice-enabled rooms), a dim full-width divider drawn only when voice and a topic are both present, then the topic row with a `/rules` hint when the room has rules. A room with neither voice nor a topic keeps the full height for messages, and the whole header yields if it would leave fewer than two rows for them.
 - `/` opens an inline substring filter over room slugs (footer shows the live query); typing edits it, `selected`/`visible_items` track the filtered subset, and `Esc` clears+closes it. While `discover.is_filtering()`, `app::input::handle_byte_event` and `chat::input::handle_byte` route every byte (digits, `space`, `h`/`l`) into the filter so it captures an unrestricted query; arrows still navigate. `start_slash_command_composer` excludes Discover so `/` never starts a slash command there.
 
 ---
