@@ -7,6 +7,7 @@ use late_core::models::marketplace;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::profile_award::{ProfileAward, list_profile_awards_for_user};
 use late_core::models::user::{User, sanitize_username_input};
+use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
@@ -405,6 +406,27 @@ impl ProfileService {
                 }
             }
             .instrument(info_span!("profile.clubhouse_tutorial_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: persist one device's home rail layout onto the SSH key
+    /// the session authenticated with. No event on success; a failure is only
+    /// logged, since the layout already applies for the rest of the session and
+    /// the cost of losing the write is one un-remembered preference.
+    pub fn set_key_layout(&self, user_id: Uuid, fingerprint: String, layout: KeyLayout) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    UserSshKey::set_layout(&client, user_id, &fingerprint, layout).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist device rail layout");
+                }
+            }
+            .instrument(info_span!("profile.device_rails_task", user_id = %user_id)),
         );
     }
 

@@ -228,8 +228,9 @@ impl App {
             && self.settings_modal_state.draft().username.is_empty()
             && !self.profile_state.profile().username.is_empty()
         {
+            let device_rails = self.rail_modes();
             self.settings_modal_state
-                .open_from_profile(self.profile_state.profile());
+                .open_from_profile(self.profile_state.profile(), device_rails);
         }
 
         for msg in messages {
@@ -1156,17 +1157,12 @@ impl App {
     /// previews the toggle live). Shared by the viz gate in tick() and the
     /// wake cadence.
     fn right_sidebar_visible(&self) -> bool {
-        if self.show_settings {
-            crate::app::render::resolve_right_sidebar_enabled(
-                self.settings_modal_state.draft().right_sidebar_mode,
-                self.screen,
-            )
+        let mode = if self.show_settings {
+            self.settings_modal_state.device_rails().1
         } else {
-            crate::app::render::resolve_right_sidebar_enabled(
-                self.profile_state.profile().right_sidebar_mode,
-                self.screen,
-            )
-        }
+            self.rail_modes().1
+        };
+        crate::app::render::resolve_right_sidebar_enabled(mode, self.screen, self.size.0)
     }
 
     fn inline_image_render_settings(&self) -> InlineImageRenderSettings {

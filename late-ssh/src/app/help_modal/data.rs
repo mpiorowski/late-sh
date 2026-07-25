@@ -1048,9 +1048,15 @@ fn settings_help_lines() -> Vec<String> {
         "    Background color        theme background fill on/off; off keeps text colors on your terminal's own background"
             .to_string(),
         "    Text Brightness         nudge overall text brightness up or down".to_string(),
-        "    Right sidebar           on / off / custom for Home and Arcade; Custom opens a panel checklist"
+        "    Right sidebar           on / off / auto for Home and Arcade; Enter opens a panel checklist"
             .to_string(),
-        "    Room list               show/hide the Home room-list rail".to_string(),
+        "    Room list               on / off / auto for the Home room-list rail".to_string(),
+        "                            auto hides a rail on terminals too narrow to carry it, so one"
+            .to_string(),
+        "                            account works on both a desktop and a phone".to_string(),
+        "                            both rows apply to this device (this SSH key) only, never the"
+            .to_string(),
+        "                            account default; `\\` on Home cycles the same two".to_string(),
         "    Pet companion strip     show/hide the pet strip above the Lounge chat composer (pet owners only)"
             .to_string(),
         "  Compose".to_string(),

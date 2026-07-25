@@ -1,3 +1,4 @@
+use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
 use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
@@ -19,6 +20,9 @@ pub struct SessionBootstrapInputs {
     pub session_token: String,
     pub session_rx: Option<mpsc::Receiver<SessionMessage>>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    /// Fingerprint of the SSH key this session authenticated with, for
+    /// per-device settings. `None` for sessions without a key of their own.
+    pub key_fingerprint: Option<String>,
 }
 
 pub struct ArcadeSessionPreloads {
@@ -225,6 +229,32 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
     }
 }
 
+/// This device's stored home rail layout, keyed by the SSH key the session
+/// authenticated with. `None` for a keyless session, a key with nothing stored,
+/// or a failed read: all three follow the account default, which is why a
+/// failure here is logged and swallowed rather than failing the connection.
+pub async fn load_device_rails(
+    state: &State,
+    user_id: Uuid,
+    key_fingerprint: Option<&str>,
+) -> Option<KeyLayout> {
+    let fingerprint = key_fingerprint?;
+    let client = match state.db.get().await {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to get db client for device rail layout");
+            return None;
+        }
+    };
+    match UserSshKey::layout_for(&client, user_id, fingerprint).await {
+        Ok(layout) => layout,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load device rail layout");
+            None
+        }
+    }
+}
+
 pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs) -> SessionConfig {
     let SessionBootstrapInputs {
         user,
@@ -235,6 +265,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_rx,
         activity_feed_rx,
+        key_fingerprint,
     } = inputs;
 
     let user_id = user.id;
@@ -345,10 +376,14 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         }
     };
 
+    let key_layout = load_device_rails(state, user_id, key_fingerprint.as_deref()).await;
+
     SessionConfig {
         cols,
         rows,
         term,
+        key_fingerprint,
+        key_layout,
         audio_service: state.audio_service.clone(),
         voice_service: state.voice_service.clone(),
         chat_service: state.chat_service.clone(),

@@ -3,6 +3,8 @@ use chrono::{DateTime, Duration, Utc};
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
+use super::user_ssh_key::UserSshKey;
+
 const LINK_CODE_LEN: usize = 12;
 const LINK_CODE_ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -165,7 +167,7 @@ pub async fn complete(
     };
 
     ensure_no_active_link_blocking_bans(&tx, &[current_user_id, peer_user_id]).await?;
-    move_ssh_keys(&tx, abandoned_user_id, kept_user_id).await?;
+    UserSshKey::move_to_user(&tx, abandoned_user_id, kept_user_id).await?;
     tx.execute(
         "UPDATE account_link_codes
          SET consumed_at = current_timestamp, updated = current_timestamp
@@ -218,22 +220,6 @@ async fn ensure_no_active_link_blocking_bans(
     if blocked {
         bail!("account linking is unavailable while either account has an active moderation ban");
     }
-    Ok(())
-}
-
-async fn move_ssh_keys(
-    client: &impl GenericClient,
-    from_user_id: Uuid,
-    to_user_id: Uuid,
-) -> Result<()> {
-    client
-        .execute(
-            "UPDATE user_ssh_keys
-             SET user_id = $1, updated = current_timestamp
-             WHERE user_id = $2",
-            &[&to_user_id, &from_user_id],
-        )
-        .await?;
     Ok(())
 }
 

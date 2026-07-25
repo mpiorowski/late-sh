@@ -1,6 +1,6 @@
 # late.sh Scale Notes
 
-Last updated: 2026-07-24 (render-cost win measured in prod at ~26 mcores/session; sessions-per-node ceiling re-derived to ~260-300. Per-pod telemetry identity (`service.instance.id`) added in infra so otel series stop clobbering across replicas. Next infra step: add a second cluster node and move everything except `service-ssh` off `server-1`)
+Last updated: 2026-07-24 (health check at 59 sessions reproduced the render-cost numbers exactly, and found the next bottleneck is not render: the work-feed all-users fan-out stalls the DB and overflows its broadcast channel for minutes at a time, see Pain Point 6. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
 
 This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
 
@@ -10,7 +10,8 @@ Cluster shape:
 
 - Single RKE2 node: `server-1`
 - Node capacity observed: 8 CPU, about 15.6 GiB memory
-- Node usage at about 80 concurrent sessions (2026-07-22, pre-render-cost-program): about 77% CPU, 43% memory
+- Node usage at about 60 concurrent sessions (2026-07-24, post-render-cost-program): about 37% CPU, 46% memory. For contrast, the pre-program reading at 80 sessions was about 77% CPU, 43% memory
+- Node disk: about 28 of 37 GiB used (75%). Not urgent, but it has no automatic reclaim
 - All core app workloads currently run on the single node
 - Storage: every PVC uses the `local-path` (hostPath) provisioner, so any pod with a volume is pinned to the node that holds its data. This matters for any node move (door-game saves, music data, Postgres).
 
@@ -132,6 +133,7 @@ The app is not continuously polling the DB for chat messages; chat message flow 
 - The 15-20 query bootstrap fan-out per new session has no concurrency limiter (only chat reads share an 8-permit semaphore). Still open.
 - Aquarium creature/world assets are re-parsed from KDL on every session start. Still open.
 - `next_available_username` + `User::create` race under same-name connect storms, rejecting auth with no backoff (the `idx_users_username_lower` error loop seen in prod logs). FIXED: new users get a randomly generated curated username (no longer derived from the SSH login name), and `ensure_user` retries on the `idx_users_username_lower` unique violation (bounded to 5 attempts, then auth is rejected instead of spinning). Follow-up: `next_generated_username` scans all usernames (`SELECT username FROM users`) per new signup and per retry; fine at current scale but O(users) per signup during a new-user surge. Cheaper shape is a single indexed probe against `idx_users_username_lower` first, full scan only on the rare collision.
+  - Open as of 2026-07-24: `idx_users_username_lower` violations still appear in prod at about 1/hour of isolated singles, plus one 59-error burst from a single user retrying a rename to a taken name. The rename path is handled correctly (`ProfileService::edit_profile` publishes a user-visible error banner, `app/profile/svc.rs:310`), so that burst is only log noise. The isolated singles are unexplained and worth one pass over who raises them, signup or rename.
 - The nonogram library deep-clone per session (about 1-3 MB) is FIXED: Arc-shared since render-cost phase 0.
 
 ### 4. Audio capacity is still single-pod
@@ -143,11 +145,32 @@ Icecast now allows 300 clients, but it is still one pod. The second-node move (b
 - multiple relays
 - or browser/client behavior that avoids duplicating streams where possible
 
+Separate open bug, seen 2026-07-24: the `service-web -> icecast-sv:8000` upstream fetch drops every 10 to 50 minutes (`upstream stream ended; injecting silence until reconnect` and `ConnectionReset` in `late-web/src/pages/stream.rs`), and `service-web` failed one readiness probe the same day. Browser `/stream` listeners hear silence gaps at those moments. Not capacity related at 59 sessions; look at Icecast's client timeout/burst settings and the proxy's reconnect behavior.
+
 ### 5. Postgres connections are bounded but not pooled externally
 
 App pools are currently per process through deadpool, with `LATE_DB_POOL_SIZE=16` for both `service-ssh` and `service-web`.
 
 Postgres `max_connections=100`. This is acceptable while replicas are low, but scaling app replicas will multiply pools. PgBouncer should be introduced before many app replicas.
+
+### 6. Work-feed writes fan out over the entire users table
+
+Found 2026-07-24 during a routine health check, and currently the largest source of user-visible stalls in prod. Not render, not connect storms: a single work-profile write.
+
+`WorkService::publish_unread_updates_for_all` (`late-ssh/src/app/chat/work/svc.rs:383`) is called after every work-profile create, update, and delete (`svc.rs:165`, `:237`, `:299`). It loops over `User::list_ids`, which is every row in `users`, and per user runs two sequential queries (`WorkFeedRead::unread_count_for_user` and `::last_read_at`) and publishes one or two events onto the service broadcast channel.
+
+At the 2026-07-24 table size of 14,156 users that is about 28,000 sequential round trips on one held pool connection per write, feeding a channel created with capacity 256 (`svc.rs:70`) that has one receiver per live session.
+
+Observed cost per write, at 59 sessions:
+
+- Postgres CPU 0.15 -> 0.45 cores (3x) for the duration
+- the burst runs 1 to 5 minutes wall clock
+- 800 to 950 `failed to receive work event e=channel lagged by ~230` errors/min (`app/chat/work/state.rs:535`), i.e. every session's receiver overflows and drops its work events, leaving stale unread badges until something else refreshes them
+- observed at 15:25-15:29, 15:40-15:41, 20:20, and 20:22 on 2026-07-24, so several times an hour
+
+Both halves scale with total registered users, not with concurrent sessions, so this gets worse with signups even if concurrency stays flat. It also gets worse per replica: every `service-ssh` pod would run its own copy of the loop.
+
+Fix direction (not yet implemented): the per-user unread count does not need a full-table scan. Either compute it only for currently connected sessions, or publish one broad `WorkFeedChanged` event and let each session recompute its own count on receipt. Either shape removes the O(users) query loop and the O(users) channel sends at the same time. Raising the channel capacity alone is not a fix; it only hides the drops.
 
 ## Render-Cost Program (shipped 2026-07-22/23)
 
@@ -269,17 +292,21 @@ Plan sketch:
 
 ### 2. Verify the render-cost win in prod
 
-Done 2026-07-24 (numbers in Pain Point 1): ~26.5 mcores/session, ~20% clean-skip ratio, ~5.3 draws/session/sec, stall guard never fired. Re-derived ceiling ~260-300 sessions/node, up from 100-110. This decides the 1000-user shape needs roughly 4 SSH pods, not a large fleet. Remaining watch item: re-read under a genuine 100+ concurrent surge (this reading was 60 sessions) and after the eq-to-quarter-edge knob if it ever ships.
+Done 2026-07-24 (numbers in Pain Point 1): ~26.5 mcores/session, ~20% clean-skip ratio, ~5.3 draws/session/sec, stall guard never fired. Re-derived ceiling ~260-300 sessions/node, up from 100-110. This decides the 1000-user shape needs roughly 4 SSH pods, not a large fleet. A second independent reading later the same day at 59 sessions reproduced it (26.8 mcores/session, 22% clean-skip, 6.6 draws/session/sec, 0 frame drops, node at 37% CPU and 46% memory), so the numbers are stable, not a lucky sample. Remaining watch item: re-read under a genuine 100+ concurrent surge (both readings were about 60 sessions) and after the eq-to-quarter-edge knob if it ever ships.
 
-### 3. `pg_stat_statements` tracking
+### 3. Kill the work-feed all-users fan-out
+
+Open, and the top code-level fix on this list: it is the only known thing currently stalling live sessions several times an hour. Full description, measurements, and fix direction in Pain Point 6.
+
+### 4. `pg_stat_statements` tracking
 
 Done: preloaded and installed in prod; query recipes in CONTEXT.md §10.2.2. Keep watching top total execution time, top mean, top calls, top temp bytes, and top shared/local block reads after traffic events.
 
-### 4. Cap render dimensions
+### 5. Cap render dimensions
 
 A defensive clamp exists (500×200 in `late-ssh/src/terminal_size.rs`, shipped 2026-07-12 against hostile resizes). The product-level render cap is still open: a server-side maximum render area (for example 160 columns × 50 rows) so render work does not scale unbounded with legitimate large PTYs (283×72 seen in logs).
 
-### 5. Make `service-ssh` horizontally shardable
+### 6. Make `service-ssh` horizontally shardable
 
 Minimum viable design:
 
@@ -291,7 +318,7 @@ Minimum viable design:
 
 Do not scale `service-ssh` randomly before this exists.
 
-### 6. Add PgBouncer
+### 7. Add PgBouncer
 
 Before increasing app replicas substantially:
 
@@ -361,8 +388,8 @@ Residual risk:
 
 - single-node cluster (second node is the next infra step)
 - single `service-ssh` pod for real session ownership
-- render-cost win not yet measured in prod; the sessions-per-node ceiling is currently unknown (old ceiling was 100-110, new one should be several times higher)
+- the work-feed all-users fan-out (Pain Point 6) stalls every live session for 1 to 5 minutes on each work-profile write, and its cost grows with total signups. A traffic event that brings signups makes this worse, not better
 - no PgBouncer yet
 - no horizontal `service-ssh` sharding yet
 
-For posts that bring about 100 active users, current state survives, proven in production. For 1000 active terminal users, the remaining projects are: verify the render-cost multiplier in prod, add the second node, then shardable `service-ssh` (with PgBouncer before replicas multiply).
+For posts that bring about 100 active users, current state survives, proven in production. For 1000 active terminal users, the remaining projects are: kill the work-feed fan-out, add the second node, then shardable `service-ssh` (with PgBouncer before replicas multiply). The render-cost multiplier is verified.

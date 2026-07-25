@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-23 (removed the `/play` browser TUI demo, the `/dashboard` internal dashboard, and the `late-ssh` `/api/ws/tunnel` web-tunnel endpoint/demo-user machinery entirely; the render loop is single-path in `ssh.rs` again, no longer mirrored by `web_tunnel.rs`)
+- Last updated: 2026-07-24 (home rail layout is now per device: the SSH key a session authenticated with owns it, in `user_ssh_keys.settings`, and both rails gained an `auto` mode that folds them away on narrow terminals)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -79,7 +79,7 @@ Routing rules for future LLM agents:
 The system is a Rust workspace with four main crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) — plus `late-webview` (the CLI's embedded YouTube helper, split out so `late` never links WebKitGTK on Linux) and the standalone door hosts (`late-brogue`, `late-dcss`, `late-dopewars`, `late-nethack`, `late-usurper`) — backed by PostgreSQL, Icecast audio streaming, Liquidsoap playlist management, and LiveKit voice media.
 
 - **Primary entry points:** SSH server (russh on port 2222), optional embedded IRC server (plaintext 6667 or TLS 6697), HTTP API (axum on port 4000), Web server (axum on port 3000), LiveKit RTC (`rtc.<domain>`)
-- **Main responsibilities:** Multi-screen TUI over SSH (Clubhouse `0`, Home/Dashboard `1`, The Arcade `2`, Games `3`, Artboard `4`, Directory `5`; top-level pages are selected by their number key or cycled with `Tab`/`Shift+Tab`. The Clubhouse `0` is the landing screen for every session: the walkable multiplayer Late Lounge tavern (see `late-ssh/src/app/clubhouse/CONTEXT.md`). The Games hub at page `3` is the dedicated landing/launcher for the Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, Rebels, and dopewars door games: a selector row of game cards with the selected game's full landing rendered below it (arrows/h/l switch, Enter launches). These games are no longer top-level tabs but live-game screens reached only through the hub), optional IRC access to late.sh chat, public web frontend, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, the `Ctrl+Q` Lobby (daily correspondence matches + fixed house tables), a shared multi-user ASCII Artboard, Lateania's persistent shared world, the Rebels in the Sky SSH door-game proxy, the NetHack door game (real upstream NetHack run locally on a PTY), the Green Dragon door game (a native, in-process LORD-style remake of LoGD with per-user persistent characters), the dopewars door game (real upstream dopewars run locally on a PTY as an in-process child of late-ssh), the Usurper door game (the real upstream LORD-era BBS door run on a PTY in its own `late-usurper` host, one shared persistent world), the Brogue door game (the real upstream Brogue CE run on a PTY in its own `late-brogue` host, per-player save directories), a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray shown only in the Home Lounge view, toggled with the `/aquarium` composer command (alias `/aq`; state persists per user), and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (a pinned two-row core block — online human count + clock, then connected friends or the AFK indicator — plus a user-ordered, individually toggleable list of visualizer, audio playback, daily games, and bonsai panels; the bonsai panel is the one flexible panel and absorbs leftover rows, its tree scaling to the space) shown on Home and Arcade only via a master on/off, the Home room-list rail, and the pet strip above the Lounge chat composer (Pet Companion owners only, `Pet companion strip` tweak or the `/pet` command); these live under `Ctrl+O` settings (Tweaks → Appearance), where the sidebar panel editor reorders panels and toggles each on/off; when vertical space runs short the sidebar drops panels by a fixed shrink priority (visualizer first, then bonsai, daily; the music stage is the last panel standing) independent of the user's display order. The former sidebar Activity panel is retired: stale `"activity"` entries in stored panel lists are dropped on read, and the public feed ships to #lounge instead (see the `Activity` service row). Pet care runs through the strip: click the bowls/pet or use `/feed`, `/water`; locked users are dropped straight into the Hub Shop tab (`Ctrl+G` on its own opens Hub on Quests). Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Clubhouse `0`, Home/Dashboard `1`, The Arcade `2`, Games `3`, Artboard `4`, Directory `5`; top-level pages are selected by their number key or cycled with `Tab`/`Shift+Tab`. The Clubhouse `0` is the landing screen for every session: the walkable multiplayer Late Lounge tavern (see `late-ssh/src/app/clubhouse/CONTEXT.md`). The Games hub at page `3` is the dedicated landing/launcher for the Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, Rebels, and dopewars door games: a selector row of game cards with the selected game's full landing rendered below it (arrows/h/l switch, Enter launches). These games are no longer top-level tabs but live-game screens reached only through the hub), optional IRC access to late.sh chat, public web frontend, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, the `Ctrl+Q` Lobby (daily correspondence matches + fixed house tables), a shared multi-user ASCII Artboard, Lateania's persistent shared world, the Rebels in the Sky SSH door-game proxy, the NetHack door game (real upstream NetHack run locally on a PTY), the Green Dragon door game (a native, in-process LORD-style remake of LoGD with per-user persistent characters), the dopewars door game (real upstream dopewars run locally on a PTY as an in-process child of late-ssh), the Usurper door game (the real upstream LORD-era BBS door run on a PTY in its own `late-usurper` host, one shared persistent world), the Brogue door game (the real upstream Brogue CE run on a PTY in its own `late-brogue` host, per-player save directories), a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray shown only in the Home Lounge view, toggled with the `/aquarium` composer command (alias `/aq`; state persists per user), and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (a pinned two-row core block — online human count + clock, then connected friends or the AFK indicator — plus a user-ordered, individually toggleable list of visualizer, audio playback, daily games, and bonsai panels; the bonsai panel is the one flexible panel and absorbs leftover rows, its tree scaling to the space) shown on Home and Arcade only via a master on/off/auto mode, the Home room-list rail (same three modes), and the pet strip above the Lounge chat composer (Pet Companion owners only, `Pet companion strip` tweak or the `/pet` command); these live under `Ctrl+O` settings (Tweaks → Appearance), where the sidebar panel editor reorders panels and toggles each on/off; **the two rail rows are per device, not per account** (see `Per-device home rails` below); when vertical space runs short the sidebar drops panels by a fixed shrink priority (visualizer first, then bonsai, daily; the music stage is the last panel standing) independent of the user's display order. The former sidebar Activity panel is retired: stale `"activity"` entries in stored panel lists are dropped on read, and the public feed ships to #lounge instead (see the `Activity` service row). Pet care runs through the strip: click the bowls/pet or use `/feed`, `/water`; locked users are dropped straight into the Hub Shop tab (`Ctrl+G` on its own opens Hub on Quests). Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -599,13 +599,51 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 
 ### 4.2 Auth and scope model
 
-- **Identity:** First unknown SSH key creates a user instantly. `user_ssh_keys` maps many fingerprints to one user. Settings > Account supports destructive account linking by moving the losing account's SSH keys to the chosen main account; no user data is merged.
+- **Identity:** First unknown SSH key creates a user instantly. `user_ssh_keys` maps many fingerprints to one user. The key a session actually authenticated with (`ClientHandler::auth_fingerprint`, not `users.fingerprint`, which is only the account's first key) is the closest thing to a device identity and is what per-device settings scope to. Settings > Account supports destructive account linking by moving the losing account's SSH keys to the chosen main account; no user data is merged.
 - **Open access:** `LATE_SSH_OPEN=true` enables auth, but only public-key auth is accepted; password and keyboard-interactive are always rejected
 - **SSH auth banner:** The russh server sends a short pre-auth public-key setup hint so plain `ssh late.sh` users who hit `Permission denied (publickey)` see the companion CLI curl installer plus manual OpenSSH-default key-generation guidance. Native `late-cli` suppresses this generic server hint because it owns richer local key generation and auth-failure messaging.
 - **User scoping:** User-owned records are scoped to `user_id` (FK to `users.id`)
 - **Chat scoping:** Rooms visible via membership (`ChatRoom::list_for_user`, `ChatRoomMember`)
 - **Auto-join:** Public rooms with `auto_join=true` are seeded for a user only when the user record is first created; reconnecting does not re-add rooms the user already left. The regular `/public #room` user command creates/opens an opt-in room only for the caller (`auto_join=false`, no bulk member add). Permanent/admin room creation still bulk-adds all existing users when the room is created/promoted. Login announcement checks are the narrow exception: if public `#announcements` exists, startup idempotently joins the user before reading unread messages.
 - **Multi-tenant isolation:** All user data queries filter by `user_id`; no cross-user reads
+
+#### Per-device home rails [STABLE]
+
+The two Home rails (the room-list rail and the right sidebar) are **per device, not
+per account**: one account linked across a desktop and a phone would otherwise
+overwrite its own layout on every reconnect.
+
+- **Storage:** `user_ssh_keys.settings` (migration 124), keyed by the SSH key the
+  session authenticated with. Written as a complete pair by
+  `UserSshKey::set_layout`, scoped by `user_id` as well as fingerprint. Nothing
+  stored, no row, or a half-written blob all read as "inherit".
+- **Read path:** `App::rail_modes()` is the only resolver: this device's layout if
+  its key has one, else the live account profile. Render, input hit-testing, and
+  the settings draft all go through it, so they cannot disagree.
+- **Write path:** `\` (cycles this device through both / room-list hidden /
+  sidebar hidden / both hidden / `auto`) and the two `Ctrl+O` Appearance rows.
+  Both land on the key and **never** on the account. The account values are only
+  the seed a key with no stored layout inherits, so the rails UI does not write
+  them at all. Keyless sessions (ghost bots, tests) apply the change for the
+  session and persist nothing.
+- **Why the modal keeps them out of its draft:** `SettingsModalState::draft` is
+  what `save()` writes to the account, and `save()` fires from every tweak and
+  field edit in the modal. Device rails therefore live in a separate
+  `device_rails` field (`settings_modal_state.device_rails()`), read by the two
+  rail rows' value spans and by the render/tick preview. Holding them in the draft
+  republished one device's layout as the account default on any unrelated settings
+  edit, which every unconfigured key then inherited; regression-tested by
+  `unrelated_settings_edits_do_not_republish_this_device_rails`.
+- **`auto`:** resolved against the live terminal width every frame
+  (`AUTO_ROOM_LIST_MIN_COLS` 96, `AUTO_RIGHT_SIDEBAR_MIN_COLS` 72 in
+  `app/render.rs`), so rotating a phone or dragging a window reflows on the next
+  paint. Below 72 columns the chat gets the full width, which is where Termux
+  sessions land. This is the horizontal twin of the sidebar's existing vertical
+  shrink priority; a key copied to two machines still gets a sensible layout on
+  both.
+- **Legacy mirrors:** `users.settings.show_right_sidebar` /
+  `show_room_list_sidebar` bools are still written alongside their `*_mode`
+  strings, so rolling back to an older binary keeps working.
 
 ### 4.3 Data model and key enums
 
@@ -614,7 +652,7 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
 | User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `text_brightness_adjustment` (int -5..5, default 0), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_aquarium_tray` (bool, default-off when absent; whether the Lounge aquarium tray was open when last toggled), `show_pet_strip` (bool, default-on when absent; shows the pet strip above the Lounge chat composer for Pet Companion owners, toggled in settings or with `/pet`), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
-| UserSshKey | `user_ssh_keys` | `fingerprint` UNIQUE; many SSH key fingerprints may point to one `users.id`; account linking moves rows from the abandoned user to the kept user before deleting the abandoned user |
+| UserSshKey | `user_ssh_keys` | `fingerprint` UNIQUE; many SSH key fingerprints may point to one `users.id`; account linking moves rows from the abandoned user to the kept user before deleting the abandoned user. Every op on this table lives in `late-core/src/models/user_ssh_key.rs`. `settings` JSONB holds this device's overrides: `room_list_mode` and `right_sidebar_mode` (`"on"`/`"off"`/`"auto"`), written as a pair or not at all, empty = inherit the account default |
 | IrcToken | `irc_tokens` | One IRC token per user; `token_hash` is SHA-256 hex of the plaintext token and is unique; plaintext exists only at mint/reset time and is never persisted or logged |
 | AccountLinkCode | `account_link_codes` | Short post-login link codes, `code` UNIQUE, per-user expiry and `consumed_at`; used only from Settings > Account between already-created accounts |
 | ChatRoom | `chat_rooms` | `kind` IN (lounge, language, dm, topic, game), complex constraints |
@@ -1206,6 +1244,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `space` / `x` / `Enter` / `1-9` / `z` | Lateania | Attack, use abilities, or flee; in list panels, `1-9` and `Enter` activate rows, and `x` sells inventory at a shop |
 | `c` / `v` / `t` / `b` / `o` / `j` / `k` | Lateania | Open character, abilities, inventory, shop, examine/interact, quest journal, and titles panels |
 | `r` / `f` | Lateania | Recall to Embergate's Town Square when out of combat; toggle auto-following another adventurer in the room |
+| `\\` | Home | Cycle this device's rails: both, room list hidden, sidebar hidden, both hidden, `auto`. Writes the SSH key, never the account |
 | Chat keys | Home / embedded game chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
 | `/pair @user` | Chat composer | Invite `@user` to a shared coding scratchpad |
 | `Enter`/`y` / `Esc`/`n` | Pending `/pair` invite prompt (owns input like quit confirm) | Accept and enter `Screen::Scratchpad` / dismiss |

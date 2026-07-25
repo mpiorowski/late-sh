@@ -1032,7 +1032,8 @@ impl GhostService {
             } else {
                 User::update_settings(&client, existing.id, &settings).await?;
             }
-            User::ensure_ssh_key(&client, existing.id, fingerprint).await?;
+            late_core::models::user_ssh_key::UserSshKey::ensure(&client, existing.id, fingerprint)
+                .await?;
             existing
         } else {
             let created = User::create(
@@ -1044,7 +1045,8 @@ impl GhostService {
                 },
             )
             .await?;
-            User::ensure_ssh_key(&client, created.id, fingerprint).await?;
+            late_core::models::user_ssh_key::UserSshKey::ensure(&client, created.id, fingerprint)
+                .await?;
             created
         };
 
