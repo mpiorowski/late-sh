@@ -1,0 +1,35 @@
+name: i18n
+
+on:
+  push:
+    branches: [feat/i18n, custom]
+    paths:
+      - "late-ssh/locales/*.toml"
+      - "late-ssh/src/**/*.rs"
+      - "scripts/check_i18n.py"
+      - ".github/workflows/i18n.yml"
+  pull_request:
+    paths:
+      - "late-ssh/locales/*.toml"
+      - "late-ssh/src/**/*.rs"
+      - "scripts/check_i18n.py"
+      - ".github/workflows/i18n.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: locale integrity + bare keys
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: run_i18n_check
+        run: python3 scripts/check_i18n.py
