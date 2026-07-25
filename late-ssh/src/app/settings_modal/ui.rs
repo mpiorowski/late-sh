@@ -585,7 +585,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::DirectMessages,
             width,
-            i18n::tr("settings.dms"),
+            i18n::tr("settings.notifications.dms"),
             toggle_span(has_kind(state, "dms")),
         )),
         sections[15],
@@ -595,7 +595,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Mentions,
             width,
-            i18n::tr("settings.mentions"),
+            i18n::tr("settings.notifications.mentions"),
             toggle_span(has_kind(state, "mentions")),
         )),
         sections[16],
@@ -605,7 +605,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::GameEvents,
             width,
-            i18n::tr("settings.game_events"),
+            i18n::tr("settings.notifications.game_events"),
             toggle_span(has_kind(state, "game_events")),
         )),
         sections[17],
@@ -615,7 +615,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Bell,
             width,
-            i18n::tr("settings.bell"),
+            i18n::tr("settings.notifications.bell"),
             toggle_span(state.draft().notify_bell),
         )),
         sections[18],
@@ -625,7 +625,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::Cooldown,
             width,
-            i18n::tr("settings.cooldown"),
+            i18n::tr("settings.notifications.cooldown"),
             if state.draft().notify_cooldown_mins == 0 {
                 value_span("off", theme::TEXT_FAINT())
             } else {
@@ -642,7 +642,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::NotifyFormat,
             width,
-            i18n::tr("settings.format"),
+            i18n::tr("settings.notifications.format"),
             value_span(
                 notify_format_label(state.draft().notify_format.as_deref()),
                 theme::TEXT_BRIGHT(),
