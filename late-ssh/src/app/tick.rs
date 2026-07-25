@@ -95,6 +95,13 @@ impl App {
 
         self.sync_visible_chat_room();
         self.tick_clubhouse();
+        crate::app::scratchpad::invite::poll_invite(self);
+        crate::app::scratchpad::invite::poll_pairing(self);
+        if let Some(scratchpad) = self.scratchpad.as_mut()
+            && scratchpad.sync_from_shared()
+        {
+            changed = true;
+        }
         if self.screen == Screen::Clubhouse && anim_half {
             // Only cosmetic ambience animates on the tick counter (jukebox
             // EQ, emote arms, fire/candles/stars); walker positions are

@@ -815,6 +815,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.pair_invite_pending.is_some() {
+        crate::app::scratchpad::input::handle_invite_prompt(app, event);
+        return;
+    }
+
     if is_room_search_shortcut(&event) {
         if app.room_search_modal_state.is_open() {
             app.room_search_modal_state.close();
@@ -1729,6 +1734,15 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::lobby::house::input::handle_event(app, event);
     }
 
+    if ctx.screen == Screen::Scratchpad {
+        // Full-screen paired scratchpad: forward everything to the editor,
+        // same shape as the daily board / house table.
+        if door_games_allows_global_help(event) {
+            return false;
+        }
+        return crate::app::scratchpad::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         match event {
             ParsedInput::Byte(byte) => {
@@ -2482,6 +2496,12 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         crate::app::lobby::house::input::close_table(app);
+        return;
+    }
+    // Esc from the paired scratchpad leaves the pairing (notifying the
+    // partner via the registry) and returns to Home.
+    if ctx.screen == Screen::Scratchpad {
+        app.set_screen(Screen::Dashboard);
         return;
     }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
@@ -3290,6 +3310,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::DailyMatch => false,
         // House table arrows are consumed in handle_dedicated_screen_input.
         Screen::HouseTable => false,
+        // Scratchpad arrows are consumed in handle_dedicated_screen_input.
+        Screen::Scratchpad => false,
     }
 }
 
@@ -4015,6 +4037,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::HouseTable => {
             // House table keys are handled in handle_dedicated_screen_input.
+        }
+        Screen::Scratchpad => {
+            // Scratchpad keys are handled in handle_dedicated_screen_input.
         }
     }
 }

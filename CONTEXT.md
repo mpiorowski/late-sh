@@ -60,6 +60,7 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 | `late-ssh/src/app/games/CONTEXT.md` | Shared game primitives used by the Arcade, the house tables, and daily games, especially cards, Late Chips, or the `chess_core` chess kernel. | Boundaries for shared card rendering, chip services, and the surface-agnostic chess rules/board renderer; use this for common primitives only, not Arcade or Lobby runtime/UI ownership. |
 | `late-ssh/src/app/lobby/daily/CONTEXT.md` | Daily correspondence games: the open-challenge lobby, daily chess/battleship/connect-four matches, the game roster (`DailyGame`), the `Ctrl+Q` Lobby modal, the sidebar Lobby panel, the full-screen daily boards, move deadlines/forfeits, `/challenge`, or the `daily_matches` table. | Daily domain context: the `DailyGame` roster enum (per-game name/prize/reward key + add-a-game checklist), `DailyService` snapshot/events/sweeper, single-table challenge+match persistence with revision guard, battleship + connect four rules, the three UI surfaces, per-match private chat + voice on the board, the backtick cycle, your-turn desktop notify, v1 scope boundaries, and future hooks (wagers, announcements). |
 | `late-ssh/src/app/clubhouse/CONTEXT.md` | The Late Lounge tavern (screen `0`): the shared multiplayer lobby, seating/walkers, speech bubbles, emotes, door ambience, the first-visit tutorial, or the generated floor plan. | Clubhouse module map, the process-global `SharedLobby` contract (single-replica!), bubble/composer chat surface, tutorial persistence, and map-generator gotchas. |
+| `late-ssh/src/app/scratchpad/CONTEXT.md` | `/pair @user`, the shared two-person live text scratchpad, `Screen::Scratchpad`, or the in-memory pairing registry. | Registry contract (single-replica, dies when both sides leave), invite/accept/decline flow, editor input model, and known gaps. |
 
 Routing rules for future LLM agents:
 - Update a local context file when behavior changes inside that domain.
@@ -759,7 +760,7 @@ An always-running game where every connected SSH session is automatically a part
 ### Other Ideas
 - Daily/weekly rituals (lo-fi standup, shipped rollup, weekend recap)
 - Ambient presence (quiet hours, listening since, typing indicator)
-- Micro-collab tools (shared scratchpad, snippet paste, pairing ping)
+- ~~Micro-collab tools (shared scratchpad, pairing ping)~~ ✓ `/pair @user` shared coding scratchpad shipped (`late-ssh/src/app/scratchpad/CONTEXT.md`); snippet paste is still open.
 - Cozy utilities (pomodoro, focus playlists, now-playing shoutouts)
 - Community texture (rotating shoutout board, wall of thanks)
 - Events (coffee breaks, AMAs, mini coding jams)
@@ -780,6 +781,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 | Chat/Article events + snapshots, Profile per-user snapshots | `broadcast` / `watch` channels | In-process only | Postgres `LISTEN/NOTIFY` or Redis pub/sub for cross-replica fan-out |
 | @bot + @graybeard chat | `GhostService` | Always-on presence + AI chat tasks; both are dedicated DB users with fixed fingerprints | Single-leader to avoid duplicate chat responses. During pod drain today, the old pod cancels bot tasks immediately. |
 | Leaderboard data | `LeaderboardService` | DB-backed `watch` channel, 30s refresh | Already DB-backed; each replica runs its own refresh loop — duplicate work but no write conflict |
+| `SharedScratchpadRegistry` | `scratchpad/registry.rs` | In-memory `user_id → pairing` | Stays local by design — `/pair` pairings are explicitly ephemeral, acceptable to drop on failover |
 
 **Approach:** Sticky sessions (LB routes by source IP) so each SSH connection lives on one replica. Shared data via DB/Redis. Not needed yet — single replica handles thousands of concurrent SSH sessions.
 
@@ -1121,6 +1123,7 @@ WHERE jsonb_array_length(coalesce(data->'house_furniture', '[]'::jsonb)) > 0;
 | _Lateania / NetHack / DCSS / Brogue / Usurper / Green Dragon / Rebels / dopewars_ | — | Active | Live door-game screens, not top-level tabs. Launched only from the Games hub (page 3); `Esc` (Lateania) or quitting the game (Rebels/NetHack/DCSS/Brogue/Usurper/dopewars, e.g. `Ctrl-C`, `Q` at Usurper's menus, or `S` save in the roguelikes) returns to the hub. Per-game behavior lives in each door's CONTEXT.md (`lateania/`, `greendragon/`, `nethack/`, `dcss/`, `brogue/`, `usurper/`, `dopewars/`). |
 | _Daily match board_ | — | Active | Full-screen correspondence board (`Screen::DailyMatch`), not a top-level tab. Entered only from the Lobby modal (`Ctrl+Q`); `Esc` returns to the modal. Lives in `late-ssh/src/app/lobby/daily/`. |
 | _House table_ | — | Active | Full-screen fixed table (`Screen::HouseTable`, poker/blackjack/asterion/tron), not a top-level tab. Entered only from the Lobby modal; `q`/`Esc` returns to the modal. Lives in `late-ssh/src/app/lobby/house/`. |
+| _Paired scratchpad_ | — | Active | Two-person shared live text buffer (`Screen::Scratchpad`), not a top-level tab. Entered only by accepting a `/pair @user` chat invite; `Esc` leaves the pairing (and notifies the partner). Lives in `late-ssh/src/app/scratchpad/`. |
 
 ### Layout
 
@@ -1204,6 +1207,10 @@ Content invariants worth preserving when editing `data.rs`:
 | `c` / `v` / `t` / `b` / `o` / `j` / `k` | Lateania | Open character, abilities, inventory, shop, examine/interact, quest journal, and titles panels |
 | `r` / `f` | Lateania | Recall to Embergate's Town Square when out of combat; toggle auto-following another adventurer in the room |
 | Chat keys | Home / embedded game chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
+| `/pair @user` | Chat composer | Invite `@user` to a shared coding scratchpad |
+| `Enter`/`y` / `Esc`/`n` | Pending `/pair` invite prompt (owns input like quit confirm) | Accept and enter `Screen::Scratchpad` / dismiss |
+| any printable, arrows, Backspace/Delete, `Enter` | Scratchpad (`Screen::Scratchpad`) | Edit the shared buffer live (Enter inserts a newline, unlike the chat composer) |
+| `Esc` | Scratchpad | Leave the pairing (notifies the partner) and return to Home |
 | `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+G` | Reserved global, except active Artboard editing | Open Hub on the Quests tab (the first tab); the locked pet/aquarium nudges open Hub on Shop instead |
 | `Ctrl+Q` | Reserved global, except active Artboard editing | Toggle the Lobby modal (daily correspondence games) from anywhere; the only key for it (bare `g` is unbound) |

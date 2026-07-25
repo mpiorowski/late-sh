@@ -115,6 +115,7 @@ const COMMANDS: &[Command] = &[
     global("list", "public rooms"),
     global("me", "send action"),
     global("members", "room members"),
+    global("pair", "invite @user to a shared coding scratchpad"),
     global("paste-image", "upload image from CLI clipboard"),
     global("pet", "toggle the pet strip"),
     global("petname", "name your pet"),

@@ -132,3 +132,26 @@ fn multiline_escape_reports_cancel() {
         EditOutcome::Cancel
     );
 }
+
+#[test]
+fn freeform_enter_inserts_newline_instead_of_submitting() {
+    let mut input = ta("ab");
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Byte(b'\r'), 10),
+        EditOutcome::Handled
+    );
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Char('c'), 10),
+        EditOutcome::Handled
+    );
+    assert_eq!(text(&input), "ab\nc");
+}
+
+#[test]
+fn freeform_escape_reports_cancel() {
+    let mut input = ta("abc");
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Byte(0x1B), 8),
+        EditOutcome::Cancel
+    );
+}

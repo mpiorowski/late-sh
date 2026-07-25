@@ -258,6 +258,9 @@ pub struct SessionConfig {
     /// Process-global clubhouse presence (seats, walkers, emotes). `None`
     /// on headless/test paths, which keeps the room session-local.
     pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
+    /// Process-global `/pair` invites and shared scratchpad buffers. `None`
+    /// on headless/test paths, which disables `/pair`.
+    pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
     /// True once this user finished (or skipped) the clubhouse tutorial.
     pub clubhouse_tutorial_done: bool,
     /// Whether the aquarium tray was open when the user last toggled it.
@@ -579,6 +582,15 @@ pub struct App {
     /// `Option` → the underlying client, so the seat is released on logout
     /// or connection loss.
     pub(crate) dartboard_state: Option<crate::app::artboard::state::State>,
+    /// Process-global `/pair` registry handle. `None` on headless/test paths.
+    pub(crate) scratchpad_registry:
+        Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
+    /// `Some` while this session is inside a paired scratchpad. Constructed
+    /// on invite acceptance and dropped on leave; `ScratchpadState`'s own
+    /// `Drop` impl notifies the partner even on a hard disconnect.
+    pub(crate) scratchpad: Option<crate::app::scratchpad::state::ScratchpadState>,
+    /// A `/pair @user` invite awaiting accept/decline from this session.
+    pub(crate) pair_invite_pending: Option<crate::app::scratchpad::registry::PendingPairInvite>,
     /// `true` while the dedicated Artboard screen is in editing mode.
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
@@ -1211,6 +1223,9 @@ impl App {
             minesweeper_state,
             traffic_state,
             dartboard_state: None,
+            scratchpad_registry: config.scratchpad_registry,
+            scratchpad: None,
+            pair_invite_pending: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,
             pinstar_browser: crate::app::pinstar::browser::DiagramBrowser::default(),
@@ -1728,6 +1743,16 @@ impl App {
 
         if self.screen == Screen::HouseTable && screen != Screen::HouseTable {
             self.house.close();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::Scratchpad && screen != Screen::Scratchpad {
+            // Dropping `scratchpad` here (rather than an explicit
+            // `leave_scratchpad` method) runs `ScratchpadState`'s `Drop`
+            // impl, which notifies the registry so the partner sees
+            // "left the pairing" on their next sync — the same RAII
+            // teardown Artboard uses for its color slot.
+            self.scratchpad = None;
             self.force_full_repaint();
         }
 

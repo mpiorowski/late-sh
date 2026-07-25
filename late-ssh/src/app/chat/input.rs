@@ -239,6 +239,14 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             }
         }
     }
+    if let Some(request) = app.chat.take_requested_pair() {
+        use crate::app::chat::state::PairRequest;
+        match request {
+            PairRequest::Directed(username) => {
+                crate::app::scratchpad::invite::request_pair_invite(app, &username);
+            }
+        }
+    }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }

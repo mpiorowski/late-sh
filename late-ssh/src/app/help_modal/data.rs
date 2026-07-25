@@ -346,6 +346,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /list              list public rooms",
         "  /poll              start a Home room poll with 2-3 options",
         "  /challenge [@user] daily challenge (chess, battleship, connect4, reversi, checkers, backgammon): lobby or directed",
+        "  /pair @user        invite a user to a shared live coding scratchpad",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",
