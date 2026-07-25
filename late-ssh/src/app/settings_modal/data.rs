@@ -1006,8 +1006,9 @@ pub(crate) const COUNTRIES: &[CountryOption] = &[
 ];
 
 pub(crate) fn country_label(code: Option<&str>) -> String {
+    use crate::app::common::i18n;
     let Some(code) = code else {
-        return "Not set".to_string();
+        return i18n::tr("settings.value.not_set").to_string();
     };
     let normalized = code.trim().to_ascii_uppercase();
     let name = COUNTRIES

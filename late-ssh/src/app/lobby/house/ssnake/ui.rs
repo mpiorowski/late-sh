@@ -8,7 +8,7 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::{
-    common::theme,
+    common::{i18n, theme},
     lobby::house::{
         game_ui::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
@@ -123,7 +123,7 @@ fn draw_compact(frame: &mut Frame, area: Rect, state: &State) {
         .level
         .as_ref()
         .map(|level| level.name.clone())
-        .unwrap_or_else(|| "no arena".to_string());
+        .unwrap_or_else(|| i18n::tr("chat.ssnake_no_arena").to_string());
     let lines = vec![
         Line::from(Span::styled(
             status_text(snapshot),
@@ -133,8 +133,11 @@ fn draw_compact(frame: &mut Frame, area: Rect, state: &State) {
         ))
         .alignment(Alignment::Center),
         Line::from(format!(
-            "{seated}/{} seated · {} · {}",
-            snapshot.seat_limit, level_name, snapshot.speed_label
+            "{seated}/{limit} · {arena} · {speed}",
+            seated = seated,
+            limit = snapshot.seat_limit,
+            arena = level_name,
+            speed = snapshot.speed_label,
         ))
         .alignment(Alignment::Center),
     ];
@@ -155,7 +158,7 @@ fn draw_arena(frame: &mut Frame, area: Rect, state: &State) {
 
     if area.width < level.width as u16 + 2 || area.height < level.height.div_ceil(2) as u16 + 2 {
         frame.render_widget(
-            Paragraph::new("Arena needs more room.").alignment(Alignment::Center),
+            Paragraph::new(i18n::tr("chat.ssnake_arena_needs")).alignment(Alignment::Center),
             area,
         );
         return;
@@ -212,22 +215,22 @@ fn waiting_lines(state: &State) -> Vec<Line<'static>> {
         )),
         Line::raw(""),
         Line::from(Span::styled(
-            format!(
-                "Up to {} snakes, one arena, shared food.",
-                snapshot.seat_limit
+            i18n::trf(
+                "chat.ssnake_desc",
+                &[("n", &snapshot.seat_limit.to_string())]
             ),
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::from(Span::styled(
-            format!("{} · {} pace", snapshot.arena_choice, snapshot.speed_label),
+            format!("{} · {}", snapshot.arena_choice, snapshot.speed_label),
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::raw(""),
         Line::from(Span::styled(
             if seated >= 2 {
-                "Press n to start."
+                i18n::tr("chat.ssnake_press_n")
             } else {
-                "Press s to take a seat."
+                i18n::tr("chat.ssnake_press_s")
             },
             Style::default().fg(theme::AMBER()),
         )),
@@ -331,10 +334,10 @@ fn paint(colors: &mut [Color], level: &SsnakeLevel, pos: Pos, color: Color) {
 fn info_lines(state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static>> {
     let snapshot = state.snapshot();
     let mut lines = vec![
-        info_tagline("The 90s DOS classic,"),
-        info_tagline("now head to head."),
+        info_tagline(i18n::tr("chat.ssnake_tagline_a")),
+        info_tagline(i18n::tr("chat.ssnake_tagline_b")),
         Line::raw(""),
-        section_header("Snakes"),
+        section_header(i18n::tr("chat.ssnake_snakes")),
     ];
     for seat in 0..snapshot.seat_limit.min(MAX_SEATS) {
         lines.extend(player_lines(seat, state, usernames));
@@ -344,32 +347,32 @@ fn info_lines(state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static
         (SsnakePhase::Running, Some(level)) => level.name.clone(),
         _ => snapshot.arena_choice.clone(),
     };
-    lines.push(info_label_value("Arena", arena_name, theme::TEXT_BRIGHT()));
+    lines.push(info_label_value(i18n::tr("chat.ssnake_arena"), arena_name, theme::TEXT_BRIGHT()));
     if snapshot.phase == SsnakePhase::Running {
         lines.push(info_label_value(
-            "Food left",
+            i18n::tr("chat.ssnake_food_left"),
             snapshot.points_left.max(0).to_string(),
             POINT,
         ));
     }
     lines.extend([
-        info_label_value("Pace", snapshot.speed_label.clone(), theme::AMBER()),
-        info_label_value("Prize", SSNAKE_WIN_CHIPS.to_string(), theme::SUCCESS()),
+        info_label_value(i18n::tr("chat.ssnake_pace"), snapshot.speed_label.clone(), theme::AMBER()),
+        info_label_value(i18n::tr("chat.ssnake_prize"), SSNAKE_WIN_CHIPS.to_string(), theme::SUCCESS()),
         info_label_value(
-            "Cooldown",
+            i18n::tr("chat.ssnake_cooldown"),
             payout_cooldown_label(SSNAKE_WIN_PAYOUT_COOLDOWN),
             theme::TEXT_DIM(),
         ),
-        info_label_value("State", state_label(snapshot), theme::SUCCESS()),
+        info_label_value(i18n::tr("chat.ssnake_state"), state_label(snapshot), theme::SUCCESS()),
         Line::raw(""),
-        section_header("How it plays"),
-        info_tagline("Eat food, grow, don't crash."),
-        info_tagline("Pink food grants a life."),
-        info_tagline("Crash: lose a life, respawn."),
-        info_tagline("Last food ends the match;"),
-        info_tagline("highest score wins."),
+        section_header(i18n::tr("chat.ssnake_how")),
+        info_tagline(i18n::tr("chat.ssnake_how_a")),
+        info_tagline(i18n::tr("chat.ssnake_how_b")),
+        info_tagline(i18n::tr("chat.ssnake_how_c")),
+        info_tagline(i18n::tr("chat.ssnake_how_d")),
+        info_tagline(i18n::tr("chat.ssnake_how_e")),
         Line::raw(""),
-        section_header("Controls"),
+        section_header(i18n::tr("chat.ssnake_controls")),
     ]);
     if state.seat_index().is_some() {
         if snapshot.phase == SsnakePhase::Running {
@@ -398,8 +401,8 @@ fn player_lines(seat: usize, state: &State, usernames: &UsernameLookup<'_>) -> V
         Some(uid) => usernames
             .get(&uid)
             .cloned()
-            .unwrap_or_else(|| "snake".to_string()),
-        None => "open".to_string(),
+            .unwrap_or_else(|| i18n::tr("chat.ssnake_snake").to_string()),
+        None => i18n::tr("chat.ssnake_open").to_string(),
     };
     let player = &snapshot.players[seat];
 
@@ -423,12 +426,12 @@ fn player_lines(seat: usize, state: &State, usernames: &UsernameLookup<'_>) -> V
     if snapshot.phase != SsnakePhase::Waiting && user.is_some() {
         let stats_line = if player.eliminated {
             Line::from(Span::styled(
-                "  eliminated".to_string(),
+                format!("  {}", i18n::tr("chat.ssnake_eliminated")),
                 Style::default().fg(theme::TEXT_DIM()),
             ))
         } else {
             let mut spans: Vec<Span<'static>> = vec![Span::styled(
-                format!("  {} pts  ", player.score),
+                i18n::trf("chat.ssnake_pts", &[("n", &player.score.to_string())]),
                 Style::default().fg(theme::TEXT_DIM()),
             )];
             spans.extend(heart_spans(player.lives, snapshot));
@@ -513,13 +516,13 @@ fn status_line(snapshot: &SsnakeSnapshot) -> Line<'static> {
 fn status_text(snapshot: &SsnakeSnapshot) -> String {
     match snapshot.outcome {
         Some(SsnakeOutcome::Winner { seat_index }) => {
-            format!("{} wins", SsnakeColor::for_seat(seat_index).label())
+            i18n::trf("chat.ssnake_wins", &[("name", SsnakeColor::for_seat(seat_index).label())])
         }
-        Some(SsnakeOutcome::Draw) => "Draw".to_string(),
+        Some(SsnakeOutcome::Draw) => i18n::tr("chat.ssnake_draw").to_string(),
         // The sidebar already names the arena; keep the title to the one
         // number that matters mid-match.
         None if snapshot.phase == SsnakePhase::Running => {
-            format!("{} food left", snapshot.points_left.max(0))
+            i18n::trf("chat.ssnake_food_count", &[("n", &snapshot.points_left.max(0).to_string())])
         }
         None => snapshot.status_message.clone(),
     }
@@ -528,13 +531,13 @@ fn status_text(snapshot: &SsnakeSnapshot) -> String {
 fn state_label(snapshot: &SsnakeSnapshot) -> String {
     match snapshot.outcome {
         Some(SsnakeOutcome::Winner { seat_index }) => {
-            format!("{} won", SsnakeColor::for_seat(seat_index).label())
+            i18n::trf("chat.ssnake_won", &[("name", SsnakeColor::for_seat(seat_index).label())])
         }
-        Some(SsnakeOutcome::Draw) => "draw".to_string(),
+        Some(SsnakeOutcome::Draw) => i18n::tr("chat.ssnake_draw").to_string(),
         None => match snapshot.phase {
-            SsnakePhase::Running => "running".to_string(),
-            SsnakePhase::Waiting => "waiting".to_string(),
-            SsnakePhase::Finished => "finished".to_string(),
+            SsnakePhase::Running => i18n::tr("chat.ssnake_running").to_string(),
+            SsnakePhase::Waiting => i18n::tr("chat.ssnake_waiting").to_string(),
+            SsnakePhase::Finished => i18n::tr("chat.ssnake_finished").to_string(),
         },
     }
 }
@@ -542,21 +545,22 @@ fn state_label(snapshot: &SsnakeSnapshot) -> String {
 fn outcome_overlay(snapshot: &SsnakeSnapshot) -> (&'static str, String, Color) {
     match snapshot.outcome {
         Some(SsnakeOutcome::Winner { seat_index }) => (
-            "Winner",
+            i18n::tr("chat.ssnake_winner"),
             format!(
-                "{} wins · press n",
-                SsnakeColor::for_seat(seat_index).label()
+                "{} · {}",
+                SsnakeColor::for_seat(seat_index).label(),
+                i18n::tr("chat.ssnake_play_again"),
             ),
             theme::SUCCESS(),
         ),
         Some(SsnakeOutcome::Draw) => (
-            "Draw",
-            "dead even · press n".to_string(),
+            i18n::tr("chat.ssnake_draw"),
+            i18n::tr("chat.ssnake_dead_even").to_string(),
             theme::TEXT_MUTED(),
         ),
         None => (
-            "Match over",
-            "press n to play again".to_string(),
+            i18n::tr("chat.ssnake_match_over"),
+            i18n::tr("chat.ssnake_play_again").to_string(),
             theme::AMBER(),
         ),
     }

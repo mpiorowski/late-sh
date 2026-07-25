@@ -12,7 +12,7 @@ use ratatui::{
 };
 
 use crate::app::{
-    common::theme,
+    common::{i18n, theme},
     games::chess_core::types::ChessColor,
     lobby::daily::{
         games::DailyGame,
@@ -50,7 +50,7 @@ pub(crate) fn draw(
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Lobby ")
+        .title(i18n::tr("lobby.title"))
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -91,9 +91,9 @@ fn draw_list(
     let width = area.width as usize;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(section_line(width, "your matches"));
+    lines.push(section_line(width, i18n::tr("chat.your_matches")));
     if finished.is_empty() && matches.is_empty() {
-        lines.push(empty_line("no active matches"));
+        lines.push(empty_line(i18n::tr("chat.no_active_matches")));
     }
     // Unseen results first: transient news rows that clear once looked at.
     for (idx, item) in finished.iter().enumerate() {
@@ -107,9 +107,9 @@ fn draw_list(
         ));
     }
     lines.push(Line::raw(""));
-    lines.push(section_line(width, "lobby"));
+    lines.push(section_line(width, i18n::tr("chat.section_lobby")));
     if lobby.is_empty() {
-        lines.push(empty_line("no open challenges · post one with c"));
+        lines.push(empty_line(i18n::tr("chat.no_open_challenges")));
     }
     let lobby_base = finished.len() + matches.len();
     for (idx, challenge) in lobby.iter().enumerate() {
@@ -122,7 +122,7 @@ fn draw_list(
     // Other people's games in progress: watch-only, header hidden when none.
     if !live.is_empty() {
         lines.push(Line::raw(""));
-        lines.push(section_line(width, "live games"));
+        lines.push(section_line(width, i18n::tr("chat.live_games")));
         for (idx, item) in live.iter().enumerate() {
             lines.push(spectate_line(
                 item,
@@ -133,7 +133,7 @@ fn draw_list(
     // The fixed house tables: always present (stable chrome), one row per
     // roster variant, live occupancy from the singleton services.
     lines.push(Line::raw(""));
-    lines.push(section_line(width, "house tables"));
+    lines.push(section_line(width, i18n::tr("chat.house_tables")));
     let house_base = lobby_base + lobby.len() + live.len();
     for (idx, table) in HouseTable::ALL.into_iter().enumerate() {
         lines.push(house_line(
@@ -257,7 +257,7 @@ fn col(text: &str, width: usize) -> String {
 
 fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line<'static> {
     let (_, opponent) = daily.opponent_of(item);
-    let opponent = opponent.unwrap_or_else(|| "player".to_string());
+    let opponent = opponent.unwrap_or_else(|| i18n::tr("chat.player").to_string());
     let my_turn = daily.my_turn(item);
     let deadline = item
         .turn_deadline_at
@@ -301,14 +301,14 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
     ));
     if my_turn {
         spans.push(Span::styled(
-            format!("your turn · {deadline}"),
+            format!("{} · {deadline}", i18n::tr("chat.your_turn")),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ));
     } else {
         spans.push(Span::styled(
-            format!("waiting · {deadline}"),
+            format!("{} · {deadline}", i18n::tr("chat.waiting")),
             Style::default().fg(theme::TEXT_FAINT()),
         ));
     }
@@ -319,22 +319,22 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
 /// until acknowledged (enter the board and leave, or `x`).
 fn finished_line(daily: &DailyState, item: &DailyFinishedItem, selected: bool) -> Line<'static> {
     let (_, opponent) = item.opponent_of(daily.user_id());
-    let opponent = opponent.unwrap_or_else(|| "player".to_string());
+    let opponent = opponent.unwrap_or_else(|| i18n::tr("chat.player").to_string());
     let (outcome, style) = match item.outcome_for(daily.user_id()) {
         DailyOutcome::Won => (
-            format!("you won · {}", result_phrase(&item.result)),
+            format!("{} · {}", i18n::tr("chat.you_won"), result_phrase(&item.result)),
             Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
         ),
         DailyOutcome::Lost => (
-            format!("you lost · {}", result_phrase(&item.result)),
+            format!("{} · {}", i18n::tr("chat.you_lost"), result_phrase(&item.result)),
             Style::default()
                 .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),
         ),
         DailyOutcome::Draw => (
-            "draw".to_string(),
+            i18n::tr("chat.draw").to_string(),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -352,7 +352,7 @@ fn finished_line(daily: &DailyState, item: &DailyFinishedItem, selected: bool) -
     ));
     spans.push(Span::styled(col(&outcome, DETAIL_COL), style));
     spans.push(Span::styled(
-        "enter view · x dismiss",
+        i18n::tr("chat.enter_view_x_dismiss"),
         Style::default()
             .fg(theme::TEXT_FAINT())
             .add_modifier(Modifier::ITALIC),
@@ -367,7 +367,7 @@ fn challenge_line(
 ) -> Line<'static> {
     let mine = challenge.challenger_id == daily.user_id();
     let poster = if mine {
-        "you".to_string()
+        i18n::tr("chat.you").to_string()
     } else {
         challenge
             .challenger_username
@@ -377,7 +377,7 @@ fn challenge_line(
     let target = match (challenge.target_user_id, &challenge.target_username) {
         (Some(id), name) if id == daily.user_id() => {
             let _ = name;
-            Some("you".to_string())
+            Some(i18n::tr("chat.you").to_string())
         }
         (Some(_), Some(name)) => Some(format!("@{name}")),
         (Some(_), None) => Some("@player".to_string()),
@@ -399,21 +399,21 @@ fn challenge_line(
     ));
     match target {
         Some(target) => spans.push(Span::styled(
-            col(&format!("challenges {target}"), DETAIL_COL),
+            col(&i18n::trf("chat.challenges_target", &[("target", &target)]), DETAIL_COL),
             Style::default().fg(theme::AMBER_DIM()),
         )),
         None => spans.push(Span::styled(
-            col("open challenge", DETAIL_COL),
+            col(i18n::tr("chat.open_challenge"), DETAIL_COL),
             Style::default().fg(theme::TEXT_DIM()),
         )),
     }
     spans.push(Span::styled(
-        format!("{} chips", challenge.game.win_payout()),
+        i18n::trf("lobby.chips", &[("n", &challenge.game.win_payout().to_string())]),
         Style::default().fg(theme::AMBER_DIM()),
     ));
     if mine {
         spans.push(Span::styled(
-            "   yours · x cancel",
+            i18n::tr("chat.yours_cancel"),
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
@@ -444,9 +444,9 @@ fn spectate_line(item: &DailyMatchItem, selected: bool) -> Line<'static> {
     // columns together and the game rides with the progress instead.
     let detail = format!("{} · {}", item.game.label(), progress);
     let to_move = match item.turn_user_id {
-        Some(id) if id == item.challenger_id => format!("{challenger} to move"),
-        Some(id) if id == item.opponent_id => format!("{opponent} to move"),
-        _ => "in progress".to_string(),
+        Some(id) if id == item.challenger_id => i18n::trf("chat.to_move", &[("name", &challenger)]),
+        Some(id) if id == item.opponent_id => i18n::trf("chat.to_move", &[("name", &opponent)]),
+        _ => i18n::tr("chat.in_progress").to_string(),
     };
     let deadline = item
         .turn_deadline_at
@@ -472,7 +472,7 @@ fn spectate_line(item: &DailyMatchItem, selected: bool) -> Line<'static> {
 fn draw_status(frame: &mut Frame, area: Rect, lobby: &LobbyState, daily: &DailyState) {
     let line = if lobby.confirm_claim.is_some() {
         Line::from(Span::styled(
-            "claim this challenge and start the match? enter confirm · esc back",
+            i18n::tr("chat.confirm_claim"),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -480,11 +480,7 @@ fn draw_status(frame: &mut Frame, area: Rect, lobby: &LobbyState, daily: &DailyS
         .centered()
     } else {
         Line::from(Span::styled(
-            format!(
-                "entries {}/{} · 24h per move · winner takes the chip payout",
-                daily.entry_count(),
-                daily.entry_cap()
-            ),
+            i18n::trf("chat.entries_info", &[("cur", &daily.entry_count().to_string()), ("max", &daily.entry_cap().to_string())]),
             Style::default().fg(theme::TEXT_FAINT()),
         ))
         .centered()
@@ -511,9 +507,9 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
     frame.render_widget(Clear, rect);
 
     let title = if draft.username.is_some() {
-        " challenge a player "
+        i18n::tr("chat.challenge_player")
     } else {
-        " new challenge "
+        i18n::tr("chat.new_challenge")
     };
     let block = Block::default()
         .title(title)
@@ -544,7 +540,7 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
                         }),
                     ),
                     Span::styled(
-                        format!("{:>4} chips", game.win_payout()),
+                        format!("{:>4}", i18n::trf("lobby.chips", &[("n", &game.win_payout().to_string())])),
                         Style::default().fg(if selected {
                             theme::AMBER_DIM()
                         } else {
@@ -554,11 +550,11 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
                 ]));
             }
             lines.push(Line::raw(""));
-            let post = if draft.directed { " next" } else { " post" };
+            let post = if draft.directed { i18n::tr("chat.next_step") } else { i18n::tr("chat.post") };
             lines.push(Line::from(vec![
                 Span::raw(" "),
                 key("j/k"),
-                text(" choose"),
+                text(i18n::tr("chat.choose_btn")),
                 gap(),
                 key("enter"),
                 text(post),
@@ -570,9 +566,9 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
         Some(buffer) => {
             lines.push(Line::from(Span::styled(
                 format!(
-                    "   {} · {} chips",
+                    "   {} · {}",
                     draft.game().label(),
-                    draft.game().win_payout()
+                    i18n::trf("lobby.chips", &[("n", &draft.game().win_payout().to_string())])
                 ),
                 Style::default().fg(theme::TEXT_DIM()),
             )));
@@ -591,10 +587,10 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
             lines.push(Line::from(vec![
                 Span::raw(" "),
                 key("enter"),
-                text(" send"),
+                text(i18n::tr("chat.send")),
                 gap(),
                 key("esc"),
-                text(" back"),
+                text(i18n::tr("chat.back")),
             ]));
         }
     }
@@ -604,33 +600,33 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
 fn draw_footer(frame: &mut Frame, area: Rect, lobby: &LobbyState, daily: &DailyState) {
     let mut spans = vec![
         key("j/k"),
-        text(" move"),
+        text(i18n::tr("chat.move_action")),
         gap(),
         key("enter"),
-        text(" open / claim"),
+        text(i18n::tr("chat.open_claim")),
         gap(),
         key("c"),
-        text(" challenge"),
+        text(i18n::tr("chat.challenge_btn")),
         gap(),
         key("C"),
-        text(" directed"),
+        text(i18n::tr("chat.directed_btn")),
         gap(),
     ];
     match lobby.selected_entry(daily) {
         Some(LobbyEntry::Challenge(challenge)) if challenge.challenger_id == daily.user_id() => {
             spans.push(key("x"));
-            spans.push(text(" cancel"));
+            spans.push(text(i18n::tr("chat.cancel_btn")));
             spans.push(gap());
         }
         Some(LobbyEntry::Finished(_)) => {
             spans.push(key("x"));
-            spans.push(text(" dismiss"));
+            spans.push(text(i18n::tr("chat.dismiss_btn")));
             spans.push(gap());
         }
         _ => {}
     }
     spans.push(key("esc"));
-    spans.push(text(" close"));
+    spans.push(text(i18n::tr("chat.close_btn")));
     frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
 }
 

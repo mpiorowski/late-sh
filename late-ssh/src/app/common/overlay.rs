@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use super::theme;
+use super::{i18n, theme};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Overlay {
@@ -83,9 +83,9 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
     );
 
     let hint = if overlay.close_on_any_key {
-        "↑/↓ j/k scroll · other key close"
+        i18n::tr("common.overlay.hint_dismiss")
     } else {
-        "↑/↓ j/k scroll · Esc/q close"
+        i18n::tr("common.overlay.hint_close")
     };
     let block = Block::default()
         .title(format!(" {} ({hint}) ", overlay.title))

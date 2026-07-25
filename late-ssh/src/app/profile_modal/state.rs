@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::app::bonsai::svc::BonsaiService;
 use crate::app::bonsai_v2::state::BonsaiV2State;
 use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
+use crate::app::common::i18n;
 use crate::app::hub::aquarium::state::AquariumState;
 use crate::app::profile::svc::{ProfileService, ProfileSnapshot};
 
@@ -31,9 +32,9 @@ impl ProfileTab {
 
     pub(crate) fn title(self) -> &'static str {
         match self {
-            ProfileTab::Overview => "Overview",
-            ProfileTab::Bonsai => "Bonsai",
-            ProfileTab::Aquarium => "Aquarium",
+            ProfileTab::Overview => i18n::tr("profile.modal.tab_overview"),
+            ProfileTab::Bonsai => i18n::tr("profile.modal.tab_bonsai"),
+            ProfileTab::Aquarium => i18n::tr("profile.modal.tab_aquarium"),
         }
     }
 

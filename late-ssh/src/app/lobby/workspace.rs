@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::app::{
     arcade::workspace::{ArcadeStop, active_daily_stop, open_stop, unfinished_daily_stops},
-    common::primitives::{Banner, Screen},
+    common::{i18n, primitives::{Banner, Screen}},
     lobby::house::tables::HouseTable,
     state::App,
 };
@@ -83,7 +83,7 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
         GameWorkspace::Dashboard => {
             match app.screen {
                 Screen::Dashboard => {
-                    app.banner = Some(Banner::error("No games waiting on you."));
+                    app.banner = Some(Banner::error(i18n::tr("chat.no_games_waiting")));
                 }
                 // Wrap back to Home chat, no modal: this is the chat half of
                 // the toggle, not a lobby visit.

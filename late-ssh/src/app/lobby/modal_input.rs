@@ -1,4 +1,5 @@
-use crate::app::common::primitives::Screen;
+use crate::app::common::primitives::{Banner, Screen};
+use crate::app::common::i18n;
 use crate::app::input::{MouseEventKind, ParsedInput};
 use crate::app::lobby::state::LobbyEntry;
 use crate::app::state::App;
@@ -142,8 +143,8 @@ fn activate_selection(app: &mut App) {
         }
         Some(Action::OpenHouseTable(table)) => {
             if !app.house.enter(table, return_screen, app.chip_balance) {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "The table failed to open. Try again in a moment.",
+                app.banner = Some(Banner::error(
+                    i18n::tr("chat.table_failed_open"),
                 ));
                 return;
             }

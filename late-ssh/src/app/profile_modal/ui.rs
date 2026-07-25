@@ -11,7 +11,7 @@ use crate::app::{
     bonsai::{state::stage_for, ui::render_tree_art_lines},
     bonsai_v2::render::render_tree_lines,
     chat::showcase::svc::ShowcaseFeedItem,
-    common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
+    common::{i18n, markdown::render_body_to_lines, theme, time::timezone_current_time},
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
     settings_modal::data::country_label,
 };
@@ -74,7 +74,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 /// content rect, or `None` when there is not enough room to draw anything.
 fn profile_frame(frame: &mut Frame, area: Rect, state: &ProfileModalState) -> Option<Rect> {
     let block = Block::default()
-        .title(format!(" profile · {} ", header_name(state)))
+        .title(i18n::trf("profile.modal.title", &[("name", &header_name(state))]))
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -124,12 +124,12 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         Constraint::Length(40), // bonsai
     ])
     .split(rows[3].inner(content));
-    let about = section(frame, top[0], "about");
+    let about = section(frame, top[0], i18n::tr("profile.modal.section_about"));
     draw_overview(frame, about, state);
-    let bonsai = section(frame, top[2], "bonsai");
+    let bonsai = section(frame, top[2], i18n::tr("profile.modal.section_bonsai"));
     draw_bonsai_panel(frame, bonsai, state, false);
 
-    let aquarium = section(frame, rows[4].inner(content), "aquarium");
+    let aquarium = section(frame, rows[4].inner(content), i18n::tr("profile.modal.section_aquarium"));
     draw_aquarium_tab(frame, aquarium, state);
 }
 
@@ -211,7 +211,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 /// footer rather than something you scroll to.
 fn draw_late_fetch_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let block = Block::default()
-        .title(" late.fetch ")
+        .title(i18n::tr("profile.modal.section_late_fetch"))
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -234,7 +234,7 @@ fn draw_late_fetch_box(frame: &mut Frame, area: Rect, state: &ProfileModalState)
     let Some(profile) = state.profile() else {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "loading…",
+                i18n::tr("profile.modal.loading"),
                 Style::default().fg(theme::TEXT_DIM()),
             ))),
             body,
@@ -254,7 +254,7 @@ fn header_name(state: &ProfileModalState) -> String {
         }
     }
     if state.fallback_name().is_empty() {
-        "loading".to_string()
+        i18n::tr("profile.modal.loading").to_string()
     } else {
         state.fallback_name().to_string()
     }
@@ -266,7 +266,10 @@ fn draw_header(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 
     let Some(profile) = state.profile() else {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled("  loading…", dim))),
+            Paragraph::new(Line::from(Span::styled(
+                format!("  {}", i18n::tr("profile.modal.loading")),
+                dim,
+            ))),
             area,
         );
         return;
@@ -278,11 +281,11 @@ fn draw_header(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     ];
     if let Some(time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
         spans.push(sep());
-        spans.push(Span::styled(format!("{time} local"), value));
+        spans.push(Span::styled(i18n::trf("profile.modal.time_local", &[("time", &time)]), value));
     }
     if let Some(balance) = state.chip_balance() {
         spans.push(sep());
-        spans.push(Span::styled(format!("{balance} chips"), value));
+        spans.push(Span::styled(i18n::trf("profile.modal.chips_balance", &[("balance", &balance.to_string())]), value));
     }
     if let Some(birthday) = profile.birthday.as_deref() {
         spans.push(sep());
@@ -298,23 +301,23 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ProfileModalState, dashboa
     let mut spans = vec![Span::raw("  ")];
     if dashboard {
         spans.push(Span::styled("↑↓ j/k", key));
-        spans.push(Span::styled(" scroll bio  ", dim));
+        spans.push(Span::styled(i18n::tr("profile.modal.footer_scroll_bio"), dim));
     } else {
         spans.push(Span::styled("Tab/S+Tab", key));
-        spans.push(Span::styled(" switch tabs  ", dim));
+        spans.push(Span::styled(i18n::tr("profile.modal.footer_switch_tabs"), dim));
         if matches!(state.tab(), ProfileTab::Overview) {
             spans.push(Span::styled("↑↓ j/k", key));
-            spans.push(Span::styled(" scroll  ", dim));
+            spans.push(Span::styled(i18n::tr("profile.modal.footer_scroll"), dim));
         }
     }
     spans.push(Span::styled("Esc/q", key));
-    spans.push(Span::styled(" close", dim));
+    spans.push(Span::styled(i18n::tr("profile.modal.footer_close"), dim));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_overview(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     if state.loading() {
-        render_centered_dim(frame, area, "loading…");
+        render_centered_dim(frame, area, i18n::tr("profile.modal.loading"));
         return;
     }
     let lines = build_overview_lines(state, area.width as usize);
@@ -334,9 +337,9 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
         return Vec::new();
     };
 
-    let mut lines = vec![section_heading("Bio")];
+    let mut lines = vec![section_heading(i18n::tr("profile.modal.overview_bio"))];
     if profile.bio.trim().is_empty() {
-        lines.push(Line::from(Span::styled("Not set", dim)));
+        lines.push(Line::from(Span::styled(i18n::tr("profile.modal.overview_not_set"), dim)));
     } else {
         lines.extend(render_body_to_lines(
             &profile.bio,
@@ -349,13 +352,14 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
     let badge_lines = badges::preview_lines(state.profile_awards());
     if !badge_lines.is_empty() {
         lines.push(Line::from(""));
-        lines.push(section_heading("Badges"));
+        lines.push(section_heading(i18n::tr("profile.modal.overview_badges")));
         lines.extend(badge_lines);
     }
     let showcases = state.showcases_for_viewed();
     if !showcases.is_empty() {
         lines.push(Line::from(""));
-        lines.push(section_heading(&format!("Showcases ({})", showcases.len())));
+        let showcases_label = i18n::trf("profile.modal.overview_showcases", &[("count", &showcases.len().to_string())]);
+        lines.push(section_heading(&showcases_label));
         for item in showcases {
             lines.push(Line::from(""));
             lines.extend(render_body_to_lines(
@@ -368,7 +372,7 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
     }
 
     lines.push(Line::from(""));
-    lines.push(section_heading("Badge Codes"));
+    lines.push(section_heading(i18n::tr("profile.modal.overview_badge_codes")));
     lines.extend(badges::legend_lines());
 
     lines
@@ -387,16 +391,16 @@ fn late_fetch_lines(
         .created_at
         .as_ref()
         .map(format_created_at)
-        .unwrap_or_else(|| "unknown".to_string());
-    let ide = profile.ide.clone().unwrap_or_else(|| "not set".to_string());
+        .unwrap_or_else(|| i18n::tr("profile.modal.lf_unknown").to_string());
+    let ide = profile.ide.clone().unwrap_or_else(|| i18n::tr("profile.modal.lf_not_set").to_string());
     let terminal = profile
         .terminal
         .clone()
-        .unwrap_or_else(|| "not set".to_string());
-    let os = profile.os.clone().unwrap_or_else(|| "not set".to_string());
+        .unwrap_or_else(|| i18n::tr("profile.modal.lf_not_set").to_string());
+    let os = profile.os.clone().unwrap_or_else(|| i18n::tr("profile.modal.lf_not_set").to_string());
     let theme_label = theme::label_for_id(theme_id).to_string();
     let langs = if profile.langs.is_empty() {
-        "not set".to_string()
+        i18n::tr("profile.modal.lf_not_set").to_string()
     } else {
         profile.langs.join(", ")
     };
@@ -404,24 +408,24 @@ fn late_fetch_lines(
     let col_w = (width / 2).max(12);
     vec![
         Line::from(format_two_cells(
-            ("created", &created),
-            ("theme", &theme_label),
+            (i18n::tr("profile.modal.lf_created"), &created),
+            (i18n::tr("profile.modal.lf_theme"), &theme_label),
             col_w,
             label,
             value,
             dim,
         )),
         Line::from(format_two_cells(
-            ("ide", &ide),
-            ("terminal", &terminal),
+            (i18n::tr("profile.modal.lf_ide"), &ide),
+            (i18n::tr("profile.modal.lf_terminal"), &terminal),
             col_w,
             label,
             value,
             dim,
         )),
         Line::from(format_two_cells(
-            ("os", &os),
-            ("langs", &langs),
+            (i18n::tr("profile.modal.lf_os"), &os),
+            (i18n::tr("profile.modal.lf_langs"), &langs),
             col_w,
             label,
             value,
@@ -458,16 +462,20 @@ fn draw_bonsai_panel(frame: &mut Frame, area: Rect, state: &ProfileModalState, s
                 render_caption(
                     frame,
                     caption_area,
-                    &format!(
-                        "Dynamic Bonsai · Day {} · vigor {} · stress {}",
-                        bonsai.age_days, bonsai.vigor, bonsai.water_stress
+                    &i18n::trf(
+                        "profile.modal.bonsai_caption_dynamic",
+                        &[
+                            ("age", &bonsai.age_days.to_string()),
+                            ("vigor", &bonsai.vigor.to_string()),
+                            ("stress", &bonsai.water_stress.to_string()),
+                        ],
                     ),
                     bonsai.is_alive,
                 );
             }
             return;
         }
-        render_centered_dim(frame, area, "Dynamic Bonsai not planted yet");
+        render_centered_dim(frame, area, i18n::tr("profile.modal.bonsai_dynamic_none"));
         return;
     }
 
@@ -489,19 +497,25 @@ fn draw_bonsai_panel(frame: &mut Frame, area: Rect, state: &ProfileModalState, s
             render_caption(
                 frame,
                 caption_area,
-                &format!("{} · {age_days}d", stage.label()),
+                &i18n::trf(
+                    "profile.modal.bonsai_caption",
+                    &[
+                        ("stage", stage.label()),
+                        ("days", &age_days.to_string()),
+                    ],
+                ),
                 tree.is_alive,
             );
         }
         return;
     }
 
-    render_centered_dim(frame, area, "no bonsai yet");
+    render_centered_dim(frame, area, i18n::tr("profile.modal.bonsai_none"));
 }
 
 fn draw_aquarium_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     if state.aquarium_fish().is_empty() {
-        render_centered_dim(frame, area, "No aquarium to show here yet");
+        render_centered_dim(frame, area, i18n::tr("profile.modal.aquarium_none"));
         return;
     }
 
@@ -520,7 +534,7 @@ fn draw_aquarium_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     if let Some(aquarium) = slot.as_mut() {
         aquarium_ui::draw(frame, area, aquarium);
     } else {
-        render_centered_dim(frame, area, "aquarium unavailable");
+        render_centered_dim(frame, area, i18n::tr("profile.modal.aquarium_unavailable"));
     }
 }
 
@@ -604,9 +618,9 @@ fn format_birthday(birthday: &str) -> String {
     };
     let base = month_day_label(&canonical).unwrap_or_else(|| canonical.clone());
     match days_until(&canonical, Utc::now().date_naive()) {
-        Some(0) => format!("{base} · today!"),
-        Some(1) => format!("{base} · tomorrow"),
-        Some(d) if d <= 30 => format!("{base} · in {d} days"),
+        Some(0) => format!("{}{}", base, i18n::tr("profile.birthday.today")),
+        Some(1) => format!("{}{}", base, i18n::tr("profile.birthday.tomorrow")),
+        Some(d) if d <= 30 => format!("{}{}", base, i18n::trf("profile.birthday.in_days", &[("days", &d.to_string())])),
         _ => base,
     }
 }

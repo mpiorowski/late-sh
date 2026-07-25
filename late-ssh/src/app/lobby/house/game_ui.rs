@@ -7,7 +7,7 @@ use ratatui::{
 };
 use std::time::Duration;
 
-use crate::app::common::theme;
+use crate::app::common::{i18n, theme};
 
 enum RoomSidebarContent<'a> {
     Info(Vec<Line<'a>>),
@@ -140,10 +140,10 @@ pub fn info_tagline(text: &str) -> Line<'static> {
 pub fn payout_cooldown_label(cooldown: Duration) -> String {
     let secs = cooldown.as_secs();
     if secs.is_multiple_of(60 * 60) {
-        return format!("{}h per player", secs / (60 * 60));
+        return i18n::trf("chat.payout_hours", &[("n", &(secs / (60 * 60)).to_string())]);
     }
     if secs.is_multiple_of(60) {
-        return format!("{}m per player", secs / 60);
+        return i18n::trf("chat.payout_minutes", &[("n", &(secs / 60).to_string())]);
     }
-    format!("{secs}s per player")
+    i18n::trf("chat.payout_seconds", &[("n", &secs.to_string())])
 }

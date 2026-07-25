@@ -1,8 +1,8 @@
-use crate::app::{common::primitives::Banner, input::ParsedInput, state::App};
+use crate::app::{common::{i18n, primitives::Banner}, input::ParsedInput, state::App};
 
 pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
     if !app.is_admin {
-        app.banner = Some(Banner::error("Admin access required"));
+        app.banner = Some(Banner::error(i18n::tr("banner.admin_required")));
         return true;
     }
 
@@ -92,7 +92,7 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
         }
         ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
             app.hub_admin_state.reload(app.is_admin);
-            app.banner = Some(Banner::success("Reloading reward templates"));
+            app.banner = Some(Banner::success(i18n::tr("banner.reloading_templates")));
             true
         }
         _ => false,

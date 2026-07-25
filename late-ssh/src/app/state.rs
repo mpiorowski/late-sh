@@ -35,6 +35,7 @@ use crate::{
         chat::news::svc::ArticleService,
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
+        common::i18n,
         common::primitives::{Banner, Screen},
         help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
@@ -1627,7 +1628,7 @@ impl App {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.pinstar_open_rx = None; // clear any existing
 
-        self.banner = Some(Banner::success("Connecting to diagram..."));
+        self.banner = Some(Banner::success(i18n::tr("banner.connecting_diagram")));
 
         let username = self.username.clone();
         let db = registry.db();
@@ -1693,7 +1694,7 @@ impl App {
                 "Artboard editing is disabled for this account.",
             ));
         } else {
-            self.banner = Some(Banner::success("Artboard editing is enabled again."));
+            self.banner = Some(Banner::success(i18n::tr("banner.artboard_enabled")));
         }
     }
 
@@ -2327,14 +2328,14 @@ impl App {
 
     pub fn voice_join(&mut self) -> Banner {
         let Some(channel_id) = self.active_voice_channel() else {
-            return Banner::error("No voice channel here.");
+            return Banner::error(i18n::tr("banner.no_voice_channel"));
         };
         if self.paired_client_registry.is_none() {
-            return Banner::error("No paired CLI with voice support. Update and run `late`.");
+            return Banner::error(i18n::tr("banner.no_paired_cli_voice_update"));
         };
         self.start_voice_join_task(channel_id);
 
-        Banner::success("Joining voice muted...")
+        Banner::success(i18n::tr("banner.joining_voice_muted"))
     }
 
     fn start_voice_join_task(&mut self, channel_id: Uuid) {
@@ -2397,9 +2398,7 @@ impl App {
                 )
             });
         if !sent {
-            self.banner = Some(Banner::error(
-                "No paired CLI with voice support. Update and run `late`.",
-            ));
+            self.banner = Some(Banner::error(i18n::tr("banner.no_paired_cli_voice_update")));
             return;
         }
 
@@ -2411,15 +2410,15 @@ impl App {
             ticket.deafened,
             false,
         );
-        self.banner = Some(Banner::success("Joining voice muted"));
+        self.banner = Some(Banner::success(i18n::tr("banner.joined_voice_muted")));
     }
 
     pub fn voice_leave(&mut self) -> Banner {
         let sent = self.voice_leave_current_channel();
         if sent {
-            Banner::success("Left voice")
+            Banner::success(i18n::tr("banner.left_voice"))
         } else {
-            Banner::error("No paired CLI with voice support")
+            Banner::error(i18n::tr("banner.no_paired_cli_voice"))
         }
     }
 
@@ -2447,7 +2446,7 @@ impl App {
 
     pub fn voice_toggle_muted(&mut self) -> Banner {
         if !self.voice.is_joined(self.user_id) {
-            return Banner::error("Join voice first");
+            return Banner::error(i18n::tr("banner.join_voice_first"));
         }
         let muted = !self.voice.muted(self.user_id);
         let sent = self
@@ -2460,7 +2459,7 @@ impl App {
                 )
             });
         if !sent {
-            return Banner::error("No paired CLI with voice support");
+            return Banner::error(i18n::tr("banner.no_paired_cli_voice"));
         }
         if let Some(room_id) = self.voice.current_room(self.user_id) {
             self.voice_service.update_local_state(
@@ -2473,15 +2472,15 @@ impl App {
             );
         }
         if muted {
-            Banner::success("Voice mic muted")
+            Banner::success(i18n::tr("banner.voice_mic_muted"))
         } else {
-            Banner::success("Voice mic unmuted")
+            Banner::success(i18n::tr("banner.voice_mic_unmuted"))
         }
     }
 
     pub fn voice_toggle_deafened(&mut self) -> Banner {
         if !self.voice.is_joined(self.user_id) {
-            return Banner::error("Join voice first");
+            return Banner::error(i18n::tr("banner.join_voice_first"));
         }
         let deafened = !self.voice.deafened(self.user_id);
         let sent = self
@@ -2494,7 +2493,7 @@ impl App {
                 )
             });
         if !sent {
-            return Banner::error("No paired CLI with voice support");
+            return Banner::error(i18n::tr("banner.no_paired_cli_voice"));
         }
         if let Some(room_id) = self.voice.current_room(self.user_id) {
             self.voice_service.update_local_state(
@@ -2507,9 +2506,9 @@ impl App {
             );
         }
         if deafened {
-            Banner::success("Voice deafened")
+            Banner::success(i18n::tr("banner.voice_deafened"))
         } else {
-            Banner::success("Voice undeafened")
+            Banner::success(i18n::tr("banner.voice_undeafened"))
         }
     }
 

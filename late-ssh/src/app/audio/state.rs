@@ -3,6 +3,7 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use super::svc::{AudioEvent, AudioService, QueueSnapshot};
+use crate::app::common::i18n;
 use crate::app::common::primitives::Banner;
 
 pub struct AudioTick {
@@ -136,16 +137,16 @@ impl AudioState {
                     if user_id == self.user_id =>
                 {
                     banner = Some(if position == 0 {
-                        Banner::success("Queued audio - up next")
+                        Banner::success(i18n::tr("banner.queued_up_next"))
                     } else {
-                        Banner::success(&format!("Queued audio - #{position} in line"))
+                        Banner::success(&i18n::trf("banner.queued_position", &[("position", &position.to_string())]))
                     });
                 }
                 AudioEvent::TrustedSubmitFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 AudioEvent::YoutubeFallbackSet { user_id } if user_id == self.user_id => {
-                    banner = Some(Banner::success("Set YouTube fallback"));
+                    banner = Some(Banner::success(i18n::tr("banner.set_youtube_fallback")));
                 }
                 AudioEvent::YoutubeFallbackFailed { user_id, message }
                     if user_id == self.user_id =>
@@ -153,32 +154,32 @@ impl AudioState {
                     banner = Some(Banner::error(&message));
                 }
                 AudioEvent::TrustedSkipFired { user_id } if user_id == self.user_id => {
-                    banner = Some(Banner::success("Skipped audio"));
+                    banner = Some(Banner::success(i18n::tr("banner.skipped_audio")));
                 }
                 AudioEvent::TrustedSkipFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 AudioEvent::BoothSubmitQueued { user_id, position } if user_id == self.user_id => {
                     banner = Some(if position == 0 {
-                        Banner::success("Submitted - up next")
+                        Banner::success(i18n::tr("banner.submitted_up_next"))
                     } else {
-                        Banner::success(&format!("Submitted - #{position} in line"))
+                        Banner::success(&i18n::trf("banner.submitted_position", &[("position", &position.to_string())]))
                     });
                 }
                 AudioEvent::BoothSubmitFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 AudioEvent::BoothVoteApplied { user_id, score, .. } if user_id == self.user_id => {
-                    banner = Some(Banner::success(&format!("Vote registered (score {score})")));
+                    banner = Some(Banner::success(&i18n::trf("banner.vote_registered", &[("score", &score.to_string())])));
                 }
                 AudioEvent::BoothVoteFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 AudioEvent::BoothSkipFired { user_id } if user_id == self.user_id => {
-                    banner = Some(Banner::success("Skip threshold reached"));
+                    banner = Some(Banner::success(i18n::tr("banner.skip_threshold")));
                 }
                 AudioEvent::BoothItemDeleted { user_id } if user_id == self.user_id => {
-                    banner = Some(Banner::success("Deleted track"));
+                    banner = Some(Banner::success(i18n::tr("banner.deleted_track")));
                 }
                 AudioEvent::BoothItemDeleteFailed { user_id, message }
                     if user_id == self.user_id =>
@@ -213,9 +214,9 @@ impl AudioState {
                     if user_id == self.user_id =>
                 {
                     banner = Some(if position == 0 {
-                        Banner::success("Queued from history - up next")
+                        Banner::success(i18n::tr("banner.queued_history_up_next"))
                     } else {
-                        Banner::success(&format!("Queued from history - #{position} in line"))
+                        Banner::success(&i18n::trf("banner.queued_history_position", &[("position", &position.to_string())]))
                     });
                 }
                 AudioEvent::BoothHistoryRequeueFailed { user_id, message }
@@ -224,7 +225,7 @@ impl AudioState {
                     banner = Some(Banner::error(&message));
                 }
                 AudioEvent::BoothHistoryItemDeleted { user_id } if user_id == self.user_id => {
-                    banner = Some(Banner::success("Deleted history track"));
+                    banner = Some(Banner::success(i18n::tr("banner.deleted_history_track")));
                 }
                 AudioEvent::BoothHistoryItemDeleteFailed { user_id, message }
                     if user_id == self.user_id =>

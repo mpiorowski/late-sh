@@ -8,7 +8,7 @@ use ratatui::{
 
 use super::{format_cooldown, manifest::UltimateKind, owned_ultimates, state::UltimateState};
 use crate::app::{
-    common::{primitives::Banner, theme},
+    common::{i18n, primitives::Banner, theme},
     hub::shop::state::ShopState,
     input::ParsedInput,
     state::App,
@@ -17,7 +17,7 @@ use crate::app::{
 pub(crate) fn open_ultimate_modal(app: &mut App) {
     app.ultimate_state.clamp_selection(&app.shop_state);
     if owned_ultimates(&app.shop_state).is_empty() {
-        app.banner = Some(Banner::error("No Ultimates unlocked yet"));
+        app.banner = Some(Banner::error(i18n::tr("banner.no_ultimates_unlocked")));
         return;
     }
     app.show_help = false;

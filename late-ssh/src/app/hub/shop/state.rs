@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use crate::app::common::primitives::Banner;
+use crate::app::common::{i18n, primitives::Banner};
 
 use super::{
     catalog::ShopCategory,
@@ -371,7 +371,7 @@ impl ShopState {
         if item.is_username_effect() {
             let options = username_effect_options(item.username_effect_variant.as_deref());
             if options.is_empty() {
-                return Some(Banner::error("This effect is not available"));
+                return Some(Banner::error(i18n::tr("banner.effect_not_available")));
             }
             self.pending_username_effect = Some(PendingUsernameEffect {
                 sku: item.sku,
@@ -380,20 +380,20 @@ impl ShopState {
                 options,
                 selected: 0,
             });
-            return Some(Banner::success("Pick a style"));
+            return Some(Banner::success(i18n::tr("banner.pick_style")));
         }
         if item.is_aquarium_fish() {
             if !self.snapshot.entitlements.has_aquarium() {
-                return Some(Banner::error("Unlock Aquarium before buying fish"));
+                return Some(Banner::error(i18n::tr("banner.unlock_aquarium_buy")));
             }
             self.service
                 .purchase_item_task(self.user_id, item.sku, current_room_id, None);
-            return Some(Banner::success(&format!("Buying {}", item.name)));
+            return Some(Banner::success(&i18n::trf("banner.buying_item", &[("name", &item.name)])));
         }
         if item.is_consumable() {
             if item.requires_room {
                 let Some(room) = current_room else {
-                    return Some(Banner::error("Open a room before buying this"));
+                    return Some(Banner::error(i18n::tr("banner.open_room_first")));
                 };
                 if item.effect_kind.as_deref() == Some("room_bump") && !room.can_bump() {
                     return Some(Banner::error(
@@ -409,7 +409,7 @@ impl ShopState {
                     room_label: room.label,
                     daily_limited: item.daily_limited,
                 });
-                return Some(Banner::success("Confirm room effect"));
+                return Some(Banner::success(i18n::tr("banner.confirm_room_effect")));
             }
             let action = if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
                 "Activating"
@@ -425,25 +425,25 @@ impl ShopState {
                 if let Some(slot) = item.slot {
                     self.service.unequip_slot_task(self.user_id, slot);
                     if is_dynamic_bonsai {
-                        return Some(Banner::success("Using classic Bonsai"));
+                        return Some(Banner::success(i18n::tr("banner.using_classic_bonsai")));
                     }
-                    return Some(Banner::success("Clearing displayed badge"));
+                    return Some(Banner::success(i18n::tr("banner.clearing_badge")));
                 }
-                return Some(Banner::success(&format!("{} already unlocked", item.name)));
+                return Some(Banner::success(&i18n::trf("banner.ultimate_unlocked", &[("name", &item.name)])));
             }
             if item.slot.is_some() {
                 self.service.equip_item_task(self.user_id, item.sku);
                 if is_dynamic_bonsai {
-                    return Some(Banner::success("Using Dynamic Bonsai"));
+                    return Some(Banner::success(i18n::tr("banner.using_dynamic_bonsai")));
                 }
-                return Some(Banner::success(&format!("Displaying {}", item.name)));
+                return Some(Banner::success(&i18n::trf("banner.displaying_item", &[("name", &item.name)])));
             }
-            return Some(Banner::success(&format!("{} already unlocked", item.name)));
+            return Some(Banner::success(&i18n::trf("banner.ultimate_unlocked", &[("name", &item.name)])));
         }
 
         self.service
             .purchase_item_task(self.user_id, item.sku, current_room_id, None);
-        Some(Banner::success(&format!("Purchasing {}", item.name)))
+        Some(Banner::success(&i18n::trf("banner.purchasing_item", &[("name", &item.name)])))
     }
 
     pub(crate) fn confirm_pending_room_effect(&mut self) -> Option<Banner> {
@@ -487,7 +487,7 @@ impl ShopState {
 
     pub(crate) fn cancel_pending_username_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_username_effect.take()?;
-        Some(Banner::success(&format!("Cancelled {}", pending.item_name)))
+        Some(Banner::success(&i18n::trf("banner.cancelled_item", &[("name", &pending.item_name)])))
     }
 
     pub(crate) fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
@@ -496,7 +496,7 @@ impl ShopState {
             return None;
         }
         if !self.snapshot.entitlements.has_aquarium() {
-            return Some(Banner::error("Unlock Aquarium before managing fish"));
+            return Some(Banner::error(i18n::tr("banner.unlock_aquarium_manage")));
         }
         self.service
             .adjust_aquarium_fish_task(self.user_id, item.sku, delta);
@@ -506,13 +506,13 @@ impl ShopState {
 
     pub(crate) fn use_aquarium_food(&mut self) -> Banner {
         if !self.snapshot.entitlements.has_aquarium() {
-            return Banner::error("Unlock Aquarium before feeding it");
+            return Banner::error(i18n::tr("banner.unlock_aquarium_feed"));
         }
         if self.aquarium_food_quantity() <= 0 {
-            return Banner::error("Buy Aquarium Food first");
+            return Banner::error(i18n::tr("banner.buy_food_first"));
         }
         self.service.use_aquarium_food_task(self.user_id);
-        Banner::success("Feeding aquarium")
+        Banner::success(i18n::tr("banner.feeding_aquarium"))
     }
 
     fn clamp_selection(&mut self) {

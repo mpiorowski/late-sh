@@ -1,3 +1,4 @@
+use crate::app::common::i18n;
 use crate::app::{common::primitives::Banner, state::App};
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
@@ -28,13 +29,13 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             if let Some(banner) = app.chat.feeds.share_selected() {
                 app.banner = Some(banner);
             } else {
-                app.banner = Some(Banner::error("No RSS entry selected."));
+                app.banner = Some(Banner::error(i18n::tr("chat.rss_not_selected")));
             }
             true
         }
         b'r' | b'R' => {
             app.chat.feeds.poll_now();
-            app.banner = Some(Banner::success("Refreshing RSS..."));
+            app.banner = Some(Banner::success(i18n::tr("chat.rss_refreshing")));
             true
         }
         b'd' | b'D' => {
@@ -47,7 +48,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             if let Some(url) = app.chat.feeds.selected_url() {
                 let cleaned = crate::app::input::sanitize_paste_markers(url);
                 app.pending_clipboard = Some(cleaned.trim().to_owned());
-                app.banner = Some(Banner::success("Link copied!"));
+                app.banner = Some(Banner::success(i18n::tr("chat.link_copied")));
             }
             true
         }

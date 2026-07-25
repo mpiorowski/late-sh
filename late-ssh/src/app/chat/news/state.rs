@@ -3,7 +3,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use crate::app::common::{composer, primitives::Banner};
+use crate::app::common::{composer, i18n, primitives::Banner};
 use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot};
 
 use super::svc::ArticleService;
@@ -357,7 +357,7 @@ impl State {
                         self.composing = false;
                         self.processing = false;
                         self.composer = new_news_textarea();
-                        banner = Some(Banner::success("Article shared!"));
+                        banner = Some(Banner::success(i18n::tr("news.article_shared")));
                     }
                     ArticleEvent::Failed { user_id, error, .. } if self.user_id == user_id => {
                         self.current_task = None;
@@ -366,10 +366,10 @@ impl State {
                             &mut self.composer,
                             self.composing,
                         );
-                        banner = Some(Banner::error(&format!("Failed: {}", error)));
+                        banner = Some(Banner::error(&i18n::trf("news.article_failed", &[("error", &error)])));
                     }
                     ArticleEvent::Deleted { user_id } if self.user_id == user_id => {
-                        banner = Some(Banner::success("Article deleted."));
+                        banner = Some(Banner::success(i18n::tr("news.article_deleted")));
                     }
                     ArticleEvent::UnreadCountUpdated {
                         user_id,
@@ -394,8 +394,12 @@ impl State {
                             } else {
                                 "articles"
                             };
-                            banner = Some(Banner::success(&format!(
-                                "{unread_count} new {noun} in news"
+                            banner = Some(Banner::success(&i18n::trf(
+                                "news.article_new",
+                                &[
+                                    ("count", &unread_count.to_string()),
+                                    ("noun", noun),
+                                ],
                             )));
                         }
                     }

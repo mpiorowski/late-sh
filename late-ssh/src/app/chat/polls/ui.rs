@@ -11,7 +11,7 @@ use ratatui::{
 
 use crate::app::{
     chat::polls::state::{PollField, PollModalState},
-    common::theme,
+    common::{i18n, theme},
 };
 
 pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) {
@@ -21,7 +21,7 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) 
     let popup = centered_rect(area, 68, 18);
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(" Poll ")
+        .title(i18n::tr("chat.poll_modal"))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()))
         .style(Style::default().bg(theme::BG_CANVAS()));
@@ -41,11 +41,11 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("Enter", Style::default().fg(theme::SUCCESS())),
-            Span::styled(" create  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(i18n::tr("chat.poll_create"), Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Tab", Style::default().fg(theme::AMBER())),
-            Span::styled(" next  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(i18n::tr("chat.poll_next"), Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Esc", Style::default().fg(theme::ERROR())),
-            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(i18n::tr("chat.poll_cancel"), Style::default().fg(theme::TEXT_DIM())),
         ]))
         .style(Style::default().bg(theme::BG_CANVAS())),
         areas[0],
@@ -53,7 +53,7 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) 
     draw_field(
         frame,
         areas[1],
-        "Question",
+        i18n::tr("chat.poll_question"),
         state.question(),
         state.focus() == PollField::Question,
         POLL_QUESTION_MAX_CHARS,
@@ -62,7 +62,7 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) 
         draw_field(
             frame,
             areas[2 + index],
-            &format!("Option {}", index + 1),
+            &i18n::trf("chat.poll_option", &[("n", &(index + 1).to_string())]),
             &state.options()[index],
             state.focus() == PollField::Option(index),
             POLL_OPTION_MAX_CHARS,
@@ -125,7 +125,7 @@ fn draw_duration_field(frame: &mut Frame, area: Rect, state: &PollModalState, fo
     };
     let block = Block::default()
         .title(Span::styled(
-            " Duration ",
+            i18n::tr("chat.poll_duration"),
             Style::default()
                 .fg(if focused {
                     theme::TEXT_BRIGHT()

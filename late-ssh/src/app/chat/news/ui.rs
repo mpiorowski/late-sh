@@ -1,5 +1,6 @@
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::chat::ui_text::{NewsPayload, format_news_ascii_art_for_display};
+use crate::app::common::i18n;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
 use chrono::{DateTime, Utc};
@@ -42,7 +43,7 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
     }
 
     if view.articles.is_empty() {
-        let text = Text::from("No news yet. Press 'i' to share a link.");
+        let text = Text::from(i18n::tr("news.empty"));
         let empty_p = Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM()));
         frame.render_widget(empty_p, list_area);
     } else {
@@ -189,7 +190,7 @@ pub(crate) fn draw_article_modal(frame: &mut Frame, area: Rect, view: ArticleMod
 
     let modal_bg = Style::default().bg(theme::BG_CANVAS());
     let block = Block::default()
-        .title(" News Item ")
+        .title(i18n::tr("news.title_modal"))
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -210,13 +211,13 @@ pub(crate) fn draw_article_modal(frame: &mut Frame, area: Rect, view: ArticleMod
 
     let footer = Line::from(vec![
         Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" copy link", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(i18n::tr("news.footer.copy_link"), Style::default().fg(theme::TEXT_DIM())),
         Span::styled("  ", Style::default().fg(theme::BORDER())),
         Span::styled("N", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" open in News", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(i18n::tr("news.footer.open"), Style::default().fg(theme::TEXT_DIM())),
         Span::styled("  ", Style::default().fg(theme::BORDER())),
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(i18n::tr("news.footer.close"), Style::default().fg(theme::TEXT_DIM())),
     ]);
     let footer_area = layout[1].inner(Margin {
         horizontal: 1,

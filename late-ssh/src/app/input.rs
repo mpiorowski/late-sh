@@ -8,6 +8,7 @@ use late_core::models::user::{RightSidebarMode, RoomListMode};
 
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
+use crate::app::common::i18n;
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::directory::state::DirectoryTab;
@@ -2632,7 +2633,7 @@ pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Opti
     use crate::app::files::image_upload::{download_and_reupload_url, is_file_upload_configured};
     if !is_file_upload_configured() {
         app.banner = Some(crate::app::common::primitives::Banner::error(
-            "File uploads are disabled",
+            i18n::tr("banner.uploads_disabled"),
         ));
         return;
     }

@@ -4,7 +4,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use crate::app::common::{composer, primitives::Banner};
+use crate::app::common::{composer, i18n, primitives::Banner};
 
 use super::svc::{self, WorkEvent, WorkFeedItem, WorkService, WorkSnapshot};
 
@@ -49,27 +49,27 @@ impl ComposerField {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Headline => "Headline",
-            Self::Status => "Status",
-            Self::Type => "Type",
-            Self::Location => "Location",
-            Self::Contact => "Contact",
-            Self::Links => "Links",
-            Self::Skills => "Skills",
-            Self::Summary => "Summary",
+            Self::Headline => i18n::tr("chat.work_field_headline"),
+            Self::Status => i18n::tr("chat.work_field_status"),
+            Self::Type => i18n::tr("chat.work_field_type"),
+            Self::Location => i18n::tr("chat.work_field_location"),
+            Self::Contact => i18n::tr("chat.work_field_contact"),
+            Self::Links => i18n::tr("chat.work_field_links"),
+            Self::Skills => i18n::tr("chat.work_field_skills"),
+            Self::Summary => i18n::tr("chat.work_field_summary"),
         }
     }
 
     pub(crate) fn placeholder(self) -> &'static str {
         match self {
-            Self::Headline => "Rust backend engineer",
-            Self::Status => "open | casual | not-looking",
-            Self::Type => "contract, full-time, freelance",
-            Self::Location => "EU remote, Warsaw, US overlap",
-            Self::Contact => "email@example.com, @handle, or DM on late.sh",
-            Self::Links => "https://github.com/you, https://cv.example",
-            Self::Skills => "rust, postgres, axum",
-            Self::Summary => "What work are you looking for?",
+            Self::Headline => i18n::tr("chat.work_ph_headline"),
+            Self::Status => i18n::tr("chat.work_ph_status"),
+            Self::Type => i18n::tr("chat.work_ph_type"),
+            Self::Location => i18n::tr("chat.work_ph_location"),
+            Self::Contact => i18n::tr("chat.work_ph_contact"),
+            Self::Links => i18n::tr("chat.work_ph_links"),
+            Self::Skills => i18n::tr("chat.work_ph_skills"),
+            Self::Summary => i18n::tr("chat.work_ph_summary"),
         }
     }
 }
@@ -368,7 +368,7 @@ impl State {
     pub fn delete_selected(&mut self) -> Option<Banner> {
         let item = self.selected_item()?;
         if !(self.is_admin || item.profile.user_id == self.user_id) {
-            return Some(Banner::error("not your work profile"));
+            return Some(Banner::error(i18n::tr("chat.work_err_not_yours")));
         }
         self.service
             .delete_task(self.user_id, item.profile.id, self.is_admin);
@@ -388,46 +388,46 @@ impl State {
         if headline.is_empty() {
             self.field = ComposerField::Headline;
             self.refresh_composer_theme();
-            return Some(Banner::error("headline required"));
+            return Some(Banner::error(i18n::tr("chat.work_err_headline_req")));
         }
         if headline.chars().count() > 120 {
-            return Some(Banner::error("headline too long (max 120)"));
+            return Some(Banner::error(i18n::tr("chat.work_err_headline_long")));
         }
         if status.is_none() {
             self.field = ComposerField::Status;
             self.refresh_composer_theme();
-            return Some(Banner::error("status must be open, casual, or not-looking"));
+            return Some(Banner::error(i18n::tr("chat.work_err_status_invalid")));
         }
         if work_type.is_empty() {
             self.field = ComposerField::Type;
             self.refresh_composer_theme();
-            return Some(Banner::error("work type required"));
+            return Some(Banner::error(i18n::tr("chat.work_err_type_req")));
         }
         if location.is_empty() {
             self.field = ComposerField::Location;
             self.refresh_composer_theme();
-            return Some(Banner::error("location required"));
+            return Some(Banner::error(i18n::tr("chat.work_err_location_req")));
         }
         if contact.is_empty() {
             self.field = ComposerField::Contact;
             self.refresh_composer_theme();
-            return Some(Banner::error("contact required"));
+            return Some(Banner::error(i18n::tr("chat.work_err_contact_req")));
         }
         if contact.chars().count() > 200 {
-            return Some(Banner::error("contact too long (max 200)"));
+            return Some(Banner::error(i18n::tr("chat.work_err_contact_long")));
         }
         if links.is_empty() {
             self.field = ComposerField::Links;
             self.refresh_composer_theme();
-            return Some(Banner::error("at least one http(s) link required"));
+            return Some(Banner::error(i18n::tr("chat.work_err_links_req")));
         }
         if summary.is_empty() {
             self.field = ComposerField::Summary;
             self.refresh_composer_theme();
-            return Some(Banner::error("summary required"));
+            return Some(Banner::error(i18n::tr("chat.work_err_summary_req")));
         }
         if summary.chars().count() > 1000 {
-            return Some(Banner::error("summary too long (max 1000)"));
+            return Some(Banner::error(i18n::tr("chat.work_err_summary_long")));
         }
 
         let params = WorkProfileParams {
@@ -488,19 +488,19 @@ impl State {
                     WorkEvent::Created { user_id } if self.user_id == user_id && self.submitted => {
                         self.submitted = false;
                         self.stop_composing();
-                        banner = Some(Banner::success("Work profile shared!"));
+                        banner = Some(Banner::success(i18n::tr("chat.work_shared")));
                     }
                     WorkEvent::Updated { user_id } if self.user_id == user_id && self.submitted => {
                         self.submitted = false;
                         self.stop_composing();
-                        banner = Some(Banner::success("Work profile updated."));
+                        banner = Some(Banner::success(i18n::tr("chat.work_updated")));
                     }
                     WorkEvent::Deleted { user_id } if self.user_id == user_id => {
-                        banner = Some(Banner::success("Work profile deleted."));
+                        banner = Some(Banner::success(i18n::tr("chat.work_deleted")));
                     }
                     WorkEvent::Failed { user_id, error } if self.user_id == user_id => {
                         self.submitted = false;
-                        banner = Some(Banner::error(&format!("Failed: {error}")));
+                        banner = Some(Banner::error(&i18n::trf("chat.work_failed", &[("error", &error)])));
                     }
                     WorkEvent::UnreadCountUpdated {
                         user_id,
@@ -520,12 +520,13 @@ impl State {
                         let increased = unread_count > self.unread_count;
                         self.unread_count = unread_count;
                         if increased {
-                            let noun = if unread_count == 1 {
-                                "work profile"
+                            let key = if unread_count == 1 {
+                                "chat.work_new"
                             } else {
-                                "work profiles"
+                                "chat.work_new_plural"
                             };
-                            banner = Some(Banner::success(&format!("{unread_count} new {noun}")));
+                            let msg = i18n::trf(key, &[("n", &unread_count.to_string())]);
+                            banner = Some(Banner::success(&msg));
                         }
                     }
                     _ => {}
@@ -614,10 +615,10 @@ fn normalize_status(input: &str) -> Option<&'static str> {
 
 pub fn status_label(status: &str) -> &'static str {
     match status {
-        "open" => "open",
-        "casual" => "casual",
-        "not-looking" => "not looking",
-        _ => "unknown",
+        "open" => i18n::tr("chat.status_open"),
+        "casual" => i18n::tr("chat.status_casual"),
+        "not-looking" => i18n::tr("chat.status_not_looking"),
+        _ => i18n::tr("chat.status_unknown"),
     }
 }
 

@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use rand_core::{OsRng, RngCore};
 
-const DEFAULT_SPLASH_TIP: &str = "Press ? outside of chat to see available hotkeys";
+use super::i18n;
 
 static NEW_AND_RETURNING_TIPS: LazyLock<Vec<String>> = LazyLock::new(|| {
     parse_tip_pool(include_str!(
@@ -37,7 +37,7 @@ pub(crate) fn tip_candidates(is_new_user: bool) -> Vec<&'static str> {
 pub(crate) fn choose_splash_hint(is_new_user: bool) -> String {
     let candidates = tip_candidates(is_new_user);
     if candidates.is_empty() {
-        return DEFAULT_SPLASH_TIP.to_string();
+        return i18n::tr("common.splash_hint").to_string();
     }
 
     let idx = (OsRng.next_u64() as usize) % candidates.len();

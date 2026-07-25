@@ -1,4 +1,4 @@
-use crate::app::common::{primitives::format_relative_time, theme};
+use crate::app::common::{i18n, primitives::format_relative_time, theme};
 use chrono::{DateTime, Utc};
 use late_core::models::notification::NotificationView;
 use ratatui::{
@@ -22,7 +22,7 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
     let inner_area = area;
 
     if view.items.is_empty() {
-        let text = Text::from("No mentions yet.");
+        let text = Text::from(i18n::tr("chat.notif_empty"));
         let p = Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM()));
         frame.render_widget(p, inner_area);
         return;
@@ -64,7 +64,7 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
             .room_slug
             .as_deref()
             .map(|s| format!("#{s}"))
-            .unwrap_or_else(|| "DM".to_string());
+            .unwrap_or_else(|| i18n::tr("chat.notif_dm").to_string());
 
         let is_unread = view
             .marker_read_at
@@ -85,7 +85,7 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" mentioned you in {room_label}"),
+                format!("{}{}", i18n::tr("chat.notif_mentioned"), room_label),
                 Style::default().fg(theme::TEXT()),
             ),
             Span::styled(

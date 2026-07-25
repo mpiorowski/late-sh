@@ -1,4 +1,4 @@
-use crate::app::common::theme;
+use crate::app::common::{i18n, theme};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -23,13 +23,13 @@ pub(crate) fn draw_mine_only_status(frame: &mut Frame, area: Rect, label: &str) 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "mine only",
+                i18n::tr("chat.mine_only"),
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" · showing your {label}"),
+                i18n::trf("chat.mine_showing", &[("label", label)]),
                 Style::default().fg(theme::TEXT_FAINT()),
             ),
         ])),

@@ -1,4 +1,5 @@
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
+use crate::app::common::i18n;
 use crate::app::common::theme;
 use crate::app::common::{composer, primitives::format_relative_time};
 use chrono::{DateTime, Utc};
@@ -35,11 +36,11 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
     if view.items.is_empty() {
         let text = Text::from(vec![
             Line::from(Span::styled(
-                "No showcases yet.",
+                i18n::tr("chat.showcase_empty"),
                 Style::default().fg(theme::TEXT_DIM()),
             )),
             Line::from(Span::styled(
-                "Press 'i' to share a project link.",
+                i18n::tr("chat.showcase_hint_create"),
                 Style::default().fg(theme::TEXT_DIM()),
             )),
         ]);
@@ -104,7 +105,7 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
         ));
         if owner {
             title_spans.push(Span::styled(
-                "  (yours)",
+                i18n::tr("chat.showcase_yours"),
                 Style::default().fg(theme::AMBER_DIM()),
             ));
         }
@@ -219,11 +220,11 @@ pub fn draw_showcase_composer(frame: &mut Frame, area: Rect, view: &ShowcaseComp
     let active = view.state.active_field();
 
     let title = if !composing {
-        " Showcase "
+        i18n::tr("chat.showcase_title")
     } else if editing {
-        " Editing · Tab/S+Tab switch · Enter submit · Alt+Enter/Ctrl+J newline · Esc cancel "
+        i18n::tr("chat.showcase_compose_edit")
     } else {
-        " New showcase · Tab/S+Tab switch · Enter submit · Alt+Enter/Ctrl+J newline · Esc cancel "
+        i18n::tr("chat.showcase_compose_new")
     };
     let border_style = if composing {
         Style::default().fg(theme::BORDER_ACTIVE())
@@ -239,7 +240,7 @@ pub fn draw_showcase_composer(frame: &mut Frame, area: Rect, view: &ShowcaseComp
 
     if !composing {
         let hint = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter copy URL · i compose · e edit own · d delete own · / filter mine",
+            i18n::tr("chat.showcase_hint_nav"),
             Style::default().fg(theme::TEXT_DIM()),
         )));
         frame.render_widget(hint, inner);

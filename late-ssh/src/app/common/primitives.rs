@@ -8,7 +8,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::theme;
+use super::{i18n, theme};
 #[derive(Debug, Clone)]
 pub enum BannerKind {
     Success,
@@ -138,26 +138,29 @@ pub fn format_duration_mmss(duration: Duration) -> String {
 
 pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     let label = match current {
-        Screen::Dashboard => "Dashboard",
-        Screen::Games => "Games",
-        Screen::Lateania => "Lateania",
-        Screen::Rebels => "Rebels",
-        Screen::Nethack => "NetHack",
-        Screen::Dcss => "DCSS",
-        Screen::Brogue => "Brogue",
-        Screen::Dopewars => "dopewars",
-        Screen::Usurper => "Usurper",
-        Screen::GreenDragon => "Green Dragon",
-        Screen::Arcade => "Arcade",
-        Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Directory",
-        Screen::Clubhouse => "Clubhouse",
-        Screen::DailyMatch => "Daily Match",
-        Screen::HouseTable => "House Table",
+        Screen::Dashboard => i18n::tr("common.tab.dashboard"),
+        Screen::Games => i18n::tr("common.tab.games"),
+        Screen::Lateania => i18n::tr("common.tab.lateania"),
+        Screen::Rebels => i18n::tr("common.tab.rebels"),
+        Screen::Nethack => i18n::tr("common.tab.nethack"),
+        Screen::Dcss => i18n::tr("common.tab.dcss"),
+        Screen::Brogue => i18n::tr("common.tab.brogue"),
+        Screen::Dopewars => i18n::tr("common.tab.dopewars"),
+        Screen::Usurper => i18n::tr("common.tab.usurper"),
+        Screen::GreenDragon => i18n::tr("common.tab.green_dragon"),
+        Screen::Arcade => i18n::tr("common.tab.arcade"),
+        Screen::Artboard => i18n::tr("common.tab.artboard"),
+        Screen::Pinstar => i18n::tr("common.tab.directory"),
+        Screen::Clubhouse => i18n::tr("common.tab.clubhouse"),
+        Screen::DailyMatch => i18n::tr("common.tab.daily_match"),
+        Screen::HouseTable => i18n::tr("common.tab.house_table"),
     };
 
     let current_line = Paragraph::new(Line::from(vec![
-        Span::styled("Current: ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            i18n::tr("common.current_label"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
         Span::styled(
             label,
             Style::default()
@@ -188,16 +191,34 @@ pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
     let diff = now.signed_duration_since(dt);
 
     if diff.num_seconds() < 60 {
-        "just now".to_string()
+        i18n::tr("common.rt.just_now").to_string()
     } else if diff.num_minutes() < 60 {
         let mins = diff.num_minutes();
-        format!("{} min{} ago", mins, if mins == 1 { "" } else { "s" })
+        let unit = i18n::tr("common.rt.min_s");
+        let ago = i18n::tr("common.rt.ago");
+        if mins == 1 {
+            format!("1 {unit} {ago}")
+        } else {
+            format!("{mins} {unit} {ago}")
+        }
     } else if diff.num_hours() < 24 {
         let hrs = diff.num_hours();
-        format!("{} hr{} ago", hrs, if hrs == 1 { "" } else { "s" })
+        let unit = i18n::tr("common.rt.hr_s");
+        let ago = i18n::tr("common.rt.ago");
+        if hrs == 1 {
+            format!("1 {unit} {ago}")
+        } else {
+            format!("{hrs} {unit} {ago}")
+        }
     } else if diff.num_days() < 7 {
         let days = diff.num_days();
-        format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
+        let unit = i18n::tr("common.rt.day_s");
+        let ago = i18n::tr("common.rt.ago");
+        if days == 1 {
+            format!("1 {unit} {ago}")
+        } else {
+            format!("{days} {unit} {ago}")
+        }
     } else {
         dt.format("%m-%d").to_string()
     }
@@ -207,7 +228,7 @@ pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
 pub fn format_relative_time_short(dt: chrono::DateTime<chrono::Utc>) -> String {
     let diff = chrono::Utc::now().signed_duration_since(dt);
     if diff.num_seconds() < 60 {
-        "now".to_string()
+        i18n::tr("common.rt.now").to_string()
     } else if diff.num_minutes() < 60 {
         format!("{}m", diff.num_minutes())
     } else if diff.num_hours() < 24 {

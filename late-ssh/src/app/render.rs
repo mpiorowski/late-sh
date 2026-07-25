@@ -311,18 +311,19 @@ impl App {
             self.profile_state.theme_id().to_string()
         };
         theme::set_current_by_id(&active_theme_id);
-        // Set the session's render language the same way: preview the
-        // settings-modal draft live while open, else the saved profile value.
+
+        // Init locale — preview settings-modal draft live while open.
         let active_language_id = if self.show_settings {
             self.settings_modal_state
                 .draft()
                 .language
-                .clone()
-                .unwrap_or_else(|| self.profile_state.language_id().to_string())
+                .as_deref()
+                .unwrap_or_else(|| self.profile_state.language_id())
         } else {
-            self.profile_state.language_id().to_string()
+            self.profile_state.language_id()
         };
-        i18n::set_current_by_id(&active_language_id);
+        i18n::set_current_by_id(active_language_id);
+
         let text_brightness_adjustment = if self.show_settings {
             self.settings_modal_state.draft().text_brightness_adjustment
         } else {
@@ -1481,9 +1482,7 @@ impl App {
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {
-                message:
-                    "⚠️ Server updating! Press 'q' to quit, then reconnect to join the new pod."
-                        .to_string(),
+                message: i18n::tr("banner.draining_server").to_string(),
                 kind: BannerKind::Error,
                 created_at: std::time::Instant::now(),
             })
@@ -1738,22 +1737,22 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     let page_title = match screen {
-        Screen::Dashboard => "Home",
-        Screen::Games => "Games",
-        Screen::Lateania => "Lateania",
-        Screen::Rebels => "Rebels",
-        Screen::Nethack => "NetHack",
-        Screen::Dcss => "DCSS",
-        Screen::Brogue => "Brogue",
-        Screen::Usurper => "Usurper",
-        Screen::Dopewars => "dopewars",
-        Screen::GreenDragon => "Green Dragon",
-        Screen::Arcade => "The Arcade",
-        Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Directory",
-        Screen::Clubhouse => "Clubhouse",
-        Screen::DailyMatch => "Daily Match",
-        Screen::HouseTable => "House Table",
+        Screen::Dashboard => i18n::tr("common.page.home"),
+        Screen::Games => i18n::tr("common.tab.games"),
+        Screen::Lateania => i18n::tr("common.tab.lateania"),
+        Screen::Rebels => i18n::tr("common.tab.rebels"),
+        Screen::Nethack => i18n::tr("common.tab.nethack"),
+        Screen::Dcss => i18n::tr("common.tab.dcss"),
+        Screen::Brogue => i18n::tr("common.tab.brogue"),
+        Screen::Usurper => i18n::tr("common.tab.usurper"),
+        Screen::Dopewars => i18n::tr("common.tab.dopewars"),
+        Screen::GreenDragon => i18n::tr("common.tab.green_dragon"),
+        Screen::Arcade => i18n::tr("common.page.the_arcade"),
+        Screen::Artboard => i18n::tr("common.tab.artboard"),
+        Screen::Pinstar => i18n::tr("common.tab.directory"),
+        Screen::Clubhouse => i18n::tr("common.tab.clubhouse"),
+        Screen::DailyMatch => i18n::tr("common.tab.daily_match"),
+        Screen::HouseTable => i18n::tr("common.tab.house_table"),
     };
     spans.push(Span::styled(
         " | ",
@@ -1766,21 +1765,21 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     if screen == Screen::Lateania {
         spans.push(Span::styled(
-            "by hardlygospel.github.io ",
+            i18n::tr("common.attribution.lateania"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
 
     if screen == Screen::Rebels {
         spans.push(Span::styled(
-            "by github.com/ricott1 ",
+            i18n::tr("common.attribution.rebels"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
 
     if screen == Screen::Nethack {
         spans.push(Span::styled(
-            "by nethack.org ",
+            i18n::tr("common.attribution.nethack"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
         // While a game is live, surface the leave/help keys in the chrome (it
@@ -1792,7 +1791,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "· ? help · S save · Ctrl-C quit ",
+                i18n::tr("common.page.nethack_in_game"),
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1800,7 +1799,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     if screen == Screen::Dcss {
         spans.push(Span::styled(
-            "by crawl.develz.org ",
+            i18n::tr("common.attribution.dcss"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
         // While a game is live, surface the leave/help keys in the chrome (it
@@ -1812,7 +1811,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "· ? help · S save · Ctrl-Q abandon ",
+                i18n::tr("common.page.dcss_in_game"),
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1840,7 +1839,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     if screen == Screen::Usurper {
         spans.push(Span::styled(
-            "by usurper.info ",
+            i18n::tr("common.attribution.usurper"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
         // While a game is live, surface the leave key in the chrome (it sits
@@ -1852,7 +1851,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "\u{b7} menus list their keys \u{b7} Q quits at the main menus ",
+                i18n::tr("common.page.usurper_in_game"),
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1860,7 +1859,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     if screen == Screen::Dopewars {
         spans.push(Span::styled(
-            "by dopewars.sourceforge.io ",
+            i18n::tr("common.attribution.dopewars"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
         // While a game is live, surface the leave key in the chrome (it sits
@@ -1872,7 +1871,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "· Ctrl-C quit ",
+                i18n::tr("common.page.dopewars_in_game"),
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1886,10 +1885,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     // headcount and keybinds live up here.
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
-            format!(
-                "· {} inside · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
-                ctx.clubhouse_state.headcount()
-            ),
+            i18n::trf("common.page.clubhouse_hint", &[("n", &ctx.clubhouse_state.headcount().to_string())]),
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
@@ -1900,7 +1896,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     if screen == Screen::Artboard {
         spans.push(Span::styled(
-            "by github.com/mevanlc ",
+            i18n::tr("common.attribution.artboard"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
         let hints: &[(&str, &str)] = if ctx.artboard_interacting {
@@ -1990,7 +1986,10 @@ fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<
         Style::default().fg(theme::TEXT_BRIGHT()),
     ));
     if ctx.game_selection == crate::app::state::GAME_SELECTION_SNAKE {
-        spans.push(Span::styled("by github.com/AndreLobato ", dim));
+        spans.push(Span::styled(
+            i18n::tr("common.attribution.snake"),
+            dim,
+        ));
     }
 }
 
@@ -2057,10 +2056,10 @@ fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
     };
     let use_caret = matches!(hint_style, HelpHintStyle::SpacedCaret);
     let hints = [
-        ("Settings", ctrl_hint("O", use_caret)),
-        ("Hub", ctrl_hint("G", use_caret)),
-        ("Lobby", ctrl_hint("Q", use_caret)),
-        ("Guide", "?"),
+        (i18n::tr("common.help_hint.settings"), ctrl_hint("O", use_caret)),
+        (i18n::tr("common.help_hint.hub"), ctrl_hint("G", use_caret)),
+        (i18n::tr("common.help_hint.lobby"), ctrl_hint("Q", use_caret)),
+        (i18n::tr("common.help_hint.guide"), "?"),
     ];
 
     let mut spans = Vec::new();
@@ -2093,7 +2092,7 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     let mut spans = Vec::new();
     if include_thanks {
         spans.push(Span::styled(
-            " thanks for hanging out ",
+            i18n::tr("common.page.sponsor_line"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
         spans.push(Span::styled("☕ ", Style::default().fg(theme::AMBER())));
@@ -2117,7 +2116,11 @@ fn status_hud_title(
     }
     let mut spans = Vec::new();
     if unread > 0 {
-        let noun = if unread == 1 { "mention" } else { "mentions" };
+        let noun = if unread == 1 {
+            i18n::tr("common.status_hud.unread_mention")
+        } else {
+            i18n::tr("common.status_hud.unread_mentions")
+        };
         spans.push(Span::styled(
             format!(" {unread}"),
             Style::default()
@@ -2151,7 +2154,7 @@ fn status_hud_title(
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(
-            " chips ",
+            i18n::tr("common.status_hud.chips"),
             Style::default().fg(theme::TEXT_MUTED()),
         ));
     }

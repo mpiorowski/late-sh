@@ -16,7 +16,7 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::{
-    common::theme,
+    common::{i18n, theme},
     files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
     games::chess_core::{
         board_ui::{self, BoardCtx, pick_tier},
@@ -126,7 +126,7 @@ pub(crate) fn draw(
 ) {
     let Some(board) = &daily.board else {
         frame.render_widget(
-            Paragraph::new("No daily match open. Press Esc to go back.")
+            Paragraph::new(i18n::tr("chat.no_match_open"))
                 .alignment(Alignment::Center),
             area,
         );
@@ -136,11 +136,11 @@ pub(crate) fn draw(
     board.target_geometry.set(None);
 
     if let Some(error) = &board.load_error {
-        draw_center_message(frame, area, &format!("Failed to load match: {error}"));
+        draw_center_message(frame, area, &i18n::trf("chat.failed_load", &[("error", error)]));
         return;
     }
     let Some(detail) = &board.detail else {
-        draw_center_message(frame, area, "Loading match…");
+        draw_center_message(frame, area, i18n::tr("chat.loading_match"));
         return;
     };
 
@@ -203,7 +203,7 @@ fn draw_match(
     terminal_images: &mut TerminalImageFrame,
 ) {
     if area.height < 10 || area.width < 30 {
-        frame.render_widget(Paragraph::new("The board needs more room."), area);
+        frame.render_widget(Paragraph::new(i18n::tr("chat.board_needs_room")), area);
         return;
     }
 
@@ -356,7 +356,7 @@ pub(super) fn draw_center_message(frame: &mut Frame, area: Rect, message: &str) 
     );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "esc back",
+            i18n::tr("chat.esc_back"),
             Style::default().fg(theme::TEXT_FAINT()),
         )))
         .alignment(Alignment::Center),
@@ -372,7 +372,7 @@ fn status_line(
 ) -> Line<'static> {
     if board.resign_confirm {
         return Line::from(Span::styled(
-            "Resign this match? Press r again to confirm.",
+            i18n::tr("chat.resign_confirm"),
             Style::default()
                 .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),
@@ -386,12 +386,9 @@ fn status_line(
     if detail.is_active() {
         let my_turn = detail.row.turn_user_id == Some(daily.user_id());
         let text = if my_turn {
-            "Your move".to_string()
+            i18n::tr("chat.your_move").to_string()
         } else {
-            format!(
-                "Waiting for {}",
-                name_for(board, detail.row.turn_user_id.unwrap_or(Uuid::nil()))
-            )
+            i18n::trf("chat.waiting_for", &[("name", &name_for(board, detail.row.turn_user_id.unwrap_or(Uuid::nil())))])
         };
         spans.push(Span::styled(
             text,
@@ -405,13 +402,13 @@ fn status_line(
         ));
         if let Some(deadline) = deadline {
             spans.push(Span::styled(
-                format!("   {deadline} on the clock"),
+                format!("   {}", i18n::trf("chat.on_the_clock", &[("deadline", &deadline)])),
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
         if chess.in_check {
             spans.push(Span::styled(
-                "   check",
+                format!("   {}", i18n::tr("chat.check")),
                 Style::default()
                     .fg(theme::ERROR())
                     .add_modifier(Modifier::BOLD),
@@ -426,7 +423,7 @@ fn status_line(
     }
     if let Some(mv) = chess.state.move_history.last() {
         spans.push(Span::styled(
-            format!("   last {}", mv.label),
+            format!("   {}", i18n::trf("chat.last_move", &[("label", &mv.label)])),
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
@@ -440,9 +437,9 @@ pub(super) fn result_banner(
 ) -> (&'static str, String, Color) {
     let winner_text = |winner: Option<Uuid>| -> String {
         match winner {
-            Some(id) if id == daily.user_id() => "you win".to_string(),
-            Some(id) => format!("{} wins", name_for(board, id)),
-            None => "no winner".to_string(),
+            Some(id) if id == daily.user_id() => i18n::tr("chat.you_win").to_string(),
+            Some(id) => i18n::trf("chat.player_wins", &[("name", &name_for(board, id))]),
+            None => i18n::tr("chat.no_winner").to_string(),
         }
     };
     let won = detail.row.winner_user_id == Some(daily.user_id());
@@ -455,39 +452,36 @@ pub(super) fn result_banner(
     };
     match detail.row.result.as_str() {
         DailyMatch::RESULT_CHECKMATE => {
-            ("Checkmate", winner_text(detail.row.winner_user_id), color)
+            (i18n::tr("chat.checkmate"), winner_text(detail.row.winner_user_id), color)
         }
-        DailyMatch::RESULT_DRAW => ("Draw", "game drawn".to_string(), theme::TEXT_MUTED()),
-        DailyMatch::RESULT_RESIGN => ("Resignation", winner_text(detail.row.winner_user_id), color),
+        DailyMatch::RESULT_DRAW => (i18n::tr("chat.draw"), i18n::tr("chat.game_drawn").to_string(), theme::TEXT_MUTED()),
+        DailyMatch::RESULT_RESIGN => (i18n::tr("chat.resignation_label"), winner_text(detail.row.winner_user_id), color),
         DailyMatch::RESULT_FLEET_SUNK => {
-            ("Fleet sunk", winner_text(detail.row.winner_user_id), color)
+            (i18n::tr("chat.fleet_sunk"), winner_text(detail.row.winner_user_id), color)
         }
         DailyMatch::RESULT_FOUR_IN_A_ROW => (
-            "Four in a row",
+            i18n::tr("chat.four_row"),
             winner_text(detail.row.winner_user_id),
             color,
         ),
         DailyMatch::RESULT_MOST_DISCS => {
-            ("Most discs", winner_text(detail.row.winner_user_id), color)
+            (i18n::tr("chat.most_discs"), winner_text(detail.row.winner_user_id), color)
         }
-        DailyMatch::RESULT_NO_MOVES => ("Game over", winner_text(detail.row.winner_user_id), color),
+        DailyMatch::RESULT_NO_MOVES => (i18n::tr("chat.game_over"), winner_text(detail.row.winner_user_id), color),
         DailyMatch::RESULT_BORNE_OFF => {
-            ("Borne off", winner_text(detail.row.winner_user_id), color)
+            (i18n::tr("chat.borne_off"), winner_text(detail.row.winner_user_id), color)
         }
         DailyMatch::RESULT_TIMEOUT => (
-            "Timeout",
-            format!(
-                "{} on the 24h clock",
-                winner_text(detail.row.winner_user_id)
-            ),
+            i18n::tr("chat.timeout_label"),
+            i18n::trf("chat.timeout_text", &[("winner", &winner_text(detail.row.winner_user_id))]),
             color,
         ),
         _ if detail.row.status == DailyMatch::STATUS_CANCELLED => (
-            "Cancelled",
-            "challenge withdrawn".to_string(),
+            i18n::tr("chat.cancelled_label"),
+            i18n::tr("chat.challenge_withdrawn").to_string(),
             theme::TEXT_MUTED(),
         ),
-        _ => ("Finished", winner_text(detail.row.winner_user_id), color),
+        _ => (i18n::tr("chat.finished_label"), winner_text(detail.row.winner_user_id), color),
     }
 }
 
@@ -640,7 +634,7 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
     };
     if board.spectating {
         spans.push(Span::styled(
-            "watching   ".to_string(),
+            format!("{}   ", i18n::tr("chat.watching")),
             Style::default().fg(theme::TEXT_DIM()),
         ));
     } else if detail.is_active() {
@@ -686,20 +680,20 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, chess: &ChessDetail) {
     // nowhere else to live: the full move list.
     let mut lines = vec![
         Line::from(Span::styled(
-            "Chess".to_string(),
+            i18n::tr("chat.chess_tagline"),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),
         )),
         Line::from(Span::styled(
-            "one move per day".to_string(),
+            i18n::tr("chat.one_move_day").to_string(),
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
         )),
         Line::raw(""),
         Line::from(Span::styled(
-            "Moves".to_string(),
+            i18n::tr("chat.moves_title").to_string(),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -718,7 +712,7 @@ fn append_moves(lines: &mut Vec<Line<'static>>, chess: &ChessDetail, budget: usi
     let history = &chess.state.move_history;
     if history.is_empty() {
         lines.push(Line::from(Span::styled(
-            "no moves yet",
+            i18n::tr("chat.no_moves_yet"),
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),

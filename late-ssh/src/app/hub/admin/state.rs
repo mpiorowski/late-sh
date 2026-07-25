@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::app::{
-    common::primitives::Banner,
+    common::{i18n, primitives::Banner},
     hub::{dailies::svc::QuestService, shop::svc::ShopService},
 };
 
@@ -281,7 +281,7 @@ impl AdminState {
                     }
                     self.sync_draft_to_selected();
                     self.dirty = false;
-                    banner = Some(Banner::success("Saved reward template"));
+                    banner = Some(Banner::success(i18n::tr("banner.saved_reward_template")));
                 }
                 AdminAsyncResult::SavedShop(row) => {
                     self.saving = false;
@@ -292,7 +292,7 @@ impl AdminState {
                     }
                     self.sync_draft_to_selected();
                     self.dirty = false;
-                    banner = Some(Banner::success("Saved shop item"));
+                    banner = Some(Banner::success(i18n::tr("banner.saved_shop_item")));
                 }
                 AdminAsyncResult::Failed(message) => {
                     self.loading = false;
@@ -469,7 +469,7 @@ impl AdminState {
         self.editing = false;
         self.edit_buffer.clear();
         self.edit_cursor = 0;
-        Some(Banner::success("Edit cancelled"))
+        Some(Banner::success(i18n::tr("banner.edit_cancelled")))
     }
 
     pub(crate) fn commit_edit(&mut self) -> Option<Banner> {
@@ -478,7 +478,7 @@ impl AdminState {
         }
         let value = self.edit_buffer.trim().to_string();
         if value.is_empty() {
-            return Some(Banner::error("Value cannot be empty"));
+            return Some(Banner::error(i18n::tr("banner.value_not_empty")));
         }
         let field = self.selected_field();
         let draft = self.draft.as_mut()?;
@@ -493,7 +493,7 @@ impl AdminState {
         self.edit_buffer.clear();
         self.edit_cursor = 0;
         self.dirty = true;
-        Some(Banner::success("Draft updated"))
+        Some(Banner::success(i18n::tr("banner.draft_updated")))
     }
 
     pub(crate) fn push_edit_char(&mut self, ch: char) {
@@ -590,7 +590,7 @@ impl AdminState {
             },
         }
         self.dirty = true;
-        Some(Banner::success("Draft updated"))
+        Some(Banner::success(i18n::tr("banner.draft_updated")))
     }
 
     pub(crate) fn reload(&mut self, is_admin: bool) {
@@ -621,10 +621,10 @@ impl AdminState {
 
     pub(crate) fn save(&mut self, is_admin: bool) -> Option<Banner> {
         if !is_admin {
-            return Some(Banner::error("Admin access required"));
+            return Some(Banner::error(i18n::tr("banner.admin_required")));
         }
         if self.saving {
-            return Some(Banner::success("Save already in progress"));
+            return Some(Banner::success(i18n::tr("banner.save_in_progress")));
         }
         let draft = self.draft.clone()?;
         let saving_message = match draft.kind() {

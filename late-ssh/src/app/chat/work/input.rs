@@ -1,3 +1,4 @@
+use crate::app::common::i18n;
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 
@@ -85,7 +86,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         }
         b'e' | b'E' => {
             if !app.chat.work.start_editing_selected() {
-                app.banner = Some(Banner::error("not your work profile"));
+                app.banner = Some(Banner::error(i18n::tr("chat.work_err_not_yours")));
             }
             true
         }
@@ -96,7 +97,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                 .map_or(&*app.connect_url, |p| p.0);
             if let Some(url) = app.chat.work.copy_selected_profile_url(base_url) {
                 app.pending_clipboard = Some(url);
-                app.banner = Some(Banner::success("Work profile link copied!"));
+                app.banner = Some(Banner::success(i18n::tr("chat.work_link_copied")));
             }
             true
         }
@@ -117,9 +118,9 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         b'/' => {
             app.chat.work.toggle_mine_only();
             let banner = if app.chat.work.mine_only() {
-                Banner::success("Showing only your work profile.")
+                Banner::success(i18n::tr("chat.work_mine"))
             } else {
-                Banner::success("Showing all work profiles.")
+                Banner::success(i18n::tr("chat.work_all"))
             };
             app.banner = Some(banner);
             true

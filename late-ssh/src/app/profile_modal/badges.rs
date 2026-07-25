@@ -9,7 +9,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::app::common::theme;
+use crate::app::common::{i18n, theme};
 
 pub(crate) const PREVIEW_LIMIT: usize = 6;
 
@@ -38,7 +38,7 @@ pub(crate) fn preview_lines(awards: &[ProfileAward]) -> Vec<Line<'static>> {
     let remaining = awards.len().saturating_sub(PREVIEW_LIMIT);
     if remaining > 0 {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(format!("+{remaining} more"), dim));
+        spans.push(Span::styled(i18n::trf("profile.modal.badges_more", &[("count", &remaining.to_string())]), dim));
     }
 
     lines.push(Line::from(spans));

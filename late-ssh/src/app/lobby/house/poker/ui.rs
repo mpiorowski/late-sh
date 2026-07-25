@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use crate::app::{
-    common::theme,
+    common::{i18n, theme},
     games::cards::{AsciiCardTheme, CardSuit, PlayingCard},
     lobby::house::{
         game_ui::key_hint,
@@ -127,7 +127,7 @@ fn draw_dealer_block(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsh
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "── DEALER / BOARD ──",
+            i18n::tr("chat.poker_dealer_board"),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -138,9 +138,9 @@ fn draw_dealer_block(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsh
     draw_community_cards(frame, cards_area, snapshot, card_theme);
 
     let hand = if snapshot.hand_number == 0 {
-        "waiting…".to_string()
+        i18n::tr("chat.waiting").to_string()
     } else {
-        format!("hand {} · {}", snapshot.hand_number, snapshot.phase.label())
+        i18n::trf("chat.poker_hand", &[("n", &snapshot.hand_number.to_string()), ("phase", snapshot.phase.label())])
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -198,16 +198,16 @@ fn draw_felt_divider(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsh
         return;
     }
     let label = match snapshot.dealer_button {
-        Some(index) => format!("button seat {}", index + 1),
-        None => "waiting for dealer button".to_string(),
+        Some(index) => i18n::trf("chat.poker_button_seat", &[("n", &(index + 1).to_string())]),
+        None => i18n::tr("chat.poker_waiting_button").to_string(),
     };
     let label = if snapshot.current_bet > 0 {
         format!(
-            "{label} · pot {} · bet {}",
-            snapshot.pot, snapshot.current_bet
+            "{label} · {}",
+            i18n::trf("chat.poker_pot_bet", &[("pot", &snapshot.pot.to_string()), ("bet", &snapshot.current_bet.to_string())])
         )
     } else {
-        format!("{label} · pot {}", snapshot.pot)
+        format!("{label} · {}", i18n::trf("chat.poker_pot", &[("n", &snapshot.pot.to_string())]))
     };
     let chip_w = label.chars().count() + 6;
     let side_each = (area.width as usize).saturating_sub(chip_w) / 2;
@@ -299,7 +299,7 @@ fn draw_seat_panel_outline(
     draw_seat_cards(frame, rows[0], state, seat, AsciiCardTheme::Outline);
     let status = if seat.user_id.is_none() {
         Line::from(Span::styled(
-            "press s to sit",
+            i18n::tr("chat.bj_press_sit"),
             Style::default()
                 .fg(theme::AMBER_DIM())
                 .add_modifier(Modifier::BOLD),
@@ -422,7 +422,7 @@ fn seat_committed_line(seat: &PokerSeat) -> Line<'static> {
         return Line::from("");
     }
     Line::from(vec![
-        Span::styled("pot ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(i18n::tr("chat.poker_pot_prefix"), Style::default().fg(theme::TEXT_DIM())),
         Span::styled(
             seat.committed.to_string(),
             Style::default().fg(theme::AMBER()),
@@ -435,7 +435,7 @@ fn seat_balance_line(seat: &PokerSeat) -> Line<'static> {
         return Line::from("");
     }
     Line::from(vec![
-        Span::styled("stk ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(i18n::tr("chat.poker_stk"), Style::default().fg(theme::TEXT_DIM())),
         Span::styled(
             seat.balance.to_string(),
             Style::default().fg(theme::SUCCESS()),
@@ -445,7 +445,7 @@ fn seat_balance_line(seat: &PokerSeat) -> Line<'static> {
 
 fn identity_span(seat: &PokerSeat, is_you: bool, usernames: &UsernameLookup<'_>) -> Span<'static> {
     let Some(user_id) = seat.user_id else {
-        return Span::styled("open", Style::default().fg(theme::TEXT_DIM()));
+        return Span::styled(i18n::tr("chat.bj_open"), Style::default().fg(theme::TEXT_DIM()));
     };
     let name = usernames
         .get(&user_id)
@@ -522,7 +522,7 @@ fn draw_seat_cards(
 fn compact_seat_cards_line(state: &State, seat: &PokerSeat) -> Line<'static> {
     if seat.user_id.is_none() {
         return Line::from(Span::styled(
-            "press s",
+            i18n::tr("chat.bj_press_sit"),
             Style::default()
                 .fg(theme::AMBER_DIM())
                 .add_modifier(Modifier::BOLD),
@@ -569,13 +569,13 @@ fn seat_status_line(
 ) -> Line<'static> {
     if seat.user_id.is_none() {
         return Line::from(Span::styled(
-            "to sit",
+            i18n::tr("chat.poker_to_sit"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
     if seat.pending {
         return Line::from(Span::styled(
-            "pending",
+            i18n::tr("chat.poker_pending"),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -583,7 +583,7 @@ fn seat_status_line(
     }
     if snapshot.winners.contains(&seat.index) {
         return Line::from(Span::styled(
-            "showdown",
+            i18n::tr("chat.poker_showdown"),
             Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
@@ -591,13 +591,13 @@ fn seat_status_line(
     }
     if seat.folded {
         return Line::from(Span::styled(
-            "folded",
+            i18n::tr("chat.poker_folded"),
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
     if seat.all_in {
         return Line::from(Span::styled(
-            "all-in",
+            i18n::tr("chat.poker_all_in"),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -605,9 +605,9 @@ fn seat_status_line(
     }
     if snapshot.active_seat == Some(seat.index) {
         let label = if state.seat_index() == Some(seat.index) {
-            "your turn"
+            i18n::tr("chat.your_turn")
         } else {
-            "acting…"
+            i18n::tr("chat.poker_acting")
         };
         return Line::from(Span::styled(
             label,
@@ -623,10 +623,10 @@ fn seat_status_line(
         ));
     }
     if seat.in_hand {
-        Line::from(Span::styled("in hand", Style::default().fg(theme::TEXT())))
+        Line::from(Span::styled(i18n::tr("chat.poker_in_hand"), Style::default().fg(theme::TEXT())))
     } else {
         Line::from(Span::styled(
-            "seated",
+            i18n::tr("chat.poker_seated"),
             Style::default().fg(theme::TEXT_DIM()),
         ))
     }
@@ -636,10 +636,11 @@ fn seat_bet_balance_line(seat: &PokerSeat) -> Line<'static> {
     if seat.user_id.is_none() {
         return Line::from(Span::raw(""));
     }
+    let stk = i18n::tr("chat.poker_stk");
     let text = if seat.committed > 0 {
-        format!("stk {} · pot {}", seat.balance, seat.committed)
+        format!("{stk}{} · pot {}", seat.balance, seat.committed)
     } else {
-        format!("stk {}", seat.balance)
+        format!("{stk}{}", seat.balance)
     };
     Line::from(Span::styled(text, Style::default().fg(theme::SUCCESS())))
 }
@@ -652,9 +653,9 @@ fn seat_badge_line(
     let mut spans = Vec::new();
     if is_winner {
         let label = if seat.last_payout > 0 {
-            format!("WIN +{}", seat.last_payout)
+            i18n::trf("chat.poker_win_plus", &[("n", &seat.last_payout.to_string())])
         } else {
-            "WIN".to_string()
+            i18n::tr("chat.poker_win").to_string()
         };
         spans.push(Span::styled(
             label,
@@ -664,7 +665,7 @@ fn seat_badge_line(
         ));
     } else if snapshot.dealer_button == Some(seat.index) {
         spans.push(Span::styled(
-            "button",
+            i18n::tr("chat.poker_button"),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -720,26 +721,26 @@ fn draw_table_compact(
 ) {
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("Board: ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!("{} ", i18n::tr("chat.board_label")), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 render_cards_compact(&snapshot.community),
                 Style::default().fg(theme::TEXT_BRIGHT()),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Phase: ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!("{} ", i18n::tr("chat.phase_label")), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 snapshot.phase.label(),
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  Pot: ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!("  {} ", i18n::tr("chat.pot_label")), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 snapshot.pot.to_string(),
                 Style::default().fg(theme::AMBER()),
             ),
-            Span::styled("  Bet: ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(format!("  {} ", i18n::tr("chat.bet_label_compact")), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 snapshot.current_bet.to_string(),
                 Style::default().fg(theme::AMBER()),
@@ -784,14 +785,14 @@ fn compact_seat_line(
     usernames: &UsernameLookup<'_>,
 ) -> Line<'static> {
     let label = if is_you {
-        format!("Seat {} You", seat.index + 1)
+        i18n::trf("chat.bj_seat_you", &[("n", &(seat.index + 1).to_string())])
     } else {
-        format!("Seat {}", seat.index + 1)
+        i18n::trf("chat.bj_seat_n", &[("n", &(seat.index + 1).to_string())])
     };
     let name = seat
         .user_id
         .and_then(|user_id| usernames.get(&user_id).cloned())
-        .unwrap_or_else(|| "open".to_string());
+        .unwrap_or_else(|| i18n::tr("chat.bj_open").to_string());
     let label_style = if is_you {
         Style::default().fg(theme::SUCCESS())
     } else if snapshot.active_seat == Some(seat.index) {
@@ -803,9 +804,10 @@ fn compact_seat_line(
     let action = seat
         .last_action
         .map(action_label)
-        .unwrap_or(if seat.folded { "folded" } else { "" });
+        .unwrap_or(if seat.folded { i18n::tr("chat.poker_folded") } else { "" });
+    let stk = i18n::tr("chat.poker_stk");
     let stack = if seat.user_id.is_some() {
-        format!(" stk {:<5}", seat.balance)
+        format!(" {stk}{:<5}", seat.balance)
     } else {
         String::new()
     };
@@ -917,22 +919,22 @@ fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {
 
 fn auto_check_fold_hint(state: &State) -> &'static str {
     if state.auto_check_fold() {
-        "X auto on"
+        i18n::tr("chat.auto_check_fold_on")
     } else {
-        "X auto"
+        i18n::tr("chat.auto_check_fold")
     }
 }
 
 fn action_label(action: PokerAction) -> &'static str {
     match action {
-        PokerAction::SmallBlind => "small blind",
-        PokerAction::BigBlind => "big blind",
-        PokerAction::Check => "check",
-        PokerAction::Call => "call",
-        PokerAction::Bet => "bet",
-        PokerAction::Raise => "raise",
-        PokerAction::Fold => "fold",
-        PokerAction::AllIn => "all-in",
+        PokerAction::SmallBlind => i18n::tr("chat.small_blind"),
+        PokerAction::BigBlind => i18n::tr("chat.big_blind"),
+        PokerAction::Check => i18n::tr("chat.check_action"),
+        PokerAction::Call => i18n::tr("chat.call_action"),
+        PokerAction::Bet => i18n::tr("chat.bet_action"),
+        PokerAction::Raise => i18n::tr("chat.raise_action"),
+        PokerAction::Fold => i18n::tr("chat.fold_action"),
+        PokerAction::AllIn => i18n::tr("chat.all_in_action"),
     }
 }
 

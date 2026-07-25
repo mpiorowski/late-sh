@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
+    i18n,
     overlay::{Overlay, draw_overlay},
     theme,
     username_effect::NameStyle,
@@ -193,21 +194,23 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     if !view.composing {
         return pick_title_that_fits(
             block_width,
-            &[" Compose (press i) ", " (press i) ", " i ", ""],
+            &[
+                i18n::tr("chat.ct_idle_full"),
+                i18n::tr("chat.ct_idle_short"),
+                i18n::tr("chat.ct_idle_min"),
+                i18n::tr("chat.ct_short_empty"),
+            ],
         )
         .to_string();
     }
 
     if let Some(author) = view.reply_author {
         if view.keep_composer_focused {
-            let long = format!(
-                " Reply to @{author} (Enter send & stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
-            );
-            let mid =
-                format!(" Reply to @{author} (⏎ send & stay, Alt+⏎/Ctrl+J newline, Esc cancel) ");
-            let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
-            let minimal = format!(" Reply to @{author} (Esc) ");
-            let name_only = format!(" Reply to @{author} ");
+            let long = i18n::trf("chat.ct_reply_ko_a", &[("author", author)]);
+            let mid = i18n::trf("chat.ct_reply_ko_b", &[("author", author)]);
+            let short = i18n::trf("chat.ct_reply_ko_c", &[("author", author)]);
+            let minimal = i18n::trf("chat.ct_reply_ko_d", &[("author", author)]);
+            let name_only = i18n::trf("chat.ct_reply_ko_e", &[("author", author)]);
             return pick_title_that_fits(
                 block_width,
                 &[
@@ -216,21 +219,18 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
                     short.as_str(),
                     minimal.as_str(),
                     name_only.as_str(),
-                    " Reply ",
-                    " Esc ",
-                    "",
+                    i18n::tr("chat.ct_reply_ko_f"),
+                    i18n::tr("chat.ct_reply_ko_g"),
+                    i18n::tr("chat.ct_short_empty"),
                 ],
             )
             .to_string();
         }
-        let long = format!(
-            " Reply to @{author} (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
-        );
-        let mid =
-            format!(" Reply to @{author} (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ");
-        let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
-        let minimal = format!(" Reply to @{author} (Esc) ");
-        let name_only = format!(" Reply to @{author} ");
+        let long = i18n::trf("chat.ct_reply_a", &[("author", author)]);
+        let mid = i18n::trf("chat.ct_reply_b", &[("author", author)]);
+        let short = i18n::trf("chat.ct_reply_c", &[("author", author)]);
+        let minimal = i18n::trf("chat.ct_reply_d", &[("author", author)]);
+        let name_only = i18n::trf("chat.ct_reply_e", &[("author", author)]);
         return pick_title_that_fits(
             block_width,
             &[
@@ -239,9 +239,9 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
                 short.as_str(),
                 minimal.as_str(),
                 name_only.as_str(),
-                " Reply ",
-                " Esc ",
-                "",
+                i18n::tr("chat.ct_short_reply"),
+                i18n::tr("chat.ct_short_esc"),
+                i18n::tr("chat.ct_short_empty"),
             ],
         )
         .to_string();
@@ -252,14 +252,14 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
             return pick_title_that_fits(
                 block_width,
                 &[
-                    " Edit message (Enter save & stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
-                    " Edit message (⏎ save & stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
-                    " Edit message (⏎ save, Esc cancel) ",
-                    " Edit message (Esc) ",
-                    " Edit message ",
-                    " Edit ",
-                    " Esc ",
-                    "",
+                    i18n::tr("chat.ct_edit_ko_a"),
+                    i18n::tr("chat.ct_edit_ko_b"),
+                    i18n::tr("chat.ct_edit_ko_c"),
+                    i18n::tr("chat.ct_edit_ko_d"),
+                    i18n::tr("chat.ct_edit_ko_e"),
+                    i18n::tr("chat.ct_edit_ko_f"),
+                    i18n::tr("chat.ct_short_esc"),
+                    i18n::tr("chat.ct_short_empty"),
                 ],
             )
             .to_string();
@@ -267,14 +267,14 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
         return pick_title_that_fits(
             block_width,
             &[
-                " Edit message (Enter save, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
-                " Edit message (⏎ save, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
-                " Edit message (⏎ save, Esc cancel) ",
-                " Edit message (Esc) ",
-                " Edit message ",
-                " Edit ",
-                " Esc ",
-                "",
+                i18n::tr("chat.ct_edit_a"),
+                i18n::tr("chat.ct_edit_b"),
+                i18n::tr("chat.ct_edit_c"),
+                i18n::tr("chat.ct_edit_d"),
+                i18n::tr("chat.ct_edit_e"),
+                i18n::tr("chat.ct_short_edit"),
+                i18n::tr("chat.ct_short_esc"),
+                i18n::tr("chat.ct_short_empty"),
             ],
         )
         .to_string();
@@ -284,14 +284,14 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
         return pick_title_that_fits(
             block_width,
             &[
-                " Compose (Enter send & stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
-                " (Enter send & stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
-                " (⏎ send & stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
-                " Compose (Enter send, Esc cancel) ",
-                " (⏎ send, Esc cancel) ",
-                " (Esc cancel) ",
-                " Esc ",
-                "",
+                i18n::tr("chat.ct_compose_ko_a"),
+                i18n::tr("chat.ct_compose_ko_b"),
+                i18n::tr("chat.ct_compose_ko_c"),
+                i18n::tr("chat.ct_compose_ko_d"),
+                i18n::tr("chat.ct_compose_ko_e"),
+                i18n::tr("chat.ct_compose_ko_f"),
+                i18n::tr("chat.ct_short_esc"),
+                i18n::tr("chat.ct_short_empty"),
             ],
         )
         .to_string();
@@ -300,14 +300,14 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     pick_title_that_fits(
         block_width,
         &[
-            " Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
-            " (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
-            " (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
-            " Compose (Enter send, Esc cancel) ",
-            " (⏎ send, Esc cancel) ",
-            " (Esc cancel) ",
-            " Esc ",
-            "",
+            i18n::tr("chat.ct_compose_a"),
+            i18n::tr("chat.ct_compose_b"),
+            i18n::tr("chat.ct_compose_c"),
+            i18n::tr("chat.ct_compose_d"),
+            i18n::tr("chat.ct_compose_e"),
+            i18n::tr("chat.ct_compose_f"),
+            i18n::tr("chat.ct_short_esc"),
+            i18n::tr("chat.ct_short_empty"),
         ],
     )
     .to_string()
@@ -318,7 +318,7 @@ fn reaction_picker_choice_width(key: i16) -> usize {
 }
 
 fn reaction_picker_custom_width() -> usize {
-    "0 icon".width()
+    "0".width() + i18n::tr("chat.ac_icon").width()
 }
 
 fn push_reaction_picker_choice(reaction_spans: &mut Vec<Span<'static>>, dim: Style, key: i16) {
@@ -372,7 +372,7 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     ));
-    current_spans.push(Span::styled(" icon", dim));
+    current_spans.push(Span::styled(i18n::tr("chat.ac_icon"), dim));
     current_width += custom_width;
 
     let owner_hint_width = 8;
@@ -387,7 +387,7 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     ));
-    current_spans.push(Span::styled(" list", dim));
+    current_spans.push(Span::styled(i18n::tr("chat.ac_list"), dim));
 
     lines.push(Line::from(current_spans));
     lines
@@ -397,37 +397,29 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
     let dim = Style::default().fg(theme::TEXT_DIM());
 
     if view.composing {
-        return Paragraph::new(Line::from(vec![
-            Span::styled(
-                "T",
-                Style::default()
-                    .fg(theme::BG_CANVAS())
-                    .bg(theme::TEXT_DIM()),
-            ),
-            Span::styled("ype a message...", dim),
-        ]));
+        return Paragraph::new(Line::from(vec![Span::styled(i18n::tr("chat.placeholder"), dim)]));
     }
 
     let placeholder = if view.reaction_picker_active {
         reaction_picker_placeholder_lines(dim, width)
     } else if view.selected_image_message {
         vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · Enter view image",
+            i18n::tr("chat.hint_image_selected"),
             dim,
         ))]
     } else if view.selected_news_message {
         vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link",
+            i18n::tr("chat.hint_news_selected"),
             dim,
         ))]
     } else if view.selected_message {
         vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · Enter jump to reply",
+            i18n::tr("chat.hint_msg_selected"),
             dim,
         ))]
     } else {
         vec![Line::from(Span::styled(
-            "Type a message · j/k select · Ctrl+] icon picker · or just ask @bot about anything",
+            i18n::tr("chat.hint_idle"),
             dim,
         ))]
     };
@@ -780,7 +772,7 @@ fn draw_poll_strip(frame: &mut Frame, area: Rect, poll: &ActiveChatPoll) {
     let question_budget = inner_width.saturating_sub(meta_width + 10).max(4);
     let question = truncate_cells(poll.poll.question.as_str(), question_budget);
     let title_left = Line::from(vec![Span::styled(
-        format!(" Poll · {question} "),
+        format!("{}{question} ", i18n::tr("chat.poll_prefix")),
         Style::default()
             .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD),
@@ -798,7 +790,7 @@ fn draw_poll_strip(frame: &mut Frame, area: Rect, poll: &ActiveChatPoll) {
     if poll.options.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                " No options yet ",
+                i18n::tr("chat.poll_no_options"),
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .style(bg),
@@ -854,22 +846,21 @@ fn poll_meta_spans(remaining_secs: i64, total_votes: i64) -> Vec<Span<'static>> 
     let faint = Style::default().fg(theme::TEXT_FAINT());
     let mut spans = vec![Span::styled(" ", dim)];
     if remaining_secs <= 0 {
-        spans.push(Span::styled("ended", faint));
+        spans.push(Span::styled(i18n::tr("chat.poll_ended"), faint));
     } else {
-        spans.push(Span::styled("ends in ", dim));
+        spans.push(Span::styled(i18n::tr("chat.poll_ends_in"), dim));
         spans.push(Span::styled(
             format_poll_remaining(remaining_secs),
             Style::default().fg(theme::AMBER()),
         ));
     }
     spans.push(Span::styled(" · ", faint));
-    spans.push(Span::styled(
-        format!(
-            "{total_votes} vote{}",
-            if total_votes == 1 { "" } else { "s" }
-        ),
-        dim,
-    ));
+    let vote_text = if total_votes == 1 {
+        i18n::trf("chat.poll_votes", &[("n", &total_votes.to_string())])
+    } else {
+        i18n::trf("chat.poll_votes_plural", &[("n", &total_votes.to_string())])
+    };
+    spans.push(Span::styled(vote_text, dim));
     spans.push(Span::styled(" ", dim));
     spans
 }
@@ -1095,7 +1086,7 @@ pub fn draw_dashboard_chat_card(
     let mut chat_hits: Option<Vec<ChatRowHit>> = None;
     if view.messages.is_empty() {
         lines = vec![Line::from(Span::styled(
-            "No messages yet.",
+            i18n::tr("chat.no_messages"),
             Style::default().fg(theme::TEXT_DIM()),
         ))];
     } else {
@@ -1357,7 +1348,7 @@ fn push_new_messages_divider(
     row_kind: &mut Vec<RowKindLite>,
     width: usize,
 ) {
-    let label = " new messages ";
+    let label = i18n::tr("chat.new_messages");
     let rule_width = width.saturating_sub(label.len()).max(2);
     let left = rule_width / 2;
     let right = rule_width.saturating_sub(left);
@@ -1418,7 +1409,7 @@ fn ensure_chat_rows_cache(
         // also bumps it; we treat that as close enough rather than tracking a
         // dedicated edited flag).
         if msg.updated > msg.created {
-            stamp.push_str(" (edited)");
+            stamp.push_str(i18n::tr("chat.edited"));
         }
         let raw_author = ctx
             .usernames
@@ -1745,7 +1736,7 @@ fn draw_image_modal(
             .max(5)
             .min(max_popup_height)
             .max(1);
-        let title = pick_title_that_fits(popup_width, &[" Image Preview ", " Image ", ""]);
+        let title = pick_title_that_fits(popup_width, &[i18n::tr("chat.img_preview"), i18n::tr("chat.img_preview_short"), i18n::tr("chat.ct_short_empty")]);
         let popup = centered_rect_in(anchor, popup_width, popup_height);
         frame.render_widget(Clear, popup);
 
@@ -1802,7 +1793,7 @@ fn draw_image_modal(
         .max(5)
         .min(max_popup_height)
         .max(1);
-    let title = pick_title_that_fits(popup_width, &[" Image Preview ", " Image ", ""]);
+    let title = pick_title_that_fits(popup_width, &[i18n::tr("chat.img_preview"), i18n::tr("chat.img_preview_short"), i18n::tr("chat.ct_short_empty")]);
     let popup = centered_rect_in(anchor, popup_width, popup_height);
     frame.render_widget(Clear, popup);
 
@@ -1872,7 +1863,7 @@ fn image_modal_fallback_lines(view: ImageModalView<'_>) -> Vec<Line<'static>> {
 
     vec![
         Line::from(Span::styled(
-            "Loading image preview...",
+            i18n::tr("chat.img_loading"),
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::from(Span::styled(
@@ -1888,21 +1879,21 @@ fn image_modal_footer(width: u16) -> Line<'static> {
     if width >= 32 {
         return Line::from(vec![
             Span::styled(" Enter/c", key),
-            Span::styled(" copy", dim),
+            Span::styled(i18n::tr("chat.img_copy"), dim),
             Span::styled("  · ", Style::default().fg(theme::BORDER())),
             Span::styled("Esc/q", key),
-            Span::styled(" close", dim),
+            Span::styled(i18n::tr("chat.img_close"), dim),
         ]);
     }
     if width >= 20 {
         return Line::from(vec![
             Span::styled(" Enter", key),
-            Span::styled(" copy ", dim),
+            Span::styled(format!("{} ", i18n::tr("chat.img_copy").trim()), dim),
             Span::styled("Esc", key),
-            Span::styled(" close", dim),
+            Span::styled(i18n::tr("chat.img_close"), dim),
         ]);
     }
-    Line::from(vec![Span::styled("Esc", key), Span::styled(" close", dim)])
+    Line::from(vec![Span::styled("Esc", key), Span::styled(i18n::tr("chat.img_close"), dim)])
 }
 
 fn line_display_width(line: &Line<'_>) -> usize {
@@ -2304,9 +2295,9 @@ pub(crate) fn draw_mention_autocomplete(
     frame.render_widget(Clear, popup);
 
     let title = match first_prefix {
-        "/" => " /commands ",
-        "#" => " #rooms ",
-        _ => " @mentions ",
+        "/" => i18n::tr("chat.ac_commands"),
+        "#" => i18n::tr("chat.ac_rooms"),
+        _ => i18n::tr("chat.ac_mentions"),
     };
     let block = Block::default()
         .title(title)
@@ -2627,7 +2618,7 @@ pub fn draw_embedded_room_chat(
     let chat_hits = visible.hits;
     let lines = if visible.lines.is_empty() {
         vec![Line::from(Span::styled(
-            "No messages yet",
+            i18n::tr("chat.emb_no_messages"),
             Style::default().fg(theme::TEXT_DIM()),
         ))]
     } else {
@@ -2911,7 +2902,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             && view.selected_room_id == Some(room_id)
     };
 
-    push_row(section_divider("Core"), None, false);
+    push_row(section_divider(i18n::tr("chat.rl_core")), None, false);
     let core_order = ["lounge", "announcements", "suggestions", "bugs"];
     for slug in &core_order {
         if let Some((room, _)) = chat_rooms
@@ -2964,9 +2955,9 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             Style::default().fg(theme::TEXT())
         };
         let label = if view.notifications_unread_count > 0 {
-            format!("{prefix}mentions ({})", view.notifications_unread_count)
+            format!("{prefix}{} ({})", i18n::tr("chat.rl_mentions"), view.notifications_unread_count)
         } else {
-            format!("{prefix}mentions")
+            format!("{prefix}{}", i18n::tr("chat.rl_mentions"))
         };
         Line::from(Span::styled(label, style))
     };
@@ -2990,9 +2981,9 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             Style::default().fg(theme::TEXT())
         };
         let label = if view.news_unread_count > 0 {
-            format!("{prefix}news ({})", view.news_unread_count)
+            format!("{prefix}{} ({})", i18n::tr("chat.rl_news"), view.news_unread_count)
         } else {
-            format!("{prefix}news")
+            format!("{prefix}{}", i18n::tr("chat.rl_news"))
         };
         Line::from(Span::styled(label, style))
     };
@@ -3013,9 +3004,9 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
                 Style::default().fg(theme::TEXT())
             };
             let label = if view.feeds_unread_count > 0 {
-                format!("{prefix}rss ({})", view.feeds_unread_count)
+                format!("{prefix}{} ({})", i18n::tr("chat.rl_rss"), view.feeds_unread_count)
             } else {
-                format!("{prefix}rss")
+                format!("{prefix}{}", i18n::tr("chat.rl_rss"))
             };
             Line::from(Span::styled(label, style))
         };
@@ -3031,7 +3022,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     public_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !public_rooms.is_empty() {
         push_row(Line::from(""), None, false);
-        push_row(section_divider("Public"), None, false);
+        push_row(section_divider(i18n::tr("chat.rl_public")), None, false);
         for (room, _) in &public_rooms {
             let is_selected = room_selected(room.id);
             push_row(
@@ -3056,7 +3047,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     private_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !private_rooms.is_empty() {
         push_row(Line::from(""), None, false);
-        push_row(section_divider("Private"), None, false);
+        push_row(section_divider(i18n::tr("chat.rl_private")), None, false);
         for (room, _) in &private_rooms {
             let is_selected = room_selected(room.id);
             push_row(
@@ -3085,7 +3076,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     });
     if !dm_rooms.is_empty() {
         push_row(Line::from(""), None, false);
-        push_row(section_divider("DMs"), None, false);
+        push_row(section_divider(i18n::tr("chat.rl_dms")), None, false);
         for (room, _) in &dm_rooms {
             let is_selected = room_selected(room.id);
             push_row(
@@ -3114,7 +3105,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        let label = format!("{prefix}+ browse rooms");
+        let label = format!("{prefix}{}", i18n::tr("chat.rl_browse"));
         Line::from(Span::styled(label, style))
     };
     push_row(
@@ -3564,7 +3555,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         })
         .collect();
     if !bumped_slugs.is_empty() {
-        push_row(effect_section_header("bumped"), None, false);
+        push_row(effect_section_header(i18n::tr("chat.rl_bumped")), None, false);
         for slug in &bumped_slugs {
             push_row(
                 Line::from(Span::styled(
@@ -3682,12 +3673,12 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
             let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
             (label, unread)
         }
-        RoomSlot::Feeds => ("rss".to_string(), view.feeds_unread_count),
-        RoomSlot::News => ("news".to_string(), view.news_unread_count),
-        RoomSlot::Notifications => ("mentions".to_string(), view.notifications_unread_count),
-        RoomSlot::Discover => ("+ browse rooms".to_string(), 0),
-        RoomSlot::Showcase => ("showcase".to_string(), view.showcase_unread_count),
-        RoomSlot::Work => ("work".to_string(), view.work_unread_count),
+        RoomSlot::Feeds => (i18n::tr("chat.rl_rss").to_string(), view.feeds_unread_count),
+        RoomSlot::News => (i18n::tr("chat.rl_news").to_string(), view.news_unread_count),
+        RoomSlot::Notifications => (i18n::tr("chat.rl_mentions").to_string(), view.notifications_unread_count),
+        RoomSlot::Discover => (i18n::tr("chat.rl_browse").to_string(), 0),
+        RoomSlot::Showcase => (i18n::tr("chat.rl_showcase").to_string(), view.showcase_unread_count),
+        RoomSlot::Work => (i18n::tr("chat.rl_work").to_string(), view.work_unread_count),
     }
 }
 
@@ -3783,10 +3774,10 @@ fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
         Span::styled(s.to_string(), Style::default().fg(theme::TEXT_FAINT()))
     };
     vec![
-        Line::from(vec![key("h l space"), hint(" jump room")]),
-        Line::from(vec![key("f"), hint("         favorite")]),
-        Line::from(vec![key("[ ]/z"), hint("     sort/fold")]),
-        Line::from(vec![key("ctrl+/"), hint("    picker")]),
+        Line::from(vec![key("h l space"), hint(i18n::tr("chat.nav_jump"))]),
+        Line::from(vec![key("f"), hint(i18n::tr("chat.nav_fav"))]),
+        Line::from(vec![key("[ ]/z"), hint(i18n::tr("chat.nav_sort"))]),
+        Line::from(vec![key("ctrl+/"), hint(i18n::tr("chat.nav_picker"))]),
     ]
 }
 
@@ -3831,7 +3822,7 @@ pub fn draw_chat_center(
     terminal_images: &mut TerminalImageFrame,
 ) {
     if view.chat_rooms.is_empty() {
-        let empty = Paragraph::new("No chat rooms yet.")
+        let empty = Paragraph::new(i18n::tr("chat.no_rooms"))
             .style(Style::default().fg(theme::TEXT_DIM()))
             .centered();
         frame.render_widget(empty, area);
@@ -3974,7 +3965,7 @@ fn draw_selected_content(
 
             if visible.lines.is_empty() {
                 vec![Line::from(Span::styled(
-                    "No messages yet",
+                    i18n::tr("chat.emb_no_messages"),
                     Style::default().fg(theme::TEXT_DIM()),
                 ))]
             } else {
@@ -3982,7 +3973,7 @@ fn draw_selected_content(
             }
         } else {
             vec![Line::from(Span::styled(
-                "Select a room.",
+                i18n::tr("chat.select_room"),
                 Style::default().fg(theme::TEXT_DIM()),
             ))]
         };
@@ -4010,22 +4001,22 @@ fn draw_selected_content(
     if feeds_selected {
         if view.feeds_processing {
             let hint_block = Block::default()
-                .title(" Processing URL... ")
+                .title(i18n::tr("chat.feeds_processing"))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::AMBER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " Sharing RSS entry to news · Esc cancel",
+                i18n::tr("chat.feeds_sharing"),
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
             frame.render_widget(hint_text, composer_area);
         } else {
             let hint_block = Block::default()
-                .title(" RSS ")
+                .title(i18n::tr("chat.feeds_title"))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · s share · Enter copy link · d dismiss · r refresh",
+                i18n::tr("chat.feeds_hint"),
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
@@ -4033,11 +4024,11 @@ fn draw_selected_content(
         }
     } else if view.notifications_selected {
         let hint_block = Block::default()
-            .title(" Mentions ")
+            .title(i18n::tr("chat.notif_title"))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER()));
         let hint_text = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter preview message",
+            i18n::tr("chat.notif_hint"),
             Style::default().fg(theme::TEXT_DIM()),
         )))
         .block(hint_block);
@@ -4063,7 +4054,7 @@ fn draw_selected_content(
     } else if view.discover_selected {
         if view.discover_view.filtering {
             let filter_block = Block::default()
-                .title(" Filter rooms ")
+                .title(i18n::tr("chat.disc_filter_title"))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
             let filter_text = Paragraph::new(Line::from(vec![
@@ -4073,7 +4064,7 @@ fn draw_selected_content(
                 ),
                 Span::styled("_", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled(
-                    "   Enter join · Esc clear",
+                    i18n::tr("chat.disc_filter_hint"),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
             ]))
@@ -4081,11 +4072,11 @@ fn draw_selected_content(
             frame.render_widget(filter_text, composer_area);
         } else {
             let hint_block = Block::default()
-                .title(" Discover ")
+                .title(i18n::tr("chat.disc_title"))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter join room · / filter",
+                i18n::tr("chat.disc_hint"),
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
@@ -4095,12 +4086,12 @@ fn draw_selected_content(
         if view.news_processing || view.news_composing {
             let (title, border_style) = if view.news_processing {
                 (
-                    " Processing URL... ".to_string(),
+                    i18n::tr("chat.news_processing").to_string(),
                     Style::default().fg(theme::AMBER()),
                 )
             } else {
                 (
-                    " Paste URL (Enter submit, Esc cancel) ".to_string(),
+                    i18n::tr("chat.news_compose_title").to_string(),
                     Style::default().fg(theme::BORDER_ACTIVE()),
                 )
             };
@@ -4114,11 +4105,11 @@ fn draw_selected_content(
             frame.render_widget(view.news_composer, text_area);
         } else {
             let hint_block = Block::default()
-                .title(" Share URL ")
+                .title(i18n::tr("chat.news_title"))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter copy link · i paste URL · / filter mine",
+                i18n::tr("chat.news_hint"),
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);

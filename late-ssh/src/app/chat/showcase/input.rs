@@ -1,3 +1,4 @@
+use crate::app::common::i18n;
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 
@@ -90,7 +91,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         }
         b'e' | b'E' => {
             if !app.chat.showcase.start_editing_selected() {
-                app.banner = Some(Banner::error("not your showcase"));
+                app.banner = Some(Banner::error(i18n::tr("chat.showcase_err_not_yours")));
             }
             true
         }
@@ -98,7 +99,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             if let Some(url) = app.chat.showcase.copy_selected_url() {
                 let cleaned = crate::app::input::sanitize_paste_markers(&url);
                 app.pending_clipboard = Some(cleaned.trim().to_owned());
-                app.banner = Some(Banner::success("Link copied!"));
+                app.banner = Some(Banner::success(i18n::tr("chat.link_copied")));
             }
             true
         }
@@ -119,9 +120,9 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         b'/' => {
             app.chat.showcase.toggle_mine_only();
             let banner = if app.chat.showcase.mine_only() {
-                Banner::success("Showing only your showcases.")
+                Banner::success(i18n::tr("chat.showcase_mine"))
             } else {
-                Banner::success("Showing all showcases.")
+                Banner::success(i18n::tr("chat.showcase_all"))
             };
             app.banner = Some(banner);
             true

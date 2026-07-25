@@ -13,7 +13,7 @@ pub(crate) use state::{UltimateCast, UltimateState};
 pub(crate) use ui::{draw, handle_input, open_ultimate_modal};
 
 use crate::app::{
-    common::primitives::Banner,
+    common::{i18n, primitives::Banner},
     hub::shop::{state::ShopState, svc::ShopCatalogItem},
     state::App,
 };
@@ -63,7 +63,7 @@ impl App {
 
     pub(crate) fn cast_ultimate(&mut self, kind: UltimateKind) {
         if self.ultimate_state.has_active_effect() {
-            self.banner = Some(Banner::error("An ultimate is already active"));
+            self.banner = Some(Banner::error(i18n::tr("banner.ultimate_already_active")));
             return;
         }
         if let Some(remaining) = self.ultimate_state.cooldown_remaining(kind) {
@@ -89,7 +89,7 @@ impl App {
         };
         self.ultimate_state
             .set_cooldown(kind.id(), ULTIMATE_CAST_COOLDOWN);
-        self.banner = Some(Banner::success(&format!("Casting {}", kind.name())));
+        self.banner = Some(Banner::success(&i18n::trf("banner.casting_ultimate", &[("name", kind.name())])));
         tokio::spawn(async move {
             match service.try_claim_cast(user_id, kind).await {
                 Ok(claim) if claim.allowed => {

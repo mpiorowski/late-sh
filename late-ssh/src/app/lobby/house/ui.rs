@@ -13,7 +13,7 @@ use ratatui::{
 
 use crate::app::files::terminal_image::TerminalImageFrame;
 use crate::app::{
-    chat::ui::EmbeddedRoomChatView, common::theme, lobby::house::state::HouseTableClient,
+    chat::ui::EmbeddedRoomChatView, common::{i18n, theme}, lobby::house::state::HouseTableClient,
 };
 use crate::usernames::UsernameLookup;
 
@@ -27,7 +27,7 @@ pub(crate) fn draw(
 ) {
     let Some(client) = client else {
         frame.render_widget(
-            Paragraph::new("The table is closed. Press Esc to head back to the Lobby.")
+            Paragraph::new(i18n::tr("chat.table_closed"))
                 .style(Style::default().fg(theme::TEXT_DIM())),
             area,
         );

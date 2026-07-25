@@ -3,7 +3,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use crate::app::common::{composer, primitives::Banner};
+use crate::app::common::{composer, i18n, primitives::Banner};
 use late_core::models::showcase::ShowcaseParams;
 
 use super::svc::{self, ShowcaseEvent, ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
@@ -37,19 +37,19 @@ impl ComposerField {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Title => "Title",
-            Self::Url => "URL",
-            Self::Tags => "Tags (comma sep)",
-            Self::Description => "Description",
+            Self::Title => i18n::tr("chat.showcase_field_title"),
+            Self::Url => i18n::tr("chat.showcase_field_url"),
+            Self::Tags => i18n::tr("chat.showcase_field_tags"),
+            Self::Description => i18n::tr("chat.showcase_field_desc"),
         }
     }
 
     pub(crate) fn placeholder(self) -> &'static str {
         match self {
-            Self::Title => "Project name",
-            Self::Url => "https://...",
-            Self::Tags => "rust, cli, game",
-            Self::Description => "What is it? Why should we look?",
+            Self::Title => i18n::tr("chat.showcase_ph_title"),
+            Self::Url => i18n::tr("chat.showcase_ph_url"),
+            Self::Tags => i18n::tr("chat.showcase_ph_tags"),
+            Self::Description => i18n::tr("chat.showcase_ph_desc"),
         }
     }
 }
@@ -116,10 +116,10 @@ impl State {
             composing: false,
             editing_id: None,
             field: ComposerField::Title,
-            title: new_single_line("Project name"),
-            url: new_single_line("https://..."),
-            tags: new_single_line("rust, cli, game"),
-            description: new_multi_line("What is it? Why should we look?"),
+            title: new_single_line(i18n::tr("chat.showcase_ph_title")),
+            url: new_single_line(i18n::tr("chat.showcase_ph_url")),
+            tags: new_single_line(i18n::tr("chat.showcase_ph_tags")),
+            description: new_multi_line(i18n::tr("chat.showcase_ph_desc")),
             submitted: false,
             unread_count: 0,
             last_read_at: None,
@@ -298,13 +298,13 @@ impl State {
         let id = item.showcase.id;
 
         self.reset_composer();
-        self.title = new_single_line("Project name");
+        self.title = new_single_line(i18n::tr("chat.showcase_ph_title"));
         self.title.insert_str(title);
-        self.url = new_single_line("https://...");
+        self.url = new_single_line(i18n::tr("chat.showcase_ph_url"));
         self.url.insert_str(url);
-        self.tags = new_single_line("rust, cli, game");
+        self.tags = new_single_line(i18n::tr("chat.showcase_ph_tags"));
         self.tags.insert_str(tags);
-        self.description = new_multi_line("What is it? Why should we look?");
+        self.description = new_multi_line(i18n::tr("chat.showcase_ph_desc"));
         self.description.insert_str(description);
 
         self.composing = true;
@@ -321,10 +321,10 @@ impl State {
     }
 
     fn reset_composer(&mut self) {
-        self.title = new_single_line("Project name");
-        self.url = new_single_line("https://...");
-        self.tags = new_single_line("rust, cli, game");
-        self.description = new_multi_line("What is it? Why should we look?");
+        self.title = new_single_line(i18n::tr("chat.showcase_ph_title"));
+        self.url = new_single_line(i18n::tr("chat.showcase_ph_url"));
+        self.tags = new_single_line(i18n::tr("chat.showcase_ph_tags"));
+        self.description = new_multi_line(i18n::tr("chat.showcase_ph_desc"));
         self.refresh_composer_theme();
     }
 
@@ -341,7 +341,7 @@ impl State {
     pub fn delete_selected(&mut self) -> Option<Banner> {
         let item = self.selected_item()?;
         if !(self.is_admin || item.showcase.user_id == self.user_id) {
-            return Some(Banner::error("not your showcase"));
+            return Some(Banner::error(i18n::tr("chat.showcase_err_not_yours")));
         }
         self.service
             .delete_task(self.user_id, item.showcase.id, self.is_admin);
@@ -357,28 +357,28 @@ impl State {
         if title.is_empty() {
             self.field = ComposerField::Title;
             self.refresh_composer_theme();
-            return Some(Banner::error("title required"));
+            return Some(Banner::error(i18n::tr("chat.showcase_err_title_req")));
         }
         if title.chars().count() > 120 {
-            return Some(Banner::error("title too long (max 120)"));
+            return Some(Banner::error(i18n::tr("chat.showcase_err_title_long")));
         }
         if url.is_empty() {
             self.field = ComposerField::Url;
             self.refresh_composer_theme();
-            return Some(Banner::error("url required"));
+            return Some(Banner::error(i18n::tr("chat.showcase_err_url_req")));
         }
         if !looks_like_url(&url) {
             self.field = ComposerField::Url;
             self.refresh_composer_theme();
-            return Some(Banner::error("url must start with http:// or https://"));
+            return Some(Banner::error(i18n::tr("chat.showcase_err_url_scheme")));
         }
         if description.is_empty() {
             self.field = ComposerField::Description;
             self.refresh_composer_theme();
-            return Some(Banner::error("description required"));
+            return Some(Banner::error(i18n::tr("chat.showcase_err_desc_req")));
         }
         if description.chars().count() > 800 {
-            return Some(Banner::error("description too long (max 800)"));
+            return Some(Banner::error(i18n::tr("chat.showcase_err_desc_long")));
         }
 
         let tags = svc::parse_tags(&tags_raw);
@@ -434,21 +434,21 @@ impl State {
                     {
                         self.submitted = false;
                         self.stop_composing();
-                        banner = Some(Banner::success("Showcase shared!"));
+                        banner = Some(Banner::success(i18n::tr("chat.showcase_shared")));
                     }
                     ShowcaseEvent::Updated { user_id }
                         if self.user_id == user_id && self.submitted =>
                     {
                         self.submitted = false;
                         self.stop_composing();
-                        banner = Some(Banner::success("Showcase updated."));
+                        banner = Some(Banner::success(i18n::tr("chat.showcase_updated")));
                     }
                     ShowcaseEvent::Deleted { user_id } if self.user_id == user_id => {
-                        banner = Some(Banner::success("Showcase deleted."));
+                        banner = Some(Banner::success(i18n::tr("chat.showcase_deleted")));
                     }
                     ShowcaseEvent::Failed { user_id, error } if self.user_id == user_id => {
                         self.submitted = false;
-                        banner = Some(Banner::error(&format!("Failed: {error}")));
+                        banner = Some(Banner::error(&i18n::trf("chat.showcase_failed", &[("error", &error)])));
                     }
                     ShowcaseEvent::UnreadCountUpdated {
                         user_id,
@@ -468,12 +468,13 @@ impl State {
                         let increased = unread_count > self.unread_count;
                         self.unread_count = unread_count;
                         if increased {
-                            let noun = if unread_count == 1 {
-                                "showcase"
+                            let key = if unread_count == 1 {
+                                "chat.showcase_new"
                             } else {
-                                "showcases"
+                                "chat.showcase_new_plural"
                             };
-                            banner = Some(Banner::success(&format!("{unread_count} new {noun}")));
+                            let count_str = unread_count.to_string();
+                            banner = Some(Banner::success(&i18n::trf(key, &[("n", &count_str)])));
                         }
                     }
                     _ => {}

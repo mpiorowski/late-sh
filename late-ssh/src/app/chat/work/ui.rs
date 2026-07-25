@@ -1,4 +1,5 @@
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
+use crate::app::common::i18n;
 use crate::app::common::theme;
 use crate::app::common::{composer, primitives::format_relative_time};
 use chrono::{DateTime, Utc};
@@ -39,11 +40,11 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
     if view.items.is_empty() {
         let text = Text::from(vec![
             Line::from(Span::styled(
-                "No work profiles yet.",
+                i18n::tr("chat.work_empty"),
                 Style::default().fg(theme::TEXT_DIM()),
             )),
             Line::from(Span::styled(
-                "Press 'i' to create yours.",
+                i18n::tr("chat.work_hint_create"),
                 Style::default().fg(theme::TEXT_DIM()),
             )),
         ]);
@@ -150,7 +151,7 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
 
         // Row 7: contact.
         if !p.contact.trim().is_empty() {
-            let contact_text = format!("contact: {}", p.contact.trim());
+            let contact_text = i18n::trf("chat.work_contact", &[("contact", p.contact.trim())]);
             lines.push(Line::from(Span::styled(
                 truncate_to_width(&contact_text, inner_w),
                 Style::default().fg(theme::TEXT_FAINT()),
@@ -177,7 +178,7 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
 fn build_title_line(headline: &str, owner: bool, is_unread: bool, width: usize) -> Line<'static> {
     let unread_prefix = if is_unread { "● " } else { "" };
     let unread_w = UnicodeWidthStr::width(unread_prefix);
-    let badge = if owner { "(yours)" } else { "" };
+    let badge = if owner { i18n::tr("chat.work_yours") } else { "" };
     let badge_w = UnicodeWidthStr::width(badge);
     // Keep at least one space between headline and badge; if width is so tight
     // we can't fit the badge, drop it rather than crowd the headline.
@@ -329,11 +330,11 @@ pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView
     let active = view.state.active_field();
 
     let title = if !composing {
-        " Work "
+        i18n::tr("chat.work_title")
     } else if editing {
-        " Editing work profile - Tab/S+Tab switch - Enter submit - Alt+Enter/Ctrl+J newline - Esc cancel "
+        i18n::tr("chat.work_compose_edit")
     } else {
-        " New work profile - Tab/S+Tab switch - Enter submit - Alt+Enter/Ctrl+J newline - Esc cancel "
+        i18n::tr("chat.work_compose_new")
     };
     let border_style = if composing {
         Style::default().fg(theme::BORDER_ACTIVE())
@@ -349,7 +350,7 @@ pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView
 
     if !composing {
         let hint = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate - Enter/c copy profile - i create/edit yours - e edit selected - d delete own - / filter mine",
+            i18n::tr("chat.work_hint_nav"),
             Style::default().fg(theme::TEXT_DIM()),
         )));
         frame.render_widget(hint, inner);

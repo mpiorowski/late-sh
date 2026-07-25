@@ -1,3 +1,4 @@
+use crate::app::common::i18n;
 use crate::app::common::primitives::Banner;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::help_modal::data::HelpTopic;
@@ -157,7 +158,7 @@ pub(crate) fn open_requested_poll_modal(app: &mut App, room_id: Uuid, allow_poll
     if allow_poll_modal {
         open_poll_modal(app, room_id);
     } else {
-        app.banner = Some(Banner::error("Polls are available from Home chat"));
+        app.banner = Some(Banner::error(i18n::tr("chat.polls_home")));
     }
 }
 
@@ -254,14 +255,10 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     }
     if let Some(upload) = app.chat.take_requested_clipboard_image_upload() {
         if app.request_paired_clipboard_image_upload(upload.room_id) {
-            app.banner = Some(Banner::success(
-                "Reading image from paired CLI clipboard...",
-            ));
+            app.banner = Some(Banner::success(i18n::tr("chat.clipboard_reading")));
         } else {
             app.chat.clear_pending_clipboard_image_upload();
-            app.banner = Some(Banner::error(
-                "No paired CLI with clipboard image support. Update and run `late`.",
-            ));
+            app.banner = Some(Banner::error(i18n::tr("chat.clipboard_no_pair")));
         }
     }
 }
@@ -275,18 +272,18 @@ fn apply_petname_request(
     use crate::app::chat::state::PetnameRequest;
     match request {
         PetnameRequest::Show => match app.pet_state.name.as_deref() {
-            Some(name) => Banner::success(&format!("🐈 your cat is named {name}")),
+            Some(name) => Banner::success(&i18n::trf("chat.petname_show", &[("name", name)])),
             None => {
-                Banner::error("your cat doesn't have a name yet — use /petname <name> to set one")
+                Banner::error(i18n::tr("chat.petname_no_name"))
             }
         },
         PetnameRequest::Set(name) => {
             app.pet_state.set_name(Some(name.clone()));
-            Banner::success(&format!("🐈 named your cat {name}"))
+            Banner::success(&i18n::trf("chat.petname_set", &[("name", &name)]))
         }
         PetnameRequest::Clear => {
             app.pet_state.set_name(None);
-            Banner::success("cleared your cat's name")
+            Banner::success(i18n::tr("chat.petname_clear"))
         }
     }
 }
@@ -335,9 +332,9 @@ fn toggle_selected_room_favorite(app: &mut App) -> bool {
     app.chat
         .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
     app.banner = Some(if added {
-        Banner::success("Room added to favorites")
+        Banner::success(i18n::tr("chat.fav_added"))
     } else {
-        Banner::success("Room removed from favorites")
+        Banner::success(i18n::tr("chat.fav_removed"))
     });
     true
 }
@@ -479,7 +476,7 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         b'c' => {
             if let Some(body) = app.chat.selected_message_body_in_room(room_id) {
                 app.pending_clipboard = Some(body);
-                app.banner = Some(Banner::success("Message copied to clipboard!"));
+                app.banner = Some(Banner::success(i18n::tr("chat.msg_copied")));
                 app.chat.clear_message_selection();
                 return true;
             }

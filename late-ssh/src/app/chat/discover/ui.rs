@@ -1,5 +1,5 @@
 use crate::app::chat::svc::DiscoverRoomItem;
-use crate::app::common::{primitives::format_relative_time, theme};
+use crate::app::common::{i18n, primitives::format_relative_time, theme};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -28,17 +28,17 @@ const LIST_PERCENT: u16 = 45;
 
 pub fn draw_discover_list(frame: &mut Frame, area: Rect, view: &DiscoverListView<'_>) {
     if view.loading {
-        let text = Text::from("Loading rooms...");
+        let text = Text::from(i18n::tr("chat.disc_loading"));
         let loading_p = Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM()));
         frame.render_widget(loading_p, area);
         return;
     }
 
     if view.items.is_empty() {
-        let msg = if view.query.trim().is_empty() {
-            "No public rooms to discover right now.".to_string()
+        let msg: String = if view.query.trim().is_empty() {
+            i18n::tr("chat.disc_empty").to_string()
         } else {
-            format!("No rooms match \"{}\".", view.query.trim())
+            i18n::trf("chat.disc_no_match", &[("query", view.query.trim())])
         };
         let empty_p = Paragraph::new(Text::from(msg)).style(Style::default().fg(theme::TEXT_DIM()));
         frame.render_widget(empty_p, area);
@@ -111,14 +111,14 @@ fn draw_preview(frame: &mut Frame, area: Rect, item: &DiscoverRoomItem) {
     frame.render_widget(block, area);
 
     let member_noun = if item.member_count == 1 {
-        "member"
+        i18n::tr("chat.member_singular")
     } else {
-        "members"
+        i18n::tr("chat.member_plural")
     };
     let activity = item
         .last_message_at
         .map(format_relative_time)
-        .unwrap_or_else(|| "no messages yet".to_string());
+        .unwrap_or_else(|| i18n::tr("chat.disc_no_activity").to_string());
 
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(Span::styled(
@@ -134,7 +134,7 @@ fn draw_preview(frame: &mut Frame, area: Rect, item: &DiscoverRoomItem) {
             ),
             Span::styled("  ·  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
-                format!("active {activity}"),
+                format!("{}{}", i18n::tr("chat.disc_active"), activity),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]),
@@ -143,7 +143,7 @@ fn draw_preview(frame: &mut Frame, area: Rect, item: &DiscoverRoomItem) {
 
     if item.recent.is_empty() {
         lines.push(Line::from(Span::styled(
-            "No messages yet. Be the first to post.",
+            i18n::tr("chat.disc_no_msgs"),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     } else {
@@ -178,16 +178,16 @@ fn room_lines(item: &DiscoverRoomItem, selected: bool) -> Vec<Line<'static>> {
     let activity = item
         .last_message_at
         .map(format_relative_time)
-        .unwrap_or_else(|| "no messages yet".to_string());
+        .unwrap_or_else(|| i18n::tr("chat.disc_no_activity").to_string());
     let member_noun = if item.member_count == 1 {
-        "member"
+        i18n::tr("chat.member_singular")
     } else {
-        "members"
+        i18n::tr("chat.member_plural")
     };
     let message_noun = if item.message_count == 1 {
-        "message"
+        i18n::tr("chat.message_singular")
     } else {
-        "messages"
+        i18n::tr("chat.message_plural")
     };
 
     let marker = if selected { "› " } else { "  " };

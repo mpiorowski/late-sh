@@ -11,7 +11,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::common::theme;
+use crate::app::common::{i18n, theme};
 
 use super::{state::DailyState, svc::DailyOutcome};
 
@@ -69,7 +69,7 @@ pub(crate) fn draw_daily_inline(
             opponent: state
                 .opponent_of(item)
                 .1
-                .unwrap_or_else(|| "player".to_string()),
+                .unwrap_or_else(|| i18n::tr("chat.player").to_string()),
             status,
         };
     // Actionable beats news beats waiting: your-turn rows, then unseen
@@ -83,7 +83,7 @@ pub(crate) fn draw_daily_inline(
             opponent: item
                 .opponent_of(state.user_id())
                 .1
-                .unwrap_or_else(|| "player".to_string()),
+                .unwrap_or_else(|| i18n::tr("chat.player").to_string()),
             status: match item.outcome_for(state.user_id()) {
                 DailyOutcome::Won => DailyPanelRowStatus::Won,
                 DailyOutcome::Lost => DailyPanelRowStatus::Lost,
@@ -127,11 +127,11 @@ fn match_line(width: u16, row: &DailyPanelMatchRow) -> Line<'static> {
     // Everything but "waiting" is an attention row: glowing marker, bright
     // bold name, accent-colored status.
     let (marker_color, status, status_color) = match row.status {
-        DailyPanelRowStatus::YourTurn => (theme::AMBER_GLOW(), "your turn", theme::AMBER()),
-        DailyPanelRowStatus::Won => (theme::SUCCESS(), "you won", theme::SUCCESS()),
-        DailyPanelRowStatus::Lost => (theme::ERROR(), "you lost", theme::ERROR()),
-        DailyPanelRowStatus::Draw => (theme::AMBER(), "draw", theme::AMBER()),
-        DailyPanelRowStatus::Waiting => (theme::TEXT_FAINT(), "waiting", theme::TEXT_FAINT()),
+        DailyPanelRowStatus::YourTurn => (theme::AMBER_GLOW(), i18n::tr("chat.your_turn"), theme::AMBER()),
+        DailyPanelRowStatus::Won => (theme::SUCCESS(), i18n::tr("chat.you_won"), theme::SUCCESS()),
+        DailyPanelRowStatus::Lost => (theme::ERROR(), i18n::tr("chat.you_lost"), theme::ERROR()),
+        DailyPanelRowStatus::Draw => (theme::AMBER(), i18n::tr("chat.draw"), theme::AMBER()),
+        DailyPanelRowStatus::Waiting => (theme::TEXT_FAINT(), i18n::tr("chat.waiting"), theme::TEXT_FAINT()),
     };
     let (marker, marker_style, name_style, status_style) =
         if matches!(row.status, DailyPanelRowStatus::Waiting) {
@@ -189,8 +189,8 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
-    let open_text = format!("{} open", props.open_count);
-    let entries_text = format!(" · {}/{}", props.entry_count, props.entry_cap);
+    let open_text = i18n::trf("chat.open_count", &[("n", &props.open_count.to_string())]);
+    let entries_text = i18n::trf("chat.entry_usage", &[("n", &props.entry_count.to_string()), ("max", &props.entry_cap.to_string())]);
     let budget = (width as usize).saturating_sub(open_text.chars().count());
     Line::from(vec![
         Span::styled(open_text, open_style),
@@ -214,7 +214,7 @@ fn hints_line() -> Line<'static> {
         Span::styled("ctrl+q", key_style),
         Span::styled(" · ", sep_style),
         Span::styled("`", key_style.fg(theme::AMBER())),
-        Span::styled(" toggle", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(i18n::tr("chat.toggle"), Style::default().fg(theme::TEXT_DIM())),
     ])
 }
 

@@ -1,3 +1,4 @@
+use crate::app::common::i18n;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::{
@@ -113,10 +114,10 @@ impl ReportKind {
     }
 
     /// Verb phrase for the card header: `<author> filed a bug <stamp>`.
-    pub(crate) const fn verb(self) -> &'static str {
+    pub(crate) fn verb(self) -> &'static str {
         match self {
-            Self::Bug => "filed a bug",
-            Self::Suggestion => "made a suggestion",
+            Self::Bug => i18n::tr("chat.report_bug"),
+            Self::Suggestion => i18n::tr("chat.report_suggestion"),
         }
     }
 

@@ -1,5 +1,5 @@
 use crate::app::common::primitives::format_relative_time;
-use crate::app::common::theme;
+use crate::app::common::{i18n, theme};
 use chrono::{DateTime, Utc};
 use late_core::models::rss_entry::RssEntryView;
 use ratatui::{
@@ -26,9 +26,9 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
 
     if view.entries.is_empty() {
         let text = if view.has_feeds {
-            "No RSS entries yet. Press r to refresh."
+            i18n::tr("chat.feeds_empty")
         } else {
-            "No RSS sources connected. Add RSS/Atom URLs in Settings > RSS."
+            i18n::tr("chat.feeds_no_sources")
         };
         frame.render_widget(
             Paragraph::new(Text::from(text)).style(Style::default().fg(theme::TEXT_DIM())),
@@ -90,7 +90,7 @@ fn entry_lines(item: &RssEntryView, is_unread: bool, width: usize) -> Vec<Line<'
         0
     };
     let shared = item.entry.shared_at.is_some();
-    let badge = if shared { "(shared)" } else { "" };
+    let badge = if shared { i18n::tr("chat.feeds_shared") } else { "" };
     let badge_w = UnicodeWidthStr::width(badge);
     let title_budget = if shared {
         width

@@ -8,7 +8,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::theme;
+use super::{i18n, theme};
 use crate::app::audio::{
     client_state::ClientAudioState,
     stations,
@@ -352,7 +352,10 @@ fn draw_core_block(
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" here", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+    format!(" {}", i18n::tr("common.sidebar.presence_here")),
+    Style::default().fg(theme::TEXT_DIM()),
+),
         ])),
         row(0),
     );
@@ -389,9 +392,9 @@ fn draw_core_block(
     // Blank when neither: the reserved row is what keeps chrome stable.
     if let Some(msg) = afk {
         let label = if msg.is_empty() {
-            "away".to_string()
+            i18n::tr("common.sidebar.afk").to_string()
         } else {
-            format!("away · {msg}")
+            i18n::trf("common.sidebar.afk_msg", &[("msg", msg)])
         };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -598,7 +601,13 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
     let source = props.source;
     let mut lines = Vec::with_capacity(MUSIC_DOCK_HEIGHT as usize);
     lines.push(volume_row_line(props.paired_client));
-    lines.push(keybind_row_line(width, &[("m", "mute"), ("-=", "vol")]));
+    lines.push(keybind_row_line(
+        width,
+        &[
+            ("m", i18n::tr("common.sidebar.keybind_mute")),
+            ("-=", i18n::tr("common.sidebar.keybind_vol")),
+        ],
+    ));
 
     lines.push(stage_title_line(
         width,
@@ -654,7 +663,10 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
 
     lines.push(keybind_row_line(
         width,
-        &[("v+v", "queue"), ("v+x", "source")],
+        &[
+            ("v+v", i18n::tr("common.sidebar.keybind_queue")),
+            ("v+x", i18n::tr("common.sidebar.keybind_source")),
+        ],
     ));
     lines
 }
@@ -686,7 +698,7 @@ fn dock_track_line(width: u16, track: Option<&str>, active: bool, tick: usize) -
             ))
         }
         None => Line::from(Span::styled(
-            "no signal",
+            i18n::tr("common.sidebar.no_signal"),
             Style::default().fg(theme::TEXT_FAINT()),
         )),
     }
@@ -751,7 +763,7 @@ fn selector_row_line(width: u16, name: &str, key: &str, selected: bool) -> Line<
 /// state, never "queue empty").
 fn youtube_track_text(queue: &QueueSnapshot) -> String {
     let Some(current) = &queue.current else {
-        return "fallback stream".to_string();
+        return i18n::tr("common.sidebar.fallback_stream").to_string();
     };
     let title = current
         .title
@@ -778,7 +790,7 @@ fn icecast_track_text(now: &NowPlaying) -> String {
 
 fn volume_row_line(paired_client: Option<&ClientAudioState>) -> Line<'static> {
     let mut spans = vec![Span::styled(
-        "vol  ",
+        i18n::tr("common.sidebar.vol_label"),
         Style::default()
             .fg(theme::TEXT_FAINT())
             .add_modifier(Modifier::ITALIC),
@@ -789,7 +801,7 @@ fn volume_row_line(paired_client: Option<&ClientAudioState>) -> Line<'static> {
         }
         Some(state) if state.muted => {
             spans.push(Span::styled(
-                "muted",
+                i18n::tr("common.sidebar.volume_muted"),
                 Style::default()
                     .fg(theme::TEXT_FAINT())
                     .add_modifier(Modifier::ITALIC),
@@ -879,7 +891,7 @@ fn youtube_detail_lines(width: u16, queue: &QueueSnapshot, tick: usize) -> Vec<L
         }
 
         lines.push(Line::from(Span::styled(
-            "next ⌄",
+            i18n::tr("common.sidebar.next_label"),
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
@@ -887,7 +899,7 @@ fn youtube_detail_lines(width: u16, queue: &QueueSnapshot, tick: usize) -> Vec<L
 
         if queue.queue.is_empty() {
             lines.push(Line::from(Span::styled(
-                "· fallback next",
+                i18n::tr("common.sidebar.fallback_next"),
                 Style::default().fg(theme::TEXT_FAINT()),
             )));
         } else {
@@ -902,12 +914,12 @@ fn youtube_detail_lines(width: u16, queue: &QueueSnapshot, tick: usize) -> Vec<L
         }
     } else {
         lines.push(Line::from(Span::styled(
-            "YouTube · 24/7",
+            i18n::tr("common.sidebar.youtube_247"),
             Style::default().fg(theme::TEXT_DIM()),
         )));
         lines.push(Line::from(vec![
             Span::styled(
-                "queue with  ",
+                i18n::tr("common.sidebar.queue_with"),
                 Style::default()
                     .fg(theme::TEXT_FAINT())
                     .add_modifier(Modifier::ITALIC),
@@ -1025,7 +1037,10 @@ fn elapsed_line(elapsed_secs: u64) -> Line<'static> {
     let elapsed = format!("{}:{:02}", elapsed_secs / 60, elapsed_secs % 60);
     Line::from(vec![
         Span::styled(elapsed, Style::default().fg(theme::AMBER())),
-        Span::styled(" live", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(
+            i18n::tr("common.sidebar.live_tag"),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ),
     ])
 }
 
@@ -1102,7 +1117,7 @@ fn skip_meter_spans(progress: &super::super::audio::svc::SkipProgress) -> Vec<Sp
     }
     vec![
         Span::styled(
-            "skip ",
+            i18n::tr("common.sidebar.skip_label"),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::BOLD),

@@ -8,7 +8,7 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::{
-    common::theme,
+    common::{i18n, theme},
     lobby::house::{
         game_ui::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
@@ -107,7 +107,9 @@ fn draw_compact(frame: &mut Frame, area: Rect, state: &State) {
         ))
         .alignment(Alignment::Center),
         Line::from(format!(
-            "{seated}/4 seated · {} · {}",
+            "{}/4 {} · {} · {}",
+            seated,
+            i18n::tr("chat.tron_seated"),
             snapshot.speed_label, snapshot.mode_label
         ))
         .alignment(Alignment::Center),
@@ -131,7 +133,7 @@ fn draw_arena(frame: &mut Frame, area: Rect, state: &State, cell_w: u16) {
 
     if area.width < outer_w || area.height < outer_h {
         frame.render_widget(
-            Paragraph::new("Grid needs more room.").alignment(Alignment::Center),
+            Paragraph::new(i18n::tr("chat.tron_grid_needs")).alignment(Alignment::Center),
             area,
         );
         return;
@@ -168,7 +170,7 @@ fn draw_arena(frame: &mut Frame, area: Rect, state: &State, cell_w: u16) {
 fn arena_title(state: &State) -> Line<'static> {
     match state.user_color() {
         Some(color) => Line::from(vec![
-            Span::styled(" you ride ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(i18n::tr("chat.tron_you_ride"), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 color.label(),
                 Style::default()
@@ -178,7 +180,7 @@ fn arena_title(state: &State) -> Line<'static> {
             Span::raw(" "),
         ]),
         None => Line::from(Span::styled(
-            " spectating ",
+            i18n::tr("chat.tron_spectating"),
             Style::default().fg(theme::TEXT_DIM()),
         )),
     }
@@ -285,53 +287,53 @@ fn direction_glyph(direction: Direction) -> char {
 fn info_lines(state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static>> {
     let snapshot = state.snapshot();
     let mut lines = vec![
-        info_tagline("Light-cycle grid."),
-        info_tagline("Last rider home wins."),
+        info_tagline(i18n::tr("chat.tron_light_cycles")),
+        info_tagline(i18n::tr("chat.tron_last_home")),
         Line::raw(""),
-        section_header("Riders"),
+        section_header(i18n::tr("chat.tron_riders")),
     ];
     for seat in 0..SEAT_COUNT {
         lines.push(rider_line(seat, state, usernames));
     }
     lines.extend([
         Line::raw(""),
-        info_label_value("Speed", snapshot.speed_label.clone(), theme::AMBER()),
-        info_label_value("Mode", snapshot.mode_label.clone(), theme::AMBER()),
+        info_label_value(i18n::tr("chat.tron_speed"), snapshot.speed_label.clone(), theme::AMBER()),
+        info_label_value(i18n::tr("chat.tron_mode"), snapshot.mode_label.clone(), theme::AMBER()),
         info_label_value(
-            "Alive",
+            i18n::tr("chat.tron_alive_count"),
             alive_count(snapshot).to_string(),
             theme::TEXT_BRIGHT(),
         ),
-        info_label_value("Prize", TRON_WIN_CHIPS.to_string(), theme::SUCCESS()),
+        info_label_value(i18n::tr("chat.tron_prize"), TRON_WIN_CHIPS.to_string(), theme::SUCCESS()),
         info_label_value(
-            "Cooldown",
+            i18n::tr("chat.tron_cooldown"),
             payout_cooldown_label(TRON_WIN_PAYOUT_COOLDOWN),
             theme::TEXT_DIM(),
         ),
-        info_label_value("State", state_label(snapshot), theme::SUCCESS()),
+        info_label_value(i18n::tr("chat.tron_state"), state_label(snapshot), theme::SUCCESS()),
         Line::raw(""),
     ]);
     if snapshot.mode_label == "glitch" {
         lines.extend([
-            section_header("Pickups"),
-            pickup_hint(TronPickup::Boost, "surges two cells/tick"),
-            pickup_hint(TronPickup::Phase, "passes trail once"),
-            pickup_hint(TronPickup::Gap, "next trail gaps"),
+            section_header(i18n::tr("chat.tron_pickups")),
+            pickup_hint(TronPickup::Boost, i18n::tr("chat.tron_boost_hint")),
+            pickup_hint(TronPickup::Phase, i18n::tr("chat.tron_phase_hint")),
+            pickup_hint(TronPickup::Gap, i18n::tr("chat.tron_gap_hint")),
             Line::raw(""),
         ]);
     }
-    lines.extend([section_header("Controls")]);
+    lines.extend([section_header(i18n::tr("chat.tron_controls"))]);
     if state.seat_index().is_some() {
         lines.extend([
-            key_hint("arrows/wasd", "steer"),
-            key_hint("n", "start round"),
-            key_hint("l", "leave seat"),
-            key_hint("q", "leave room"),
+            key_hint("arrows/wasd", i18n::tr("chat.tron_steer")),
+            key_hint("n", i18n::tr("chat.tron_start_round")),
+            key_hint("l", i18n::tr("chat.tron_leave_seat")),
+            key_hint("q", i18n::tr("chat.tron_leave_room")),
         ]);
     } else {
         lines.extend([
-            key_hint("s/space", "take a seat"),
-            key_hint("q", "leave room"),
+            key_hint("s/space", i18n::tr("chat.tron_take_seat")),
+            key_hint("q", i18n::tr("chat.tron_leave_room")),
         ]);
     }
     lines
@@ -346,14 +348,14 @@ fn rider_line(seat: usize, state: &State, usernames: &UsernameLookup<'_>) -> Lin
         Some(uid) => usernames
             .get(&uid)
             .cloned()
-            .unwrap_or_else(|| "rider".to_string()),
-        None => "open".to_string(),
+            .unwrap_or_else(|| i18n::tr("chat.tron_rider").to_string()),
+        None => i18n::tr("chat.tron_open").to_string(),
     };
     let player = snapshot.players[seat];
     let status = if player.alive {
-        "alive"
+        i18n::tr("chat.tron_alive")
     } else if player.crashed {
-        "crashed"
+        i18n::tr("chat.tron_crashed")
     } else {
         ""
     };
@@ -453,9 +455,9 @@ fn status_line(snapshot: &TronSnapshot) -> Line<'static> {
 fn status_text(snapshot: &TronSnapshot) -> String {
     match snapshot.outcome {
         Some(TronOutcome::Winner { seat_index }) => {
-            format!("{} wins", TronColor::for_seat(seat_index).label())
+            i18n::trf("chat.tron_wins", &[("name", TronColor::for_seat(seat_index).label())])
         }
-        Some(TronOutcome::Draw) => "Draw".to_string(),
+        Some(TronOutcome::Draw) => i18n::tr("chat.tron_draw").to_string(),
         None => snapshot.status_message.clone(),
     }
 }
@@ -463,32 +465,35 @@ fn status_text(snapshot: &TronSnapshot) -> String {
 fn state_label(snapshot: &TronSnapshot) -> String {
     match snapshot.outcome {
         Some(TronOutcome::Winner { seat_index }) => {
-            format!("{} won", TronColor::for_seat(seat_index).label())
+            i18n::trf("chat.tron_won", &[("name", TronColor::for_seat(seat_index).label())])
         }
-        Some(TronOutcome::Draw) => "draw".to_string(),
+        Some(TronOutcome::Draw) => i18n::tr("chat.tron_draw").to_string(),
         None => match snapshot.phase {
-            TronPhase::Running => "running".to_string(),
-            TronPhase::Waiting => "waiting".to_string(),
-            TronPhase::Finished => "finished".to_string(),
+            TronPhase::Running => i18n::tr("chat.tron_running").to_string(),
+            TronPhase::Waiting => i18n::tr("chat.tron_waiting").to_string(),
+            TronPhase::Finished => i18n::tr("chat.tron_finished").to_string(),
         },
     }
 }
 
 fn outcome_overlay(snapshot: &TronSnapshot) -> (&'static str, String, Color) {
     match snapshot.outcome {
-        Some(TronOutcome::Winner { seat_index }) => (
-            "Winner",
-            format!("{} wins · press n", TronColor::for_seat(seat_index).label()),
-            theme::SUCCESS(),
-        ),
+        Some(TronOutcome::Winner { seat_index }) => {
+            let label = TronColor::for_seat(seat_index).label();
+            (
+                i18n::tr("chat.tron_winner"),
+                format!("{} · {}", i18n::trf("chat.tron_wins", &[("name", label)]), i18n::tr("chat.tron_press_n")),
+                theme::SUCCESS(),
+            )
+        }
         Some(TronOutcome::Draw) => (
-            "Draw",
-            "grid locked · press n".to_string(),
+            i18n::tr("chat.tron_draw"),
+            i18n::tr("chat.tron_grid_locked").to_string(),
             theme::TEXT_MUTED(),
         ),
         None => (
-            "Round over",
-            "press n to ride again".to_string(),
+            i18n::tr("chat.tron_round_over"),
+            i18n::tr("chat.tron_ride_again").to_string(),
             theme::AMBER(),
         ),
     }
@@ -509,13 +514,13 @@ fn key_line(state: &State) -> Line<'static> {
 
     let mut spans = Vec::new();
     if seated {
-        hint(&mut spans, "arrows/wasd", "steer");
-        hint(&mut spans, "n", "start");
-        hint(&mut spans, "l", "leave seat");
+        hint(&mut spans, "arrows/wasd", i18n::tr("chat.tron_steer"));
+        hint(&mut spans, "n", i18n::tr("chat.tron_start"));
+        hint(&mut spans, "l", i18n::tr("chat.tron_leave_seat"));
     } else {
-        hint(&mut spans, "s/space", "take a seat");
+        hint(&mut spans, "s/space", i18n::tr("chat.tron_take_seat"));
     }
-    hint(&mut spans, "q", "leave room");
+    hint(&mut spans, "q", i18n::tr("chat.tron_leave_room"));
 
     // Trim the trailing separator padding from the final hint.
     if let Some(last) = spans.last_mut() {

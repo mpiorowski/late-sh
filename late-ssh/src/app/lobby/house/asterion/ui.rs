@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::app::{
-    common::theme,
+    common::{i18n, theme},
     lobby::house::{
         asterion::state::State,
         game_ui::{draw_game_frame_with_info_sidebar, info_label_value, key_hint},
@@ -51,11 +51,11 @@ fn draw_compact(frame: &mut Frame, area: Rect, state: &State) {
     if lines.is_empty() {
         let private = state.private();
         let msg = if private.rejected {
-            "Asterion room is full. Press Esc to leave."
+            i18n::tr("chat.asterion_full")
         } else if private.seated {
-            "Asterion - rendering..."
+            i18n::tr("chat.asterion_rendering")
         } else {
-            "Asterion - joining..."
+            i18n::tr("chat.asterion_joining")
         };
         frame.render_widget(
             Paragraph::new(Span::styled(msg, Style::default().fg(theme::TEXT_DIM())))
@@ -79,11 +79,11 @@ fn draw_maze(frame: &mut Frame, area: Rect, state: &State) {
     if lines.is_empty() {
         let private = state.private();
         let (msg, color) = if private.rejected {
-            ("Room is full. Press Esc to leave.", theme::ERROR())
+            (i18n::tr("chat.asterion_full"), theme::ERROR())
         } else if private.seated {
-            ("Rendering...", theme::TEXT_DIM())
+            (i18n::tr("chat.asterion_rendering_short"), theme::TEXT_DIM())
         } else {
-            ("Joining maze...", theme::TEXT_DIM())
+            (i18n::tr("chat.asterion_joining_short"), theme::TEXT_DIM())
         };
         frame.render_widget(
             Paragraph::new(Span::styled(msg, Style::default().fg(color)))
@@ -114,16 +114,17 @@ fn maze_border_color(state: &State) -> Style {
 fn draw_maze_overlays(frame: &mut Frame, area: Rect, state: &State) {
     let private = state.private();
     if private.has_won {
-        let text = if private.daily_prize_claimed {
-            "ESCAPED - DAILY PRIZE CLAIMED".to_string()
+        let payout_str = ASTERION_DAILY_ESCAPE_PAYOUT.to_string();
+        let text: String = if private.daily_prize_claimed {
+            i18n::tr("chat.asterion_escaped").to_string()
         } else {
-            format!("ESCAPED - {ASTERION_DAILY_ESCAPE_PAYOUT} CHIPS")
+            i18n::trf("chat.asterion_escaped_chips", &[("n", &payout_str)])
         };
         draw_flash_line(frame, area, &text, theme::AMBER_GLOW());
         return;
     }
     if private.is_dead {
-        draw_flash_line(frame, area, "KILLED BY A MINOTAUR", theme::ERROR());
+        draw_flash_line(frame, area, i18n::tr("chat.asterion_killed"), theme::ERROR());
         return;
     }
     if let Some(flash) = state.power_up_flash() {
@@ -164,41 +165,42 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
     );
     let alert = alarm_label(private.alarm_level);
     let current_maze = (private.maze_id + 1).min(MAX_MAZE_ID);
+    let payout_str = ASTERION_DAILY_ESCAPE_PAYOUT.to_string();
     let prize = if private.daily_prize_claimed {
-        "claimed today".to_string()
+        i18n::tr("chat.asterion_claimed").to_string()
     } else {
-        format!("{ASTERION_DAILY_ESCAPE_PAYOUT}/day")
+        i18n::trf("chat.asterion_per_day", &[("n", &payout_str)])
     };
 
     lines.extend([
-        section_header("Objective"),
+        section_header(i18n::tr("chat.asterion_objective")),
         info_label_value(
-            "Progress",
+            i18n::tr("chat.asterion_progress"),
             format!("{current_maze}/{MAX_MAZE_ID}"),
             theme::AMBER(),
         ),
-        info_label_value("Prize", prize, theme::SUCCESS()),
+        info_label_value(i18n::tr("chat.asterion_prize"), prize, theme::SUCCESS()),
         info_label_value(
-            "Heroes",
+            i18n::tr("chat.asterion_heroes"),
             public.hero_count.to_string(),
             theme::TEXT_BRIGHT(),
         ),
         Line::raw(""),
-        section_header("Maze"),
-        info_label_value("Level", current_maze.to_string(), theme::TEXT_BRIGHT()),
+        section_header(i18n::tr("chat.asterion_maze")),
+        info_label_value(i18n::tr("chat.asterion_level"), current_maze.to_string(), theme::TEXT_BRIGHT()),
         info_label_value(
-            "Pos",
+            i18n::tr("chat.asterion_pos"),
             format!("({}, {})", private.position.0, private.position.1),
             theme::TEXT_BRIGHT(),
         ),
         info_label_value(
-            "Minotaurs",
+            i18n::tr("chat.asterion_minotaurs"),
             private.minotaurs_in_maze.to_string(),
             theme::TEXT_BRIGHT(),
         ),
         Line::from(vec![
             Span::styled(
-                format!("{:<11}", "Alert"),
+                format!("{:<11}", i18n::tr("chat.asterion_alert")),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
             Span::styled(alert, Style::default().fg(alarm_color)),
@@ -211,29 +213,35 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
             ),
         ]),
         Line::raw(""),
-        section_header("Legend"),
-        legend_pair_line(("you", HERO_COLOR), ("ally", OTHER_HERO_COLOR)),
-        legend_pair_line(("power", POWER_UP_COLOR), ("minotaur", MINOTAUR_COLOR)),
-        legend_line("chasing", CHASING_MINOTAUR_COLOR),
+        section_header(i18n::tr("chat.asterion_legend")),
+        legend_pair_line(
+            (i18n::tr("chat.asterion_you"), HERO_COLOR),
+            (i18n::tr("chat.asterion_ally"), OTHER_HERO_COLOR),
+        ),
+        legend_pair_line(
+            (i18n::tr("chat.asterion_power"), POWER_UP_COLOR),
+            (i18n::tr("chat.asterion_minotaur"), MINOTAUR_COLOR),
+        ),
+        legend_line(i18n::tr("chat.asterion_chasing"), CHASING_MINOTAUR_COLOR),
         Line::raw(""),
-        section_header("Power-ups"),
+        section_header(i18n::tr("chat.asterion_powerups")),
         info_label_value(
-            "Speed",
+            i18n::tr("chat.asterion_speed"),
             format!("{}/{} move delay", private.speed, Hero::MAX_SPEED),
             theme::TEXT_BRIGHT(),
         ),
         info_label_value(
-            "Vision",
+            i18n::tr("chat.asterion_vision"),
             format!("{}/{} sight", private.vision, Hero::MAX_VISION),
             theme::TEXT_BRIGHT(),
         ),
         info_label_value(
-            "Memory",
+            i18n::tr("chat.asterion_memory"),
             format!("{} seen tiles", private.memory),
             theme::TEXT_BRIGHT(),
         ),
         info_label_value(
-            "Pickups",
+            i18n::tr("chat.asterion_pickups"),
             format!(
                 "{}/{} pink tile",
                 private.power_ups_collected, POWER_UPS_PER_ROOM
@@ -241,14 +249,14 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
             theme::TEXT_BRIGHT(),
         ),
         Line::raw(""),
-        section_header("Controls"),
+        section_header(i18n::tr("chat.asterion_controls")),
         key_hint("arrows/wasd", "move"),
         key_hint(",/. Esc/q", "turn/leave"),
     ]);
     if private.rejected {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
-            "Room is full. Press Esc.",
+            i18n::tr("chat.asterion_full_esc"),
             Style::default()
                 .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),
@@ -268,10 +276,10 @@ fn alarm_color(level: AlarmLevel) -> Color {
 
 fn alarm_label(level: AlarmLevel) -> &'static str {
     match level {
-        AlarmLevel::NoMinotaurs => "clear",
-        AlarmLevel::NotChasing => "near",
-        AlarmLevel::ChasingOtherHero => "hunt",
-        AlarmLevel::ChasingHero => "chased",
+        AlarmLevel::NoMinotaurs => i18n::tr("chat.asterion_clear"),
+        AlarmLevel::NotChasing => i18n::tr("chat.asterion_near"),
+        AlarmLevel::ChasingOtherHero => i18n::tr("chat.asterion_hunt"),
+        AlarmLevel::ChasingHero => i18n::tr("chat.asterion_chased"),
     }
 }
 
