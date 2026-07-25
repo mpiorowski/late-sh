@@ -332,7 +332,11 @@ fn make_app_with_chat_service_and_permissions(
     session_token: &str,
     permissions: Permissions,
 ) -> (App, ChatService) {
-    let chat_service = ChatService::new(db.clone(), NotificationService::new(db.clone()));
+    // One shared instance between ChatService and SessionConfig, mirroring
+    // main.rs: mention events broadcast on the instance's channel, so a second
+    // instance would never deliver them to the app.
+    let notification_service = NotificationService::new(db.clone());
+    let chat_service = ChatService::new(db.clone(), notification_service.clone());
     let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
@@ -352,7 +356,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
         chat_service: chat_service.clone(),
-        notification_service: NotificationService::new(db.clone()),
+        notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
@@ -520,6 +524,9 @@ pub fn make_app_with_paired_client(
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
     let ultimate_service = crate::app::UltimateService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
+    // One shared instance between ChatService and SessionConfig, mirroring
+    // main.rs (see make_app_with_chat_service_and_permissions).
+    let notification_service = NotificationService::new(db.clone());
 
     let mut app = App::new(SessionConfig {
         cols: 100,
@@ -532,8 +539,8 @@ pub fn make_app_with_paired_client(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
-        chat_service: ChatService::new(db.clone(), NotificationService::new(db.clone())),
-        notification_service: NotificationService::new(db.clone()),
+        chat_service: ChatService::new(db.clone(), notification_service.clone()),
+        notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),

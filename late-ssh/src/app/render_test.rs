@@ -168,21 +168,24 @@ fn status_hud_title_renders_right_aligned_pluralized_text() {
     use ratatui::layout::Alignment;
 
     let one = status_hud_title(None, 1, None).expect("one mention should render");
-    assert_eq!(one.alignment, Some(Alignment::Right));
-    let text: String = one.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(one.line.alignment, Some(Alignment::Right));
+    let text: String = one.line.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, " 1 unread mention ");
+    assert_eq!(one.mentions_width, " 1 unread mention ".len() as u16);
 
     let many = status_hud_title(None, 14, None).expect("many mentions should render");
-    let text: String = many.iter().map(|s| s.content.as_ref()).collect();
+    let text: String = many.line.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, " 14 unread mentions ");
 }
 
 #[test]
 fn status_hud_title_combines_voice_and_mentions() {
-    let line =
+    let hud =
         status_hud_title(None, 2, Some(" mic #lounge [muted] ")).expect("status should render");
-    let text: String = line.iter().map(|s| s.content.as_ref()).collect();
+    let text: String = hud.line.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, " 2 unread mentions | mic #lounge [muted] ");
+    // Only the mentions segment is clickable, so its width stops at the text.
+    assert_eq!(hud.mentions_width, " 2 unread mentions ".len() as u16);
 }
 
 #[test]
@@ -190,13 +193,14 @@ fn status_hud_title_renders_balance_right_of_mentions() {
     use ratatui::layout::Alignment;
 
     let only = status_hud_title(Some(1_500), 0, None).expect("balance should render alone");
-    assert_eq!(only.alignment, Some(Alignment::Right));
-    let text: String = only.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(only.line.alignment, Some(Alignment::Right));
+    let text: String = only.line.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, " 1500 chips ");
+    assert_eq!(only.mentions_width, 0);
 
     let combined = status_hud_title(Some(1_500), 2, Some(" mic #lounge [muted] "))
         .expect("balance + voice + mentions should render");
-    let text: String = combined.iter().map(|s| s.content.as_ref()).collect();
+    let text: String = combined.line.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(
         text,
         " 2 unread mentions | mic #lounge [muted] | 1500 chips "

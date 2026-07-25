@@ -280,6 +280,9 @@ struct DrawContext<'a> {
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
     chip_balance: i64,
+    /// Slot for where the top-border mentions text lands this frame, read by
+    /// the HUD click hit test in `input.rs`.
+    mentions_hud_rect: &'a std::cell::Cell<Option<Rect>>,
     voice_badge: Option<String>,
     home_selected: bool,
 }
@@ -1063,6 +1066,7 @@ impl App {
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
                         chip_balance: self.chip_balance,
+                        mentions_hud_rect: &self.last_mentions_hud_rect,
                         voice_badge,
                         home_selected,
                     },
@@ -1125,6 +1129,9 @@ impl App {
         terminal_images: &mut TerminalImageFrame,
     ) {
         if ctx.show_splash {
+            // No HUD on the splash: keep the click slot in step with what is
+            // actually on screen.
+            ctx.mentions_hud_rect.set(None);
             let msg = "take a break, grab a coffee";
             // Animate typing the message (1 char per tick instead of 1 char per 2 ticks)
             let len = msg.len();
@@ -1200,12 +1207,25 @@ impl App {
             .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-        if let Some(hud) = status_hud_title(
+        match status_hud_title(
             Some(ctx.chip_balance),
             ctx.mentions_unread_count,
             ctx.voice_badge.as_deref(),
         ) {
-            block = block.title_top(hud);
+            Some(hud) => {
+                // The right-aligned title's last cell sits just inside the
+                // top-right corner, and the mentions segment leads the line.
+                let total = hud.line.width() as u16;
+                let rect = (hud.mentions_width > 0).then(|| Rect {
+                    x: area.right().saturating_sub(total + 1),
+                    y: area.y,
+                    width: hud.mentions_width,
+                    height: 1,
+                });
+                ctx.mentions_hud_rect.set(rect);
+                block = block.title_top(hud.line);
+            }
+            None => ctx.mentions_hud_rect.set(None),
         }
         let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
         block = block.title_bottom(help_hint_title);
@@ -2101,11 +2121,20 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     Line::from(spans).right_aligned()
 }
 
+/// The top-border status line plus the width of its leading mentions
+/// segment, so the click hit test can find the mentions text inside the
+/// right-aligned line (the voice/chips text after it is not clickable).
+struct StatusHud {
+    line: Line<'static>,
+    /// Display cells of the mentions segment, 0 when nothing is unread.
+    mentions_width: u16,
+}
+
 fn status_hud_title(
     balance: Option<i64>,
     unread: i64,
     voice_badge: Option<&str>,
-) -> Option<Line<'static>> {
+) -> Option<StatusHud> {
     if balance.is_none() && unread <= 0 && voice_badge.is_none() {
         return None;
     }
@@ -2123,6 +2152,7 @@ fn status_hud_title(
             Style::default().fg(theme::TEXT_MUTED()),
         ));
     }
+    let mentions_width = spans.iter().map(Span::width).sum::<usize>() as u16;
     if let Some(voice_badge) = voice_badge {
         if !spans.is_empty() {
             spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
@@ -2149,7 +2179,10 @@ fn status_hud_title(
             Style::default().fg(theme::TEXT_MUTED()),
         ));
     }
-    Some(Line::from(spans).right_aligned())
+    Some(StatusHud {
+        line: Line::from(spans).right_aligned(),
+        mentions_width,
+    })
 }
 
 #[cfg(test)]
