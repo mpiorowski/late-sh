@@ -3,14 +3,18 @@ use chrono::NaiveDate;
 use late_core::nonogram::{NonogramPack, NonogramPackIndex, NonogramPuzzle};
 use rand_core::{OsRng, RngCore};
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use super::svc::NonogramService;
 use late_core::models::nonogram::{Game, GameParams};
 
+/// Shared, immutable puzzle library. The packs sit behind an `Arc` so the
+/// per-session clones in `SessionConfig` are refcount bumps, not deep copies
+/// of ~300 embedded puzzles.
 #[derive(Clone, Debug, Default)]
 pub struct Library {
-    packs: Vec<NonogramPack>,
+    packs: Arc<Vec<NonogramPack>>,
 }
 
 impl Library {
@@ -765,7 +769,9 @@ pub fn load_default_library() -> Result<Library> {
         packs.push(pack);
     }
 
-    Ok(Library { packs })
+    Ok(Library {
+        packs: Arc::new(packs),
+    })
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use late_core::models::user::RightSidebarMode;
+use late_core::models::user::{RightSidebarMode, RoomListMode};
 
 use crate::app::common::{markdown::render_body_to_lines, theme};
 
@@ -720,7 +720,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             TweakRow::RightSidebar,
             width,
             "Right sidebar",
-            right_sidebar_mode_span(state.draft().right_sidebar_mode),
+            right_sidebar_mode_span(state.device_rails().1),
         )),
         sections[3],
     );
@@ -730,7 +730,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             TweakRow::RoomListSidebar,
             width,
             "Room list",
-            toggle_span(state.draft().show_room_list_sidebar),
+            room_list_mode_span(state.device_rails().0),
         )),
         sections[4],
     );
@@ -2498,6 +2498,31 @@ fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
         RightSidebarMode::Off => ValueSpan {
             text: "○ off".to_string(),
             style: Style::default().fg(theme::TEXT_FAINT()),
+        },
+        RightSidebarMode::Auto => ValueSpan {
+            text: "◐ auto  ⏎ panels".to_string(),
+            style: Style::default().fg(theme::AMBER()),
+        },
+    }
+}
+
+/// The room-list rail row. Mirrors `right_sidebar_mode_span` without the panel
+/// editor affordance: the rail has no panel list of its own.
+fn room_list_mode_span(mode: RoomListMode) -> ValueSpan {
+    match mode {
+        RoomListMode::On => ValueSpan {
+            text: "● on".to_string(),
+            style: Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        },
+        RoomListMode::Off => ValueSpan {
+            text: "○ off".to_string(),
+            style: Style::default().fg(theme::TEXT_FAINT()),
+        },
+        RoomListMode::Auto => ValueSpan {
+            text: "◐ auto".to_string(),
+            style: Style::default().fg(theme::AMBER()),
         },
     }
 }

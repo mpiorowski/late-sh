@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: embedded IRC server for late.sh chat
 - Primary audience: LLM agents working in `late-ssh/src/ircd`, IRC token auth, or IRC/chat integration paths
-- Last updated: 2026-06-17
+- Last updated: 2026-07-25 (rooms have real topics now: the JOIN burst and `TOPIC` queries answer 332/331 from `chat_rooms.topic`; setting one stays a late.sh-side action)
 - Status: Active
 - Parent context: `../../../CONTEXT.md`
 - Related context: `../app/chat/CONTEXT.md`
@@ -142,6 +142,7 @@ Not exposed as normal IRC channels:
 
 Behavior:
 - `#lounge` is force-joined on IRC session start. If join fails because of room-level restrictions, the IRC session stays up and receives the refusal.
+- The JOIN burst is JOIN, then the topic (`replies::topic`: 332 with `chat_rooms.topic`, 331 when unset), then NAMES. A `TOPIC #room` query answers the same way. `TOPIC #room :text` still refuses with 482: a private room's topic answers to its owner and a public one to the mods, and that authority lives in the chat service, not in the IRC layer.
 - Joining a public channel calls the normal room membership path.
 - Joining a private channel requires existing membership; IRC presents private rooms as invite-only.
 - PART detaches the IRC view for normal rooms but does not leave late.sh room membership.

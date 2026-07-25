@@ -1,9 +1,11 @@
 use super::{
     audio::booth as audio_booth,
     chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_search_modal, settings_modal, sheet_modal,
+    room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
 };
+use late_core::models::user::{RightSidebarMode, RoomListMode};
+
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
@@ -815,6 +817,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_input(app, event);
+        return;
+    }
+
     if is_room_search_shortcut(&event) {
         if app.room_search_modal_state.is_open() {
             app.room_search_modal_state.close();
@@ -1312,9 +1319,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 /// launches it; `d` opens the Lateania reset prompt when Lateania is selected.
 /// Returns `false` for keys it does not own (digit/Tab nav, `q`, `?`) so they
 /// fall through to the global handlers.
-/// World Cup screen keys: `Space` toggles overview/bracket and `j`/`k` (plus
-/// the down/up arrows) scroll the active view. Returns `false` for everything
-/// else so global navigation (Tab, page numbers, `?`, `q`, …) still works.
 /// The key byte a door launcher should see, if the event carries one. The vt
 /// parser emits printables as `Char` and control bytes (Enter, backspace) as
 /// `Byte`; the arcade-name claim prompt needs both.
@@ -1324,17 +1328,6 @@ fn launcher_key_byte(event: &ParsedInput) -> Option<u8> {
         ParsedInput::Char(c) if c.is_ascii() => Some(*c as u8),
         _ => None,
     }
-}
-
-fn handle_worldcup_input(app: &mut App, event: &ParsedInput) -> bool {
-    let byte = match event {
-        ParsedInput::Byte(b) => *b,
-        ParsedInput::Char(c) if c.is_ascii() => *c as u8,
-        ParsedInput::Arrow(b'B') => b'j',
-        ParsedInput::Arrow(b'A') => b'k',
-        _ => return false,
-    };
-    crate::app::worldcup::input::handle_key(&mut app.worldcup, byte)
 }
 
 fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
@@ -1469,6 +1462,18 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
                 state.connect();
             }
         }
+        HubGame::Brogue => {
+            if !app.brogue_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Brogue is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Brogue);
+            if let Some(state) = app.brogue_state.as_mut() {
+                state.connect();
+            }
+        }
         HubGame::Usurper => {
             if !app.usurper_enabled {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
@@ -1516,10 +1521,6 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return handle_games_hub_input(app, event);
     }
 
-    if ctx.screen == Screen::WorldCup {
-        return handle_worldcup_input(app, event);
-    }
-
     if ctx.screen == Screen::Clubhouse {
         return crate::app::clubhouse::input::handle_event(app, event);
     }
@@ -1527,7 +1528,7 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     if ctx.screen == Screen::Rebels {
         // Running-mode bytes never reach here (intercepted in handle_input), so
         // this only handles the Launcher. Enter launches the game; every other
-        // key (Tab/1-7 nav, `q` to quit, `?` for help, ...) falls through to
+        // key (Tab/1-5 nav, `q` to quit, `?` for help, ...) falls through to
         // the normal global handling, so the splash behaves like a plain page.
         if let ParsedInput::Byte(b'\r' | b'\n') = event {
             app.enter_rebels();
@@ -1580,6 +1581,28 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if let Some(b) = launcher_key_byte(event) {
             app.enter_dcss();
             if let Some(state) = app.dcss_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Brogue {
+        // Same as DCSS above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .brogue_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_brogue();
+            if let Some(state) = app.brogue_state.as_mut()
                 && state.launcher_key(b)
             {
                 return true;
@@ -2358,6 +2381,10 @@ fn dispatch_escape(app: &mut App) {
         close_icon_picker(app);
         return;
     }
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_escape(app);
+        return;
+    }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
         app.chat.message_search.clear();
@@ -2704,10 +2731,6 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
     // history lives on Home), so it resolves to None like everything else.
     if let Some(room_id) = embedded_chat_room_id(app, screen) {
         chat::input::handle_scroll_in_room(app, room_id, delta);
-        return;
-    }
-    if screen == Screen::WorldCup {
-        app.worldcup.scroll(delta);
     }
 }
 
@@ -2718,14 +2741,13 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 0 1 2 3 4 5 6 7 | ..." land on these columns.
+        // cells in " late.sh | 0 1 2 3 4 5 | ..." land on these columns.
         12 => Some(Screen::Clubhouse),
         14 => Some(Screen::Dashboard),
         16 => Some(Screen::Arcade),
         18 => Some(Screen::Games),
         20 => Some(Screen::Artboard),
         22 => Some(Screen::Pinstar),
-        24 => Some(Screen::WorldCup),
         _ => None,
     }
 }
@@ -3182,7 +3204,8 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
 }
 
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
-    if !app.profile_state.profile().show_room_list_sidebar {
+    let (room_list_mode, _) = app.rail_modes();
+    if !crate::app::render::resolve_room_list_enabled(room_list_mode, app.size.0) {
         return None;
     }
     const HOME_RAIL_WIDTH: u16 = 24;
@@ -3224,8 +3247,9 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
 fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    let profile = app.profile_state.profile();
-    if crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, app.screen) {
+    let (_, right_sidebar_mode) = app.rail_modes();
+    if crate::app::render::resolve_right_sidebar_enabled(right_sidebar_mode, app.screen, app.size.0)
+    {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
     } else {
         inner
@@ -3263,6 +3287,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Launcher ignores them.
         Screen::Nethack => false,
         Screen::Dcss => false,
+        Screen::Brogue => false,
         Screen::Usurper => false,
         Screen::Dopewars => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
@@ -3271,9 +3296,6 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
             // Arrows handled via handle_dedicated_screen_input
             false
         }
-        // World Cup up/down arrows are consumed earlier in
-        // handle_dedicated_screen_input (mapped to k/j scroll).
-        Screen::WorldCup => false,
         // Walk-mode arrows are consumed in handle_dedicated_screen_input;
         // composing-mode arrows are swallowed by the shared composer gate.
         Screen::Clubhouse => false,
@@ -3302,6 +3324,17 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
     if ctx.screen == Screen::Dcss
         && let Some(state) = app.dcss_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Brogue
+        && let Some(state) = app.brogue_state.as_mut()
         && state.name_modal_visible()
     {
         if byte == 0x1B {
@@ -3457,8 +3490,9 @@ fn open_settings_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
+    let device_rails = app.rail_modes();
     app.settings_modal_state
-        .open_from_profile(app.profile_state.profile());
+        .open_from_profile(app.profile_state.profile(), device_rails);
     app.show_settings = true;
 }
 
@@ -3850,11 +3884,22 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
         {
-            let label = match app.profile_state.cycle_sidebars() {
-                (true, true) => "Sidebars: both shown",
-                (false, true) => "Sidebars: room list hidden",
-                (true, false) => "Sidebars: info panel hidden",
-                (false, false) => "Sidebars: both hidden",
+            // Per device: this writes the layout onto the SSH key the session
+            // authenticated with, so cycling on a phone leaves the desktop's
+            // layout alone. The banner says so, since the same account can now
+            // legitimately look different in two places.
+            let label = match app.cycle_device_rails() {
+                (RoomListMode::Auto, _) | (_, RightSidebarMode::Auto) => {
+                    "Sidebars: auto for this terminal size (this device)"
+                }
+                (RoomListMode::On, RightSidebarMode::On) => "Sidebars: both shown (this device)",
+                (RoomListMode::Off, RightSidebarMode::On) => {
+                    "Sidebars: room list hidden (this device)"
+                }
+                (RoomListMode::On, RightSidebarMode::Off) => {
+                    "Sidebars: info panel hidden (this device)"
+                }
+                (RoomListMode::Off, RightSidebarMode::Off) => "Sidebars: both hidden (this device)",
             };
             app.banner = Some(crate::app::common::primitives::Banner::success(label));
             true
@@ -3906,11 +3951,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         b'5' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Pinstar);
-            true
-        }
-        b'6' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::WorldCup);
             true
         }
         b'0' if !artboard_blocks_page_switch => {
@@ -3966,6 +4006,11 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }
+        Screen::Brogue => {
+            // Same as DCSS: Launcher keys are handled in
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
         Screen::Usurper => {
             // Same as Nethack: Launcher keys are handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
@@ -3985,10 +4030,6 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Pinstar => {
             // Pinstar key dispatch is handled via handle_dedicated_screen_input
             // and the rich-event path; byte dispatch is a no-op here.
-        }
-        Screen::WorldCup => {
-            // World Cup keys are handled in handle_dedicated_screen_input
-            // (Space/j/k/arrows); byte dispatch is a no-op here.
         }
         Screen::Clubhouse => {
             // Clubhouse keys are handled in handle_dedicated_screen_input

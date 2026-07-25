@@ -433,15 +433,6 @@ pub(crate) fn protocol_from_device_attributes(attrs: &[u16]) -> Option<TerminalI
     attrs.contains(&4).then_some(TerminalImageProtocol::Sixel)
 }
 
-/// True when a terminal identity string (TERM, `TERM_PROGRAM`, or the raw
-/// XTVERSION reply) names kitty specifically — not the wider kitty-graphics
-/// family (ghostty, rio, …), which render regional-indicator flags fine. kitty
-/// alone desyncs its cursor from ratatui's cell-width model, so the World Cup
-/// overview drops flags from its rightmost (bracket) column only for it.
-pub(crate) fn identity_is_kitty(value: &str) -> bool {
-    value.to_ascii_lowercase().contains("kitty")
-}
-
 fn protocol_from_identity(value: &str) -> Option<TerminalImageProtocol> {
     let value = value.trim().to_ascii_lowercase();
     if ITERM2_PROTOCOL_IDENTITIES

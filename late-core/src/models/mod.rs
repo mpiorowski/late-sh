@@ -109,6 +109,9 @@ pub mod traffic;
 pub mod twenty_forty_eight;
 pub mod ultimate_cooldown;
 pub mod user;
+pub mod user_ssh_key;
+#[cfg(test)]
+mod user_ssh_key_test;
 #[cfg(test)]
 mod user_test;
 pub mod username_effect;

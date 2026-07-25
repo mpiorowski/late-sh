@@ -153,15 +153,19 @@ impl State {
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
-    pub fn poll_daily_generation(&mut self) {
+    /// Returns true when a generated board arrived (or fallbacks installed),
+    /// changing what the sudoku screen renders.
+    pub fn poll_daily_generation(&mut self) -> bool {
         let Some(rx) = self.daily_generation_rx.take() else {
-            return;
+            return false;
         };
 
+        let mut changed = false;
         let mut disconnected = false;
         loop {
             match rx.try_recv() {
                 Ok(result) => {
+                    changed = true;
                     let should_apply = self.mode == Mode::Daily
                         && self.difficulty_key() == result.difficulty_key
                         && !self.daily_snapshots.contains_key(&result.difficulty_key);
@@ -183,7 +187,9 @@ impl State {
             self.daily_generation_rx = Some(rx);
         } else {
             self.install_daily_fallbacks_for_missing();
+            changed = true;
         }
+        changed
     }
 
     pub fn is_loading(&self) -> bool {

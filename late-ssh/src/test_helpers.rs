@@ -28,7 +28,7 @@ use crate::app::state::{App, SessionConfig};
 use crate::app::voice::svc::{VoiceConfig, VoiceService};
 use crate::app::{LeaderboardService, QuestService, ShopService};
 use crate::authz::Permissions;
-use crate::config::{AiConfig, Config, WebTunnelConfig};
+use crate::config::{AiConfig, Config};
 use crate::paired_clients::{PairControlMessage, PairedClientRegistry};
 use crate::session::SessionRegistry;
 use crate::state::State;
@@ -137,11 +137,6 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ssh_proxy_trusted_cidrs: vec![],
         ws_pair_max_attempts_per_ip: 30,
         ws_pair_rate_limit_window_secs: 60,
-        web_tunnel: WebTunnelConfig {
-            token: "test-web-tunnel-token".to_string(),
-            username: "web-demo".to_string(),
-            fingerprint: "web-tunnel-demo".to_string(),
-        },
         ai: AiConfig {
             enabled: false,
             api_key: None,
@@ -162,6 +157,10 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         dcss_host: String::new(),
         dcss_port: 2325,
         dcss_secret: String::new(),
+        brogue_enabled: false,
+        brogue_host: String::new(),
+        brogue_port: 2327,
+        brogue_secret: String::new(),
         usurper_enabled: false,
         usurper_host: String::new(),
         usurper_port: 2326,
@@ -233,6 +232,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
+        pair_ws_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
         clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby::with_seed(7),
         afk_users,
@@ -294,7 +294,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ultimate_service,
         now_playing_rx,
         radio_meta_rx,
-        worldcup_service: crate::app::worldcup::svc::WorldCupService::new(),
         activity_feed: activity_tx,
         session_registry,
         irc_registry,
@@ -450,6 +449,10 @@ fn make_app_with_chat_service_and_permissions(
         dcss_host: String::new(),
         dcss_port: 2325,
         dcss_secret: String::new(),
+        brogue_enabled: false,
+        brogue_host: String::new(),
+        brogue_port: 2327,
+        brogue_secret: String::new(),
         usurper_enabled: false,
         usurper_host: String::new(),
         usurper_port: 2326,
@@ -465,7 +468,6 @@ fn make_app_with_chat_service_and_permissions(
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
-        worldcup_service: None,
         user_id,
         permissions,
         artboard_banned: false,
@@ -474,6 +476,10 @@ fn make_app_with_chat_service_and_permissions(
         clubhouse_lobby: None,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
+        // No SSH key: test apps follow the account default and persist no
+        // per-device layout, which is also what ghost bot sessions do.
+        key_fingerprint: None,
+        key_layout: None,
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
@@ -496,18 +502,17 @@ pub fn make_app_with_paired_client(
     db: Db,
     user_id: Uuid,
     session_token: &str,
-) -> (
-    App,
-    tokio::sync::mpsc::UnboundedReceiver<PairControlMessage>,
-) {
+) -> (App, tokio::sync::mpsc::Receiver<PairControlMessage>) {
     let registry = PairedClientRegistry::new("https://audio.late.sh");
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    registry.register(
-        session_token.to_string(),
-        tx,
-        uuid::Uuid::now_v7(),
-        late_core::models::user::AudioSource::default(),
-    );
+    let (tx, rx) = tokio::sync::mpsc::channel(crate::paired_clients::PAIR_CONTROL_QUEUE_CAP);
+    registry
+        .register(
+            session_token.to_string(),
+            tx,
+            uuid::Uuid::now_v7(),
+            late_core::models::user::AudioSource::default(),
+        )
+        .expect("paired register");
     let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
@@ -625,6 +630,10 @@ pub fn make_app_with_paired_client(
         dcss_host: String::new(),
         dcss_port: 2325,
         dcss_secret: String::new(),
+        brogue_enabled: false,
+        brogue_host: String::new(),
+        brogue_port: 2327,
+        brogue_secret: String::new(),
         usurper_enabled: false,
         usurper_host: String::new(),
         usurper_port: 2326,
@@ -640,7 +649,6 @@ pub fn make_app_with_paired_client(
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
-        worldcup_service: None,
         user_id,
         permissions: Permissions::default(),
         artboard_banned: false,
@@ -649,6 +657,10 @@ pub fn make_app_with_paired_client(
         clubhouse_lobby: None,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
+        // No SSH key: test apps follow the account default and persist no
+        // per-device layout, which is also what ghost bot sessions do.
+        key_fingerprint: None,
+        key_layout: None,
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
@@ -665,6 +677,15 @@ pub fn make_app_with_paired_client(
     .expect("app");
     app.skip_splash_for_tests();
     (app, rx)
+}
+
+/// Give a test app a device identity: the SSH key a real session would have
+/// authenticated with. Without it an app is keyless, so per-device settings
+/// apply for the session but persist nowhere. The caller must have created the
+/// matching `user_ssh_keys` row (as `auth_publickey` does) for writes to land.
+pub fn with_session_key(mut app: App, fingerprint: &str) -> App {
+    app.key_fingerprint = Some(fingerprint.to_string());
+    app
 }
 
 pub async fn wait_until<F, Fut>(mut predicate: F, label: &str)

@@ -26,14 +26,13 @@ pub const DRUNK_DECAY_PER_HOUR: i64 = 150;
 pub const MAX_DRUNK_POINTS: i64 = 4_000;
 
 /// Level thresholds on effective (decayed) points. Level 0 renders nothing;
-/// level 4 ("fully wasted") lands at 2000, two top-shelf pours deep. Level 1
-/// (the welcome round) glows without a word; the printed drunk label only kicks
-/// in at level 2, i.e. 300 points, so a first sip stays quiet.
+/// level 1 ("tipsy", the welcome round) already earns its printed label;
+/// level 4 ("fully wasted") lands at 2000, two top-shelf pours deep.
 const DRUNK_LEVEL_THRESHOLDS: [i64; 4] = [1, 300, 1_000, 2_000];
 
-/// Lowest level that earns a printed "(word)" label next to the name. Below it,
-/// the glow carries the state on its own.
-pub const DRUNK_LABEL_MIN_LEVEL: u8 = 2;
+/// Lowest level that earns a printed "(word)" label next to the name. Every
+/// non-sober level gets one now that the label is the only drunk indicator.
+pub const DRUNK_LABEL_MIN_LEVEL: u8 = 1;
 
 /// The top drunk level ("wasted"). The bar keeps pouring the strong stuff right
 /// up to here so a patron can actually climb the ladder; only once they hit it

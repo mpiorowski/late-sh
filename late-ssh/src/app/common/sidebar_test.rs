@@ -19,7 +19,8 @@ fn friend_names_text_scrolls_past_the_names_that_do_not_fit() {
     // column is reserved.
     assert_eq!(friend_names_text(&names, 12, 0), "@ada @bob @c");
     // Held at the start, then scrolled to the end: the tail is readable.
-    assert_eq!(friend_names_text(&names, 12, 40), "da @bob @cyd");
+    // With hold 45 and step 15, the far extreme spans ticks 75..120.
+    assert_eq!(friend_names_text(&names, 12, 90), "da @bob @cyd");
 }
 
 fn line_text(line: &Line<'_>) -> String {
@@ -78,7 +79,7 @@ fn music_stage_chrome_rows_never_move() {
     for source in ALL_SOURCES {
         let lines = stage_lines(source);
         let texts: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(texts.len(), MUSIC_STAGE_HEIGHT as usize, "{source:?}");
+        assert_eq!(texts.len(), MUSIC_DOCK_HEIGHT as usize, "{source:?}");
         assert!(texts[2].starts_with("▌ radio"), "{source:?}");
         assert!(texts[4].starts_with("▌ youtube"), "{source:?}");
         assert!(texts[6].starts_with("▌ icecast"), "{source:?}");
@@ -190,7 +191,6 @@ fn visible_components_respects_order() {
     let components = [
         on(RightSidebarComponent::Bonsai),
         on(RightSidebarComponent::Music),
-        on(RightSidebarComponent::Visualizer),
         on(RightSidebarComponent::Daily),
     ];
     // Tall enough for everything: order is preserved exactly.
@@ -199,7 +199,6 @@ fn visible_components_respects_order() {
         vec![
             RightSidebarComponent::Bonsai,
             RightSidebarComponent::Music,
-            RightSidebarComponent::Visualizer,
             RightSidebarComponent::Daily,
         ]
     );
@@ -208,7 +207,6 @@ fn visible_components_respects_order() {
 #[test]
 fn visible_components_skips_disabled() {
     let components = [
-        off(RightSidebarComponent::Visualizer),
         on(RightSidebarComponent::Music),
         off(RightSidebarComponent::Daily),
         on(RightSidebarComponent::Bonsai),
@@ -237,20 +235,18 @@ fn visible_components_drops_by_priority_not_position() {
 
 #[test]
 fn visible_components_skips_unfit_panel_without_stopping() {
-    // Bonsai (10) doesn't fit but the visualizer (4) below the cut still
-    // does: the walk skips bonsai instead of ending, so lower-priority
+    // Music (the biggest panel, now carrying the visualizer strip on top
+    // too) doesn't fit in a short rail, but Daily and Bonsai below the cut
+    // still do: the walk skips Music instead of ending, so lower-priority
     // panels that fit are kept.
     let components = [
-        on(RightSidebarComponent::Visualizer),
         on(RightSidebarComponent::Music),
+        on(RightSidebarComponent::Daily),
         on(RightSidebarComponent::Bonsai),
     ];
-    let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + RULE_HEIGHT + VISUALIZER_HEIGHT;
+    let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT - 1;
     assert_eq!(
         visible_components(&components, height),
-        vec![
-            RightSidebarComponent::Visualizer,
-            RightSidebarComponent::Music,
-        ]
+        vec![RightSidebarComponent::Daily, RightSidebarComponent::Bonsai]
     );
 }

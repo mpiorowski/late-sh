@@ -117,14 +117,22 @@ impl State {
         }
     }
 
-    pub fn tick(&mut self) {
-        self.drain_archive_results();
+    /// Returns true when this tick changed anything render-visible: a canvas
+    /// snapshot swap, a drained dartboard event, or an archive load result.
+    /// In archive view the snapshot peek stays out of the report (the drain
+    /// is deliberately skipped there, so the latched watch flag must not
+    /// dirty every tick); leaving archive view is input-driven and the next
+    /// tick drains and reports it.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = self.drain_archive_results();
+        changed |= !self.event_rx.is_empty();
 
         if !self.is_archive_view_active() && self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.invalidate_owner_overlay_cache();
             self.editor.clamp_cursor(&self.snapshot.canvas);
             self.editor.clamp_viewport_origin(&self.snapshot.canvas);
+            changed = true;
         }
         if let Some(reason) = self.snapshot.connect_rejected.as_ref() {
             self.private_notice = Some(reason.clone());
@@ -146,6 +154,7 @@ impl State {
                 }
             }
         }
+        changed
     }
 
     pub fn cursor(&self) -> Pos {
@@ -1059,8 +1068,10 @@ impl State {
         true
     }
 
-    fn drain_archive_results(&mut self) {
+    fn drain_archive_results(&mut self) -> bool {
+        let mut changed = false;
         while let Some(result) = self.archive_loader.try_recv() {
+            changed = true;
             self.snapshot_browser.loading = false;
             match result {
                 ArtboardArchiveResult::Loaded(items) => {
@@ -1074,6 +1085,7 @@ impl State {
                 }
             }
         }
+        changed
     }
 
     fn snapshot_browser_option_count(&self) -> usize {

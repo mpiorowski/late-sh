@@ -158,8 +158,8 @@ pub(crate) fn bot_app_context() -> String {
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. The printed word only shows from buzzed (level 2) up; tipsy just glows quietly. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
         - The buzz sobers up on its own over time, no action needed: it decays 150 points an hour, so even a maxed-out binge is fully sober again in about a day.\n\
         - Drunk level tints the username label's background everywhere it appears (the Clubhouse floor and chat author labels alike), light green through yellow and orange to red as the level climbs.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Directory (5), and World Cup (6).\n\
-        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Usurper, Green Dragon, dopewars, and Rebels; each is launched from there, not from its own top-level page.\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), and Directory (5).\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, dopewars, and Rebels; each is launched from there, not from its own top-level page.\n\
         - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
@@ -185,8 +185,8 @@ pub(crate) fn bot_app_context() -> String {
 /// in depth, so anything past "which screen / which key" should route there.
 pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
-    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games), 3 Games hub (Lateania, NetHack, DCSS, Usurper, Green Dragon, dopewars, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar), 6 World Cup (live scores).\n\
-    - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, dopewars, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar).\n\
+    - Tab / Shift+Tab cycles screens; number keys 0-5 jump straight to one.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens Hub (Quests, Shop, Leaderboard, Events). Ctrl+Q opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake).\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Voice, Mentions, and Discover.\n\
@@ -334,10 +334,14 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
         "  /private #room     create a private room",
+        "  /roominfo          set this room's topic & rules (owner, or a mod)",
+        "  /rules             show this room's rules",
         "  /invite @user      add a user to the current room",
+        "  /kick @user        remove a user from your private room (or a mod)",
         "  /leave             leave the current room",
         "  /dm @user          open a direct message",
         "  /active            list active users",
+        "  /gift @user <n>    send chips, with an optional note after the amount",
         "  /friends           list friends",
         "  /friend [@user]    list friends, or mark a user as a friend",
         "  /unfriend [@user]  list friends, or remove a friend mark",
@@ -808,7 +812,6 @@ fn overview_lines() -> Vec<String> {
         "  3 Games           Lateania, Rebels, and NetHack in one hub",
         "  4 Artboard        shared persistent ASCII canvas",
         "  5 Directory       Profiles, Projects, and Pinstar",
-        "  6 World Cup       live scores, groups, and the bracket",
         "",
         "You land in the Clubhouse: hjkl/arrows walk, i talks (your words float",
         "over your head and land in #lounge), w waves, x dances, Enter interacts.",
@@ -1047,9 +1050,15 @@ fn settings_help_lines() -> Vec<String> {
         "    Background color        theme background fill on/off; off keeps text colors on your terminal's own background"
             .to_string(),
         "    Text Brightness         nudge overall text brightness up or down".to_string(),
-        "    Right sidebar           on / off / custom for Home and Arcade; Custom opens a panel checklist"
+        "    Right sidebar           on / off / auto for Home and Arcade; Enter opens a panel checklist"
             .to_string(),
-        "    Room list               show/hide the Home room-list rail".to_string(),
+        "    Room list               on / off / auto for the Home room-list rail".to_string(),
+        "                            auto hides a rail on terminals too narrow to carry it, so one"
+            .to_string(),
+        "                            account works on both a desktop and a phone".to_string(),
+        "                            both rows apply to this device (this SSH key) only, never the"
+            .to_string(),
+        "                            account default; `\\` on Home cycles the same two".to_string(),
         "    Pet companion strip     show/hide the pet strip above the Lounge chat composer (pet owners only)"
             .to_string(),
         "  Compose".to_string(),
@@ -1059,7 +1068,7 @@ fn settings_help_lines() -> Vec<String> {
         "    Start app with music muted    mutes the first paired audio client on each new session so music doesn't auto-play"
             .to_string(),
         "  Display".to_string(),
-        "    Chat flag text fallback       show text/boxed-letter labels instead of flag emoji in chat badges, Shop Flags, and World Cup"
+        "    Chat flag text fallback       show text/boxed-letter labels instead of flag emoji in chat badges and Shop Flags"
             .to_string(),
         "  Startup".to_string(),
         "    Land on Home page             land on Home (page 1) instead of the Clubhouse (page 0) when a session starts"
@@ -1327,6 +1336,10 @@ Plain stream, no pairing:
   mpv https://late.sh/stream
 
 Direct stream playback is Icecast only. Pair the CLI or browser for source switching, mute/volume keys, visualizer sync, or the shared YouTube queue.
+
+No sound from the paired CLI on Linux?
+  The CLI plays audio through ALSA. On a PipeWire system with no ALSA compatibility layer, it finds no output device.
+  Install pipewire-alsa (Arch: pacman -S pipewire-alsa, Debian/Ubuntu: apt install pipewire-alsa) and reconnect.
 
 Global keys (work anywhere)
   ?                open this guide, including Pair and terminal-specific tabs

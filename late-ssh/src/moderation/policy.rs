@@ -53,6 +53,10 @@ bitflags! {
 
 const REGULAR: Caps = Caps::empty();
 
+/// What the owner of a private room may do inside that one room. Deliberately
+/// narrow: an owner keeps the door, staff keep everything else.
+const ROOM_OWNER: Caps = Caps::KICK_FROM_ROOM;
+
 const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::DELETE_OTHER_MESSAGE)
     .union(Caps::KICK_FROM_ROOM)
@@ -81,12 +85,27 @@ const ADMIN: Caps = Caps::all();
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Permissions {
     tier: Tier,
+    /// Granted for a single action against a single room the actor owns. Never
+    /// part of a session's standing permissions, which is why it is not derived
+    /// from the user flags.
+    owns_room: bool,
 }
 
 impl Permissions {
     pub const fn new(is_admin: bool, is_moderator: bool) -> Self {
         Self {
             tier: Tier::from_user_flags(is_admin, is_moderator),
+            owns_room: false,
+        }
+    }
+
+    /// Add the caps a room owner holds, for one action inside the room they
+    /// own. The tier is untouched on purpose: ownership outranks nobody, so the
+    /// rank compare in `can` still refuses staff targets.
+    pub const fn as_room_owner(self) -> Self {
+        Self {
+            tier: self.tier,
+            owns_room: true,
         }
     }
 
@@ -143,10 +162,15 @@ impl Permissions {
     }
 
     pub const fn caps(self) -> Caps {
-        match self.tier {
+        let tier = match self.tier {
             Tier::Regular => REGULAR,
             Tier::Moderator => MODERATOR,
             Tier::Admin => ADMIN,
+        };
+        if self.owns_room {
+            tier.union(ROOM_OWNER)
+        } else {
+            tier
         }
     }
 
@@ -155,11 +179,19 @@ impl Permissions {
     }
 
     pub fn can(self, action: Caps, target: Tier) -> bool {
-        self.has(action) && self.tier > target
+        if !self.has(action) {
+            return false;
+        }
+        // Staff act by rank. An owner holds no rank, so they may only act on
+        // regulars, and only with the caps ownership itself grants.
+        self.tier > target
+            || (self.owns_room && matches!(target, Tier::Regular) && ROOM_OWNER.contains(action))
     }
 
+    /// Owner actions are logged like staff actions: someone was removed from a
+    /// room and the record should say who did it.
     pub const fn should_audit(self, target_is_self: bool) -> bool {
-        !target_is_self && self.can_moderate()
+        !target_is_self && (self.can_moderate() || self.owns_room)
     }
 }
 

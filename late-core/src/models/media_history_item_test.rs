@@ -24,7 +24,9 @@ async fn submitter(client: &Client, name: &str) -> User {
 }
 
 /// Play `video_id` through the same path production uses: a queued row that
-/// gets promoted, then recorded in history.
+/// gets promoted, recorded in history, then retired when the track ends.
+/// Retiring matters: only one row per track may be queued or playing at a
+/// time, so a play that never ends would block the next play of that track.
 async fn play(client: &Client, submitter_id: Uuid, video_id: &str, limit: i64) {
     let item = MediaQueueItem::insert_youtube(
         client,
@@ -37,9 +39,16 @@ async fn play(client: &Client, submitter_id: Uuid, video_id: &str, limit: i64) {
     )
     .await
     .expect("queue item");
+    let item = MediaQueueItem::mark_playing(client, item.id, Utc::now())
+        .await
+        .expect("mark playing")
+        .expect("queued row promoted to playing");
     MediaHistoryItem::record_play_from_queue_item(client, &item, limit)
         .await
         .expect("record play");
+    MediaQueueItem::mark_played(client, item.id, Utc::now())
+        .await
+        .expect("mark played");
 }
 
 /// History ordering is driven by wall-clock `last_played_at`. Pin it explicitly

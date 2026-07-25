@@ -1,5 +1,16 @@
 use crate::app::activity::event::ActivityGame;
 
+/// Why the render loop drew a frame. The loop can only distinguish its two
+/// wake sources; event-driven renders currently ride the world tick, so they
+/// count as `WorldTick` until the loop becomes event-driven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderReason {
+    /// Keystroke or resize, rendered without advancing world time.
+    Input,
+    /// The 66ms world tick, which advanced animations first.
+    WorldTick,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -9,10 +20,17 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
-    use super::ActivityGame;
+    use super::{ActivityGame, RenderReason};
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
+    }
+
+    fn render_reason_label(reason: RenderReason) -> &'static str {
+        match reason {
+            RenderReason::Input => "input",
+            RenderReason::WorldTick => "tick",
+        }
     }
 
     fn game_label(game: ActivityGame) -> &'static str {
@@ -105,12 +123,58 @@ mod inner {
         })
     }
 
+    fn renders_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_renders_total")
+                .with_description("Frames actually drawn, by render loop wake reason")
+                .build()
+        })
+    }
+
+    fn renders_skipped_clean_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_renders_skipped_clean_total")
+                .with_description(
+                    "Render passes skipped because neither input nor the world tick changed visible state",
+                )
+                .build()
+        })
+    }
+
     fn render_frame_drops_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
             meter()
                 .u64_counter("late_ssh_render_frame_drops_total")
                 .with_description("Frames dropped because the SSH channel was busy")
+                .build()
+        })
+    }
+
+    fn render_stall_skips_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_render_stall_skips_total")
+                .with_description(
+                    "Render passes skipped because a session's unacked SSH output exceeded the budget",
+                )
+                .build()
+        })
+    }
+
+    fn render_stall_disconnects_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_render_stall_disconnects_total")
+                .with_description(
+                    "Sessions disconnected after staying over the SSH output budget too long",
+                )
                 .build()
         })
     }
@@ -181,8 +245,24 @@ mod inner {
         );
     }
 
+    pub fn record_render(reason: RenderReason) {
+        renders_total().add(1, &[KeyValue::new("reason", render_reason_label(reason))]);
+    }
+
+    pub fn record_render_skipped_clean() {
+        renders_skipped_clean_total().add(1, &[]);
+    }
+
     pub fn record_render_frame_drop() {
         render_frame_drops_total().add(1, &[]);
+    }
+
+    pub fn record_render_stall_skip() {
+        render_stall_skips_total().add(1, &[]);
+    }
+
+    pub fn record_render_stall_disconnect() {
+        render_stall_disconnects_total().add(1, &[]);
     }
 
     pub fn record_chat_message_sent() {
@@ -200,15 +280,19 @@ mod inner {
 
 #[cfg(not(feature = "otel"))]
 mod inner {
-    use super::ActivityGame;
+    use super::{ActivityGame, RenderReason};
 
     pub fn record_ssh_connection() {}
+    pub fn record_render(_reason: RenderReason) {}
+    pub fn record_render_skipped_clean() {}
     pub fn add_ssh_session(_delta: i64) {}
     pub fn record_ws_pair_success() {}
     pub fn record_ws_pair_rejected_unknown_token() {}
     pub fn record_cli_pair_usage(_ssh_mode: &str, _platform: &str) {}
     pub fn add_cli_pair_active(_delta: i64, _ssh_mode: &str, _platform: &str) {}
     pub fn record_render_frame_drop() {}
+    pub fn record_render_stall_skip() {}
+    pub fn record_render_stall_disconnect() {}
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}

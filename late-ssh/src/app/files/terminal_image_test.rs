@@ -151,17 +151,6 @@ fn kitty_family_identities_use_kitty_protocol() {
 }
 
 #[test]
-fn identity_is_kitty_matches_only_kitty() {
-    for value in ["kitty", "xterm-kitty", "kitty(0.32.2)"] {
-        assert!(identity_is_kitty(value), "{value} should be kitty");
-    }
-    // Rest of the kitty-graphics family render flags fine — not kitty.
-    for value in ["ghostty", "xterm-ghostty", "rio", "WarpTerminal", "konsole"] {
-        assert!(!identity_is_kitty(value), "{value} should not be kitty");
-    }
-}
-
-#[test]
 fn iterm_family_identities_use_iterm2_protocol() {
     for value in ["iTerm.app", "iTerm2", "mintty", "hterm", "WezTerm 20240203"] {
         assert_eq!(

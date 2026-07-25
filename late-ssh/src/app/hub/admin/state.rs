@@ -223,6 +223,9 @@ pub(crate) struct AdminState {
 
 pub(crate) struct AdminTick {
     pub banner: Option<Banner>,
+    /// True when this tick drained any async result: loads mutate the admin
+    /// tab without a banner, so the render gate needs its own signal.
+    pub changed: bool,
 }
 
 impl AdminState {
@@ -254,6 +257,8 @@ impl AdminState {
             self.reload(true);
         }
 
+        // Peek before draining: any queued result mutates the admin tab.
+        let changed = !self.rx.is_empty();
         let mut banner = None;
         while let Ok(result) = self.rx.try_recv() {
             match result {
@@ -297,7 +302,7 @@ impl AdminState {
             }
         }
 
-        AdminTick { banner }
+        AdminTick { banner, changed }
     }
 
     pub(crate) fn templates(&self) -> &[RewardTemplateAdminRow] {

@@ -11,7 +11,7 @@ pub const POLL_MAX_OPTIONS: usize = 3;
 pub const POLL_MIN_OPTIONS: usize = 2;
 pub const POLL_DURATION_OPTIONS_SECS: [i64; 3] = [10 * 60, 20 * 60, 30 * 60];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChatPoll {
     pub id: Uuid,
     pub created: DateTime<Utc>,
@@ -40,7 +40,7 @@ impl From<tokio_postgres::Row> for ChatPoll {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChatPollOptionSummary {
     pub id: Uuid,
     pub position: i32,
@@ -48,7 +48,7 @@ pub struct ChatPollOptionSummary {
     pub vote_count: i64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ActiveChatPoll {
     pub poll: ChatPoll,
     pub options: Vec<ChatPollOptionSummary>,

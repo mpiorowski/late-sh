@@ -57,6 +57,11 @@ variable "DCSS_IMAGE_TAG" {
   type        = string
 }
 
+variable "BROGUE_IMAGE_TAG" {
+  description = "Docker image for late-brogue, the Brogue door host (e.g., ghcr.io/org/late-brogue:sha-abc123)."
+  type        = string
+}
+
 variable "USURPER_IMAGE_TAG" {
   description = "Docker image for late-usurper, the Usurper door host (e.g., ghcr.io/org/late-usurper:sha-abc123)."
   type        = string
@@ -212,6 +217,17 @@ variable "DCSS_ENABLED" {
   validation {
     condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DCSS_ENABLED)))
     error_message = "DCSS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
+variable "BROGUE_ENABLED" {
+  description = "Enable the Brogue door game CLIENT (service-ssh reaches the late-brogue host over SSH; the host pod is always deployed). Empty defaults to on."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.BROGUE_ENABLED)))
+    error_message = "BROGUE_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
   }
 }
 

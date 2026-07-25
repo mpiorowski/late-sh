@@ -1,5 +1,5 @@
 use crate::app::common::primitives::Screen;
-use crate::app::input::ParsedInput;
+use crate::app::input::{MouseEventKind, ParsedInput};
 use crate::app::lobby::state::LobbyEntry;
 use crate::app::state::App;
 
@@ -24,6 +24,13 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Char('k' | 'K') => {
             app.lobby.move_selection(&app.daily, -1);
         }
+        // The modal owns input while it is open, so the wheel never reaches
+        // the global scroll fallback: move the cursor the way the wheel turns.
+        ParsedInput::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => app.lobby.move_selection(&app.daily, -1),
+            MouseEventKind::ScrollDown => app.lobby.move_selection(&app.daily, 1),
+            _ => {}
+        },
         ParsedInput::Byte(b'\r' | b'\n' | b' ') | ParsedInput::Char(' ') => {
             activate_selection(app);
         }

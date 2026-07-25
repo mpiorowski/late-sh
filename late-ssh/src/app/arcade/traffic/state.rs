@@ -465,9 +465,11 @@ impl State {
 
     // ─── Tick ─────────────────────────────────────────────────────────────────
 
-    pub fn tick(&mut self) {
+    /// Returns true when the world advanced; a paused or non-playing game
+    /// is static.
+    pub fn tick(&mut self) -> bool {
         if !self.is_playing() || self.is_paused {
-            return;
+            return false;
         }
         let dt = Config::TICK_DT;
 
@@ -544,7 +546,7 @@ impl State {
         // An obstacle crash may have ended play (Crashed/Dead); stop here so the
         // later collision check can't spend a second life in the same tick.
         if !matches!(self.phase, Phase::Playing) {
-            return;
+            return true;
         }
 
         if let Some(stage) = self.current_stage() {
@@ -556,7 +558,7 @@ impl State {
 
         if !self.is_flashing() && self.check_collision() {
             self.handle_crash();
-            return;
+            return true;
         }
 
         if let Some(track) = self.active_track {
@@ -571,6 +573,7 @@ impl State {
                 self.record_best();
             }
         }
+        true
     }
 
     fn current_lane_cfg(&self) -> Option<&'static super::track::Lane> {

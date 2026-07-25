@@ -148,7 +148,7 @@ fn draw_list(
     if lines.len() > budget {
         let selected_line =
             selected_line_index(lobby_state.selected, lobby_base, lobby.len(), live.len());
-        let skip = selected_line.saturating_sub(budget.saturating_sub(1));
+        let skip = visible_window_start(selected_line, lines.len(), budget);
         lines.drain(..skip);
         lines.truncate(budget);
     }
@@ -184,6 +184,19 @@ fn house_line(table: HouseTable, occupancy: String, selected: bool) -> Line<'sta
         }),
     ));
     Line::from(spans)
+}
+
+/// First visible line of the scrolled list. The cursor rides the middle of
+/// the window, so rows stay visible below it and the list keeps reading as a
+/// list: pinning the selection to the last visible line hid everything
+/// underneath and made moving up look like the content sliding down.
+fn visible_window_start(selected_line: usize, line_count: usize, budget: usize) -> usize {
+    if line_count <= budget {
+        return 0;
+    }
+    selected_line
+        .saturating_sub(budget / 2)
+        .min(line_count - budget)
 }
 
 /// Line index of the selected entry inside the built list (headers offset).

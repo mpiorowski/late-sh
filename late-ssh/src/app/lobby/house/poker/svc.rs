@@ -576,7 +576,10 @@ impl PokerService {
                     state.action_countdown_remaining().unwrap_or_default()
                 };
 
-                tokio::time::sleep(sleep_for).await;
+                // Wake at most every second so each step republishes the
+                // snapshot: clients render the ticking clock from snapshot
+                // changes alone (same shape as blackjack's countdowns).
+                tokio::time::sleep(sleep_for.min(Duration::from_secs(1))).await;
 
                 let (settlements, next_countdown_id) = {
                     let mut state = svc.state.lock().await;
@@ -588,6 +591,7 @@ impl PokerService {
                         .action_countdown_remaining()
                         .is_some_and(|remaining| !remaining.is_zero())
                     {
+                        svc.publish(&state);
                         continue;
                     }
 

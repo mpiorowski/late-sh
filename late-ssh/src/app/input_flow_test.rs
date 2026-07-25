@@ -4,7 +4,10 @@ use crate::authz::Permissions;
 use crate::test_helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
     make_app_with_permissions, new_test_db, render_plain, wait_for_render_contains, wait_until,
+    with_session_key,
 };
+use late_core::models::user::{RightSidebarMode, RoomListMode};
+use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_message_reaction::ChatMessageReaction,
@@ -140,9 +143,6 @@ async fn screen_number_keys_switch_between_pages_including_pinstar() {
     app.handle_input(b"5");
     wait_for_render_contains(&mut app, " Directory ").await;
 
-    app.handle_input(b"6");
-    wait_for_render_contains(&mut app, "FIFA World Cup").await;
-
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
 }
@@ -162,9 +162,6 @@ async fn shift_tab_cycles_screens_backwards() {
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Clubhouse ").await;
-
-    app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, "FIFA World Cup").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Directory").await;
@@ -206,9 +203,6 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Directory ").await;
-
-    app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, "FIFA World Cup").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Clubhouse ").await;
@@ -1050,7 +1044,7 @@ async fn members_command_shows_room_members_without_persisting_message() {
         .await
         .expect("join viewer to lounge");
 
-    let private_room = ChatRoom::create_private_room(&client, "side")
+    let private_room = ChatRoom::create_private_room(&client, "side", viewer.id)
         .await
         .expect("create room");
     ChatRoomMember::join(&client, private_room.id, viewer.id)
@@ -1244,4 +1238,259 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     app.handle_input(b"/sheet \r");
     wait_for_render_contains(&mut app, "character sheet").await;
     wait_for_render_contains(&mut app, "sheet-modal-it").await;
+}
+
+#[tokio::test]
+async fn backslash_cycles_rails_for_this_device_only_and_auto_follows_width() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "rails-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "rails-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+    // Both rails up to start with: the room rail's footer hints and the
+    // sidebar's music panel are both on screen. (The sidebar's pinned presence
+    // row sits under the banner popup, so the panel header is the stable
+    // marker once a banner is showing.)
+    wait_for_render_contains(&mut app, "sort/fold").await;
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("music"), "sidebar missing; frame={frame:?}");
+
+    // First press hides the room rail, and says which scope it changed.
+    app.handle_input(b"\\");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("room list hidden (this device)"),
+        "expected a per-device banner; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("sort/fold"),
+        "expected the room rail to be hidden; frame={frame:?}"
+    );
+
+    // Three more presses reach Auto, which at 100 columns keeps both rails.
+    app.handle_input(b"\\\\\\");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("auto for this terminal size"),
+        "expected the auto step in the cycle; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("sort/fold") && frame.contains("music"),
+        "a 100-column terminal should keep both rails on auto; frame={frame:?}"
+    );
+
+    // A phone-sized terminal folds both rails away without touching settings,
+    // and widening brings them back: auto reads the live width every frame.
+    app.resize(50, 32).expect("resize narrow");
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("sort/fold") && !frame.contains("music"),
+        "auto should fold both rails on a narrow terminal; frame={frame:?}"
+    );
+    app.resize(100, 32).expect("resize wide");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("sort/fold"),
+        "auto should restore the rails when the terminal grows; frame={frame:?}"
+    );
+
+    // The account default is untouched throughout: the layout belongs to the
+    // device, so the user's other machine keeps its own rails.
+    let profile = app.profile_state.profile();
+    assert!(
+        profile.show_room_list_sidebar,
+        "cycling rails must not rewrite the account default"
+    );
+    assert_eq!(
+        profile.room_list_mode,
+        late_core::models::user::RoomListMode::On
+    );
+}
+
+#[tokio::test]
+async fn unrelated_settings_edits_do_not_republish_this_device_rails() {
+    // Regression: the rail rows are per device, but `save()` writes the whole
+    // draft to the account and fires from every tweak. If the device layout
+    // lived in that draft, changing the theme on a phone would push the phone's
+    // rails onto the account, and every key with no layout of its own (the
+    // desktop) would inherit them.
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "rails-leak-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "rails-leak-flow-it");
+    wait_for_render_contains(&mut app, "sort/fold").await;
+
+    // Hide the room rail on this device only.
+    app.handle_input(b"\\");
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("sort/fold"),
+        "expected the rail hidden for this device; frame={frame:?}"
+    );
+
+    // Now touch something unrelated: Ctrl+O, Tab to the Tweaks tab, and flip
+    // the first row (Background color). The save banner marks the write landing.
+    app.handle_input(b"\x0f");
+    // Wait for the draft to hydrate from the profile snapshot before moving:
+    // that hydration resets the modal to its first tab (`open_from_profile`).
+    wait_for_render_contains(&mut app, "rails-leak-it").await;
+    app.handle_input(b"\t\t\t");
+    wait_for_render_contains(&mut app, "Background color").await;
+    // Enter toggles the selected row (Background color, the first one), which
+    // runs the same `save()` every other settings edit runs.
+    app.handle_input(b"\r");
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                let stored = User::get(&client, user.id)
+                    .await
+                    .expect("load user")
+                    .expect("user exists");
+                !late_core::models::user::extract_enable_background_color(&stored.settings)
+            }
+        },
+        "background color tweak to persist",
+    )
+    .await;
+
+    // That write landed, so if the device rails were riding along they would be
+    // in it. The account default still has both rails on: only this device changed.
+    let stored = User::get(&client, user.id)
+        .await
+        .expect("load user")
+        .expect("user exists");
+    assert_eq!(
+        late_core::models::user::extract_room_list_mode(&stored.settings),
+        late_core::models::user::RoomListMode::On,
+        "an unrelated tweak must not republish this device's rails"
+    );
+    assert!(
+        late_core::models::user::extract_show_room_list_sidebar(&stored.settings),
+        "the legacy mirror must stay in step with the account default"
+    );
+
+    // And the device's own choice survived the settings round trip.
+    app.handle_input(b"\x1b");
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("sort/fold"),
+        "expected the device rail to stay hidden; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn cycling_rails_persists_onto_the_authenticating_key() {
+    // End-to-end for the write path: keystroke -> App -> ProfileService -> the
+    // `user_ssh_keys` row for the key this session authenticated with, and not
+    // onto the account's other keys.
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "rails-key-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    // Two devices on one account, as `auth_publickey` would have recorded them.
+    UserSshKey::ensure(&client, user.id, "SHA256:phone")
+        .await
+        .expect("phone key");
+    UserSshKey::ensure(&client, user.id, "SHA256:desktop")
+        .await
+        .expect("desktop key");
+
+    let mut app = with_session_key(
+        make_app(test_db.db.clone(), user.id, "rails-key-flow-it"),
+        "SHA256:phone",
+    );
+    wait_for_render_contains(&mut app, "sort/fold").await;
+    app.handle_input(b"\\");
+
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+                    .await
+                    .expect("phone layout")
+                    == Some(KeyLayout {
+                        room_list_mode: RoomListMode::Off,
+                        right_sidebar_mode: RightSidebarMode::On,
+                    })
+            }
+        },
+        "the cycled layout to reach this device's key",
+    )
+    .await;
+
+    assert_eq!(
+        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+            .await
+            .expect("desktop layout"),
+        None,
+        "the account's other device must keep following the account default"
+    );
+}
+
+#[tokio::test]
+async fn rules_command_shows_every_line_in_an_overlay() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "rules-flow-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+
+    let room = ChatRoom::create_private_room(&client, "parlour", viewer.id)
+        .await
+        .expect("create room");
+    ChatRoomMember::join(&client, room.id, viewer.id)
+        .await
+        .expect("join viewer to parlour");
+    ChatRoom::set_topic_and_rules(
+        &client,
+        room.id,
+        Some("cards and tea"),
+        Some("be kind\nno spoilers\ntake the bins out"),
+    )
+    .await
+    .expect("set rules");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "rules-command-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+    wait_for_render_contains(&mut app, "parlour").await;
+    app.handle_input(b"llll");
+
+    app.handle_input(b"i/rules\r");
+    // Every line survives, which a one-line banner could not do.
+    wait_for_render_contains(&mut app, "#parlour rules").await;
+    wait_for_render_contains(&mut app, "be kind").await;
+    wait_for_render_contains(&mut app, "no spoilers").await;
+    wait_for_render_contains(&mut app, "take the bins out").await;
+
+    let messages = ChatMessage::list_recent(&client, room.id, 20)
+        .await
+        .expect("list recent messages");
+    assert!(messages.is_empty(), "expected /rules to stay client-side");
 }

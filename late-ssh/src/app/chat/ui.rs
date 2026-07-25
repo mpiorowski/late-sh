@@ -12,8 +12,7 @@ use ratatui::{
 use ratatui_textarea::TextArea;
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, hash_map::DefaultHasher},
-    hash::{Hash, Hasher},
+    collections::{HashMap, HashSet},
 };
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
@@ -21,6 +20,7 @@ use uuid::Uuid;
 use crate::app::common::{
     composer::composer_line_count,
     overlay::{Overlay, draw_overlay},
+    primitives::row_with_hint,
     theme,
     username_effect::NameStyle,
 };
@@ -76,6 +76,7 @@ pub struct DashboardChatView<'a> {
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
+    pub rows_versions: ChatRowsVersions,
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
@@ -1010,7 +1011,7 @@ fn pad_left_to_width(text: &str, width: usize) -> String {
     }
 }
 
-fn truncate_cells(text: &str, max_width: usize) -> String {
+pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(text) <= max_width {
         return text.to_string();
     }
@@ -1106,6 +1107,7 @@ pub fn draw_dashboard_chat_card(
             view.messages.iter().collect(),
             width,
             ChatRowsContext {
+                versions: view.rows_versions,
                 current_user_id: view.current_user_id,
                 afk_user_ids: view.afk_user_ids,
                 show_flag_fallback: view.show_flag_fallback,
@@ -1188,6 +1190,7 @@ pub fn draw_dashboard_chat_card(
 // ── Chat rows cache & scroll ────────────────────────────────
 
 struct ChatRowsContext<'a> {
+    versions: ChatRowsVersions,
     current_user_id: Uuid,
     afk_user_ids: &'a HashSet<Uuid>,
     show_flag_fallback: bool,
@@ -1292,10 +1295,37 @@ enum RowKindLite {
     Image,
 }
 
+/// Counter inputs that decide chat row cache validity. `room_version` bumps
+/// on any message-store change in the rendered room (new message, edit,
+/// delete, tail merge, reactions); the two epochs bump when author context
+/// (usernames, badges, glyphs, drunk levels, name styles, AFK, images)
+/// changes on the chat state or the app respectively. Comparing these is the
+/// whole per-frame validity check; nothing hashes message bodies anymore.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct ChatRowsVersions {
+    pub room_id: Option<Uuid>,
+    pub room_version: u64,
+    pub chat_ctx_epoch: u64,
+    pub app_ctx_epoch: u64,
+}
+
+/// Full cache key: the counters plus the cheap render inputs that also shape
+/// the painted rows. The minute stamp keeps relative timestamps ("5 mins
+/// ago") fresh.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct ChatRowsCacheKey {
+    versions: ChatRowsVersions,
+    width: usize,
+    theme: theme::ThemeKind,
+    minute: i64,
+    unread_marker: Option<DateTime<Utc>>,
+    current_user_id: Uuid,
+    show_flag_fallback: bool,
+}
+
 #[derive(Default)]
 pub struct ChatRowsCache {
-    width: usize,
-    fingerprint: u64,
+    key: Option<ChatRowsCacheKey>,
     all_rows: Vec<Line<'static>>,
     selected_ranges: HashMap<Uuid, (usize, usize)>,
     highlighted_ranges: HashMap<Uuid, (usize, usize)>,
@@ -1309,51 +1339,17 @@ pub struct ChatRowsCache {
     header_segments: HashMap<Uuid, Vec<HeaderSegment>>,
 }
 
-fn chat_rows_fingerprint(
-    messages: &[&ChatMessage],
-    ctx: &ChatRowsContext<'_>,
-    width: usize,
-) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    width.hash(&mut hasher);
-    ctx.current_user_id.hash(&mut hasher);
-    ctx.show_flag_fallback.hash(&mut hasher);
-    ctx.unread_marker.hash(&mut hasher);
-    theme::current_kind().hash(&mut hasher);
-    // Include current minute so relative timestamps ("5 mins ago") stay fresh.
-    (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
-
-    for msg in messages {
-        msg.id.hash(&mut hasher);
-        msg.user_id.hash(&mut hasher);
-        msg.created.hash(&mut hasher);
-        msg.body.hash(&mut hasher);
-        ctx.usernames.get(&msg.user_id).hash(&mut hasher);
-        ctx.countries.get(&msg.user_id).hash(&mut hasher);
-        ctx.friend_user_ids.contains(&msg.user_id).hash(&mut hasher);
-        ctx.afk_user_ids.contains(&msg.user_id).hash(&mut hasher);
-        ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
-        ctx.chat_badges.get(&msg.user_id).hash(&mut hasher);
-        ctx.profile_award_badges.get(&msg.user_id).hash(&mut hasher);
-        ctx.drunk_levels.get(&msg.user_id).hash(&mut hasher);
-        // Resolved name style (not the raw effect): shimmer's phase step
-        // lands here, so an animated name re-renders at most once a second.
-        ctx.name_styles.get(&msg.user_id).hash(&mut hasher);
-        ctx.message_reactions.get(&msg.id).hash(&mut hasher);
-        if let Some(lines) = ctx.inline_images.get(&msg.id) {
-            true.hash(&mut hasher);
-            lines.len().hash(&mut hasher);
-            lines
-                .iter()
-                .map(|line| line.spans.len())
-                .sum::<usize>()
-                .hash(&mut hasher);
-        } else {
-            false.hash(&mut hasher);
-        }
+fn chat_rows_cache_key(ctx: &ChatRowsContext<'_>, width: usize) -> ChatRowsCacheKey {
+    ChatRowsCacheKey {
+        versions: ctx.versions,
+        width,
+        theme: theme::current_kind(),
+        // Current minute so relative timestamps ("5 mins ago") stay fresh.
+        minute: chrono::Utc::now().timestamp() / 60,
+        unread_marker: ctx.unread_marker,
+        current_user_id: ctx.current_user_id,
+        show_flag_fallback: ctx.show_flag_fallback,
     }
-
-    hasher.finish()
 }
 
 fn push_new_messages_divider(
@@ -1390,8 +1386,8 @@ fn ensure_chat_rows_cache(
     width: usize,
     ctx: ChatRowsContext<'_>,
 ) {
-    let fingerprint = chat_rows_fingerprint(&messages, &ctx, width);
-    if cache.width == width && cache.fingerprint == fingerprint {
+    let key = chat_rows_cache_key(&ctx, width);
+    if cache.key == Some(key) {
         return;
     }
 
@@ -1486,15 +1482,14 @@ fn ensure_chat_rows_cache(
             profile_award_badges,
             afk_badge,
         );
-        let drunk = ctx
-            .drunk_levels
-            .get(&msg.user_id)
-            .and_then(|level| theme::DRUNK_LABEL_BG(*level).map(|bg| (*level, bg)));
+        let drunk_word = ctx.drunk_levels.get(&msg.user_id).and_then(|level| {
+            late_core::models::drinks::drunk_label_word(*level)
+                .map(|word| (word, theme::DRUNK_WORD_FG(*level)))
+        });
         let name_style = ctx.name_styles.get(&msg.user_id).copied();
-        let author_tint = (drunk.is_some() || name_style.is_some()).then(|| AuthorTint {
+        let author_tint = (drunk_word.is_some() || name_style.is_some()).then_some(AuthorTint {
             range: author_range,
-            bg: drunk.map(|(_, bg)| bg),
-            word: drunk.and_then(|(level, _)| late_core::models::drinks::drunk_label_word(level)),
+            word: drunk_word,
             name_style,
         });
 
@@ -1593,8 +1588,7 @@ fn ensure_chat_rows_cache(
     debug_assert_eq!(all_rows.len(), row_message.len());
     debug_assert_eq!(all_rows.len(), row_kind.len());
 
-    cache.width = width;
-    cache.fingerprint = fingerprint;
+    cache.key = Some(key);
     cache.all_rows = all_rows;
     cache.row_message = row_message;
     cache.row_kind = row_kind;
@@ -2374,6 +2368,9 @@ pub struct ChatRenderInput<'a> {
     pub discover_selected: bool,
     pub discover_view: super::discover::ui::DiscoverListView<'a>,
     pub rows_cache: &'a mut ChatRowsCache,
+    pub room_versions: &'a HashMap<Uuid, u64>,
+    pub chat_ctx_epoch: u64,
+    pub app_ctx_epoch: u64,
     pub chat_rooms: &'a [(
         late_core::models::chat_room::ChatRoom,
         Vec<late_core::models::chat_message::ChatMessage>,
@@ -2501,6 +2498,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
+    pub rows_versions: ChatRowsVersions,
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
@@ -2604,6 +2602,7 @@ pub fn draw_embedded_room_chat(
         view.messages.iter().collect(),
         width,
         ChatRowsContext {
+            versions: view.rows_versions,
             current_user_id: view.current_user_id,
             afk_user_ids: view.afk_user_ids,
             show_flag_fallback: view.show_flag_fallback,
@@ -3823,6 +3822,103 @@ fn dm_display_label(
     format!("@ {}", name)
 }
 
+/// The header block above a room's messages: the voice row (when the room has a
+/// voice channel), a divider, then the topic row. Each row pairs live state on
+/// the left with the keys or commands that act on it flushed to the right edge,
+/// so the eye finds status in one column and actions in another.
+struct RoomHeader<'a> {
+    voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
+    topic: Option<&'a str>,
+    has_rules: bool,
+}
+
+impl RoomHeader<'_> {
+    /// Rows this header wants: the voice row, a divider between voice and topic
+    /// (only when there is something on both sides of it), the topic row, and a
+    /// closing rule that separates the whole block from the messages.
+    fn height(&self) -> u16 {
+        let voice = u16::from(self.voice.is_some());
+        let topic = u16::from(self.topic.is_some());
+        if voice + topic == 0 {
+            return 0;
+        }
+        let divider = u16::from(self.voice.is_some() && self.topic.is_some());
+        voice + divider + topic + 1
+    }
+}
+
+/// Draw the header and return the area left for messages. A room with neither
+/// voice nor a topic (most of them) is left untouched, and the header yields
+/// entirely rather than squeeze the message area below one row.
+fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Rect {
+    let height = header.height();
+    if height == 0 || area.height <= height {
+        return area;
+    }
+    let width = area.width.max(1) as usize;
+
+    let rule = || {
+        Line::from(Span::styled(
+            "\u{2500}".repeat(width),
+            Style::default().fg(theme::BORDER_DIM()),
+        ))
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(voice) = &header.voice {
+        lines.push(crate::app::voice::ui::voice_strip_line(voice, width));
+    }
+    if header.voice.is_some() && header.topic.is_some() {
+        lines.push(rule());
+    }
+    if let Some(topic) = header.topic {
+        let hint = if header.has_rules {
+            vec![Span::styled(
+                "/rules",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )]
+        } else {
+            Vec::new()
+        };
+        // The topic is clipped to whatever the hint leaves, so a long topic
+        // never pushes `/rules` off the row.
+        let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { 0 });
+        lines.push(row_with_hint(
+            vec![Span::styled(
+                truncate_cells(topic, room_for_topic),
+                Style::default().fg(theme::TEXT_DIM()),
+            )],
+            hint,
+            width,
+        ));
+    }
+    // Closes the block off from the conversation below it.
+    lines.push(rule());
+
+    frame.render_widget(Paragraph::new(lines), Rect { height, ..area });
+    Rect {
+        y: area.y + height,
+        height: area.height.saturating_sub(height),
+        ..area
+    }
+}
+
+/// The room's topic, when it has a non-blank one.
+fn room_topic(room: &ChatRoom) -> Option<&str> {
+    room.topic
+        .as_deref()
+        .map(str::trim)
+        .filter(|topic| !topic.is_empty())
+}
+
+/// Whether the room has rules worth pointing at with `/rules`.
+fn room_has_rules(room: &ChatRoom) -> bool {
+    room.rules
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|rules| !rules.is_empty())
+}
+
 /// Center pane for the merged Home/Chat shell. The room rail is rendered by
 /// the outer shell, so this draws only the selected room/feed content plus the
 /// relevant composer or hint row.
@@ -3894,28 +3990,26 @@ fn draw_selected_content(
                     .find(|(room, _)| is_chat_list_room(room))
             });
 
-        // A voice channel shows a compact voice strip pinned at the very top;
-        // text-only rooms render unchanged with the messages at full height.
-        let messages_area = if let Some((room, _)) = selected_room
-            && let Some(channel) = view.voice_channels_by_room_id.get(&room.id)
-        {
-            let voice_view = crate::app::voice::ui::VoiceRoomView {
-                snapshot: view.voice_snapshot,
-                room_id: channel.id,
-                current_user_id,
-                paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
-            };
-            let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
-            let strip = Rect {
-                height: strip_height,
-                ..messages_area
-            };
-            crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
-            Rect {
-                y: messages_area.y + strip_height,
-                height: messages_area.height.saturating_sub(strip_height),
-                ..messages_area
-            }
+        // Voice state and the room's topic share one header block above the
+        // messages; a text-only room without a topic renders unchanged.
+        let messages_area = if let Some((room, _)) = selected_room {
+            let voice = view.voice_channels_by_room_id.get(&room.id).map(|channel| {
+                crate::app::voice::ui::VoiceRoomView {
+                    snapshot: view.voice_snapshot,
+                    room_id: channel.id,
+                    current_user_id,
+                    paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+                }
+            });
+            draw_room_header(
+                frame,
+                messages_area,
+                RoomHeader {
+                    voice,
+                    topic: room_topic(room),
+                    has_rules: room_has_rules(room),
+                },
+            )
         } else {
             messages_area
         };
@@ -3944,6 +4038,12 @@ fn draw_selected_content(
                 messages.iter().collect(),
                 width,
                 ChatRowsContext {
+                    versions: ChatRowsVersions {
+                        room_id: Some(room.id),
+                        room_version: view.room_versions.get(&room.id).copied().unwrap_or(0),
+                        chat_ctx_epoch: view.chat_ctx_epoch,
+                        app_ctx_epoch: view.app_ctx_epoch,
+                    },
                     current_user_id,
                     afk_user_ids: view.afk_user_ids,
                     show_flag_fallback: view.show_flag_fallback,

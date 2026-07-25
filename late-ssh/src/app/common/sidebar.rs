@@ -13,7 +13,7 @@ use crate::app::audio::{
     client_state::ClientAudioState,
     stations,
     svc::{QueueItemView, QueueSnapshot},
-    viz::Visualizer,
+    viz::render_eq,
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai_v2::state::BonsaiV2State;
@@ -27,12 +27,19 @@ use late_core::models::user::{
 // changes.
 const TIME_HEIGHT: u16 = 2;
 const RULE_HEIGHT: u16 = 1;
-const VISUALIZER_HEIGHT: u16 = 4;
-// Full music stage: volume rows (2) + three dock entries (title +
-// now-playing, 6) + labeled rule (1) + detail area (6) + keybind footer
-// (1). Constant for ALL active sources — chrome must not move between
-// states; `music_stage_chrome_rows_never_move` locks this in tests.
-const MUSIC_STAGE_HEIGHT: u16 = 16;
+// Ambient equalizer strip pinned above the dock: a small always-on
+// decorative band (`viz::render_eq`) synthesized from the wall tick, not
+// audio. Its one audio nod is the muted flatline. The band scales to
+// whatever height it's given; the stage pins 3.
+const MUSIC_VIZ_HEIGHT: u16 = 3;
+// Dock + detail portion of the stage (unchanged by the visualizer merge):
+// volume rows (2) + three dock entries (title + now-playing, 6) + labeled
+// rule (1) + detail area (6) + keybind footer (1). Constant for ALL active
+// sources — chrome must not move between states;
+// `music_stage_chrome_rows_never_move` locks this in tests.
+const MUSIC_DOCK_HEIGHT: u16 = 16;
+// Full music stage: the wave strip on top of the dock + detail area.
+const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 // Detail area under the labeled rule: the active source's controls, padded
 // to exactly this many rows. Sized for radio (five station rows + the
 // Nightride attribution row).
@@ -52,13 +59,11 @@ pub(crate) struct SidebarProps<'a> {
     /// Ordered panels with their on/off state. Render order is top to bottom;
     /// the clock is always pinned above this list.
     pub components: &'a [RightSidebarComponentSetting],
-    pub visualizer: &'a Visualizer,
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
     pub bonsai: &'a BonsaiState,
     pub bonsai_v2: &'a BonsaiV2State,
     pub use_bonsai_v2: bool,
-    pub audio_beat: f32,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
@@ -206,10 +211,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         let body = inset(layout[i]);
         i += 1;
         match component {
-            RightSidebarComponent::Visualizer => {
-                // Visualizer: borderless inline render.
-                props.visualizer.render_inline(frame, body);
-            }
             RightSidebarComponent::Music => {
                 draw_music_stage(
                     frame,
@@ -235,14 +236,14 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                         frame,
                         body,
                         props.bonsai_v2,
-                        props.audio_beat,
+                        props.marquee_tick,
                     );
                 } else {
                     crate::app::bonsai::ui::draw_bonsai_inline(
                         frame,
                         body,
                         props.bonsai,
-                        props.audio_beat,
+                        props.marquee_tick,
                     );
                 }
             }
@@ -265,7 +266,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 /// (the tree renderer scales to its viewport).
 fn component_height(component: RightSidebarComponent) -> u16 {
     match component {
-        RightSidebarComponent::Visualizer => VISUALIZER_HEIGHT,
         RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
         RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
         RightSidebarComponent::Daily => DAILY_HEIGHT,
@@ -275,12 +275,11 @@ fn component_height(component: RightSidebarComponent) -> u16 {
 /// How eagerly a panel is dropped when the rail runs out of rows: higher
 /// drops first. Deliberately independent of display order — reordering the
 /// sidebar changes where panels sit, not which ones survive a short
-/// terminal. Ambience (visualizer, bonsai) goes first; the music stage is
-/// the last panel standing.
+/// terminal. Bonsai (ambience) goes first; the music stage, which now
+/// carries the eq strip too, is the last panel standing.
 fn shrink_priority(component: RightSidebarComponent) -> u8 {
     match component {
-        RightSidebarComponent::Visualizer => 4, // first to go
-        RightSidebarComponent::Bonsai => 3,
+        RightSidebarComponent::Bonsai => 3, // first to go
         RightSidebarComponent::Daily => 2,
         RightSidebarComponent::Music => 0, // last panel standing
     }
@@ -423,19 +422,91 @@ fn draw_core_block(
 /// The list scrolls (marquee) when it overruns the rail instead of stopping
 /// at the few names that happen to fit, so the whole crowd can be read.
 fn friend_names_text(names: &[String], width: usize, tick: usize) -> String {
-    let joined = names
+    crate::app::common::marquee::marquee_text(&friend_names_joined(names), width, tick)
+}
+
+fn friend_names_joined(names: &[String]) -> String {
+    names
         .iter()
         .map(|name| format!("@{name}"))
         .collect::<Vec<_>>()
-        .join(" ");
-    crate::app::common::marquee::marquee_text(&joined, width, tick)
+        .join(" ")
+}
+
+/// Conservative lower bound on any marquee rail width in the sidebar. Real
+/// rails are 22-24 columns; using the smaller bound means overflow (and so
+/// "still animating") can only be over-reported, never missed.
+const MARQUEE_RAIL_MIN: usize = 20;
+/// Queue detail rows lose ~6 columns to the index and vote score.
+const MARQUEE_QUEUE_RAIL_MIN: usize = MARQUEE_RAIL_MIN - 6;
+
+/// Inputs for [`sidebar_marquee_scrolling`], mirroring what the draw path
+/// feeds its marquee rows.
+pub(crate) struct SidebarMarqueeInputs<'a> {
+    pub components: &'a [RightSidebarComponentSetting],
+    pub active_friend_names: &'a [String],
+    pub icecast_now_playing: Option<&'a NowPlaying>,
+    pub radio_now_playing: Option<&'a str>,
+    pub selected_station: RadioStation,
+    pub source: AudioSource,
+    pub queue: Option<&'a QueueSnapshot>,
+}
+
+/// True when any sidebar marquee row currently overflows its rail and is
+/// therefore scrolling. The render gate treats that as continuous animation;
+/// hold phases are not modeled (tightening pass material). Must stay in sync
+/// with the rows the draw path feeds through `marquee_text`: the friends
+/// row, the three music dock track rows, and the youtube queue detail rows.
+pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bool {
+    use crate::app::common::marquee::marquee_scrolls;
+
+    if marquee_scrolls(
+        &friend_names_joined(inputs.active_friend_names),
+        MARQUEE_RAIL_MIN,
+    ) {
+        return true;
+    }
+    let music_visible = inputs
+        .components
+        .iter()
+        .any(|setting| setting.component == RightSidebarComponent::Music && setting.enabled);
+    if !music_visible {
+        return false;
+    }
+    let station_name = stations::radio_station_display_name(inputs.selected_station);
+    if marquee_scrolls(
+        inputs.radio_now_playing.unwrap_or(station_name),
+        MARQUEE_RAIL_MIN,
+    ) {
+        return true;
+    }
+    if inputs
+        .icecast_now_playing
+        .is_some_and(|now| marquee_scrolls(&icecast_track_text(now), MARQUEE_RAIL_MIN))
+    {
+        return true;
+    }
+    let Some(queue) = inputs.queue else {
+        return false;
+    };
+    if marquee_scrolls(&youtube_track_text(queue), MARQUEE_RAIL_MIN) {
+        return true;
+    }
+    // Queue detail rows (current + up next) render only for the youtube source.
+    inputs.source == AudioSource::Youtube
+        && queue.current.iter().chain(queue.queue.iter()).any(|item| {
+            let title = item
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("yt:{}", item.video_id));
+            marquee_scrolls(&title, MARQUEE_QUEUE_RAIL_MIN)
+        })
 }
 
 /// Section name rendered into each panel's separator rule. Keeps panel
 /// bodies free of title rows: the divider IS the title.
 fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
     match component {
-        RightSidebarComponent::Visualizer => "visualizer",
         RightSidebarComponent::Music => "music",
         RightSidebarComponent::Bonsai => "bonsai",
         RightSidebarComponent::Daily => "lobby",
@@ -487,12 +558,14 @@ struct MusicStageProps<'a> {
     marquee_tick: usize,
 }
 
-/// Music stage: fixed dock + fixed detail area. Rows 0-1 volume, rows 2-7
-/// a three-source dock in order radio → youtube → icecast (title bar +
+/// Music stage: a small ambient equalizer strip pinned on top, then the
+/// fixed dock and fixed detail area. Rows 0-2 the eq band (borderless,
+/// always dancing, no audio data), rows 3-4 volume, rows 5-10 a
+/// three-source dock in order radio → youtube → icecast (title bar +
 /// now-playing line per source; radio leads because it is the default
-/// source for new users), row 8 a labeled rule naming the active source,
-/// rows 9-13 the active source's controls padded to a constant height,
-/// row 14 the keybind footer.
+/// source for new users), row 11 a labeled rule naming the active source,
+/// rows 12-17 the active source's controls padded to a constant height,
+/// row 18 the keybind footer.
 ///
 /// Two product rules (user requirements):
 /// - Every source ALWAYS shows its now-playing line, even when inactive.
@@ -512,13 +585,18 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) 
         return;
     }
 
-    let lines = music_stage_lines(area.width, props);
-    frame.render_widget(Paragraph::new(lines), area);
+    let [viz_area, dock_area] =
+        Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
+    let muted = props.paired_client.is_some_and(|client| client.muted);
+    render_eq(frame, viz_area, props.marquee_tick, muted);
+
+    let lines = music_stage_lines(dock_area.width, props);
+    frame.render_widget(Paragraph::new(lines), dock_area);
 }
 
 fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'static>> {
     let source = props.source;
-    let mut lines = Vec::with_capacity(MUSIC_STAGE_HEIGHT as usize);
+    let mut lines = Vec::with_capacity(MUSIC_DOCK_HEIGHT as usize);
     lines.push(volume_row_line(props.paired_client));
     lines.push(keybind_row_line(width, &[("m", "mute"), ("-=", "vol")]));
 

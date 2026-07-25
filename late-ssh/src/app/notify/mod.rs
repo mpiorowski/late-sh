@@ -126,6 +126,13 @@ pub(crate) struct Outbox {
 }
 
 impl Outbox {
+    /// True when notifications are queued for the next drain. The render
+    /// gate forces a frame on pending notifications because `drain` only
+    /// runs during render.
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.rx.is_empty()
+    }
+
     /// Drain pending notifications into at most one terminal payload per
     /// call. Notifications during cooldown or with disabled kinds are
     /// dropped, not queued.

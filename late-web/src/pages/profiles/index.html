@@ -47,10 +47,10 @@
 <div class="max-w-2xl mx-auto pt-8 sm:pt-14 pb-20">
 
     <!-- ─── breadcrumb ─── -->
-    <div class="stagger stagger-1 mb-10 text-xs text-gray-600">
-        <a href="/" class="hover:text-gray-400 transition-colors">late.sh</a>
-        <span class="text-gray-700 mx-2">/</span>
-        <span class="text-gray-400">profiles</span>
+    <div class="stagger stagger-1 mb-10 text-xs text-gray-400">
+        <a href="/" class="hover:text-gray-200 transition-colors">late.sh</a>
+        <span class="text-gray-500 mx-2">/</span>
+        <span class="text-gray-200">profiles</span>
     </div>
 
     <!-- ─── header ─── -->
@@ -58,35 +58,35 @@
         <h1 class="text-2xl sm:text-3xl text-gray-100 tracking-tight">who's around</h1>
     </div>
 
-    <div class="stagger stagger-2 mb-10 text-sm text-gray-500">
+    <div class="stagger stagger-2 mb-10 text-sm text-gray-300">
         <p>work profiles posted by people on late.sh.</p>
-        <p class="text-gray-600 text-xs mt-2">
-            want to be on this list? <span class="text-gray-400">ssh late.sh</span>, open the work room, press <span class="text-gray-400">i</span>.
+        <p class="text-gray-400 text-xs mt-2">
+            want to be on this list? <span class="text-gray-200">ssh late.sh</span>, open the work room, press <span class="text-gray-200">i</span>.
         </p>
     </div>
 
     {% if items.is_empty() %}
     <!-- ─── empty state ─── -->
-    <div class="stagger stagger-3 border border-gray-800 px-5 py-10 bg-gray-900/20 text-center">
-        <div class="text-sm text-gray-400 mb-2">no profiles yet</div>
-        <div class="text-xs text-gray-600">be the first &mdash; ssh late.sh and post one.</div>
+    <div class="stagger stagger-3 border border-gray-600 px-5 py-10 bg-gray-900/20 text-center">
+        <div class="text-sm text-gray-200 mb-2">no profiles yet</div>
+        <div class="text-xs text-gray-400">be the first &mdash; ssh late.sh and post one.</div>
     </div>
     {% else %}
 
     <!-- ─── tally strip ─── -->
     <div class="stagger stagger-2 mb-8 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-        <span class="text-gray-600">{{ items.len() }} total</span>
+        <span class="text-gray-400">{{ items.len() }} total</span>
         {% if open_count > 0 %}
-        <span class="text-gray-700">·</span>
+        <span class="text-gray-500">·</span>
         <span class="text-green-500">{{ open_count }} open</span>
         {% endif %}
         {% if casual_count > 0 %}
-        <span class="text-gray-700">·</span>
+        <span class="text-gray-500">·</span>
         <span class="text-yellow-500">{{ casual_count }} casual</span>
         {% endif %}
         {% if closed_count > 0 %}
-        <span class="text-gray-700">·</span>
-        <span class="text-gray-500">{{ closed_count }} not looking</span>
+        <span class="text-gray-500">·</span>
+        <span class="text-gray-300">{{ closed_count }} not looking</span>
         {% endif %}
     </div>
 
@@ -94,7 +94,7 @@
     <div class="space-y-3">
         {% for item in items %}
         <a href="/profiles/{{ item.slug }}"
-           class="stagger stagger-3 list-item group block w-full text-left border border-gray-800 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
+           class="stagger stagger-3 list-item group block w-full text-left border border-gray-600 hover:border-green-700 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
 
             <!-- top row: status pill + updated -->
             <div class="flex items-center justify-between gap-3 mb-2">
@@ -102,7 +102,7 @@
                     {% if item.status_id == "open" %}<span class="pulse-dot"></span>{% endif %}
                     {{ item.status_label }}
                 </span>
-                <span class="shrink-0 text-[0.65rem] text-gray-700">{{ item.updated }}</span>
+                <span class="shrink-0 text-[0.7rem] text-gray-400">{{ item.updated }}</span>
             </div>
 
             <!-- headline -->
@@ -111,24 +111,24 @@
             </div>
 
             <!-- meta -->
-            <div class="text-xs text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-1 mb-3">
-                <span class="text-green-600">@{{ item.username }}</span>
-                <span class="text-gray-700">·</span>
+            <div class="text-xs text-gray-300 flex flex-wrap items-center gap-x-2 gap-y-1 mb-3">
+                <span class="text-green-400">@{{ item.username }}</span>
+                <span class="text-gray-500">·</span>
                 <span>{{ item.work_type }}</span>
-                <span class="text-gray-700">·</span>
+                <span class="text-gray-500">·</span>
                 <span>{{ item.location }}</span>
             </div>
 
             <!-- summary preview -->
             {% if item.summary_preview.is_empty() %}{% else %}
-            <div class="text-xs text-gray-500 leading-relaxed mb-3">
+            <div class="text-xs text-gray-300 leading-relaxed mb-3">
                 {{ item.summary_preview }}
             </div>
             {% endif %}
 
             <!-- skills -->
             {% if item.skills.is_empty() %}{% else %}
-            <div class="flex flex-wrap gap-x-2.5 gap-y-1 text-[0.7rem] text-gray-700">
+            <div class="flex flex-wrap gap-x-2.5 gap-y-1 text-[0.7rem] text-gray-400">
                 {% for skill in item.skills %}
                 <span>#{{ skill }}</span>
                 {% endfor %}
@@ -140,9 +140,9 @@
 
     {% endif %}
 
-    <div class="mt-16 border-t border-gray-800 pt-5 text-[0.7rem] text-gray-700 flex items-center justify-between">
+    <div class="mt-16 border-t border-gray-600 pt-5 text-[0.7rem] text-gray-400 flex items-center justify-between">
         <span>updates as people post or refresh their profiles</span>
-        <a href="/" class="text-gray-500 hover:text-green-500 transition-colors">home</a>
+        <a href="/" class="text-gray-300 hover:text-green-500 transition-colors">home</a>
     </div>
 
 </div>

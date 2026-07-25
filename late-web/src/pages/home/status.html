@@ -1,5 +1,5 @@
 {% if listeners_count.is_some() %}
-<span class="inline-block w-1.5 h-1.5 rounded-full bg-green-700"></span>
-<span class="text-green-600">{{ listeners_count.unwrap_or_default() }}</span>
-<span class="text-gray-600">online now</span>
+<span class="inline-block w-1.5 h-1.5 rounded-full bg-green-400"></span>
+<span class="text-green-400">{{ listeners_count.unwrap_or_default() }}</span>
+<span class="text-gray-400">online now</span>
 {% endif %}

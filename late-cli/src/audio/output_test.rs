@@ -15,13 +15,13 @@ fn maps_stereo_to_quad_by_repeating_lr_pairs() {
 }
 
 #[test]
-fn maps_stereo_to_mono_for_analyzer_mix() {
+fn maps_stereo_to_mono_by_downmixing() {
     assert!((map_output_sample(&[0.25, -0.5], 0, 1) + 0.125).abs() < 1e-6);
 }
 
 #[test]
-fn analyzer_mix_averages_channels() {
-    assert!((mix_for_analyzer(&[0.5, -0.25, 0.25]) - (1.0 / 6.0)).abs() < 1e-6);
+fn downmix_averages_channels() {
+    assert!((downmix_to_mono(&[0.5, -0.25, 0.25]) - (1.0 / 6.0)).abs() < 1e-6);
 }
 
 #[test]

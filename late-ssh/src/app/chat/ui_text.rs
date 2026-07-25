@@ -12,32 +12,28 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const NEWS_SEPARATOR: &str = " || ";
 
-/// The flair painted over the bare username inside the author header:
-/// the tavern drunk glow as a background tint and/or a bought 24h username
-/// effect as per-character foreground color. `range` is the username's byte
-/// range within the prefix string, so badges and flags stay untouched.
-/// `word` is the drunk state printed after the header (e.g. "wasted"),
-/// present only once the drinker is soused enough to earn a label; the glow
-/// alone carries lighter states. The effect fg deliberately overrides the
-/// base author fg (own amber, friend gold, default) while keeping its bg and
+/// The flair painted over the bare username inside the author header: the
+/// tavern drunk state as a trailing `(word)` label and/or a bought 24h
+/// username effect as per-character foreground color. `range` is the
+/// username's byte range within the prefix string, so badges and flags stay
+/// untouched. `word` pairs the printed state with the dim hue that carries it
+/// (green tipsy through red wasted). The effect fg deliberately overrides the
+/// base author fg (own amber, friend gold, default) while keeping its
 /// modifiers, so a bought effect always wins the color of the name.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AuthorTint {
     pub range: (usize, usize),
-    pub bg: Option<Color>,
-    pub word: Option<&'static str>,
+    pub word: Option<(&'static str, Color)>,
     pub name_style: Option<NameStyle>,
 }
 
 /// The trailing ` (word)` span appended after the author header for a drinker
-/// deep enough to warrant a printed label. Faint and italic so it reads as an
-/// aside next to the name, not another badge.
-fn drunk_word_span(word: &str) -> Span<'static> {
+/// far enough gone to warrant a printed label. Italic and dimly hued by level
+/// so it reads as an aside next to the name, not another badge.
+fn drunk_word_span(word: &str, color: Color) -> Span<'static> {
     Span::styled(
         format!(" ({word})"),
-        Style::default()
-            .fg(theme::TEXT_FAINT())
-            .add_modifier(Modifier::ITALIC),
+        Style::default().fg(color).add_modifier(Modifier::ITALIC),
     )
 }
 
@@ -65,18 +61,17 @@ fn push_author_prefix_spans(
                 spans.push(Span::styled(prefix[..start].to_string(), author_style));
             }
             let name = &prefix[start..end];
-            let name_base = match tint.bg {
-                Some(bg) => author_style.bg(bg),
-                None => author_style,
-            };
             match tint.name_style {
                 Some(style) => {
                     let len = name.chars().count();
                     spans.extend(name.chars().enumerate().map(|(index, ch)| {
-                        Span::styled(ch.to_string(), name_base.fg(char_color(style, index, len)))
+                        Span::styled(
+                            ch.to_string(),
+                            author_style.fg(char_color(style, index, len)),
+                        )
                     }));
                 }
-                None => spans.push(Span::styled(name.to_string(), name_base)),
+                None => spans.push(Span::styled(name.to_string(), author_style)),
             }
             if end < prefix.len() {
                 spans.push(Span::styled(prefix[end..].to_string(), author_style));
@@ -109,8 +104,8 @@ pub(super) fn wrap_message_to_lines(
     if !continuation {
         let mut spans = vec![pad.clone()];
         push_author_prefix_spans(&mut spans, prefix, author_style, author_tint);
-        if let Some(word) = author_tint.and_then(|tint| tint.word) {
-            spans.push(drunk_word_span(word));
+        if let Some((word, color)) = author_tint.and_then(|tint| tint.word) {
+            spans.push(drunk_word_span(word, color));
         }
         spans.push(Span::styled(
             format!(" {stamp}"),

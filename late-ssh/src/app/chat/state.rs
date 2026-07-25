@@ -167,6 +167,40 @@ impl PendingClipboardImageUpload {
     }
 }
 
+/// A pending request to open the room-info form, carried until the app-level
+/// input loop opens the modal. `Create` comes from `/private`, `Edit` from
+/// `/roominfo` on a room the user may set info on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RoomInfoRequest {
+    Create {
+        slug: String,
+    },
+    Edit {
+        room_id: Uuid,
+        /// `#slug` of the room being edited, for the form's title.
+        room_label: String,
+        /// Who the form says holds this room: a username for a private room,
+        /// "moderators" for a public one. Ownership can move on its own when a
+        /// creator leaves, so the form is where it becomes visible.
+        owner_label: String,
+        topic: Option<String>,
+        rules: Option<String>,
+    },
+}
+
+/// Who may set a room's topic and rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoomInfoAuthority {
+    /// This user owns the room (private rooms only).
+    Owner,
+    /// Staff standing, which carries every room.
+    Moderator,
+    /// The room has info, but not for this user to set.
+    None,
+    /// The room has no topic or rules at all (DMs, game rooms).
+    NotEditable,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
@@ -364,6 +398,15 @@ pub struct SheetOpenRequest {
     pub editable: bool,
 }
 
+/// Outcome of one chat tick: the banner to surface plus whether the tick may
+/// have changed render-visible chat state. `changed` over-reports by design
+/// (prove-clean, not prove-dirty): every queued event or snapshot counts,
+/// even ones that end up filtered out during the drain.
+pub struct ChatTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct ChatState {
     pub(crate) service: ChatService,
     user_id: Uuid,
@@ -372,9 +415,21 @@ pub struct ChatState {
     is_moderator: bool,
     active_users: Option<ActiveUsers>,
     snapshot_rx: watch::Receiver<ChatSnapshot>,
+    /// Single-recipient events (tail loads, search results, discover lists)
+    /// delivered point-to-point by the service instead of over the global
+    /// broadcast; drained ahead of `event_rx` in `drain_events`.
+    targeted_event_rx: mpsc::UnboundedReceiver<ChatEvent>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
     moderation_event_rx: tokio::sync::broadcast::Receiver<ModerationEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    /// Per-room message-store version, bumped on any change to that room's
+    /// stored messages or their reactions. Rendered row caches compare this
+    /// instead of hashing message bodies (`ChatRowsVersions`).
+    room_versions: HashMap<Uuid, u64>,
+    /// Author-context epoch, bumped when any map feeding chat row rendering
+    /// (usernames, countries, friends, glyphs, badges, inline images)
+    /// actually changes.
+    context_epoch: u64,
     pub(crate) active_polls: HashMap<Uuid, ActiveChatPoll>,
     pinned_messages: Vec<ChatMessage>,
     lounge_room_id: Option<Uuid>,
@@ -388,6 +443,10 @@ pub struct ChatState {
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
     friend_user_ids: HashSet<Uuid>,
+    /// Derived owner per private room, from the chat snapshot. Ownership is not
+    /// stored on the room (a creator who leaves hands it on), so this is the
+    /// session's view of who currently holds each private room.
+    room_owner_ids: HashMap<Uuid, Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
     pinned_rx: watch::Receiver<Vec<ChatMessage>>,
     pinned_tx: watch::Sender<Vec<ChatMessage>>,
@@ -489,6 +548,7 @@ pub struct ChatState {
     /// `App::notify_outbox`.
     notifier: Notifier,
     requested_help_topic: Option<HelpTopic>,
+    requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
@@ -585,7 +645,8 @@ impl ChatState {
         let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
         service.load_pinned_messages_task(pinned_tx.clone());
         let (room_tx, room_rx) = watch::channel(None);
-        let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
+        let (snapshot_rx, targeted_event_rx, refresh_tx, bg_task) =
+            service.start_user_refresh_task(user_id, room_rx);
 
         let (inline_image_tx, inline_image_rx) = tokio::sync::mpsc::unbounded_channel();
         let (terminal_image_tx, terminal_image_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -597,9 +658,12 @@ impl ChatState {
             is_moderator: permissions.is_moderator(),
             active_users,
             snapshot_rx,
+            targeted_event_rx,
             event_rx,
             moderation_event_rx,
             rooms: Vec::new(),
+            room_versions: HashMap::new(),
+            context_epoch: 0,
             active_polls: HashMap::new(),
             pinned_messages: Vec::new(),
             lounge_room_id: None,
@@ -608,6 +672,7 @@ impl ChatState {
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             friend_user_ids: HashSet::new(),
+            room_owner_ids: HashMap::new(),
             username_rx,
             pinned_rx,
             pinned_tx,
@@ -673,6 +738,7 @@ impl ChatState {
             favorite_room_ids: Vec::new(),
             notifier,
             requested_help_topic: None,
+            requested_room_info_modal: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
@@ -944,6 +1010,10 @@ impl ChatState {
 
     pub fn take_requested_settings_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_settings_modal)
+    }
+
+    pub fn take_requested_room_info_modal(&mut self) -> Option<RoomInfoRequest> {
+        self.requested_room_info_modal.take()
     }
 
     pub fn take_requested_mod_modal(&mut self) -> bool {
@@ -1534,6 +1604,41 @@ impl ChatState {
 
     fn room_slug(&self, room_id: Uuid) -> Option<String> {
         room_slug_for(&self.rooms, room_id)
+    }
+
+    /// Who may set this room's topic and rules. Private topic rooms answer to
+    /// their derived owner, every other room with info answers to the house,
+    /// and DMs and game rooms have no info at all.
+    pub(crate) fn room_info_authority(&self, room: &ChatRoom) -> RoomInfoAuthority {
+        if room.kind == "dm" || room.kind == "game" {
+            return RoomInfoAuthority::NotEditable;
+        }
+        if room.kind == "topic"
+            && room.visibility == "private"
+            && self.room_owner_ids.get(&room.id) == Some(&self.user_id)
+        {
+            return RoomInfoAuthority::Owner;
+        }
+        if self.permissions.can_moderate() {
+            return RoomInfoAuthority::Moderator;
+        }
+        RoomInfoAuthority::None
+    }
+
+    /// The owner line the room-info form shows.
+    fn room_owner_label(&self, room: &ChatRoom) -> String {
+        if room.kind != "topic" || room.visibility != "private" {
+            return "moderators".to_string();
+        }
+        match self.room_owner_ids.get(&room.id) {
+            Some(owner) if *owner == self.user_id => "you".to_string(),
+            Some(owner) => self
+                .usernames
+                .get(owner)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string()),
+            None => "unowned".to_string(),
+        }
     }
 
     fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
@@ -2360,6 +2465,8 @@ impl ChatState {
             return Some(Banner::success(&format!("Opening DM with {target}...")));
         }
 
+        // Public rooms are hosted, not owned: `/public` only ever opens or
+        // joins one, and a mod sets its topic and rules afterwards.
         if let Some(room) = parse_room_command(&body, "/public") {
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
@@ -2370,14 +2477,110 @@ impl ChatState {
             return Some(Banner::success(&format!("Opening public #{room}...")));
         }
 
+        // A private room is owned by whoever opens it, so it gets the form up
+        // front and the creator's answers are saved with the room.
         if let Some(room) = parse_room_command(&body, "/private") {
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
             }
             self.clear_composer_after_submit();
-            self.service
-                .create_private_room_task(self.user_id, room.to_string());
-            return Some(Banner::success(&format!("Creating private #{room}...")));
+            self.requested_room_info_modal = Some(RoomInfoRequest::Create {
+                slug: room.to_string(),
+            });
+            return None;
+        }
+
+        if is_room_info_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.selected_room_id else {
+                return Some(Banner::error("Select a room first"));
+            };
+            let Some(room) = self.room_by_id(room_id) else {
+                return Some(Banner::error("No room selected"));
+            };
+            match self.room_info_authority(room) {
+                RoomInfoAuthority::Owner | RoomInfoAuthority::Moderator => {}
+                RoomInfoAuthority::None => {
+                    // Private rooms have an owner who can; public ones do not.
+                    return Some(Banner::error(
+                        if room.kind == "topic" && room.visibility == "private" {
+                            "Only this room's owner can set its topic and rules"
+                        } else {
+                            "Only a moderator can set this room's topic and rules"
+                        },
+                    ));
+                }
+                RoomInfoAuthority::NotEditable => {
+                    return Some(Banner::error("This room has no topic or rules"));
+                }
+            }
+            self.requested_room_info_modal = Some(RoomInfoRequest::Edit {
+                room_id,
+                room_label: room
+                    .slug
+                    .as_deref()
+                    .map(|slug| format!("#{slug}"))
+                    .unwrap_or_else(|| "this room".to_string()),
+                owner_label: self.room_owner_label(room),
+                topic: room.topic.clone(),
+                rules: room.rules.clone(),
+            });
+            return None;
+        }
+
+        // Rules are multi-line by design, so they go in the same overlay
+        // `/active` uses (scrollable, wraps long lines) rather than a banner,
+        // which is one line and would eat the line breaks.
+        if body.trim() == "/rules" {
+            self.clear_composer_after_submit();
+            let overlay = {
+                let room = self
+                    .selected_room_id
+                    .and_then(|room_id| self.room_by_id(room_id));
+                let rules = room
+                    .and_then(|room| room.rules.as_deref())
+                    .map(str::trim)
+                    .filter(|rules| !rules.is_empty());
+                match rules {
+                    Some(rules) => {
+                        let title = match room.and_then(|room| room.slug.as_deref()) {
+                            Some(slug) => format!("#{slug} rules"),
+                            None => "Rules".to_string(),
+                        };
+                        Some((title, rules.lines().map(str::to_string).collect::<Vec<_>>()))
+                    }
+                    None => None,
+                }
+            };
+            let Some((title, lines)) = overlay else {
+                return Some(Banner::info("No rules set for this room"));
+            };
+            self.open_overlay(&title, lines);
+            return None;
+        }
+
+        // Kicking answers to the room, not the composer: a private room's owner
+        // may remove a regular from it, staff may remove anyone anywhere, and
+        // the service decides which of those applies.
+        if let Some(target) = parse_user_command(&body, "/kick") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let Some(target) = target else {
+                return Some(Banner::error("Usage: /kick @user"));
+            };
+            let Some(slug) = self.room_slug(room_id) else {
+                return Some(Banner::error("This room has no members to kick"));
+            };
+            self.service.kick_from_room_task(
+                self.user_id,
+                self.permissions,
+                slug,
+                target.to_string(),
+            );
+            return Some(Banner::success(&format!("Kicking @{target}...")));
         }
 
         if let Some(target) = parse_user_command(&body, "/invite") {
@@ -2858,6 +3061,7 @@ impl ChatState {
                 Ok(lines) => {
                     self.inline_image_failures.remove(&msg_id);
                     self.inline_image_cache.insert(msg_id, lines);
+                    self.context_epoch += 1;
                 }
                 Err(error) => {
                     let attempts = self
@@ -2929,15 +3133,18 @@ impl ChatState {
         }
     }
 
-    pub(crate) fn poll_terminal_images(&mut self) {
+    /// Returns true when any fetch completed; the image modal renders from
+    /// this cache, so a completion must count as a render-visible change.
+    pub(crate) fn poll_terminal_images(&mut self) -> bool {
         let Some(rx) = self.terminal_image_rx.as_mut() else {
-            return;
+            return false;
         };
 
         let mut completed = Vec::new();
         while let Ok(result) = rx.try_recv() {
             completed.push(result);
         }
+        let any_completed = !completed.is_empty();
 
         for (msg_id, result) in completed {
             self.terminal_image_requested.remove(&msg_id);
@@ -2957,6 +3164,7 @@ impl ChatState {
             }
             self.track_inline_image_id(msg_id);
         }
+        any_completed
     }
 
     pub(crate) fn request_image_modal_terminal_image(
@@ -3024,6 +3232,9 @@ impl ChatState {
     }
 
     pub(crate) fn clear_inline_image_previews(&mut self) {
+        if !self.inline_image_cache.is_empty() {
+            self.context_epoch += 1;
+        }
         self.inline_image_cache.clear();
         self.inline_image_requested.clear();
         self.inline_image_failures.clear();
@@ -3045,7 +3256,9 @@ impl ChatState {
         while self.inline_image_tracked_order.len() > INLINE_IMAGE_TRACKED_LIMIT {
             if let Some(old_id) = self.inline_image_tracked_order.pop_front() {
                 self.inline_image_requested.remove(&old_id);
-                self.inline_image_cache.remove(&old_id);
+                if self.inline_image_cache.remove(&old_id).is_some() {
+                    self.context_epoch += 1;
+                }
                 self.inline_image_failures.remove(&old_id);
                 self.terminal_image_requested.remove(&old_id);
                 self.terminal_image_cache.remove(&old_id);
@@ -3054,26 +3267,46 @@ impl ChatState {
         }
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> ChatTick {
         self.sync_refresh_room_id();
+        // Peek every event source before draining: anything queued may change
+        // render-visible chat state (messages, unread badges, tab lists), so
+        // it must count as changed. Over-reporting here only costs a frame;
+        // a wrong "clean" freezes the UI. Snapshots are the exception: they
+        // arrive on a fixed cadence whether or not anything changed, so
+        // drain_snapshot reports real change itself instead of being peeked.
+        let changed = self.username_rx.has_changed().unwrap_or(false)
+            || self.pinned_rx.has_changed().unwrap_or(false)
+            || !self.targeted_event_rx.is_empty()
+            || !self.event_rx.is_empty()
+            || !self.moderation_event_rx.is_empty();
         self.drain_username_directory();
-        self.drain_snapshot();
+        let changed = self.drain_snapshot() || changed;
         self.drain_pinned_messages();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
-        let feeds_banner = self.feeds.tick();
-        let news_banner = self.news.tick();
-        let notif_banner = self.notifications.tick();
-        let showcase_banner = self.showcase.tick();
-        let work_banner = self.work.tick();
+        let feeds_tick = self.feeds.tick();
+        let news_tick = self.news.tick();
+        let notif_tick = self.notifications.tick();
+        let showcase_tick = self.showcase.tick();
+        let work_tick = self.work.tick();
         self.flush_pending_read_cursors_if_due();
-        moderation_banner
+        let banner = moderation_banner
             .or(banner)
-            .or(feeds_banner)
-            .or(news_banner)
-            .or(notif_banner)
-            .or(showcase_banner)
-            .or(work_banner)
+            .or(feeds_tick.banner)
+            .or(news_tick.banner)
+            .or(notif_tick.banner)
+            .or(showcase_tick.banner)
+            .or(work_tick.banner);
+        ChatTick {
+            banner,
+            changed: changed
+                || feeds_tick.changed
+                || news_tick.changed
+                || notif_tick.changed
+                || showcase_tick.changed
+                || work_tick.changed,
+        }
     }
 
     pub fn select_feeds(&mut self) {
@@ -3318,27 +3551,64 @@ impl ChatState {
     }
 
     fn set_bonsai_glyph(&mut self, user_id: Uuid, glyph: Option<&str>) {
-        if let Some(glyph) = glyph.filter(|glyph| !glyph.trim().is_empty()) {
-            self.bonsai_glyphs.insert(user_id, glyph.to_string());
-        } else {
-            self.bonsai_glyphs.remove(&user_id);
+        let changed = set_context_value(&mut self.bonsai_glyphs, user_id, glyph);
+        if changed {
+            self.context_epoch += 1;
         }
     }
 
     pub fn set_chat_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
-        if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
-            self.chat_badges.insert(user_id, badge.to_string());
-        } else {
-            self.chat_badges.remove(&user_id);
+        let changed = set_context_value(&mut self.chat_badges, user_id, badge);
+        if changed {
+            self.context_epoch += 1;
         }
     }
 
     fn set_profile_award_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
-        if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
-            self.profile_award_badges.insert(user_id, badge.to_string());
-        } else {
-            self.profile_award_badges.remove(&user_id);
+        let changed = set_context_value(&mut self.profile_award_badges, user_id, badge);
+        if changed {
+            self.context_epoch += 1;
         }
+    }
+
+    /// Insert `username` for the author, bumping the context epoch only when
+    /// the stored value actually changes.
+    fn note_username(&mut self, user_id: Uuid, username: String) {
+        match self.usernames.get(&user_id) {
+            Some(existing) if *existing == username => {}
+            _ => {
+                self.usernames.insert(user_id, username);
+                self.context_epoch += 1;
+            }
+        }
+    }
+
+    /// Merge a username map from a service payload, bumping the context
+    /// epoch only on real changes.
+    fn extend_usernames(&mut self, usernames: HashMap<Uuid, String>) {
+        if extend_changed(&mut self.usernames, usernames) {
+            self.context_epoch += 1;
+        }
+    }
+
+    /// Current message-store version for a room; part of the row cache key.
+    pub fn room_version(&self, room_id: Uuid) -> u64 {
+        self.room_versions.get(&room_id).copied().unwrap_or(0)
+    }
+
+    /// All per-room message-store versions, for surfaces that resolve the
+    /// rendered room inside the draw call.
+    pub fn room_versions(&self) -> &HashMap<Uuid, u64> {
+        &self.room_versions
+    }
+
+    /// Author-context epoch; part of the row cache key.
+    pub fn context_epoch(&self) -> u64 {
+        self.context_epoch
+    }
+
+    fn bump_room_version(&mut self, room_id: Uuid) {
+        *self.room_versions.entry(room_id).or_insert(0) += 1;
     }
 
     pub fn friend_user_ids(&self) -> &HashSet<Uuid> {
@@ -3362,8 +3632,9 @@ impl ChatState {
         friends.sort_by(|left, right| {
             right.last_login_at.cmp(&left.last_login_at).then_with(|| {
                 left.username
-                    .to_ascii_lowercase()
-                    .cmp(&right.username.to_ascii_lowercase())
+                    .bytes()
+                    .map(|b| b.to_ascii_lowercase())
+                    .cmp(right.username.bytes().map(|b| b.to_ascii_lowercase()))
             })
         });
         friends
@@ -3376,7 +3647,7 @@ impl ChatState {
         if user_id == self.user_id || !self.friend_user_ids.contains(&user_id) {
             return None;
         }
-        self.usernames.insert(user_id, username.to_string());
+        self.note_username(user_id, username.to_string());
         self.notifier.push(Notification::friend_online(username));
         Some(Banner::success(&format!("Friend online: @{username}")))
     }
@@ -3385,16 +3656,23 @@ impl ChatState {
         &self.message_reactions
     }
 
-    fn drain_snapshot(&mut self) {
+    /// Returns true when applying the snapshot changed anything
+    /// render-visible. Snapshots arrive on a fixed cadence whether or not
+    /// anything changed, so every write below detects real change before
+    /// reporting; an unchanged snapshot must not invalidate caches or pay a
+    /// frame.
+    fn drain_snapshot(&mut self) -> bool {
         if !self.snapshot_rx.has_changed().unwrap_or(false) {
-            return;
+            return false;
         }
 
         let snapshot = self.snapshot_rx.borrow_and_update().clone();
         if snapshot.user_id != Some(self.user_id) {
-            return;
+            return false;
         }
 
+        let mut changed = false;
+        let mut context_changed = false;
         let refreshed_author_ids = snapshot
             .chat_rooms
             .iter()
@@ -3403,35 +3681,114 @@ impl ChatState {
             .collect::<HashSet<_>>();
         for user_id in &refreshed_author_ids {
             if !snapshot.bonsai_glyphs.contains_key(user_id) {
-                self.bonsai_glyphs.remove(user_id);
+                context_changed |= self.bonsai_glyphs.remove(user_id).is_some();
             }
             if !snapshot.chat_badges.contains_key(user_id) {
-                self.chat_badges.remove(user_id);
+                context_changed |= self.chat_badges.remove(user_id).is_some();
             }
             if !snapshot.profile_award_badges.contains_key(user_id) {
-                self.profile_award_badges.remove(user_id);
+                context_changed |= self.profile_award_badges.remove(user_id).is_some();
             }
         }
 
-        self.usernames.extend(snapshot.usernames);
-        self.countries = snapshot.countries;
-        self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
-        self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
-        self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
-        for (_, messages) in &snapshot.chat_rooms {
-            self.note_activity_ticker_from(messages);
+        context_changed |= extend_changed(&mut self.usernames, snapshot.usernames);
+        if self.countries != snapshot.countries {
+            self.countries = snapshot.countries;
+            context_changed = true;
         }
+        let ignored_user_ids: HashSet<Uuid> = snapshot.ignored_user_ids.into_iter().collect();
+        if self.ignored_user_ids != ignored_user_ids {
+            self.ignored_user_ids = ignored_user_ids;
+            context_changed = true;
+        }
+        let friend_user_ids: HashSet<Uuid> = snapshot.friend_user_ids.into_iter().collect();
+        if self.friend_user_ids != friend_user_ids {
+            self.friend_user_ids = friend_user_ids;
+            context_changed = true;
+        }
+        if self.room_owner_ids != snapshot.room_owner_ids {
+            self.room_owner_ids = snapshot.room_owner_ids;
+            changed = true;
+        }
+        if self.voice_channels_by_room_id != snapshot.voice_channels_by_room_id {
+            self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
+            changed = true;
+        }
+        for (_, messages) in &snapshot.chat_rooms {
+            changed |= self.note_activity_ticker_from(messages);
+        }
+        let previous_room_signatures: HashMap<Uuid, Vec<(Uuid, DateTime<Utc>)>> = self
+            .rooms
+            .iter()
+            .map(|(room, messages)| {
+                (
+                    room.id,
+                    messages.iter().map(|m| (m.id, m.updated)).collect(),
+                )
+            })
+            .collect();
+        // Room metadata and list order matter to the room rail even when no
+        // message signature moved: compare the room structs themselves.
+        let previous_rooms_meta: Vec<ChatRoom> =
+            self.rooms.iter().map(|(room, _)| room.clone()).collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
-        self.lounge_room_id = snapshot.lounge_room_id;
-        self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
-        self.room_last_message_at = self.merge_room_last_message_at(snapshot.room_last_message_at);
-        self.active_polls = snapshot.active_polls;
-        self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
-        self.chat_badges.extend(snapshot.chat_badges);
-        self.profile_award_badges
-            .extend(snapshot.profile_award_badges);
-        self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
+        changed |= self.rooms.len() != previous_rooms_meta.len()
+            || self
+                .rooms
+                .iter()
+                .zip(&previous_rooms_meta)
+                .any(|((room, _), previous)| room != previous);
+        let changed_room_ids: Vec<Uuid> = self
+            .rooms
+            .iter()
+            .filter(|(room, messages)| {
+                let signature: Vec<(Uuid, DateTime<Utc>)> =
+                    messages.iter().map(|m| (m.id, m.updated)).collect();
+                previous_room_signatures.get(&room.id) != Some(&signature)
+            })
+            .map(|(room, _)| room.id)
+            .collect();
+        changed |= !changed_room_ids.is_empty();
+        for room_id in changed_room_ids {
+            self.bump_room_version(room_id);
+        }
+        if self.lounge_room_id != snapshot.lounge_room_id {
+            self.lounge_room_id = snapshot.lounge_room_id;
+            changed = true;
+        }
+        let merged_unread_counts = self.merge_unread_counts(snapshot.unread_counts);
+        if self.unread_counts != merged_unread_counts {
+            self.unread_counts = merged_unread_counts;
+            changed = true;
+        }
+        let merged_room_last_message_at =
+            self.merge_room_last_message_at(snapshot.room_last_message_at);
+        if self.room_last_message_at != merged_room_last_message_at {
+            self.room_last_message_at = merged_room_last_message_at;
+            changed = true;
+        }
+        if self.active_polls != snapshot.active_polls {
+            self.active_polls = snapshot.active_polls;
+            changed = true;
+        }
+        context_changed |= extend_changed(&mut self.bonsai_glyphs, snapshot.bonsai_glyphs);
+        context_changed |= extend_changed(&mut self.chat_badges, snapshot.chat_badges);
+        context_changed |= extend_changed(
+            &mut self.profile_award_badges,
+            snapshot.profile_award_badges,
+        );
+        let merged_reactions = self.merge_message_reactions(snapshot.message_reactions);
+        if self.message_reactions != merged_reactions {
+            self.message_reactions = merged_reactions;
+            context_changed = true;
+        }
+        if context_changed {
+            self.context_epoch += 1;
+        }
+        let selected_before = self.selected_room_id;
         self.sync_selection();
+        changed |= self.selected_room_id != selected_before;
+        changed || context_changed
     }
 
     fn drain_username_directory(&mut self) {
@@ -3451,15 +3808,22 @@ impl ChatState {
     fn drain_events(&mut self) -> Option<Banner> {
         let mut banner = None;
         loop {
-            let event = match self.event_rx.try_recv() {
+            // Point-to-point events first (they cannot lag), then the global
+            // broadcast; both feed the same match below.
+            let event = match self.targeted_event_rx.try_recv() {
                 Ok(event) => event,
-                Err(TryRecvError::Lagged(_)) => {
-                    if let Some(room_id) = self.visible_room_id {
-                        self.request_room_tail(room_id);
+                Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                    match self.event_rx.try_recv() {
+                        Ok(event) => event,
+                        Err(TryRecvError::Lagged(_)) => {
+                            if let Some(room_id) = self.visible_room_id {
+                                self.request_room_tail(room_id);
+                            }
+                            continue;
+                        }
+                        Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                     }
-                    continue;
                 }
-                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             };
             match event {
                 ChatEvent::MessageCreated {
@@ -3512,7 +3876,7 @@ impl ChatState {
                         }
                     }
                     if let Some(username) = author_username {
-                        self.usernames.insert(message.user_id, username);
+                        self.note_username(message.user_id, username);
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
@@ -3552,21 +3916,28 @@ impl ChatState {
                     profile_award_badges,
                 } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
-                    self.usernames.extend(usernames);
+                    self.extend_usernames(usernames);
+                    let mut context_changed = false;
                     for message in &messages {
                         if !bonsai_glyphs.contains_key(&message.user_id) {
-                            self.bonsai_glyphs.remove(&message.user_id);
+                            context_changed |=
+                                self.bonsai_glyphs.remove(&message.user_id).is_some();
                         }
                         if !chat_badges.contains_key(&message.user_id) {
-                            self.chat_badges.remove(&message.user_id);
+                            context_changed |= self.chat_badges.remove(&message.user_id).is_some();
                         }
                         if !profile_award_badges.contains_key(&message.user_id) {
-                            self.profile_award_badges.remove(&message.user_id);
+                            context_changed |=
+                                self.profile_award_badges.remove(&message.user_id).is_some();
                         }
                     }
-                    self.bonsai_glyphs.extend(bonsai_glyphs);
-                    self.chat_badges.extend(chat_badges);
-                    self.profile_award_badges.extend(profile_award_badges);
+                    context_changed |= extend_changed(&mut self.bonsai_glyphs, bonsai_glyphs);
+                    context_changed |= extend_changed(&mut self.chat_badges, chat_badges);
+                    context_changed |=
+                        extend_changed(&mut self.profile_award_badges, profile_award_badges);
+                    if context_changed {
+                        self.context_epoch += 1;
+                    }
                     if messages.iter().any(|message| {
                         last_read_at.is_none_or(|read_at| message.created > read_at)
                             && message.user_id != self.user_id
@@ -3576,8 +3947,18 @@ impl ChatState {
                         self.room_unread_markers.remove(&room_id);
                     }
                     self.merge_room_tail(room_id, messages);
+                    let mut reactions_changed = false;
                     for (message_id, reactions) in message_reactions {
-                        self.message_reactions.insert(message_id, reactions);
+                        match self.message_reactions.get(&message_id) {
+                            Some(existing) if *existing == reactions => {}
+                            _ => {
+                                self.message_reactions.insert(message_id, reactions);
+                                reactions_changed = true;
+                            }
+                        }
+                    }
+                    if reactions_changed {
+                        self.bump_room_version(room_id);
                     }
                     if self.visible_room_id == Some(room_id) {
                         self.mark_room_read(room_id);
@@ -3762,7 +4143,7 @@ impl ChatState {
                         continue;
                     }
                     if let Some(username) = author_username {
-                        self.usernames.insert(message.user_id, username);
+                        self.note_username(message.user_id, username);
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
@@ -3788,7 +4169,7 @@ impl ChatState {
                     if !self.message_search.is_current(request_id) {
                         continue;
                     }
-                    self.usernames.extend(usernames);
+                    self.extend_usernames(usernames);
                     let query = self.message_search.query.clone();
                     let hits = messages
                         .into_iter()
@@ -3827,7 +4208,7 @@ impl ChatState {
                         continue;
                     }
                     self.message_search.context_in_flight = None;
-                    self.usernames.extend(usernames);
+                    self.extend_usernames(usernames);
                     self.message_search
                         .context
                         .insert(message_id, MessageContext { before, after });
@@ -3847,7 +4228,7 @@ impl ChatState {
                     }
                 }
                 ChatEvent::MessageReactionsUpdated {
-                    room_id: _,
+                    room_id,
                     message_id,
                     reactions,
                     target_user_ids,
@@ -3858,6 +4239,7 @@ impl ChatState {
                         continue;
                     }
                     self.message_reactions.insert(message_id, reactions);
+                    self.bump_room_version(room_id);
                 }
                 ChatEvent::EditSucceeded {
                     user_id,
@@ -3898,8 +4280,12 @@ impl ChatState {
                     target_username,
                     message,
                 } if self.user_id == user_id => {
-                    self.friend_user_ids = friend_user_ids.into_iter().collect();
-                    self.usernames.insert(target_user_id, target_username);
+                    let friend_user_ids: HashSet<Uuid> = friend_user_ids.into_iter().collect();
+                    if self.friend_user_ids != friend_user_ids {
+                        self.friend_user_ids = friend_user_ids;
+                        self.context_epoch += 1;
+                    }
+                    self.note_username(target_user_id, target_username);
                     banner = Some(Banner::success(&message));
                 }
                 ChatEvent::FriendFailed { user_id, message } if self.user_id == user_id => {
@@ -3982,7 +4368,7 @@ impl ChatState {
                     && self.pending_reaction_owners_message_id == Some(message_id) =>
                 {
                     self.pending_reaction_owners_message_id = None;
-                    self.usernames.extend(usernames);
+                    self.extend_usernames(usernames);
                     let lines = self.reaction_owner_lines(&owners);
                     self.overlay = Some(Overlay::dismissible("Reactions", lines));
                 }
@@ -4001,6 +4387,34 @@ impl ChatState {
                 }
                 ChatEvent::InviteFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
+                }
+                ChatEvent::KickSucceeded {
+                    user_id,
+                    room_slug,
+                    username,
+                } if self.user_id == user_id => {
+                    self.request_list();
+                    banner = Some(Banner::success(&format!(
+                        "Kicked @{username} from #{room_slug}"
+                    )));
+                }
+                ChatEvent::KickFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
+                // Not filtered to the editor: every session sitting in the room
+                // is showing a stale header, and the room row is what the header
+                // reads. Only the editor gets the banner.
+                ChatEvent::RoomInfoUpdated {
+                    user_id,
+                    room_id,
+                    room_slug,
+                } => {
+                    if self.rooms.iter().any(|(room, _)| room.id == room_id) {
+                        self.request_list();
+                    }
+                    if self.user_id == user_id {
+                        banner = Some(Banner::success(&format!("Updated #{room_slug}")));
+                    }
                 }
                 ChatEvent::ModCommandOutput {
                     user_id,
@@ -4125,6 +4539,7 @@ impl ChatState {
                 self.message_reactions.remove(&message_id);
             }
         }
+        self.bump_room_version(room_id);
 
         if is_viewing_room {
             // Keep the DB cursor aligned with the visible live stream. Without
@@ -4135,10 +4550,18 @@ impl ChatState {
     }
 
     fn remove_message(&mut self, room_id: Uuid, message_id: Uuid) {
+        let mut changed = false;
         if let Some((_, messages)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) {
+            let before = messages.len();
             messages.retain(|m| m.id != message_id);
+            changed = messages.len() != before;
         }
-        self.message_reactions.remove(&message_id);
+        if self.message_reactions.remove(&message_id).is_some() {
+            changed = true;
+        }
+        if changed {
+            self.bump_room_version(room_id);
+        }
     }
 
     pub(crate) fn remove_room_for_moderation(&mut self, room_id: Uuid) {
@@ -4174,6 +4597,7 @@ impl ChatState {
 
         let ignored = &self.ignored_user_ids;
         let usernames = &self.usernames;
+        let before: Vec<(Uuid, DateTime<Utc>)> = stored.iter().map(|m| (m.id, m.updated)).collect();
         *stored = merged
             .into_iter()
             .filter(|message| {
@@ -4181,9 +4605,19 @@ impl ChatState {
                     && system_line_text_in(usernames, message).is_none()
             })
             .collect();
+        let changed = stored.len() != before.len()
+            || stored
+                .iter()
+                .zip(&before)
+                .any(|(m, (id, updated))| m.id != *id || m.updated != *updated);
+        if changed {
+            self.bump_room_version(room_id);
+        }
     }
 
     fn replace_message(&mut self, message: ChatMessage) {
+        let room_id = message.room_id;
+        let mut replaced = false;
         if let Some((_, messages)) = self
             .rooms
             .iter_mut()
@@ -4191,6 +4625,10 @@ impl ChatState {
             && let Some(existing) = messages.iter_mut().find(|m| m.id == message.id)
         {
             *existing = message;
+            replaced = true;
+        }
+        if replaced {
+            self.bump_room_version(room_id);
         }
     }
 
@@ -4291,20 +4729,22 @@ impl ChatState {
             .collect()
     }
 
-    fn note_activity_ticker(&mut self, entry: ActivityTickerEntry) {
-        note_ticker_entry(&mut self.activity_ticker, entry);
+    fn note_activity_ticker(&mut self, entry: ActivityTickerEntry) -> bool {
+        note_ticker_entry(&mut self.activity_ticker, entry)
     }
 
-    fn note_activity_ticker_from(&mut self, messages: &[ChatMessage]) {
+    fn note_activity_ticker_from(&mut self, messages: &[ChatMessage]) -> bool {
+        let mut changed = false;
         for message in messages {
             if let Some(text) = system_line_text_in(&self.usernames, message) {
-                self.note_activity_ticker(ActivityTickerEntry {
+                changed |= self.note_activity_ticker(ActivityTickerEntry {
                     id: message.id,
                     text,
                     at: message.created,
                 });
             }
         }
+        changed
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
@@ -4318,6 +4758,8 @@ impl ChatState {
         for (_, messages) in &mut self.rooms {
             messages.retain(|m| !message_is_ignored_in(ignored, m));
         }
+        // Every room may have lost rows; the epoch invalidates all row caches.
+        self.context_epoch += 1;
         self.sync_selection();
     }
 }
@@ -4335,9 +4777,11 @@ const ACTIVITY_TICKER_CAP: usize = 10;
 
 /// Insert into the newest-first ticker queue, deduped by message id (tails
 /// and snapshots replay the same lines), capped at `ACTIVITY_TICKER_CAP`.
-fn note_ticker_entry(entries: &mut Vec<ActivityTickerEntry>, entry: ActivityTickerEntry) {
+/// Returns true when the entry actually landed in the ticker (a duplicate
+/// delivery leaves it untouched).
+fn note_ticker_entry(entries: &mut Vec<ActivityTickerEntry>, entry: ActivityTickerEntry) -> bool {
     if entries.iter().any(|existing| existing.id == entry.id) {
-        return;
+        return false;
     }
     let pos = entries
         .iter()
@@ -4345,6 +4789,7 @@ fn note_ticker_entry(entries: &mut Vec<ActivityTickerEntry>, entry: ActivityTick
         .unwrap_or(entries.len());
     entries.insert(pos, entry);
     entries.truncate(ACTIVITY_TICKER_CAP);
+    true
 }
 
 /// The #lounge system-feed check (author is the `system` bot AND the body
@@ -4859,6 +5304,11 @@ fn format_member_overlay_lines(
 /// Parse `/leave` from the composer text.
 fn parse_leave_command(input: &str) -> bool {
     input.trim() == "/leave"
+}
+
+/// `/roominfo` (or `/roomedit`) opens the room-info form for the current room.
+fn is_room_info_command(input: &str) -> bool {
+    matches!(input.trim(), "/roominfo" | "/roomedit")
 }
 
 /// Parse `/public <slug>` or `/private <slug>` style commands.
@@ -5434,6 +5884,49 @@ fn resolve_room_jump_target(targets: &[(u8, RoomSlot)], byte: u8) -> Option<Room
     targets
         .iter()
         .find_map(|(key, slot)| (*key == byte).then_some(*slot))
+}
+
+/// Set or clear a per-author context value, returning whether the map
+/// actually changed (so callers bump the context epoch only on real updates).
+/// Blank values clear, matching the service payload convention.
+fn set_context_value(
+    target: &mut HashMap<Uuid, String>,
+    user_id: Uuid,
+    value: Option<&str>,
+) -> bool {
+    match value.filter(|value| !value.trim().is_empty()) {
+        Some(value) => match target.get(&user_id) {
+            Some(existing) if existing == value => false,
+            _ => {
+                target.insert(user_id, value.to_string());
+                true
+            }
+        },
+        None => target.remove(&user_id).is_some(),
+    }
+}
+
+/// Merge `incoming` into `target`, returning whether anything actually
+/// changed.
+fn extend_changed<K, V>(
+    target: &mut HashMap<K, V>,
+    incoming: impl IntoIterator<Item = (K, V)>,
+) -> bool
+where
+    K: Eq + std::hash::Hash,
+    V: PartialEq,
+{
+    let mut changed = false;
+    for (key, value) in incoming {
+        match target.get(&key) {
+            Some(existing) if *existing == value => {}
+            _ => {
+                target.insert(key, value);
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 /// Parse `/<command>` or `/<command> [@]username`. Returns:

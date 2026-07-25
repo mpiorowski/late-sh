@@ -44,11 +44,14 @@ fn drunk_level_buckets() {
 }
 
 #[test]
-fn drunk_label_word_starts_at_level_two() {
-    // Below 300 points the glow stands alone; from level 2 up a word prints.
+fn drunk_label_word_starts_at_level_one() {
+    // Sober prints nothing; every level from 1 (tipsy) up prints a word.
     assert_eq!(drunk_label_word(0), None);
-    assert_eq!(drunk_label_word(1), None);
-    assert_eq!(drunk_label_word(drunk_level(WELCOME_DRINK_POINTS)), None);
+    assert_eq!(drunk_label_word(1), Some("tipsy"));
+    assert_eq!(
+        drunk_label_word(drunk_level(WELCOME_DRINK_POINTS)),
+        Some("tipsy")
+    );
     assert_eq!(drunk_label_word(2), Some("buzzed"));
     assert_eq!(drunk_label_word(3), Some("sloshed"));
     assert_eq!(drunk_label_word(4), Some("wasted"));

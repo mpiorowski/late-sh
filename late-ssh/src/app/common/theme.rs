@@ -4341,21 +4341,21 @@ pub fn BG_HIGHLIGHT() -> Color {
     current_palette().bg_highlight
 }
 
-/// Background tint under a username for the tavern drunk glow: level 1
-/// (tipsy) light green through level 4 (wasted) heavy red, level 0 nothing.
-/// Anchors are blended toward the active canvas so the tint stays quiet on
-/// dark themes and pastel on light ones; "wasted" blends least so it reads
-/// unmistakably. Derived, so no per-palette field is needed.
+/// Foreground for the printed drunk `(word)` beside a name: level 1 (tipsy)
+/// green climbing through gold and orange to level 4 (wasted) red, so the hue
+/// alone reads how far gone a patron is. Level 0 prints no word. Anchors are
+/// blended well toward the active canvas so the aside stays dim next to the
+/// name instead of competing with it. Derived, so no per-palette field is
+/// needed.
 #[allow(non_snake_case)]
-pub fn DRUNK_LABEL_BG(level: u8) -> Option<Color> {
-    let (anchor, toward_canvas) = match level {
-        0 => return None,
-        1 => (Color::Rgb(70, 140, 60), 0.62),
-        2 => (Color::Rgb(180, 150, 40), 0.60),
-        3 => (Color::Rgb(200, 110, 30), 0.55),
-        _ => (Color::Rgb(190, 45, 40), 0.40),
+pub fn DRUNK_WORD_FG(level: u8) -> Color {
+    let anchor = match level {
+        0 | 1 => Color::Rgb(70, 140, 60),
+        2 => Color::Rgb(180, 150, 40),
+        3 => Color::Rgb(200, 110, 30),
+        _ => Color::Rgb(190, 45, 40),
     };
-    Some(blend_toward(anchor, BG_CANVAS(), toward_canvas))
+    blend_toward(anchor, BG_CANVAS(), 0.45)
 }
 
 /// Background tint for the Sudoku cells that share the selected cell's number.

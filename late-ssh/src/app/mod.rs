@@ -33,6 +33,7 @@ pub mod profile;
 pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;
 mod render;
+pub(crate) mod room_info_modal;
 pub(crate) mod room_search_modal;
 pub(crate) mod settings_modal;
 pub(crate) mod sheet_modal;
@@ -43,10 +44,11 @@ mod smoke_test;
 pub mod state;
 #[cfg(test)]
 mod state_test;
-mod tick;
+pub mod tick;
+#[cfg(test)]
+mod tick_test;
 pub(crate) mod ultimates;
 pub mod voice;
-pub mod worldcup;
 
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;

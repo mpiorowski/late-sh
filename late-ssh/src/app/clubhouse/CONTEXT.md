@@ -82,8 +82,15 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `App::tick_clubhouse`): each line holds ~6s while more wait, ~14s solo;
   lines older than 15s never enqueue and the queue caps at 8, oldest
   dropped. Graybeard bubbles normally.
-  `App.clubhouse_bartender_id`/`clubhouse_graybeard_id` are captured from
-  `active_users` during roster refresh.
+  `App.clubhouse_bartender_id`/`clubhouse_graybeard_id`/`clubhouse_bot_id`
+  are captured from `active_users` during roster refresh.
+- `@bot` stands at `map::BOT_SPOT`, a fixed aisle cell between the arcade
+  cabinet and the poker table (not a `Seat`: no furniture glyph there, he
+  just stands, same rendering as the bartender's stick figure). He bubbles
+  normally like graybeard rather than using the pinned banner, so a bubble
+  only appears when he is the author of a fresh #lounge message; replies he
+  posts to other rooms (any room he is mentioned in, per `ai/ghost.rs`) do
+  not surface here since `lounge_messages` is #lounge-only.
 - **Drinks cost chips:** `@bartender` mentions (from anywhere, but usually
   `t` at the bar) run an ungrounded, schema-enforced JSON decision in `ai/ghost.rs`
   (`pour`/`offer`/`chat`): the prompt carries the patron's live balance and

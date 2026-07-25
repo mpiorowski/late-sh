@@ -61,9 +61,11 @@ fn door_events_expire_with_the_clock() {
     state.refresh_roster(vec![occupant(1, "me")]);
     state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
     assert_eq!(state.door_events.len(), 1);
-    for _ in 0..=DOOR_EVENT_TICKS {
-        state.tick(true);
-    }
+    // The clock is wall-driven: a sparse tick jumps straight to the wall
+    // tick it is given, and expiry follows wall time, not call count.
+    state.tick(DOOR_EVENT_TICKS - 1);
+    assert_eq!(state.door_events.len(), 1);
+    state.tick(DOOR_EVENT_TICKS);
     assert!(state.door_events.is_empty());
 }
 
@@ -155,13 +157,11 @@ fn bartender_banner_queues_a_burst_and_plays_it_in_order() {
     );
 
     // The pinned line survives the dwell window even with lines waiting.
-    for _ in 0..BANNER_QUEUE_DWELL_TICKS - 1 {
-        state.tick(true);
-        state.update_bartender_banner(bartender, &tail, now);
-    }
+    state.tick(BANNER_QUEUE_DWELL_TICKS - 1);
+    state.update_bartender_banner(bartender, &tail, now);
     assert_eq!(banner_id(&state), Some(Uuid::from_u128(1)));
 
-    state.tick(true);
+    state.tick(BANNER_QUEUE_DWELL_TICKS);
     state.update_bartender_banner(bartender, &tail, now);
     assert_eq!(
         banner_id(&state),
@@ -179,17 +179,15 @@ fn bartender_banner_holds_a_lone_line_for_the_full_window_then_clears() {
     state.update_bartender_banner(bartender, &tail, now);
     assert_eq!(banner_id(&state), Some(Uuid::from_u128(1)));
 
-    for _ in 0..BANNER_FULL_TICKS - 1 {
-        state.tick(true);
-        state.update_bartender_banner(bartender, &tail, now);
-    }
+    state.tick(BANNER_FULL_TICKS - 1);
+    state.update_bartender_banner(bartender, &tail, now);
     assert_eq!(
         banner_id(&state),
         Some(Uuid::from_u128(1)),
         "nothing queued: the line keeps the full reading window"
     );
 
-    state.tick(true);
+    state.tick(BANNER_FULL_TICKS);
     state.update_bartender_banner(bartender, &tail, now);
     assert_eq!(banner_id(&state), None);
 }
@@ -250,16 +248,14 @@ fn tutorial_welcome_takes_the_banner_ahead_of_a_queued_answer() {
     );
 
     // It holds its own dwell, then the queued answer resumes as usual.
-    state.tick(true);
+    state.tick(1);
     state.update_bartender_banner(bartender, &tail, now);
     assert!(matches!(
         state.bartender_banner_line(),
         Some(BannerLine::Local(_))
     ));
-    for _ in 0..BANNER_QUEUE_DWELL_TICKS {
-        state.tick(true);
-        state.update_bartender_banner(bartender, &tail, now);
-    }
+    state.tick(BANNER_QUEUE_DWELL_TICKS);
+    state.update_bartender_banner(bartender, &tail, now);
     assert_eq!(banner_id(&state), Some(Uuid::from_u128(2)));
 }
 

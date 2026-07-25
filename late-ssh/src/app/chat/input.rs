@@ -114,8 +114,9 @@ fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    let device_rails = app.rail_modes();
     app.settings_modal_state
-        .open_from_profile(app.profile_state.profile());
+        .open_from_profile(app.profile_state.profile(), device_rails);
     app.show_settings = true;
 }
 
@@ -214,6 +215,27 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     }
     if app.chat.take_requested_settings_modal() {
         open_settings_modal(app);
+    }
+    if let Some(request) = app.chat.take_requested_room_info_modal() {
+        use crate::app::chat::state::RoomInfoRequest;
+        match request {
+            RoomInfoRequest::Create { slug } => app.room_info_modal_state.open_create(slug),
+            RoomInfoRequest::Edit {
+                room_id,
+                room_label,
+                owner_label,
+                topic,
+                rules,
+            } => {
+                app.room_info_modal_state.open_edit(
+                    room_id,
+                    room_label,
+                    owner_label,
+                    topic.as_deref(),
+                    rules.as_deref(),
+                );
+            }
+        }
     }
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);

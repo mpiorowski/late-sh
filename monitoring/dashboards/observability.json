@@ -1358,6 +1358,166 @@
         "y": 110
       },
       "description": "Per-second win rate by game."
+    },
+    {
+      "type": "row",
+      "title": "Rendering",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 118
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Render Rate",
+      "description": "Frames drawn (by trigger) vs clean world ticks that skipped the draw entirely (the dirty gate)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(late_ssh_renders_total[$__rate_interval]))",
+          "legendFormat": "drawn ({{reason}})"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(late_ssh_renders_skipped_clean_total[$__rate_interval])",
+          "legendFormat": "skipped clean"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 119
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Clean Skip Ratio (%)",
+      "description": "Share of render passes the dirty gate skipped; higher = more idle sessions settling clean",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * rate(late_ssh_renders_skipped_clean_total[$__rate_interval]) / (sum(rate(late_ssh_renders_total[$__rate_interval])) + rate(late_ssh_renders_skipped_clean_total[$__rate_interval]))",
+          "legendFormat": "skipped clean %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 119
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Draws per Session",
+      "description": "Average frames drawn per second per active session (pre-adaptive baseline was ~15; mostly-idle fleet should sit well under 2)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(late_ssh_renders_total[$__rate_interval])) / late_ssh_sessions_active",
+          "legendFormat": "draws/s per session"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 127
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Render Stalls",
+      "description": "Output-budget guard: paused render passes and forced disconnects for clients not reading their stream",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(late_ssh_render_stall_skips_total[$__rate_interval])",
+          "legendFormat": "stall skips"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(late_ssh_render_stall_disconnects_total[$__rate_interval])",
+          "legendFormat": "stall disconnects"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 127
+      }
     }
   ]
 }

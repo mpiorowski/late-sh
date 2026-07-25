@@ -1,10 +1,18 @@
 use late_core::models::profile::{Profile, ProfileParams};
-use late_core::models::user::RightSidebarMode;
+use late_core::models::user_ssh_key::KeyLayout;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use super::svc::{ProfileEvent, ProfileService, ProfileSnapshot};
 use crate::app::common::{primitives::Banner, theme};
+
+/// Outcome of one profile tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed render-visible state (theme, sidebar
+/// layout, favorites).
+pub struct ProfileTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
 
 pub struct ProfileState {
     profile_service: ProfileService,
@@ -99,29 +107,13 @@ impl ProfileState {
         self.profile.show_pet_strip
     }
 
-    /// Advance both sidebars through the 4-state layout cycle (the Home `\`
-    /// key): both on -> left off -> right off -> both off -> both on. `left`
-    /// is the room-list sidebar, `right` the info sidebar (its mode is kept in
-    /// step with the visibility flag). Persists and returns the new
-    /// `(left, right)` visibility.
-    pub fn cycle_sidebars(&mut self) -> (bool, bool) {
-        const CYCLE: [(bool, bool); 4] =
-            [(true, true), (false, true), (true, false), (false, false)];
-        let current = (
-            self.profile.show_room_list_sidebar,
-            self.profile.show_right_sidebar,
-        );
-        let idx = CYCLE.iter().position(|&s| s == current).unwrap_or(0);
-        let (left, right) = CYCLE[(idx + 1) % CYCLE.len()];
-        self.profile.show_room_list_sidebar = left;
-        self.profile.show_right_sidebar = right;
-        self.profile.right_sidebar_mode = if right {
-            RightSidebarMode::On
-        } else {
-            RightSidebarMode::Off
-        };
-        self.save_profile();
-        (left, right)
+    /// Store the home rail layout for one device (one SSH key). Fire and
+    /// forget, like every other profile write; the caller already applied the
+    /// change to session state. Deliberately does *not* touch the account
+    /// profile: that is what makes the layout per device.
+    pub fn set_device_rails(&self, fingerprint: String, layout: KeyLayout) {
+        self.profile_service
+            .set_key_layout(self.user_id, fingerprint, layout);
     }
 
     fn save_profile(&self) {
@@ -130,9 +122,15 @@ impl ProfileState {
     }
 
     // Tick
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> ProfileTick {
+        // Peek before draining: anything queued may change render-visible
+        // state, so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
-        self.drain_events()
+        ProfileTick {
+            banner: self.drain_events(),
+            changed,
+        }
     }
 
     fn drain_snapshot(&mut self) {
@@ -212,6 +210,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_components: profile.right_sidebar_components.clone(),
         show_room_list_sidebar: profile.show_room_list_sidebar,
+        room_list_mode: profile.room_list_mode,
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
         land_on_home: profile.land_on_home,
