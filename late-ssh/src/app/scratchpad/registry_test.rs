@@ -6,57 +6,155 @@ fn uid(n: u128) -> Uuid {
     Uuid::from_u128(n)
 }
 
-#[test]
-fn invite_round_trips_through_take_invite_for() {
-    let registry = SharedScratchpadRegistry::new();
-    let (alice, bob) = (uid(1), uid(2));
-    registry.invite(alice, "alice".to_string(), bob);
+fn side(user_id: Uuid, username: &str, session_token: &str) -> PairSide {
+    PairSide {
+        user_id,
+        username: username.to_string(),
+        session_token: session_token.to_string(),
+    }
+}
 
-    let invite = registry.take_invite_for(bob).expect("invite present");
-    assert_eq!(invite.from_user_id, alice);
-    assert_eq!(invite.from_username, "alice");
-    assert!(registry.take_invite_for(bob).is_none(), "invite is drained");
+/// Both sides run `/pair @other` and land in the same buffer. `joined`
+/// mirrors what `ScratchpadState::new` does when each session opens it.
+fn pair_up(registry: &SharedScratchpadRegistry, now: Instant) -> SharedScratchpad {
+    let outcome = registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+    assert!(matches!(outcome, PairOutcome::Waiting), "{outcome:?}");
+    let PairOutcome::Paired { shared, .. } =
+        registry.try_pair(side(uid(2), "bob", "sess-b"), uid(1), now)
+    else {
+        panic!("mirroring the intent should pair");
+    };
+    let mut buffer = shared.lock_recover();
+    buffer.mark_joined(uid(1));
+    buffer.mark_joined(uid(2));
+    drop(buffer);
+    shared
 }
 
 #[test]
-fn re_inviting_overwrites_the_pending_invite() {
+fn one_sided_pair_waits_and_does_not_create_a_pairing() {
     let registry = SharedScratchpadRegistry::new();
-    let (alice, carol, bob) = (uid(1), uid(3), uid(2));
-    registry.invite(alice, "alice".to_string(), bob);
-    registry.invite(carol, "carol".to_string(), bob);
+    let now = Instant::now();
 
-    let invite = registry.take_invite_for(bob).expect("invite present");
-    assert_eq!(invite.from_user_id, carol, "last invite wins");
+    let outcome = registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+
+    assert!(matches!(outcome, PairOutcome::Waiting), "{outcome:?}");
+    assert!(
+        registry.poll(uid(2), "sess-b").pairing.is_none(),
+        "the target is not pulled into anything by a one-sided ask"
+    );
+    assert!(
+        registry.poll(uid(1), "sess-a").pairing.is_none(),
+        "nor is the asker"
+    );
 }
 
 #[test]
-fn accept_indexes_the_pairing_under_both_user_ids() {
+fn the_target_gets_a_notice_once() {
     let registry = SharedScratchpadRegistry::new();
-    let (alice, bob) = (uid(1), uid(2));
-    registry.invite(alice, "alice".to_string(), bob);
-    let invite = registry.take_invite_for(bob).unwrap();
-    let shared = registry.accept(bob, "bob".to_string(), invite);
+    let now = Instant::now();
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
 
-    assert!(registry.is_paired(alice));
-    assert!(registry.is_paired(bob));
-    assert!(Arc::ptr_eq(&shared, &registry.lookup(alice).unwrap()));
-    assert!(Arc::ptr_eq(&shared, &registry.lookup(bob).unwrap()));
+    assert_eq!(
+        registry.poll(uid(2), "sess-b").notice.as_deref(),
+        Some("alice")
+    );
+    assert_eq!(
+        registry.poll(uid(2), "sess-b").notice,
+        None,
+        "the notice is drained by the first session that reads it"
+    );
+}
+
+#[test]
+fn mirroring_the_ask_pairs_both_sides_into_one_buffer() {
+    let registry = SharedScratchpadRegistry::new();
+    let shared = pair_up(&registry, Instant::now());
+
+    let alice = registry
+        .poll(uid(1), "sess-a")
+        .pairing
+        .expect("alice paired");
+    let bob = registry.poll(uid(2), "sess-b").pairing.expect("bob paired");
+    assert!(Arc::ptr_eq(&shared, &alice));
+    assert!(Arc::ptr_eq(&shared, &bob));
+}
+
+#[test]
+fn an_expired_intent_does_not_pair() {
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+
+    let late = now + PAIR_INTENT_TTL;
+    let outcome = registry.try_pair(side(uid(2), "bob", "sess-b"), uid(1), late);
+
+    assert!(
+        matches!(outcome, PairOutcome::Waiting),
+        "a stale ask is not an agreement; bob's own ask starts fresh: {outcome:?}"
+    );
+    assert!(registry.poll(uid(2), "sess-b").pairing.is_none());
+}
+
+#[test]
+fn an_intent_aimed_at_someone_else_is_left_alone() {
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    // Alice wants Carol, not Bob.
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(3), now);
+
+    let outcome = registry.try_pair(side(uid(2), "bob", "sess-b"), uid(1), now);
+    assert!(matches!(outcome, PairOutcome::Waiting), "{outcome:?}");
+
+    let outcome = registry.try_pair(side(uid(3), "carol", "sess-c"), uid(1), now);
+    assert!(
+        matches!(outcome, PairOutcome::Paired { .. }),
+        "alice's ask for carol survived bob's unrelated ask: {outcome:?}"
+    );
+}
+
+#[test]
+fn a_pairing_is_bound_to_the_session_that_asked() {
+    // A user's other SSH sessions must not be dragged into the editor.
+    let registry = SharedScratchpadRegistry::new();
+    pair_up(&registry, Instant::now());
+
+    assert!(registry.poll(uid(1), "sess-a").pairing.is_some());
+    assert!(
+        registry.poll(uid(1), "another-tty").pairing.is_none(),
+        "a second session of the same user stays where it is"
+    );
+}
+
+#[test]
+fn pairing_with_a_busy_user_is_refused_on_both_sides() {
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    pair_up(&registry, now);
+
+    let outcome = registry.try_pair(side(uid(3), "carol", "sess-c"), uid(1), now);
+    assert!(matches!(outcome, PairOutcome::TargetBusy), "{outcome:?}");
+
+    let outcome = registry.try_pair(side(uid(1), "alice", "sess-a"), uid(3), now);
+    assert!(matches!(outcome, PairOutcome::AlreadyPaired), "{outcome:?}");
 }
 
 #[test]
 fn leave_from_one_side_keeps_the_pairing_alive_for_the_other() {
     let registry = SharedScratchpadRegistry::new();
-    let (alice, bob) = (uid(1), uid(2));
-    registry.invite(alice, "alice".to_string(), bob);
-    let invite = registry.take_invite_for(bob).unwrap();
-    registry.accept(bob, "bob".to_string(), invite);
+    let shared = pair_up(&registry, Instant::now());
 
-    registry.leave(alice);
-    assert!(!registry.is_paired(alice), "the leaver's own entry is gone");
-    let shared = registry
-        .lookup(bob)
-        .expect("the other side keeps their entry");
-    assert_eq!(shared.lock_recover().left, Some(alice));
+    registry.leave(uid(1));
+
+    assert!(
+        registry.poll(uid(1), "sess-a").pairing.is_none(),
+        "the leaver's own entry is gone"
+    );
+    assert!(
+        registry.poll(uid(2), "sess-b").pairing.is_some(),
+        "the other side keeps their entry"
+    );
+    assert_eq!(shared.lock_recover().left, Some(uid(1)));
 }
 
 #[test]
@@ -66,13 +164,10 @@ fn leave_bumps_revision_so_the_survivor_syncs_promptly() {
     // would only notice a departed partner on their next unrelated
     // keystroke instead of on their very next tick.
     let registry = SharedScratchpadRegistry::new();
-    let (alice, bob) = (uid(1), uid(2));
-    registry.invite(alice, "alice".to_string(), bob);
-    let invite = registry.take_invite_for(bob).unwrap();
-    let shared = registry.accept(bob, "bob".to_string(), invite);
+    let shared = pair_up(&registry, Instant::now());
     let revision_before = shared.lock_recover().revision;
 
-    registry.leave(alice);
+    registry.leave(uid(1));
 
     assert_eq!(shared.lock_recover().revision, revision_before + 1);
 }
@@ -80,35 +175,54 @@ fn leave_bumps_revision_so_the_survivor_syncs_promptly() {
 #[test]
 fn leave_from_both_sides_tears_down_the_pairing() {
     let registry = SharedScratchpadRegistry::new();
-    let (alice, bob) = (uid(1), uid(2));
-    registry.invite(alice, "alice".to_string(), bob);
-    let invite = registry.take_invite_for(bob).unwrap();
-    registry.accept(bob, "bob".to_string(), invite);
+    pair_up(&registry, Instant::now());
 
-    registry.leave(alice);
-    registry.leave(bob);
-    assert!(!registry.is_paired(alice));
-    assert!(!registry.is_paired(bob));
+    registry.leave(uid(1));
+    registry.leave(uid(2));
+
+    assert!(registry.poll(uid(1), "sess-a").pairing.is_none());
+    assert!(registry.poll(uid(2), "sess-b").pairing.is_none());
+}
+
+#[test]
+fn a_partner_who_never_opened_the_editor_is_not_left_paired_forever() {
+    // Alice asks, then her session dies before bob mirrors. Bob's session
+    // pairs against a token nobody will ever poll with, so when bob leaves
+    // the whole pairing has to go: otherwise alice can never `/pair` again.
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    registry.try_pair(side(uid(1), "alice", "dead-session"), uid(2), now);
+    let PairOutcome::Paired { shared, .. } =
+        registry.try_pair(side(uid(2), "bob", "sess-b"), uid(1), now)
+    else {
+        panic!("mirroring the intent should pair");
+    };
+    shared.lock_recover().mark_joined(uid(2));
+
+    registry.leave(uid(2));
+
+    let outcome = registry.try_pair(side(uid(1), "alice", "sess-a2"), uid(3), now);
+    assert!(
+        matches!(outcome, PairOutcome::Waiting),
+        "alice is free to pair again: {outcome:?}"
+    );
 }
 
 #[test]
 fn cursor_and_content_round_trip_per_side() {
     let registry = SharedScratchpadRegistry::new();
-    let (alice, bob) = (uid(1), uid(2));
-    registry.invite(alice, "alice".to_string(), bob);
-    let invite = registry.take_invite_for(bob).unwrap();
-    let shared = registry.accept(bob, "bob".to_string(), invite);
+    let shared = pair_up(&registry, Instant::now());
 
     {
         let mut buffer = shared.lock_recover();
         buffer.content = "fn main() {}".to_string();
         buffer.revision += 1;
-        buffer.set_cursor_for(alice, (0, 3));
-        buffer.set_cursor_for(bob, (0, 7));
+        buffer.set_cursor_for(uid(1), (0, 3));
+        buffer.set_cursor_for(uid(2), (0, 7));
     }
     let buffer = shared.lock_recover();
     assert_eq!(buffer.content, "fn main() {}");
-    assert_eq!(buffer.cursor_for(alice), (0, 3));
-    assert_eq!(buffer.cursor_for(bob), (0, 7));
-    assert_eq!(buffer.partner_of(alice).map(|(id, _)| id), Some(bob));
+    assert_eq!(buffer.cursor_for(uid(1)), (0, 3));
+    assert_eq!(buffer.cursor_for(uid(2)), (0, 7));
+    assert_eq!(buffer.partner_of(uid(1)).map(|(id, _)| id), Some(uid(2)));
 }

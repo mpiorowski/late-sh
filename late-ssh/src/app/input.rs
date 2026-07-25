@@ -1,7 +1,7 @@
 use super::{
     audio::booth as audio_booth,
     chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_search_modal, settings_modal, sheet_modal,
+    room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
 };
 use late_core::models::user::{RightSidebarMode, RoomListMode};
@@ -817,8 +817,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.pair_invite_pending.is_some() {
-        crate::app::scratchpad::input::handle_invite_prompt(app, event);
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_input(app, event);
         return;
     }
 
@@ -2390,6 +2390,10 @@ fn dispatch_escape(app: &mut App) {
         close_icon_picker(app);
         return;
     }
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_escape(app);
+        return;
+    }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
         app.chat.message_search.clear();
@@ -2500,12 +2504,8 @@ fn dispatch_escape(app: &mut App) {
         crate::app::lobby::house::input::close_table(app);
         return;
     }
-    // Esc from the paired scratchpad leaves the pairing (notifying the
-    // partner via the registry) and returns to Home.
-    if ctx.screen == Screen::Scratchpad {
-        app.set_screen(Screen::Dashboard);
-        return;
-    }
+    // No Scratchpad arm here: its editor consumes Esc as `EditOutcome::Cancel`
+    // in `handle_dedicated_screen_input`, which is what leaves the pairing.
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
     // that launched it, not to a standalone landing page.
     if ctx.screen == Screen::Lateania {
@@ -3236,16 +3236,19 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
     if app.show_splash {
         return false;
     }
-
-    let unread = app.chat.notifications.unread_count();
-    // SGR mouse coords are 1-indexed; the top border row is y=1.
-    if unread == 0 || mouse.y != 1 {
+    // Where the last frame drew the "N unread mentions" text; `None` when
+    // nothing is unread. The voice/chips text after it is not clickable.
+    let Some(rect) = app.last_mentions_hud_rect.get() else {
         return false;
-    }
-
-    let noun = if unread == 1 { "mention" } else { "mentions" };
-    let hud_width = format!(" {unread} unread {noun} ").len() as u16;
-    if mouse.x < app.size.0.saturating_sub(hud_width) {
+    };
+    // SGR mouse coords are 1-indexed; the rect is in 0-indexed frame cells.
+    let Some(x) = mouse.x.checked_sub(1) else {
+        return false;
+    };
+    let Some(y) = mouse.y.checked_sub(1) else {
+        return false;
+    };
+    if !rect_contains(rect, x, y) {
         return false;
     }
 

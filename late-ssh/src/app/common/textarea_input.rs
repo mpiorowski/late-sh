@@ -130,9 +130,21 @@ pub fn handle_multiline_edit(
     EditOutcome::Handled
 }
 
+/// One level of indentation for [`handle_freeform_edit`]. Spaces, not a
+/// literal tab: the buffer is shared verbatim and a tab renders at a
+/// different width on each side's terminal.
+const FREEFORM_INDENT: &str = "    ";
+
 /// Keystroke handling for a free-typing surface (scratchpad convention:
 /// Enter inserts a newline like a real editor rather than submitting, and
 /// Esc is left for the caller to interpret as "leave" rather than "cancel").
+///
+/// Two more departures from the composer keymaps. Tab indents instead of
+/// falling through to the global page cycle, which on a full-screen editor
+/// would look like the screen changing under you. Undo is absent: the
+/// surface this serves replaces its whole buffer whenever the other side
+/// publishes, so the undo stack contains remote edits and one undo would
+/// rewind work that was never yours.
 pub fn handle_freeform_edit(
     ta: &mut TextArea<'static>,
     event: &ParsedInput,
@@ -143,13 +155,11 @@ pub fn handle_freeform_edit(
         ParsedInput::Byte(b'\r') | ParsedInput::AltEnter | ParsedInput::Byte(b'\n') => {
             push_char_limited(ta, '\n', max_chars)
         }
+        ParsedInput::Byte(0x09) => insert_multiline_limited(ta, FREEFORM_INDENT, max_chars),
         ParsedInput::Byte(0x15) => clear(ta),
         ParsedInput::Byte(0x19) => {
             let yank = ta.yank_text();
             insert_multiline_limited(ta, &yank, max_chars);
-        }
-        ParsedInput::Byte(0x1F) => {
-            ta.undo();
         }
         ParsedInput::Byte(0x17) => {
             ta.delete_word();

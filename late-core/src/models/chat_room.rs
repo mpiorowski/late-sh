@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
+use std::collections::HashMap;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -19,7 +20,19 @@ crate::model! {
         pub language_code: Option<String>,
         pub dm_user_a: Option<Uuid>,
         pub dm_user_b: Option<Uuid>,
+        // What this room is about, one line. Projected as the IRC topic.
+        pub topic: Option<String>,
+        // The room's general rules, shown on request.
+        pub rules: Option<String>,
+        // Who opened this room. Written by the create paths only, never
+        // back-filled; see `owner_id` for the ownership actually in force.
+        pub created_by: Option<Uuid>,
     }
+}
+
+/// Trim a room-info field and treat an empty result as "unset" (NULL).
+fn clean_info(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
 }
 
 impl ChatRoom {
@@ -220,17 +233,23 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    pub async fn create_private_room(client: &Client, slug: &str) -> Result<Self> {
+    /// Create a private room owned by `created_by`. The creator is recorded in
+    /// the same statement, so a private room is never momentarily ownerless.
+    pub async fn create_private_room(
+        client: &Client,
+        slug: &str,
+        created_by: Uuid,
+    ) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 
         let row = client
             .query_opt(
-                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
-                 VALUES ('topic', 'private', false, $1)
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, created_by)
+                 VALUES ('topic', 'private', false, $1, $2)
                  ON CONFLICT (visibility, slug) WHERE kind = 'topic'
                  DO NOTHING
                  RETURNING *",
-                &[&slug],
+                &[&slug, &created_by],
             )
             .await?;
 
@@ -238,6 +257,81 @@ impl ChatRoom {
             Some(row) => Ok(Self::from(row)),
             None => bail!("private room #{slug} already exists"),
         }
+    }
+
+    /// Record who opened a room, from the create path only. The `created_by IS
+    /// NULL` guard is a concurrency guard, not a back-fill: two sessions racing
+    /// `/public #foo` both land here, and the loser must not overwrite the
+    /// winner. Never call this to grant ownership of an existing room.
+    pub async fn set_creator(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<()> {
+        client
+            .execute(
+                "UPDATE chat_rooms SET created_by = $2
+                 WHERE id = $1 AND created_by IS NULL",
+                &[&room_id, &user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Owners of `room_ids`, derived rather than stored: the recorded creator
+    /// while they are still a member, otherwise the earliest remaining member
+    /// (ties broken by user id so the answer is stable). Ownership therefore
+    /// succeeds on its own when a creator leaves, and rooms that predate
+    /// `created_by` resolve to their first member. A room with no members left
+    /// is absent from the map.
+    pub async fn owner_ids_for_rooms(
+        client: &Client,
+        room_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Uuid>> {
+        if room_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query(
+                "SELECT DISTINCT ON (m.room_id) m.room_id, m.user_id
+                   FROM chat_room_members m
+                   JOIN chat_rooms r ON r.id = m.room_id
+                  WHERE m.room_id = ANY($1)
+                  ORDER BY m.room_id,
+                           COALESCE(m.user_id = r.created_by, false) DESC,
+                           m.joined_at ASC,
+                           m.user_id ASC",
+                &[&room_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("room_id"), row.get("user_id")))
+            .collect())
+    }
+
+    /// The owner of one room. Same derivation as `owner_ids_for_rooms`.
+    pub async fn owner_id(client: &Client, room_id: Uuid) -> Result<Option<Uuid>> {
+        Ok(Self::owner_ids_for_rooms(client, &[room_id])
+            .await?
+            .remove(&room_id))
+    }
+
+    /// Set what the room is about and its rules. Empty strings are stored as
+    /// NULL so a cleared field reads as "unset" rather than blank. Authority is
+    /// resolved by the caller (service layer).
+    pub async fn set_topic_and_rules(
+        client: &Client,
+        room_id: Uuid,
+        topic: Option<&str>,
+        rules: Option<&str>,
+    ) -> Result<Self> {
+        let row = client
+            .query_one(
+                "UPDATE chat_rooms
+                    SET topic = $2, rules = $3, updated = current_timestamp
+                  WHERE id = $1
+                 RETURNING *",
+                &[&room_id, &clean_info(topic), &clean_info(rules)],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
     pub async fn get_or_create_room(client: &Client, slug: &str) -> Result<Self> {
@@ -430,6 +524,7 @@ impl ChatRoom {
             .query(
                 "SELECT r.id,
                         r.slug,
+                        r.topic,
                         COALESCE(m.member_count, 0)::bigint AS member_count,
                         COALESCE(msg.message_count, 0)::bigint AS message_count,
                         msg.last_message_at
@@ -464,6 +559,7 @@ impl ChatRoom {
                 slug.map(|slug| DiscoverPublicTopicRoom {
                     room_id: row.get("id"),
                     slug,
+                    topic: row.get("topic"),
                     member_count: row.get("member_count"),
                     message_count: row.get("message_count"),
                     last_message_at: row.get("last_message_at"),
@@ -695,6 +791,9 @@ impl ChatRoom {
 pub struct DiscoverPublicTopicRoom {
     pub room_id: Uuid,
     pub slug: String,
+    /// What the room is about, when a mod has set it. This is the one line
+    /// someone reads before deciding whether to join.
+    pub topic: Option<String>,
     pub member_count: i64,
     pub message_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,

@@ -706,22 +706,20 @@ impl Session {
                     .await?;
             }
             Command::TOPIC(channel, None) => {
+                let topic = self.channel_topic(&channel).await?;
                 framed
-                    .send(replies::numeric(
-                        &self.nick,
-                        Response::RPL_NOTOPIC,
-                        vec![channel, "No topic is set".to_string()],
-                    ))
+                    .send(replies::topic(&self.nick, &channel, topic.as_deref()))
                     .await?;
             }
             Command::TOPIC(channel, Some(_)) => {
-                // TODO(FRD §9.4): allow ops to set room topics once rooms
-                // grow an editable topic concept.
+                // Setting a topic stays a late.sh-side action: a private room
+                // answers to its owner and a public one to the mods, and that
+                // authority lives in the chat service, not here.
                 framed
                     .send(replies::numeric(
                         &self.nick,
                         Response::ERR_CHANOPRIVSNEEDED,
-                        vec![channel, "Topics are managed in the late.sh TUI".to_string()],
+                        vec![channel, "Topics are set in the late.sh TUI".to_string()],
                     ))
                     .await?;
             }
@@ -1445,6 +1443,9 @@ impl Session {
                 Command::JOIN(name.clone(), None, None),
             ))
             .await?;
+        framed
+            .send(replies::topic(&self.nick, &name, room.topic.as_deref()))
+            .await?;
         self.send_names(framed, &name).await
     }
 
@@ -2101,6 +2102,18 @@ impl Session {
             self.last_rate_notice = Some(now);
         }
         should_send
+    }
+
+    /// The topic of a channel this connection has joined, if it has one.
+    async fn channel_topic(&mut self, name: &str) -> Result<Option<String>> {
+        let Some((room_id, _)) = self.authorized_joined_channel(name).await? else {
+            return Ok(None);
+        };
+        let client = self.state.db.get().await?;
+        let topic = ChatRoom::get(&client, room_id)
+            .await?
+            .and_then(|room| room.topic);
+        Ok(topic)
     }
 
     async fn authorized_joined_channel(&mut self, name: &str) -> Result<Option<(Uuid, String)>> {

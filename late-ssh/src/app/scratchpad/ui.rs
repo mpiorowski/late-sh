@@ -19,7 +19,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ScratchpadState) {
 
     let header = if state.partner_left() {
         Line::from(Span::styled(
-            format!("@{} left the pairing — Esc to exit", state.partner_username),
+            format!("@{} left the pairing. Esc to exit", state.partner_username),
             Style::default().fg(theme::TEXT_DIM()),
         ))
     } else {

@@ -273,7 +273,7 @@ pub struct SessionConfig {
     /// Process-global clubhouse presence (seats, walkers, emotes). `None`
     /// on headless/test paths, which keeps the room session-local.
     pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
-    /// Process-global `/pair` invites and shared scratchpad buffers. `None`
+    /// Process-global `/pair` intents and shared scratchpad buffers. `None`
     /// on headless/test paths, which disables `/pair`.
     pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
     /// True once this user finished (or skipped) the clubhouse tutorial.
@@ -441,6 +441,10 @@ pub struct App {
     /// Wander travel width of the pet strip drawn last frame; `None` when the
     /// strip was not drawn. Gates the strip animation's frame cost in tick.
     pub(crate) last_pet_strip_travel: std::cell::Cell<Option<usize>>,
+    /// Where the top-border "N unread mentions" text was drawn last frame,
+    /// for the HUD click hit test; `None` when nothing is unread. Only the
+    /// mentions segment is clickable, not the voice/chips text after it.
+    pub(crate) last_mentions_hud_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -465,6 +469,7 @@ pub struct App {
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
+    pub(crate) room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
     /// Server-authoritative audio source for the paired playback surface.
     /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
@@ -617,11 +622,10 @@ pub struct App {
     pub(crate) scratchpad_registry:
         Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
     /// `Some` while this session is inside a paired scratchpad. Constructed
-    /// on invite acceptance and dropped on leave; `ScratchpadState`'s own
-    /// `Drop` impl notifies the partner even on a hard disconnect.
+    /// once both sides have run `/pair @other` and dropped on leave;
+    /// `ScratchpadState`'s own `Drop` impl notifies the partner even on a
+    /// hard disconnect.
     pub(crate) scratchpad: Option<crate::app::scratchpad::state::ScratchpadState>,
-    /// A `/pair @user` invite awaiting accept/decline from this session.
-    pub(crate) pair_invite_pending: Option<crate::app::scratchpad::registry::PendingPairInvite>,
     /// `true` while the dedicated Artboard screen is in editing mode.
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
@@ -1180,6 +1184,7 @@ impl App {
             last_pet_strip_food_rect: std::cell::Cell::new(None),
             last_pet_strip_water_rect: std::cell::Cell::new(None),
             last_pet_strip_travel: std::cell::Cell::new(None),
+            last_mentions_hud_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -1213,6 +1218,8 @@ impl App {
             poll_modal_state: chat::polls::state::PollModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
+            room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState::default(
+            ),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             paired_browser_source: config.initial_audio_source,
             selected_icecast_stream: config.initial_icecast_stream,
@@ -1315,7 +1322,6 @@ impl App {
             dartboard_state: None,
             scratchpad_registry: config.scratchpad_registry,
             scratchpad: None,
-            pair_invite_pending: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,
             pinstar_browser: crate::app::pinstar::browser::DiagramBrowser::default(),
@@ -1840,7 +1846,7 @@ impl App {
             // Dropping `scratchpad` here (rather than an explicit
             // `leave_scratchpad` method) runs `ScratchpadState`'s `Drop`
             // impl, which notifies the registry so the partner sees
-            // "left the pairing" on their next sync — the same RAII
+            // "left the pairing" on their next sync, the same RAII
             // teardown Artboard uses for its color slot.
             self.scratchpad = None;
             self.force_full_repaint();

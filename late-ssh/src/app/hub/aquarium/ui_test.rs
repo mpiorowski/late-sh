@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::dashboard::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE;
+use crate::app::chat::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE;
 
 const TALL_ENOUGH: u16 = TOP_TRAY_HEIGHT + MIN_CHAT_HEIGHT_WITH_LOUNGE;
 

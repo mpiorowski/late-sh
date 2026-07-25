@@ -1,13 +1,34 @@
+use std::time::Instant;
+
 use uuid::Uuid;
 
 use super::*;
-use crate::app::scratchpad::registry::SharedScratchpadRegistry;
+use crate::app::scratchpad::registry::{PairOutcome, PairSide, SharedScratchpadRegistry};
+
+/// Both sides run `/pair @other`, which is the only way a pairing exists.
+fn pair_up(
+    registry: &SharedScratchpadRegistry,
+    alice: Uuid,
+    bob: Uuid,
+) -> crate::app::scratchpad::registry::SharedScratchpad {
+    let side = |user_id, username: &str, session_token: &str| PairSide {
+        user_id,
+        username: username.to_string(),
+        session_token: session_token.to_string(),
+    };
+    let now = Instant::now();
+    registry.try_pair(side(alice, "alice", "sess-a"), bob, now);
+    let PairOutcome::Paired { shared, .. } =
+        registry.try_pair(side(bob, "bob", "sess-b"), alice, now)
+    else {
+        panic!("mirroring the intent should pair");
+    };
+    shared
+}
 
 fn paired(alice: Uuid, bob: Uuid) -> (ScratchpadState, ScratchpadState) {
     let registry = SharedScratchpadRegistry::new();
-    registry.invite(alice, "alice".to_string(), bob);
-    let invite = registry.take_invite_for(bob).unwrap();
-    let shared = registry.accept(bob, "bob".to_string(), invite);
+    let shared = pair_up(&registry, alice, bob);
 
     let alice_state = ScratchpadState::new(
         registry.clone(),
@@ -24,9 +45,7 @@ fn paired(alice: Uuid, bob: Uuid) -> (ScratchpadState, ScratchpadState) {
 fn new_seeds_editor_from_the_shared_buffer() {
     let (alice, bob) = (Uuid::from_u128(1), Uuid::from_u128(2));
     let registry = SharedScratchpadRegistry::new();
-    registry.invite(alice, "alice".to_string(), bob);
-    let invite = registry.take_invite_for(bob).unwrap();
-    let shared = registry.accept(bob, "bob".to_string(), invite);
+    let shared = pair_up(&registry, alice, bob);
     shared.lock_recover().content = "fn main() {}".to_string();
     shared.lock_recover().revision = 1;
 
@@ -80,6 +99,21 @@ fn typing_after_a_remote_sync_appends_instead_of_scrambling_the_buffer() {
         bob.editor.lines().join("\n"),
         "hello from alice\nreply from bob"
     );
+}
+
+#[test]
+fn a_remote_sync_leaves_the_local_yank_register_alone() {
+    // Regression test: the sync replaces the buffer with select_all + cut,
+    // and cut yanks. Without saving it, every keystroke from the partner
+    // silently replaced whatever the user had copied with the whole buffer.
+    let (mut alice, mut bob) = paired(Uuid::from_u128(1), Uuid::from_u128(2));
+    bob.editor.set_yank_text("copied earlier");
+
+    alice.editor.insert_str("alice types");
+    alice.publish();
+    assert!(bob.sync_from_shared());
+
+    assert_eq!(bob.editor.yank_text(), "copied earlier");
 }
 
 #[test]

@@ -167,6 +167,40 @@ impl PendingClipboardImageUpload {
     }
 }
 
+/// A pending request to open the room-info form, carried until the app-level
+/// input loop opens the modal. `Create` comes from `/private`, `Edit` from
+/// `/roominfo` on a room the user may set info on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RoomInfoRequest {
+    Create {
+        slug: String,
+    },
+    Edit {
+        room_id: Uuid,
+        /// `#slug` of the room being edited, for the form's title.
+        room_label: String,
+        /// Who the form says holds this room: a username for a private room,
+        /// "moderators" for a public one. Ownership can move on its own when a
+        /// creator leaves, so the form is where it becomes visible.
+        owner_label: String,
+        topic: Option<String>,
+        rules: Option<String>,
+    },
+}
+
+/// Who may set a room's topic and rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoomInfoAuthority {
+    /// This user owns the room (private rooms only).
+    Owner,
+    /// Staff standing, which carries every room.
+    Moderator,
+    /// The room has info, but not for this user to set.
+    None,
+    /// The room has no topic or rules at all (DMs, game rooms).
+    NotEditable,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
@@ -397,7 +431,6 @@ pub struct ChatState {
     /// actually changes.
     context_epoch: u64,
     pub(crate) active_polls: HashMap<Uuid, ActiveChatPoll>,
-    pinned_messages: Vec<ChatMessage>,
     lounge_room_id: Option<Uuid>,
     /// Recent #lounge system-feed lines (see `activity/lounge.rs`), newest
     /// first, capped at `ACTIVITY_TICKER_CAP`. System messages are diverted
@@ -409,9 +442,11 @@ pub struct ChatState {
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
     friend_user_ids: HashSet<Uuid>,
+    /// Derived owner per private room, from the chat snapshot. Ownership is not
+    /// stored on the room (a creator who leaves hands it on), so this is the
+    /// session's view of who currently holds each private room.
+    room_owner_ids: HashMap<Uuid, Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
-    pinned_rx: watch::Receiver<Vec<ChatMessage>>,
-    pinned_tx: watch::Sender<Vec<ChatMessage>>,
     overlay: Option<Overlay>,
     news_modal: Option<NewsModalState>,
     image_modal: Option<ImageModalState>,
@@ -510,6 +545,7 @@ pub struct ChatState {
     /// `App::notify_outbox`.
     notifier: Notifier,
     requested_help_topic: Option<HelpTopic>,
+    requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
@@ -604,8 +640,6 @@ impl ChatState {
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
-        let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
-        service.load_pinned_messages_task(pinned_tx.clone());
         let (room_tx, room_rx) = watch::channel(None);
         let (snapshot_rx, targeted_event_rx, refresh_tx, bg_task) =
             service.start_user_refresh_task(user_id, room_rx);
@@ -627,16 +661,14 @@ impl ChatState {
             room_versions: HashMap::new(),
             context_epoch: 0,
             active_polls: HashMap::new(),
-            pinned_messages: Vec::new(),
             lounge_room_id: None,
             activity_ticker: Vec::new(),
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             friend_user_ids: HashSet::new(),
+            room_owner_ids: HashMap::new(),
             username_rx,
-            pinned_rx,
-            pinned_tx,
             overlay: None,
             news_modal: None,
             image_modal: None,
@@ -699,6 +731,7 @@ impl ChatState {
             favorite_room_ids: Vec::new(),
             notifier,
             requested_help_topic: None,
+            requested_room_info_modal: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
@@ -789,11 +822,6 @@ impl ChatState {
         if let Some(room_id) = self.selected_room_id {
             self.request_room_tail(room_id);
         }
-    }
-
-    pub fn request_pinned_messages(&self) {
-        self.service
-            .load_pinned_messages_task(self.pinned_tx.clone());
     }
 
     pub fn request_room_tail(&mut self, room_id: Uuid) {
@@ -971,6 +999,10 @@ impl ChatState {
 
     pub fn take_requested_settings_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_settings_modal)
+    }
+
+    pub fn take_requested_room_info_modal(&mut self) -> Option<RoomInfoRequest> {
+        self.requested_room_info_modal.take()
     }
 
     pub fn take_requested_mod_modal(&mut self) -> bool {
@@ -1541,21 +1573,6 @@ impl ChatState {
         None
     }
 
-    pub fn toggle_pin_selected_message_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
-        let message = self.selected_message_in_room(room_id)?;
-        if !self.is_admin {
-            return Some(Banner::error("Admin only: pin messages"));
-        }
-        self.service
-            .toggle_message_pin_task(message.id, self.is_admin, self.pinned_tx.clone());
-        let label = if message.pinned {
-            "Unpinning message..."
-        } else {
-            "Pinning message..."
-        };
-        Some(Banner::success(label))
-    }
-
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {
         self.rooms
             .iter()
@@ -1567,7 +1584,42 @@ impl ChatState {
         room_slug_for(&self.rooms, room_id)
     }
 
-    fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
+    /// Who may set this room's topic and rules. Private topic rooms answer to
+    /// their derived owner, every other room with info answers to the house,
+    /// and DMs and game rooms have no info at all.
+    pub(crate) fn room_info_authority(&self, room: &ChatRoom) -> RoomInfoAuthority {
+        if room.kind == "dm" || room.kind == "game" {
+            return RoomInfoAuthority::NotEditable;
+        }
+        if room.kind == "topic"
+            && room.visibility == "private"
+            && self.room_owner_ids.get(&room.id) == Some(&self.user_id)
+        {
+            return RoomInfoAuthority::Owner;
+        }
+        if self.permissions.can_moderate() {
+            return RoomInfoAuthority::Moderator;
+        }
+        RoomInfoAuthority::None
+    }
+
+    /// The owner line the room-info form shows.
+    fn room_owner_label(&self, room: &ChatRoom) -> String {
+        if room.kind != "topic" || room.visibility != "private" {
+            return "moderators".to_string();
+        }
+        match self.room_owner_ids.get(&room.id) {
+            Some(owner) if *owner == self.user_id => "you".to_string(),
+            Some(owner) => self
+                .usernames
+                .get(owner)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string()),
+            None => "unowned".to_string(),
+        }
+    }
+
+    pub(crate) fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
         self.rooms
             .iter()
             .find(|(room, _)| room.id == room_id)
@@ -2404,6 +2456,8 @@ impl ChatState {
             return Some(Banner::success(&format!("Opening DM with {target}...")));
         }
 
+        // Public rooms are hosted, not owned: `/public` only ever opens or
+        // joins one, and a mod sets its topic and rules afterwards.
         if let Some(room) = parse_room_command(&body, "/public") {
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
@@ -2414,14 +2468,110 @@ impl ChatState {
             return Some(Banner::success(&format!("Opening public #{room}...")));
         }
 
+        // A private room is owned by whoever opens it, so it gets the form up
+        // front and the creator's answers are saved with the room.
         if let Some(room) = parse_room_command(&body, "/private") {
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
             }
             self.clear_composer_after_submit();
-            self.service
-                .create_private_room_task(self.user_id, room.to_string());
-            return Some(Banner::success(&format!("Creating private #{room}...")));
+            self.requested_room_info_modal = Some(RoomInfoRequest::Create {
+                slug: room.to_string(),
+            });
+            return None;
+        }
+
+        if is_room_info_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.selected_room_id else {
+                return Some(Banner::error("Select a room first"));
+            };
+            let Some(room) = self.room_by_id(room_id) else {
+                return Some(Banner::error("No room selected"));
+            };
+            match self.room_info_authority(room) {
+                RoomInfoAuthority::Owner | RoomInfoAuthority::Moderator => {}
+                RoomInfoAuthority::None => {
+                    // Private rooms have an owner who can; public ones do not.
+                    return Some(Banner::error(
+                        if room.kind == "topic" && room.visibility == "private" {
+                            "Only this room's owner can set its topic and rules"
+                        } else {
+                            "Only a moderator can set this room's topic and rules"
+                        },
+                    ));
+                }
+                RoomInfoAuthority::NotEditable => {
+                    return Some(Banner::error("This room has no topic or rules"));
+                }
+            }
+            self.requested_room_info_modal = Some(RoomInfoRequest::Edit {
+                room_id,
+                room_label: room
+                    .slug
+                    .as_deref()
+                    .map(|slug| format!("#{slug}"))
+                    .unwrap_or_else(|| "this room".to_string()),
+                owner_label: self.room_owner_label(room),
+                topic: room.topic.clone(),
+                rules: room.rules.clone(),
+            });
+            return None;
+        }
+
+        // Rules are multi-line by design, so they go in the same overlay
+        // `/active` uses (scrollable, wraps long lines) rather than a banner,
+        // which is one line and would eat the line breaks.
+        if body.trim() == "/rules" {
+            self.clear_composer_after_submit();
+            let overlay = {
+                let room = self
+                    .selected_room_id
+                    .and_then(|room_id| self.room_by_id(room_id));
+                let rules = room
+                    .and_then(|room| room.rules.as_deref())
+                    .map(str::trim)
+                    .filter(|rules| !rules.is_empty());
+                match rules {
+                    Some(rules) => {
+                        let title = match room.and_then(|room| room.slug.as_deref()) {
+                            Some(slug) => format!("#{slug} rules"),
+                            None => "Rules".to_string(),
+                        };
+                        Some((title, rules.lines().map(str::to_string).collect::<Vec<_>>()))
+                    }
+                    None => None,
+                }
+            };
+            let Some((title, lines)) = overlay else {
+                return Some(Banner::info("No rules set for this room"));
+            };
+            self.open_overlay(&title, lines);
+            return None;
+        }
+
+        // Kicking answers to the room, not the composer: a private room's owner
+        // may remove a regular from it, staff may remove anyone anywhere, and
+        // the service decides which of those applies.
+        if let Some(target) = parse_user_command(&body, "/kick") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let Some(target) = target else {
+                return Some(Banner::error("Usage: /kick @user"));
+            };
+            let Some(slug) = self.room_slug(room_id) else {
+                return Some(Banner::error("This room has no members to kick"));
+            };
+            self.service.kick_from_room_task(
+                self.user_id,
+                self.permissions,
+                slug,
+                target.to_string(),
+            );
+            return Some(Banner::success(&format!("Kicking @{target}...")));
         }
 
         if let Some(target) = parse_user_command(&body, "/invite") {
@@ -3117,13 +3267,11 @@ impl ChatState {
         // arrive on a fixed cadence whether or not anything changed, so
         // drain_snapshot reports real change itself instead of being peeked.
         let changed = self.username_rx.has_changed().unwrap_or(false)
-            || self.pinned_rx.has_changed().unwrap_or(false)
             || !self.targeted_event_rx.is_empty()
             || !self.event_rx.is_empty()
             || !self.moderation_event_rx.is_empty();
         self.drain_username_directory();
         let changed = self.drain_snapshot() || changed;
-        self.drain_pinned_messages();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_tick = self.feeds.tick();
@@ -3361,10 +3509,6 @@ impl ChatState {
             .unwrap_or(&[])
     }
 
-    pub fn pinned_messages(&self) -> &[ChatMessage] {
-        &self.pinned_messages
-    }
-
     /// Recent #lounge system-feed lines for the activity ticker row,
     /// newest first.
     pub fn activity_ticker(&self) -> &[ActivityTickerEntry] {
@@ -3547,6 +3691,10 @@ impl ChatState {
             self.friend_user_ids = friend_user_ids;
             context_changed = true;
         }
+        if self.room_owner_ids != snapshot.room_owner_ids {
+            self.room_owner_ids = snapshot.room_owner_ids;
+            changed = true;
+        }
         if self.voice_channels_by_room_id != snapshot.voice_channels_by_room_id {
             self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
             changed = true;
@@ -3633,13 +3781,6 @@ impl ChatState {
             return;
         }
         self.all_usernames = self.username_rx.borrow_and_update().clone();
-    }
-
-    fn drain_pinned_messages(&mut self) {
-        if !self.pinned_rx.has_changed().unwrap_or(false) {
-            return;
-        }
-        self.pinned_messages = self.pinned_rx.borrow_and_update().clone();
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -4224,6 +4365,34 @@ impl ChatState {
                 }
                 ChatEvent::InviteFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
+                }
+                ChatEvent::KickSucceeded {
+                    user_id,
+                    room_slug,
+                    username,
+                } if self.user_id == user_id => {
+                    self.request_list();
+                    banner = Some(Banner::success(&format!(
+                        "Kicked @{username} from #{room_slug}"
+                    )));
+                }
+                ChatEvent::KickFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
+                // Not filtered to the editor: every session sitting in the room
+                // is showing a stale header, and the room row is what the header
+                // reads. Only the editor gets the banner.
+                ChatEvent::RoomInfoUpdated {
+                    user_id,
+                    room_id,
+                    room_slug,
+                } => {
+                    if self.rooms.iter().any(|(room, _)| room.id == room_id) {
+                        self.request_list();
+                    }
+                    if self.user_id == user_id {
+                        banner = Some(Banner::success(&format!("Updated #{room_slug}")));
+                    }
                 }
                 ChatEvent::ModCommandOutput {
                     user_id,
@@ -5006,7 +5175,7 @@ pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
 
 /// A `/pair` request drained by `handle_post_submit_requests` (the composer
 /// has no handle on `active_users`/the scratchpad registry of its own).
-/// Only the directed form exists — `/pair` has no open/anyone-can-claim
+/// Only the directed form exists: `/pair` has no open/anyone-can-claim
 /// lobby, unlike `/challenge`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PairRequest {
@@ -5144,6 +5313,11 @@ fn format_member_overlay_lines(
 /// Parse `/leave` from the composer text.
 fn parse_leave_command(input: &str) -> bool {
     input.trim() == "/leave"
+}
+
+/// `/roominfo` (or `/roomedit`) opens the room-info form for the current room.
+fn is_room_info_command(input: &str) -> bool {
+    matches!(input.trim(), "/roominfo" | "/roomedit")
 }
 
 /// Parse `/public <slug>` or `/private <slug>` style commands.

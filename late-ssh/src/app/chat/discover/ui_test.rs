@@ -10,6 +10,7 @@ fn discover_item(slug: &str, members: i64, messages: i64) -> DiscoverRoomItem {
     DiscoverRoomItem {
         room_id: Uuid::from_u128(1),
         slug: slug.to_string(),
+        topic: None,
         member_count: members,
         message_count: messages,
         last_message_at: Some(Utc::now()),
@@ -206,4 +207,66 @@ fn preview_handles_room_with_no_messages() {
     );
 
     assert!(rendered.contains("No messages yet."));
+}
+
+#[test]
+fn discover_row_shows_the_topic_next_to_the_room_name() {
+    let mut item = discover_item("books", 12, 40);
+    item.topic = Some("what we are reading".to_string());
+    let rendered = render_discover(DiscoverListView {
+        items: vec![&item],
+        selected_index: 0,
+        query: "",
+        filtering: false,
+        loading: false,
+    });
+    assert!(rendered.contains("#books"));
+    assert!(
+        rendered.contains("what we are reading"),
+        "the topic is what tells someone whether to join:\n{rendered}"
+    );
+}
+
+#[test]
+fn discover_row_without_a_topic_is_unchanged() {
+    let item = discover_item("books", 12, 40);
+    let rendered = render_discover(DiscoverListView {
+        items: vec![&item],
+        selected_index: 0,
+        query: "",
+        filtering: false,
+        loading: false,
+    });
+    // Only the name row matters here: the stats row carries its own separators.
+    let name_row = rendered.lines().next().unwrap_or_default();
+    assert!(name_row.contains("#books"));
+    assert!(
+        !name_row.contains('\u{b7}'),
+        "no topic, so no separator on the name row: {name_row}"
+    );
+}
+
+#[test]
+fn discover_preview_shows_what_the_room_is_about() {
+    let mut item = discover_item("books", 12, 40);
+    item.topic = Some("what we are reading this month".to_string());
+    let rendered = render_discover(DiscoverListView {
+        items: vec![&item],
+        selected_index: 0,
+        query: "",
+        filtering: false,
+        loading: false,
+    });
+    // The row has space only for a clipped version, so the preview pane is where
+    // the whole description is legible.
+    let mut lines = rendered.lines();
+    let row = lines.next().unwrap_or_default();
+    assert!(
+        row.contains("what we are reading"),
+        "row shows the start: {row}"
+    );
+    assert!(
+        rendered.contains("what we are reading this month"),
+        "the preview shows all of it:\n{rendered}"
+    );
 }

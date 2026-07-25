@@ -95,8 +95,7 @@ impl App {
 
         self.sync_visible_chat_room();
         self.tick_clubhouse();
-        crate::app::scratchpad::invite::poll_invite(self);
-        crate::app::scratchpad::invite::poll_pairing(self);
+        changed |= crate::app::scratchpad::pair::poll(self);
         if let Some(scratchpad) = self.scratchpad.as_mut()
             && scratchpad.sync_from_shared()
         {

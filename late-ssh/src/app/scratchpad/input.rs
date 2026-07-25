@@ -3,49 +3,20 @@ use crate::app::common::textarea_input::{EditOutcome, handle_freeform_edit};
 use crate::app::input::ParsedInput;
 use crate::app::state::App;
 
-use super::state::ScratchpadState;
-
-/// The pending-invite prompt owns all input while it's up, same shape as
-/// `quit_confirm::input::handle_input` ("a lightweight Y/N prompt that
-/// pre-empts whatever screen is showing").
-pub(crate) fn handle_invite_prompt(app: &mut App, event: ParsedInput) {
-    match event {
-        ParsedInput::Byte(b'\r')
-        | ParsedInput::Char('y' | 'Y')
-        | ParsedInput::Byte(b'y' | b'Y') => {
-            accept_pending_invite(app);
-        }
-        ParsedInput::Byte(0x1B) | ParsedInput::Char('n' | 'N') | ParsedInput::Byte(b'n' | b'N') => {
-            app.pair_invite_pending = None;
-        }
-        _ => {}
-    }
-}
-
-fn accept_pending_invite(app: &mut App) {
-    let Some(invite) = app.pair_invite_pending.take() else {
-        return;
-    };
-    let Some(registry) = app.scratchpad_registry.clone() else {
-        return;
-    };
-    let partner_id = invite.from_user_id;
-    let partner_username = invite.from_username.clone();
-    let shared = registry.accept(app.user_id, app.username.clone(), invite);
-    app.scratchpad = Some(ScratchpadState::new(
-        registry,
-        shared,
-        app.user_id,
-        partner_id,
-        partner_username,
-    ));
-    app.set_screen(Screen::Scratchpad);
-}
-
 /// Full-screen dispatch for the paired editor: forward everything to the
 /// shared `TextArea`, same shape as the daily board / house table in
 /// `handle_dedicated_screen_input`.
+///
+/// There is no accept/decline prompt to handle here. Pairing is a mutual
+/// `/pair @user` handshake (see `pair.rs`), so a session only ever reaches
+/// this screen because its own user asked to.
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
+    // Shift+Tab would otherwise fall through to the global page cycle, which
+    // changes screen and so silently ends the pairing. There is nothing to
+    // cycle on this screen, so swallow it without publishing.
+    if matches!(event, ParsedInput::BackTab) {
+        return true;
+    }
     let Some(state) = app.scratchpad.as_mut() else {
         return false;
     };

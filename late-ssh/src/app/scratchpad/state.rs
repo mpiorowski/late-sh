@@ -7,7 +7,7 @@ use crate::app::common::composer::new_themed_textarea;
 use super::registry::{SharedScratchpad, SharedScratchpadRegistry};
 
 /// Small on purpose: a scratchpad, not a file editor (no DB persistence, no
-/// syntax highlighting, no more than two participants — see module scope).
+/// syntax highlighting, no more than two participants; see module scope).
 const MAX_CHARS: usize = 8_000;
 
 /// Per-session view onto a shared scratchpad pairing. `shared` is the same
@@ -25,7 +25,7 @@ pub(crate) struct ScratchpadState {
     /// immediately bounce back and clobber our local cursor.
     last_seen_revision: u64,
     /// Partner's last-known cursor, presence-only (never used to merge
-    /// edits) — refreshed on every `sync_from_shared`.
+    /// edits), refreshed on every `sync_from_shared`.
     pub(crate) partner_cursor: (usize, usize),
 }
 
@@ -39,7 +39,11 @@ impl ScratchpadState {
     ) -> Self {
         let mut editor = new_themed_textarea("", WrapMode::None, true);
         let (last_seen_revision, partner_cursor) = {
-            let buffer = shared.lock_recover();
+            let mut buffer = shared.lock_recover();
+            // Tells the registry this side actually opened the editor, so a
+            // pairing whose other session died is torn down whole instead of
+            // stranding them as permanently paired.
+            buffer.mark_joined(own_user_id);
             editor.insert_str(&buffer.content);
             (buffer.revision, buffer.cursor_for(partner_id))
         };
@@ -66,6 +70,11 @@ impl ScratchpadState {
     /// that stale offset now lands (e.g. index 0 for a side that hadn't
     /// typed yet), scrambling the buffer instead of appending after the
     /// partner's edit.
+    ///
+    /// The yank register is saved across the replace: `cut` is the only bulk
+    /// delete the textarea exposes, and it would otherwise overwrite whatever
+    /// the user had copied with the entire buffer every time the partner
+    /// typed.
     pub(crate) fn sync_from_shared(&mut self) -> bool {
         let (content, partner_cursor) = {
             let buffer = self.shared.lock_recover();
@@ -79,10 +88,13 @@ impl ScratchpadState {
         if self.editor.lines().join("\n") == content {
             return true;
         }
+        let yank = self.editor.yank_text();
         self.editor.select_all();
         self.editor.cut();
         self.editor.insert_str(&content);
-        self.editor.move_cursor(CursorMove::Jump(u16::MAX, u16::MAX));
+        self.editor
+            .move_cursor(CursorMove::Jump(u16::MAX, u16::MAX));
+        self.editor.set_yank_text(yank);
         true
     }
 

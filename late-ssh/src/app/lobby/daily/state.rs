@@ -1244,9 +1244,12 @@ impl DailyState {
         let mut board = board;
         board.play(mv);
         chess.state.fen = format!("{board}");
+        // The resolved move's own squares, not the clicked pair: a castle
+        // played as a two-square king push records as the king-captures-rook
+        // encoding every other castle in the history uses.
         chess.state.move_history.push(super::svc::DailyMoveRecord {
-            from,
-            to,
+            from: mv.from as usize,
+            to: mv.to as usize,
             label,
             at: Utc::now(),
         });

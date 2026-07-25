@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-24 (home rail layout is now per device: the SSH key a session authenticated with owns it, in `user_ssh_keys.settings`, and both rails gained an `auto` mode that folds them away on narrow terminals)
+- Last updated: 2026-07-25 (chat rooms carry a topic and rules: private rooms answer to a derived owner who sets them and can `/kick`, public rooms stay mod-managed and report themselves to #moderators when opened; the topic also surfaces in Discover and as the IRC channel topic)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -53,14 +53,14 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 | `late-ssh/src/app/door/dcss/CONTEXT.md` | DCSS door screen, launcher/launch/leave behavior, the SSH client transport, the `late-dcss` host (PTY bridge / auth / TERM handling), input forwarding, the F1→`?` remap, or DCSS config/deploy wiring. | DCSS door context: the NetHack-twin network door (client + `late-dcss` host crate), module map, `-name` playname identity, SIGHUP-save teardown, from-source 0.34.1 build, config knobs, invariants, tests, and deferred file-based milestones. |
 | `late-ssh/src/app/door/brogue/CONTEXT.md` | Brogue door screen, launcher/launch/leave behavior, the SSH client transport, the `late-brogue` host (PTY bridge / auth / per-player cwd identity), input forwarding, the F1→`?` remap, or Brogue config/deploy wiring. | Brogue door context: the DCSS-twin network door (client + `late-brogue` host crate), module map, per-player save-directory identity via the arcade handle, patched SIGHUP-save teardown, from-source Brogue CE 1.15.1 build, config knobs, invariants, and tests. |
 | `late-ssh/src/app/door/usurper/CONTEXT.md` | Usurper door screen, launcher/launch/leave behavior, the SSH client transport, the `late-usurper` host (PTY bridge / auth / DOOR32 dropfiles / node leases / CP437 transcoding), input forwarding/F-key stripping, or Usurper config/deploy wiring. | Usurper door context: the DCSS-twin network door (client + `late-usurper` host crate), module map, dropfile identity via the arcade handle, shared-world PVC + boot seeding/sweeps, from-source Free Pascal build, config knobs, invariants, tests, and gotchas. |
-| `late-ssh/src/app/chat/CONTEXT.md` | Home chat, DMs, public/private rooms, embedded Rooms chat, composer commands, moderation, notifications, message rendering, or chat-adjacent feed services. | Chat service/state/input/UI ownership, room ordering, snapshots versus tails, message/reaction/pin/reply/edit/delete contracts, RSS/News/Mentions/Voice/Discover entries, Directory-backed Showcase/Work services, row caches, commands, and chat integration tests. |
+| `late-ssh/src/app/chat/CONTEXT.md` | Home chat, DMs, public/private rooms, embedded Rooms chat, composer commands, moderation, notifications, message rendering, or chat-adjacent feed services. | Chat service/state/input/UI ownership, room ordering, snapshots versus tails, message/reaction/reply/edit/delete contracts, RSS/News/Mentions/Voice/Discover entries, Directory-backed Showcase/Work services, row caches, commands, and chat integration tests. |
 | `late-ssh/src/ircd/CONTEXT.md` | Embedded IRC server, IRC token auth, IRC client compatibility, IRC TLS/listener behavior, IRC channel/DM projection, or IRC moderation mapping. | Listener/config, token registration, welcome/MOTD burst, channel and DM bridge, moderation projection, registry disconnect semantics, and protocol helper tests. |
 | `late-ssh/src/app/artboard/CONTEXT.md` | Shared ASCII Artboard, dartboard code, editor input/rendering, canvas persistence, provenance, gallery snapshots, archives, or artboard bans. | Artboard lifecycle, live `dartboard_local` server, per-session editor state, active/view/archive input routing, swatches/glyph picker, provenance, persistence/archive rollovers, gallery contract, tests, and fragile layout/provenance areas. |
 | `late-ssh/src/app/arcade/CONTEXT.md` | The Arcade screen, single-player games, high scores, daily puzzles, nonogram assets, Arcade rewards, or adding a new Arcade game. | Arcade lifecycle, lobby/navigation, per-game source shape, persistence/service patterns, high-score and daily puzzle categories, chip reward hooks, leaderboard integration, nonogram runtime assets, controls, and Arcade test guidance. |
 | `late-ssh/src/app/games/CONTEXT.md` | Shared game primitives used by the Arcade, the house tables, and daily games, especially cards, Late Chips, or the `chess_core` chess kernel. | Boundaries for shared card rendering, chip services, and the surface-agnostic chess rules/board renderer; use this for common primitives only, not Arcade or Lobby runtime/UI ownership. |
 | `late-ssh/src/app/lobby/daily/CONTEXT.md` | Daily correspondence games: the open-challenge lobby, daily chess/battleship/connect-four matches, the game roster (`DailyGame`), the `Ctrl+Q` Lobby modal, the sidebar Lobby panel, the full-screen daily boards, move deadlines/forfeits, `/challenge`, or the `daily_matches` table. | Daily domain context: the `DailyGame` roster enum (per-game name/prize/reward key + add-a-game checklist), `DailyService` snapshot/events/sweeper, single-table challenge+match persistence with revision guard, battleship + connect four rules, the three UI surfaces, per-match private chat + voice on the board, the backtick cycle, your-turn desktop notify, v1 scope boundaries, and future hooks (wagers, announcements). |
 | `late-ssh/src/app/clubhouse/CONTEXT.md` | The Late Lounge tavern (screen `0`): the shared multiplayer lobby, seating/walkers, speech bubbles, emotes, door ambience, the first-visit tutorial, or the generated floor plan. | Clubhouse module map, the process-global `SharedLobby` contract (single-replica!), bubble/composer chat surface, tutorial persistence, and map-generator gotchas. |
-| `late-ssh/src/app/scratchpad/CONTEXT.md` | `/pair @user`, the shared two-person live text scratchpad, `Screen::Scratchpad`, or the in-memory pairing registry. | Registry contract (single-replica, dies when both sides leave), invite/accept/decline flow, editor input model, and known gaps. |
+| `late-ssh/src/app/scratchpad/CONTEXT.md` | `/pair @user`, the shared two-person live text scratchpad, `Screen::Scratchpad`, or the in-memory pairing registry. | Registry contract (single-replica, dies when both sides leave), the mutual `/pair` handshake and its 10 minute intent TTL, editor input model, and known gaps. |
 
 Routing rules for future LLM agents:
 - Update a local context file when behavior changes inside that domain.
@@ -798,7 +798,7 @@ An always-running game where every connected SSH session is automatically a part
 ### Other Ideas
 - Daily/weekly rituals (lo-fi standup, shipped rollup, weekend recap)
 - Ambient presence (quiet hours, listening since, typing indicator)
-- ~~Micro-collab tools (shared scratchpad, pairing ping)~~ ✓ `/pair @user` shared coding scratchpad shipped (`late-ssh/src/app/scratchpad/CONTEXT.md`); snippet paste is still open.
+- ~~Micro-collab tools (shared scratchpad, pairing ping)~~ ✓ mutual `/pair @user` shared coding scratchpad shipped (`late-ssh/src/app/scratchpad/CONTEXT.md`); snippet paste is still open.
 - Cozy utilities (pomodoro, focus playlists, now-playing shoutouts)
 - Community texture (rotating shoutout board, wall of thanks)
 - Events (coffee breaks, AMAs, mini coding jams)
@@ -819,7 +819,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 | Chat/Article events + snapshots, Profile per-user snapshots | `broadcast` / `watch` channels | In-process only | Postgres `LISTEN/NOTIFY` or Redis pub/sub for cross-replica fan-out |
 | @bot + @graybeard chat | `GhostService` | Always-on presence + AI chat tasks; both are dedicated DB users with fixed fingerprints | Single-leader to avoid duplicate chat responses. During pod drain today, the old pod cancels bot tasks immediately. |
 | Leaderboard data | `LeaderboardService` | DB-backed `watch` channel, 30s refresh | Already DB-backed; each replica runs its own refresh loop — duplicate work but no write conflict |
-| `SharedScratchpadRegistry` | `scratchpad/registry.rs` | In-memory `user_id → pairing` | Stays local by design — `/pair` pairings are explicitly ephemeral, acceptable to drop on failover |
+| `SharedScratchpadRegistry` | `scratchpad/registry.rs` | In-memory `/pair` intents + `user_id → pairing` | Stays local by design: `/pair` pairings are explicitly ephemeral, acceptable to drop on failover |
 
 **Approach:** Sticky sessions (LB routes by source IP) so each SSH connection lives on one replica. Shared data via DB/Redis. Not needed yet — single replica handles thousands of concurrent SSH sessions.
 
@@ -864,7 +864,7 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorite
 ### 8.4 Easy-to-break gotchas
 
 - **House-table invariants live locally:** Blackjack render tiers, service-owned stake chips, seat player hydration, seat events, and table chat routing are documented in `late-ssh/src/app/lobby/house/CONTEXT.md`.
-- **Chat invariants live locally:** room ordering, composer targets, replies, reactions, pins, ignores, snapshots/tails, row caches, synthetic entries, and chat keybindings are documented in `late-ssh/src/app/chat/CONTEXT.md`.
+- **Chat invariants live locally:** room ordering, composer targets, replies, reactions, ignores, snapshots/tails, row caches, synthetic entries, and chat keybindings are documented in `late-ssh/src/app/chat/CONTEXT.md`.
 - **Artboard invariants live locally:** dartboard lifecycle, persistence/archives, provenance, active-vs-view input routing, swatches, glyph picker, and gallery lag caveats are documented in `late-ssh/src/app/artboard/CONTEXT.md`.
 - **Render loop missed ticks:** 66ms interval with `MissedTickBehavior::Skip` - if a frame takes too long, next ticks are skipped rather than queued (prevents snowball lag)
 - **SSH data timeout:** `handle.data` has 50ms timeout to avoid blocking render loop on backpressure
@@ -1161,7 +1161,7 @@ WHERE jsonb_array_length(coalesce(data->'house_furniture', '[]'::jsonb)) > 0;
 | _Lateania / NetHack / DCSS / Brogue / Usurper / Green Dragon / Rebels / dopewars_ | — | Active | Live door-game screens, not top-level tabs. Launched only from the Games hub (page 3); `Esc` (Lateania) or quitting the game (Rebels/NetHack/DCSS/Brogue/Usurper/dopewars, e.g. `Ctrl-C`, `Q` at Usurper's menus, or `S` save in the roguelikes) returns to the hub. Per-game behavior lives in each door's CONTEXT.md (`lateania/`, `greendragon/`, `nethack/`, `dcss/`, `brogue/`, `usurper/`, `dopewars/`). |
 | _Daily match board_ | — | Active | Full-screen correspondence board (`Screen::DailyMatch`), not a top-level tab. Entered only from the Lobby modal (`Ctrl+Q`); `Esc` returns to the modal. Lives in `late-ssh/src/app/lobby/daily/`. |
 | _House table_ | — | Active | Full-screen fixed table (`Screen::HouseTable`, poker/blackjack/asterion/tron), not a top-level tab. Entered only from the Lobby modal; `q`/`Esc` returns to the modal. Lives in `late-ssh/src/app/lobby/house/`. |
-| _Paired scratchpad_ | — | Active | Two-person shared live text buffer (`Screen::Scratchpad`), not a top-level tab. Entered only by accepting a `/pair @user` chat invite; `Esc` leaves the pairing (and notifies the partner). Lives in `late-ssh/src/app/scratchpad/`. |
+| _Paired scratchpad_ | — | Active | Two-person shared live text buffer (`Screen::Scratchpad`), not a top-level tab. Entered only once both users have run `/pair @other` in chat within 10 minutes of each other; `Esc` leaves the pairing (and notifies the partner). Lives in `late-ssh/src/app/scratchpad/`. |
 
 ### Layout
 
@@ -1246,9 +1246,8 @@ Content invariants worth preserving when editing `data.rs`:
 | `r` / `f` | Lateania | Recall to Embergate's Town Square when out of combat; toggle auto-following another adventurer in the room |
 | `\\` | Home | Cycle this device's rails: both, room list hidden, sidebar hidden, both hidden, `auto`. Writes the SSH key, never the account |
 | Chat keys | Home / embedded game chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
-| `/pair @user` | Chat composer | Invite `@user` to a shared coding scratchpad |
-| `Enter`/`y` / `Esc`/`n` | Pending `/pair` invite prompt (owns input like quit confirm) | Accept and enter `Screen::Scratchpad` / dismiss |
-| any printable, arrows, Backspace/Delete, `Enter` | Scratchpad (`Screen::Scratchpad`) | Edit the shared buffer live (Enter inserts a newline, unlike the chat composer) |
+| `/pair @user` | Chat composer | Ask to pair with `@user`. Both of you must run it within 10 minutes; the second one completes it and drops you both into `Screen::Scratchpad`. Never changes the other person's screen on its own |
+| any printable, arrows, Backspace/Delete, `Enter`, `Tab` | Scratchpad (`Screen::Scratchpad`) | Edit the shared buffer live (Enter inserts a newline and Tab indents, unlike the chat composer). No undo |
 | `Esc` | Scratchpad | Leave the pairing (notifies the partner) and return to Home |
 | `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+G` | Reserved global, except active Artboard editing | Open Hub on the Quests tab (the first tab); the locked pet/aquarium nudges open Hub on Shop instead |
