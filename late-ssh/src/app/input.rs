@@ -2381,6 +2381,10 @@ fn dispatch_escape(app: &mut App) {
         close_icon_picker(app);
         return;
     }
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_escape(app);
+        return;
+    }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
         app.chat.message_search.clear();

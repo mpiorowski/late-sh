@@ -2,41 +2,30 @@ use ratatui::style::Style;
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use uuid::Uuid;
 
-/// Field length caps. Title is a header line; about/rules are short blurbs.
-pub(crate) const TITLE_MAX: usize = 60;
-pub(crate) const ABOUT_MAX: usize = 240;
+/// Field length caps. The topic is one line (it also becomes the IRC topic,
+/// which tops out at 300); rules get more room.
+pub(crate) const TOPIC_MAX: usize = 140;
 pub(crate) const RULES_MAX: usize = 400;
 
 /// Which field the cursor is in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum Field {
     #[default]
-    Title,
-    About,
+    Topic,
     Rules,
 }
 
 impl Field {
-    fn next(self) -> Self {
+    fn other(self) -> Self {
         match self {
-            Field::Title => Field::About,
-            Field::About => Field::Rules,
-            Field::Rules => Field::Title,
+            Field::Topic => Field::Rules,
+            Field::Rules => Field::Topic,
         }
     }
 
-    fn prev(self) -> Self {
+    pub(crate) fn max_len(self) -> usize {
         match self {
-            Field::Title => Field::Rules,
-            Field::About => Field::Title,
-            Field::Rules => Field::About,
-        }
-    }
-
-    fn max_len(self) -> usize {
-        match self {
-            Field::Title => TITLE_MAX,
-            Field::About => ABOUT_MAX,
+            Field::Topic => TOPIC_MAX,
             Field::Rules => RULES_MAX,
         }
     }
@@ -45,13 +34,12 @@ impl Field {
 /// What the form will do on submit.
 #[derive(Clone, Debug)]
 pub(crate) enum Mode {
-    /// Creating a brand-new room from a `/public` or `/private` command.
-    Create { is_private: bool, slug: String },
-    /// Editing the info of an existing room the user owns.
+    /// Opening a new private room from `/private`.
+    Create { slug: String },
+    /// Setting an existing room's info from `/roominfo`.
     Edit { room_id: Uuid },
 }
 
-/// A single-line editable field.
 fn field_input() -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_cursor_line_style(Style::default());
@@ -68,11 +56,7 @@ fn seed(text: Option<&str>) -> TextArea<'static> {
 }
 
 fn line_text(ta: &TextArea<'static>) -> String {
-    ta.lines().first().cloned().unwrap_or_default()
-}
-
-fn char_count(ta: &TextArea<'static>) -> usize {
-    ta.lines().first().map(|l| l.chars().count()).unwrap_or(0)
+    ta.lines().join(" ")
 }
 
 /// The room-info form. Default is closed.
@@ -81,10 +65,12 @@ pub(crate) struct RoomInfoModalState {
     open: bool,
     mode: Option<Mode>,
     focus: Field,
-    title: TextArea<'static>,
-    about: TextArea<'static>,
+    /// The room this form is about, shown in the title and never editable.
+    room_label: String,
+    /// Who holds the room: "you", a username, or "moderators".
+    owner_label: String,
+    topic: TextArea<'static>,
     rules: TextArea<'static>,
-    status: Option<String>,
 }
 
 impl RoomInfoModalState {
@@ -100,128 +86,83 @@ impl RoomInfoModalState {
         self.focus
     }
 
-    pub(crate) fn status(&self) -> Option<&str> {
-        self.status.as_deref()
+    pub(crate) fn room_label(&self) -> &str {
+        &self.room_label
+    }
+
+    pub(crate) fn owner_label(&self) -> &str {
+        &self.owner_label
     }
 
     pub(crate) fn field(&self, field: Field) -> &TextArea<'static> {
         match field {
-            Field::Title => &self.title,
-            Field::About => &self.about,
+            Field::Topic => &self.topic,
             Field::Rules => &self.rules,
         }
     }
 
-    /// Open the form to create a room. `suggested_title` pre-fills the name from
-    /// the slug the user typed, so hitting Enter straight away still works.
-    pub(crate) fn open_create(&mut self, is_private: bool, slug: String, suggested_title: &str) {
-        self.mode = Some(Mode::Create { is_private, slug });
-        self.title = seed(Some(suggested_title));
-        self.about = field_input();
+    pub(crate) fn field_mut(&mut self, field: Field) -> &mut TextArea<'static> {
+        match field {
+            Field::Topic => &mut self.topic,
+            Field::Rules => &mut self.rules,
+        }
+    }
+
+    /// Open the form for a private room about to be created. The creator owns
+    /// it, so the owner line reads "you" before the room even exists.
+    pub(crate) fn open_create(&mut self, slug: String) {
+        self.room_label = format!("#{slug}");
+        self.mode = Some(Mode::Create { slug });
+        self.owner_label = "you".to_string();
+        self.topic = field_input();
         self.rules = field_input();
-        self.focus = Field::Title;
-        self.title.move_cursor(CursorMove::End);
-        self.status = None;
+        self.reset_focus();
         self.open = true;
     }
 
-    /// Open the form to edit an existing room's info.
+    /// Open the form for an existing room.
     pub(crate) fn open_edit(
         &mut self,
         room_id: Uuid,
-        title: Option<&str>,
-        about: Option<&str>,
+        room_label: String,
+        owner_label: String,
+        topic: Option<&str>,
         rules: Option<&str>,
     ) {
         self.mode = Some(Mode::Edit { room_id });
-        self.title = seed(title);
-        self.about = seed(about);
+        self.room_label = room_label;
+        self.owner_label = owner_label;
+        self.topic = seed(topic);
         self.rules = seed(rules);
-        self.focus = Field::Title;
-        self.title.move_cursor(CursorMove::End);
-        self.status = None;
+        self.reset_focus();
         self.open = true;
+    }
+
+    fn reset_focus(&mut self) {
+        self.focus = Field::Topic;
+        self.topic.move_cursor(CursorMove::End);
     }
 
     pub(crate) fn close(&mut self) {
         self.open = false;
         self.mode = None;
-        self.status = None;
-        self.title = field_input();
-        self.about = field_input();
+        self.room_label = String::new();
+        self.owner_label = String::new();
+        self.topic = field_input();
         self.rules = field_input();
-        self.focus = Field::Title;
+        self.focus = Field::Topic;
     }
 
-    pub(crate) fn focus_next(&mut self) {
-        self.focus = self.focus.next();
+    /// Two fields, so next and previous are the same move.
+    pub(crate) fn toggle_focus(&mut self) {
+        self.focus = self.focus.other();
     }
 
-    pub(crate) fn focus_prev(&mut self) {
-        self.focus = self.focus.prev();
-    }
-
-    fn active_mut(&mut self) -> &mut TextArea<'static> {
-        match self.focus {
-            Field::Title => &mut self.title,
-            Field::About => &mut self.about,
-            Field::Rules => &mut self.rules,
-        }
-    }
-
-    pub(crate) fn push(&mut self, ch: char) {
-        if ch.is_control() {
-            return;
-        }
-        let cap = self.focus.max_len();
-        let ta = self.active_mut();
-        if char_count(ta) < cap {
-            ta.insert_char(ch);
-            self.status = None;
-        }
-    }
-
-    pub(crate) fn backspace(&mut self) {
-        self.active_mut().delete_char();
-    }
-
-    pub(crate) fn delete_forward(&mut self) {
-        self.active_mut().delete_next_char();
-    }
-
-    pub(crate) fn cursor_left(&mut self) {
-        self.active_mut().move_cursor(CursorMove::Back);
-    }
-
-    pub(crate) fn cursor_right(&mut self) {
-        self.active_mut().move_cursor(CursorMove::Forward);
-    }
-
-    pub(crate) fn cursor_home(&mut self) {
-        self.active_mut().move_cursor(CursorMove::Head);
-    }
-
-    pub(crate) fn cursor_end(&mut self) {
-        self.active_mut().move_cursor(CursorMove::End);
-    }
-
-    pub(crate) fn clear_active(&mut self) {
-        match self.focus {
-            Field::Title => self.title = field_input(),
-            Field::About => self.about = field_input(),
-            Field::Rules => self.rules = field_input(),
-        }
-    }
-
-    pub(crate) fn set_status(&mut self, msg: impl Into<String>) {
-        self.status = Some(msg.into());
-    }
-
-    /// The trimmed values. A name is required; about/rules may be empty.
-    pub(crate) fn values(&self) -> (String, String, String) {
+    /// The trimmed values, empty when unset. Both fields are optional: a room
+    /// with neither simply has no info, which is how every room starts.
+    pub(crate) fn values(&self) -> (String, String) {
         (
-            line_text(&self.title).trim().to_string(),
-            line_text(&self.about).trim().to_string(),
+            line_text(&self.topic).trim().to_string(),
             line_text(&self.rules).trim().to_string(),
         )
     }

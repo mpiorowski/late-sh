@@ -18,8 +18,7 @@ fn room_with_slug(slug: Option<&str>) -> ChatRoom {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     }

@@ -500,8 +500,7 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            title: None,
-            about: None,
+            topic: None,
             rules: None,
             created_by: None,
         },
@@ -608,8 +607,7 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            title: None,
-            about: None,
+            topic: None,
             rules: None,
             created_by: None,
         },
@@ -1209,7 +1207,7 @@ async fn fill_room_task_rejects_private_room() {
 
     let admin = create_test_user(&test_db.db, "fill_private_admin").await;
     let untouched_user = create_test_user(&test_db.db, "fill_private_untouched").await;
-    let room = ChatRoom::create_private_room(&client, "staff")
+    let room = ChatRoom::create_private_room(&client, "staff", admin.id)
         .await
         .expect("create private room");
 
@@ -3739,4 +3737,180 @@ async fn message_context_window_surrounds_hit_chronologically() {
             "context message 8"
         ]
     );
+}
+
+/// Room-info authority: a private room answers to its owner, a public one to
+/// the house. The service is the gate; the UI only decides what to show.
+#[tokio::test]
+async fn only_the_owner_or_a_mod_may_set_room_info() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let owner = create_test_user(&test_db.db, "info_owner").await;
+    let member = create_test_user(&test_db.db, "info_member").await;
+    let private = ChatRoom::create_private_room(&client, "parlour", owner.id)
+        .await
+        .expect("create private room");
+    ChatRoomMember::join(&client, private.id, owner.id)
+        .await
+        .expect("owner joins");
+    ChatRoomMember::join(&client, private.id, member.id)
+        .await
+        .expect("member joins");
+
+    service.set_room_info_task(
+        owner.id,
+        false,
+        private.id,
+        Some("cards and tea".to_string()),
+        None,
+    );
+    wait_for_topic(&test_db.db, private.id, Some("cards and tea")).await;
+
+    // A member who does not own the room cannot overwrite it.
+    service.set_room_info_task(
+        member.id,
+        false,
+        private.id,
+        Some("mine now".to_string()),
+        None,
+    );
+    sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        current_topic(&test_db.db, private.id).await.as_deref(),
+        Some("cards and tea"),
+        "a non-owner must not change a private room's info"
+    );
+
+    // Public rooms are hosted: the person who opened it has no say, a mod does.
+    let opener = create_test_user(&test_db.db, "info_opener").await;
+    let public = ChatRoom::get_or_create_public_room(&client, "commons")
+        .await
+        .expect("create public room");
+    ChatRoomMember::join(&client, public.id, opener.id)
+        .await
+        .expect("opener joins");
+    ChatRoom::set_creator(&client, public.id, opener.id)
+        .await
+        .expect("record creator");
+
+    service.set_room_info_task(opener.id, false, public.id, Some("mine".to_string()), None);
+    sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        current_topic(&test_db.db, public.id).await,
+        None,
+        "opening a public room does not grant its topic"
+    );
+
+    service.set_room_info_task(
+        opener.id,
+        true,
+        public.id,
+        Some("the town square".to_string()),
+        None,
+    );
+    wait_for_topic(&test_db.db, public.id, Some("the town square")).await;
+}
+
+async fn current_topic(db: &late_core::db::Db, room_id: Uuid) -> Option<String> {
+    let client = db.get().await.expect("db client");
+    ChatRoom::get(&client, room_id)
+        .await
+        .expect("get room")
+        .expect("room exists")
+        .topic
+}
+
+async fn wait_for_topic(db: &late_core::db::Db, room_id: Uuid, expected: Option<&str>) {
+    for _ in 0..50 {
+        if current_topic(db, room_id).await.as_deref() == expected {
+            return;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    panic!("topic never became {expected:?}");
+}
+
+/// Opening a brand-new public room tells two audiences: the creator, in the
+/// room they just opened, and the mods, in #moderators. Neither line carries
+/// the system-feed prefix, so both render as messages instead of being
+/// diverted into the activity ticker.
+#[tokio::test]
+async fn opening_a_new_public_room_asks_the_creator_and_reports_to_moderators() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    User::create(
+        &client,
+        late_core::models::user::UserParams {
+            fingerprint: "system-fp-000".to_string(),
+            username: "system".to_string(),
+            settings: serde_json::json!({ "bot": true, "system": true }),
+        },
+    )
+    .await
+    .expect("system user");
+    let staff = create_test_user(&test_db.db, "announce_staff").await;
+    let moderators = ChatRoom::create_private_room(&client, "moderators", staff.id)
+        .await
+        .expect("moderators room");
+    let creator = create_test_user(&test_db.db, "announce_creator").await;
+
+    service.open_public_room_task(creator.id, "greenhouse".to_string());
+
+    let room_id = wait_for_public_room(&test_db.db, "greenhouse").await;
+    let welcome = wait_for_message_containing(&test_db.db, room_id, "greenhouse").await;
+    assert!(
+        !welcome.starts_with('\u{b7}'),
+        "a room notice must not look like a feed line: {welcome}"
+    );
+    assert!(welcome.contains("rules"), "the creator is asked for rules");
+
+    let report = wait_for_message_containing(&test_db.db, moderators.id, "greenhouse").await;
+    assert!(
+        report.contains("announce_creator"),
+        "mods learn who opened it"
+    );
+}
+
+async fn wait_for_public_room(db: &late_core::db::Db, slug: &str) -> Uuid {
+    for _ in 0..50 {
+        let client = db.get().await.expect("db client");
+        let found = ChatRoom::find_topic_room(&client, "public", slug)
+            .await
+            .expect("find room");
+        drop(client);
+        if let Some(room) = found {
+            return room.id;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    panic!("public room was never created");
+}
+
+async fn wait_for_message_containing(
+    db: &late_core::db::Db,
+    room_id: Uuid,
+    needle: &str,
+) -> String {
+    for _ in 0..50 {
+        let client = db.get().await.expect("db client");
+        let messages = ChatMessage::list_recent(&client, room_id, 20)
+            .await
+            .expect("list messages");
+        drop(client);
+        if let Some(found) = messages.iter().find(|m| m.body.contains(needle)) {
+            return found.body.clone();
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    panic!("no message containing {needle:?} landed in the room");
 }

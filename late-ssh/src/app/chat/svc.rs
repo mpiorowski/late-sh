@@ -34,6 +34,7 @@ use serde_json::json;
 use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
+use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
 use crate::app::bonsai::state::stage_for;
 use crate::app::games::chips::svc::ChipService;
 use crate::authz::{Caps, Permissions, Tier};
@@ -53,6 +54,10 @@ use super::commands::RoomScopedCommand;
 /// Messages before and after a search hit, plus a username lookup for their
 /// authors, as loaded by `load_message_context_task`.
 type MessageContext = (Vec<ChatMessage>, Vec<ChatMessage>, HashMap<Uuid, String>);
+
+/// The staff room a new public room is reported to. A missing room means the
+/// report is skipped, not that opening the room fails.
+const MODERATORS_SLUG: &str = "moderators";
 
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
@@ -528,6 +533,10 @@ pub struct ChatSnapshot {
     pub profile_award_badges: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
     pub friend_user_ids: Vec<Uuid>,
+    /// Derived owner per private room (see `ChatRoom::owner_ids_for_rooms`).
+    /// Only private topic rooms are owned; public rooms answer to the house, so
+    /// they are absent here.
+    pub room_owner_ids: HashMap<Uuid, Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -1108,6 +1117,12 @@ impl ChatService {
         visible_user_ids.dedup();
         let author_metadata = Self::load_chat_author_metadata(&client, &visible_user_ids).await?;
         let ignored_user_ids = User::ignored_user_ids(&client, user_id).await?;
+        let private_room_ids: Vec<Uuid> = rooms
+            .iter()
+            .filter(|room| room.kind == "topic" && room.visibility == "private")
+            .map(|room| room.id)
+            .collect();
+        let room_owner_ids = ChatRoom::owner_ids_for_rooms(&client, &private_room_ids).await?;
 
         let rooms = rooms.into_iter().map(|chat| (chat, Vec::new())).collect();
 
@@ -1127,6 +1142,7 @@ impl ChatService {
             profile_award_badges: author_metadata.profile_award_badges,
             ignored_user_ids,
             friend_user_ids,
+            room_owner_ids,
         })
     }
 
@@ -3539,15 +3555,101 @@ impl ChatService {
 
     async fn open_public_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
         let client = self.db.get().await?;
+        // Public rooms are hosted, not owned: only mods edit their topic and
+        // rules. Whether this call opens a brand-new room decides whether the
+        // house gets told about it, so look before creating.
+        let existed = ChatRoom::find_topic_room(&client, "public", slug)
+            .await?
+            .is_some();
         let room = ChatRoom::get_or_create_public_room(&client, slug).await?;
         ChatRoom::set_auto_join(&client, room.id, false).await?;
+        if !existed {
+            ChatRoom::set_creator(&client, room.id, user_id).await?;
+        }
         tracing::info!(
             slug = %slug,
             room_id = %room.id,
+            existed,
             "public room opened"
         );
         ChatRoomMember::join(&client, room.id, user_id).await?;
+        drop(client);
+        if !existed {
+            self.announce_new_public_room(user_id, room.id, slug)
+                .await?;
+        }
         Ok(room.id)
+    }
+
+    /// A fresh public room gets two system lines: one in the room telling the
+    /// creator to write down what it is about and its rules, and one in
+    /// #moderators so a mod can come and set them for real. Bodies carry no
+    /// `· ` prefix on purpose: prefixed lines are ambient feed lines that the
+    /// TUI diverts into the activity ticker, and these have to read as
+    /// messages (and light an unread badge for the mods).
+    async fn announce_new_public_room(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        slug: &str,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let system_user_id = match User::find_by_fingerprint(&client, SYSTEM_FINGERPRINT).await? {
+            Some(user) => user.id,
+            None => return Ok(()),
+        };
+        let creator = User::get(&client, user_id)
+            .await?
+            .map(|user| user.username)
+            .unwrap_or_else(|| "someone".to_string());
+        let moderators = ChatRoom::find_topic_room(&client, "private", MODERATORS_SLUG).await?;
+        drop(client);
+
+        self.send_system_message(
+            system_user_id,
+            room_id,
+            format!(
+                "Welcome to #{slug}. Say what this room is about and what its rules are, \
+                 and a moderator will set them on the room."
+            ),
+        )
+        .await?;
+
+        if let Some(moderators) = moderators {
+            self.send_system_message(
+                system_user_id,
+                moderators.id,
+                format!("{creator} opened #{slug}. It has no topic or rules yet."),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Post `body` into `room_id` as the system bot, joining it to the room
+    /// first: `send_message` requires membership of every author.
+    async fn send_system_message(
+        &self,
+        system_user_id: Uuid,
+        room_id: Uuid,
+        body: String,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let room = ChatRoom::get(&client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("room not found"))?;
+        ChatRoomMember::join(&client, room_id, system_user_id).await?;
+        drop(client);
+        self.send_message(SendMessageParams {
+            user_id: system_user_id,
+            room_id,
+            room_slug: room.slug,
+            body,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            is_admin: false,
+        })
+        .await
     }
 
     pub fn create_private_room_task(&self, user_id: Uuid, slug: String) {
@@ -3577,7 +3679,7 @@ impl ChatService {
 
     async fn create_private_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
         let client = self.db.get().await?;
-        let room = ChatRoom::create_private_room(&client, slug).await?;
+        let room = ChatRoom::create_private_room(&client, slug, user_id).await?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
         let display_name = room.slug.as_deref().unwrap_or("private");
         VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, display_name, true)
@@ -3585,63 +3687,43 @@ impl ChatService {
         Ok(room.id)
     }
 
-    /// Create (or open) a room and record its name/about/rules in one go, from
-    /// the room-info form. Reuses the plain create paths so voice channels and
-    /// membership are set up identically, then claims creator and stores info.
-    pub fn create_room_with_info_task(
+    /// Create a private room and record its topic/rules in one go, from the
+    /// room-info form. Reuses the plain create path so the voice channel,
+    /// membership and creator are set up identically. Public rooms never come
+    /// through here: they are hosted, and only a mod sets their info.
+    pub fn create_private_room_with_info_task(
         &self,
         user_id: Uuid,
-        is_private: bool,
         slug: String,
-        title: String,
-        about: Option<String>,
+        topic: Option<String>,
         rules: Option<String>,
     ) {
         let service = self.clone();
         let span =
-            info_span!("chat.create_room_with_info", user_id = %user_id, slug = %slug, is_private);
+            info_span!("chat.create_private_room_with_info", user_id = %user_id, slug = %slug);
         tokio::spawn(
             async move {
                 let result = service
-                    .create_room_with_info(
+                    .create_private_room_with_info(
                         user_id,
-                        is_private,
                         &slug,
-                        &title,
-                        about.as_deref(),
+                        topic.as_deref(),
                         rules.as_deref(),
                     )
                     .await;
                 match result {
                     Ok(room_id) => {
-                        let evt = if is_private {
-                            ChatEvent::RoomCreated {
-                                user_id,
-                                room_id,
-                                slug,
-                            }
-                        } else {
-                            ChatEvent::RoomJoined {
-                                user_id,
-                                room_id,
-                                slug,
-                            }
-                        };
-                        let _ = service.evt_tx.send(evt);
+                        let _ = service.evt_tx.send(ChatEvent::RoomCreated {
+                            user_id,
+                            room_id,
+                            slug,
+                        });
                     }
                     Err(e) => {
-                        let evt = if is_private {
-                            ChatEvent::RoomCreateFailed {
-                                user_id,
-                                message: e.to_string(),
-                            }
-                        } else {
-                            ChatEvent::RoomFailed {
-                                user_id,
-                                message: e.to_string(),
-                            }
-                        };
-                        let _ = service.evt_tx.send(evt);
+                        let _ = service.evt_tx.send(ChatEvent::RoomCreateFailed {
+                            user_id,
+                            message: e.to_string(),
+                        });
                     }
                 }
             }
@@ -3649,43 +3731,36 @@ impl ChatService {
         );
     }
 
-    async fn create_room_with_info(
+    async fn create_private_room_with_info(
         &self,
         user_id: Uuid,
-        is_private: bool,
         slug: &str,
-        title: &str,
-        about: Option<&str>,
+        topic: Option<&str>,
         rules: Option<&str>,
     ) -> Result<Uuid> {
-        let room_id = if is_private {
-            self.create_private_room(user_id, slug).await?
-        } else {
-            self.open_public_room(user_id, slug).await?
-        };
+        let room_id = self.create_private_room(user_id, slug).await?;
         let client = self.db.get().await?;
-        ChatRoom::claim_creator(&client, room_id, user_id).await?;
-        ChatRoom::set_info(&client, room_id, Some(title), about, rules).await?;
+        ChatRoom::set_topic_and_rules(&client, room_id, topic, rules).await?;
         Ok(room_id)
     }
 
-    /// Update a room's info from the `/roominfo` edit form. Only the room's
-    /// creator may edit; a room with no recorded creator is claimed by the
-    /// first editor.
+    /// Update a room's topic and rules from the `/roominfo` form. `is_mod` is
+    /// the actor's staff standing, passed in because authority differs by room:
+    /// a private room answers to its owner, a public one to the house.
     pub fn set_room_info_task(
         &self,
         user_id: Uuid,
+        is_mod: bool,
         room_id: Uuid,
-        title: String,
-        about: Option<String>,
+        topic: Option<String>,
         rules: Option<String>,
     ) {
         let service = self.clone();
-        let span = info_span!("chat.set_room_info", user_id = %user_id, room_id = %room_id);
+        let span = info_span!("chat.set_room_info", user_id = %user_id, room_id = %room_id, is_mod);
         tokio::spawn(
             async move {
                 if let Err(e) = service
-                    .set_room_info(user_id, room_id, &title, about.as_deref(), rules.as_deref())
+                    .set_room_info(user_id, is_mod, room_id, topic.as_deref(), rules.as_deref())
                     .await
                 {
                     let _ = service.evt_tx.send(ChatEvent::RoomFailed {
@@ -3698,28 +3773,32 @@ impl ChatService {
         );
     }
 
+    /// The one place room-info authority is decided. Mods may edit any room's
+    /// info; otherwise only a private topic room, and only by its current
+    /// owner (`ChatRoom::owner_id`, which succeeds to the earliest remaining
+    /// member when a creator leaves).
     async fn set_room_info(
         &self,
         user_id: Uuid,
+        is_mod: bool,
         room_id: Uuid,
-        title: &str,
-        about: Option<&str>,
+        topic: Option<&str>,
         rules: Option<&str>,
     ) -> Result<()> {
         let client = self.db.get().await?;
         let room = ChatRoom::get(&client, room_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
-        match room.created_by {
-            Some(owner) if owner != user_id => {
-                anyhow::bail!("Only the room's owner can edit its info");
+            .ok_or_else(|| anyhow::anyhow!("room not found"))?;
+        if !is_mod {
+            if room.kind != "topic" || room.visibility != "private" {
+                anyhow::bail!("only a moderator can set this room's info");
             }
-            None => {
-                ChatRoom::claim_creator(&client, room_id, user_id).await?;
+            match ChatRoom::owner_id(&client, room_id).await? {
+                Some(owner) if owner == user_id => {}
+                _ => anyhow::bail!("only the room's owner can set its info"),
             }
-            _ => {}
         }
-        ChatRoom::set_info(&client, room_id, Some(title), about, rules).await?;
+        ChatRoom::set_topic_and_rules(&client, room_id, topic, rules).await?;
         Ok(())
     }
 

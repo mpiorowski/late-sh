@@ -856,8 +856,7 @@ fn room_list_rows_display_lounge() {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -960,8 +959,7 @@ fn cozy_room_rail_places_voice_news_and_feeds_below_mentions_with_jump_keys() {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -977,8 +975,7 @@ fn cozy_room_rail_places_voice_news_and_feeds_below_mentions_with_jump_keys() {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -1049,8 +1046,7 @@ fn cozy_room_rail_shows_section_keys_when_fold_prefix_is_armed() {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -1066,8 +1062,7 @@ fn cozy_room_rail_shows_section_keys_when_fold_prefix_is_armed() {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -1083,8 +1078,7 @@ fn cozy_room_rail_shows_section_keys_when_fold_prefix_is_armed() {
         language_code: None,
         dm_user_a: Some(Uuid::nil()),
         dm_user_b: Some(Uuid::from_u128(4)),
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -1160,8 +1154,7 @@ fn room_list_rows_skip_game_rooms() {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -1177,8 +1170,7 @@ fn room_list_rows_skip_game_rooms() {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -1229,8 +1221,7 @@ fn room_list_hit_test_maps_public_room_row_to_room_slot() {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -1246,8 +1237,7 @@ fn room_list_hit_test_maps_public_room_row_to_room_slot() {
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: None,
-        about: None,
+        topic: None,
         rules: None,
         created_by: None,
     };
@@ -1584,7 +1574,7 @@ fn visible_chat_rows_pads_top_with_none_hits() {
     assert!(matches!(visible.hits[4].kind, ChatRowKind::Body));
 }
 
-fn room_with_info(title: Option<&str>, about: Option<&str>, rules: Option<&str>) -> ChatRoom {
+fn room_with_info(topic: Option<&str>, rules: Option<&str>) -> ChatRoom {
     ChatRoom {
         id: Uuid::now_v7(),
         created: Utc::now(),
@@ -1597,8 +1587,7 @@ fn room_with_info(title: Option<&str>, about: Option<&str>, rules: Option<&str>)
         language_code: None,
         dm_user_a: None,
         dm_user_b: None,
-        title: title.map(str::to_string),
-        about: about.map(str::to_string),
+        topic: topic.map(str::to_string),
         rules: rules.map(str::to_string),
         created_by: None,
     }
@@ -1611,52 +1600,49 @@ fn row_text(buf: &ratatui::buffer::Buffer, y: u16, width: u16) -> String {
 }
 
 #[test]
-fn room_info_header_pins_name_and_about_and_shrinks_the_message_area() {
+fn room_topic_line_takes_one_row_and_hints_at_the_rules() {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
-    let room = room_with_info(Some("Book Club"), Some("We read sci-fi"), Some("Be kind"));
+    let room = room_with_info(Some("We read sci-fi"), Some("Be kind"));
     let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("term");
     let area = Rect::new(0, 0, 40, 20);
     let mut remaining = area;
     terminal
-        .draw(|f| remaining = super::draw_room_info_header(f, area, &room))
+        .draw(|f| remaining = super::draw_room_topic_line(f, area, &room))
         .unwrap();
 
-    // Name + about + separator = 3 rows carved off the top.
-    assert_eq!(remaining.y, 3);
-    assert_eq!(remaining.height, 17);
+    assert_eq!(remaining.y, 1, "the topic costs exactly one row");
+    assert_eq!(remaining.height, 19);
 
-    let buf = terminal.backend().buffer();
-    assert!(row_text(buf, 0, 40).contains("Book Club"));
-    assert!(row_text(buf, 0, 40).contains("/rules"));
-    assert!(row_text(buf, 1, 40).contains("We read sci-fi"));
+    let row = row_text(terminal.backend().buffer(), 0, 40);
+    assert!(row.contains("We read sci-fi"));
+    assert!(row.contains("/rules"));
 }
 
 #[test]
-fn room_info_header_is_absent_when_the_room_has_no_info() {
+fn room_topic_line_is_absent_without_a_topic() {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
-    let room = room_with_info(None, None, None);
+    let room = room_with_info(None, Some("Be kind"));
     let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("term");
     let area = Rect::new(0, 0, 40, 20);
     let mut remaining = area;
     terminal
-        .draw(|f| remaining = super::draw_room_info_header(f, area, &room))
+        .draw(|f| remaining = super::draw_room_topic_line(f, area, &room))
         .unwrap();
-    assert_eq!(remaining, area, "no header should be drawn");
+    assert_eq!(remaining, area, "no topic, no row taken");
 }
 
 #[test]
-fn room_info_header_falls_back_to_slug_when_unnamed_but_has_about() {
+fn room_topic_line_omits_the_hint_when_there_are_no_rules() {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
-    let room = room_with_info(None, Some("A cozy corner"), None);
+    let room = room_with_info(Some("A cozy corner"), None);
     let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("term");
     let area = Rect::new(0, 0, 40, 20);
     let mut remaining = area;
     terminal
-        .draw(|f| remaining = super::draw_room_info_header(f, area, &room))
+        .draw(|f| remaining = super::draw_room_topic_line(f, area, &room))
         .unwrap();
-    assert_eq!(remaining.y, 3);
-    let buf = terminal.backend().buffer();
-    assert!(row_text(buf, 0, 40).contains("#book-club"));
-    // No rules -> no /rules hint.
-    assert!(!row_text(buf, 0, 40).contains("/rules"));
+    assert_eq!(remaining.y, 1);
+    let row = row_text(terminal.backend().buffer(), 0, 40);
+    assert!(row.contains("A cozy corner"));
+    assert!(!row.contains("/rules"));
 }

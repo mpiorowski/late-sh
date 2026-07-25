@@ -1,68 +1,64 @@
 use super::state::Mode;
+use crate::app::common::textarea_input::{EditOutcome, handle_single_line_edit};
 use crate::app::input::ParsedInput;
 use crate::app::state::App;
 
-/// Route a key/mouse event to the open room-info form.
+/// Route a key event to the open room-info form. Editing keys go to the focused
+/// field through the shared textarea helper; Tab and the arrows move between the
+/// two fields.
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     match event {
-        ParsedInput::Byte(0x1B) => app.room_info_modal_state.close(),
-        ParsedInput::Byte(b'\t') | ParsedInput::Arrow(b'B') => {
-            app.room_info_modal_state.focus_next()
+        ParsedInput::Byte(b'\t') | ParsedInput::BackTab => {
+            app.room_info_modal_state.toggle_focus();
+            return;
         }
-        ParsedInput::BackTab | ParsedInput::Arrow(b'A') => app.room_info_modal_state.focus_prev(),
-        ParsedInput::Byte(b'\r') => submit(app),
-        ParsedInput::Byte(0x15) => app.room_info_modal_state.clear_active(),
-        ParsedInput::Byte(0x01) | ParsedInput::Home => app.room_info_modal_state.cursor_home(),
-        ParsedInput::Byte(0x05) | ParsedInput::End => app.room_info_modal_state.cursor_end(),
-        ParsedInput::Byte(0x7F | 0x08) => app.room_info_modal_state.backspace(),
-        ParsedInput::Delete => app.room_info_modal_state.delete_forward(),
-        ParsedInput::Arrow(b'C') => app.room_info_modal_state.cursor_right(),
-        ParsedInput::Arrow(b'D') => app.room_info_modal_state.cursor_left(),
-        ParsedInput::Paste(pasted) => {
-            let text = String::from_utf8_lossy(&pasted);
-            for ch in text.chars() {
-                if !ch.is_control() {
-                    app.room_info_modal_state.push(ch);
-                }
-            }
-        }
-        ParsedInput::Char(ch) if !ch.is_control() => app.room_info_modal_state.push(ch),
-        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
-            app.room_info_modal_state.push(byte as char)
+        ParsedInput::Arrow(b'A') | ParsedInput::Arrow(b'B') => {
+            app.room_info_modal_state.toggle_focus();
+            return;
         }
         _ => {}
     }
+
+    let focus = app.room_info_modal_state.focus();
+    let max = focus.max_len();
+    let outcome = handle_single_line_edit(app.room_info_modal_state.field_mut(focus), &event, max);
+    match outcome {
+        EditOutcome::Handled => {}
+        EditOutcome::Submit => submit(app),
+        EditOutcome::Cancel => app.room_info_modal_state.close(),
+        EditOutcome::Ignored => {}
+    }
 }
 
-/// Validate and dispatch the form. A name is required; about/rules are optional.
+/// Close the form on Esc from anywhere in the app-level escape dispatch.
+pub(crate) fn handle_escape(app: &mut App) {
+    app.room_info_modal_state.close();
+}
+
+/// Dispatch the form. Both fields are optional: submitting an empty form on
+/// create still opens the room, it just has no info yet.
 fn submit(app: &mut App) {
-    let (title, about, rules) = app.room_info_modal_state.values();
-    if title.is_empty() {
-        app.room_info_modal_state
-            .set_status("Please give your room a name.");
-        return;
-    }
     let Some(mode) = app.room_info_modal_state.mode().cloned() else {
         app.room_info_modal_state.close();
         return;
     };
-    let user_id = app.user_id;
+    let (topic, rules) = app.room_info_modal_state.values();
     let opt = |s: String| (!s.is_empty()).then_some(s);
+    let user_id = app.user_id;
     match mode {
-        Mode::Create { is_private, slug } => {
-            app.chat.service.create_room_with_info_task(
+        Mode::Create { slug } => {
+            app.chat.service.create_private_room_with_info_task(
                 user_id,
-                is_private,
                 slug,
-                title,
-                opt(about),
+                opt(topic),
                 opt(rules),
             );
         }
         Mode::Edit { room_id } => {
+            let is_mod = app.permissions.can_moderate();
             app.chat
                 .service
-                .set_room_info_task(user_id, room_id, title, opt(about), opt(rules));
+                .set_room_info_task(user_id, is_mod, room_id, opt(topic), opt(rules));
         }
     }
     app.room_info_modal_state.close();

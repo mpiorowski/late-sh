@@ -219,21 +219,19 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if let Some(request) = app.chat.take_requested_room_info_modal() {
         use crate::app::chat::state::RoomInfoRequest;
         match request {
-            RoomInfoRequest::Create { is_private, slug } => {
-                let suggested = slug.replace(['-', '_'], " ");
-                app.room_info_modal_state
-                    .open_create(is_private, slug, &suggested);
-            }
+            RoomInfoRequest::Create { slug } => app.room_info_modal_state.open_create(slug),
             RoomInfoRequest::Edit {
                 room_id,
-                title,
-                about,
+                room_label,
+                owner_label,
+                topic,
                 rules,
             } => {
                 app.room_info_modal_state.open_edit(
                     room_id,
-                    title.as_deref(),
-                    about.as_deref(),
+                    room_label,
+                    owner_label,
+                    topic.as_deref(),
                     rules.as_deref(),
                 );
             }

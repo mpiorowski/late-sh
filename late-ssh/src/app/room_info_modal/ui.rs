@@ -1,92 +1,71 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::state::{ABOUT_MAX, Field, Mode, RULES_MAX, RoomInfoModalState, TITLE_MAX};
+use super::state::{Field, Mode, RoomInfoModalState};
+use crate::app::common::theme;
 
-const ACCENT: Color = Color::Cyan;
-const MUTED: Color = Color::DarkGray;
-
-/// Draw the room-info form centred over `area`.
+/// Draw the room-info form centred over `area`. Follows the poll modal's field
+/// convention: one bordered box per field, label and character count in its
+/// title, focus carried by the border.
 pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &RoomInfoModalState) {
-    let width = 62.min(area.width.saturating_sub(4)).max(24);
-    let height = 15.min(area.height.saturating_sub(2)).max(10);
-    let popup = centered_rect(area, width, height);
+    let popup = centered_rect(area, 64, 12);
     frame.render_widget(Clear, popup);
 
     let creating = matches!(state.mode(), Some(Mode::Create { .. }));
     let heading = if creating {
-        " Create a room "
+        format!(" Create {} ", state.room_label())
     } else {
-        " Edit room info "
+        format!(" {} ", state.room_label())
     };
     let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
         .title(Span::styled(
             heading,
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ));
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()))
+        .style(Style::default().bg(theme::BG_CANVAS()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
     let rows = Layout::vertical([
-        Constraint::Length(2), // name
-        Constraint::Length(2), // about
-        Constraint::Length(2), // rules
-        Constraint::Min(1),    // hint / status
+        Constraint::Length(1), // owner + keys
+        Constraint::Length(3), // topic
+        Constraint::Length(3), // rules
     ])
     .split(inner);
 
-    draw_field(
-        frame,
-        rows[0],
-        state,
-        Field::Title,
-        "Name",
-        "What do you want to name your room?",
-        TITLE_MAX,
-    );
-    draw_field(
-        frame,
-        rows[1],
-        state,
-        Field::About,
-        "About",
-        "Tell people what your room is about",
-        ABOUT_MAX,
-    );
-    draw_field(
-        frame,
-        rows[2],
-        state,
-        Field::Rules,
-        "Rules",
-        "The general rules (optional)",
-        RULES_MAX,
-    );
-
-    let mut footer: Vec<Line> = Vec::new();
-    if let Some(status) = state.status() {
-        footer.push(Line::from(Span::styled(
-            status.to_string(),
-            Style::default().fg(Color::Yellow),
-        )));
-    }
     let submit = if creating {
         "Enter create"
     } else {
         "Enter save"
     };
-    footer.push(Line::from(Span::styled(
-        format!("Tab/↑↓ move · {submit} · Esc cancel"),
-        Style::default().fg(MUTED),
-    )));
-    frame.render_widget(Paragraph::new(footer), rows[3]);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Owner ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                state.owner_label().to_string(),
+                Style::default().fg(theme::AMBER()),
+            ),
+            Span::styled("  ·  ", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(submit, Style::default().fg(theme::SUCCESS())),
+            Span::styled("  Tab field  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc", Style::default().fg(theme::ERROR())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]))
+        .style(Style::default().bg(theme::BG_CANVAS())),
+        rows[0],
+    );
+
+    draw_field(frame, rows[1], state, Field::Topic, "What it is about");
+    draw_field(frame, rows[2], state, Field::Rules, "Rules");
 }
 
 fn draw_field(
@@ -95,55 +74,49 @@ fn draw_field(
     state: &RoomInfoModalState,
     field: Field,
     label: &str,
-    placeholder: &str,
-    max: usize,
 ) {
     let focused = state.focus() == field;
-    let ta = state.field(field);
-    let text = ta.lines().first().cloned().unwrap_or_default();
-    let used = text.chars().count();
-
-    let split = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
-
-    // Label row with a focus marker and a live character count.
-    let marker = if focused { "› " } else { "  " };
-    let label_style = if focused {
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+    let input = state.field(field);
+    let border = if focused {
+        theme::BORDER_ACTIVE()
     } else {
-        Style::default().fg(MUTED)
+        theme::BORDER()
     };
-    let label_line = Line::from(vec![
-        Span::styled(format!("{marker}{label}"), label_style),
-        Span::styled(format!("  {used}/{max}"), Style::default().fg(MUTED)),
-    ]);
-    frame.render_widget(Paragraph::new(label_line), split[0]);
-
-    // Input row: the focused field renders the live editor (with its cursor);
-    // the others show their text, or the placeholder when empty.
-    if focused {
-        frame.render_widget(ta, split[1]);
-    } else if text.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                placeholder.to_string(),
-                Style::default().fg(MUTED).add_modifier(Modifier::ITALIC),
-            )),
-            split[1],
-        );
-    } else {
-        frame.render_widget(Paragraph::new(text), split[1]);
-    }
+    let title = format!(
+        " {label} {}/{} ",
+        input.lines().join(" ").chars().count(),
+        field.max_len()
+    );
+    let block = Block::default()
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(if focused {
+                    theme::TEXT_BRIGHT()
+                } else {
+                    theme::TEXT_DIM()
+                })
+                .add_modifier(if focused {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border))
+        .style(Style::default().bg(theme::BG_CANVAS()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(input, inner);
 }
 
 /// A centred rectangle of the given size, clamped to `area`.
 fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
     Rect {
-        x,
-        y,
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
         width,
         height,
     }

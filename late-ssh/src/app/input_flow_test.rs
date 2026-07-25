@@ -1044,7 +1044,7 @@ async fn members_command_shows_room_members_without_persisting_message() {
         .await
         .expect("join viewer to lounge");
 
-    let private_room = ChatRoom::create_private_room(&client, "side")
+    let private_room = ChatRoom::create_private_room(&client, "side", viewer.id)
         .await
         .expect("create room");
     ChatRoomMember::join(&client, private_room.id, viewer.id)

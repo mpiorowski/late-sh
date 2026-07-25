@@ -168,20 +168,37 @@ impl PendingClipboardImageUpload {
 }
 
 /// A pending request to open the room-info form, carried until the app-level
-/// input loop opens the modal. `Create` comes from `/public`/`/private`, `Edit`
-/// from `/roominfo` on a room the user owns.
+/// input loop opens the modal. `Create` comes from `/private`, `Edit` from
+/// `/roominfo` on a room the user may set info on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RoomInfoRequest {
     Create {
-        is_private: bool,
         slug: String,
     },
     Edit {
         room_id: Uuid,
-        title: Option<String>,
-        about: Option<String>,
+        /// `#slug` of the room being edited, for the form's title.
+        room_label: String,
+        /// Who the form says holds this room: a username for a private room,
+        /// "moderators" for a public one. Ownership can move on its own when a
+        /// creator leaves, so the form is where it becomes visible.
+        owner_label: String,
+        topic: Option<String>,
         rules: Option<String>,
     },
+}
+
+/// Who may set a room's topic and rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoomInfoAuthority {
+    /// This user owns the room (private rooms only).
+    Owner,
+    /// Staff standing, which carries every room.
+    Moderator,
+    /// The room has info, but not for this user to set.
+    None,
+    /// The room has no topic or rules at all (DMs, game rooms).
+    NotEditable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -426,6 +443,10 @@ pub struct ChatState {
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
     friend_user_ids: HashSet<Uuid>,
+    /// Derived owner per private room, from the chat snapshot. Ownership is not
+    /// stored on the room (a creator who leaves hands it on), so this is the
+    /// session's view of who currently holds each private room.
+    room_owner_ids: HashMap<Uuid, Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
     pinned_rx: watch::Receiver<Vec<ChatMessage>>,
     pinned_tx: watch::Sender<Vec<ChatMessage>>,
@@ -651,6 +672,7 @@ impl ChatState {
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             friend_user_ids: HashSet::new(),
+            room_owner_ids: HashMap::new(),
             username_rx,
             pinned_rx,
             pinned_tx,
@@ -1584,6 +1606,41 @@ impl ChatState {
         room_slug_for(&self.rooms, room_id)
     }
 
+    /// Who may set this room's topic and rules. Private topic rooms answer to
+    /// their derived owner, every other room with info answers to the house,
+    /// and DMs and game rooms have no info at all.
+    pub(crate) fn room_info_authority(&self, room: &ChatRoom) -> RoomInfoAuthority {
+        if room.kind == "dm" || room.kind == "game" {
+            return RoomInfoAuthority::NotEditable;
+        }
+        if room.kind == "topic"
+            && room.visibility == "private"
+            && self.room_owner_ids.get(&room.id) == Some(&self.user_id)
+        {
+            return RoomInfoAuthority::Owner;
+        }
+        if self.permissions.can_moderate() {
+            return RoomInfoAuthority::Moderator;
+        }
+        RoomInfoAuthority::None
+    }
+
+    /// The owner line the room-info form shows.
+    fn room_owner_label(&self, room: &ChatRoom) -> String {
+        if room.kind != "topic" || room.visibility != "private" {
+            return "moderators".to_string();
+        }
+        match self.room_owner_ids.get(&room.id) {
+            Some(owner) if *owner == self.user_id => "you".to_string(),
+            Some(owner) => self
+                .usernames
+                .get(owner)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string()),
+            None => "unowned".to_string(),
+        }
+    }
+
     fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
         self.rooms
             .iter()
@@ -2408,25 +2465,26 @@ impl ChatState {
             return Some(Banner::success(&format!("Opening DM with {target}...")));
         }
 
+        // Public rooms are hosted, not owned: `/public` only ever opens or
+        // joins one, and a mod sets its topic and rules afterwards.
         if let Some(room) = parse_room_command(&body, "/public") {
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
             }
             self.clear_composer_after_submit();
-            self.requested_room_info_modal = Some(RoomInfoRequest::Create {
-                is_private: false,
-                slug: room.to_string(),
-            });
-            return None;
+            self.service
+                .open_public_room_task(self.user_id, room.to_string());
+            return Some(Banner::success(&format!("Opening public #{room}...")));
         }
 
+        // A private room is owned by whoever opens it, so it gets the form up
+        // front and the creator's answers are saved with the room.
         if let Some(room) = parse_room_command(&body, "/private") {
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
             }
             self.clear_composer_after_submit();
             self.requested_room_info_modal = Some(RoomInfoRequest::Create {
-                is_private: true,
                 slug: room.to_string(),
             });
             return None;
@@ -2440,18 +2498,26 @@ impl ChatState {
             let Some(room) = self.room_by_id(room_id) else {
                 return Some(Banner::error("No room selected"));
             };
-            if !is_chat_list_room(room) {
-                return Some(Banner::error("This room's info can't be edited"));
-            }
-            if let Some(owner) = room.created_by
-                && owner != self.user_id
-            {
-                return Some(Banner::error("Only the room's owner can edit its info"));
+            match self.room_info_authority(room) {
+                RoomInfoAuthority::Owner | RoomInfoAuthority::Moderator => {}
+                RoomInfoAuthority::None => {
+                    return Some(Banner::error(
+                        "Only a moderator can set this room's topic and rules",
+                    ));
+                }
+                RoomInfoAuthority::NotEditable => {
+                    return Some(Banner::error("This room has no topic or rules"));
+                }
             }
             self.requested_room_info_modal = Some(RoomInfoRequest::Edit {
                 room_id,
-                title: room.title.clone(),
-                about: room.about.clone(),
+                room_label: room
+                    .slug
+                    .as_deref()
+                    .map(|slug| format!("#{slug}"))
+                    .unwrap_or_else(|| "this room".to_string()),
+                owner_label: self.room_owner_label(room),
+                topic: room.topic.clone(),
                 rules: room.rules.clone(),
             });
             return None;
@@ -3593,6 +3659,10 @@ impl ChatState {
         if self.friend_user_ids != friend_user_ids {
             self.friend_user_ids = friend_user_ids;
             context_changed = true;
+        }
+        if self.room_owner_ids != snapshot.room_owner_ids {
+            self.room_owner_ids = snapshot.room_owner_ids;
+            changed = true;
         }
         if self.voice_channels_by_room_id != snapshot.voice_channels_by_room_id {
             self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;

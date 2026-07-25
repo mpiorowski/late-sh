@@ -242,7 +242,11 @@ impl ChatRoomMember {
         let rows = client
             .query(
                 // The system-feed bot (settings.system = true) posts ambient
-                // #lounge lines; they must never light anyone's unread badge.
+                // activity lines prefixed with `· `; those must never light
+                // anyone's unread badge. The same author also posts real
+                // messages (a new public room reported to #moderators), which
+                // must. The prefix is the discriminator everywhere else too,
+                // see `chat/state.rs::system_line_text_in`.
                 "SELECT m.room_id, COALESCE(unread.unread_count, 0)::bigint AS unread_count
                  FROM chat_room_members m
                  LEFT JOIN LATERAL (
@@ -251,7 +255,10 @@ impl ChatRoomMember {
                     JOIN users author ON author.id = msg.user_id
                     WHERE msg.room_id = m.room_id
                       AND msg.user_id <> m.user_id
-                      AND COALESCE((author.settings->>'system')::boolean, false) = false
+                      AND NOT (
+                          COALESCE((author.settings->>'system')::boolean, false)
+                          AND msg.body LIKE '· %'
+                      )
                       AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
                  ) unread ON true
                  WHERE m.user_id = $1",
