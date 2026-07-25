@@ -13,7 +13,7 @@
 ## 1. Scope
 
 Owned by this domain:
-- The process-global `SharedScratchpadRegistry`: one-sided `/pair` intents, the notices they post, and live pairings.
+- The process-global `SharedScratchpadRegistry`: one-sided `/pair` intents, the notices they post (and their per-pair cooldown), and live pairings.
 - The shared `ScratchpadBuffer` two paired users edit together (full-buffer replace + revision counter, no merge).
 - Per-session `ScratchpadState`: the local `TextArea`, sync/publish, and Drop-triggered leave notification.
 - `Screen::Scratchpad` input/render.
@@ -63,11 +63,14 @@ Pairing is a **mutual handshake**, and that is the load-bearing decision here. `
 `SharedScratchpadRegistry` (`registry.rs`) is a single-replica, in-process `Arc<Mutex<..>>`, modeled on `clubhouse::lobby::SharedLobby`:
 - `intents: HashMap<Uuid, PairIntent>`: one-sided asks keyed by the user who ran `/pair` first, carrying that session's token and the timestamp. A newer ask from the same user overwrites the old one.
 - `notices: HashMap<Uuid, PairNotice>`: undrained "@x wants to pair" banners keyed by the target. Purely informational.
+- `notified_at: HashMap<(Uuid, Uuid), Instant>`: when each asker last pinged each target, so re-running `/pair` in a loop cannot spam a banner slot. Keyed by both ends on purpose: one asker must not be able to mute anyone else's ask.
 - `pairings: HashMap<Uuid, PairedSession>`: one entry per participant, each holding the shared buffer and the **session token** that asked for it.
 
-Both `intents` and `notices` expire after `PAIR_INTENT_TTL` (10 minutes) and are pruned inside `try_pair`, the only place either map grows.
+All three maps expire and are pruned inside `try_pair`, the only place any of them grows. `PAIR_NOTICE_COOLDOWN` is deliberately equal to `PAIR_INTENT_TTL` (10 minutes): you may nudge someone again exactly when your previous ask has lapsed, so the spam guard never outlives the thing it guards and a genuine retry (they were in a door game and missed the banner) is never refused.
 
-`try_pair` does every busy check under the same lock that creates the pairing, so two simultaneous `/pair` commands cannot both win. It returns a closed `PairOutcome` (`Waiting`, `Paired`, `AlreadyPaired`, `TargetBusy`), one arm per banner at the call site.
+The cooldown rate limits the **ping only**. A suppressed ask still records the intent, so the handshake completes normally if the target mirrors it, and `try_pair` reports `AlreadyAsked` rather than `Waiting` so the asker is told they did not nudge anyone. Pairing clears the cooldown between those two, since a completed pairing answered the ask.
+
+`try_pair` does every busy check under the same lock that creates the pairing, so two simultaneous `/pair` commands cannot both win. It returns a closed `PairOutcome` (`Waiting`, `AlreadyAsked`, `Paired`, `AlreadyPaired`, `TargetBusy`), one arm per banner at the call site.
 
 `ScratchpadBuffer` holds `content: String`, `revision: u64`, both participants' `(Uuid, String)`, a presence-only cursor per side, a `joined` flag per side, and `left: Option<Uuid>`. `leave(user_id)` marks `left` on first departure (partner's next sync sees it) and normally removes both registry entries only once both sides have left. The exception is a partner that never joined: their session died between `/pair` and the mirror command, so nobody will ever read `left`, and keeping the entry would mark them paired forever.
 
@@ -82,7 +85,7 @@ Editing reuses `handle_freeform_edit` (`common/textarea_input.rs`), a third sibl
 - Tab indents (four spaces, not a literal tab, since the buffer is shared verbatim and tab width differs per terminal). An unhandled Tab would reach the global page cycle and silently end the pairing; `scratchpad::input` swallows Shift+Tab for the same reason.
 - There is no undo. See the scope note in section 1.
 
-Esc yields `Cancel`, which the caller treats as "leave the pairing". That is the only Esc handling for this screen: `dispatch_escape` deliberately has no `Screen::Scratchpad` arm.
+Esc leaves the pairing, and it needs **two** handlers, which is easy to get wrong. A lone Esc never reaches the keymap at all: the parser holds it as `pending_escape` to rule out a longer sequence, and `tick.rs` resolves it through `flush_pending_escape` straight into `dispatch_escape`. That is the common case, and the `Screen::Scratchpad` arm there is what actually leaves. The keymap's `EditOutcome::Cancel` covers the other case, an Esc arriving mid-chunk alongside other bytes. Deleting either one leaves Esc broken on a path no unit test exercises; `pair_test.rs` covers the lone-Esc path end to end.
 
 ## 5. Invariants
 
@@ -104,7 +107,7 @@ Esc yields `Cancel`, which the caller treats as "leave the pairing". That is the
 
 ## 7. Testing Guidance
 
-- `registry_test.rs`: the handshake (one-sided ask waits, mirror pairs, expired ask does not), notice drain-once, session-scoped pairings, busy refusals on both sides, and leave/teardown including the never-joined partner.
+- `registry_test.rs`: the handshake (one-sided ask waits, mirror pairs, expired ask does not), notice drain-once, the ping cooldown (re-ask is quiet, alternating targets cannot reopen it, a suppressed ask still pairs, it lapses, one asker cannot mute another, pairing clears it), session-scoped pairings, busy refusals on both sides, and leave/teardown including the never-joined partner.
 - `state_test.rs`: seeding from the shared buffer, publish/sync round-trips, own-publish does not bounce back, yank register survives a remote sync, `partner_left` after Drop.
 - `pair_test.rs`: `find_active_user_by_username` case-insensitivity and not-found paths.
 - `chat/state_internal_test.rs`: `parse_pair_command` accept/reject/ignore cases.

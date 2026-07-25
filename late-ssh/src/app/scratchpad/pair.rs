@@ -46,6 +46,11 @@ pub(crate) fn request_pair(app: &mut App, target_username: &str) {
                 app.username
             )));
         }
+        PairOutcome::AlreadyAsked => {
+            app.banner = Some(Banner::info(&format!(
+                "Still waiting on @{target_username}. They already know you asked"
+            )));
+        }
         PairOutcome::Paired {
             shared,
             partner_id,

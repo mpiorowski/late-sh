@@ -1246,7 +1246,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `r` / `f` | Lateania | Recall to Embergate's Town Square when out of combat; toggle auto-following another adventurer in the room |
 | `\\` | Home | Cycle this device's rails: both, room list hidden, sidebar hidden, both hidden, `auto`. Writes the SSH key, never the account |
 | Chat keys | Home / embedded game chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
-| `/pair @user` | Chat composer | Ask to pair with `@user`. Both of you must run it within 10 minutes; the second one completes it and drops you both into `Screen::Scratchpad`. Never changes the other person's screen on its own |
+| `/pair @user` | Chat composer | Ask to pair with `@user`. Both of you must run it within 10 minutes; the second one completes it and drops you both into `Screen::Scratchpad`. Never changes the other person's screen on its own, and re-running it inside the window will not ping them twice |
 | any printable, arrows, Backspace/Delete, `Enter`, `Tab` | Scratchpad (`Screen::Scratchpad`) | Edit the shared buffer live (Enter inserts a newline and Tab indents, unlike the chat composer). No undo |
 | `Esc` | Scratchpad | Leave the pairing (notifies the partner) and return to Home |
 | `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |

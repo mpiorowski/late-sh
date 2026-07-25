@@ -25,6 +25,13 @@ use uuid::Uuid;
 /// someone an hour later.
 pub const PAIR_INTENT_TTL: Duration = Duration::from_secs(10 * 60);
 
+/// How long before the same asker can put another "wants to pair" banner in
+/// front of the same target. Deliberately equal to [`PAIR_INTENT_TTL`]: you
+/// may nudge someone again exactly when your previous ask has lapsed, so the
+/// spam guard never outlives the thing it guards and a genuine retry (they
+/// were in a door game and missed it) is never refused.
+pub const PAIR_NOTICE_COOLDOWN: Duration = PAIR_INTENT_TTL;
+
 /// The session that ran `/pair @other`. A pairing is bound to the session
 /// token, not just the user: one human can hold several concurrent SSH
 /// sessions, and only the one that asked should be pulled into the editor.
@@ -148,8 +155,13 @@ pub(crate) type SharedScratchpad = Arc<Mutex<ScratchpadBuffer>>;
 /// site, so the whole command reads as a list of outcomes.
 #[derive(Debug)]
 pub enum PairOutcome {
-    /// Intent recorded. The other side has [`PAIR_INTENT_TTL`] to mirror it.
+    /// Intent recorded and the target notified. They have
+    /// [`PAIR_INTENT_TTL`] to mirror it.
     Waiting,
+    /// Intent recorded (or refreshed), but the target was not notified again:
+    /// this asker pinged them less than [`PAIR_NOTICE_COOLDOWN`] ago. The
+    /// handshake still completes if they mirror it.
+    AlreadyAsked,
     /// Both sides have now asked for each other; the editor is live.
     Paired {
         shared: SharedScratchpad,
@@ -183,16 +195,22 @@ struct RegistryInner {
     intents: HashMap<Uuid, PairIntent>,
     /// Undrained "wants to pair" banners, keyed by the target.
     notices: HashMap<Uuid, PairNotice>,
+    /// When each `(asker, target)` pair was last notified, so re-running
+    /// `/pair` in a loop cannot spam someone's banner slot. Keyed by both
+    /// ends: one asker must not be able to mute anyone else's ask.
+    notified_at: HashMap<(Uuid, Uuid), Instant>,
 }
 
 impl RegistryInner {
-    /// Drop intents and notices past their TTL. Called from `try_pair`, the
-    /// only place either map grows.
+    /// Drop intents, notices and cooldowns past their TTL. Called from
+    /// `try_pair`, the only place any of the three maps grows.
     fn prune(&mut self, now: Instant) {
         self.intents
             .retain(|_, intent| now.saturating_duration_since(intent.at) < PAIR_INTENT_TTL);
         self.notices
             .retain(|_, notice| now.saturating_duration_since(notice.at) < PAIR_INTENT_TTL);
+        self.notified_at
+            .retain(|_, at| now.saturating_duration_since(*at) < PAIR_NOTICE_COOLDOWN);
     }
 }
 
@@ -242,22 +260,40 @@ impl SharedScratchpadRegistry {
         };
 
         let Some(theirs) = theirs else {
-            inner.notices.insert(
-                to,
-                PairNotice {
-                    from_username: from.username.clone(),
-                    at: now,
-                },
-            );
+            // The intent is always recorded, cooldown or not: suppressing the
+            // banner must never stop the handshake from completing when they
+            // mirror it. Only the ping is rate limited.
+            let notify = inner
+                .notified_at
+                .get(&(from.user_id, to))
+                .is_none_or(|at| now.saturating_duration_since(*at) >= PAIR_NOTICE_COOLDOWN);
+            if notify {
+                inner.notified_at.insert((from.user_id, to), now);
+                inner.notices.insert(
+                    to,
+                    PairNotice {
+                        from_username: from.username.clone(),
+                        at: now,
+                    },
+                );
+            }
             inner
                 .intents
                 .insert(from.user_id, PairIntent { from, to, at: now });
-            return PairOutcome::Waiting;
+            return if notify {
+                PairOutcome::Waiting
+            } else {
+                PairOutcome::AlreadyAsked
+            };
         };
 
         inner.intents.remove(&from.user_id);
         inner.notices.remove(&from.user_id);
         inner.notices.remove(&to);
+        // A pairing answers the ask, so neither side has to wait out a
+        // cooldown to reach the other again after they both leave.
+        inner.notified_at.remove(&(from.user_id, to));
+        inner.notified_at.remove(&(to, from.user_id));
 
         let partner_id = theirs.from.user_id;
         let partner_username = theirs.from.username;

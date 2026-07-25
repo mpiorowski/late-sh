@@ -2504,8 +2504,15 @@ fn dispatch_escape(app: &mut App) {
         crate::app::lobby::house::input::close_table(app);
         return;
     }
-    // No Scratchpad arm here: its editor consumes Esc as `EditOutcome::Cancel`
-    // in `handle_dedicated_screen_input`, which is what leaves the pairing.
+    // Esc from the paired scratchpad leaves the pairing (notifying the partner
+    // via the registry) and returns to Home. This arm is not redundant with the
+    // editor's own `EditOutcome::Cancel`: a lone Esc never reaches the keymap,
+    // it is held as `pending_escape` and lands here via `flush_pending_escape`.
+    // The keymap only sees Esc when it arrives mid-chunk with other bytes.
+    if ctx.screen == Screen::Scratchpad {
+        app.set_screen(Screen::Dashboard);
+        return;
+    }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
     // that launched it, not to a standalone landing page.
     if ctx.screen == Screen::Lateania {

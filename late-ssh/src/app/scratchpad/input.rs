@@ -10,6 +10,11 @@ use crate::app::state::App;
 /// There is no accept/decline prompt to handle here. Pairing is a mutual
 /// `/pair @user` handshake (see `pair.rs`), so a session only ever reaches
 /// this screen because its own user asked to.
+///
+/// The `Cancel` arm below is not the main Esc path. A lone Esc is held by the
+/// parser and resolved into `dispatch_escape`, which has its own
+/// `Screen::Scratchpad` arm; this one only fires when Esc arrives mid-chunk
+/// with other bytes. Both are needed.
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     // Shift+Tab would otherwise fall through to the global page cycle, which
     // changes screen and so silently ends the pairing. There is nothing to

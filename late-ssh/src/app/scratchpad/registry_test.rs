@@ -67,6 +67,106 @@ fn the_target_gets_a_notice_once() {
 }
 
 #[test]
+fn re_asking_does_not_ping_the_target_again() {
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+    assert!(registry.poll(uid(2), "sess-b").notice.is_some());
+
+    let outcome = registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+
+    assert!(matches!(outcome, PairOutcome::AlreadyAsked), "{outcome:?}");
+    assert!(
+        registry.poll(uid(2), "sess-b").notice.is_none(),
+        "a second ask must not put another banner in front of the target"
+    );
+}
+
+#[test]
+fn a_suppressed_ask_still_records_the_intent() {
+    // The cooldown rate limits the ping, never the handshake: bob mirroring
+    // after alice's quiet re-ask still has to pair them.
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+
+    let outcome = registry.try_pair(side(uid(2), "bob", "sess-b"), uid(1), now);
+
+    assert!(matches!(outcome, PairOutcome::Paired { .. }), "{outcome:?}");
+}
+
+#[test]
+fn alternating_targets_does_not_reopen_the_ping() {
+    // `intents` holds one entry per asker, so asking someone else clears
+    // alice's own live intent. Without a per-pair record she could bounce
+    // between two names and ping bob on every other command.
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+    assert!(registry.poll(uid(2), "sess-b").notice.is_some());
+
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(3), now);
+    let outcome = registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+
+    assert!(matches!(outcome, PairOutcome::AlreadyAsked), "{outcome:?}");
+    assert!(registry.poll(uid(2), "sess-b").notice.is_none());
+}
+
+#[test]
+fn the_ping_comes_back_once_the_cooldown_lapses() {
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+    registry.poll(uid(2), "sess-b");
+
+    let later = now + PAIR_NOTICE_COOLDOWN;
+    let outcome = registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), later);
+
+    assert!(matches!(outcome, PairOutcome::Waiting), "{outcome:?}");
+    assert_eq!(
+        registry.poll(uid(2), "sess-b").notice.as_deref(),
+        Some("alice"),
+        "a genuine retry after the ask lapsed is not refused"
+    );
+}
+
+#[test]
+fn one_asker_cannot_mute_someone_elses_ask() {
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+    registry.poll(uid(2), "sess-b");
+
+    let outcome = registry.try_pair(side(uid(3), "carol", "sess-c"), uid(2), now);
+
+    assert!(matches!(outcome, PairOutcome::Waiting), "{outcome:?}");
+    assert_eq!(
+        registry.poll(uid(2), "sess-b").notice.as_deref(),
+        Some("carol")
+    );
+}
+
+#[test]
+fn pairing_clears_the_cooldown_between_those_two() {
+    // They paired, so the ask was answered. Once both leave, either of them
+    // must be able to ping the other again without waiting it out.
+    let registry = SharedScratchpadRegistry::new();
+    let now = Instant::now();
+    pair_up(&registry, now);
+    registry.leave(uid(1));
+    registry.leave(uid(2));
+
+    let outcome = registry.try_pair(side(uid(1), "alice", "sess-a"), uid(2), now);
+
+    assert!(matches!(outcome, PairOutcome::Waiting), "{outcome:?}");
+    assert_eq!(
+        registry.poll(uid(2), "sess-b").notice.as_deref(),
+        Some("alice")
+    );
+}
+
+#[test]
 fn mirroring_the_ask_pairs_both_sides_into_one_buffer() {
     let registry = SharedScratchpadRegistry::new();
     let shared = pair_up(&registry, Instant::now());
