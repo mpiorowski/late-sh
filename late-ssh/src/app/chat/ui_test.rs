@@ -1620,10 +1620,11 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
         })
         .unwrap();
 
-    assert_eq!(remaining.y, 1, "topic alone costs one row");
-    assert_eq!(remaining.height, 19);
+    assert_eq!(remaining.y, 2, "the topic row plus the rule closing it off");
+    assert_eq!(remaining.height, 18);
 
-    let row = row_text(terminal.backend().buffer(), 0, 40);
+    let buf = terminal.backend().buffer();
+    let row = row_text(buf, 0, 40);
     assert!(
         row.starts_with("We read sci-fi"),
         "topic reads from the left"
@@ -1631,6 +1632,10 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
     assert!(
         row.trim_end().ends_with("/rules"),
         "the hint is flushed right: {row}"
+    );
+    assert!(
+        row_text(buf, 1, 40).starts_with('\u{2500}'),
+        "the block is closed off from the messages"
     );
 }
 

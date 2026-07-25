@@ -1,3 +1,5 @@
+use unicode_width::UnicodeWidthStr;
+
 use crate::app::chat::svc::DiscoverRoomItem;
 use crate::app::common::{primitives::format_relative_time, theme};
 use ratatui::{
@@ -138,8 +140,23 @@ fn draw_preview(frame: &mut Frame, area: Rect, item: &DiscoverRoomItem) {
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]),
-        Line::from(""),
     ];
+
+    // What the room is about, wrapped in full: the row above only has space for
+    // a clipped version, and this pane is where someone decides to join.
+    if let Some(topic) = item
+        .topic
+        .as_deref()
+        .map(str::trim)
+        .filter(|topic| !topic.is_empty())
+    {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            topic.to_string(),
+            Style::default().fg(theme::TEXT()),
+        )));
+    }
+    lines.push(Line::from(""));
 
     if item.recent.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -211,11 +228,16 @@ fn room_lines(item: &DiscoverRoomItem, selected: bool, width: u16) -> Vec<Line<'
         .map(str::trim)
         .filter(|topic| !topic.is_empty())
     {
-        let used = marker.len() + name.chars().count() + 3;
+        // Cells, not bytes: the marker and the separator are both wider than
+        // their byte length, and a wrong budget clips the ellipsis off the end.
+        const SEPARATOR: &str = "  ·  ";
+        let used = UnicodeWidthStr::width(marker)
+            + UnicodeWidthStr::width(name.as_str())
+            + UnicodeWidthStr::width(SEPARATOR);
         let room = (width as usize).saturating_sub(used);
         if room >= 8 {
             name_spans.push(Span::styled(
-                "  ·  ".to_string(),
+                SEPARATOR.to_string(),
                 Style::default().fg(theme::TEXT_FAINT()),
             ));
             name_spans.push(Span::styled(

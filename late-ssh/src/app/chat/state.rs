@@ -2501,8 +2501,13 @@ impl ChatState {
             match self.room_info_authority(room) {
                 RoomInfoAuthority::Owner | RoomInfoAuthority::Moderator => {}
                 RoomInfoAuthority::None => {
+                    // Private rooms have an owner who can; public ones do not.
                     return Some(Banner::error(
-                        "Only a moderator can set this room's topic and rules",
+                        if room.kind == "topic" && room.visibility == "private" {
+                            "Only this room's owner can set its topic and rules"
+                        } else {
+                            "Only a moderator can set this room's topic and rules"
+                        },
                     ));
                 }
                 RoomInfoAuthority::NotEditable => {
@@ -2523,18 +2528,35 @@ impl ChatState {
             return None;
         }
 
+        // Rules are multi-line by design, so they go in the same overlay
+        // `/active` uses (scrollable, wraps long lines) rather than a banner,
+        // which is one line and would eat the line breaks.
         if body.trim() == "/rules" {
             self.clear_composer_after_submit();
-            let rules = self
-                .selected_room_id
-                .and_then(|room_id| self.room_by_id(room_id))
-                .and_then(|room| room.rules.as_deref())
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
-            return Some(match rules {
-                Some(rules) => Banner::info(&format!("Rules: {rules}")),
-                None => Banner::info("No rules set for this room"),
-            });
+            let overlay = {
+                let room = self
+                    .selected_room_id
+                    .and_then(|room_id| self.room_by_id(room_id));
+                let rules = room
+                    .and_then(|room| room.rules.as_deref())
+                    .map(str::trim)
+                    .filter(|rules| !rules.is_empty());
+                match rules {
+                    Some(rules) => {
+                        let title = match room.and_then(|room| room.slug.as_deref()) {
+                            Some(slug) => format!("#{slug} rules"),
+                            None => "Rules".to_string(),
+                        };
+                        Some((title, rules.lines().map(str::to_string).collect::<Vec<_>>()))
+                    }
+                    None => None,
+                }
+            };
+            let Some((title, lines)) = overlay else {
+                return Some(Banner::info("No rules set for this room"));
+            };
+            self.open_overlay(&title, lines);
+            return None;
         }
 
         // Kicking answers to the room, not the composer: a private room's owner
@@ -4378,6 +4400,21 @@ impl ChatState {
                 }
                 ChatEvent::KickFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
+                }
+                // Not filtered to the editor: every session sitting in the room
+                // is showing a stale header, and the room row is what the header
+                // reads. Only the editor gets the banner.
+                ChatEvent::RoomInfoUpdated {
+                    user_id,
+                    room_id,
+                    room_slug,
+                } => {
+                    if self.rooms.iter().any(|(room, _)| room.id == room_id) {
+                        self.request_list();
+                    }
+                    if self.user_id == user_id {
+                        banner = Some(Banner::success(&format!("Updated #{room_slug}")));
+                    }
                 }
                 ChatEvent::ModCommandOutput {
                     user_id,

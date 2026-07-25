@@ -786,6 +786,11 @@ pub enum ChatEvent {
         room_slug: String,
         username: String,
     },
+    RoomInfoUpdated {
+        user_id: Uuid,
+        room_id: Uuid,
+        room_slug: String,
+    },
     KickFailed {
         user_id: Uuid,
         message: String,
@@ -3586,9 +3591,11 @@ impl ChatService {
         );
         ChatRoomMember::join(&client, room.id, user_id).await?;
         drop(client);
-        if !existed {
-            self.announce_new_public_room(user_id, room.id, slug)
-                .await?;
+        if !existed && let Err(error) = self.announce_new_public_room(user_id, room.id, slug).await
+        {
+            // The room exists and the caller is in it. A missed notice is worth
+            // logging, never worth telling them their room failed to open.
+            tracing::error!(?error, slug = %slug, room_id = %room.id, "failed to announce new public room");
         }
         Ok(room.id)
     }
@@ -3772,15 +3779,21 @@ impl ChatService {
         let span = info_span!("chat.set_room_info", user_id = %user_id, room_id = %room_id, is_mod);
         tokio::spawn(
             async move {
-                if let Err(e) = service
+                let event = match service
                     .set_room_info(user_id, is_mod, room_id, topic.as_deref(), rules.as_deref())
                     .await
                 {
-                    let _ = service.evt_tx.send(ChatEvent::RoomFailed {
+                    Ok(room_slug) => ChatEvent::RoomInfoUpdated {
+                        user_id,
+                        room_id,
+                        room_slug,
+                    },
+                    Err(e) => ChatEvent::RoomFailed {
                         user_id,
                         message: e.to_string(),
-                    });
-                }
+                    },
+                };
+                let _ = service.evt_tx.send(event);
             }
             .instrument(span),
         );
@@ -3797,7 +3810,7 @@ impl ChatService {
         room_id: Uuid,
         topic: Option<&str>,
         rules: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let client = self.db.get().await?;
         let room = ChatRoom::get(&client, room_id)
             .await?
@@ -3811,8 +3824,8 @@ impl ChatService {
                 _ => anyhow::bail!("only the room's owner can set its info"),
             }
         }
-        ChatRoom::set_topic_and_rules(&client, room_id, topic, rules).await?;
-        Ok(())
+        let room = ChatRoom::set_topic_and_rules(&client, room_id, topic, rules).await?;
+        Ok(room.slug.unwrap_or_else(|| room.kind.clone()))
     }
 
     pub fn leave_room_task(&self, user_id: Uuid, room_id: Uuid, slug: String) {

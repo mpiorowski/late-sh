@@ -1449,3 +1449,48 @@ async fn cycling_rails_persists_onto_the_authenticating_key() {
         "the account's other device must keep following the account default"
     );
 }
+
+#[tokio::test]
+async fn rules_command_shows_every_line_in_an_overlay() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "rules-flow-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+
+    let room = ChatRoom::create_private_room(&client, "parlour", viewer.id)
+        .await
+        .expect("create room");
+    ChatRoomMember::join(&client, room.id, viewer.id)
+        .await
+        .expect("join viewer to parlour");
+    ChatRoom::set_topic_and_rules(
+        &client,
+        room.id,
+        Some("cards and tea"),
+        Some("be kind\nno spoilers\ntake the bins out"),
+    )
+    .await
+    .expect("set rules");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "rules-command-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+    wait_for_render_contains(&mut app, "parlour").await;
+    app.handle_input(b"llll");
+
+    app.handle_input(b"i/rules\r");
+    // Every line survives, which a one-line banner could not do.
+    wait_for_render_contains(&mut app, "#parlour rules").await;
+    wait_for_render_contains(&mut app, "be kind").await;
+    wait_for_render_contains(&mut app, "no spoilers").await;
+    wait_for_render_contains(&mut app, "take the bins out").await;
+
+    let messages = ChatMessage::list_recent(&client, room.id, 20)
+        .await
+        .expect("list recent messages");
+    assert!(messages.is_empty(), "expected /rules to stay client-side");
+}

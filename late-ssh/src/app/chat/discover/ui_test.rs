@@ -245,3 +245,28 @@ fn discover_row_without_a_topic_is_unchanged() {
         "no topic, so no separator on the name row: {name_row}"
     );
 }
+
+#[test]
+fn discover_preview_shows_what_the_room_is_about() {
+    let mut item = discover_item("books", 12, 40);
+    item.topic = Some("what we are reading this month".to_string());
+    let rendered = render_discover(DiscoverListView {
+        items: vec![&item],
+        selected_index: 0,
+        query: "",
+        filtering: false,
+        loading: false,
+    });
+    // The row has space only for a clipped version, so the preview pane is where
+    // the whole description is legible.
+    let mut lines = rendered.lines();
+    let row = lines.next().unwrap_or_default();
+    assert!(
+        row.contains("what we are reading"),
+        "row shows the start: {row}"
+    );
+    assert!(
+        rendered.contains("what we are reading this month"),
+        "the preview shows all of it:\n{rendered}"
+    );
+}

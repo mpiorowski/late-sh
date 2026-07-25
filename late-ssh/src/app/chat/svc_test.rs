@@ -3748,6 +3748,7 @@ async fn only_the_owner_or_a_mod_may_set_room_info() {
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
+    let mut events = service.subscribe_events();
     let client = test_db.db.get().await.expect("db client");
 
     let owner = create_test_user(&test_db.db, "info_owner").await;
@@ -3769,9 +3770,13 @@ async fn only_the_owner_or_a_mod_may_set_room_info() {
         Some("cards and tea".to_string()),
         None,
     );
-    wait_for_topic(&test_db.db, private.id, Some("cards and tea")).await;
+    expect_room_info_updated(&mut events, owner.id).await;
+    assert_eq!(
+        current_topic(&test_db.db, private.id).await.as_deref(),
+        Some("cards and tea")
+    );
 
-    // A member who does not own the room cannot overwrite it.
+    // A member who does not own the room is refused, and nothing is written.
     service.set_room_info_task(
         member.id,
         false,
@@ -3779,7 +3784,7 @@ async fn only_the_owner_or_a_mod_may_set_room_info() {
         Some("mine now".to_string()),
         None,
     );
-    sleep(Duration::from_millis(300)).await;
+    expect_room_failed(&mut events, member.id).await;
     assert_eq!(
         current_topic(&test_db.db, private.id).await.as_deref(),
         Some("cards and tea"),
@@ -3799,7 +3804,7 @@ async fn only_the_owner_or_a_mod_may_set_room_info() {
         .expect("record creator");
 
     service.set_room_info_task(opener.id, false, public.id, Some("mine".to_string()), None);
-    sleep(Duration::from_millis(300)).await;
+    expect_room_failed(&mut events, opener.id).await;
     assert_eq!(
         current_topic(&test_db.db, public.id).await,
         None,
@@ -3813,7 +3818,52 @@ async fn only_the_owner_or_a_mod_may_set_room_info() {
         Some("the town square".to_string()),
         None,
     );
-    wait_for_topic(&test_db.db, public.id, Some("the town square")).await;
+    expect_room_info_updated(&mut events, opener.id).await;
+    assert_eq!(
+        current_topic(&test_db.db, public.id).await.as_deref(),
+        Some("the town square")
+    );
+}
+
+/// Await the room-info success event for `actor`, skipping unrelated traffic.
+async fn expect_room_info_updated(
+    events: &mut tokio::sync::broadcast::Receiver<ChatEvent>,
+    actor: Uuid,
+) {
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("room info event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::RoomInfoUpdated { user_id, .. } if user_id == actor => return,
+            ChatEvent::RoomFailed { user_id, message } if user_id == actor => {
+                panic!("expected the write to be allowed, got: {message}")
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Await the refusal for `actor`. Waiting on the event the service actually
+/// emits is what makes "nothing was written" assertions deterministic.
+async fn expect_room_failed(
+    events: &mut tokio::sync::broadcast::Receiver<ChatEvent>,
+    actor: Uuid,
+) -> String {
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("room failure event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::RoomFailed { user_id, message } if user_id == actor => return message,
+            ChatEvent::RoomInfoUpdated { user_id, .. } if user_id == actor => {
+                panic!("expected the write to be refused")
+            }
+            _ => {}
+        }
+    }
 }
 
 async fn current_topic(db: &late_core::db::Db, room_id: Uuid) -> Option<String> {
@@ -3823,16 +3873,6 @@ async fn current_topic(db: &late_core::db::Db, room_id: Uuid) -> Option<String> 
         .expect("get room")
         .expect("room exists")
         .topic
-}
-
-async fn wait_for_topic(db: &late_core::db::Db, room_id: Uuid, expected: Option<&str>) {
-    for _ in 0..50 {
-        if current_topic(db, room_id).await.as_deref() == expected {
-            return;
-        }
-        sleep(Duration::from_millis(20)).await;
-    }
-    panic!("topic never became {expected:?}");
 }
 
 /// Opening a brand-new public room tells two audiences: the creator, in the
@@ -3945,6 +3985,7 @@ async fn private_room_owner_can_kick_regulars_but_not_staff() {
     }
 
     let regular = Permissions::new(false, false);
+    let mut events = service.subscribe_events();
 
     // A member who does not own the room cannot throw anyone out.
     service.kick_from_room_task(
@@ -3953,7 +3994,7 @@ async fn private_room_owner_can_kick_regulars_but_not_staff() {
         "study".to_string(),
         "kick_owner".to_string(),
     );
-    sleep(Duration::from_millis(300)).await;
+    expect_kick_failed(&mut events, guest.id).await;
     assert!(
         is_member(&test_db.db, room.id, owner.id).await,
         "a non-owner must not be able to kick"
@@ -3966,7 +4007,7 @@ async fn private_room_owner_can_kick_regulars_but_not_staff() {
         "study".to_string(),
         "kick_staff".to_string(),
     );
-    sleep(Duration::from_millis(300)).await;
+    expect_kick_failed(&mut events, owner.id).await;
     assert!(
         is_member(&test_db.db, room.id, staff.id).await,
         "an owner must not be able to kick a moderator"
@@ -3979,16 +4020,48 @@ async fn private_room_owner_can_kick_regulars_but_not_staff() {
         "study".to_string(),
         "kick_guest".to_string(),
     );
-    for _ in 0..50 {
-        if !is_member(&test_db.db, room.id, guest.id).await {
-            break;
-        }
-        sleep(Duration::from_millis(20)).await;
-    }
+    expect_kick_succeeded(&mut events, owner.id).await;
     assert!(
         !is_member(&test_db.db, room.id, guest.id).await,
         "the owner may remove a regular member"
     );
+}
+
+/// Await the kick refusal for `actor`. The event is what makes the
+/// "still a member" assertion below it deterministic.
+async fn expect_kick_failed(events: &mut tokio::sync::broadcast::Receiver<ChatEvent>, actor: Uuid) {
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("kick failure event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::KickFailed { user_id, .. } if user_id == actor => return,
+            ChatEvent::KickSucceeded { user_id, .. } if user_id == actor => {
+                panic!("expected the kick to be refused")
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn expect_kick_succeeded(
+    events: &mut tokio::sync::broadcast::Receiver<ChatEvent>,
+    actor: Uuid,
+) {
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("kick success event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::KickSucceeded { user_id, .. } if user_id == actor => return,
+            ChatEvent::KickFailed { user_id, message } if user_id == actor => {
+                panic!("expected the kick to be allowed, got: {message}")
+            }
+            _ => {}
+        }
+    }
 }
 
 async fn is_member(db: &late_core::db::Db, room_id: Uuid, user_id: Uuid) -> bool {

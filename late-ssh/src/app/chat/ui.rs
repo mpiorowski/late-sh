@@ -3822,9 +3822,6 @@ fn dm_display_label(
     format!("@ {}", name)
 }
 
-/// Center pane for the merged Home/Chat shell. The room rail is rendered by
-/// the outer shell, so this draws only the selected room/feed content plus the
-/// relevant composer or hint row.
 /// The header block above a room's messages: the voice row (when the room has a
 /// voice channel), a divider, then the topic row. Each row pairs live state on
 /// the left with the keys or commands that act on it flushed to the right edge,
@@ -3836,14 +3833,17 @@ struct RoomHeader<'a> {
 }
 
 impl RoomHeader<'_> {
-    /// Rows this header wants: the voice row, the divider between voice and
-    /// topic, and the topic row. The divider only earns its row when there is
-    /// something on both sides of it.
+    /// Rows this header wants: the voice row, a divider between voice and topic
+    /// (only when there is something on both sides of it), the topic row, and a
+    /// closing rule that separates the whole block from the messages.
     fn height(&self) -> u16 {
         let voice = u16::from(self.voice.is_some());
         let topic = u16::from(self.topic.is_some());
+        if voice + topic == 0 {
+            return 0;
+        }
         let divider = u16::from(self.voice.is_some() && self.topic.is_some());
-        voice + divider + topic
+        voice + divider + topic + 1
     }
 }
 
@@ -3857,15 +3857,19 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     }
     let width = area.width.max(1) as usize;
 
+    let rule = || {
+        Line::from(Span::styled(
+            "\u{2500}".repeat(width),
+            Style::default().fg(theme::BORDER_DIM()),
+        ))
+    };
+
     let mut lines: Vec<Line> = Vec::new();
     if let Some(voice) = &header.voice {
         lines.push(crate::app::voice::ui::voice_strip_line(voice, width));
     }
     if header.voice.is_some() && header.topic.is_some() {
-        lines.push(Line::from(Span::styled(
-            "\u{2500}".repeat(width),
-            Style::default().fg(theme::BORDER_DIM()),
-        )));
+        lines.push(rule());
     }
     if let Some(topic) = header.topic {
         let hint = if header.has_rules {
@@ -3888,6 +3892,8 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
             width,
         ));
     }
+    // Closes the block off from the conversation below it.
+    lines.push(rule());
 
     frame.render_widget(Paragraph::new(lines), Rect { height, ..area });
     Rect {
@@ -3913,6 +3919,9 @@ fn room_has_rules(room: &ChatRoom) -> bool {
         .is_some_and(|rules| !rules.is_empty())
 }
 
+/// Center pane for the merged Home/Chat shell. The room rail is rendered by
+/// the outer shell, so this draws only the selected room/feed content plus the
+/// relevant composer or hint row.
 pub fn draw_chat_center(
     frame: &mut Frame,
     area: Rect,
