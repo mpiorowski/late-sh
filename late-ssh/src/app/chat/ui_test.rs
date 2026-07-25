@@ -241,6 +241,235 @@ fn unread_boundary_ignores_read_and_own_messages() {
     ));
 }
 
+#[test]
+fn mentions_user_matches_the_same_way_the_notifier_does() {
+    assert!(mentions_user("hey @alice look", Some("alice")));
+    // Case-insensitive, like the mention notification path.
+    assert!(mentions_user("hey @Alice look", Some("alice")));
+    // A longer name that merely starts with ours is a different person.
+    assert!(!mentions_user("hey @alicebob look", Some("alice")));
+    // A mention inside a code span is not a mention.
+    assert!(!mentions_user("try `@alice` here", Some("alice")));
+    assert!(!mentions_user("hey @alice look", None));
+}
+
+#[test]
+fn replies_to_user_resolves_the_target_author() {
+    let room_id = Uuid::from_u128(1);
+    let current_user_id = Uuid::from_u128(2);
+    let other_user_id = Uuid::from_u128(3);
+    let our_message_id = Uuid::from_u128(10);
+    let their_message_id = Uuid::from_u128(11);
+    let message_authors = HashMap::from([
+        (our_message_id, current_user_id),
+        (their_message_id, other_user_id),
+    ]);
+    let make_reply = |reply_to_message_id, reply_to_user_id| ChatMessage {
+        id: Uuid::from_u128(20),
+        created: Utc::now(),
+        updated: Utc::now(),
+        pinned: false,
+        reply_to_message_id,
+        reply_to_user_id,
+        room_id,
+        user_id: other_user_id,
+        body: "sure".to_string(),
+    };
+
+    // A human reply carries only the target message id.
+    assert!(replies_to_user(
+        &make_reply(Some(our_message_id), None),
+        current_user_id,
+        &message_authors
+    ));
+    assert!(!replies_to_user(
+        &make_reply(Some(their_message_id), None),
+        current_user_id,
+        &message_authors
+    ));
+    // A bot reply carries the target user id directly.
+    assert!(replies_to_user(
+        &make_reply(None, Some(current_user_id)),
+        current_user_id,
+        &message_authors
+    ));
+    // A reply whose target is no longer loaded cannot be resolved.
+    assert!(!replies_to_user(
+        &make_reply(Some(Uuid::from_u128(99)), None),
+        current_user_id,
+        &message_authors
+    ));
+    assert!(!replies_to_user(
+        &make_reply(None, None),
+        current_user_id,
+        &message_authors
+    ));
+}
+
+#[test]
+fn mentions_and_replies_paint_a_background_wash() {
+    theme::set_current_by_id("late");
+
+    let room_id = Uuid::from_u128(1);
+    let current_user_id = Uuid::from_u128(2);
+    let other_user_id = Uuid::from_u128(3);
+    let our_message_id = Uuid::from_u128(10);
+    let created = Utc::now();
+    let make_message = |id, user_id, body: &str, reply_to_message_id| ChatMessage {
+        id,
+        created,
+        updated: created,
+        pinned: false,
+        reply_to_message_id,
+        reply_to_user_id: None,
+        room_id,
+        user_id,
+        body: body.to_string(),
+    };
+
+    let plain = make_message(Uuid::from_u128(12), other_user_id, "just talking", None);
+    let mention = make_message(Uuid::from_u128(11), other_user_id, "hey @alice", None);
+    let reply = make_message(
+        Uuid::from_u128(13),
+        other_user_id,
+        "on it",
+        Some(our_message_id),
+    );
+    let ours = make_message(our_message_id, current_user_id, "who can help?", None);
+    // `ensure_chat_rows_cache` walks the slice newest-first.
+    let messages = vec![&reply, &plain, &mention, &ours];
+
+    let usernames = HashMap::from([
+        (current_user_id, "alice".to_string()),
+        (other_user_id, "bob".to_string()),
+    ]);
+    let countries = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let friend_user_ids = HashSet::new();
+    let afk_user_ids = HashSet::new();
+    let message_reactions = HashMap::new();
+    let inline_images = HashMap::new();
+    let profile_award_badges = HashMap::new();
+    let drunk_levels = HashMap::new();
+    let name_styles = HashMap::new();
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let ctx = ChatRowsContext {
+        versions: ChatRowsVersions::default(),
+        current_user_id,
+        afk_user_ids: &afk_user_ids,
+        show_flag_fallback: false,
+        usernames: &username_lookup,
+        countries: &countries,
+        friend_user_ids: &friend_user_ids,
+        bonsai_glyphs: &bonsai_glyphs,
+        chat_badges: &chat_badges,
+        profile_award_badges: &profile_award_badges,
+        message_reactions: &message_reactions,
+        inline_images: &inline_images,
+        unread_marker: None,
+        drunk_levels: &drunk_levels,
+        name_styles: &name_styles,
+    };
+
+    let width = 60;
+    let mut cache = ChatRowsCache::default();
+    ensure_chat_rows_cache(&mut cache, messages, width, ctx);
+
+    let background_of = |message_id: Uuid| {
+        let row = cache
+            .row_message
+            .iter()
+            .position(|owner| *owner == Some(message_id))
+            .expect("message should own at least one row");
+        let visible = visible_chat_rows(&cache, None, None, cache.all_rows.len());
+        visible.lines[row].spans[0].style.bg
+    };
+
+    assert_eq!(background_of(mention.id), Some(theme::CHAT_MENTION_BG()));
+    assert_eq!(background_of(reply.id), Some(theme::CHAT_REPLY_BG()));
+    assert_eq!(background_of(plain.id), None);
+    // Our own message never washes, even though it is the reply target.
+    assert_eq!(background_of(ours.id), None);
+}
+
+#[test]
+fn background_wash_fills_the_whole_row_width() {
+    theme::set_current_by_id("late");
+
+    let room_id = Uuid::from_u128(1);
+    let current_user_id = Uuid::from_u128(2);
+    let other_user_id = Uuid::from_u128(3);
+    let created = Utc::now();
+    let mention = ChatMessage {
+        id: Uuid::from_u128(11),
+        created,
+        updated: created,
+        pinned: false,
+        reply_to_message_id: None,
+        reply_to_user_id: None,
+        room_id,
+        user_id: other_user_id,
+        body: "hey @alice".to_string(),
+    };
+
+    let usernames = HashMap::from([
+        (current_user_id, "alice".to_string()),
+        (other_user_id, "bob".to_string()),
+    ]);
+    let countries = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let friend_user_ids = HashSet::new();
+    let afk_user_ids = HashSet::new();
+    let message_reactions = HashMap::new();
+    let inline_images = HashMap::new();
+    let profile_award_badges = HashMap::new();
+    let drunk_levels = HashMap::new();
+    let name_styles = HashMap::new();
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let ctx = ChatRowsContext {
+        versions: ChatRowsVersions::default(),
+        current_user_id,
+        afk_user_ids: &afk_user_ids,
+        show_flag_fallback: false,
+        usernames: &username_lookup,
+        countries: &countries,
+        friend_user_ids: &friend_user_ids,
+        bonsai_glyphs: &bonsai_glyphs,
+        chat_badges: &chat_badges,
+        profile_award_badges: &profile_award_badges,
+        message_reactions: &message_reactions,
+        inline_images: &inline_images,
+        unread_marker: None,
+        drunk_levels: &drunk_levels,
+        name_styles: &name_styles,
+    };
+
+    let width = 60;
+    let mut cache = ChatRowsCache::default();
+    ensure_chat_rows_cache(&mut cache, vec![&mention], width, ctx);
+    let visible = visible_chat_rows(&cache, None, None, cache.all_rows.len());
+
+    for (index, line) in visible.lines.iter().enumerate() {
+        if cache.row_message.get(index).copied().flatten() != Some(mention.id) {
+            continue;
+        }
+        let painted: usize = line
+            .spans
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum();
+        assert_eq!(painted, width, "row {index} should be washed edge to edge");
+        assert!(
+            line.spans
+                .iter()
+                .all(|span| span.style.bg == Some(theme::CHAT_MENTION_BG())),
+            "row {index} should be washed in one background color"
+        );
+    }
+}
+
 fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
     ComposerBlockView {
         composer: textarea,
