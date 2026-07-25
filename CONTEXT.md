@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-24 (home rail layout is now per device: the SSH key a session authenticated with owns it, in `user_ssh_keys.settings`, and both rails gained an `auto` mode that folds them away on narrow terminals)
+- Last updated: 2026-07-25 (chat rooms carry a topic and rules: private rooms answer to a derived owner who sets them and can `/kick`, public rooms stay mod-managed and report themselves to #moderators when opened; the topic also surfaces in Discover and as the IRC channel topic)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
