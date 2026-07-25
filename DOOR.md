@@ -1,10 +1,12 @@
 # Door Games & MUDs - Candidate Research
 
 Investigation notes for slowly adding more door games / MUDs to late.sh.
-Status: **research notes.** Last updated 2026-07-21 (roadmap re-cut: Brogue CE
+Status: **research notes.** Last updated 2026-07-25 (added the incremental /
+idle shelf: A Dark Room audited as the cheapest pattern-1 port on the list, plus
+a license sweep of the famous idle games). Previous cut 2026-07-21: Brogue CE
 is the next door, one marketing beat before the Green Dragon push (see root
 `DRAGON.md`); TradeWars/twclone re-parked as future season/event content
-despite a green spike; museum wing passed on).
+despite a green spike; museum wing passed on.
 
 ## TL;DR
 
@@ -19,6 +21,11 @@ despite a green spike; museum wing passed on).
 - **TradeWars 2002 is a no-go on license** (proprietary, EIS/Pritchett own the
   trademark). The open path is **twclone** (GPL-2 clone), which would be a port,
   not the real thing.
+- **The cheapest native port we have found is A Dark Room** (MPL-2.0, 8.5k lines
+  of dependency-free jQuery, no server, no DB). It is a whole new *shelf* for
+  late.sh, not just a door: minimalist text incrementals. See the deep dive
+  below. The gates are brand etiquette and one design call, not license or
+  effort.
 - **MUDs are parked** (see bottom). Almost all the demand is for *doors*, not
   MUDs, and MUDs fight late.sh's quick-session format. Licensing is fine if we
   ever want one (DikuMUD LGPL, Evennia BSD), but it's not on the roadmap.
